@@ -697,8 +697,10 @@ function choice(type, name, value, label) {
 // give it tasks are all picked here, and both people see them.
 function inviteDialog(t) {
   const me = state.overview.person;
-  const hosts = [choice("radio", "agent-host", me.address, "Yours, on " + me.address),
-    choice("radio", "agent-host", t.peer.address, t.peer.label + "'s, on " + t.peer.address)];
+  // A browser device runs no agent: only the other person's can be invited from it.
+  const browser = !!(state.overview.me && state.overview.me.browser);
+  const hosts = [!browser && choice("radio", "agent-host", me.address, "Yours, on " + me.address),
+    choice("radio", "agent-host", t.peer.address, t.peer.label + "'s, on " + t.peer.address)].filter(Boolean);
   const share = t.messages.filter((m) => !m.event).slice(-30)
     .map((m) => choice("checkbox", "agent-share", m.id, dmAuthor(m, t) + ": " + firstLine(m.body, 70)));
   const tasks = [[me, "You"], [t.peer, t.peer.label]].filter(([p]) => p.fingerprint)

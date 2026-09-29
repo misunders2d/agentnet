@@ -393,6 +393,31 @@ func TestBrowserEngineJourney(t *testing.T) {
 	w.until("eve's DM", func() bool {
 		return w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + root.ID()})["error"] == nil
 	})
+	// A participation record that is not the sending device's own (Eve signs
+	// one claiming Alice's device wrote it) is held, never shown or counted.
+	heldBefore := w.ok(map[string]any{"op": "count", "store": "held"})["n"].(float64)
+	forged := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: protocol.NewID(), Type: protocol.EventInvite, TS: time.Now().Unix(),
+		Author:   protocol.EventAuthor{Person: eveRoster.Person, Roster: eveRoster.Hash(), Address: alice.Address, Fingerprint: eve.id.Public(eve.addr).Fingerprint()},
+		Host:     &protocol.ParticipationHost{Person: eveRoster.Person, Address: eve.addr, Fingerprint: eve.id.Public(eve.addr).Fingerprint()},
+		Audience: protocol.AudienceConversation}
+	forged.Sign(eve.id.Sign)
+	eve.send(dPub, envelope.Inner{V: 2, Kind: "message", Sub: envelope.SubEvent, Body: string(marshalBytes(t, forged)), Conv: root.ID(),
+		LID: protocol.NewID(), Root: rootJSON, PID: forged.PID})
+	// So is one whose signature does not verify (changed after signing).
+	eveAuthor := forged.Author
+	eveAuthor.Address = eve.addr
+	tampered := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: protocol.NewID(), Type: protocol.EventInvite, TS: time.Now().Unix(),
+		Author: eveAuthor, Host: forged.Host, Audience: protocol.AudienceConversation}
+	tampered.Sign(eve.id.Sign)
+	tampered.Note = "changed after signing"
+	eve.send(dPub, envelope.Inner{V: 2, Kind: "message", Sub: envelope.SubEvent, Body: string(marshalBytes(t, tampered)), Conv: root.ID(),
+		LID: protocol.NewID(), Root: rootJSON, PID: tampered.PID})
+	w.until("the forged and changed records held", func() bool {
+		return w.ok(map[string]any{"op": "count", "store": "held"})["n"].(float64) == heldBefore+2
+	})
+	if a := w.api("/api/dm?id="+root.ID(), nil)["agents"].([]any); len(a) != 0 {
+		t.Fatalf("a forged record counts: %v", a)
+	}
 	inbox := func() float64 { return w.ok(map[string]any{"op": "count", "store": "inbox"})["n"].(float64) }
 	held := func() float64 { return w.ok(map[string]any{"op": "count", "store": "held"})["n"].(float64) }
 	n0, h0 := inbox(), held()
@@ -401,6 +426,30 @@ func TestBrowserEngineJourney(t *testing.T) {
 	w.until("the conflicting copy held", func() bool { return held() == h0+1 })
 	if inbox() != n0 || dmBodies(w.api("/api/dm?id="+root.ID(), nil)) != "in:first" {
 		t.Fatalf("duplicate stored: %v", dmBodies(w.api("/api/dm?id="+root.ID(), nil)))
+	}
+	// A decision counts only from the invited host: Eve invites the agent
+	// on Dana's device and accepts it herself; it stays invited.
+	named := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: protocol.NewID(), Type: protocol.EventInvite, TS: time.Now().Unix(),
+		Author: eveAuthor, Host: &protocol.ParticipationHost{Person: dRoster.Person, Address: "dana/phone", Fingerprint: dPub.Fingerprint()},
+		Audience: protocol.AudienceConversation}
+	named.Sign(eve.id.Sign)
+	selfAccept := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: named.PID, Type: protocol.EventAccept, Prev: named.Hash(),
+		TS: time.Now().Unix(), Author: eveAuthor}
+	selfAccept.Sign(eve.id.Sign)
+	// A dismissal following a record not held here does not count either.
+	strayDismiss := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: named.PID, Type: protocol.EventDismiss, Prev: strings.Repeat("ab", 32),
+		TS: time.Now().Unix(), Author: eveAuthor}
+	strayDismiss.Sign(eve.id.Sign)
+	for _, ev := range []protocol.ParticipationEvent{named, selfAccept, strayDismiss} {
+		eve.send(dPub, envelope.Inner{V: 2, Kind: "message", Sub: envelope.SubEvent, Body: string(marshalBytes(t, ev)), Conv: root.ID(),
+			LID: protocol.NewID(), Root: rootJSON, PID: ev.PID})
+	}
+	w.until("the invitation naming dana", func() bool {
+		a := w.api("/api/dm?id="+root.ID(), nil)["agents"].([]any)
+		return len(a) == 1 && a[0].(map[string]any)["held"] == float64(2)
+	})
+	if a := w.api("/api/dm?id="+root.ID(), nil)["agents"].([]any)[0].(map[string]any); a["state"] != "invited" || a["host_here"] != true || a["can_decide"] != false {
+		t.Fatalf("an accept not by the host: %v", a)
 	}
 	// Eve invites her own agent into the DM and asks it: the record reads as
 	// a sentence, and her request to her agent is history here, not held
@@ -419,9 +468,9 @@ func TestBrowserEngineJourney(t *testing.T) {
 	var evMsgs []any
 	w.until("eve's record and request", func() bool {
 		evMsgs = w.api("/api/dm?id="+root.ID(), nil)["messages"].([]any)
-		return len(evMsgs) == 3
+		return len(evMsgs) == 6
 	})
-	record, request := evMsgs[1].(map[string]any), evMsgs[2].(map[string]any)
+	record, request := evMsgs[4].(map[string]any), evMsgs[5].(map[string]any)
 	if record["event"] != "Eve invited Eve's agent (on "+eve.addr+") into this DM." || record["body"] != "" {
 		t.Fatalf("the record as the browser shows it: %v", record)
 	}
@@ -664,4 +713,119 @@ func (r *rawAgent) supports(address string) bool {
 	var p protocol.Profile
 	json.Unmarshal(data, &p)
 	return p.Supports(address, d.Public.SignKey, protocol.CapEnv2)
+}
+
+// The browser invites, asks and dismisses the agent on the other person's
+// computer, as the core resolves it, and never hosts, accepts or runs one:
+// against a real laptop daemon.
+func TestBrowserEngineAgents(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	runDaemon(t, alice)
+	if _, err := alice.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": "https://" + hub.Addr})
+	code, _ := alice.Invite(ctx, "dana", time.Hour, false)
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Dana"})
+	w.ok(map[string]any{"op": "start"})
+	w.until("connected with members", func() bool {
+		s := w.ok(map[string]any{"op": "status"})
+		return s["connected"] == true && s["members"] == true
+	})
+	var conv string
+	w.until("alice's DM with dana", func() bool { conv, err = alice.CreateDM(ctx, "dana/phone"); return err == nil })
+	hello, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "the deploy plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.until("alice's message in the browser", func() bool {
+		return w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + conv})["error"] == nil && len(w.api("/api/dm?id="+conv, nil)["messages"].([]any)) == 1
+	})
+	notes := w.api("/api/dm/send", map[string]any{"conv": conv, "body": "my notes"})["id"].(string)
+	agents := func() []any { return w.api("/api/dm?id="+conv, nil)["agents"].([]any) }
+	if o := w.api("/api/overview", nil); o["agents"] != true {
+		t.Fatal("the browser offers no agents")
+	}
+
+	// What cannot be invited from here is refused before anything is sent.
+	w.refuses("this browser as the host", w.call(map[string]any{"op": "api", "path": "/api/dm/agent/invite",
+		"body": map[string]any{"conv": conv, "host": "dana/phone"}}), "runs no agent")
+	w.refuses("a message not of this DM", w.call(map[string]any{"op": "api", "path": "/api/dm/agent/invite",
+		"body": map[string]any{"conv": conv, "host": alice.Address, "share": []string{protocol.NewID()}}}), "not an earlier message")
+	if len(agents()) != 0 {
+		t.Fatal("a refused invite left a record")
+	}
+
+	// Dana invites Alice's agent, sharing both earlier messages exactly.
+	pid := w.api("/api/dm/agent/invite", map[string]any{"conv": conv, "host": alice.Address, "share": []string{hello.ID, notes}, "note": "help"})["pid"].(string)
+	var info client.ParticipationInfo
+	w.until("the invitation at alice", func() bool {
+		info, err = alice.Participation(pid)
+		return err == nil && info.State == client.PartInvited
+	})
+	if !info.HostHere || info.Inviter.Label != "Dana" || info.Note != "help" || len(info.Grant) != 2 {
+		t.Fatalf("the browser's invitation as alice resolves it: %+v", info)
+	}
+	if c, err := alice.ParticipationContext(pid, 0); err != nil || c.Missing != 0 || len(c.Messages) != 2 {
+		t.Fatalf("what alice's agent would be shown: %+v %v", c, err)
+	}
+	a := agents()[0].(map[string]any)
+	if a["state"] != "invited" || a["can_decide"] != false || a["can_ask"] != false || len(a["shared"].([]any)) != 2 {
+		t.Fatalf("the invitation in the browser: %v", a)
+	}
+
+	// Alice accepts on her computer; the browser can then ask it.
+	if _, err := alice.AcceptParticipation(ctx, pid); err != nil {
+		t.Fatal(err)
+	}
+	w.until("active in the browser", func() bool { a = agents()[0].(map[string]any); return a["state"] == "active" && a["can_ask"] == true })
+	w.refuses("deciding in the browser", w.call(map[string]any{"op": "api", "path": "/api/dm/agent/decide", "body": map[string]any{"pid": pid, "accept": true}}), "runs no agent")
+	asked := w.api("/api/dm/agent/ask", map[string]any{"pid": pid, "body": "which branch?"})["id"].(string)
+	var req client.ConvMessage
+	w.until("the question at alice", func() bool {
+		ms, _ := alice.ConversationMessages(conv)
+		for _, m := range ms {
+			if m.ID == asked {
+				req = m
+			}
+		}
+		return req.ID != ""
+	})
+	if req.PID != pid || req.Target == nil || req.Target.Address != alice.Address || req.Kind != "question" {
+		t.Fatalf("the browser's question as alice holds it: %+v", req)
+	}
+
+	// Dana dismisses it; Alice's computer resolves the same.
+	w.api("/api/dm/agent/dismiss", map[string]any{"pid": pid})
+	w.until("dismissed at alice", func() bool { info, _ = alice.Participation(pid); return info.State == client.PartDismissed })
+	w.refuses("asking after the dismissal", w.call(map[string]any{"op": "api", "path": "/api/dm/agent/ask", "body": map[string]any{"pid": pid, "body": "x"}}), "not active")
+
+	// Alice invites "Dana's agent": the browser shows it, and cannot accept.
+	mine, err := alice.InviteAgent(ctx, conv, "dana/phone", nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.until("the invitation naming the browser", func() bool {
+		for _, x := range agents() {
+			if x.(map[string]any)["pid"] == mine.PID {
+				a = x.(map[string]any)
+				return true
+			}
+		}
+		return false
+	})
+	if a["host_here"] != true || a["can_decide"] != false || a["can_ask"] != false || !strings.Contains(a["state_text"].(string), "runs none") {
+		t.Fatalf("an invitation naming the browser: %v", a)
+	}
 }

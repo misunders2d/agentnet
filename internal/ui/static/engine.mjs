@@ -453,8 +453,8 @@ export class Engine {
     return id;
   }
 
-  // sendDM stores the sealed envelope before it is sent, and sends that
-  // exact envelope on every retry. Never a question or task, never v1.
+  // sendDM sends a message to the person. Never a question or task for
+  // them, never v1.
   async sendDM({ conv, body, reply_to: replyTo }) {
     body = String(body || "").trim();
     if (!body) throw new Error("Write a message first.");
@@ -464,6 +464,13 @@ export class Engine {
       const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
       if (!m || m.conv !== conv) throw new Error("A reply stays within its conversation.");
     }
+    return this.sendConv(c, { kind: "message", body, reply_to: replyTo || "", origin: "ui" });
+  }
+
+  // sendConv stores the sealed envelope before it is sent, and sends that
+  // exact envelope on every retry: a message, a participation record (sub
+  // "event") or a request to another device's agent (pid and target).
+  async sendConv(c, { kind, body, reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null }) {
     const { why: stop, peer, pin } = await this.gate(c);
     if (stop) throw new Error(stop);
     let ok = false, why = "";
@@ -475,11 +482,11 @@ export class Engine {
     }
     const again = (await this.gate(c)).why; // the profile just read may have frozen the person
     if (again) throw new Error(again);
-    const id = wire.newID();
+    const id = wire.newID(), lid = wire.newID();
     const at = this.now();
-    const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: peer.address, ts: Math.floor(at / 1000), kind: "message",
-      body, reply_to: replyTo || "", conv, lid: wire.newID(), root: c.root, origin: "ui" }, this.keys, await this.pubOf(pin));
-    const rec = { id, conv, body, reply_to: replyTo || "", kind: "message", origin: "ui", at, to: peer.address, envelope,
+    const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: peer.address, ts: Math.floor(at / 1000), kind,
+      body, reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target }, this.keys, await this.pubOf(pin));
+    const rec = { id, conv: c.id, lid, body, reply_to: replyTo, kind, origin, sub, pid, target, at, to: peer.address, envelope,
       state: ok ? "queued" : "waiting", detail: why };
     await put(this.store, "outbox", id, rec);
     this.changed();
@@ -685,6 +692,18 @@ export class Engine {
     if (n.reply_to) {
       const m = (await this.store.get("inbox", n.reply_to)) || (await this.store.get("outbox", n.reply_to));
       if (m && m.conv !== n.conv) throw new Hold("invalid", "it replies to a message outside its conversation");
+    }
+    if (n.sub === "event") { // a participation record: the sending device's own, for this very conversation, signed
+      let e;
+      try {
+        e = wire.parseEvent(n.body);
+        if (n.kind !== "message" || !n.pid || e.conv !== n.conv || e.pid !== n.pid || e.author.address !== env.from || e.author.fingerprint !== pin.fingerprint) {
+          throw new Error("the record is not the sending device's own, for this conversation");
+        }
+        await wire.verifyEvent(e, (await this.pubOf(pin)).sign_key);
+      } catch (err) {
+        throw new Hold("invalid", "participation: " + err.message);
+      }
     }
     const hash = wire.hex(await wire.sha256(new TextEncoder().encode(JSON.stringify(
       [n.kind, n.body, n.reply_to, n.conv, n.sub, n.origin, n.emotion, n.target, n.pid, n.replica, n.status]))));
@@ -902,17 +921,27 @@ export class Engine {
     }
     const inbox = await this.store.all("inbox");
     const outbox = await this.store.all("outbox");
-    const dms = [];
+    const dms = [], links = new Map(); // person → the agents their device runs in DMs here
     for (const c of await this.store.all("convs")) {
       const peer = persons.find((p) => p.person === c.peer);
       const msgs = [...inbox.filter((m) => m.conv === c.id), ...outbox.filter((m) => m.conv === c.id)].sort((a, b) => a.at - b.at);
+      for (const info of await this.agentsOf(c)) {
+        if (!info.host) continue;
+        const ls = links.get(info.host.person) || [];
+        let l = ls.find((x) => x.address === info.host.address);
+        if (!l) ls.push(l = { address: info.host.address, dms: [] });
+        l.dms.push({ conv: c.id, pid: info.pid, state: info.state });
+        links.set(info.host.person, ls);
+      }
+      const line = (m) => (m.sub === "event" ? this.eventText(m.body, peer) : firstLine(m.body));
       dms.push({ id: c.id, peer: this.personView(peer), created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
-        title: msgs[0] ? firstLine(msgs[0].body) : "", last: msgs.length ? firstLine(msgs[msgs.length - 1].body) : "",
+        title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? line(msgs[msgs.length - 1]) : "",
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
         unread: msgs.filter((m) => m.fp && !m.read).length, held: msgs.filter((m) => m.state === "conv_held").length,
         waiting: msgs.filter((m) => m.state === "waiting").length });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
+    for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
     const threads = inbox.filter((m) => m.v === 1).map((m) => ({ id: m.id, peer: m.from, title: firstLine(m.body), last: firstLine(m.body),
       last_at: iso(m.at), count: 1, review: 0, unread: m.read ? 0 : 1, running: 0, waiting: false, key_changed: false, notices: 0, notice_only: false }));
     const held = await this.store.all("held");
@@ -924,7 +953,8 @@ export class Engine {
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
-      persons: true, person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
+      persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
+      person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
     };
   }
 
@@ -936,6 +966,7 @@ export class Engine {
       .sort((a, b) => a.at - b.at);
     return { id, peer: this.personView(peer), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",
+      agents: (await this.agentsOf(c)).map((info) => this.agentView(info, msgs, peer)),
       messages: msgs.map((m) => {
         const out = !m.fp;
         const event = m.sub === "event" ? this.eventText(m.body, peer) : "";
@@ -944,6 +975,187 @@ export class Engine {
           pid: m.pid || "", to: m.target ? m.target.address : "", event,
           state_text: event ? "" : out ? outText(m.state, peer ? peer.address : "", m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
       }) };
+  }
+
+  // ---- agents in DMs: shown, invited, asked and dismissed here, as the
+  // core resolves them; never hosted, accepted or run (this browser runs
+  // nothing).
+
+  // dmMembers are c's member persons as pinned here now: this device's
+  // person and the other one unless frozen, each with the roster its root
+  // names.
+  async dmMembers(c) {
+    const root = wire.parseRoot(c.root);
+    const out = new Map();
+    for (const p of [this.me, await this.store.get("persons", c.peer)]) {
+      if (p && p.state !== "conflict" && wire.rootMember(root, p.person) === p.hash) out.set(p.person, p);
+    }
+    return out;
+  }
+
+  // convEvents are the participation records of conv held here, received
+  // and sent, oldest first.
+  async convEvents(conv) {
+    const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))]
+      .filter((m) => m.conv === conv && m.sub === "event").sort((a, b) => a.at - b.at);
+    const out = [];
+    for (const m of rows) {
+      try {
+        const e = wire.parseEvent(m.body);
+        out.push({ e, hash: await wire.eventHash(e) });
+      } catch (err) { /* admitted records parse; nothing else counts */ }
+    }
+    return out;
+  }
+
+  // resolveAgent is the core's resolve (participation.go): a
+  // participation's state from the set of its records, never their order,
+  // with the members as pinned now. A record that does not count is held:
+  // it has no effect until its evidence is here.
+  resolveAgent(pid, evs, m) {
+    const info = { pid, state: "pending", held: 0, host: null, inviter: null, grant: [], taskKeys: [], note: "", invite: "", decision: "", dismissal: "", conflict: "", invited: 0 };
+    const author = (a) => { const p = m.get(a.person); return p && p.hash === a.roster && p.address === a.address && p.fingerprint === a.fingerprint ? p : null; };
+    const host = (h) => { const p = h && m.get(h.person); return p && p.address === h.address && p.fingerprint === h.fingerprint ? p : null; };
+    const memberKey = (fp) => [...m.values()].some((p) => p.fingerprint === fp);
+    const invites = new Map(), decisions = [], dismisses = [];
+    for (const x of evs.filter((y) => y.e.pid === pid)) {
+      if (!author(x.e.author)) { info.held++; continue; }
+      if (x.e.type === "invite") {
+        if (!host(x.e.host) || !(x.e.task_keys || []).every(memberKey)) { info.held++; continue; }
+        invites.set(x.hash, x);
+      } else if (x.e.type === "dismiss") dismisses.push(x);
+      else decisions.push(x);
+    }
+    const known = new Set(invites.keys());
+    let inv = null;
+    if (invites.size === 1) {
+      [[info.invite, inv]] = [...invites];
+      Object.assign(info, { host: host(inv.e.host), inviter: author(inv.e.author), grant: inv.e.grant || [], taskKeys: inv.e.task_keys || [],
+        note: inv.e.note, invited: inv.e.ts, state: "invited" });
+    } else if (invites.size > 1) {
+      Object.assign(info, { state: "conflict", conflict: "different invites share this participation id" });
+    }
+    const decided = [];
+    for (const x of decisions) {
+      const h = inv && inv.e.host;
+      if (info.state !== "invited" || x.e.prev !== info.invite || x.e.author.person !== h.person || x.e.author.address !== h.address ||
+        x.e.author.fingerprint !== h.fingerprint) { info.held++; continue; }
+      decided.push(x);
+      known.add(x.hash);
+    }
+    decided.sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
+    if (decided.length === 1) Object.assign(info, { state: decided[0].e.type === "accept" ? "active" : "declined", decision: decided[0].hash });
+    else if (decided.length > 1) Object.assign(info, { state: "conflict", decision: decided[0].hash, conflict: "the host decided more than once" });
+    for (const x of dismisses) {
+      if (!known.has(x.e.prev)) { info.held++; continue; }
+      if (info.state !== "dismissed" || x.hash < info.dismissal) info.dismissal = x.hash;
+      info.state = "dismissed";
+    }
+    return info;
+  }
+
+  // agentsOf resolves every participation of conv c.
+  async agentsOf(c) {
+    const m = await this.dmMembers(c), evs = await this.convEvents(c.id);
+    return [...new Set(evs.map((x) => x.e.pid))].map((pid) => this.resolveAgent(pid, evs, m));
+  }
+
+  // agentView is a participation as the page shows it (ui.AgentView).
+  agentView(info, msgs, peer) {
+    const hostHere = !!info.host && info.host.address === this.address;
+    const label = (p) => (p === this.me ? this.me.label : p ? p.label : "");
+    const shared = [], people = [this.me, peer].filter(Boolean);
+    let missing = 0;
+    for (const g of info.grant) {
+      const m = msgs.find((x) => x.lid === g.lid && (x.fp || this.fp) === g.fingerprint && !x.sub && !x.replica);
+      if (m) shared.push(m.id); else missing++;
+    }
+    const whose = hostHere ? "your" : label(info.host) + "'s";
+    const v = { pid: info.pid, state: info.state, host: this.personView(info.host), host_here: hostHere, inviter: this.personView(info.inviter),
+      note: info.note, shared, missing, tasks_from: info.taskKeys.map((fp) => this.personView(people.find((p) => p.fingerprint === fp))).filter(Boolean),
+      held: info.held, invited: info.invited ? iso(info.invited * 1000) : "", can_decide: false, can_dismiss: false, can_ask: false, state_text: "" };
+    switch (info.state) {
+    case "pending": v.state_text = "Its invitation is not here yet: nothing counts until it is."; break;
+    case "invited":
+      v.state_text = hostHere ? "It names this browser to run an agent, but this browser runs none: it cannot accept."
+        : "Invited. " + label(info.host) + " accepts or declines it on " + info.host.address + ".";
+      v.can_dismiss = true;
+      break;
+    case "active":
+      v.state_text = hostHere ? "It names this browser, which runs no agent." : "In this DM. It answers what either of you asks it, on " + info.host.address +
+        " with " + whose + " own setup, and is shown only what was shared and what is asked of it here.";
+      v.can_dismiss = true;
+      v.can_ask = !hostHere && info.held === 0;
+      break;
+    case "declined": v.state_text = "Declined by " + label(info.host) + "."; break;
+    case "conflict": v.state_text = "Its records conflict (" + info.conflict + "): nothing runs it."; v.can_dismiss = true; break;
+    case "dismissed": v.state_text = "Dismissed: it gets nothing more from this DM."; break;
+    }
+    if (info.held > 0) v.state_text += " Some of its records do not count here yet.";
+    return v;
+  }
+
+  // agentConv finds the conversation and participation of pid.
+  async agentConv(pid) {
+    const row = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))].find((m) => m.pid === pid && m.sub === "event" && m.conv);
+    const c = row && (await this.store.get("convs", row.conv));
+    if (!c) throw new Error("No such agent in a DM here.");
+    const info = this.resolveAgent(pid, await this.convEvents(c.id), await this.dmMembers(c));
+    return { c, info };
+  }
+
+  author() {
+    return { person: this.me.person, roster: this.me.hash, address: this.address, fingerprint: this.fp };
+  }
+
+  // inviteAgent invites the agent on the other member's device: never this
+  // browser, which runs none. The earlier messages it may be shown and the
+  // member keys it takes tasks from without asking are chosen by the person.
+  async inviteAgent({ conv, host, share = [], tasks_from: tasks = [], note = "" }) {
+    const c = await this.store.get("convs", conv);
+    if (!c) throw new Error("No conversation " + conv + " here.");
+    if (!this.me) throw new Error("Set up your person first.");
+    if (host === this.address) throw new Error("This browser runs no agent: invite the agent on the other person's computer.");
+    const m = await this.dmMembers(c);
+    if (!m.has(this.me.person)) throw new Error("This device does not speak for a member of that conversation.");
+    const hp = [...m.values()].find((p) => p.address === host);
+    if (!hp) throw new Error(host + " is not the device of a member of that conversation (or its person is frozen).");
+    const msgs = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))].filter((x) => x.conv === conv);
+    const grant = share.map((id) => {
+      const x = msgs.find((y) => y.id === id && !y.sub && !y.replica);
+      if (!x || !x.lid) throw new Error("A message chosen to share is not an earlier message of this DM that can be shared.");
+      return { lid: x.lid, fingerprint: x.fp || this.fp };
+    });
+    for (const fp of tasks) if (![...m.values()].some((p) => p.fingerprint === fp)) throw new Error(fp + " is not the key of a member of that conversation.");
+    const e = await wire.signEvent(this.keys, { conv, pid: wire.newID(), type: "invite", ts: Math.floor(this.now() / 1000), author: this.author(),
+      host: { person: hp.person, address: hp.address, fingerprint: hp.fingerprint }, grant: grant.length ? grant : null,
+      audience: "conversation", task_keys: tasks.length ? tasks : null, note: String(note).trim() });
+    await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(e), pid: e.pid });
+    return { pid: e.pid, state: "invited" };
+  }
+
+  // dismissAgent ends a participation, following the record it ends.
+  async dismissAgent(pid) {
+    const { c, info } = await this.agentConv(pid);
+    if (!this.me || !(await this.dmMembers(c)).has(this.me.person)) throw new Error("This device does not speak for a member of that conversation.");
+    let prev = info.decision;
+    if (info.state === "invited") prev = info.invite;
+    else if (!["active", "declined", "conflict"].includes(info.state) || !prev) throw new Error("The agent's participation is " + info.state + ".");
+    const e = await wire.signEvent(this.keys, { conv: c.id, pid, type: "dismiss", prev, ts: Math.floor(this.now() / 1000), author: this.author() });
+    await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(e), pid });
+    return { pid, state: "dismissed" };
+  }
+
+  // askAgent sends a question or task to an active participation's agent,
+  // on the other person's computer: its one target.
+  async askAgent({ pid, kind = "question", body }) {
+    body = String(body || "").trim();
+    if (!body) throw new Error("Write what to ask first.");
+    if (kind !== "question" && kind !== "task") throw new Error("An agent is asked a question or given a task.");
+    const { c, info } = await this.agentConv(pid);
+    if (info.state !== "active" || info.held > 0) throw new Error("The agent's participation is " + info.state + ": not active.");
+    if (info.host.address === this.address) throw new Error("This browser runs no agent.");
+    return this.sendConv(c, { kind, body, pid, origin: "ui", target: { address: info.host.address, fingerprint: info.host.fingerprint } });
   }
 
   // eventText says what an agent participation record in a DM does, as
@@ -1011,6 +1223,10 @@ export class Engine {
     case "/api/thread": return this.thread(u.searchParams.get("id"));
     case "/api/dm/new": return { id: await this.newDM(body.address) };
     case "/api/dm/send": return this.sendDM(body);
+    case "/api/dm/agent/invite": return this.inviteAgent(body);
+    case "/api/dm/agent/dismiss": return this.dismissAgent(body.pid);
+    case "/api/dm/agent/ask": return this.askAgent(body);
+    case "/api/dm/agent/decide": throw new Error("This browser runs no agent: an agent is accepted on the computer that runs it.");
     case "/api/person": return this.createPerson(body.label);
     case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : { text: "Connection unknown" };
     case "/api/act":
