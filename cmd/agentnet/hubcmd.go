@@ -201,6 +201,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	public := fs.String("public-url", env("PUBLIC_URL", ""), "https URL clients use (default https://LISTEN; env AGENTNET_PUBLIC_URL)")
 	adminLabel := fs.String("admin-label", env("ADMIN_LABEL", "admin"), "person label for the bootstrap admin invite")
 	platformTLS := fs.Bool("platform-tls", env("PLATFORM_TLS", "") == "1", "serve plain HTTP behind a platform that terminates HTTPS for --public-url (env AGENTNET_PLATFORM_TLS=1)")
+	web := fs.Bool("web", env("WEB", "") == "1", "serve the browser messenger at this Hub's URL (env AGENTNET_WEB=1)")
 	maxFile := fs.String("max-file", env("MAX_FILE", "100MiB"), "largest attachment (plaintext)")
 	quota := fs.String("quota", env("QUOTA", "1GiB"), "total attachment storage")
 	uploadTTL := fs.Duration("upload-ttl", mustDuration(env("UPLOAD_TTL", "24h")), "idle time before an unfinished upload is removed")
@@ -230,7 +231,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 		}
 		*public = "https://" + *listen
 	}
-	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel, PlatformTLS: *platformTLS,
+	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel, PlatformTLS: *platformTLS, Web: *web,
 		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL})
 	if err != nil {
 		return err

@@ -588,12 +588,12 @@ commands need the Hub stopped.
 Environment variables (how the container image is configured):
   all hub commands:  AGENTNET_DATA (--data)
   hub serve only:    AGENTNET_LISTEN or PORT (--listen), AGENTNET_PUBLIC_URL,
-                     AGENTNET_ADMIN_LABEL, AGENTNET_PLATFORM_TLS=1,
+                     AGENTNET_ADMIN_LABEL, AGENTNET_PLATFORM_TLS=1, AGENTNET_WEB=1,
                      AGENTNET_MAX_FILE, AGENTNET_QUOTA, AGENTNET_UPLOAD_TTL
 Other flags (--out, --from, cleanup ages) have no variable.`,
 
 	"hub serve": `Usage: agentnet hub serve --data DIR [--listen ADDR] [--public-url URL]
-                         [--platform-tls] [--max-file 100MiB] [--quota 1GiB]
+                         [--platform-tls] [--web] [--max-file 100MiB] [--quota 1GiB]
                          [--upload-ttl 24h] [--admin-label admin]
 
 Serve a Hub. On first start it writes a one-time admin invite to
@@ -604,10 +604,15 @@ DIR/bootstrap-invite.txt (read it with agentnet hub bootstrap-invite).
   --public-url URL  https URL laptops use (env AGENTNET_PUBLIC_URL)
   --platform-tls    plain HTTP behind a platform that terminates HTTPS for
                     --public-url (Railway, load balancer); keep the port private
+  --web             serve the browser messenger at / (env AGENTNET_WEB=1)
   --max-file SIZE   largest attachment        --quota SIZE  total attachments
   --upload-ttl D    remove unfinished uploads after D idle
 
 Default TLS: the Hub makes its own certificate and pins it in invites.
+For browsers, use HTTPS with a certificate they trust, normally through a
+reverse proxy with --platform-tls. The page's code comes from the Hub operator.
+Without --web the Hub serves only its API; --web does not expose the laptop's
+local page API or run a responder on the Hub.
 
 Examples:
   agentnet hub serve --data /var/lib/agentnet --listen :8443 --public-url https://hub.example.com:8443

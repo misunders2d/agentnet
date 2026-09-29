@@ -49,6 +49,10 @@ type Config struct {
 	// the platform's certificate with their system CAs. The listener must be
 	// reachable only through that platform.
 	PlatformTLS bool
+
+	// Web serves the browser messenger on this Hub's origin. The default is
+	// API-only. Browsers need publicly trusted HTTPS (normally PlatformTLS).
+	Web bool
 }
 
 // Hub serves the AgentNet Hub API.

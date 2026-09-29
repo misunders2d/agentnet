@@ -13,6 +13,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/ui/static"
 )
 
 func (h *Hub) routes() http.Handler {
@@ -42,6 +43,9 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
 	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
+	if h.cfg.Web {
+		mux.Handle("/", static.Relay())
+	}
 	return h.countRequests(mux)
 }
 
