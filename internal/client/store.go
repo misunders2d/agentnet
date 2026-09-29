@@ -510,6 +510,17 @@ var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld
 
 const inReview = `state IN (?, ?, ?, ?)`
 
+// alertReviewStates are the review states that ask for attention by the
+// legacy desktop review notification and the review notice to another
+// agent: a DM question or task for the person (stateConvHeld) is not among
+// them, as it is a person's DM turn, which follows the DM's own opt-in
+// alerts (alerts.go). It stays in review (reviewStates) all the same. A
+// request to this device's agent that needs the person (awaiting,
+// needs_human) keeps them.
+var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
+
+const inAlertReview = `state IN (?, ?, ?)`
+
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
 	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state, verifiedBy}
 }
@@ -916,9 +927,10 @@ func (s *store) finishJob(id, state, detail string) error {
 }
 
 // unnotified returns the ids of items waiting for the human that no desktop
-// notification has covered yet, and how many items wait in all.
+// notification has covered yet, and how many such items wait in all (a
+// person's DM turn is not one: alertReviewStates).
 func (s *store) unnotified() (ids []string, total int, err error) {
-	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inReview, reviewStates...)
+	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview, alertReviewStates...)
 	if err != nil {
 		return nil, 0, err
 	}

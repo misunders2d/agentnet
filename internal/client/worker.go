@@ -43,6 +43,9 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 	for {
 		for a.reviewAttention(ctx); a.runNext(ctx, wake); a.reviewAttention(ctx) {
 		}
+		// The last look may have moved a request to review without running
+		// anything (a task for this device's agent that needs the person).
+		a.reviewAttention(ctx)
 		a.notifyRelease()
 		if r := a.updatePending(); r != nil && a.UpdateSwitching() == nil {
 			a.switchForUpdate(ctx, *r) // no job runs now: its result is stored

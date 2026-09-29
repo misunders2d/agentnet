@@ -92,9 +92,10 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		a.reviewGen, a.reviewTried = gen, nil
 	}
 	// Every item waiting here counts, including follow-ups your responder
-	// marked needs_human, except review notices received from others.
-	args := append(append([]any{}, reviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := a.store.db.Query(`SELECT id, review_sent FROM inbox WHERE `+inReview+` AND NOT (`+receivedNotice+`)`, args...)
+	// marked needs_human, except review notices received from others and
+	// a person's DM turns (alertReviewStates: they follow the DM's alerts).
+	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
+	rows, err := a.store.db.Query(`SELECT id, review_sent FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`)`, args...)
 	if err != nil {
 		a.Logf("review notice: %v", err)
 		return
@@ -125,11 +126,11 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		a.reviewTried[id] = true
 	}
 	claim := func(tx *sql.Tx, _ string) error {
-		marks := append([]any{}, reviewStates...)
+		marks := append([]any{}, alertReviewStates...)
 		for _, id := range ids {
 			marks = append(marks, id)
 		}
-		res, err := tx.Exec(`UPDATE inbox SET review_sent = 1 WHERE review_sent = 0 AND `+inReview+
+		res, err := tx.Exec(`UPDATE inbox SET review_sent = 1 WHERE review_sent = 0 AND `+inAlertReview+
 			` AND id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, marks...)
 		if err != nil {
 			return err
