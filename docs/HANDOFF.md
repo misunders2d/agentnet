@@ -294,7 +294,8 @@ If a local database or key file is damaged:
   An agent's first report does **not** dismiss it: it remains available for
   follow-ups, with no model calls merely to wait, until explicitly dismissed.
   This records design direction and acceptance examples, not implementation approval.
-- **Messenger architecture (reviewed proposal; only slice S-A implemented)**: read
+- **Messenger architecture (reviewed design, partly built: S-A, the People directory, Pi attention, the
+  human-DM core and its page candidate, browser-wire infrastructure; the rest is proposal)**: read
   [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) before any messenger code.
   It covers the real Provider/backend contract, relay-served phone/browser devices
   and the requirement that the relay stays one portable unit (binary/container,
@@ -308,40 +309,49 @@ If a local database or key file is damaged:
   must show each human with visible links to their own agents (ownership, not presence or invitation;
   from the reviewed identity/agent relationship, never labels or addresses; no device-as-human shortcut).
   See [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
-- **First human-DM core (candidate, corrections pending)**: `1d97945` (core Claude) adds, CLI only
-  (`agentnet person create`, `agentnet dm`), explicit single-device persons, signed DM roots, envelope v2,
-  capability records, admission dedupe, and holds every conversation question/task (nothing runs). Root
-  review found R1 (signed person conflict ignored on the cache/event path) and R2 (missing-proof queue
-  starvation), being corrected. Not built: agent participation/execution, page person/DM/Zoom views,
-  device linking, groups, browser devices. Human DMs are not complete.
-- **Human DMs on the page (candidate)**: person setup by hand, people listed by their claimed name until checked,
+- **Human-DM core (corrections accepted)**: `1d97945` (core Claude) adds, from the CLI (`agentnet person create`,
+  `agentnet dm`), explicit single-device persons, signed DM roots, envelope v2, capability records, admission
+  dedupe, and holds every conversation question/task (nothing runs). Root review defects R1, R2, C1, C2 and the
+  frozen-person deferred send are fixed (`9f5bea1`, `5da7fa1`, `7247759`); root accepted `7247759` with focused
+  race tests, closing the core correction gate. Not built: agent participation/execution, Zoom human–agent
+  links, device linking, groups, browser devices. Human DMs are not complete.
+- **Human DMs on the page (`4a0659c`, candidate; Agy review pending)**: person setup by hand, people listed by their claimed name until checked,
   separate persistent DMs, a message-only DM composer with receipts, held questions/tasks (nothing runs), frozen
   DMs; apart from device history. Not yet in Comic/Zoom; no agent invitation, Zoom human–agent links, device
   linking, people search or relay browser DMs.
 - **Next release scope (recorded; v1 contacts/conversations navigation, search of known agents and
   conversations, separated review reports and the People directory are implemented, the rest not)**: S-W relay-served HTTPS browser/phone,
   a People directory with event-driven presence (online = daemon connected, shown only while this daemon
-  is connected to the relay; listing grants no trust; choosing a member opens a draft, never sends), Pi native attention (under investigation), and contacts and conversations (reviewed
+  is connected to the relay; listing grants no trust; choosing a member opens a draft, never sends), Pi native attention (built for Pi 0.87.1:
+  `2479a7e`, `4b1c7a2`, `587a1d5`; evidence and limits in [M4](revival/M4.md)), and contacts and conversations (reviewed
   direction, corrected by the owner: one row per exact address holding separate conversations,
   never merged; grouped remote notices; no remote approval), and one search for agents and
-  conversations (people once human identity exists; kinds shown, opens exactly the chosen item,
-  grants no trust). See
+  conversations (kinds shown, opens exactly the chosen item, grants no trust; people are not searchable yet). See
   [MESSENGER_ARCHITECTURE.md §16](MESSENGER_ARCHITECTURE.md#16-a5-rollout). Chrome standalone/PWA
   remains an open request; S-R reminders unchanged. One-command `agentnet update` (latest stable,
   same home, daemon and page switch safely): in source, not released; Windows switches only a daemon
   started by the scheduled task `\agentnet` (native test passed in Actions run 36458378377; a standalone
   daemon is not stopped, an explicit limit)
   ([§19.2b](MESSENGER_ARCHITECTURE.md#19-updates-and-versions)).
-- **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed; implementation deferred until scoped next assignment. See [`docs/DECISIONS.md`](DECISIONS.md).
+- **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed. First part built: explicit single-device
+  persons (human-DM core above). Linking devices, roster changes across devices, recovery and history transfer are not
+  built. See [`docs/DECISIONS.md`](DECISIONS.md).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: Persisted conversation focus specified; native OS click handlers unimplemented.
+- **Owner requests for later (2026-09-29; backlog, not this release; Linear to be linked)**: custom visual plugins
+  (each user bundles presentations like Classic/Comic/Zoom; isolated, least permission, no secret access or silent
+  export, core keeps all authority; architecture, API and package format undecided) and editing sent messages
+  (visible edited state, authenticated sender revisions synced to offline devices, never a silent rewrite or rerun of
+  accepted/run work; edit windows, history visibility, attachments and conflicts undecided). See
+  [MESSENGER_ARCHITECTURE.md §20](MESSENGER_ARCHITECTURE.md#20-owner-requests-for-later-backlog-not-this-release).
 - **Live Daemon Web UI Integration (`MEL-429`, slice S-A)**: `agentnet daemon --ui 127.0.0.1:0` serves the
   messenger page over this home's real inbox from the daemon that owns the home; `agentnet ui` prints its
   address (token kept in the owner-only `HOME/ui-url`, never logged). Classic, Comic and Zoom presentations
   share one Provider and the same decision dialogs. Threads are derived v1 reply links;
   every action is an existing `Agent` operation with its CLI gates; changes are pushed (store writes and
   the local kick socket), never polled. It is a page on this computer only: no relay hosting, phone or
-  browser devices, groups, conversation v2, file sending from the page, or push (S-W, S-B, S-C, S-P and later).
+  browser devices, groups, file sending from the page, or push (S-W, S-C, S-P and later); human DMs (v2) are the
+  page candidate above.
   Tests: `internal/ui`, `internal/client/uiview_test.go`, `itest/ui_test.go` (two synthetic homes, real binary).
 - **Group Messaging & Federation**: Deferred from initial slice.
 - **Automated Task Execution**: Tasks run only after `agentnet accept ID` or under a local, per-key task grant (`approve --tasks`, `accept --always`; see docs/revival/M4.md). No other path may run a task: nothing received, no name match and no policy engine grants it.

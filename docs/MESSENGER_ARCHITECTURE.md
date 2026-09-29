@@ -1,12 +1,13 @@
-# Messenger architecture (REVIEWED PROPOSAL, not implemented)
+# Messenger architecture (reviewed design, partly built)
 
 **Status:**
-- Reviewed proposal. Codex, Agy and core Claude reviewed the initial draft, the
+- Reviewed design. Codex, Agy and core Claude reviewed the initial draft, the
   author corrected it, and Codex checked the corrections.
-- This is **not** implementation approval. The owner decisions in §15 remain
-  open.
-- Nothing here is built or frozen. Field, table, route and API names are
-  provisional.
+- Parts are built, each on its own scoped assignment and listed below with its
+  commits; the rest is still proposal. Being written here is **not**
+  implementation approval, and the open owner decisions are in §15.
+- Nothing is frozen: field, table, route and API names stay provisional until
+  a release ships them.
 - **Increments, not the messenger (owner correction, 2026-09-28).** What is
   built (S-A: the page over one installation's inbox, contacts by exact
   address, v1 reply-linked conversations, the member directory) and the planned
@@ -32,9 +33,9 @@
   roster, the agent's host installation and participation), never from a label
   or an address. There is no device-as-human shortcut in the meantime. It is
   part of the human-DM acceptance and of the final Zoom view.
-- **First human-DM core: a candidate with corrections pending (2026-09-28).**
-  Core Claude's `1d97945` adds, from the command line only (`agentnet person
-  create NAME`, `agentnet dm new|list|show|send`):
+- **Human-DM core: corrections accepted (2026-09-29).** Core Claude's
+  `1d97945` adds, from the command line (`agentnet person create NAME`,
+  `agentnet dm new|list|show|send`):
   - explicit person creation, one signed single-device roster per
     installation, pinned by peers, with a conflicting record frozen, never a
     replacement;
@@ -45,18 +46,22 @@
   - every conversation question or task held for the person: nothing runs
     it.
 
-  Root review found two defects that core Claude is correcting: a signed
-  person conflict ignored on the cached and event path (R1), and the
-  missing-proof queue starving past its oldest 50 items (R2). Its tests are
-  core Claude's and root's evidence. Not built yet:
+  Root review found defects, now corrected: a signed person conflict ignored
+  on the cached and event path (R1) and the missing-proof queue starving past
+  its oldest 50 items (R2), with DMs kept out of device history (C1, C2), in
+  `9f5bea1` and `5da7fa1`; a frozen person got a deferred send and a new DM,
+  fixed in `7247759`. Root accepted `7247759` (source checked; focused race
+  tests of waiting, queued, fresh-conflict and normal-recovery sends passed),
+  which closes the core's correction gate. The tests are core Claude's and
+  root's evidence. Not built yet:
   - agent participation (invite, allowed context, follow-ups, dismissal) and
     execution;
-  - the page's person, DM and Zoom-link views;
+  - Zoom's human–agent links;
   - linking devices, groups, browser devices.
 
   Human DMs are **not** complete.
-- **Human DMs on the page: a candidate (2026-09-28).** The daemon's page adds,
-  through the core's APIs only:
+- **Human DMs on the page: a candidate, review pending (2026-09-28).**
+  `4a0659c` adds to the daemon's page, through the core's APIs only:
   - setting up your person by hand (never automatically);
   - people on your server shown by the name they claim until checked (the
     check happens when you start a DM);
@@ -67,8 +72,12 @@
   DMs stay apart from device history (the contacts by address), and Comic and
   Zoom do not draw them yet. Not built: agent invitation and participation,
   Zoom's human–agent links, linking devices, searching people, DMs on the
-  relay's browser page. The core's own acceptance still waits on one fix (a
-  kept DM message went out despite a person conflict).
+  relay's browser page. Agy's review of this page is pending.
+- **Also built since the design was written:** the People directory (`aec4d4f`,
+  `b88f782`; §16); Pi attention (`2479a7e`, `4b1c7a2`, `587a1d5`;
+  `docs/revival/M4.md`); the browser device's wire format and the relay's page
+  handler (`306adaf`, `421f3b6`, `b61a494`), with nothing mounted and no
+  browser device yet (§16, S-W).
 
 **Sources of requirements:**
 - `docs/DECISIONS.md` §2 (identity), §3.2 (persistent conversations and
@@ -703,6 +712,10 @@ option, not a gate.
 **Needed before the named slice.**
 1. **Before S-W:** hosted-access code trust (§6). Accept relay-served code for
    browser devices, or choose daemon-only laptops or a native client.
+   *Owner direction so far:* the owner asked for relay hosting. Engineering
+   follows that direction with §6's limit stated on the page and nothing
+   activated in production; this record is not a separate sign-off on §6's
+   tradeoff.
 2. **Before S-C:** the group authority default. The proposal is keeper-authorized
    epochs, any member may request, and the creator's device is keeper.
    Alternatives: several keepers, or any member authorizes, with weaker
@@ -744,12 +757,16 @@ option, not a gate.
 
 **Next release scope (recorded 2026-09-28).** Implemented so far: the v1
 navigation part of contacts and conversations, search of known agents and
-conversations, separated review notices (see "In this build" below), and the
-People directory (below). The rest is not implemented.
-S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
+conversations, separated review notices (see "In this build" below), the
+People directory and Pi attention (below), and the human-DM core with its page
+candidate (status at the top). S-A was qualified at `0760ccc` (all four CI jobs
+passed then). The next release bundles:
 - **S-W** as designed below: the relay serves the page over HTTPS to a browser
   or phone. §6's code-trust limit stands: a browser device trusts the code the
-  relay serves.
+  relay serves. *In source:* the wire format checked against the Go code and
+  the relay's page handler (`306adaf`, `421f3b6`, `b61a494`); not mounted, and
+  the browser's conversation screens wait for the person, DM and
+  participation contract.
 - **People directory:** the enrolled members, each with presence online,
   reconnecting, offline or unknown, so a newly joined member (for example
   Vitalii) can be found without knowing their exact address. It is kept current
@@ -769,8 +786,12 @@ S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
     grants. Evidence: `internal/ui` live test on a real test relay (arrival,
     connect, disconnect, revoke, relay gone), page checks, and a real
     browser on synthetic homes with no reload.
-- **Pi native attention:** under investigation (which lifecycle and idle APIs
-  Pi supports); no design or code yet.
+- **Pi native attention:** built for upstream Pi 0.87.1 (`2479a7e`,
+  `4b1c7a2`, `587a1d5`; details and limits in `docs/revival/M4.md`): a Pi
+  session is told what arrived, as metadata, at session start, with a prompt,
+  at the end of a run and while idle, without starting a model turn. Evidence:
+  tests and a live Pi run in RPC mode without a model; not run in an
+  interactive Pi TUI or with OMP.
 - **Contacts and conversations** (reviewed direction below, corrected by the
   owner).
 - **Search (required by the owner):** one clear search entry finds agents
@@ -780,12 +801,14 @@ S-A is current at `0760ccc` (all four CI jobs pass). The next release bundles:
   or conversation, never a guess or a merge (contact, then its separate
   conversations, then messages, as below). Search reaches only what the
   directory and local history already show and grants no trust or permission.
-  Person results wait for the human-identity model (§4); today's person label
-  (such as "admin") is not shown as a verified person. How search is built
-  (index, service, any AI) is not decided here.
+  Person results are not built: persons now exist only as explicit
+  single-device records (human-DM core), and search does not reach them yet;
+  an address's label (such as "admin") is never shown as a verified person.
+  How search is built (index, service, any AI) is not decided here.
 
 Still open, not implemented: a Chrome standalone/PWA install. S-R (reminders)
-keeps its status above. No group or identity work is in this release.
+keeps its status above. No group work is in this release, and identity is
+limited to explicit single-device persons: no linking, merging or recovery.
 
 **Contacts and conversations (reviewed direction, corrected by the owner
 2026-09-28; v1 navigation implemented, named conversations not).** This supersedes the contact-wide history
@@ -1289,3 +1312,41 @@ inferred from a build string.
   - an older app with newer data refuses writes.
 - **Mixed versions:** the §9.1 matrix run with real binaries (itest style), across
   restarts.
+
+## 20. Owner requests for later (backlog, not this release)
+
+Recorded 2026-09-29. Neither is designed or scheduled; nothing here widens the
+current release. Linear: to be linked.
+
+**Custom visual plugins.** Every user can bundle their own presentation of the
+messenger, as Classic, Comic and Zoom are, without changing how messages flow.
+It must be secure:
+- *Isolation:* a plugin runs apart from the page's own code and from other
+  plugins, and sees only the view data it is given. It cannot reach keys,
+  tokens, cookies, the page's API, the network or local files.
+- *Least permission, protected core authority:* a plugin only draws and asks
+  for core actions. Sending, accepting, trusting, granting and approving stay
+  with the core, which shows its own confirmation and applies its own rules; a
+  plugin cannot perform them, decide them, or imitate the core's dialogs.
+- *No silent export:* nothing a plugin sees leaves the page or the computer
+  except by the person's explicit action in the core's own screens.
+- *No change to the core flow:* sending, storing, receipts and execution are
+  the same with or without plugins.
+
+Undecided: the architecture, the API, the package format, and how plugins are
+installed, reviewed and updated. Signing a plugin, or running it in a sandbox,
+is not by itself shown to meet these requirements.
+
+**Editing sent messages.** As in Slack or Telegram, a sender can edit a message
+they sent:
+- the message visibly shows that it was edited;
+- an edit is an authenticated revision by the same sender, delivered as
+  messages are, reaching devices that were offline and applied in order;
+- messages stay immutable underneath (§8): a revision is a new signed record
+  linked to the original, never a silent rewrite;
+- an edit never reruns or re-decides anything: a question or task already
+  accepted, answered or run keeps its record.
+
+Open design questions: time limits on editing, who can see earlier versions,
+attachments, conflicting or concurrent edits, what an agent that already read
+the message does with a revision, and how older clients show edits.
