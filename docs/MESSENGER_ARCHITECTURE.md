@@ -162,8 +162,8 @@
   push and click only (content-free "AgentNet / New activity"; a click
   opens the DM this device resolves, or says it is not here). Evidence:
   wire vectors both ways, engine tests against the Hub's API, service
-  worker and page checks, and one real pass in desktop Chrome 154 on
-  Linux with Google's push service (synthetic Hub and messages on
+  worker and page checks, and one implementer-observed real pass in
+  desktop Chrome 154 on Linux with Google's push service (synthetic Hub and messages on
   loopback, the Hub behind a test-only port that serves the browser over
   plain HTTP and the command-line peer over pinned TLS): opt-in from the
   page's button (the browser's permission answered for that test origin),
@@ -176,9 +176,24 @@
   from another DM) and with the page closed (one tab in the same window),
   and a person's own click did the same; a muted DM raised nothing while
   the other DM with the same person still alerted; off raised nothing.
-  Not shown: a deployed HTTPS relay, a phone or iPhone, other browsers,
-  macOS or Windows; the desktop daemon's alerts are core work in
-  progress.
+  There is no log of the push service's 2xx (the Hub records none; the
+  delivery is inferred from the alert leaving the Hub and the banner that
+  only the service worker can show), and the browser's permission prompt
+  was answered by the test, not clicked. Not shown: a deployed HTTPS
+  relay, a phone or iPhone, other browsers, macOS or Windows.
+- **Desktop alerts from the daemon's page (`cd54168`, on core `a85b84c`,
+  `99b2559`).** The page turns the daemon's alerts on and off (never
+  asking the browser for permission), mutes DMs, allows people by exact
+  key, reports presented messages, and opens `#conv=ID` from an alert's
+  click (that DM if held here, else the list; without its session it says
+  to run `agentnet ui`). One synthetic pass on this Linux desktop: the
+  daemon's native banner ("AgentNet / New activity", action "Open") came
+  about 5 s after a message with the page closed and not while the DM was
+  in view; a muted DM and "off" raised nothing; the click's page route was
+  checked by opening the exact `#conv=` address in the test browser (the
+  native banner itself was not clicked, since that opens the person's
+  default browser). macOS and Windows alerts have no click; not shown
+  there.
 - **The browser device (2026-09-29; local commits, review in progress).**
   `hub serve --web` (or `AGENTNET_WEB=1`; off by default) serves the page at
   the Hub's origin (`7a97aaf`, core), and `admin invite --link` prints a

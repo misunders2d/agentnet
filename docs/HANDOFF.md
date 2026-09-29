@@ -341,9 +341,11 @@ If a local database or key file is damaged:
   invites, asks and dismisses the other person's agent and never runs one (`061faaf`). See
   [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status). Notifications ([`docs/revival/NOTIFY.md`](revival/NOTIFY.md)):
   Hub side `a83aa4d` and the browser device's side (`6adc18d`, `63f1ac9`) built locally; one real desktop Chrome 154
-  (Linux) pass through Google's push service showed opt-in, presented suppression, closed-page alerts, click to the
-  exact DM, per-DM mute and off (loopback, synthetic; details in the architecture status). Not shown: deployed HTTPS,
-  phone/iPhone, other browsers, macOS/Windows; desktop daemon alerts in progress.
+  (Linux) implementer-observed pass through Google's push service showed opt-in (permission answered by the test),
+  presented suppression, closed-page alerts, click to the exact DM, per-DM mute and off (loopback, synthetic; no
+  provider 2xx log). Desktop daemon alerts: core `a85b84c`/`99b2559`, page controls `cd54168`, one Linux pass (native
+  banner, suppression, mute, off; click route opened directly). Not shown: deployed HTTPS, phone/iPhone, other
+  browsers, macOS/Windows clicks.
 - **Browser device (2026-09-29, local commits, review in progress)**: `hub serve --web` serves the page at the Hub
   origin (`7a97aaf`), `admin invite --link` prints browser invite links (`3a588c3`); the human-only browser engine,
   plain join page and installable manifest are `6061c11`, `9ecd3c8`, `2d05b2c`, `e971c16`, `1cab993`. The app icon
