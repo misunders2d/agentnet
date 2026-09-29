@@ -674,3 +674,14 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
 .hub .new-conv { justify-self: start; }
 .hub-back { font-size: 13px; padding: 0; margin: 0 0 2px; color: var(--accent-text); }
 @media (max-width: 760px) { .hub { padding: 12px; } }
+
+/* one person, several devices (MEL-433) */
+.person-devices summary { cursor: pointer; font-weight: 600; }
+.device-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.device-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.device-children { margin: 4px 0 0 18px; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.device-child { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--sunken); color: var(--muted); }
+.link-ask { display: grid; gap: 6px; justify-items: start; padding: 8px 10px; margin: 4px 0; border-radius: 12px; background: var(--attn-soft, var(--sunken)); }
+.link-ask p { margin: 0; font-size: 13px; }
+.chip.danger { color: var(--danger); }
+#link-code { width: 100%; font-family: var(--mono, monospace); font-size: 12px; }

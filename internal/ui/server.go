@@ -60,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/act", s.act)
 	mux.HandleFunc("POST /api/simulate", s.simulate)
 	mux.HandleFunc("POST /api/person", s.person)
+	mux.HandleFunc("POST /api/device/{what}", s.device)
 	mux.HandleFunc("GET /api/dm", s.dm)
 	mux.HandleFunc("POST /api/dm/new", s.newDM)
 	mux.HandleFunc("POST /api/dm/send", s.sendDM)
@@ -430,6 +431,41 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 // persons is the provider's human DMs, or a refusal saying there are none.
+// device handles one person's devices (Identity): marking this
+// installation a service, a link for a new device, deciding a new device's
+// request, removing a device.
+func (s *Server) device(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(Identity)
+	if !ok {
+		writeErr(w, NotFound("devices are not available here"))
+		return
+	}
+	var v struct {
+		ID      string `json:"id"`
+		Accept  bool   `json:"accept"`
+		Address string `json:"address"`
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	switch r.PathValue("what") {
+	case "service":
+		note, err := p.SetService()
+		writeResult(w, map[string]string{"note": note}, err)
+	case "link":
+		l, err := p.NewDeviceLink()
+		writeResult(w, l, err)
+	case "decide":
+		note, err := p.DecideLink(v.ID, v.Accept)
+		writeResult(w, map[string]string{"note": note}, err)
+	case "remove":
+		note, err := p.RemoveDevice(v.Address)
+		writeResult(w, map[string]string{"note": note}, err)
+	default:
+		writeErr(w, NotFound("no such device action"))
+	}
+}
+
 func (s *Server) persons(w http.ResponseWriter) (Persons, bool) {
 	p, ok := s.p.(Persons)
 	if !ok {

@@ -24,7 +24,10 @@ type Fixture struct {
 	seq      uint64
 	changed  chan struct{}
 	arrivals int
-	person   *PersonView  // this demo installation's person, once created
+	person   *PersonView // this demo installation's person, once created
+	role     string      // RoleUnset, RolePerson or RoleService
+	links    []LinkRequest
+	history  []HistoryCopy
 	listed   []PersonView // invented people the demo server lists
 	dms      []*fxDM
 }
@@ -57,7 +60,7 @@ var thisComputer = Author{Label: "This computer",
 
 // NewFixture returns the demo data, with times relative to now.
 func NewFixture(now func() time.Time) *Fixture {
-	f := &Fixture{now: now, changed: make(chan struct{}), peers: map[string]*fxPeer{},
+	f := &Fixture{now: now, changed: make(chan struct{}), peers: map[string]*fxPeer{}, role: RoleUnset,
 		me: Me{Address: "alice/laptop", Fingerprint: "SHA256:5e1d 9a07 c3b2 11f4", Responder: "claude", ResponderDir: "~/work/api"}}
 	t := now()
 	ago := func(min int) time.Time { return t.Add(-time.Duration(min) * time.Minute) }
@@ -132,7 +135,9 @@ func NewFixture(now func() time.Time) *Fixture {
 
 	// Who the server lists: the peers above, and someone who just joined and
 	// has not written yet.
-	f.listed = []PersonView{{Label: "Vitalii", Address: "vitalii/laptop", State: PersonListed}}
+	f.listed = []PersonView{{Label: "Vitalii", Address: "vitalii/laptop", State: PersonListed},
+		{Label: "Bob", Address: "bob/desk", State: PersonListed, Devices: []DeviceView{
+			{Address: "bob/desk", Name: "desk", Fingerprint: "SHA256:0b7c 44e1 92aa 6d30"}, {Address: "bob/phone", Name: "phone", Fingerprint: "SHA256:c4e2 19b0 7a33 5d81"}}}}
 	f.dir = Directory{Status: DirectoryListed, Current: true, At: t, Members: []DirMember{
 		{Address: "vitalii/laptop", Presence: "connected", Joined: ago(30)},
 		{Address: "hub/ops", Presence: "connected", Joined: ago(3000)},
@@ -263,6 +268,7 @@ func (f *Fixture) Overview() (Overview, error) {
 	}
 	sort.SliceStable(o.Threads, func(i, j int) bool { return o.Threads[i].LastAt.After(o.Threads[j].LastAt) })
 	o.Persons, o.Person, o.People, o.DMs = true, f.person, []PersonView{}, []DMSummary{}
+	o.Role, o.Links, o.History = f.role, f.links, f.history
 	pinned := map[string]bool{}
 	for _, d := range f.dms {
 		if !pinned[d.peer.Address] {
@@ -528,7 +534,12 @@ func (f *Fixture) CreatePerson(label string) (PersonView, string, error) {
 	if f.person != nil {
 		return *f.person, "", Refuse("This installation already has a person; a second one is not created.")
 	}
-	f.person = &PersonView{Person: "demo-person-me", Label: label, Address: f.me.Address, State: PersonSelf, Published: true}
+	if f.role == RoleService {
+		return PersonView{}, "", Refuse("This installation is a service: it has no person.")
+	}
+	f.person = &PersonView{Person: "demo-person-me", Label: label, Address: f.me.Address, State: PersonSelf, Published: true,
+		Devices: []DeviceView{{Address: f.me.Address, Name: "laptop", Fingerprint: f.me.Fingerprint, This: true}}}
+	f.role = RolePerson
 	f.bump()
 	return *f.person, "Your person is set up (demo: nothing leaves this page).", nil
 }
@@ -593,4 +604,75 @@ func (f *Fixture) SendDM(x DMDraft) (Sent, error) {
 		}
 	}
 	return Sent{}, NotFound("no conversation with that id")
+}
+
+// SetService implements Identity: this demo installation is a service.
+func (f *Fixture) SetService() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.person != nil {
+		return "", Refuse("This installation already has a person.")
+	}
+	f.role = RoleService
+	f.bump()
+	return "This computer is a service: it has no person (demo).", nil
+}
+
+// NewDeviceLink implements Identity. In the demo, an invented phone asks
+// to join at once, so approving can be tried.
+func (f *Fixture) NewDeviceLink() (DeviceLink, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.person == nil {
+		return DeviceLink{}, Refuse("Set up your person first.")
+	}
+	now := f.now()
+	if len(f.links) == 0 && len(f.person.Devices) == 1 {
+		f.links = append(f.links, LinkRequest{ID: "demo-link-1", Address: "alice/phone", Name: "phone", Fingerprint: "SHA256:3f10 aa92 c7e4 0b58",
+			RequestedAt: now, Expires: now.Add(10 * time.Minute), State: "pending"})
+		f.bump()
+	}
+	return DeviceLink{URL: "https://agentnet.example/#agentnet-link-v2:demo-only-not-a-real-link", Expires: now.Add(10 * time.Minute)}, nil
+}
+
+// DecideLink implements Identity: an approved device joins the person and
+// the demo's chats are "copied" to it at once.
+func (f *Fixture) DecideLink(id string, accept bool) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, l := range f.links {
+		if l.ID != id || l.State != "pending" {
+			continue
+		}
+		f.links = append(f.links[:i], f.links[i+1:]...)
+		defer f.bump()
+		if !accept {
+			return "Refused: " + l.Name + " was not added.", nil
+		}
+		f.person.Devices = append(f.person.Devices, DeviceView{Address: l.Address, Name: l.Name, Fingerprint: l.Fingerprint})
+		f.history = append(f.history, HistoryCopy{Device: l.Address, Name: l.Name, Done: len(f.dms), Total: len(f.dms), State: "done"})
+		return l.Name + " is now one of your devices; your chats were copied to it (demo).", nil
+	}
+	return "", Refuse("That request is no longer waiting.")
+}
+
+// RemoveDevice implements Identity.
+func (f *Fixture) RemoveDevice(address string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.person == nil {
+		return "", Refuse("There is no person here.")
+	}
+	for i, d := range f.person.Devices {
+		if d.Address != address {
+			continue
+		}
+		if len(f.person.Devices) == 1 {
+			return "", Refuse("Your last device cannot be removed.")
+		}
+		f.person.Devices = append(f.person.Devices[:i], f.person.Devices[i+1:]...)
+		f.bump()
+		return d.Name + " is no longer one of your devices.", nil
+	}
+	return "", Refuse("That is not one of your devices.")
 }

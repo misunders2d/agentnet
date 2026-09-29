@@ -76,6 +76,81 @@ type Overview struct {
 	Person    *PersonView    `json:"person,omitempty"`
 	People    []PersonView   `json:"people"`
 	DMs       []DMSummary    `json:"dms"`
+	// One person on several devices (Identity providers, MEL-433): what
+	// this installation is (RoleUnset, RolePerson, RoleService), this
+	// device's own request to join its person while it is not done, new
+	// devices asking to join this person (approved here, by a person), and
+	// the chats being copied to newly added devices.
+	Role    string        `json:"role,omitempty"`
+	Link    *LinkState    `json:"link,omitempty"`
+	Links   []LinkRequest `json:"links,omitempty"`
+	History []HistoryCopy `json:"history,omitempty"`
+}
+
+// Roles an installation has (Overview.Role).
+const (
+	RoleUnset   = "unset"   // nothing chosen yet: a person, or a service
+	RolePerson  = "person"  // a person's device
+	RoleService = "service" // a service or bot: no person, set up by invitation
+)
+
+// Identity is implemented by providers where one person has several
+// devices (MEL-433). A device of a person offers a one-scan link that
+// lets a new device join as the same person; it becomes that person's only
+// once a person approves it here. A service never has a person.
+type Identity interface {
+	// SetService records that this installation is a service, not a person.
+	SetService() (string, error)
+	// NewDeviceLink makes a one-use link (a QR and the text of it) that a
+	// new device of this person joins with; it expires.
+	NewDeviceLink() (DeviceLink, error)
+	// DecideLink approves or refuses a new device asking to join.
+	DecideLink(id string, accept bool) (string, error)
+	// RemoveDevice takes a device off this person (never the last one).
+	RemoveDevice(address string) (string, error)
+}
+
+// DeviceLink is a one-use link for a new device of this person: URL opens
+// the browser page on this server and joins there; the same text can be
+// given to the command line.
+type DeviceLink struct {
+	URL     string    `json:"url"`
+	Expires time.Time `json:"expires"`
+}
+
+// DeviceView is one device of a person.
+type DeviceView struct {
+	Address     string `json:"address"`
+	Name        string `json:"name"` // the device's own name, as its address shows it
+	Fingerprint string `json:"fingerprint"`
+	This        bool   `json:"this,omitempty"` // this installation
+}
+
+// LinkRequest is a new device asking to join this person, until decided.
+type LinkRequest struct {
+	ID          string    `json:"id"`
+	Address     string    `json:"address"`
+	Name        string    `json:"name"`
+	Fingerprint string    `json:"fingerprint"`
+	RequestedAt time.Time `json:"requested_at"`
+	Expires     time.Time `json:"expires"`
+	State       string    `json:"state"` // pending, or why it ended
+}
+
+// LinkState is this device's own request to join its person: pending,
+// refused, expired, stale or failed (linked is shown as the person).
+type LinkState struct {
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// HistoryCopy is the copying of this person's chats to a new device.
+type HistoryCopy struct {
+	Device string `json:"device"` // its address
+	Name   string `json:"name"`
+	Done   int    `json:"done"`
+	Total  int    `json:"total"`
+	State  string `json:"state"` // running, waiting (for this device to be online) or done
 }
 
 // Persons is implemented by providers that hold human DMs.
@@ -112,6 +187,9 @@ type PersonView struct {
 	// each is linked to the person by the invitation's host (their person
 	// and their device), never by a name or an address alone.
 	Agents []AgentLink `json:"agents,omitempty"`
+	// Devices are the person's devices, as their signed record names them
+	// (Identity providers); one person, one row, however many devices.
+	Devices []DeviceView `json:"devices,omitempty"`
 }
 
 // AgentLink is one person's agent, on their device, and the DMs it was

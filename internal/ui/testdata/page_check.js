@@ -146,6 +146,8 @@ function fetch(url, opts) {
     return Promise.resolve({ ok: true, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) });
   }
   else if (u.pathname.startsWith("/api/notify/")) data = { note: "" };
+  else if (u.pathname === "/api/device/link") data = { url: "https://hub.example/#agentnet-link-v2:abc", expires: "2026-09-29T18:10:00Z" };
+  else if (u.pathname.startsWith("/api/device/")) data = { note: "Done." };
   else if (u.pathname === "/api/person") data = { person: { person: "p-me", label: body.label, address: "me/laptop", state: "self" }, note: "Your person is set up." };
   const resp = { ok: true, json: async () => JSON.parse(JSON.stringify(data)), text: async () => "" };
   if (hold[u.pathname]) return new Promise((res) => { (held[u.pathname] ||= []).push(() => res(resp)); });
@@ -1119,6 +1121,64 @@ const ev = { preventDefault() {} };
   run("choosePerson")(overview.people[1]);
   check(run("state.query") === "" && run("state.hub.key") === "listed:vitalii/laptop" && !$("hub").hidden && run("state.dm") === null,
     "choosing a person shows them, nothing else");
+
+  // One person, several devices (MEL-433): setup asks person or service;
+  // your devices are listed with this one marked; a new device's request
+  // is decided here; a person's devices hang under them, never as rows of
+  // their own; services stay apart.
+  const keepPerson = overview.person, keepThreads2 = overview.threads;
+  Object.assign(overview, { role: "unset", person: null });
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("Who uses this computer?") && side.includes("I do: set up my person") && side.includes("It is a service or bot") &&
+    side.includes("Add this device from there"), "setup asks person or service, and points to adding a device: " + side);
+  calls.length = 0;
+  run("serviceDialog()");
+  await $("dialog-ok").onclick();
+  check(calls.some((c) => c.path === "/api/device/service"), "a service is chosen only by its button");
+  overview.role = "service";
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("This computer is a service or bot") && !side.includes("set up my person"), "a service is never asked to set up a person: " + side);
+  const bobPerson2 = { person: "p-bob", label: "Bob", address: "bob/desk", state: "pinned", devices: [
+    { address: "bob/desk", name: "desk", fingerprint: "SHA256:b1" }, { address: "bob/phone", name: "phone", fingerprint: "SHA256:b2" }] };
+  Object.assign(overview, { role: "person", person: Object.assign({}, keepPerson, { devices: [
+      { address: "me/laptop", name: "laptop", fingerprint: "SHA256:me", this: true }, { address: "me/phone", name: "phone", fingerprint: "SHA256:m2" }] }),
+    people: [alicePerson, bobPerson2], links: [{ id: "L1", address: "me/tablet", name: "tablet", fingerprint: "SHA256:t1", requested_at: T, expires: T, state: "pending" }],
+    history: [{ device: "me/phone", name: "phone", done: 3, total: 12, state: "running" }],
+    threads: [sum("b9", "bob/phone", { title: "phone hello" }), sum("h1", "hub/ops", { title: "service report" })] });
+  await run("loadOverview()");
+  side = JSON.stringify($("conv-list").children.map(textOf));
+  check(side.includes("on laptop (this one), phone") && side.includes("Your devices") && side.includes("A new device,  tablet , asks to join as you"),
+    "you, your devices (this one marked) and a new device's request: " + side);
+  check(side.includes("on desk, phone") && side.replace(/\s+/g, "").includes("hub/ops") && !side.replace(/\s+/g, "").includes("bob/phone"),
+    "a person's devices are named under them; their device is not a row of its own; a service is: " + side);
+  calls.length = 0;
+  run("linkDialog")(overview.links[0]);
+  const ask = JSON.stringify($("dialog-body").children.map(textOf));
+  check(ask.includes("tablet") && ask.includes("Approve it only if") && ask.includes("Details") && !calls.some((c) => c.path === "/api/device/decide"),
+    "the request says what approving means, keys under Details, and waits: " + ask);
+  await $("dialog-ok").onclick();
+  check(calls.some((c) => c.path === "/api/device/decide" && c.body.id === "L1" && c.body.accept === true), "approving sends that decision");
+  run("devicesDialog()");
+  const devs = JSON.stringify($("dialog-body").children.map(textOf));
+  check(/laptop\s+\(this device\)/.test(devs) && devs.includes("Remove") && devs.includes("Copying your chats to phone: 3 of 12"), "your devices, with the copy's progress: " + devs);
+  $("dialog").close();
+  run('openHub({ kind: "person", key: "p-bob" })');
+  hub = JSON.stringify($("hub").children.map(textOf));
+  check(hub.includes("Bob on 2 devices") && hub.includes("phone") && hub.includes("1 device conversation"), "a person's view lists their devices: " + hub);
+  run('openHub({ kind: "device", key: "bob/phone" })');
+  check(!$("hub-back").hidden && $("hub-back").textContent === "\u2039 Bob" && $("conv-topic").textContent.startsWith("Bob's device"),
+    "their device's conversations say whose device it is and link back: " + $("conv-topic").textContent);
+  run("backOneLevel()");
+  check(run("state.hub.kind") === "person" && run("state.hub.key") === "p-bob", "back from their device goes to the person");
+  overview.link = { state: "pending" };
+  await run("loadOverview()");
+  check(JSON.stringify($("conv-list").children.map(textOf)).includes("Waiting for your other device to approve this one"), "this device's own request is said plainly");
+  Object.assign(overview, { person: keepPerson, threads: keepThreads2, people: [alicePerson, overview.people[1]] });
+  delete overview.role; delete overview.links; delete overview.history; delete overview.link;
+  overview.people = [alicePerson, { label: "Vitalii", address: "vitalii/laptop", state: "listed" }];
+  await run("loadOverview()");
 
   // Comic draws a DM as an issue: the person's name, captions for held and
   // kept messages, no decisions.

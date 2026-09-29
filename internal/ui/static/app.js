@@ -5,7 +5,7 @@
 
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
-  drafts: {}, draftKey: null, sending: false, hub: null, query: "", singlesOpen: {}, directoryOpen: false,
+  drafts: {}, draftKey: null, sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
   dm: null, dmData: null, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
   files: [], opened: [],
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
@@ -868,11 +868,7 @@ function peopleSection() {
   const o = state.overview;
   if (!o || !o.persons) return [];
   const head = el("li", { class: "result-head" }, "People");
-  if (!o.person) {
-    return [head, el("li", { class: "person-setup" },
-      el("p", {}, "You have no person yet. A person is you, the human, as others see you in DMs."),
-      el("button", { type: "button", class: "chip", onclick: () => personDialog() }, "Set up your person…"))];
-  }
+  if (!o.person) return [head, ...linkNotices().map((n) => el("li", {}, n)), el("li", { class: "person-setup" }, setupChoice())];
   const dms = o.dms || [];
   const people = [...(o.people || [])].sort((a, b) => {
     const la = dms.find((d) => d.peer.person && d.peer.person === a.person), lb = dms.find((d) => d.peer.person && d.peer.person === b.person);
@@ -880,8 +876,8 @@ function peopleSection() {
     return a.label.localeCompare(b.label);
   });
   return [head,
-    el("li", { class: "hint person-me" }, "You: ", el("strong", {}, o.person.label), " · ",
-      o.person.published ? "others can start a DM with you" : "not on your server yet"),
+    ...linkNotices().map((n) => el("li", {}, n)),
+    el("li", { class: "hint person-me" }, meLine()),
     ...people.map((p) => personRow(p, dms.filter((d) => d.peer.person && d.peer.person === p.person))),
     !people.length && el("li", { class: "hint empty-list" }, "No one else on your server has set up a person yet.")];
 }
@@ -890,7 +886,8 @@ function peopleSection() {
 // (the one DM directly, when there is just one).
 function personRow(p, dms) {
   const key = personKey(p);
-  const current = sameHub(state.hub, { kind: "person", key });
+  const current = sameHub(state.hub, { kind: "person", key }) ||
+    !!(state.hub && state.hub.kind === "device" && deviceOwner(state.hub.key) && personKey(deviceOwner(state.hub.key)) === key);
   const unread = dms.reduce((n, d) => n + d.unread, 0);
   const held = dms.reduce((n, d) => n + d.held, 0);
   const last = dms[0];
@@ -905,8 +902,8 @@ function personRow(p, dms) {
         p.state === "conflict" && el("span", { class: "conv-flag danger" }, "Frozen"),
         held > 0 && el("span", { class: "conv-flag calm" }, held + " held"),
         unread > 0 && el("span", { class: "conv-flag unread" }, unread + " new")),
-      el("span", { class: "conv-sub" }, "via " + p.address + " · " + (personStateText[p.state] || p.state) +
-        (dms.length ? " · " + plural(dms.length, "DM", "DMs") : "")),
+      el("span", { class: "conv-sub" }, (devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address) +
+        " · " + (personStateText[p.state] || p.state) + (dms.length ? " · " + plural(dms.length, "DM", "DMs") : "")),
       (p.agents || []).map((a) => el("span", { class: "conv-sub agent-link" }, agentLinkText(a, p)))));
   return el("li", { class: "contact-item" + (current ? " open" : "") }, head);
 }
@@ -1008,7 +1005,10 @@ function renderHub() {
     fill($("conv-name"), p.label);
     $("conv-topic").textContent = "Person · " + plural(x.dms.length, "DM", "DMs") + " · each DM is a separate conversation";
     $("conv-presence").textContent = "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state);
+    const devs = devicesOf(p);
     fill($("hub"),
+      el("details", { class: "person-devices", open: devs.length > 1 },
+        el("summary", {}, p.label + " on " + plural(devs.length, "device", "devices")), deviceList(p)),
       (p.agents || []).map((a) => el("p", { class: "hint agent-link" }, agentLinkText(a, p))),
       x.dms.length ? el("ul", { class: "thread-list hub-list", "aria-label": "DMs with " + p.label }, x.dms.map((d) => dmRow(d, (id) => openDM(id))))
         : el("p", { class: "hint empty-list" }, "No DMs with " + p.label + " yet."),
@@ -1017,8 +1017,14 @@ function renderHub() {
     return;
   }
   const c = x.contact;
+  const owner = deviceOwner(c.peer);
   fill($("conv-name"), who(c.peer));
-  $("conv-topic").textContent = "Device · " + [plural(c.conversations.length, "conversation", "conversations"),
+  if (owner) { // back to the person whose device it is
+    state.hubUp = { kind: "person", key: personKey(owner) };
+    $("hub-back").hidden = false;
+    $("hub-back").textContent = "\u2039 " + owner.label;
+  }
+  $("conv-topic").textContent = (owner ? (owner.state === "self" ? "Your device" : owner.label + "'s device") : "Device") + " · " + [plural(c.conversations.length, "conversation", "conversations"),
     c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · ");
   $("conv-presence").textContent = peerPresence(c.peer) || "";
   fill($("hub"), contactBody(c, (id) => openThread(id)));
@@ -1028,12 +1034,13 @@ function renderHub() {
 // there to the list.
 function backOneLevel() {
   if ((state.dm || state.data) && state.hub) openHub(state.hub);
+  else if (!$("hub").hidden && !$("hub-back").hidden && state.hubUp) openHub(state.hubUp); // a person's device, back to them
   else showList();
 }
 
 // setHubBack links the open conversation back to its person or device.
 function setHubBack() {
-  state.hub = ownerOf();
+  state.hub = state.hubUp = ownerOf();
   const x = hubOf(state.hub);
   $("hub-back").hidden = !x;
   if (x) $("hub-back").textContent = "‹ " + x.label + (x.count > 1 ? " · " + plural(x.count, x.person ? "DM" : "conversation", x.person ? "DMs" : "conversations") : "");
@@ -1063,6 +1070,174 @@ function personDialog() {
     },
   });
   state.dialogRestore = { type: "person" };
+}
+
+// ---- one person, several devices (MEL-433) ---------------------------------------------
+//
+// A person's devices are listed under the person, never as other people.
+// A new device joins with a one-use link made on a device the person
+// already has, and becomes theirs only when approved there. A service or
+// bot has no person. Plain words first; keys and addresses in Details.
+
+const devicesHere = () => !!(state.overview && state.overview.role); // the provider knows roles and devices
+
+// devicesOf is a person's devices as their record names them (one device
+// until they have several).
+function devicesOf(p) {
+  if (p.devices && p.devices.length) return p.devices;
+  return [{ address: p.address, name: p.address.split("/").pop(), fingerprint: p.fingerprint || "" }];
+}
+
+// deviceOwner is the checked person (you, or someone pinned here) whose
+// record names the device at address, or null. Only a checked record
+// groups a device under a person; a name never does.
+function deviceOwner(address) {
+  const o = state.overview;
+  if (!o) return null;
+  return [...(o.person ? [o.person] : []), ...(o.people || [])]
+    .find((p) => (p.state === "pinned" || p.state === "self") && devicesOf(p).some((d) => d.address === address)) || null;
+}
+
+// deviceList shows a person's devices, each with its own device
+// conversations (if any) one click away; this device is marked.
+function deviceList(p, open = (addr) => openHub({ kind: "device", key: addr })) {
+  const contacts = contactsOf((state.overview && state.overview.threads) || []);
+  return el("ul", { class: "device-list" }, devicesOf(p).map((d) => {
+    const c = contacts.find((x) => x.peer === d.address);
+    const n = c ? c.conversations.length + c.singles.length : 0;
+    return el("li", { class: "device-row" },
+      el("span", {}, el("strong", {}, d.name), d.this ? " (this device)" : "", el("span", { class: "hint" }, " · " + d.address)),
+      n > 0 && el("button", { type: "button", class: "text-btn", onclick: () => open(d.address) },
+        plural(n, "device conversation", "device conversations")));
+  }));
+}
+
+// setupChoice asks who uses this computer, until a person or a service is chosen.
+function setupChoice() {
+  const o = state.overview;
+  if (o.role === "service") return [el("p", {}, "This computer is a service or bot: it has no person. DMs are between people; its device conversations are below.")];
+  return [
+    el("p", {}, devicesHere() ? "Who uses this computer?" : "You have no person yet. A person is you, the human, as others see you in DMs."),
+    el("button", { type: "button", class: "chip", onclick: () => personDialog() }, devicesHere() ? "I do: set up my person…" : "Set up your person…"),
+    devicesHere() && el("button", { type: "button", class: "chip", onclick: () => serviceDialog() }, "It is a service or bot…"),
+    devicesHere() && el("p", {}, "Already use AgentNet as yourself on another device? Add this device from there instead (Your devices, Add a device), so you are one person everywhere."),
+  ];
+}
+
+function serviceDialog() {
+  dialog({
+    title: "A service or bot",
+    body: [el("p", {}, "This computer then has no person: nobody writes DMs as a human from here, and people are not asked to trust it as one."),
+      el("p", { class: "hint" }, "It keeps its device conversations and its invitation. Choose this for a server, an automation or a bot, not for your own computer.")],
+    ok: "It is a service",
+    run: async () => {
+      const r = await api("/api/device/service", {});
+      if (r.note) announce(r.note);
+      await loadOverview();
+    },
+  });
+}
+
+// meLine is "You: Alice · on laptop and phone · Your devices…".
+function meLine() {
+  const p = state.overview.person;
+  const devs = p.devices || [];
+  return [
+    "You: ", el("strong", {}, p.label), " · ", p.published ? "others can start a DM with you" : "not on your server yet",
+    devs.length > 1 && " · on " + devs.map((d) => d.name + (d.this ? " (this one)" : "")).join(", "),
+    devicesHere() && [" · ", el("button", { type: "button", class: "text-btn", onclick: () => devicesDialog() }, "Your devices…")],
+  ];
+}
+
+// linkNotices are what needs the person about devices: a new device
+// asking to join (approved or refused here), or this device's own request.
+function linkNotices() {
+  const o = state.overview;
+  const out = (o.links || []).filter((l) => l.state === "pending").map((l) => el("div", { class: "link-ask", role: "status" },
+    el("p", {}, "A new device, ", el("strong", {}, l.name), ", asks to join as you."),
+    el("button", { type: "button", class: "chip", onclick: () => linkDialog(l) }, "Check it…")));
+  const own = o.link && ownLinkText[o.link.state];
+  if (own) out.push(el("div", { class: "link-ask", role: "status" }, el("p", {}, own), o.link.detail && el("p", { class: "hint" }, o.link.detail)));
+  return out;
+}
+
+const ownLinkText = {
+  pending: "Waiting for your other device to approve this one. Open AgentNet there and answer it.",
+  refused: "Your other device refused this one: it did not join as you.",
+  expired: "That link expired before this device was approved. On your other device, choose Add a device and use the new link.",
+  stale: "That link is out of date (your devices changed meanwhile). On your other device, choose Add a device and use the new link.",
+  failed: "Joining as you did not work.",
+};
+
+// linkDialog asks the person whether a new device is theirs.
+function linkDialog(l) {
+  const refuse = el("button", { type: "button", class: "chip danger", onclick: async () => {
+    try { const r = await api("/api/device/decide", { id: l.id, accept: false }); announce(r.note || "Refused."); $("dialog").close(); await loadOverview(); }
+    catch (e) { $("dialog-error").textContent = e.message; }
+  } }, "No, refuse it");
+  dialog({
+    title: "Is “" + l.name + "” your device?",
+    body: [el("p", {}, "A new device, ", el("strong", {}, l.name), ", used your link and asks to join as you. Approve it only if you just opened your link on it yourself."),
+      el("p", {}, "Once approved it is you: it sends and receives your DMs, and your chats are copied to it."),
+      el("details", { class: "tech" }, el("summary", {}, "Details"),
+        el("p", {}, "Device: " + l.address), el("p", {}, "Key: " + l.fingerprint),
+        el("p", {}, "Asked " + new Date(l.requested_at).toLocaleString() + " · the request ends " + new Date(l.expires).toLocaleTimeString())),
+      refuse],
+    ok: "Yes, it is mine",
+    run: async () => {
+      const r = await api("/api/device/decide", { id: l.id, accept: true });
+      if (r.note) announce(r.note);
+      await loadOverview();
+    },
+  });
+}
+
+// historyLine says how far a new device has your chats.
+function historyLine(h) {
+  if (h.state === "done") return h.name + " has your chats.";
+  const where = state.overview.device ? "Keep this page open until it is done." : "AgentNet on this computer copies them while it runs.";
+  return (h.state === "waiting" ? "Your chats go to " + h.name + " when it is online" : "Copying your chats to " + h.name) +
+    ": " + h.done + " of " + h.total + ". " + where;
+}
+
+// devicesDialog lists the person's devices, adds one, removes one.
+function devicesDialog() {
+  const o = state.overview, p = o.person;
+  const rows = (p.devices || []).map((d) => el("li", { class: "device-row" },
+    el("span", {}, el("strong", {}, d.name), d.this ? " (this device)" : ""),
+    el("details", { class: "tech" }, el("summary", {}, "Details"), el("p", {}, "Device: " + d.address), el("p", {}, "Key: " + d.fingerprint)),
+    !d.this && (p.devices || []).length > 1 && el("button", { type: "button", class: "text-btn", onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      try { const r = await api("/api/device/remove", { address: d.address }); announce(r.note); $("dialog").close(); await loadOverview(); }
+      catch (err) { $("dialog-error").textContent = err.message; e.currentTarget.disabled = false; }
+    } }, "Remove")));
+  dialog({
+    title: "Your devices",
+    body: [el("p", {}, "You are one person on each of these. A new one joins with a link from here and becomes yours only when you approve it."),
+      el("ul", { class: "device-list" }, rows),
+      (o.history || []).map((h) => el("p", { class: "hint" }, historyLine(h)))],
+    ok: "Add a device…",
+    run: async () => { addDeviceDialog(); }, // opens once this one has closed
+  });
+}
+
+// addDeviceDialog shows a one-use link for a new device of this person.
+async function addDeviceDialog() {
+  let l;
+  try { l = await api("/api/device/link", {}); } catch (e) { $("dialog-error").textContent = e.message; return; }
+  const code = el("textarea", { id: "link-code", rows: "3", readonly: true, spellcheck: "false" });
+  code.value = l.url;
+  const copy = el("button", { type: "button", class: "chip", onclick: async () => {
+    try { await navigator.clipboard.writeText(l.url); announce("Link copied."); } catch (e) { code.select(); $("dialog-error").textContent = "Copy it by hand: it is selected."; }
+  } }, "Copy the link");
+  dialog({
+    title: "Add a device",
+    body: [el("p", {}, "On your new device, open this link: paste it into its browser, or give it to AgentNet there when it joins. It joins as you once you approve it here."),
+      code, copy,
+      el("p", { class: "hint" }, "It works once, until " + new Date(l.expires).toLocaleTimeString() + ". Anyone with it can ask to be you, so give it only to your own device; you still approve it here.")],
+    ok: "Done",
+    run: async () => {},
+  });
 }
 
 // newDMDialog starts a separate DM with a person; nothing is sent yet.
@@ -1472,16 +1647,19 @@ function renderThreads(threads) {
   if (state.query.trim()) return renderSearch(threads);
   $("list-title").textContent = "Contacts";
   const people = peopleSection();
-  const devices = people.length > 0 && el("li", { class: "result-head" }, "Devices: messages per installation");
+  const devices = people.length > 0 && el("li", { class: "result-head" }, "Devices and services: messages per installation");
   const reminders = remindersSection();
-  if (!threads.length) {
-    fill(list, reminders, people, devices, el("li", { class: "hint empty-list" }, state.overview.device
-      ? "No messages from devices here. Start a DM with a person above."
-      : "No conversations yet. Start one with the + button, or with someone below."),
+  // A person's devices are under that person, never rows of their own here.
+  const loose = contactsOf(threads).filter((c) => !deviceOwner(c.peer));
+  if (!loose.length) {
+    fill(list, reminders, people, devices, el("li", { class: "hint empty-list" }, threads.length
+      ? "Other devices and services appear here; people's devices are under each person."
+      : state.overview.device ? "No messages from devices here. Start a DM with a person above."
+        : "No conversations yet. Start one with the + button, or with someone below."),
       directorySection(threads));
     return;
   }
-  fill(list, reminders, people, devices, ...contactsOf(threads).map((c) => {
+  fill(list, reminders, people, devices, ...loose.map((c) => {
     const current = sameHub(state.hub, { kind: "device", key: c.peer });
     const only = !c.reports.length && c.conversations.length + c.singles.length === 1 && [...c.conversations, ...c.singles][0];
     const head = el("button", { type: "button", class: "conv-item contact", "aria-current": String(current),
@@ -2348,7 +2526,7 @@ function start() {
   let saved = null;
   try { saved = localStorage.getItem("agentnet-lens"); } catch (e) { /* default */ }
   $("back").addEventListener("click", backOneLevel);
-  $("hub-back").addEventListener("click", () => state.hub && openHub(state.hub));
+  $("hub-back").addEventListener("click", () => state.hubUp && openHub(state.hubUp));
   $("dialog-form").addEventListener("submit", (e) => { if (e.submitter !== $("dialog-cancel")) e.preventDefault(); });
   for (const [id, what] of [["sim-arrival", "arrival"], ["sim-finish", "finish"]]) {
     $(id).addEventListener("click", async () => {
