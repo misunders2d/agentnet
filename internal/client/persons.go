@@ -583,11 +583,15 @@ func (a *Agent) Role() (string, error) {
 	} else if ok {
 		return "person", nil
 	}
-	r, err := a.store.config("role")
-	if r == "service" {
-		return r, err
+	switch r, err := a.store.config("role"); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil // not chosen yet
+	case err != nil:
+		return "", err
+	case r == "service":
+		return r, nil
 	}
-	return "", err
+	return "", nil
 }
 
 // SetService records that this installation is a service: it is not asked

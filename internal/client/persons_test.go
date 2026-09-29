@@ -214,14 +214,14 @@ func TestDeviceLinkRefusals(t *testing.T) {
 func TestServiceStaysStandalone(t *testing.T) {
 	w := newWorld(t, "")
 	persons(t, w.alice)
-	if role, _ := w.bob.Role(); role != "" {
-		t.Fatalf("role before a choice %q", role)
+	if role, err := w.bob.Role(); role != "" || err != nil {
+		t.Fatalf("role before a choice %q %v", role, err)
 	}
 	if err := w.bob.SetService(); err != nil {
 		t.Fatal(err)
 	}
-	if role, _ := w.bob.Role(); role != "service" {
-		t.Fatalf("role %q", role)
+	if role, err := w.bob.Role(); role != "service" || err != nil {
+		t.Fatalf("role %q %v", role, err)
 	}
 	if _, err := w.bob.CreatePerson(tctx(t), "Bob"); !errors.Is(err, ErrService) {
 		t.Fatalf("a service made a person: %v", err)
