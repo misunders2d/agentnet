@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -317,6 +318,31 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			}
 		}
 
+		// Attention (NOTIFY.md §2): this DM's channel for the recipient, in
+		// its signed place, both ways; what SealAttention refuses, refused.
+		ch := protocol.NotifyChannel(conv, bob.Fingerprint())
+		av := w.ok(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": msg(map[string]any{"chan": ch})})
+		var aenv envelope.Envelope
+		if err := strictJSON([]byte(av["envelope"].(string)), &aenv); err != nil || marshal(t, aenv) != av["envelope"] {
+			t.Fatalf("attention envelope not in Go's form (%v): %s", err, av["envelope"])
+		}
+		if !aenv.Attn || aenv.Chan != ch || aenv.VerifySig(pub.SignKey) != nil {
+			t.Fatalf("attention envelope: attn %v chan %q verify %v", aenv.Attn, aenv.Chan, aenv.VerifySig(pub.SignKey))
+		}
+		w.refuses("attention on version 1", w.call(map[string]any{"op": "seal", "to": publicJSON(t, bob),
+			"message": map[string]any{"id": protocol.NewID(), "to": bob.Address, "ts": now, "kind": "message", "body": "x", "chan": ch}}), "attention")
+		w.refuses("attention with a bad channel", w.call(map[string]any{"op": "seal", "to": publicJSON(t, bob),
+			"message": msg(map[string]any{"chan": "CRTkM8HtV3rVNaVsnOnalx"})}), "attention")
+		gAttn, err := envelope.SealAttention(envelope.Inner{V: 2, ID: protocol.NewID(), From: bob.Address, To: dana, TS: now, Kind: "message",
+			Body: "look", Conv: conv, LID: protocol.NewID(), Root: json.RawMessage(root), Origin: envelope.OriginUI}, bobID.Sign, danaRecipient,
+			protocol.NotifyChannel(conv, pub.Fingerprint()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := w.ok(map[string]any{"op": "open", "envelope": marshal(t, gAttn), "from": publicJSON(t, bob)})["inner"].(map[string]any); got["body"] != "look" {
+			t.Fatalf("Go's attention envelope opened as %v", got)
+		}
+
 		// Go to device.
 		goIn := envelope.Inner{V: 2, ID: protocol.NewID(), From: bob.Address, To: dana, TS: now, Kind: "question", Body: "can you check?",
 			Conv: conv, LID: protocol.NewID(), Root: json.RawMessage(root), Origin: envelope.OriginUI}
@@ -509,4 +535,69 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 func str(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// The notification channel and the attention hint match Go byte for byte
+// (docs/revival/NOTIFY.md §2; the core's vectors): the channel and its
+// validity, the envelope's attn and chan in their signed position, both
+// ways, and the shapes every reader refuses.
+func TestBrowserNotifyWire(t *testing.T) {
+	w := startWireNode(t)
+	if m := w.ok(map[string]any{"op": "support"})["missing"].([]any); len(m) > 0 {
+		t.Skipf("this node lacks %v", m)
+	}
+	const vconv = "e0758d3e1872da6abc62304e16423c9ae8782d39be3517e4503df4b6ac88b75a"
+	for fp, want := range map[string]string{"01234567-89abcdef-01234567-89abcdef": "CRTkM8HtV3rVNaVsnOnalw", "fedcba98-76543210-fedcba98-76543210": "bs5zEfoANj9lBOw3SnQxAQ"} {
+		if got := w.ok(map[string]any{"op": "channel", "conv": vconv, "fp": fp})["chan"]; got != want || protocol.NotifyChannel(vconv, fp) != want {
+			t.Fatalf("channel for %s: %v, want %s", fp, got, want)
+		}
+	}
+	id, _ := identity.Generate()
+	fp := id.Public("dana/phone").Fingerprint()
+	for i := 0; i < 5; i++ {
+		conv := protocol.NewID() + protocol.NewID()
+		if got := w.ok(map[string]any{"op": "channel", "conv": conv, "fp": fp})["chan"]; got != protocol.NotifyChannel(conv, fp) {
+			t.Fatalf("channel for %s: %v", conv, got)
+		}
+	}
+	for _, bad := range [][2]string{{"short", fp}, {strings.Repeat("A", 64), fp}, {strings.Repeat("a", 64), "not-a-key"}} {
+		w.refuses("channel "+bad[0], w.call(map[string]any{"op": "channel", "conv": bad[0], "fp": bad[1]}), "invalid")
+	}
+	shapes := []string{"CRTkM8HtV3rVNaVsnOnalw", "CRTkM8HtV3rVNaVsnOnalx", "CRTkM8HtV3rVNaVsnOnal", "CRTkM8HtV3rVNaVsnOnalw=", "CRTkM8HtV3rVNaVsnOna+w",
+		"CRTkM8HtV3rVNaVsnOnalg", "CRTkM8HtV3rVNaVsnOnalB", "", "AAAAAAAAAAAAAAAAAAAAAA", "AAAAAAAAAAAAAAAAAAAAAB"}
+	valid := w.ok(map[string]any{"op": "validChannel", "list": shapes})["valid"].([]any)
+	for i, s := range shapes {
+		if valid[i] != protocol.ValidNotifyChannel(s) {
+			t.Errorf("channel %q: browser %v, Go %v", s, valid[i], protocol.ValidNotifyChannel(s))
+		}
+	}
+
+	// The core's attention vector: its signature verifies here.
+	zero := ed25519.NewKeyFromSeed(make([]byte, 32))
+	sig, _ := hex.DecodeString("71e8952944d3efcadea155cf5a53e05fd50b7f19c31895fa2f3918f1fc6ada109b77c1ba0e3aa23ce34c70cba00359db052e4eab7324b6372315d75e009d3705")
+	vector := `{"v":2,"id":"00112233445566778899aabbccddeeff","from":"alice/a","to":"bob/b","ts":1790000000,"kind":"message","ct":"Y2lwaGVydGV4dA==",` +
+		`"attn":true,"chan":"CRTkM8HtV3rVNaVsnOnalw","sig":"` + base64.StdEncoding.EncodeToString(sig) + `"}`
+	zeroKey := base64.StdEncoding.EncodeToString(zero.Public().(ed25519.PublicKey))
+	w.ok(map[string]any{"op": "verifyEnvelope", "envelope": vector, "key": zeroKey})
+	// Hand-made shapes (signed as the core signs): each refused here and there.
+	for name, mut := range map[string]func(*envelope.Envelope){
+		"attn without chan":  func(e *envelope.Envelope) { e.Chan = "" },
+		"chan without attn":  func(e *envelope.Envelope) { e.Attn = false },
+		"version 1":          func(e *envelope.Envelope) { e.V = 1 },
+		"non-canonical chan": func(e *envelope.Envelope) { e.Chan = "CRTkM8HtV3rVNaVsnOnalx" },
+	} {
+		var e envelope.Envelope
+		strictJSON([]byte(vector), &e)
+		mut(&e)
+		e.Sig = nil
+		domain := "agentnet-envelope-v2\n"
+		if e.V == 1 {
+			domain = "agentnet-envelope-v1\n"
+		}
+		e.Sig = ed25519.Sign(zero, append([]byte(domain), marshalBytes(t, e)...))
+		if e.VerifySig(zero.Public().(ed25519.PublicKey)) == nil {
+			t.Fatalf("%s: Go accepts it", name)
+		}
+		w.refuses(name, w.call(map[string]any{"op": "verifyEnvelope", "envelope": marshal(t, e), "key": zeroKey}), "")
+	}
 }

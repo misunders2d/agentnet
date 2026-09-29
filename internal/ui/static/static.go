@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs manifest.webmanifest
+//go:embed index.html app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs manifest.webmanifest sw.js
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -33,6 +33,7 @@ var Files fs.FS = files
 var relayFiles = map[string]string{
 	"/":                      "",
 	"/manifest.webmanifest":  "manifest.webmanifest",
+	"/sw.js":                 "sw.js", // the service worker: push and click only (its scope is the origin)
 	"/assets/app.css":        "app.css",
 	"/assets/app.js":         "app.js",
 	"/assets/lenses.js":      "lenses.js",
@@ -130,7 +131,7 @@ var relayContent = sync.OnceValue(func() map[string][2]string {
 
 // relayCSP lets the page run only its own origin's files and talk only to
 // its own origin.
-const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; " +
+const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // Relay serves the browser page and its files on a relay's origin, for GET

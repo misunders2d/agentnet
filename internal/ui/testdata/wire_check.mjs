@@ -71,6 +71,13 @@ async function handle(req) {
     await wire.verifyCaps(c, wire.unb64(req.key, "key"));
     return { ok: true };
   }
+  case "validChannel":
+    return { valid: req.list.map((s) => wire.validChannel(s)) };
+  case "verifyEnvelope": // an envelope made elsewhere, checked with that sender's signing key
+    await wire.verifyEnvelope(wire.parseEnvelope(req.envelope), wire.unb64(req.key, "key"));
+    return {};
+  case "channel":
+    return { chan: await wire.notifyChannel(req.conv, req.fp) };
   case "supports":
     return { supports: await wire.profileSupports(JSON.parse(req.profile), req.address, wire.unb64(req.key, "key"), req.name) };
   case "event": {

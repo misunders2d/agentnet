@@ -12,13 +12,43 @@ let offline = false, dropPosts = false;
 const realFetch = globalThis.fetch.bind(globalThis);
 // A network that can be switched off, as a phone on a train, or that
 // loses only the messages posted.
-const fetchImpl = (url, opts) => (offline || (dropPosts && opts && opts.method === "POST" && url.endsWith("/v1/messages"))
+const fetchNet = (url, opts) => (offline || (dropPosts && opts && opts.method === "POST" && url.endsWith("/v1/messages"))
   ? Promise.reject(new TypeError("fetch failed")) : realFetch(url, opts));
+// notifyCalls stands in for the relay's notification API (NOTIFY.md §3)
+// until the Hub has it: the relay then lists notify1, and every call to it
+// is recorded with its signature headers present.
+let notifyCalls = null;
+const json = (v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
+async function fetchImpl(url, opts = {}) {
+  const u = new URL(url);
+  if (notifyCalls && u.pathname.startsWith("/v1/notify")) {
+    notifyCalls.push({ method: opts.method || "GET", path: u.pathname, body: opts.body ? JSON.parse(opts.body) : null,
+      signed: !!(opts.headers && opts.headers["X-Agentnet-Agent"]) });
+  }
+  return fetchNet(url, opts);
+}
+// A browser's push service, as the page's adapter gives it to the engine:
+// a subscription of the right shape (an FCM endpoint, a P-256 key, 16
+// bytes of auth). Nothing is ever pushed to it in the tests.
+const b64url = (b) => Buffer.from(b).toString("base64url");
+const fakePush = { supported: () => true, subscribed: 0,
+  async subscribe(key) {
+    this.subscribed++;
+    this.key = key;
+    if (!this.sub) {
+      const kp = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+      this.sub = { endpoint: "https://fcm.googleapis.com/fcm/send/agentnet-test-" + wire.newID(),
+        p256dh: b64url(new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey))), auth: b64url(crypto.getRandomValues(new Uint8Array(16))) };
+    }
+    return this.sub;
+  },
+  async current(key) { return this.subscribe(key); } };
 
 async function handle(req) {
   switch (req.op) {
   case "init":
-    engine = new Engine({ store, base: req.base, fetch: fetchImpl });
+    if (req.notify) notifyCalls = [];
+    engine = new Engine({ store, base: req.base, fetch: fetchImpl, push: fakePush });
     await engine.load();
     await probeStore(store);
     return { joined: engine.joined };
@@ -56,7 +86,7 @@ async function handle(req) {
     return { rec: (await store.get("outbox", req.id)) || null };
   case "reload": { // the page is reloaded: a new engine over the same stored data
     engine.stop();
-    engine = new Engine({ store, base: req.base, fetch: fetchImpl });
+    engine = new Engine({ store, base: req.base, fetch: fetchImpl, push: fakePush });
     await engine.load();
     engine.start();
     return { joined: engine.joined };
@@ -70,6 +100,17 @@ async function handle(req) {
   case "sameOrigin":
     sameOrigin(req.hub, req.base);
     return {};
+  case "notifyCalls": { // the notification API calls since the last look
+    const out = notifyCalls || [];
+    notifyCalls = notifyCalls ? [] : null;
+    return { calls: out, subscribed: fakePush.subscribed, key: fakePush.key || "" };
+  }
+  case "channel":
+    return { chan: await wire.notifyChannel(req.conv, req.fp || engine.fp) };
+  case "notifyPrefs": // what the relay holds for this device
+    return await engine.call("GET", "/v1/notify/prefs");
+  case "inboxRec":
+    return { rec: (await store.get("inbox", req.id)) || null };
   case "count":
     return { n: (await store.all(req.store)).length };
   case "keys": {

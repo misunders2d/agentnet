@@ -6,6 +6,43 @@ import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
 import { decodeInvite, support, validName } from "./wire.mjs";
 
 const invitePrefix = "#agentnet-invite-v1:";
+const openPrefix = "#agentnet-open:"; // a notification's click (sw.js)
+
+// push is the engine's Web Push adapter. The service worker is registered
+// only when the person turns notifications on (or they were on already).
+const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const subscriptionJSON = (s) => { const j = s.toJSON(); return { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }; };
+const sameKey = (s, key) => { const k = s.options && s.options.applicationServerKey; return !k || b64url(new Uint8Array(k)) === key; };
+const push = {
+  supported: () => "serviceWorker" in navigator && "PushManager" in globalThis && "Notification" in globalThis,
+  async subscribe(key) {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    let s = await reg.pushManager.getSubscription();
+    if (s && !sameKey(s, key)) { await s.unsubscribe(); s = null; }
+    if (!s) s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    return subscriptionJSON(s);
+  },
+  // current is the subscription now, made again if the browser dropped it
+  // (never asking for permission: only when it is still granted).
+  async current(key) {
+    if (Notification.permission !== "granted") return null;
+    return this.subscribe(key);
+  },
+};
+
+// A notification's click names a channel; the views open it once they are loaded.
+let pendingOpen = null;
+function openNotified(chan) {
+  if (window.agentnetOpen) window.agentnetOpen(chan);
+  else pendingOpen = chan;
+}
+function takeOpen() {
+  if (!location.hash.startsWith(openPrefix)) return;
+  const chan = location.hash.slice(openPrefix.length);
+  history.replaceState(null, "", location.pathname + location.search);
+  openNotified(/^[A-Za-z0-9_-]{0,22}$/.test(chan) ? chan : "");
+}
 
 function el(tag, attrs, ...kids) {
   const e = document.createElement(tag);
@@ -69,7 +106,9 @@ async function main() {
   window.addEventListener("hashchange", () => {
     const inv = takeInvite();
     if (inv && onInvite) onInvite(inv);
+    takeOpen();
   });
+  takeOpen();
   const link = takeInvite();
   document.querySelector(".app").hidden = true;
   panel = el("main", { id: "device-setup", class: "join" });
@@ -108,7 +147,7 @@ async function run(link) {
       el("p", { class: "hint" }, "(" + e.message + ")"));
     return;
   }
-  const engine = new Engine({ store, base: location.origin });
+  const engine = new Engine({ store, base: location.origin, push });
   if (await engine.load()) start(engine);
   else joinScreen(engine, link);
 }
@@ -171,9 +210,15 @@ async function start(engine) {
   engine.start();
   window.addEventListener("online", () => engine.online());
   window.addEventListener("offline", () => engine.offline());
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (e.data && e.data.type === "agentnet-open") openNotified(typeof e.data.chan === "string" ? e.data.chan : "");
+    });
+  }
   for (const src of ["/assets/lenses.js", "/assets/app.js"]) {
     await new Promise((res, rej) => { const s = el("script", { src }); s.onload = res; s.onerror = () => rej(new Error("could not load " + src)); document.head.append(s); });
   }
+  if (pendingOpen !== null && window.agentnetOpen) { window.agentnetOpen(pendingOpen); pendingOpen = null; }
 }
 
 main().catch((e) => show("AgentNet", "AgentNet could not start here: " + e.message));

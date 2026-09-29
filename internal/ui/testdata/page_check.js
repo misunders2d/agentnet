@@ -109,6 +109,7 @@ const overview = { demo: false, me: { address: "me/laptop", fingerprint: "SHA256
 let down = false;
 let refreshReply = { text: "Connection unknown" }; // the one check made when a thread opens
 const dmThreads = {}; // DMs by id, for /api/dm
+const resolvable = {}; // notification channels this device resolves, for /api/notify/resolve
 const calls = [];
 const hold = {};
 const held = {};
@@ -127,6 +128,8 @@ function fetch(url, opts) {
   else if (u.pathname === "/api/dm/send") data = { id: "sent-dm", state: "custody" };
   else if (u.pathname === "/api/dm/new") data = { id: "d3" };
   else if (u.pathname.startsWith("/api/dm/agent/")) data = u.pathname.endsWith("/ask") ? { id: "asked", state: "custody" } : {};
+  else if (u.pathname === "/api/notify/resolve") data = { conv: resolvable[u.searchParams.get("chan")] || "" };
+  else if (u.pathname.startsWith("/api/notify/")) data = { note: "" };
   else if (u.pathname === "/api/person") data = { person: { person: "p-me", label: body.label, address: "me/laptop", state: "self" }, note: "Your person is set up." };
   const resp = { ok: true, json: async () => JSON.parse(JSON.stringify(data)), text: async () => "" };
   if (hold[u.pathname]) return new Promise((res) => { (held[u.pathname] ||= []).push(() => res(resp)); });
@@ -149,8 +152,14 @@ const sessionStorage = {
   removeItem: (k) => { store.delete(k); },
 };
 let reloads = 0;
+// The browser's notification permission, as a check sets it.
+const Notification = { permission: "default", asked: 0, answer: "granted",
+  async requestPermission() { this.asked++; this.permission = this.answer; return this.answer; } };
+document.visibilityState = "visible";
+document.hasFocus = () => focused;
+let focused = true;
 const ctx = vm.createContext({
-  document, fetch, console, setTimeout, clearTimeout, URL, sessionStorage,
+  document, fetch, console, setTimeout, clearTimeout, URL, sessionStorage, Notification,
   window: { innerHeight: 800, matchMedia: () => ({ matches: false }), addEventListener() {} },
   localStorage: { getItem: () => null, setItem() {} },
   location: { reload() { reloads++; } },
@@ -699,6 +708,70 @@ const ev = { preventDefault() {} };
   await run('openDM("d4")');
   check($("agents").hidden, "no agent controls where agents cannot be invited");
   delete overview.agents;
+
+  // Notifications (browser device): off until the person turns them on; the
+  // browser's permission is asked only from that click; the page reports
+  // only what the person has in front of them; a click opens the DM this
+  // device resolves, never a guess.
+  check($("notify-line").hidden, "no notification controls where the page has none (the daemon's page)");
+  overview.notify = { available: true, enabled: false, reason: "", mutes: [], allowed: [] };
+  calls.length = 0;
+  await run("loadOverview()");
+  check(!$("notify-line").hidden && textOf($("notify-line")).includes("Notifications off") && Notification.asked === 0 &&
+    !calls.some((c) => c.path.startsWith("/api/notify/")), "off, and nothing asked, when the page loads: " + textOf($("notify-line")));
+  run("notifyDialog()");
+  check(Notification.asked === 0 && !calls.some((c) => c.path === "/api/notify/enable"), "the dialog explains first; nothing is asked yet");
+  Notification.answer = "denied";
+  await $("dialog-ok").onclick();
+  check(Notification.asked === 1 && $("dialog-error").textContent.includes("Everything else works") && !calls.some((c) => c.path === "/api/notify/enable"),
+    "a refusal is said plainly and nothing is turned on");
+  await run("loadOverview()");
+  check(textOf($("notify-line")).includes("blocked in this browser's settings"), "blocked: said, and the messenger stays usable");
+  Notification.permission = "default";
+  Notification.answer = "granted";
+  run("notifyDialog()");
+  await $("dialog-ok").onclick();
+  check(calls.filter((c) => c.path === "/api/notify/enable").length === 1, "allowed: turned on once");
+  overview.notify = { available: true, enabled: true, reason: "", mutes: [], allowed: [] };
+  await run("loadOverview()");
+  await run('openDM("d2")');
+  let chips = JSON.stringify($("peer-chips").children.map(textOf));
+  check(chips.includes("Notifies you") && chips.includes("Alerts from Alice off · Allow"), "a DM says it notifies you, and that its person may not yet: " + chips);
+  calls.length = 0;
+  $("peer-chips").children[0].click();
+  await tick();
+  check(calls.some((c) => c.path === "/api/notify/mute" && c.body.conv === "d2" && c.body.muted === true), "one DM is muted, by its id");
+  $("peer-chips").children[1].click();
+  await tick();
+  check(calls.some((c) => c.path === "/api/notify/allow" && c.body.person === "p-alice" && c.body.allowed === true), "allowing names the person");
+  // Presented: visible, focused, that DM, newest in view (Classic).
+  const seenCalls = () => calls.filter((c) => c.path === "/api/notify/seen");
+  calls.length = 0;
+  run("state.seenReported = {}");
+  focused = false;
+  run("reportSeen()");
+  check(seenCalls().length === 0, "not focused: nothing is reported");
+  focused = true;
+  run("reportSeen()");
+  check(seenCalls().length === 1 && seenCalls()[0].body.conv === "d2" && JSON.stringify(seenCalls()[0].body.ids) === '["m3"]',
+    "in front of the person: the DM's messages from them are reported: " + JSON.stringify(seenCalls()[0] && seenCalls()[0].body));
+  run("reportSeen()");
+  check(seenCalls().length === 1, "and not again until something new is shown");
+  run('state.seenReported = {}; state.lens = "comic"');
+  run("reportSeen()");
+  check(seenCalls().length === 1, "another view does not report (only Classic knows what is in view)");
+  run('state.lens = "classic"');
+  // A notification's click: the DM this device resolves.
+  resolvable["AbCdEfGhIjKlMnOpQrStUv"] = "d1";
+  await run("openThread")("a1");
+  run('openNotified("AbCdEfGhIjKlMnOpQrStUv")');
+  await pause(5);
+  check(run("state.dm") === "d1", "a click opens the DM its channel resolves to here");
+  run('openNotified("ZZZZZZZZZZZZZZZZZZZZZZ")');
+  await pause(5);
+  check(run("state.dm") === "d1" && run("state.pendingOpen") !== null, "an unknown channel opens nothing and waits for the stream");
+  run("state.pendingOpen = null");
+  delete overview.notify;
 
   // Search finds people by the name they give or their device, and DMs by
   // their lines or the person; each result says its kind and opens exactly it.

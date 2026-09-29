@@ -6,7 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
   drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
-  dm: null, dmData: null, personOpen: {}, dmReply: null, dmAgent: null,
+  dm: null, dmData: null, personOpen: {}, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null,
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
@@ -90,10 +90,128 @@ async function loadOverview() {
   $("new-btn").hidden = !!o.device; // a browser device starts DMs with people, nothing else
   $("release").hidden = !o.release;
   $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
+  renderNotify(o.notify);
   renderReview(o.review);
   renderThreads(o.threads);
   renderQuarantine(o.quarantine);
+  if (state.pendingOpen) retryOpen();
   return o;
+}
+
+// ---- notifications (browser device) -----------------------------------------------------
+//
+// Off until the person turns them on, here. The service worker shows each
+// alert ("AgentNet" / "New activity"); this page never shows one. It tells
+// the relay which messages it actually presented, so those do not alert.
+
+const notifyPermission = () => (typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+
+function renderNotify(n) {
+  const line = $("notify-line");
+  line.hidden = !n;
+  if (!n) return;
+  const iphone = typeof navigator !== "undefined" && /iPhone|iPad/.test(navigator.userAgent) &&
+    !(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  if (!n.available) {
+    fill(line, "Notifications: " + (iphone ? "on iPhone, add AgentNet to your Home Screen first, then turn them on there." : n.reason));
+  } else if (notifyPermission() === "denied") {
+    fill(line, "Notifications are blocked in this browser's settings. Everything else works without them.");
+  } else if (n.enabled) {
+    fill(line, "Notifications on, from " + plural(n.allowed.length, "contact", "contacts") + " · ",
+      el("button", { type: "button", class: "text-btn", onclick: () => notifyAct("/api/notify/disable") }, "Turn off"));
+  } else {
+    fill(line, "Notifications off · ", el("button", { type: "button", class: "text-btn", onclick: () => notifyDialog() }, "Turn on…"));
+  }
+}
+
+async function notifyAct(path, body) {
+  try {
+    const r = await api(path, body || {});
+    if (r.note) announce(r.note);
+    await loadOverview();
+    if (state.dm) await loadDM();
+  } catch (e) {
+    announce(e.message);
+  }
+}
+
+// notifyDialog turns notifications on, only on the person's click: the
+// browser's own permission question comes from that click.
+function notifyDialog() {
+  dialog({
+    title: "Get notifications?",
+    body: [el("p", {}, "When someone you started a DM with writes to you, or an agent you invited answers, this device shows \u201cAgentNet: New activity\u201d. It never shows what was written."),
+      el("p", {}, "You can mute any DM, and turn this off again here."),
+      el("details", { class: "tech" }, el("summary", {}, "Details"),
+        el("p", {}, "Your server keeps your notification settings and learns which of your messages belong to the same conversation (not which one), and when you read one here. Your browser's push service learns when a notification is sent to this device, not what it is about."),
+        el("p", {}, "Your system may delay or hide notifications (Focus, battery saving, a closed browser on some systems). People who start a DM with you alert only after you allow them.")),
+      el("p", { class: "hint" }, "Your browser asks next whether AgentNet may show notifications.")],
+    ok: "Turn on",
+    run: async () => {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") throw new Error("The browser did not allow notifications. Everything else works without them.");
+      const r = await api("/api/notify/enable", {});
+      if (r.note) announce(r.note);
+      await loadOverview();
+    },
+  });
+}
+
+// dmNotifyChips are a DM's mute, and whether its person may alert you.
+function dmNotifyChips(t) {
+  const n = state.overview && state.overview.notify;
+  if (!n || !n.enabled || !t.peer.person) return [];
+  const muted = n.mutes.includes(t.id);
+  const allowed = n.allowed.includes(t.peer.address);
+  return [el("button", { type: "button", class: "peer-chip" + (muted ? "" : " on"), onclick: () => notifyAct("/api/notify/mute", { conv: t.id, muted: !muted }),
+    title: muted ? "This DM does not notify you" : "New activity in this DM notifies you" }, muted ? "Muted" : "Notifies you"),
+  !allowed && el("button", { type: "button", class: "peer-chip", onclick: () => notifyAct("/api/notify/allow", { person: t.peer.person, allowed: true }),
+    title: "You did not start a DM with " + t.peer.label + ", so their messages do not notify you" }, "Alerts from " + t.peer.label + " off · Allow")].filter(Boolean);
+}
+
+// reportSeen tells the relay which messages of the open DM the person has
+// in front of them: the page visible and focused, that DM, its newest
+// message in view (Classic). Only then; opening a DM is not enough.
+function reportSeen() {
+  const t = state.dmData, n = state.overview && state.overview.notify;
+  if (!t || !n || !n.enabled || state.lens !== "classic" || document.visibilityState !== "visible" || !document.hasFocus()) return;
+  const tl = $("timeline");
+  if (tl.scrollHeight - tl.scrollTop - tl.clientHeight > 40) return;
+  const ids = t.messages.filter((m) => m.dir === "in").slice(-32).map((m) => m.id);
+  if (!ids.length || state.seenReported[t.id] === ids[ids.length - 1]) return;
+  state.seenReported[t.id] = ids[ids.length - 1];
+  api("/api/notify/seen", { conv: t.id, ids }).catch(() => { delete state.seenReported[t.id]; });
+}
+
+// openNotified opens the conversation a notification names, as this
+// device resolves its channel; if it is not here yet, it waits for the
+// stream to catch up, then says so. A summary opens the conversation list.
+function openNotified(chan) {
+  if (!chan) {
+    document.body.classList.remove("show-conv");
+    announce("New activity in more than one conversation.");
+    return;
+  }
+  state.pendingOpen = { chan, until: Date.now() + 15000 };
+  retryOpen();
+  setTimeout(() => {
+    if (state.pendingOpen && state.pendingOpen.chan === chan) {
+      state.pendingOpen = null;
+      document.body.classList.remove("show-conv");
+      announce("The conversation of that notification is not on this device.");
+    }
+  }, 15000);
+}
+window.agentnetOpen = openNotified;
+
+async function retryOpen() {
+  const p = state.pendingOpen;
+  if (!p) return;
+  const r = await api("/api/notify/resolve?chan=" + encodeURIComponent(p.chan)).catch(() => ({}));
+  if (!r.conv || state.pendingOpen !== p) return;
+  state.pendingOpen = null;
+  if (state.lens === "zoom") await Zoom.go(2, { dm: r.conv });
+  else await openDM(r.conv);
 }
 
 // deviceLine says what a browser device is doing, plainly.
@@ -547,7 +665,7 @@ async function loadDM(scrollToEnd) {
   const online = presenceOf(t.peer.address); // the server's pushed view, only while current
   $("conv-presence").textContent = "The name they give · via " + t.peer.address + " · " + (personStateText[t.peer.state] || t.peer.state) +
     (online ? " · their computer is " + online : "");
-  fill($("peer-chips"));
+  fill($("peer-chips"), ...dmNotifyChips(t));
   const n = $("notice");
   n.hidden = !t.frozen;
   fill(n, t.frozen && el("p", {}, t.frozen));
@@ -575,6 +693,7 @@ function renderDMBody(scrollToEnd) {
   fill(tl, t.messages.length ? t.messages.map((m, i) => dmMsg(m, t, t.messages[i - 1]))
     : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + t.peer.label + " only."));
   if (scrollToEnd || atEnd) tl.scrollTop = tl.scrollHeight;
+  reportSeen();
 }
 
 // dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
@@ -1718,6 +1837,10 @@ function start() {
     if (!$("lost").hidden) return;
     refetch(false);
   });
+  // What the person has in front of them, reported when it changes.
+  $("timeline").addEventListener("scroll", reportSeen);
+  document.addEventListener("visibilitychange", reportSeen);
+  window.addEventListener("focus", reportSeen);
   loadOverview().then(async (o) => {
     setLens(saved);
     if (await restoreAfterReload()) return; // back after an update, with what was unsent

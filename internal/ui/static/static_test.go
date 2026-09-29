@@ -46,7 +46,7 @@ func securityHeaders(t *testing.T, what string, resp *http.Response) {
 // type, cache rule and the security headers.
 func TestRelayServesThePage(t *testing.T) {
 	for _, want := range []string{"default-src 'none'", "script-src 'self'", "connect-src 'self'", "frame-ancestors 'none'",
-		"base-uri 'none'", "form-action 'none'", "manifest-src 'self'"} {
+		"base-uri 'none'", "form-action 'none'", "manifest-src 'self'", "worker-src 'self'"} {
 		if !strings.Contains(relayCSP, want) {
 			t.Errorf("CSP lacks %q", want)
 		}

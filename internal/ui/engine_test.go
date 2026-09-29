@@ -856,3 +856,143 @@ func TestBrowserEngineAgents(t *testing.T) {
 		t.Fatalf("an invitation naming the browser: %v", a)
 	}
 }
+
+// Notifications on the browser device, against the Hub's notification API
+// (NOTIFY.md §3): nothing until the person turns them on; senders only from
+// the person's own decisions and never a changed key; mutes by the channel
+// of that DM; the attention hint both ways; a presentation report by its
+// channel; a channel resolves only here. No alert is ever due (every
+// attention message meets a mute or an unallowed sender), so the Hub
+// pushes nothing to a real push service.
+func TestBrowserEngineNotify(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
+	alice, err := client.Join(ctx, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	runDaemon(t, alice)
+	if _, err := alice.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": "https://" + hub.Addr, "notify": true})
+	code, _ := alice.Invite(ctx, "dana", time.Hour, false)
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Dana"})
+	w.ok(map[string]any{"op": "start"})
+	w.until("connected with members", func() bool {
+		s := w.ok(map[string]any{"op": "status"})
+		return s["connected"] == true && s["members"] == true
+	})
+	type call struct {
+		Method, Path string
+		Body         map[string]any
+		Signed       bool
+	}
+	calls := func() (out []call) {
+		data, _ := json.Marshal(w.ok(map[string]any{"op": "notifyCalls"})["calls"])
+		json.Unmarshal(data, &out)
+		return out
+	}
+	prefs := func() map[string]any { return w.ok(map[string]any{"op": "notifyPrefs"}) }
+	// Alice starts a DM with Dana: an arrival, not Dana's decision.
+	var conv string
+	w.until("alice's DM with dana", func() bool { conv, err = alice.CreateDM(ctx, "dana/phone"); return err == nil })
+	hello, _ := alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "hello"})
+	w.until("the DM in the browser", func() bool { return w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + conv})["error"] == nil })
+	n := w.api("/api/overview", nil)["notify"].(map[string]any)
+	if n["available"] != true || n["enabled"] != false {
+		t.Fatalf("before turning on: %v", n)
+	}
+	w.api("/api/notify/seen", map[string]any{"conv": conv, "ids": []string{hello.ID}}) // off: nothing to report
+	for _, c := range calls() {
+		if c.Method != "GET" {
+			t.Fatalf("something was sent before the person turned notifications on: %+v", c)
+		}
+	}
+	if p := prefs(); p["subscribed"] != false || p["prefs"].(map[string]any)["enabled"] != false {
+		t.Fatalf("the Hub before turning on: %v", p)
+	}
+
+	// Turned on: subscribed, then preferences with no sender yet.
+	calls() // (the test's own look at the Hub above)
+	w.api("/api/notify/enable", map[string]any{})
+	got := calls()
+	if len(got) != 2 || got[0].Path != "/v1/notify/subscription" || got[0].Method != "PUT" || !got[0].Signed ||
+		got[1].Path != "/v1/notify/prefs" || got[1].Body["enabled"] != true || len(got[1].Body["senders"].([]any)) != 0 {
+		t.Fatalf("turning on: %+v", got)
+	}
+	if p := prefs(); p["subscribed"] != true || p["prefs"].(map[string]any)["enabled"] != true {
+		t.Fatalf("the Hub after turning on: %v", p)
+	}
+	// Dana mutes this DM, then allows Alice: her exact key.
+	chanWant := protocol.NotifyChannel(conv, w.ok(map[string]any{"op": "keys"})["fingerprint"].(string))
+	w.api("/api/notify/mute", map[string]any{"conv": conv, "muted": true})
+	alicePerson := w.api("/api/dm?id="+conv, nil)["peer"].(map[string]any)["person"].(string)
+	w.api("/api/notify/allow", map[string]any{"person": alicePerson, "allowed": true})
+	held := prefs()["prefs"].(map[string]any)
+	senders, mutes := held["senders"].([]any), held["mutes"].([]any)
+	if len(senders) != 1 || senders[0].(map[string]any)["address"] != alice.Address || senders[0].(map[string]any)["fingerprint"] != alice.Self().Fingerprint() {
+		t.Fatalf("senders after allowing alice: %v", senders)
+	}
+	if len(mutes) != 1 || mutes[0] != chanWant {
+		t.Fatalf("mutes: %v, want [%s]", mutes, chanWant)
+	}
+	calls()
+
+	// The hint both ways: Dana's DM message asks for Alice's attention on
+	// Alice's channel of this DM; Alice's asks for Dana's, checked here.
+	sent := w.api("/api/dm/send", map[string]any{"conv": conv, "body": "on my phone"})
+	rec := w.ok(map[string]any{"op": "outbox", "id": sent["id"]})["rec"].(map[string]any)
+	var env envelope.Envelope
+	strictJSON([]byte(rec["envelope"].(string)), &env)
+	if !env.Attn || env.Chan != protocol.NotifyChannel(conv, alice.Self().Fingerprint()) {
+		t.Fatalf("dana's DM message: attn %v chan %q", env.Attn, env.Chan)
+	}
+	w.until("alice holds dana's message", func() bool {
+		ms, _ := alice.ConversationMessages(conv)
+		for _, m := range ms {
+			if m.ID == sent["id"] {
+				return true
+			}
+		}
+		return false
+	})
+	back, _ := alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "seen it"}) // muted here: no alert is due
+	w.until("alice's reply in the browser", func() bool { return w.ok(map[string]any{"op": "inboxRec", "id": back.ID})["rec"] != nil })
+	if r := w.ok(map[string]any{"op": "inboxRec", "id": back.ID})["rec"].(map[string]any); r["attn"] != "ok" {
+		t.Fatalf("alice's reply as the browser holds it: %v", r)
+	}
+
+	// Presented messages are reported by that channel; the channel resolves here.
+	calls()
+	w.api("/api/notify/seen", map[string]any{"conv": conv, "ids": []string{hello.ID, back.ID}})
+	got = calls()
+	if len(got) != 1 || got[0].Path != "/v1/notify/seen" || got[0].Body["channel"] != chanWant || fmt.Sprint(got[0].Body["ids"]) != "["+hello.ID+" "+back.ID+"]" {
+		t.Fatalf("seen: %+v", got)
+	}
+	if r := w.api("/api/notify/resolve?chan="+chanWant, nil); r["conv"] != conv {
+		t.Fatalf("resolve: %v", r)
+	}
+	if r := w.api("/api/notify/resolve?chan=AAAAAAAAAAAAAAAAAAAAAA", nil); r["conv"] != "" {
+		t.Fatalf("an unknown channel resolved: %v", r)
+	}
+	// A changed key is not inherited: Alice's pin now names another key.
+	other, _ := identity.Generate()
+	otherPub := other.Public(alice.Address)
+	w.ok(map[string]any{"op": "tamperPin", "address": alice.Address, "json": publicJSON(t, otherPub), "fingerprint": otherPub.Fingerprint()})
+	w.api("/api/notify/mute", map[string]any{"conv": conv, "muted": false})
+	if p := prefs()["prefs"].(map[string]any); len(p["senders"].([]any)) != 0 || len(p["mutes"].([]any)) != 0 {
+		t.Fatalf("after alice's key changed: %v", p)
+	}
+	// Off: preferences say so; the subscription stays for turning on again.
+	w.api("/api/notify/disable", map[string]any{})
+	if p := prefs(); p["prefs"].(map[string]any)["enabled"] != false || p["subscribed"] != true {
+		t.Fatalf("turning off: %v", p)
+	}
+}

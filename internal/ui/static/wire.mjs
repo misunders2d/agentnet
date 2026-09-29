@@ -295,6 +295,8 @@ function marshalEnvelope(e, withSig) {
   if (e.blobs.length) s += ',"blobs":[' + e.blobs.map(blobJSON).join(",") + "]";
   if (e.session) s += ',"session":' + goString(e.session);
   if (e.fallback) s += ',"fallback":true';
+  if (e.attn) s += ',"attn":true';
+  if (e.chan) s += ',"chan":' + goString(e.chan);
   if (withSig && e.sig && e.sig.length) s += ',"sig":' + goBytes(e.sig);
   return s + "}";
 }
@@ -396,8 +398,12 @@ export async function seal(m, keys, recipient) {
   e.addRecipient(recipient.box_recipient);
   const ct = await e.encrypt(utf8.encode(marshalInner(inner)));
   if (ct.length > MaxCiphertext) throw new Error("message too large (" + ct.length + " bytes encrypted, max " + MaxCiphertext + ")");
+  // A turn that asks for the recipient's attention names its channel
+  // (envelope.SealAttention); only version 2 carries it.
+  const chan = m.chan || "";
+  if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
-    blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback };
+    blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
   env.sig = await signBytes(keys, envelopeSigned(env));
   return marshalEnvelope(env, true);
 }
@@ -405,11 +411,12 @@ export async function seal(m, keys, recipient) {
 // parseEnvelope reads an envelope as the Hub sends or stores it, strictly.
 export function parseEnvelope(json) {
   const v = strict(typeof json === "string" ? JSON.parse(json) : json, "envelope", { v: "int", id: "string", from: "string",
-    to: "string", ts: "int", kind: "string", ct: "string", blobs: "array", session: "string", fallback: "boolean", sig: "string" });
+    to: "string", ts: "int", kind: "string", ct: "string", blobs: "array", session: "string", fallback: "boolean",
+    attn: "boolean", chan: "string", sig: "string" });
   const blobs = (v.blobs || []).map((b) => strict(b, "attachment reference", { id: "string", size: "int", sha256: "string" }))
     .map((b) => ({ id: b.id || "", size: b.size || 0, sha256: b.sha256 || "" }));
   return { v: v.v || 0, id: v.id || "", from: v.from || "", to: v.to || "", ts: v.ts || 0, kind: v.kind || "",
-    ct: unb64(v.ct || "", "ciphertext"), blobs, session: v.session || "", fallback: !!v.fallback,
+    ct: unb64(v.ct || "", "ciphertext"), blobs, session: v.session || "", fallback: !!v.fallback, attn: !!v.attn, chan: v.chan || "",
     sig: v.sig ? unb64(v.sig, "signature") : new Uint8Array(0) };
 }
 
@@ -421,6 +428,7 @@ export async function verifyEnvelope(e, signKey) {
   if (e.ct.length > MaxCiphertext) throw new Error("envelope too large");
   if (e.blobs.length > MaxAttachments) throw new Error("too many attachments (max " + MaxAttachments + ")");
   if (e.session && !validID(e.session)) throw new Error("invalid session id");
+  if (e.attn !== (e.chan !== "") || (e.attn && (e.v !== Version2 || !validChannel(e.chan)))) throw new Error("invalid attention hint");
   const seen = new Set();
   for (const b of e.blobs) {
     checkBlob(b);
@@ -732,6 +740,30 @@ function marshalEvent(e, withSig) {
 export const eventJSON = (e) => marshalEvent(e, true);
 const eventCanonical = (e) => utf8.encode(participationDomain + marshalEvent(e, false));
 export const eventHash = (e) => hashOf(eventCanonical(e));
+
+// ---- notifications (docs/revival/NOTIFY.md §2) -------------------------------------------
+
+export const channelPattern = /^[A-Za-z0-9_-]{22}$/;
+// validChannel is protocol.ValidNotifyChannel: 22 characters that decode
+// to 16 bytes and encode back to themselves (no stray bits in the last).
+export function validChannel(s) {
+  if (typeof s !== "string" || !channelPattern.test(s)) return false;
+  try {
+    const raw = Uint8Array.from(unb64url(s), (c) => c.charCodeAt(0));
+    return raw.length === 16 && b64url(raw) === s;
+  } catch (e) { return false; }
+}
+
+// notifyChannel is protocol.NotifyChannel: the recipient device's opaque
+// channel for a conversation, the first 16 bytes of
+// SHA-256("agentnet-notify-channel-v1\n" + conv + "\n" + fingerprint),
+// base64url without padding. The sender and the recipient compute it; the
+// relay cannot.
+export async function notifyChannel(conv, fingerprint) {
+  if (!validHash(conv) || !validFingerprint(fingerprint)) throw new Error("notify channel: invalid conversation or key");
+  const sum = await sha256(utf8.encode("agentnet-notify-channel-v1\n" + conv + "\n" + fingerprint));
+  return b64url(sum.slice(0, 16));
+}
 
 function uniqueList(items, max, valid, what) {
   if (items.length > max) throw new Error("participation: " + what + ": more than " + max);

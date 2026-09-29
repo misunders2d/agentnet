@@ -159,8 +159,11 @@ export function sameOrigin(hub, base) {
 // ---- the engine -------------------------------------------------------------------------------
 
 export class Engine {
-  constructor({ store, base, fetch: f, now } = {}) {
+  constructor({ store, base, fetch: f, now, push } = {}) {
     this.store = store;
+    // push is the page's Web Push adapter (device.mjs): supported(),
+    // subscribe(key), current(). Tests pass their own.
+    this.push = push || null;
     this.base = base;
     this.fetch = f || globalThis.fetch.bind(globalThis);
     this.now = now || (() => Date.now());
@@ -419,10 +422,13 @@ export class Engine {
     if (!f.includes("env2") || !f.includes("caps")) return [false, "your server cannot carry conversations (it needs an update)"];
     const prof = await this.profile(address);
     await this.observePerson(address, prof && prof.person);
-    if (!(await wire.profileSupports(prof || {}, address, (await this.pubOf(pin)).sign_key, wire.CapEnv2))) {
+    const key = (await this.pubOf(pin)).sign_key;
+    if (!(await wire.profileSupports(prof || {}, address, key, wire.CapEnv2))) {
       return [false, address + "'s AgentNet cannot read conversations now (an older program, or it has not connected since updating)"];
     }
-    return [true, ""];
+    // The third answer: whether it reads the attention hint (every session
+    // of it says so, and the relay takes it).
+    return [true, "", f.includes("notify1") && (await wire.profileSupports(prof, address, key, "notify1"))];
   }
 
   // ---- DMs
@@ -473,9 +479,9 @@ export class Engine {
   async sendConv(c, { kind, body, reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null }) {
     const { why: stop, peer, pin } = await this.gate(c);
     if (stop) throw new Error(stop);
-    let ok = false, why = "";
+    let ok = false, why = "", notify = false;
     try {
-      [ok, why] = await this.supports(peer.address, pin);
+      [ok, why, notify] = await this.supports(peer.address, pin);
     } catch (e) {
       if (this.revoked) throw new Error("This device was removed from its server: nothing more is sent or received here.");
       why = "cannot reach your server";
@@ -484,8 +490,12 @@ export class Engine {
     if (again) throw new Error(again);
     const id = wire.newID(), lid = wire.newID();
     const at = this.now();
+    // A turn a person typed asks for the recipient's attention, on this DM's
+    // channel for them, when their device and the relay read the hint.
+    const attention = notify && origin === "ui" && sub === "" && ["message", "question", "task"].includes(kind);
+    const chan = attention ? await wire.notifyChannel(c.id, pin.fingerprint) : "";
     const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: peer.address, ts: Math.floor(at / 1000), kind,
-      body, reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target }, this.keys, await this.pubOf(pin));
+      body, reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan }, this.keys, await this.pubOf(pin));
     const rec = { id, conv: c.id, lid, body, reply_to: replyTo, kind, origin, sub, pid, target, at, to: peer.address, envelope,
       state: ok ? "queued" : "waiting", detail: why };
     await put(this.store, "outbox", id, rec);
@@ -719,6 +729,9 @@ export class Engine {
     const request = n.kind === "question" || n.kind === "task";
     const rec = { ...base, v: 2, conv: n.conv, lid: n.lid, sub: n.sub, pid: n.pid, origin: n.origin, emotion: n.emotion, replica: n.replica,
       target: n.target || null, state: request && !(n.target && n.target.address !== this.address) ? "conv_held" : "" };
+    // The attention hint is the sender's claim: recorded, checked against
+    // this DM's channel here, never used to route anything.
+    if (env.attn) rec.attn = env.chan === (await wire.notifyChannel(n.conv, this.fp)) ? "ok" : "mismatch";
     return [...ops, { s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, hash } }];
   }
 
@@ -879,11 +892,14 @@ export class Engine {
   async onConnect() {
     try {
       const f = await this.features();
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session)));
+      // This device reads conversations and the attention hint (it never
+      // alerts from the stream: its service worker shows the relay's pushes).
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1"])));
       await this.publishPerson().catch(() => {});
       await this.flushReceipts();
       await this.retryHeld();
       await this.flushOutbox();
+      await this.reconcileNotify().catch(() => {});
     } catch (e) { /* tried again on the next ping */ }
   }
 
@@ -953,6 +969,7 @@ export class Engine {
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
+      notify: await this.notifyView(),
       persons: true, agents: true, // agents on the other person's computer: invited, asked and dismissed here, never run here
       person: this.personView(this.me, this.me ? { published: !!this.me.published } : undefined) || undefined, people, dms,
     };
@@ -1161,6 +1178,130 @@ export class Engine {
     return this.sendConv(c, { kind, body, pid, origin: "ui", target: { address: info.host.address, fingerprint: info.host.fingerprint } });
   }
 
+  // ---- notifications (docs/revival/NOTIFY.md): off until the person turns
+  // them on. The service worker shows every alert; this page never shows
+  // one. The relay alerts only for senders this device allows, in
+  // channels it has not muted, unless this page reports it presented the
+  // messages first.
+
+  async notifyState() {
+    return (await this.store.get("kv", "notify")) || { enabled: false, allowed: [], mutes: [] };
+  }
+
+  // notifyInfo is what the relay offers (null when it sends no Web Push).
+  async notifyInfo() {
+    if (!(await this.features()).includes("notify1")) return null;
+    if (!this.notifyOffer) this.notifyOffer = await this.call("GET", "/v1/notify", undefined, { signed: false });
+    return this.notifyOffer.push_key ? this.notifyOffer : null;
+  }
+
+  // notifySenders are the exact keys this device's person decided on: the
+  // people they started a DM with, and those they allowed by hand. A key
+  // that changed since is not included; receiving a message adds nobody.
+  async notifySenders(st) {
+    const convs = await this.store.all("convs");
+    const out = [];
+    for (const p of await this.store.all("persons")) {
+      const decided = st.allowed.includes(p.person) || convs.some((c) => c.peer === p.person && c.creator === this.address);
+      if (!decided || p.state === "conflict") continue;
+      const pin = await this.store.get("pins", p.address);
+      if (pin && !pin.pending && pin.fingerprint === p.fingerprint) out.push({ address: p.address, fingerprint: p.fingerprint });
+    }
+    return out;
+  }
+
+  // syncNotify sends this device's preferences to the relay.
+  async syncNotify() {
+    const st = await this.notifyState();
+    if (!(await this.notifyInfo())) return;
+    const mutes = [];
+    for (const conv of st.mutes) mutes.push(await wire.notifyChannel(conv, this.fp));
+    await this.call("PUT", "/v1/notify/prefs", { enabled: st.enabled, senders: await this.notifySenders(st), mutes });
+  }
+
+  // enableNotify subscribes this browser (the page asked for permission
+  // first, on the person's click) and turns alerts on.
+  async enableNotify() {
+    const info = await this.notifyInfo();
+    if (!info) throw new Error("Your server does not send notifications.");
+    if (!this.push || !this.push.supported()) throw new Error("This browser cannot show notifications for AgentNet here.");
+    const sub = await this.push.subscribe(info.push_key);
+    await this.call("PUT", "/v1/notify/subscription", sub);
+    await put(this.store, "kv", "notify", { ...(await this.notifyState()), enabled: true });
+    await this.syncNotify();
+    this.changed();
+    return { note: "Notifications are on." };
+  }
+
+  async disableNotify() {
+    await put(this.store, "kv", "notify", { ...(await this.notifyState()), enabled: false });
+    await this.syncNotify();
+    this.changed();
+    return { note: "Notifications are off." };
+  }
+
+  // reconcileNotify runs when the page starts and connects: a browser may
+  // have dropped or replaced the subscription meanwhile.
+  async reconcileNotify() {
+    const st = await this.notifyState();
+    const info = await this.notifyInfo();
+    if (!st.enabled || !info || !this.push || !this.push.supported()) return;
+    const sub = await this.push.current(info.push_key);
+    if (sub) await this.call("PUT", "/v1/notify/subscription", sub);
+    await this.syncNotify();
+  }
+
+  async muteDM(conv, muted) {
+    if (!(await this.store.get("convs", conv))) throw new Error("No conversation " + conv + " here.");
+    const st = await this.notifyState();
+    const mutes = st.mutes.filter((c) => c !== conv).concat(muted ? [conv] : []);
+    await put(this.store, "kv", "notify", { ...st, mutes });
+    await this.syncNotify();
+    this.changed();
+    return { note: muted ? "This DM is muted." : "This DM notifies you again." };
+  }
+
+  async allowSender(person, allowed) {
+    if (!(await this.store.get("persons", person))) throw new Error("That person is not known here.");
+    const st = await this.notifyState();
+    const list = st.allowed.filter((p) => p !== person).concat(allowed ? [person] : []);
+    await put(this.store, "kv", "notify", { ...st, allowed: list });
+    await this.syncNotify();
+    this.changed();
+    return { note: allowed ? "Alerts from them are on." : "Alerts from them are off." };
+  }
+
+  // notifySeen reports messages this page presented (visible, focused,
+  // that DM, newest in view): the relay then does not alert for them. It
+  // is not a read receipt; nobody else learns it.
+  async notifySeen(conv, ids) {
+    const st = await this.notifyState();
+    if (!st.enabled || !(await this.notifyInfo()) || !(await this.store.get("convs", conv))) return {};
+    const shown = (ids || []).filter((id) => wire.validID(id)).slice(-32);
+    if (!shown.length) return {};
+    await this.call("POST", "/v1/notify/seen", { channel: await wire.notifyChannel(conv, this.fp), ids: shown });
+    return {};
+  }
+
+  // resolveChannel finds the conversation a notification names, here and
+  // only here ("" when it is not on this device).
+  async resolveChannel(chan) {
+    if (!wire.validChannel(chan)) return "";
+    for (const c of await this.store.all("convs")) if ((await wire.notifyChannel(c.id, this.fp)) === chan) return c.id;
+    return "";
+  }
+
+  // notifyView is what the page shows about notifications.
+  async notifyView() {
+    const st = await this.notifyState();
+    let info = null;
+    try { info = await this.notifyInfo(); } catch (e) { /* unknown now */ }
+    const supported = !!(this.push && this.push.supported());
+    return { available: !!info && supported, enabled: st.enabled,
+      reason: !info ? "Your server does not send notifications." : !supported ? "This browser cannot show notifications for AgentNet here." : "",
+      mutes: st.mutes, allowed: (await this.notifySenders(st)).map((s) => s.address) };
+  }
+
   // eventText says what an agent participation record in a DM does, as
   // the laptop's page does. This browser only shows it: it never invites,
   // hosts or runs an agent.
@@ -1227,6 +1368,12 @@ export class Engine {
     case "/api/dm/new": return { id: await this.newDM(body.address) };
     case "/api/dm/send": return this.sendDM(body);
     case "/api/dm/agent/invite": return this.inviteAgent(body);
+    case "/api/notify/enable": return this.enableNotify();
+    case "/api/notify/disable": return this.disableNotify();
+    case "/api/notify/mute": return this.muteDM(body.conv, !!body.muted);
+    case "/api/notify/allow": return this.allowSender(body.person, !!body.allowed);
+    case "/api/notify/seen": return this.notifySeen(body.conv, body.ids);
+    case "/api/notify/resolve": return { conv: await this.resolveChannel(u.searchParams.get("chan") || "") };
     case "/api/dm/agent/dismiss": return this.dismissAgent(body.pid);
     case "/api/dm/agent/ask": return this.askAgent(body);
     case "/api/dm/agent/decide": throw new Error("This browser runs no agent: an agent is accepted on the computer that runs it.");
