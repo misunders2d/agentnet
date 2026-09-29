@@ -302,3 +302,51 @@ func TestDMFilesFreezeDuringUpload(t *testing.T) {
 		t.Fatalf("a flush posted it: %d %v", h.messages, err)
 	}
 }
+
+// A direct (v1) message takes named files too (a page's staged uploads),
+// shown under their chosen names, within the same limit; the staging left
+// by an earlier run is cleaned, and only StageUpload's files.
+func TestV1NamedFilesAndStagingCleanup(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.bob)
+	staged, cleanup, err := w.alice.StageUpload("budget.xlsx", strings.NewReader("numbers"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := writeFile(t, t.TempDir(), "notes.txt", 100)
+	sent, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "files", Files: []string{plain},
+		Named: []OutgoingFile{{Name: "budget.xlsx", Path: staged}}})
+	cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, sent.ID) == 1 })
+	m := inboxRow(t, w.bob, sent.ID)
+	if len(m.Attachments) != 2 || m.Attachments[0].Name != "notes.txt" || m.Attachments[1].Name != "budget.xlsx" {
+		t.Fatalf("received: %+v", m.Attachments)
+	}
+	r, _, err := w.bob.OpenAttachment(tctx(t), sent.ID, 1)
+	if err != nil || string(readAll(t, r)) != "numbers" {
+		t.Fatalf("open: %v", err)
+	}
+	nine := make([]OutgoingFile, envelope.MaxAttachments)
+	for i := range nine {
+		nine[i] = OutgoingFile{Path: plain}
+	}
+	if _, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Files: []string{plain}, Named: nine}); err == nil {
+		t.Fatal("more than the limit, counted together, was sent")
+	}
+
+	left, _, _ := w.alice.StageUpload("left over", strings.NewReader("x"))
+	other := filepath.Join(w.alice.home, "staging", "keep-me")
+	os.WriteFile(other, nil, 0o600)
+	if err := w.alice.CleanStaging(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Fatal("a staged upload stayed")
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal("CleanStaging removed a file that is not a staged upload")
+	}
+}

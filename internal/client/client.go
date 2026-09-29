@@ -264,8 +264,9 @@ type Outgoing struct {
 	Body     string
 	ReplyTo  string
 	Files    []string
-	Fallback bool   // if the addressed session has ended, deliver to the agent's inbox
-	Kind     string // envelope.KindMessage (default), KindQuestion or KindTask
+	Named    []OutgoingFile // more files, each with the name it is shown under (a page's staged uploads)
+	Fallback bool           // if the addressed session has ended, deliver to the agent's inbox
+	Kind     string         // envelope.KindMessage (default), KindQuestion or KindTask
 	// Wait, if positive, waits up to this long for the recipient's receipt
 	// after the Hub takes custody (one request, woken by the receipt).
 	Wait   time.Duration
@@ -313,7 +314,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 			return SendResult{}, ErrConversationItem
 		}
 	}
-	if len(m.Files) > envelope.MaxAttachments {
+	if len(m.Files)+len(m.Named) > envelope.MaxAttachments {
 		return SendResult{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
 	}
 	if len(m.FollowUp) > maxFollowUp {
@@ -345,7 +346,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback, Status: m.Status,
 	}
-	if len(m.Files) > 0 {
+	if len(m.Files)+len(m.Named) > 0 {
 		// Cleanup must not see spooled files before the outbox refers to them.
 		release, err := lockfile.Wait(a.spoolLockPath())
 		if err != nil {
@@ -354,8 +355,12 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		defer release() // idempotent; released early below, before delivery
 		m.releaseSpoolLock = release
 	}
+	files := make([]OutgoingFile, 0, len(m.Files)+len(m.Named))
 	for _, path := range m.Files {
-		att, err := a.spoolFile(path, recipient)
+		files = append(files, OutgoingFile{Path: path})
+	}
+	for _, f := range append(files, m.Named...) {
+		att, err := a.spoolNamed(f, recipient)
 		if err != nil {
 			a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
 			return SendResult{}, err

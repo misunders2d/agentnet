@@ -514,6 +514,26 @@ func (r *removeOnClose) Close() error {
 	return err
 }
 
+// CleanStaging removes what StageUpload left in the private staging folder
+// (its upload-* files only). Call it only where nothing can be staging: in
+// the daemon holding the home, before its page takes uploads.
+func (a *Agent) CleanStaging() error {
+	matches, err := filepath.Glob(filepath.Join(a.home, "staging", "upload-*"))
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, m := range matches {
+		if info, err := os.Lstat(m); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(m); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 // StageUpload keeps bytes a local page received (a chosen or pasted file)
 // in a private file under the home until they are sent: at most MaxFileSize
 // bytes. Pass the path as OutgoingFile.Path (with name as its Name), and call
