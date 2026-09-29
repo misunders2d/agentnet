@@ -64,6 +64,7 @@ type Overview struct {
 	// person (nil until the person creates one), the people known or listed,
 	// and the two-person conversations. They are never part of Threads.
 	Persons bool         `json:"persons"`
+	Agents  bool         `json:"agents"` // agents can be invited into DMs here (Participants)
 	Person  *PersonView  `json:"person,omitempty"`
 	People  []PersonView `json:"people"`
 	DMs     []DMSummary  `json:"dms"`
@@ -124,6 +125,7 @@ type DMThread struct {
 	Mine     bool        `json:"mine"`
 	Frozen   string      `json:"frozen,omitempty"` // why nothing can be sent in it
 	Messages []DMMessage `json:"messages"`
+	Agents   []AgentView `json:"agents"` // agents invited into it, oldest first
 }
 
 // DMMessage is one message of a DM.
@@ -141,6 +143,60 @@ type DMMessage struct {
 	At        time.Time `json:"at"`
 	Unread    bool      `json:"unread,omitempty"`
 	Replica   bool      `json:"replica,omitempty"`
+	PID       string    `json:"pid,omitempty"`   // the agent participation it is for, from or about
+	To        string    `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
+	Event     string    `json:"event,omitempty"` // a participation record, said in words (its body is the record)
+}
+
+// Participants is implemented by providers where agents can be invited
+// into DMs. Nothing here runs an agent: the host's person decides, and
+// what is asked of an agent is held for that person.
+type Participants interface {
+	InviteAgent(d AgentInvite) (AgentView, error)
+	// DecideAgent accepts or declines an invite for this installation's agent.
+	DecideAgent(pid string, accept bool) (AgentView, error)
+	DismissAgent(pid string) (AgentView, error)
+	AskAgent(d AgentAsk) (Sent, error)
+}
+
+// AgentInvite invites the agent on a member's device (Host, an address)
+// into a DM: the earlier messages it may be shown (Share, message ids of
+// that DM, each exactly) and the member keys that may give it follow-up
+// tasks (TasksFrom, fingerprints).
+type AgentInvite struct {
+	Conv      string   `json:"conv"`
+	Host      string   `json:"host"`
+	Share     []string `json:"share"`
+	TasksFrom []string `json:"tasks_from"`
+	Note      string   `json:"note"`
+}
+
+// AgentAsk is a question (or task) for an active participation's agent.
+type AgentAsk struct {
+	PID  string `json:"pid"`
+	Kind string `json:"kind"`
+	Body string `json:"body"`
+}
+
+// AgentView is an agent invited into a DM, as the page shows it: whose
+// installation runs it, who invited it, what it may be shown and who may
+// give it tasks. The host's person decides; either person can end it.
+type AgentView struct {
+	PID        string       `json:"pid"`
+	State      string       `json:"state"` // pending, invited, active, declined, conflict, dismissed
+	StateText  string       `json:"state_text"`
+	Host       PersonView   `json:"host"`
+	HostHere   bool         `json:"host_here"` // this installation runs it
+	Inviter    PersonView   `json:"inviter"`
+	Note       string       `json:"note,omitempty"`
+	Shared     []string     `json:"shared"`  // ids of the shared earlier messages held here
+	Missing    int          `json:"missing"` // shared messages not held here
+	TasksFrom  []PersonView `json:"tasks_from"`
+	Held       int          `json:"held"` // its records not counted here (yet)
+	Invited    time.Time    `json:"invited"`
+	CanDecide  bool         `json:"can_decide"`
+	CanDismiss bool         `json:"can_dismiss"`
+	CanAsk     bool         `json:"can_ask"`
 }
 
 // DMDraft is a message the person writes in a DM. The page sends messages
@@ -162,10 +218,19 @@ func DMStateText(dir, kind, state, peer, detail string) string {
 		}
 		return StateText("out", kind, state, peer)
 	}
-	if state == "conv_held" {
+	switch state {
+	case "conv_held":
 		return "Held for you: nothing runs it. Answer here if you want to."
+	case "part_waiting": // a request to this device's agent, not claimed yet
+		return "For your agent. It has not run yet: it runs here only with a responder chosen on this computer, while the invitation allows it."
+	case "not_run":
+		return "Not run: the agent's part in this DM ended first."
+	case "not_delivered":
+		return "Your agent's reply was kept here: the invitation no longer allowed sending it."
+	case "":
+		return ""
 	}
-	return ""
+	return StateText("in", kind, state, peer)
 }
 
 // Me describes this installation.

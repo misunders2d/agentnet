@@ -78,7 +78,14 @@ func (l *Live) dmOverview(o *Overview) error {
 			}
 		}
 		if len(msgs) > 0 {
-			s.Title, s.Last = firstLine(msgs[0].Body), firstLine(msgs[len(msgs)-1].Body)
+			people := l.people(c.Peer)
+			line := func(m client.ConvMessage) string { // a participation record in words, not its body
+				if m.Sub == envelope.SubEvent {
+					return eventText(m.Body, people)
+				}
+				return firstLine(m.Body)
+			}
+			s.Title, s.Last = line(msgs[0]), line(msgs[len(msgs)-1])
 			s.LastAt = time.Unix(msgs[len(msgs)-1].At, 0)
 		}
 		o.DMs = append(o.DMs, s)
@@ -155,10 +162,21 @@ func (l *Live) DM(id string) (DMThread, error) {
 		if c.Peer.State == PersonConflict {
 			t.Frozen = c.Peer.Address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it."
 		}
+		people := l.people(c.Peer)
 		for _, m := range msgs {
-			t.Messages = append(t.Messages, DMMessage{ID: m.ID, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
+			dm := DMMessage{ID: m.ID, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, c.Peer.Address, m.Detail),
-				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica})
+				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID}
+			if m.Target != nil {
+				dm.To = m.Target.Address
+			}
+			if m.Sub == envelope.SubEvent {
+				dm.Event, dm.Body, dm.StateText = eventText(m.Body, people), "", ""
+			}
+			t.Messages = append(t.Messages, dm)
+		}
+		if t.Agents, err = l.agentViews(id, people, msgs); err != nil {
+			return DMThread{}, err
 		}
 		return t, nil
 	}

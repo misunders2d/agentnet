@@ -607,3 +607,28 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 .person-card .node-name { box-shadow: none; padding: 0; }
 .zoom-search { width: 100%; margin: 8px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
 .zoom-results { width: 100%; max-width: 560px; }
+
+/* Agents in a DM: who runs each, what it may see, and what you can do. */
+.agents { display: grid; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--surface); justify-items: start; }
+.agent-card { width: min(640px, 100%); border: 1px solid var(--line); border-radius: var(--r-card); padding: 10px 12px; display: grid; gap: 4px; background: var(--canvas); }
+.agent-card.invited { border-color: var(--attn-line); background: var(--attn-soft); }
+.agent-card p { margin: 0; }
+.agent-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.agent-state { font-size: 13.5px; }
+.agent-note { font-size: 13px; font-style: italic; color: var(--muted); }
+.agent-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.agents-past summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.agents-past .agent-card { margin-top: 6px; opacity: .8; }
+.event-line { align-self: center; display: flex; gap: 8px; align-items: baseline; margin: 12px 0 2px; padding: 4px 12px; border-radius: 999px;
+  background: var(--sunken); color: var(--muted); font-size: 13px; max-width: 90%; text-align: center; }
+.event-line time { font-size: 12px; }
+.shared-note { margin: 2px 0 0; font-size: 12px; color: var(--accent-text); }
+.choices { border: 0; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+.choices legend { font-size: 13px; font-weight: 600; margin-bottom: 4px; padding: 0; }
+.choice { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.choice input { margin-top: 3px; flex: none; }
+.choices .hint { margin: 2px 0 0; }
+.quote-list { margin: 4px 0 8px; padding-left: 18px; font-size: 13.5px; }
+@media (max-width: 720px) { .agents { padding: 8px 12px; } }
+.panel.narration { min-height: 0; justify-content: space-between; gap: 6px; }
+.panel.narration .caption { position: static; align-self: flex-start; }

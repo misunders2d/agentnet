@@ -694,8 +694,12 @@ export class Engine {
       if (seen.hash !== hash) throw new Hold("conflicting_duplicate", "a message with the same key and logical id but other content is stored");
       return ops; // the same message again: acknowledged, not stored twice
     }
+    // A request to another device's agent is history here (as the core
+    // keeps it); any other question or task is held for the person. This
+    // browser never runs anything.
+    const request = n.kind === "question" || n.kind === "task";
     const rec = { ...base, v: 2, conv: n.conv, lid: n.lid, sub: n.sub, pid: n.pid, origin: n.origin, emotion: n.emotion, replica: n.replica,
-      state: n.kind === "question" || n.kind === "task" ? "conv_held" : "" };
+      target: n.target || null, state: request && !(n.target && n.target.address !== this.address) ? "conv_held" : "" };
     return [...ops, { s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, hash } }];
   }
 
@@ -932,12 +936,32 @@ export class Engine {
       .sort((a, b) => a.at - b.at);
     return { id, peer: this.personView(peer), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",
-      messages: msgs.filter((m) => m.sub !== "event").map((m) => {
+      messages: msgs.map((m) => {
         const out = !m.fp;
-        return { id: m.id, dir: out ? "out" : "in", from: out ? this.address : m.from, kind: m.kind, body: m.body, reply_to: m.reply_to || "",
+        const event = m.sub === "event" ? this.eventText(m.body, peer) : "";
+        return { id: m.id, dir: out ? "out" : "in", from: out ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: m.reply_to || "",
           origin: m.origin || "", state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
-          state_text: out ? outText(m.state, peer ? peer.address : "", m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
+          pid: m.pid || "", to: m.target ? m.target.address : "", event,
+          state_text: event ? "" : out ? outText(m.state, peer ? peer.address : "", m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
       }) };
+  }
+
+  // eventText says what an agent participation record in a DM does, as
+  // the laptop's page does. This browser only shows it: it never invites,
+  // hosts or runs an agent.
+  eventText(body, peer) {
+    let e;
+    try { e = wire.parseEvent(body); } catch (err) { return "A record about an agent that cannot be read here."; }
+    const me = this.me && this.me.person;
+    const who = (id) => (id && id === me ? "You" : peer && id === peer.person ? peer.label : "Someone not in this DM");
+    const whose = (id) => (id && id === me ? "your" : peer && id === peer.person ? peer.label + "'s" : "an unknown person's");
+    switch (e.type) {
+    case "invite": return who(e.author.person) + " invited " + (e.host ? whose(e.host.person) + " agent (on " + e.host.address + ")" : "an agent") + " into this DM.";
+    case "accept": return who(e.author.person) + " accepted: the agent joins this DM.";
+    case "decline": return who(e.author.person) + " declined the invitation for the agent.";
+    case "dismiss": return who(e.author.person) + " dismissed the agent: it gets nothing more from this DM.";
+    }
+    return "A record about an agent (" + e.type + ").";
   }
 
   async thread(id) {

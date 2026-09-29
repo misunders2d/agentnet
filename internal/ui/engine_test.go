@@ -402,6 +402,34 @@ func TestBrowserEngineJourney(t *testing.T) {
 	if inbox() != n0 || dmBodies(w.api("/api/dm?id="+root.ID(), nil)) != "in:first" {
 		t.Fatalf("duplicate stored: %v", dmBodies(w.api("/api/dm?id="+root.ID(), nil)))
 	}
+	// Eve invites her own agent into the DM and asks it: the record reads as
+	// a sentence, and her request to her agent is history here, not held
+	// for Dana (this browser never runs anything).
+	evePID := protocol.NewID()
+	evePubKey := eve.id.Public(eve.addr)
+	ev := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: evePID, Type: protocol.EventInvite, TS: time.Now().Unix(),
+		Author:   protocol.EventAuthor{Person: eveRoster.Person, Roster: eveRoster.Hash(), Address: eve.addr, Fingerprint: evePubKey.Fingerprint()},
+		Host:     &protocol.ParticipationHost{Person: eveRoster.Person, Address: eve.addr, Fingerprint: evePubKey.Fingerprint()},
+		Audience: protocol.AudienceConversation}
+	ev.Sign(eve.id.Sign)
+	eve.send(dPub, envelope.Inner{V: 2, Kind: "message", Sub: envelope.SubEvent, Body: string(marshalBytes(t, ev)), Conv: root.ID(),
+		LID: protocol.NewID(), Root: rootJSON, PID: evePID})
+	eve.send(dPub, envelope.Inner{V: 2, Kind: "question", Body: "summarize this for me", Conv: root.ID(), LID: protocol.NewID(), Root: rootJSON,
+		Origin: "ui", PID: evePID, Target: &envelope.Target{Address: eve.addr, Fingerprint: evePubKey.Fingerprint()}})
+	var evMsgs []any
+	w.until("eve's record and request", func() bool {
+		evMsgs = w.api("/api/dm?id="+root.ID(), nil)["messages"].([]any)
+		return len(evMsgs) == 3
+	})
+	record, request := evMsgs[1].(map[string]any), evMsgs[2].(map[string]any)
+	if record["event"] != "Eve invited Eve's agent (on "+eve.addr+") into this DM." || record["body"] != "" {
+		t.Fatalf("the record as the browser shows it: %v", record)
+	}
+	if request["state"] != "" || request["to"] != eve.addr || request["pid"] != evePID || strings.Contains(fmt.Sprint(request["state_text"]), "Held") {
+		t.Fatalf("a request to eve's own agent as the browser shows it: %v", request)
+	}
+	n0 = inbox()
+
 	// A root Eve did not make, from Eve: held until proven, never admitted.
 	other := root
 	other.Creator = protocol.ConvCreator{Person: dRoster.Person, Roster: dRoster.Hash(), Address: "dana/phone", Fingerprint: dPub.Fingerprint()}

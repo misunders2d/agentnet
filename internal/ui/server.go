@@ -58,6 +58,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/dm", s.dm)
 	mux.HandleFunc("POST /api/dm/new", s.newDM)
 	mux.HandleFunc("POST /api/dm/send", s.sendDM)
+	mux.HandleFunc("POST /api/dm/agent/invite", s.inviteAgent)
+	mux.HandleFunc("POST /api/dm/agent/decide", s.decideAgent)
+	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
+	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
 	mux.HandleFunc("GET /events", s.events)
 	return s.guard(mux)
 }
@@ -156,7 +160,74 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	_, o.Agents = s.p.(Participants)
 	writeJSON(w, o)
+}
+
+func (s *Server) participants(w http.ResponseWriter) (Participants, bool) {
+	p, ok := s.p.(Participants)
+	if !ok {
+		writeErr(w, NotFound("agents cannot be invited into DMs here"))
+	}
+	return p, ok
+}
+
+func (s *Server) inviteAgent(w http.ResponseWriter, r *http.Request) {
+	var d AgentInvite
+	if !readJSON(w, r, &d) {
+		return
+	}
+	if p, ok := s.participants(w); ok {
+		v, err := p.InviteAgent(d)
+		writeResult(w, v, err)
+	}
+}
+
+func (s *Server) decideAgent(w http.ResponseWriter, r *http.Request) {
+	var d struct {
+		PID    string `json:"pid"`
+		Accept bool   `json:"accept"`
+	}
+	if !readJSON(w, r, &d) {
+		return
+	}
+	if p, ok := s.participants(w); ok {
+		v, err := p.DecideAgent(d.PID, d.Accept)
+		writeResult(w, v, err)
+	}
+}
+
+func (s *Server) dismissAgent(w http.ResponseWriter, r *http.Request) {
+	var d struct {
+		PID string `json:"pid"`
+	}
+	if !readJSON(w, r, &d) {
+		return
+	}
+	if p, ok := s.participants(w); ok {
+		v, err := p.DismissAgent(d.PID)
+		writeResult(w, v, err)
+	}
+}
+
+func (s *Server) askAgent(w http.ResponseWriter, r *http.Request) {
+	var d AgentAsk
+	if !readJSON(w, r, &d) {
+		return
+	}
+	if p, ok := s.participants(w); ok {
+		v, err := p.AskAgent(d)
+		writeResult(w, v, err)
+	}
+}
+
+// writeResult writes v, or err as the page's error.
+func writeResult(w http.ResponseWriter, v any, err error) {
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, v)
 }
 
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {

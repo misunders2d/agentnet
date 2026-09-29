@@ -231,6 +231,10 @@ const Comic = {
   },
 
   panel(m, wide) {
+    if (m.event) { // a participation record: the narrator says it, nobody speaks it
+      return el("article", { id: "p-" + m.id, class: "panel narration" + (wide ? " full" : "") },
+        el("div", { class: "caption" }, m.event), el("footer", { class: "panel-foot" }, el("span", {}), el("time", { datetime: m.at }, when(m.at))));
+    }
     const mine = m.dir === "out";
     const needs = needsYou(m);
     const caption = m.state_text && !needs && el("div", { class: "caption" + (working(m) ? " running" : "") }, m.state_text);

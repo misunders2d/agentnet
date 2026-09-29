@@ -6,7 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
   drafts: {}, draftKey: null, sending: false, expanded: null, query: "", singlesOpen: {}, directoryOpen: false,
-  dm: null, dmData: null, personOpen: {}, dmReply: null,
+  dm: null, dmData: null, personOpen: {}, dmReply: null, dmAgent: null,
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
@@ -510,6 +510,7 @@ function beginDM(id) {
     setKind("message");
     setAnswering(null);
     setDMReply(null);
+    setDMAgent(null);
   }
   state.dm = id;
   return changed;
@@ -535,6 +536,9 @@ async function loadDM(scrollToEnd) {
     return;
   }
   if (state.dm !== id) return; // another conversation was opened meanwhile
+  // A participation record is shown as the sentence it stands for, in every view.
+  t.messages = t.messages.map((m) => (m.event ? Object.assign({}, m, { body: m.event }) : m));
+  t.agents = t.agents || [];
   state.dmData = t;
   fill($("conv-name"), t.peer.label);
   $("conv-topic").textContent = "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
@@ -547,10 +551,12 @@ async function loadDM(scrollToEnd) {
   n.hidden = !t.frozen;
   fill(n, t.frozen && el("p", {}, t.frozen));
   $("composer").hidden = false;
+  renderAgents(t);
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginDM)
   else if (state.dmReply && !t.messages.some((m) => m.id === state.dmReply.id)) setDMReply(null);
+  if (state.dmAgent && !(agentOf(state.dmAgent) || {}).can_ask) setDMAgent(null); // dismissed meanwhile
   state.draftKey = key;
   syncComposer();
   const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
@@ -573,14 +579,20 @@ function renderDMBody(scrollToEnd) {
 // dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
 // shown as that: a person's name is their claim, an agent is marked.
 function dmMsg(m, t, prev) {
+  if (m.event) {
+    return el("li", { id: "m-" + m.id, class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.at }, when(m.at)));
+  }
   const mine = m.dir === "out";
   const agent = (m.origin || "").startsWith("agent:");
   const author = dmAuthor(m, t);
-  const cont = prev && prev.dir === m.dir && prev.origin === m.origin && !kindTag[m.kind] && !kindTag[prev.kind] &&
-    new Date(m.at) - new Date(prev.at) < 10 * 60e3;
+  const to = m.to && (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "an agent on " + m.to);
+  const sharedWith = t.agents.filter((a) => (a.state === "invited" || a.state === "active") && a.shared.includes(m.id));
+  const cont = prev && !prev.event && prev.dir === m.dir && prev.origin === m.origin && !kindTag[m.kind] && !kindTag[prev.kind] &&
+    !to && !prev.to && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
   const held = m.state === "conv_held";
   const meta = !cont && el("div", { class: "meta" }, el("span", { class: "who" }, author),
     agent && el("span", { class: "tag" }, "Agent"),
+    to && el("span", { class: "tag" }, "To " + to.charAt(0).toLowerCase() + to.slice(1)),
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.unread && el("span", { class: "tag unread" }, "New"),
     el("time", { datetime: m.at }, when(m.at)));
@@ -593,6 +605,7 @@ function dmMsg(m, t, prev) {
           : el("span", { class: "replyref" }, "Reply to a message not shown here")),
         el("p", { class: "body" }, m.body)),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
+      sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
       el("div", { class: "foot" }, !held && m.state_text && el("span", {}, m.state_text),
         !t.frozen && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
         dmDetails(m))));
@@ -614,15 +627,154 @@ function dmDetails(m) {
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")]));
 }
 
+// ---- agents in a DM ------------------------------------------------------------------
+
+const agentOf = (pid) => state.dmData && (state.dmData.agents || []).find((a) => a.pid === pid);
+// agentName names an agent by the person whose installation runs it.
+const agentName = (a) => (a.host_here ? "Your agent" : a.host.label + "'s agent");
+const isMe = (p) => !!p && p.state === "self";
+const mayTask = (a) => a.tasks_from.some(isMe);
+
+// renderAgents shows the agents invited into the open DM: whose each is,
+// what it may be shown, who may give it tasks, and what you can do now.
+function renderAgents(t) {
+  const box = $("agents");
+  const canInvite = !!(state.overview && state.overview.agents && state.overview.person) && !t.frozen;
+  box.hidden = !t.agents.length && !canInvite;
+  const ended = (a) => a.state === "dismissed" || a.state === "declined";
+  const past = t.agents.filter(ended);
+  fill(box, t.agents.filter((a) => !ended(a)).map((a) => agentCard(a, t)),
+    past.length > 0 && el("details", { class: "agents-past" }, el("summary", {}, plural(past.length, "earlier agent", "earlier agents")),
+      past.map((a) => agentCard(a, t))),
+    canInvite && el("button", { type: "button", class: "text-btn", onclick: () => inviteDialog(t) }, "Invite an agent…"));
+}
+
+function agentCard(a, t) {
+  const shown = a.shared.length + a.missing;
+  const facts = ["invited by " + (isMe(a.inviter) ? "you" : a.inviter.label),
+    shown ? "shown " + plural(shown, "earlier message", "earlier messages") + (a.missing ? " (" + a.missing + " not here)" : "")
+      : "shown no earlier messages",
+    a.tasks_from.length ? "tasks from " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ") : "questions only"];
+  return el("div", { class: "agent-card " + a.state },
+    el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", {}, agentName(a)),
+      el("span", { class: "hint" }, "on " + a.host.address)),
+    el("p", { class: "agent-state" }, a.state_text),
+    el("p", { class: "hint" }, facts.join(" · ")),
+    a.note && el("p", { class: "agent-note" }, "Note: " + a.note),
+    (a.can_decide || a.can_ask || a.can_dismiss) && el("div", { class: "agent-actions" },
+      a.can_decide && el("button", { type: "button", class: "btn primary", onclick: () => decideDialog(a, t, true) }, "Accept…"),
+      a.can_decide && el("button", { type: "button", class: "btn", onclick: () => decideDialog(a, t, false) }, "Decline…"),
+      a.can_ask && el("button", { type: "button", class: "btn", onclick: () => { setDMAgent(a); $("body").focus(); } }, "Ask"),
+      a.can_dismiss && el("button", { type: "button", class: "text-btn", onclick: () => dismissDialog(a) }, "Dismiss…")));
+}
+
+// choice is one labelled radio or checkbox of a dialog.
+function choice(type, name, value, label) {
+  const input = el("input", { type, name, id: name + ":" + value });
+  input.value = value;
+  return { input, row: el("label", { class: "choice" }, input, el("span", {}, label)) };
+}
+
+// inviteDialog invites the agent on one member's computer. Nothing is
+// chosen for the person: whose agent, what it may be shown and who may
+// give it tasks are all picked here, and both people see them.
+function inviteDialog(t) {
+  const me = state.overview.person;
+  const hosts = [choice("radio", "agent-host", me.address, "Yours, on " + me.address),
+    choice("radio", "agent-host", t.peer.address, t.peer.label + "'s, on " + t.peer.address)];
+  const share = t.messages.filter((m) => !m.event).slice(-30)
+    .map((m) => choice("checkbox", "agent-share", m.id, dmAuthor(m, t) + ": " + firstLine(m.body, 70)));
+  const tasks = [[me, "You"], [t.peer, t.peer.label]].filter(([p]) => p.fingerprint)
+    .map(([p, label]) => choice("checkbox", "agent-tasks", p.fingerprint, label));
+  const note = el("input", { id: "agent-note", type: "text", maxlength: "200", autocomplete: "off" });
+  const picked = (cs) => cs.filter((c) => c.input.checked).map((c) => c.input.value);
+  dialog({
+    title: "Invite an agent into this DM",
+    body: [el("p", {}, "It joins only if its owner accepts, on their computer. You both see the invitation, what it may be shown and who may give it tasks."),
+      el("fieldset", { class: "choices" }, el("legend", {}, "Whose agent"), hosts.map((c) => c.row)),
+      el("fieldset", { class: "choices" }, el("legend", {}, "Earlier messages it may be shown"),
+        share.length ? share.map((c) => c.row) : el("p", { class: "hint" }, "No messages yet."),
+        el("p", { class: "hint" }, "None unless you choose. Nothing else earlier is given.")),
+      el("fieldset", { class: "choices" }, el("legend", {}, "Who may give it tasks"), tasks.map((c) => c.row),
+        el("p", { class: "hint" }, "Either of you can ask it questions. Tasks only from those chosen.")),
+      el("label", { for: "agent-note", class: "field-label" }, "A note for its owner (optional)"), note],
+    ok: "Invite",
+    run: async () => {
+      const host = picked(hosts)[0];
+      if (!host) throw new Error("Choose whose agent to invite.");
+      await api("/api/dm/agent/invite", { conv: t.id, host, share: picked(share), tasks_from: picked(tasks), note: note.value });
+      announce("Invited. Its owner accepts or declines it on their computer.");
+      await loadDM();
+    },
+  });
+}
+
+// decideDialog is the host's explicit answer, showing exactly what an
+// accept agrees to.
+function decideDialog(a, t, accept) {
+  const shared = t.messages.filter((m) => a.shared.includes(m.id));
+  const who = isMe(a.inviter) ? "You" : a.inviter.label;
+  dialog({
+    title: accept ? "Let your agent join this DM?" : "Decline the invitation?",
+    body: accept ? [el("p", {}, who + " invited your agent. If you accept, it answers what either of you asks it here, on this computer with the responder you chose."),
+      !(state.overview.me && state.overview.me.responder) && el("p", { class: "hint" }, "No responder is chosen on this computer yet: what is asked of it waits until you choose one."),
+      el("p", {}, shared.length ? "It may be shown these earlier messages:" : "It is shown no earlier messages."),
+      shared.length > 0 && el("ul", { class: "quote-list" }, shared.map((m) => el("li", {}, dmAuthor(m, t) + ": " + firstLine(m.body, 90)))),
+      a.missing > 0 && el("p", { class: "hint" }, plural(a.missing, "chosen message is", "chosen messages are") + " not on this computer and cannot be shown."),
+      el("p", {}, a.tasks_from.length ? "Tasks from: " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ") + "." : "Questions only: no one may give it tasks."),
+      a.note && el("p", {}, "Their note: " + a.note),
+      el("p", { class: "hint" }, "You accept exactly this, all or nothing. Either of you can dismiss it later.")]
+      : [el("p", {}, "Your agent does not join. If you change your mind, they can invite it again.")],
+    ok: accept ? "Accept" : "Decline",
+    run: async () => {
+      await api("/api/dm/agent/decide", { pid: a.pid, accept });
+      announce(accept ? "Your agent joined this DM." : "Declined.");
+      await loadDM();
+    },
+  });
+}
+
+function dismissDialog(a) {
+  dialog({
+    title: "Dismiss " + agentName(a).replace(/^Your/, "your") + "?",
+    body: [el("p", {}, "It gets nothing more from this DM and nothing more can be asked of it. What was already said stays. To have it again, invite it again.")],
+    ok: "Dismiss",
+    run: async () => {
+      await api("/api/dm/agent/dismiss", { pid: a.pid });
+      if (state.dmAgent === a.pid) setDMAgent(null);
+      announce("Dismissed.");
+      await loadDM();
+    },
+  });
+}
+
+// setDMAgent makes the composer ask an agent of the open DM, or write to
+// the person again (null). It is part of that DM's draft and never crosses
+// to another.
+function setDMAgent(a) {
+  state.dmAgent = a ? a.pid : null;
+  if (a) {
+    state.dmReply = null;
+    $("replying").hidden = false;
+    $("replying-label").textContent = "Asking";
+    $("replying-text").textContent = agentName(a) + " (on " + a.host.address + ")";
+    setKind("question");
+  } else if (!state.dmReply && !state.answering) {
+    $("replying").hidden = true;
+  }
+  if (state.dm) syncComposer();
+}
+
 async function sendDM() {
   const t = state.dmData;
   if (state.sending || !t || t.frozen) return;
-  const key = state.draftKey, text = $("body").value, reply = state.dmReply;
+  const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent;
   state.sending = true;
   syncComposer();
   $("compose-error").textContent = "";
   try {
-    const r = await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "" });
+    const r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind: kindValue() === "task" ? "task" : "question", body: text })
+      : await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "" });
     announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     if (state.draftKey === key) {
@@ -789,10 +941,12 @@ function beginThread(id) {
     setKind("message");
     setAnswering(null);
     setDMReply(null);
+    setDMAgent(null);
   }
   state.dm = null;
   state.dmData = null;
   state.thread = id;
+  $("agents").hidden = true;
   return changed;
 }
 
@@ -1181,7 +1335,8 @@ function setKind(kind) {
 // (or none). It is part of that DM's draft and never crosses to another.
 function setDMReply(m) {
   state.dmReply = m ? { id: m.id, body: m.body } : null;
-  if (!m && state.answering) return;
+  if (m && state.dmAgent) setDMAgent(null);
+  if (!m && (state.answering || state.dmAgent)) return;
   $("replying").hidden = !m;
   if (m) {
     $("replying-label").textContent = "Replying to";
@@ -1204,7 +1359,9 @@ function setAnswering(m) {
 function keepDraft() {
   if (state.draftKey === null) return;
   const text = $("body").value;
-  if (text || state.answering || state.dmReply) state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply };
+  if (text || state.answering || state.dmReply || state.dmAgent) {
+    state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply, agent: state.dmAgent };
+  }
   else delete state.drafts[state.draftKey];
 }
 
@@ -1219,6 +1376,10 @@ function restoreDraft(key, t) {
   // A DM's reply target comes back only if that message is in this DM.
   const r = state.dm && d && d.reply && t.messages.find((x) => x.id === d.reply.id);
   setDMReply(r || null);
+  // An agent target comes back only while that agent of this DM can be asked.
+  const a = state.dm && d && d.agent && (t.agents || []).find((x) => x.pid === d.agent && x.can_ask);
+  setDMAgent(a || null);
+  if (a && d.kind === "task") setKind("task");
 }
 
 // syncComposer enables what the open conversation allows. A send on its way
@@ -1230,12 +1391,21 @@ function syncComposer() {
     const blocked = !d || !!d.frozen || revoked;
     $("body").disabled = blocked;
     $("send").disabled = blocked || state.sending;
-    $("kind").hidden = true;
-    $("body").placeholder = !d ? "" : revoked ? "This device was removed from its server" : d.frozen ? "Nothing more can be sent in this conversation" : "Write to " + d.peer.label;
+    const a = state.dmAgent && agentOf(state.dmAgent);
+    // Asking an agent: a question, or a task when the invitation lets you give it tasks.
+    $("kind").hidden = !a || !mayTask(a);
+    for (const r of document.querySelectorAll('input[name="kind"]')) {
+      const l = r.value === "message" && r.closest && r.closest("label");
+      if (l) l.hidden = !!a;
+    }
+    if (a && kindValue() === "message") setKind("question");
+    $("body").placeholder = !d ? "" : revoked ? "This device was removed from its server" : d.frozen ? "Nothing more can be sent in this conversation"
+      : a ? "Ask " + agentName(a).replace(/^Your/, "your") : "Write to " + d.peer.label;
     kindHint();
     return;
   }
   $("kind").hidden = false;
+  for (const r of document.querySelectorAll('input[name="kind"]')) { const l = r.closest && r.closest("label"); if (l) l.hidden = false; }
   const t = state.data;
   const blocked = !t || !!t.key.pending;
   $("body").disabled = blocked;
@@ -1289,7 +1459,13 @@ async function send(ev) {
 }
 
 function kindHint() {
-  if (state.dm) { $("compose-hint").textContent = "A DM is for the person; nothing runs it. Ctrl+Enter sends."; return; }
+  if (state.dm) {
+    const a = state.dmAgent && agentOf(state.dmAgent);
+    $("compose-hint").textContent = !a ? "A DM message is for the person; nothing runs it. Ctrl+Enter sends."
+      : kindValue() === "task" ? "The invitation lets you give it tasks. It runs on " + a.host.address + ". Ctrl+Enter sends."
+        : "Both of you see what you ask and what it answers. It runs on " + a.host.address + ". Ctrl+Enter sends.";
+    return;
+  }
   $("compose-hint").textContent = state.answering
     ? "Your reply answers this " + state.answering.kind + " and takes it over from your responder. Ctrl+Enter sends."
     : {
@@ -1479,7 +1655,7 @@ function start() {
   });
   $("kind").addEventListener("change", kindHint);
   kindHint();
-  $("replying-cancel").addEventListener("click", () => { setAnswering(null); setDMReply(null); });
+  $("replying-cancel").addEventListener("click", () => { setAnswering(null); setDMReply(null); setDMAgent(null); });
   $("review-btn").addEventListener("click", () => toggleReview());
   $("new-btn").addEventListener("click", () => newConversationDialog());
   $("search").addEventListener("input", () => { state.query = $("search").value; rerenderContacts(); });

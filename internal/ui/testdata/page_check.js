@@ -126,6 +126,7 @@ function fetch(url, opts) {
   else if (u.pathname === "/api/dm") data = dmThreads[u.searchParams.get("id")] || {};
   else if (u.pathname === "/api/dm/send") data = { id: "sent-dm", state: "custody" };
   else if (u.pathname === "/api/dm/new") data = { id: "d3" };
+  else if (u.pathname.startsWith("/api/dm/agent/")) data = u.pathname.endsWith("/ask") ? { id: "asked", state: "custody" } : {};
   else if (u.pathname === "/api/person") data = { person: { person: "p-me", label: body.label, address: "me/laptop", state: "self" }, note: "Your person is set up." };
   const resp = { ok: true, json: async () => JSON.parse(JSON.stringify(data)), text: async () => "" };
   if (hold[u.pathname]) return new Promise((res) => { (held[u.pathname] ||= []).push(() => res(resp)); });
@@ -582,6 +583,91 @@ const ev = { preventDefault() {} };
   await run('openThread("a1")');
   check(run("state.dm") === null && $("kind").hidden === false && run("state.data.peer") === "alice/desk",
     "device history opens apart from DMs, with its own composer");
+
+  // Agents in a DM: invited by a person, accepted only by its host's person,
+  // asked from the composer, dismissed by either; records read as sentences.
+  const me = { person: "p-me", label: "Sergey", address: "me/laptop", fingerprint: "fp-me", state: "self" };
+  const alice = Object.assign({ fingerprint: "fp-alice" }, alicePerson);
+  const agentV = (pid, extra) => Object.assign({ pid, state: "invited", state_text: "", host: me, host_here: true, inviter: alice, note: "",
+    shared: [], missing: 0, tasks_from: [], held: 0, invited: T, can_decide: false, can_dismiss: false, can_ask: false }, extra);
+  overview.agents = true;
+  overview.person = me;
+  dmThreads.d4 = { id: "d4", peer: alice, created: T, mine: false, messages: [
+    dmsg("m41", "in", "the deploy plan"),
+    dmsg("m42", "in", "", { event: "Alice invited your agent (on me/laptop) into this DM.", pid: "pid1" }),
+    dmsg("m43", "in", "which branch?", { kind: "question", pid: "pid1", to: "me/laptop", state: "part_waiting", state_text: "For your agent: it has not run yet." })],
+    agents: [agentV("pid1", { state_text: "Alice invited your agent. Nothing runs unless you accept.", shared: ["m41"], note: "help with deploy",
+      can_decide: true, can_dismiss: true })] };
+  await run("loadOverview()");
+  calls.length = 0;
+  await run('openDM("d4")');
+  let ag = JSON.stringify($("agents").children.map(textOf));
+  check(!$("agents").hidden && ag.includes("Your agent") && ag.includes("Accept") && ag.includes("Decline") && ag.includes("invited by Alice") &&
+    ag.includes("shown 1 earlier message") && ag.includes("questions only") && ag.includes("help with deploy"),
+    "an invitation to your agent says who invited it, what it may see, and offers accept and decline: " + ag);
+  tl = JSON.stringify($("timeline").children.map(textOf));
+  check(tl.includes("Alice invited your agent") && !tl.includes('"pid"') && tl.includes("Shared with your agent") && tl.includes("To your agent"),
+    "a record reads as a sentence; the shared message and the request to the agent say so: " + tl);
+  check($("timeline").children.flatMap((c) => strayText(c)).concat($("agents").children.flatMap((c) => strayText(c))).length === 0,
+    "no stray text with agents");
+  run("decideDialog")(dmThreads.d4.agents[0], run("state.dmData"), true);
+  const acc = JSON.stringify($("dialog-body").children.map(textOf));
+  check(!calls.some((c) => c.path === "/api/dm/agent/decide") && acc.includes("the deploy plan") && acc.includes("Questions only"),
+    "accepting shows exactly what is agreed to, and waits for its button: " + acc);
+  await $("dialog-ok").onclick();
+  check(calls.some((c) => c.path === "/api/dm/agent/decide" && c.body.pid === "pid1" && c.body.accept === true), "accept sends the host's decision");
+
+  // Inviting: nothing is chosen for the person.
+  calls.length = 0;
+  run("inviteDialog")(run("state.dmData"));
+  await $("dialog-ok").onclick();
+  check(!calls.some((c) => c.path === "/api/dm/agent/invite") && $("dialog-error").textContent.includes("Choose whose agent"),
+    "an invite needs whose agent, chosen by hand");
+  byId["agent-host:alice/desk"].checked = true;
+  byId["agent-share:m41"].checked = true;
+  byId["agent-tasks:fp-me"].checked = true;
+  byId["agent-note"].value = "please help";
+  await $("dialog-ok").onclick();
+  const invs = calls.filter((c) => c.path === "/api/dm/agent/invite");
+  check(invs.length === 1 && invs[0].body.conv === "d4" && invs[0].body.host === "alice/desk" && JSON.stringify(invs[0].body.share) === '["m41"]' &&
+    JSON.stringify(invs[0].body.tasks_from) === '["fp-me"]' && invs[0].body.note === "please help",
+    "the invite carries exactly what was chosen: " + JSON.stringify(invs[0] && invs[0].body));
+
+  // Asking an active agent from the composer; the target is part of that DM's draft.
+  dmThreads.d4.agents = [agentV("pid2", { state: "active", host: alice, host_here: false, inviter: me, tasks_from: [me], can_ask: true, can_dismiss: true })];
+  await run('openDM("d4")');
+  ag = JSON.stringify($("agents").children.map(textOf));
+  check(ag.includes("Alice's agent") && ag.includes("Ask") && ag.includes("Dismiss") && !ag.includes("Accept") && ag.includes("tasks from you"),
+    "someone else's agent offers ask and dismiss, never accept: " + ag);
+  run("setDMAgent")(dmThreads.d4.agents[0]);
+  check($("body").placeholder === "Ask Alice's agent" && $("kind").hidden === false && !$("replying").hidden,
+    "asking an agent says whom, and offers tasks when the invitation allows yours: " + $("body").placeholder);
+  $("body").value = "which branch?";
+  calls.length = 0;
+  await run("send")(ev);
+  const asks = calls.filter((c) => c.path === "/api/dm/agent/ask");
+  check(asks.length === 1 && asks[0].body.pid === "pid2" && asks[0].body.kind === "question" && asks[0].body.body === "which branch?" &&
+    !calls.some((c) => c.path === "/api/dm/send"), "the question goes to the agent, not as a message to the person");
+  check(run("state.dmAgent") === "pid2", "follow-ups go to the same agent until cancelled");
+  await run('openDM("d2")');
+  check(run("state.dmAgent") === null && $("body").placeholder === "Write to Alice", "another DM does not ask that agent");
+  await run('openDM("d4")');
+  check(run("state.dmAgent") === "pid2", "coming back, the DM still asks its agent");
+  run("setDMReply")(dmThreads.d4.messages[0]);
+  check(run("state.dmAgent") === null && $("body").placeholder === "Write to Alice", "replying to a message writes to the person again");
+  calls.length = 0;
+  run("dismissDialog")(dmThreads.d4.agents[0]);
+  check(!calls.some((c) => c.path === "/api/dm/agent/dismiss"), "dismissing waits for its button");
+  await $("dialog-ok").onclick();
+  check(calls.some((c) => c.path === "/api/dm/agent/dismiss" && c.body.pid === "pid2"), "either person can dismiss");
+
+  // Where agents cannot be invited (the browser device), nothing offers it.
+  overview.agents = false;
+  dmThreads.d4.agents = [];
+  await run("loadOverview()");
+  await run('openDM("d4")');
+  check($("agents").hidden, "no agent controls where agents cannot be invited");
+  delete overview.agents;
 
   // Search finds people by the name they give or their device, and DMs by
   // their lines or the person; each result says its kind and opens exactly it.
