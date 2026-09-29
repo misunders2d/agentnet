@@ -105,7 +105,7 @@ func TestReleaseOlderNotRecommended(t *testing.T) {
 		t.Fatalf("told to downgrade: %q", line)
 	}
 	for _, c := range w.bob.Doctor(tctx(t)) {
-		if c.Name == "update" && !strings.Contains(c.Result, "is not older, so no update is needed") {
+		if c.Name == "update" && !strings.Contains(c.Result, "no comparable newer recommendation") {
 			t.Fatalf("doctor: %q", c.Result)
 		}
 	}
@@ -140,6 +140,7 @@ func TestReleaseNoticeRetriedAfterRestart(t *testing.T) {
 // A slow desktop notifier runs on the worker and does not hold up the
 // stream: messages keep arriving while it is still showing.
 func TestSlowReleaseNoticeDoesNotBlockDelivery(t *testing.T) {
+	running(t, "v0.3.0")
 	w := newWorld(t, "")
 	var showing atomic.Bool
 	w.bob.notify = func(title, body string, _ []string, _ func()) error {
@@ -149,7 +150,7 @@ func TestSlowReleaseNoticeDoesNotBlockDelivery(t *testing.T) {
 		return nil
 	}
 	runWith(t, w, w.bob, RunOptions{})
-	recommend(t, w.alice, "v8", "https://example.test/")
+	recommend(t, w.alice, "v8.0.0", "https://example.test/")
 	eventually(t, "slow notice started", showing.Load)
 	w.alice.Send(tctx(t), w.bob.Address, "still flowing", "")
 	eventually(t, "message during a slow notice", func() bool { return hasInbox(w.bob, "still flowing") })

@@ -15,8 +15,9 @@ import (
 // The Hub's operator may recommend a client version. The daemon receives it
 // on its stream (on connect and when it changes), saves it, and tells the
 // person once per recommendation (content-free desktop notice) and each
-// harness session once (hook line). Builds are compared only for equality:
-// version strings such as git hashes or "dev" have no order. AgentNet never
+// harness session once (hook line), only when the recommendation is a
+// release newer than this build (protocol.Newer); a build it cannot compare
+// ("dev", a bare hash) is never told to update. AgentNet never
 // downloads or runs anything; the URL is the operator's recommendation, not
 // authority to install.
 
