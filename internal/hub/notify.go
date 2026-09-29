@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ const (
 	notifyGrace             = 5 * time.Second  // wait for the device's presentation of a message
 	notifyLifetime          = 24 * time.Hour   // a pending alert not sent by then is dropped
 	notifyChannelsPerSender = 16               // exact channels kept per sender and device; beyond, one summary per sender
+	notifySummaryChannels   = 64               // channels a summary records; one beyond them never alerts on its own
 	notifyBatch             = 32               // devices looked at per scheduler round
 	pushBurst               = 3                // pushes a device may get at once…
 	pushRefill              = 10 * time.Second // …then one per this
@@ -63,14 +65,25 @@ func enqueueAttention(tx *sql.Tx, env envelope.Envelope, senderFP string, now ti
 		env.To, env.From, channel, env.To, env.From).Scan(&have, &channels); err != nil {
 		return err
 	}
+	recorded := ""
 	if have == 0 && channels >= notifyChannelsPerSender {
-		channel = "" // this sender's summary: its sender stays known and checked
+		// This sender's summary. It keeps its sender, and records the
+		// channels it stands for (bounded), so mutes still decide.
+		channel = ""
+		if err := tx.QueryRow(`SELECT channels FROM notify_pending WHERE address = ? AND channel = '' AND sender = ?`,
+			env.To, env.From).Scan(&recorded); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if list := strings.Fields(recorded); !slices.Contains(list, env.Chan) && len(list) < notifySummaryChannels {
+			recorded = strings.Join(append(list, env.Chan), " ")
+		}
 	}
 	ms := now.UnixMilli()
-	_, err := tx.Exec(`INSERT INTO notify_pending(address, channel, sender, gen, count, last_msg, due_ms, expires_ms)
-		VALUES(?, ?, ?, 1, 1, ?, ?, ?)
-		ON CONFLICT(address, channel, sender) DO UPDATE SET gen = gen + 1, count = count + 1, last_msg = excluded.last_msg`,
-		env.To, channel, env.From, env.ID, ms+notifyGrace.Milliseconds(), ms+notifyLifetime.Milliseconds())
+	_, err := tx.Exec(`INSERT INTO notify_pending(address, channel, sender, gen, count, last_msg, due_ms, expires_ms, channels)
+		VALUES(?, ?, ?, 1, 1, ?, ?, ?, ?)
+		ON CONFLICT(address, channel, sender) DO UPDATE SET gen = gen + 1, count = count + 1, last_msg = excluded.last_msg,
+		channels = excluded.channels`,
+		env.To, channel, env.From, env.ID, ms+notifyGrace.Milliseconds(), ms+notifyLifetime.Milliseconds(), recorded)
 	return err
 }
 
@@ -308,11 +321,9 @@ func (h *Hub) handleNotifySeen(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// pushHosts is the explicit list of push services this Hub sends to.
 func (h *Hub) pushHosts() []string {
-	if len(h.cfg.PushHosts) > 0 {
-		return h.cfg.PushHosts
-	}
-	return protocol.DefaultPushHosts
+	return append(slices.Clone(protocol.DefaultPushHosts), h.cfg.PushHosts...)
 }
 
 // The scheduler.
@@ -417,12 +428,24 @@ func (n *notifier) round(ctx context.Context) (time.Time, error) {
 	return time.UnixMilli(next.Int64), nil
 }
 
-// alert is one pending row as it was when a push was made from it.
+// alert is one pending row as it was when a push was made from it. Its
+// generation and newest message together name that state of that row: a
+// row recreated after a presentation starts again at generation 1 but
+// always with another newest message, so an outcome for the old state
+// never touches it.
 type alert struct {
 	channel, sender, lastMsg string
 	gen                      int64
 	attempts                 int
 	expires                  int64
+	recorded                 []string // a summary's channels
+}
+
+// sameState matches a pending row in exactly the state a was read in.
+const sameState = `address = ? AND channel = ? AND sender = ? AND gen = ? AND last_msg = ?`
+
+func (a alert) state(address string) []any {
+	return []any{address, a.channel, a.sender, a.gen, a.lastMsg}
 }
 
 // dispatch sends one push for the device's due alerts, if they are still
@@ -439,7 +462,7 @@ func (n *notifier) dispatch(ctx context.Context, address string, now time.Time) 
 	if err != nil {
 		return err
 	}
-	rows, err := st.db.Query(`SELECT channel, sender, last_msg, gen, attempts, expires_ms FROM notify_pending WHERE address = ? AND due_ms <= ?`,
+	rows, err := st.db.Query(`SELECT channel, sender, last_msg, gen, attempts, expires_ms, channels FROM notify_pending WHERE address = ? AND due_ms <= ?`,
 		address, now.UnixMilli())
 	if err != nil {
 		return err
@@ -447,10 +470,12 @@ func (n *notifier) dispatch(ctx context.Context, address string, now time.Time) 
 	var all []alert
 	for rows.Next() {
 		var a alert
-		if err := rows.Scan(&a.channel, &a.sender, &a.lastMsg, &a.gen, &a.attempts, &a.expires); err != nil {
+		var recorded string
+		if err := rows.Scan(&a.channel, &a.sender, &a.lastMsg, &a.gen, &a.attempts, &a.expires, &recorded); err != nil {
 			rows.Close()
 			return err
 		}
+		a.recorded = strings.Fields(recorded)
 		all = append(all, a)
 	}
 	rows.Close()
@@ -506,21 +531,37 @@ func (n *notifier) dispatch(ctx context.Context, address string, now time.Time) 
 
 // allowed checks a due alert again: turned on, not revoked, not expired,
 // the sender still allowed with the key the Hub has enrolled for it now
-// and not revoked, and its channel not muted.
+// and not revoked, and its channel not muted; a summary, at least one of
+// the channels it recorded not muted (a channel beyond its record never
+// alerts on its own).
 func (n *notifier) allowed(address string, a alert, now time.Time) (bool, error) {
 	if a.expires <= now.UnixMilli() {
 		return false, nil
 	}
 	st := n.h.store
-	var enabled, muted bool
+	var enabled bool
 	var fp string
 	err := st.db.QueryRow(`SELECT
 		EXISTS (SELECT 1 FROM notify_prefs p JOIN agents g ON g.address = p.address WHERE p.address = ? AND p.enabled = 1 AND g.revoked_at IS NULL),
-		EXISTS (SELECT 1 FROM notify_mutes WHERE address = ? AND channel = ?),
 		coalesce((SELECT fingerprint FROM notify_senders WHERE address = ? AND sender = ?), '')`,
-		address, address, a.channel, address, a.sender).Scan(&enabled, &muted, &fp)
-	if err != nil || !enabled || muted || fp == "" {
+		address, address, a.sender).Scan(&enabled, &fp)
+	if err != nil || !enabled || fp == "" {
 		return false, err
+	}
+	channels := []string{a.channel}
+	if a.channel == "" {
+		channels = a.recorded
+	}
+	open := false
+	for _, c := range channels {
+		var muted bool
+		if err := st.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM notify_mutes WHERE address = ? AND channel = ?)`, address, c).Scan(&muted); err != nil {
+			return false, err
+		}
+		open = open || !muted
+	}
+	if !open {
+		return false, nil
 	}
 	sender, err := st.agent(a.sender)
 	if errors.Is(err, errNotFound) {
@@ -533,11 +574,12 @@ func (n *notifier) allowed(address string, a alert, now time.Time) (bool, error)
 }
 
 // complete removes the alerts a push covered (or that were dropped), only
-// as they were: one that gained activity meanwhile (a new generation) stays,
-// due again after the grace when sent.
+// in the state they were read in: one that gained activity meanwhile, or
+// was removed and made again, stays; after a push, it is due again no
+// sooner than the grace.
 func complete(st *store, address string, as []alert, now time.Time, sent bool) error {
 	for _, a := range as {
-		res, err := st.db.Exec(`DELETE FROM notify_pending WHERE address = ? AND channel = ? AND sender = ? AND gen = ?`, address, a.channel, a.sender, a.gen)
+		res, err := st.db.Exec(`DELETE FROM notify_pending WHERE `+sameState, a.state(address)...)
 		if err != nil {
 			return err
 		}
@@ -551,18 +593,22 @@ func complete(st *store, address string, as []alert, now time.Time, sent bool) e
 	return nil
 }
 
+// reschedule moves the alerts, in the state they were read in, to at; one
+// changed meanwhile keeps its own deadline.
 func reschedule(st *store, address string, as []alert, at time.Time) error {
 	for _, a := range as {
-		if _, err := st.db.Exec(`UPDATE notify_pending SET due_ms = ? WHERE address = ? AND channel = ? AND sender = ?`,
-			at.UnixMilli(), address, a.channel, a.sender); err != nil {
+		if _, err := st.db.Exec(`UPDATE notify_pending SET due_ms = ? WHERE `+sameState, append([]any{at.UnixMilli()}, a.state(address)...)...); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// retry schedules another attempt after a transient failure, honouring
-// Retry-After, or drops an alert that has had its attempts.
+// retry schedules another attempt after a transient failure, or drops an
+// alert that has had its attempts or would outlive its lifetime. The push
+// service's Retry-After is a minimum and is never shortened; without one,
+// the wait doubles up to pushMaxBackoff. Only alerts in the state they were
+// read in are touched.
 func retry(st *store, address string, as []alert, now time.Time, retryAfter time.Duration, status int, logf func(string, ...any)) error {
 	dropped := 0
 	for _, a := range as {
@@ -571,17 +617,18 @@ func retry(st *store, address string, as []alert, now time.Time, retryAfter time
 		if wait <= 0 {
 			wait = min(pushMaxBackoff, notifyGrace<<attempts)
 		}
-		wait = min(wait, pushMaxBackoff)
 		if attempts >= pushMaxAttempts || now.Add(wait).UnixMilli() >= a.expires {
-			if _, err := st.db.Exec(`DELETE FROM notify_pending WHERE address = ? AND channel = ? AND sender = ? AND gen = ?`,
-				address, a.channel, a.sender, a.gen); err != nil {
+			res, err := st.db.Exec(`DELETE FROM notify_pending WHERE `+sameState, a.state(address)...)
+			if err != nil {
 				return err
 			}
-			dropped++
+			if n, _ := res.RowsAffected(); n == 1 {
+				dropped++
+			}
 			continue
 		}
-		if _, err := st.db.Exec(`UPDATE notify_pending SET attempts = ?, due_ms = ? WHERE address = ? AND channel = ? AND sender = ?`,
-			attempts, now.Add(wait).UnixMilli(), address, a.channel, a.sender); err != nil {
+		if _, err := st.db.Exec(`UPDATE notify_pending SET attempts = ?, due_ms = ? WHERE `+sameState,
+			append([]any{attempts, now.Add(wait).UnixMilli()}, a.state(address)...)...); err != nil {
 			return err
 		}
 	}

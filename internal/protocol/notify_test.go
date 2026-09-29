@@ -111,3 +111,16 @@ func TestNotifyPrefsAndSeenValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestValidPushHost(t *testing.T) {
+	for _, h := range []string{"push.example.org", "a-b.push.example.org", "web.push.apple.com"} {
+		if !ValidPushHost(h) {
+			t.Errorf("%q refused", h)
+		}
+	}
+	for _, h := range []string{"", "localhost", "10.0.0.1", "::1", "https://x.org", "x.org:443", "x.org/p", "-x.org", "x-.org", "X.org", "x..org", "x.org."} {
+		if ValidPushHost(h) {
+			t.Errorf("%q accepted", h)
+		}
+	}
+}

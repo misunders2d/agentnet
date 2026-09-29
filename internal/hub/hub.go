@@ -54,9 +54,9 @@ type Config struct {
 	// API-only. Browsers need publicly trusted HTTPS (normally PlatformTLS).
 	Web bool
 
-	// PushHosts are the host suffixes of the push services this Hub sends
-	// Web Push to (default protocol.DefaultPushHosts): the explicit list a
-	// device's subscription must match.
+	// PushHosts are push services this Hub sends Web Push to besides
+	// protocol.DefaultPushHosts (each a host name; a subscription's host
+	// must be one of them or a subdomain of one).
 	PushHosts []string
 }
 
@@ -116,6 +116,11 @@ func Open(cfg Config) (*Hub, error) {
 	public, err := protocol.NormalizeHubURL(cfg.PublicURL)
 	if err != nil {
 		return nil, err
+	}
+	for _, h := range cfg.PushHosts {
+		if !protocol.ValidPushHost(h) {
+			return nil, fmt.Errorf("invalid push host %q (a host name such as push.example.com)", h)
+		}
 	}
 	cfg.PublicURL = public
 	u, _ := url.Parse(public)

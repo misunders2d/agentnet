@@ -205,6 +205,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	maxFile := fs.String("max-file", env("MAX_FILE", "100MiB"), "largest attachment (plaintext)")
 	quota := fs.String("quota", env("QUOTA", "1GiB"), "total attachment storage")
 	uploadTTL := fs.Duration("upload-ttl", mustDuration(env("UPLOAD_TTL", "24h")), "idle time before an unfinished upload is removed")
+	pushHosts := fs.String("push-hosts", env("PUSH_HOSTS", ""), "comma-separated push services to send Web Push to, besides Apple, Google, Mozilla and Microsoft (env AGENTNET_PUSH_HOSTS)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -231,8 +232,17 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 		}
 		*public = "https://" + *listen
 	}
+	var extra []string
+	for _, h := range strings.Split(*pushHosts, ",") {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			if !protocol.ValidPushHost(h) {
+				return fmt.Errorf("--push-hosts: %q is not a host name (such as push.example.com)", h)
+			}
+			extra = append(extra, h)
+		}
+	}
 	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel, PlatformTLS: *platformTLS, Web: *web,
-		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL})
+		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, PushHosts: extra})
 	if err != nil {
 		return err
 	}

@@ -87,7 +87,7 @@ const CapNotify     = "notify1" // device caps record: reads attn/chan
 // GET /v1/notify (no signature needed)
 type NotifyInfo struct {
 	PushKey   string   `json:"push_key,omitempty"`   // VAPID public key, base64url uncompressed P-256; "" when this Hub sends no Web Push
-	PushHosts []string `json:"push_hosts,omitempty"` // host suffixes of push services this Hub sends to
+	PushHosts []string `json:"push_hosts,omitempty"` // push service hosts this Hub sends to (exact, or a dot-delimited subdomain)
 	GraceMS   int64    `json:"grace_ms"`             // how long a pending alert waits for a presentation ack
 }
 
@@ -154,10 +154,12 @@ Built: `internal/hub/notify.go`, `push.go`; schema step 6.
   sets the deadline `now + grace`; later ones count, replace `last_msg` and
   bump a generation, never extending the deadline.
 - **Provenance:** every alert keeps its sender. A sender gets at most 16
-  exact channels pending per device; beyond that, one summary per sender
-  (no channel). So removing, re-keying or revoking a sender stops even its
-  summary; a channel mute applies to exact channels (a sender spraying
-  channels is the documented honest-sender limit).
+  exact channels pending per device; beyond that, one summary per sender,
+  which records the channels it stands for (at most 64; schema step 7).
+  So removing, re-keying or revoking a sender stops even its summary, and
+  mutes still decide: a summary goes out only if at least one channel it
+  recorded is not muted; a channel beyond its record never alerts on its
+  own (a sender spraying channels is the documented honest-sender limit).
 - `POST /v1/notify/seen` cancels the channel's pending alerts (and its
   senders' summaries) whose `last_msg` is among the ids: newer, unseen
   activity keeps them. A stream connection, stream acks and delivery
@@ -170,17 +172,22 @@ Built: `internal/hub/notify.go`, `push.go`; schema step 6.
   `chan` = the conversation if exactly one is due, else a summary (`""`);
   `Topic` = that channel or `summary`; `TTL` 24 h; `Urgency: high`; the §3
   payload padded to one 1024-byte record.
-- **Generation-safe completion:** the push is built from a snapshot (each
-  alert's generation, the subscription's identity) and completes only
-  that: an alert that gained activity while the push was out stays, due
-  again after the grace; a 404/410 removes the subscription only if it is
-  still the one the push went to (a replacement made meanwhile stays, and
-  the alerts go to it).
+- **Completion only of what was sent:** the push is built from a snapshot
+  of each alert's state (its generation AND its newest message: a row
+  presented and made again restarts at generation 1 but never with the
+  same newest message) and of the subscription's identity. Every outcome
+  (completion, drop, retry, reschedule) touches an alert only in that
+  state: one that gained activity, or was removed and made again, while the
+  push was out stays with its own deadline (after a sent push, no sooner
+  than the grace); a 404/410 removes the subscription only if it is still
+  the one the push went to (a replacement made meanwhile stays, and the
+  alerts go to it).
 - Outcomes: 2xx = accepted by the push service (queued there; not shown,
   not read). 404/410 → that subscription and the device's alerts are
-  removed. 429/5xx/network → retried after `Retry-After` (else 10 s, 20 s,
-  … up to 1 h), at most 6 attempts within the 24 h lifetime, then dropped
-  and counted in the log (never the endpoint). Other statuses (including a
+  removed. 429/5xx/network → retried after the service's `Retry-After`
+  (a minimum, never shortened), else after 10 s, 20 s, … up to 1 h; at
+  most 6 attempts, and never past the 24 h lifetime (a wait beyond it drops
+  the alert); drops are counted in the log (never the endpoint). Other statuses (including a
   redirect, never followed) → dropped, logged by status only. A failure
   inside the Hub reschedules that device a minute later (no spin).
 - Bounds (named constants in `notify.go`): grace 5 s; lifetime 24 h; 16
@@ -195,11 +202,12 @@ The Hub makes HTTPS requests to URLs an enrolled device supplied.
 
 - **Explicit provider policy:** the endpoint must be `https://`, port 443,
   a DNS host name (no IP literal), no userinfo, no fragment, and its host
-  must end in a configured push host suffix. Default list: Apple
-  (`push.apple.com`), Google (`fcm.googleapis.com`), Mozilla
-  (`push.services.mozilla.com`), Microsoft (`notify.windows.com`). An
-  operator can widen it (`hub serve` config); the list is published in
-  `GET /v1/notify`.
+  must be one of the listed push hosts or a dot-delimited subdomain of one
+  (never a raw suffix match). Always listed: Apple (`push.apple.com`),
+  Google (`fcm.googleapis.com`), Mozilla (`push.services.mozilla.com`),
+  Microsoft (`notify.windows.com`); an operator adds others by host name
+  with `hub serve --push-hosts` (env `AGENTNET_PUSH_HOSTS`). The list is
+  published in `GET /v1/notify`.
 - **At dial time,** the address actually being connected must be public:
   loopback, private (RFC 1918, ULA), link-local (incl. 169.254.169.254
   metadata), CGNAT, multicast, unspecified, documentation, benchmark,

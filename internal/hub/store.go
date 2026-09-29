@@ -111,6 +111,8 @@ CREATE TABLE notify_pending(
   attempts INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(address, channel, sender));
 CREATE INDEX notify_pending_due ON notify_pending(due_ms);
+`, `
+ALTER TABLE notify_pending ADD COLUMN channels TEXT NOT NULL DEFAULT '';
 `}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address

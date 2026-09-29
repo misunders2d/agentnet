@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestDefaultListen(t *testing.T) {
 	for _, c := range []struct{ listen, port, want string }{
@@ -27,6 +31,17 @@ func TestParseSize(t *testing.T) {
 	for _, bad := range []string{"", "0", "-1MiB", "1TB", "MiB"} {
 		if _, err := parseSize(bad); err == nil {
 			t.Errorf("parseSize(%q) accepted", bad)
+		}
+	}
+}
+
+// --push-hosts adds push services by host name only, refused before the
+// Hub is opened otherwise.
+func TestHubServePushHostsChecked(t *testing.T) {
+	for _, bad := range []string{"https://push.example.com", "push.example.com:443", "10.0.0.1", "localhost", "push.example.com/x"} {
+		err := runHub(context.Background(), []string{"serve", "--data", t.TempDir(), "--push-hosts", "push.example.org," + bad})
+		if err == nil || !strings.Contains(err.Error(), "--push-hosts") {
+			t.Errorf("%q: %v", bad, err)
 		}
 	}
 }

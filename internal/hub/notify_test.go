@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -443,5 +445,134 @@ func TestNotifyOutcomesAndRestart(t *testing.T) {
 	}
 	if h.push.publicKey == "" || filepath.Base(dir) == "" {
 		t.Fatal("no push key")
+	}
+}
+
+// N1: an outcome for a push completes the alert only in the state it was
+// read in. Presented, then made again by a newer message (generation 1
+// again, another newest message), it survives the old push's success,
+// retry and drop alike.
+func TestNotifyOutcomeNeverTouchesARecreatedAlert(t *testing.T) {
+	for _, outcome := range []int{http.StatusCreated, http.StatusTooManyRequests, http.StatusBadRequest} {
+		t.Run(http.StatusText(outcome), func(t *testing.T) {
+			w := newNotifyWorld(t)
+			w.allowAlice(t)
+			c := conv(1)
+			first := w.say(t, c, true)
+			w.now = w.now.Add(notifyGrace)
+			w.push.status, w.push.retry = outcome, time.Hour
+			w.push.block, w.push.started = make(chan struct{}), make(chan struct{}, 1)
+			done := make(chan error, 1)
+			go func() { done <- w.h.notifier.dispatch(context.Background(), w.bob.addr, w.now) }()
+			<-w.push.started
+			if c, b := w.bob.call(t, w.h, "POST", "/v1/notify/seen", protocol.NotifySeen{Channel: w.channel(c), IDs: []string{first}}); c != http.StatusNoContent {
+				t.Fatalf("seen: %d %s", c, b)
+			}
+			newer := w.say(t, c, true)
+			close(w.push.block)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			p := w.pending(t)
+			if len(p) != 1 || p[0].last != newer || p[0].gen != 1 {
+				t.Fatalf("after the old push (%d): %+v", outcome, p)
+			}
+			var attempts int
+			w.h.store.db.QueryRow(`SELECT attempts FROM notify_pending`).Scan(&attempts)
+			if attempts != 0 || p[0].due != w.now.Add(notifyGrace).UnixMilli() { // its own deadline
+				t.Fatalf("the new alert took the old push's retry: attempts %d, due %d", attempts, p[0].due)
+			}
+		})
+	}
+}
+
+// N2: the push service's Retry-After is a minimum, never shortened by the
+// local backoff cap; one beyond the alert's lifetime drops it.
+func TestNotifyRetryAfterIsAMinimum(t *testing.T) {
+	w := newNotifyWorld(t)
+	w.allowAlice(t)
+	w.say(t, conv(1), true)
+	w.now = w.now.Add(notifyGrace)
+	w.push.status, w.push.retry = http.StatusServiceUnavailable, 3*time.Hour
+	w.round(t)
+	if p := w.pending(t); len(p) != 1 || p[0].due != w.now.Add(3*time.Hour).UnixMilli() {
+		t.Fatalf("pending: %+v", p)
+	}
+	w.now = w.now.Add(3 * time.Hour)
+	w.push.retry = notifyLifetime
+	w.round(t)
+	if len(w.pending(t)) != 0 {
+		t.Fatal("kept past its lifetime")
+	}
+}
+
+// N3: a summary records the channels it stands for, so mutes decide it
+// too: all recorded channels muted, nothing is sent; one open, it is; a
+// channel beyond the record never alerts on its own.
+func TestNotifySummaryHonoursMutes(t *testing.T) {
+	channelsOf := func(w *notifyWorld, n int) []string {
+		var out []string
+		for i := 0; i < n; i++ {
+			c := fmt.Sprintf("%064x", i+1)
+			w.say(t, c, true)
+			out = append(out, w.channel(c))
+		}
+		return out
+	}
+	alice := func(w *notifyWorld) []protocol.NotifySender {
+		return []protocol.NotifySender{{Address: w.alice.addr, Fingerprint: w.alice.id.Public(w.alice.addr).Fingerprint()}}
+	}
+	for _, c := range []struct {
+		name   string
+		total  int
+		mute   func(all []string) []string
+		pushes int
+	}{
+		{"all muted", notifyChannelsPerSender + 3, func(all []string) []string { return all }, 0},
+		{"summary's all muted, exact open", notifyChannelsPerSender + 3, func(all []string) []string { return all[notifyChannelsPerSender:] }, 1},
+		{"one summary channel open", notifyChannelsPerSender + 3, func(all []string) []string { return all[:len(all)-1] }, 1},
+		{"only beyond the record open", notifyChannelsPerSender + notifySummaryChannels + 1, func(all []string) []string { return all[:len(all)-1] }, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newNotifyWorld(t)
+			w.allowAlice(t)
+			all := channelsOf(w, c.total)
+			w.prefs(t, w.bob, protocol.NotifyPrefs{Enabled: true, Mutes: c.mute(all), Senders: alice(w)})
+			w.now = w.now.Add(notifyGrace)
+			w.round(t)
+			if n := len(w.push.calls()); n != c.pushes {
+				t.Fatalf("%d pushes, want %d", n, c.pushes)
+			}
+		})
+	}
+}
+
+// An operator's push hosts extend the explicit list; a subscription must
+// still name one of them (or a subdomain), and a bad host stops the Hub.
+func TestNotifyOperatorPushHosts(t *testing.T) {
+	if _, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", PushHosts: []string{"https://x"}}); err == nil {
+		t.Fatal("a Hub opened with a bad push host")
+	}
+	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, PushHosts: []string{"push.example.org"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	bob := enroll(t, h, "bob")
+	sub := protocol.PushSubscription{P256DH: pushKey(65, 4), Auth: pushKey(16, 1)}
+	for ep, want := range map[string]int{
+		"https://eu.push.example.org/s": http.StatusNoContent,
+		"https://fcm.googleapis.com/s":  http.StatusNoContent,
+		"https://push.example.net/s":    http.StatusBadRequest,
+	} {
+		sub.Endpoint = ep
+		if c, b := bob.call(t, h, "PUT", "/v1/notify/subscription", sub); c != want {
+			t.Errorf("%s: %d %s", ep, c, b)
+		}
+	}
+	var info protocol.NotifyInfo
+	json.Unmarshal(serve(h, httptestGet("/v1/notify")).Body.Bytes(), &info)
+	if !slices.Contains(info.PushHosts, "push.example.org") || !slices.Contains(info.PushHosts, "push.apple.com") || info.PushKey == "" {
+		t.Fatalf("info: %+v", info)
 	}
 }

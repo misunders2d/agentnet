@@ -63,7 +63,7 @@ const (
 // NotifyInfo is GET /v1/notify.
 type NotifyInfo struct {
 	PushKey   string   `json:"push_key,omitempty"`   // VAPID public key (base64url, uncompressed P-256); "" when this Hub sends no Web Push
-	PushHosts []string `json:"push_hosts,omitempty"` // host suffixes of the push services this Hub sends to
+	PushHosts []string `json:"push_hosts,omitempty"` // push service hosts this Hub sends to (exact, or a dot-delimited subdomain)
 	GraceMS   int64    `json:"grace_ms"`             // how long a pending alert waits for the device's presentation of it
 }
 
@@ -121,9 +121,29 @@ type PushSubscription struct {
 	Auth     string `json:"auth"`   // base64url, 16 bytes
 }
 
-// DefaultPushHosts are the push services a Hub sends to unless its operator
-// configures others: Apple, Google, Mozilla, Microsoft.
+// DefaultPushHosts are the push services every Hub sends to: Apple,
+// Google, Mozilla, Microsoft. An operator can add others (hub serve
+// --push-hosts).
 var DefaultPushHosts = []string{"push.apple.com", "fcm.googleapis.com", "push.services.mozilla.com", "notify.windows.com"}
+
+// ValidPushHost reports whether h can name a push service: a lowercase DNS
+// host name with at least two labels (no IP literal, scheme, port or path).
+func ValidPushHost(h string) bool {
+	if len(h) > 253 || net.ParseIP(h) != nil || !strings.Contains(h, ".") {
+		return false
+	}
+	for _, label := range strings.Split(h, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // Validate checks s against the explicit push host list hosts (host
 // suffixes): an https URL on port 443 whose DNS host name is one of them or
