@@ -28,7 +28,20 @@ class Elem {
   scrollIntoView() {}
   showModal() { this.open = true; }
   close() { this.open = false; }
-  querySelector() { return null; }
+  // Simple selectors only: tag and classes, the last part of a descendant
+  // selector, alternatives separated by commas.
+  querySelector(sel) {
+    for (const alt of sel.split(",")) {
+      const m = alt.trim().split(/\s+/).pop().match(/^([a-z]*)((?:\.[\w-]+)*)$/i);
+      if (!m || (!m[1] && !m[2])) continue;
+      const classes = m[2].split(".").filter(Boolean);
+      const hit = (n) => n instanceof Elem && (!m[1] || n.tagName === m[1]) && classes.every((c) => n.className.split(/\s+/).includes(c));
+      const find = (n) => { for (const c of n.children) { if (hit(c)) return c; const f = c instanceof Elem && find(c); if (f) return f; } return null; };
+      const f = find(this);
+      if (f) return f;
+    }
+    return null;
+  }
   // Only what the page asks for: a dialog's text fields.
   querySelectorAll(sel) {
     if (sel !== "input[type=text], textarea, select") return [];
@@ -566,6 +579,67 @@ const ev = { preventDefault() {} };
   await run('openThread("a1")');
   check(run("state.dm") === null && $("kind").hidden === false && run("state.data.peer") === "alice/desk",
     "device history opens apart from DMs, with its own composer");
+
+  // Search finds people by the name they give or their device, and DMs by
+  // their lines or the person; each result says its kind and opens exactly it.
+  overview.people = [alicePerson, { label: "Vitalii", address: "vitalii/laptop", state: "listed" }];
+  delete dmThreads.d1.frozen;
+  await run("loadOverview()");
+  const search = (q) => run("searchKnown")(q, overview.threads, run("directory")());
+  found = search("vitalii");
+  check(found.people.length === 1 && found.people[0].state === "listed" && found.dms.length === 0, "search finds a listed person by name");
+  found = search("alice/desk");
+  check(found.people.length === 1 && found.people[0].person === "p-alice", "search finds a person by their device");
+  found = search("budget");
+  check(found.dms.length === 1 && found.dms[0].id === "d2" && found.people.length === 0, "search finds a DM by its lines");
+  found = search("alice");
+  check(found.people.length === 1 && found.dms.length === 2, "the person and each of their DMs are separate results");
+  run('state.query = "vit"');
+  run("renderSearch")(overview.threads);
+  const res = JSON.stringify($("conv-list").children.map(textOf));
+  check(res.includes("Person") && res.includes("Vitalii") && res.includes("not checked yet"), "a person result says its kind and how it is known: " + res);
+  run("choosePerson")(overview.people[1]);
+  check(run("state.query") === "" && run('state.personOpen["listed:vitalii/laptop"]') === true, "choosing a person opens their row, nothing else");
+
+  // Comic draws a DM as an issue: the person's name, captions for held and
+  // kept messages, no decisions.
+  run('setLens("comic")');
+  await run('openDM("d2")');
+  let comic = JSON.stringify($("comic").children.map(textOf));
+  check($("timeline").hidden && !$("comic").hidden && comic.includes("You → Alice") && comic.includes("can you check?") &&
+    comic.includes("Held for you") && comic.includes("Kept here") && !/Accept|Decline|NEEDS YOU/.test(comic),
+    "a DM is a comic page with the person's name, held and kept captions, nothing to run: " + comic.slice(0, 300));
+  run("Comic.turn(-1)");
+  comic = JSON.stringify($("comic").children.map(textOf));
+  check(comic.includes("DM · Alice via alice/desk") && comic.includes("1 held for you"), "the DM's cover names the person and the device: " + comic.slice(0, 300));
+  await run('openDM("d3")');
+  check(JSON.stringify($("comic").children.map(textOf)).includes("no messages yet"), "an empty DM has a cover, not an error");
+
+  // Zoom: people apart from devices, then a person's DMs, then one DM.
+  run('setLens("zoom")');
+  run("Zoom.go(0, {})");
+  let zoom = JSON.stringify($("zoom").children.map(textOf));
+  check(zoom.includes("People") && zoom.includes("Alice") && zoom.includes("Vitalii") && zoom.includes("Devices"), "Zoom shows people apart from devices: " + zoom.slice(0, 300));
+  await run('Zoom.go(1, { person: "p-alice", peer: null })');
+  zoom = JSON.stringify($("zoom").children.map(textOf));
+  check(zoom.includes("budget") && zoom.includes("deploy") && zoom.includes("New DM with Alice"), "a person in Zoom holds their separate DMs");
+  await run('Zoom.go(2, { dm: "d2" })');
+  zoom = JSON.stringify($("zoom").children.map(textOf));
+  check(run("state.dm") === "d2" && zoom.includes("Held for you") && zoom.includes("Write in this DM"), "a DM in Zoom, with its held question and nothing to run");
+  calls.length = 0;
+  run("dmWriteDialog(state.dmData)");
+  byId["write-body"].value = "from zoom";
+  await $("dialog-ok").onclick();
+  const zs = calls.filter((c) => c.path === "/api/dm/send");
+  check(zs.length === 1 && zs[0].body.conv === "d2" && zs[0].body.body === "from zoom" && sends().length === 0, "writing in Zoom goes to that DM only");
+  dmThreads.d1.frozen = "Frozen.";
+  await run('Zoom.go(2, { dm: "d1" })');
+  const zoomWrite = (n) => n instanceof Object && n.children ? (n.tagName === "button" && /Nothing more can be sent/.test(textOf(n)) ? n : n.children.map(zoomWrite).find(Boolean)) : null;
+  const frozenBtn = $("zoom").children.map(zoomWrite).find(Boolean);
+  check(frozenBtn && frozenBtn.attrs.disabled !== undefined, "a frozen DM in Zoom offers no writing");
+  await run('Zoom.go(2, { thread: "a1" })');
+  check(run("Zoom.person") === null && run("state.dm") === null, "a device conversation in Zoom leaves the person path");
+  run('setLens("classic")');
   Object.assign(overview, { persons: false, person: null, people: [], dms: [] });
 
   if (failed) process.exit(1);

@@ -1,19 +1,31 @@
-// Comic and Zoom: two more ways to look at the same threads. They read the
-// same data as the classic view and every decision goes through the same
-// dialogs and server actions (decide, actionButton in app.js). Faces are
-// initials only: whether a person or one of their agents wrote a message is
-// not recorded, so nothing here draws one or the other.
+// Comic and Zoom: two more ways to look at the same threads and DMs. They
+// read the same data as the classic view and every decision goes through the
+// same dialogs and server actions (decide, actionButton in app.js). Faces are
+// initials only. In device history whether a person or one of their agents
+// wrote a message is not recorded; in a DM it is what the sending AgentNet
+// says, shown as that. Nothing here links a person to an agent: that waits
+// for real participation data.
 "use strict";
 
 const motion = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const stampWord = { question: "QUESTION", task: "TASK", answer: "ANSWER", result: "RESULT" };
 const needsYou = (m) => !isReport(m) && (m.actions || []).some((a) => decisionActions.includes(a));
 const working = (m) => (m.actions || []).includes("cancel");
-const authorName = (m) => m.dir === "in" ? m.from : "You (this computer)";
+const authorName = (m) => m.author || (m.dir === "in" ? m.from : "You (this computer)");
+const faceOf = (m) => m.face || (m.dir === "out" && state.overview ? state.overview.me.address : m.from);
+
+// comicDM is a DM as the comic draws it: the person's name as they give it,
+// no decisions (nothing in a DM runs), held and kept states as captions.
+function comicDM(d) {
+  const me = state.overview && state.overview.person ? state.overview.person.label : "You";
+  return { id: "dm:" + d.id, dm: true, peer: d.peer.label, via: d.peer.address,
+    messages: d.messages.map((m) => Object.assign({}, m, { dm: true, actions: [], author: dmAuthor(m, d),
+      face: m.dir === "out" ? me : d.peer.label || m.from, to: d.peer.label })) };
+}
 
 // Full text and details of one message, in a dialog.
 function readDialog(m) {
-  const d = details(m);
+  const d = m.dm ? dmDetails(m) : details(m);
   d.open = true;
   dialog({ title: (kindTag[m.kind] || "Message") + " · " + authorName(m), ok: "Close", run: async () => {},
     body: [el("div", { class: "quote" }, m.body), m.summary && el("p", { class: "hint" }, "Your responder's summary: " + m.summary), d] });
@@ -38,6 +50,22 @@ function writeDialog(t, m) {
     },
   });
   state.dialogRestore = { type: "write", msg: m ? m.id : null };
+}
+
+// dmWriteDialog writes a message in DM d without the composer (Zoom).
+function dmWriteDialog(d) {
+  const body = el("textarea", { id: "write-body", rows: "4" });
+  dialog({
+    title: "Write to " + d.peer.label,
+    body: [el("label", { for: "write-body", class: "field-label" }, "Message"), body,
+      el("p", { class: "hint" }, "It goes to this DM only. A DM is for the person; nothing runs it.")],
+    ok: "Send", focus: body,
+    run: async () => {
+      const r = await api("/api/dm/send", { conv: d.id, body: body.value });
+      announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.") : "Sent.");
+    },
+  });
+  state.dialogRestore = { type: "dmwrite" };
 }
 
 // ---- Comic: a thread is an issue, its messages are panels ----------------------
@@ -184,17 +212,22 @@ const Comic = {
   },
 
   cover() {
-    const t = this.t, me = state.overview ? state.overview.me.address : "";
+    const t = this.t, first = t.messages[0];
+    const me = t.dm ? (state.overview && state.overview.person ? state.overview.person.label : "You")
+      : state.overview ? state.overview.me.address : "";
     const open = t.messages.filter(needsYou).length;
+    const held = t.messages.filter((m) => m.state === "conv_held").length;
     return el("section", { class: "page cover" },
-      el("div", { class: "cover-top" }, el("span", {}, "AgentNet · " + t.peer), el("span", {}, when(t.messages[0].at))),
-      el("h2", { class: "cover-title" }, firstLine(t.messages[0].body, 56)),
+      el("div", { class: "cover-top" }, el("span", {}, t.dm ? "DM · " + t.peer + " via " + t.via : "AgentNet · " + t.peer),
+        first && el("span", {}, when(first.at))),
+      el("h2", { class: "cover-title" }, first ? firstLine(first.body, 56) : "A DM with " + t.peer + ", no messages yet"),
       el("div", { class: "cast" },
         el("figure", {}, avatar(t.peer, "actor"), el("figcaption", {}, t.peer)),
         me && el("figure", {}, avatar(me, "actor"), el("figcaption", {}, "You"))),
       el("p", { class: "cover-sub" }, t.messages.length === 1 ? "1 message" : t.messages.length + " messages"),
       open ? el("div", { class: "burst" }, open === 1 ? "1 decision inside!" : open + " decisions inside!") : null,
-      el("button", { type: "button", class: "btn comic-btn", onclick: () => this.turn(1) }, "Start reading"));
+      held ? el("p", { class: "cover-sub" }, held === 1 ? "1 held for you: nothing runs it" : held + " held for you: nothing runs them") : null,
+      first && el("button", { type: "button", class: "btn comic-btn", onclick: () => this.turn(1) }, "Start reading"));
   },
 
   panel(m, wide) {
@@ -206,7 +239,7 @@ const Comic = {
       stampWord[m.kind] && el("span", { class: "stamp" }, stampWord[m.kind] + (m.status && m.status !== "done" ? " · " + (statusWord[m.status] || m.status).toUpperCase() : "")),
       el("button", { type: "button", class: "read-btn", "aria-label": "Read in full", title: "Read in full", onclick: () => readDialog(m) }, "⤢"),
       caption, waiting,
-      el("div", { class: "art" }, avatar(mine && state.overview ? state.overview.me.address : m.from, "actor"),
+      el("div", { class: "art" }, avatar(faceOf(m), "actor"),
         el("div", { class: "balloons" },
           el("div", { class: "balloon speech " + (mine ? "mine" : "theirs") },
             el("p", { class: "balloon-text" }, m.body),
@@ -234,22 +267,39 @@ function zoomDirectory(threads) {
 // ---- Zoom: everyone → one person → one thread → one message ---------------------
 
 const Zoom = {
-  level: 0, peer: null, msg: null, origins: [],
+  level: 0, peer: null, person: null, dm: null, msg: null, origins: [],
+
+  // Two kinds of path: a person (by their record) and their DMs, or a
+  // device contact (by address) and its conversations. Never both at once.
+  personOf() { return ((state.overview && state.overview.people) || []).find((p) => personKey(p) === this.person); },
 
   names() {
+    if (this.level === 0) {
+      return ["Everyone", state.overview && state.overview.persons ? "Person or contact" : "Contact", "Conversation", "Message"];
+    }
+    if (this.person) {
+      const p = this.personOf(), d = state.dmData;
+      return ["Everyone", p ? p.label : "Person", d && this.level >= 2 && d.messages[0] ? firstLine(d.messages[0].body, 40) : "DM", "Message"];
+    }
     const t = state.data;
     return ["Everyone", this.level >= 1 ? this.peer : "Contact", t && this.level >= 2 ? firstLine(t.messages[0].body, 40) : "Conversation", "Message"];
   },
 
   // refresh redraws the current level after new data, without motion.
   refresh() {
-    if (this.level >= 2 && (!state.data || state.data.peer !== this.peer)) this.level = this.peer ? 1 : 0;
-    if (this.level === 3 && !state.data.messages.some((m) => m.id === this.msg)) this.level = 2;
+    if (this.person) {
+      if (this.level >= 2 && (!state.dmData || state.dm !== this.dm)) this.level = 1;
+      if (this.level === 3 && !state.dmData.messages.some((m) => m.id === this.msg)) this.level = 2;
+    } else {
+      if (this.level >= 2 && (!state.data || state.data.peer !== this.peer)) this.level = this.peer ? 1 : 0;
+      if (this.level === 3 && !state.data.messages.some((m) => m.id === this.msg)) this.level = 2;
+    }
     fill($("zoom"), this.layer());
   },
 
   layer() {
-    const views = [() => this.everyone(), () => this.person(), () => this.thread(), () => this.message()];
+    const views = this.person ? [() => this.everyone(), () => this.personLevel(), () => this.dmLevel(), () => this.dmMessage()]
+      : [() => this.everyone(), () => this.person_(), () => this.thread(), () => this.message()];
     return el("div", { class: "zoom-layer" },
       el("div", { class: "zoom-side" }, lensSwitch(), el("nav", { class: "ladder", "aria-label": "Zoom level" },
         this.names().map((n, i) => el("button", {
@@ -264,12 +314,21 @@ const Zoom = {
     const inward = level > this.level;
     if (inward && from) this.origins[this.level] = from.getBoundingClientRect();
     const origin = inward ? (from ? from.getBoundingClientRect() : null) : this.origins[level];
-    const { thread, ...rest } = patch;
+    const { thread, dm, ...rest } = patch;
     Object.assign(this, rest, { level });
     if (thread) {
       const changed = beginThread(thread); // the same switch as the other views: drafts stay put
+      this.person = null;
       await loadThread(true);
       if (changed) refreshThread();
+    }
+    if (dm) {
+      const changed = beginDM(dm);
+      this.dm = dm;
+      this.peer = null;
+      await loadDM(true);
+      if (state.dmData) this.person = personKey(state.dmData.peer); // a listed person is known by its id once checked
+      if (changed) api("/api/refresh", { id: dm }).catch(() => {});
     }
     const root = $("zoom");
     for (const c of [...root.children].slice(0, -1)) c.remove(); // still leaving from a fast earlier zoom
@@ -297,13 +356,43 @@ const Zoom = {
     return false;
   },
 
-  // Level 0: each person you talk to, around this computer.
+  // people is the group of persons at the top of Level 0: each by the name
+  // they give, with their device and DMs. No line joins a person to a
+  // device or an agent.
+  people() {
+    const o = state.overview;
+    if (!o.persons) return null;
+    const head = el("h3", { class: "zoom-group" }, "People");
+    if (!o.person) {
+      return el("section", { class: "zoom-people-set" }, head,
+        el("p", { class: "hint" }, "You have no person yet. A person is you, the human, as others see you in DMs."),
+        el("button", { type: "button", class: "chip", onclick: () => personDialog() }, "Set up your person…"));
+    }
+    const dms = o.dms || [], people = o.people || [];
+    return el("section", { class: "zoom-people-set" }, head,
+      el("p", { class: "hint" }, "You: " + o.person.label + ". Each name is what that person calls themself."),
+      people.length ? el("ul", { class: "person-cards" }, people.map((p) => {
+        const theirs = dms.filter((d) => d.peer.person && d.peer.person === p.person);
+        const held = theirs.reduce((n, d) => n + d.held, 0), unread = theirs.reduce((n, d) => n + d.unread, 0);
+        const status = ["via " + p.address, personStateText[p.state] || p.state, theirs.length && plural(theirs.length, "DM", "DMs"),
+          held && held + " held", unread && unread + " new"].filter(Boolean).join(" · ");
+        const b = el("button", { type: "button", class: "person-card" + (p.state === "conflict" ? " danger" : ""), "aria-label": p.label + ", " + status },
+          avatar(p.label || p.address, "node-face"), el("span", { class: "node-name" }, p.label), el("span", { class: "node-status" }, status));
+        b.addEventListener("click", () => this.go(1, { person: personKey(p), peer: null }, b));
+        return el("li", {}, b);
+      })) : el("p", { class: "hint" }, "No one else on your server has set up a person yet."));
+  },
+
+  // Level 0: the people you have DMs with, and each device you talk to,
+  // around this computer.
   everyone() {
     const o = state.overview;
     const list = contactsOf(o.threads);
+    const people = this.people();
+    const devices = people && el("h3", { class: "zoom-group" }, "Devices: messages per installation");
     if (!list.length) {
-      return el("div", { class: "zoom-people" }, el("p", { class: "hint" }, "No conversations yet: start one with someone on your server."),
-        zoomDirectory(o.threads));
+      return el("div", { class: "zoom-people" }, people, devices,
+        el("p", { class: "hint" }, "No conversations yet: start one with someone on your server."), zoomDirectory(o.threads));
     }
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 100 100");
@@ -331,22 +420,77 @@ const Zoom = {
         p.review ? el("span", { class: "badge" }, String(p.review)) : null);
       node.style.left = pos[i][0] + "%";
       node.style.top = pos[i][1] + "%";
-      node.addEventListener("click", () => this.go(1, { peer: p.peer }, node));
+      node.addEventListener("click", () => this.go(1, { peer: p.peer, person: null }, node));
       return node;
     });
     const me = el("div", { class: "node me" }, avatar(o.me.address, "node-face"), el("span", { class: "node-name" }, "You"),
       el("span", { class: "node-status" }, o.me.address));
     me.style.left = "50%";
     me.style.top = "50%";
-    return el("div", { class: "zoom-people" },
+    return el("div", { class: "zoom-people" }, people, devices,
       el("div", { class: "network" }, svg, me, nodes,
-        el("p", { class: "zoom-hint" }, "Glowing people have something waiting for your decision.")),
+        el("p", { class: "zoom-hint" }, "Glowing contacts have something waiting for your decision.")),
       zoomDirectory(o.threads));
   },
 
-  // Level 1: one contact: its reports and its separate conversations, as a
-  // compact list (the same one the sidebar shows).
-  person() {
+  // Level 1 for a person: their separate DMs (the same rows the sidebar
+  // shows) and a new one.
+  personLevel() {
+    const p = this.personOf();
+    if (!p) return el("p", { class: "hint" }, "That person is not listed here any more.");
+    const dms = ((state.overview && state.overview.dms) || []).filter((d) => d.peer.person && d.peer.person === p.person);
+    const online = presenceOf(p.address);
+    return el("div", { class: "zoom-person" },
+      el("header", { class: "zoom-head" }, avatar(p.label || p.address), el("div", {}, el("h2", {}, p.label),
+        el("p", { class: "hint" }, "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state) +
+          (online ? " · their computer is " + online : "")))),
+      el("div", { class: "zoom-contact" },
+        dms.length ? el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => dmRow(d, (id, from) => this.go(2, { dm: id }, from))))
+          : el("p", { class: "hint" }, "No DM with " + p.label + " yet."),
+        p.state === "conflict" ? el("p", { class: "hint" }, "Frozen: no new DM can start with this record.")
+          : el("button", { type: "button", class: "text-btn new-conv", onclick: () => newDMDialog(p) }, "New DM with " + p.label)));
+  },
+
+  // Level 2 for a person: one DM as a short chat.
+  dmLevel() {
+    const d = state.dmData;
+    if (!d) return el("p", { class: "hint" }, "This DM could not be loaded.");
+    const me = state.overview && state.overview.person ? state.overview.person.label : "You";
+    return el("div", { class: "zoom-scene" },
+      el("header", { class: "zoom-head" }, el("div", {},
+        el("p", { class: "hint" }, "DM with " + d.peer.label + " (the name they give) · via " + d.peer.address),
+        el("h2", {}, d.messages[0] ? firstLine(d.messages[0].body, 80) : "No messages yet"))),
+      d.frozen && el("p", { class: "notice" }, d.frozen),
+      el("ol", { class: "mini-chat" }, d.messages.map((m) => {
+        const mine = m.dir === "out";
+        const bubble = el("button", { type: "button", class: "mc-bubble" },
+          el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + when(m.at)),
+          el("span", { class: "mc-text" }, m.body));
+        bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
+        return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, avatar(mine ? me : d.peer.label || m.from, "sm"), bubble,
+          m.state_text && el("p", { class: "narr" }, m.state_text));
+      })),
+      el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen, onclick: () => dmWriteDialog(d) },
+        d.frozen ? "Nothing more can be sent in this conversation" : "Write in this DM…")));
+  },
+
+  // Level 3 for a person: one DM message with everything known about it.
+  dmMessage() {
+    const d = state.dmData, m = d.messages.find((x) => x.id === this.msg);
+    const det = dmDetails(m);
+    det.open = true;
+    const me = state.overview && state.overview.person ? state.overview.person.label : "You";
+    return el("article", { class: "zoom-message", tabindex: "-1" },
+      el("div", { class: "meta" }, avatar(m.dir === "out" ? me : d.peer.label || m.from, "sm"), el("span", { class: "who" }, dmAuthor(m, d)),
+        kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.at }, when(m.at))),
+      el("p", { class: "body" }, m.body),
+      m.state_text && el("p", { class: "hint" }, m.state_text),
+      det);
+  },
+
+  // Level 1 for a device contact: its reports and its separate
+  // conversations, as a compact list (the same one the sidebar shows).
+  person_() {
     const c = contactsOf(state.overview.threads).find((x) => x.peer === this.peer);
     if (!c) return el("p", { class: "hint" }, "No conversations with " + this.peer + ".");
     return el("div", { class: "zoom-person" },

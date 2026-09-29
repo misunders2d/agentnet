@@ -133,7 +133,13 @@ function contactsOf(threads) {
 // messages (by their first and latest lines). It never invents people.
 function searchKnown(q, threads, dir) {
   q = q.trim().toLowerCase();
-  if (!q) return { agents: [], conversations: [], listed: [] };
+  if (!q) return { people: [], dms: [], agents: [], conversations: [], listed: [] };
+  const o = state.overview || {};
+  // People by the name they give or their device; DMs by their lines or
+  // the person's name. Nothing matched is merged or guessed.
+  const has = (s) => (s || "").toLowerCase().includes(q);
+  const people = (o.people || []).filter((p) => has(p.label) || has(p.address));
+  const dms = (o.dms || []).filter((d) => has(d.title) || has(d.last) || has(d.peer.label));
   const agents = contactsOf(threads).filter((c) => c.peer.toLowerCase().includes(q));
   const known = new Set(threads.map((t) => t.peer));
   // Agents the server lists that there is no conversation with yet.
@@ -141,7 +147,7 @@ function searchKnown(q, threads, dir) {
   const conversations = threads.filter((t) => !t.notice_only &&
     (t.title.toLowerCase().includes(q) || t.last.toLowerCase().includes(q)))
     .sort((a, b) => new Date(b.last_at) - new Date(a.last_at));
-  return { agents, conversations, listed };
+  return { people, dms, agents, conversations, listed };
 }
 
 // ---- directory --------------------------------------------------------------------
@@ -209,7 +215,7 @@ function directoryNote(d) {
 function chooseMember(addr) {
   clearSearch();
   if (state.overview.threads.some((t) => t.peer === addr)) {
-    if (state.lens === "zoom") { Zoom.go(1, { peer: addr }); return; }
+    if (state.lens === "zoom") { Zoom.go(1, { peer: addr, person: null }); return; }
     state.expanded = addr;
     rerenderContacts();
     return;
@@ -402,18 +408,43 @@ function personRow(p, dms) {
         (dms.length ? " · " + plural(dms.length, "DM", "DMs") : ""))));
   return el("li", { class: "contact-item" + (open ? " open" : "") }, head,
     open && el("div", { class: "contact-body" },
-      dms.length > 0 && el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => {
-        const b = el("button", { type: "button", class: "thread-row", "aria-current": String(state.dm === d.id), onclick: () => openDM(d.id) },
-          el("span", { class: "thread-title" }, d.title || "No messages yet"),
-          d.count > 1 && el("span", { class: "thread-count", title: plural(d.count, "message", "messages") }, String(d.count)),
-          d.waiting > 0 && el("span", { class: "conv-flag calm" }, d.waiting + " kept"),
-          d.unread > 0 && el("span", { class: "conv-flag unread" }, d.unread + " new"),
-          el("span", { class: "conv-time", title: "Started " + new Date(d.created).toLocaleString() + (d.mine ? " by you" : " by them") }, when(d.last_at)));
-        return el("li", {}, b);
-      })),
+      dms.length > 0 && el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => dmRow(d, (id) => openDM(id)))),
       p.state === "conflict"
         ? el("p", { class: "hint" }, "Frozen: no new DM can start with this record.")
         : el("button", { type: "button", class: "text-btn new-conv", onclick: () => newDMDialog(p) }, "New DM with " + p.label)));
+}
+
+// dmFlags shows a DM's numbers side by side.
+function dmFlags(d) {
+  return [d.waiting > 0 && el("span", { class: "conv-flag calm" }, d.waiting + " kept"),
+    d.held > 0 && el("span", { class: "conv-flag calm" }, d.held + " held"),
+    d.unread > 0 && el("span", { class: "conv-flag unread" }, d.unread + " new")];
+}
+
+// dmRow is one DM in a person's list (sidebar and Zoom).
+function dmRow(d, open) {
+  const b = el("button", { type: "button", class: "thread-row", "aria-current": String(state.dm === d.id) },
+    el("span", { class: "thread-title" }, d.title || "No messages yet"),
+    d.count > 1 && el("span", { class: "thread-count", title: plural(d.count, "message", "messages") }, String(d.count)),
+    dmFlags(d),
+    el("span", { class: "conv-time", title: "Started " + new Date(d.created).toLocaleString() + (d.mine ? " by you" : " by them") }, when(d.last_at)));
+  b.addEventListener("click", () => open(d.id, b));
+  return el("li", {}, b);
+}
+
+// choosePerson opens a person found by search: their DMs, never a guess.
+function choosePerson(p) {
+  clearSearch();
+  state.personOpen[personKey(p)] = true;
+  if (state.lens === "zoom") { Zoom.go(1, { person: personKey(p), peer: null }); return; }
+  rerenderContacts();
+}
+
+// dmAuthor names who wrote a DM message, as the sending AgentNet says.
+function dmAuthor(m, d) {
+  if (m.dir === "out") return "You";
+  if ((m.origin || "").startsWith("agent:")) return "An agent on " + m.from + ", as their AgentNet says";
+  return d.peer.label;
 }
 
 // personDialog sets up this installation's person, only when asked.
@@ -448,7 +479,8 @@ function newDMDialog(p) {
       const r = await api("/api/dm/new", { address: p.address });
       state.personOpen[p.person || personKey(p)] = true;
       await loadOverview();
-      await openDM(r.id);
+      if (state.lens === "zoom") await Zoom.go(2, { dm: r.id });
+      else await openDM(r.id);
     },
   });
 }
@@ -513,14 +545,13 @@ async function loadDM(scrollToEnd) {
   if (unread.length) api("/api/act", { do: "read", ids: unread }).catch(() => {});
 }
 
-// renderDMBody draws the open DM. DMs are drawn this way in every lens for
-// now; Zoom does not show them yet.
+// renderDMBody draws the open DM, as a chat or as a comic; Zoom draws
+// itself (lenses.js).
 function renderDMBody(scrollToEnd) {
   const t = state.dmData;
   if (!t || state.lens === "zoom") return;
+  if (state.lens === "comic") { Comic.render(comicDM(t)); return; }
   const tl = $("timeline");
-  tl.hidden = false;
-  $("comic").hidden = true;
   const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
   fill(tl, t.messages.length ? t.messages.map((m, i) => dmMsg(m, t, t.messages[i - 1]))
     : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + t.peer.label + " only."));
@@ -532,7 +563,7 @@ function renderDMBody(scrollToEnd) {
 function dmMsg(m, t, prev) {
   const mine = m.dir === "out";
   const agent = (m.origin || "").startsWith("agent:");
-  const author = mine ? "You" : agent ? "An agent on " + m.from + ", as their AgentNet says" : t.peer.label;
+  const author = dmAuthor(m, t);
   const cont = prev && prev.dir === m.dir && prev.origin === m.origin && !kindTag[m.kind] && !kindTag[prev.kind] &&
     new Date(m.at) - new Date(prev.at) < 10 * 60e3;
   const held = m.state === "conv_held";
@@ -662,16 +693,26 @@ function renderThreads(threads) {
 }
 
 function renderSearch(threads) {
-  const { agents, conversations, listed } = searchKnown(state.query, threads, directory());
+  const { people, dms, agents, conversations, listed } = searchKnown(state.query, threads, directory());
   $("list-title").textContent = "Search results";
   const shown = conversations.slice(0, 30);
   const kind = (t) => t.count > 1 ? "Conversation" : "Message";
-  if (!agents.length && !conversations.length && !listed.length) {
-    fill($("conv-list"), el("li", { class: "hint empty-list" }, "No agent or conversation matches. People are not searchable yet."),
+  if (!people.length && !dms.length && !agents.length && !conversations.length && !listed.length) {
+    fill($("conv-list"), el("li", { class: "hint empty-list" }, "No person, agent or conversation matches."),
       directoryNote(directory()) && el("li", { class: "hint dir-note" }, directoryNote(directory())));
     return;
   }
   fill($("conv-list"),
+    people.length > 0 && el("li", { class: "result-head" }, plural(people.length, "person", "people")),
+    ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => choosePerson(p) },
+      el("span", { class: "result-kind" }, "Person"),
+      el("span", { class: "result-main" }, el("span", { class: "result-title" }, p.label),
+        el("span", { class: "hint" }, "via " + p.address + " · " + (personStateText[p.state] || p.state)))))),
+    dms.length > 0 && el("li", { class: "result-head" }, plural(dms.length, "DM", "DMs")),
+    ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => { clearSearch(); openDM(d.id); } },
+      el("span", { class: "result-kind" }, "DM"),
+      el("span", { class: "result-main" }, el("span", { class: "result-title" }, d.title || "No messages yet"),
+        el("span", { class: "hint" }, "with " + d.peer.label + " · " + when(d.last_at))), dmFlags(d)))),
     agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "agent", "agents")),
     ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result",
       onclick: () => { state.expanded = c.peer; clearSearch(); } },
@@ -813,10 +854,11 @@ function setLens(name) {
   const zoom = name === "zoom";
   document.querySelector(".app").hidden = zoom;
   $("zoom").hidden = !zoom;
-  $("timeline").hidden = name === "comic" && !state.dm; // DMs are not drawn as a comic yet
-  $("comic").hidden = name !== "comic" || !!state.dm;
+  $("timeline").hidden = name === "comic";
+  $("comic").hidden = name !== "comic";
   if (zoom) {
-    Object.assign(Zoom, state.data ? { level: 2, peer: state.data.peer } : { level: 0, peer: null });
+    Object.assign(Zoom, state.dmData ? { level: 2, person: personKey(state.dmData.peer), dm: state.dm, peer: null }
+      : state.data ? { level: 2, peer: state.data.peer, person: null } : { level: 0, peer: null, person: null });
     if (state.overview) Zoom.refresh();
   } else {
     renderBody(true);
@@ -1325,6 +1367,7 @@ async function restoreAfterReload() {
     const m = r.msg && state.data ? state.data.messages.find((x) => x.id === r.msg) : null;
     if (r.type === "new") newConversationDialog(r.prefill);
     else if (r.type === "person") personDialog();
+    else if (r.type === "dmwrite" && state.dmData) dmWriteDialog(state.dmData);
     else if (r.type === "write" && state.data) writeDialog(state.data, m);
     else if (r.type === "decline" && m) decide("decline", m, state.data);
     for (const [id, v] of Object.entries(keep.fields || {})) { const f = document.getElementById(id); if (f) f.value = v; }
@@ -1393,7 +1436,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // Page turning and zooming keys, unless typing or a dialog is open.
     if ($("dialog").open || e.target.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
     const handled = state.lens === "zoom" ? Zoom.onKey(e)
-      : state.lens === "comic" && state.data && !$("comic").hidden ? Comic.onKey(e) : false;
+      : state.lens === "comic" && (state.data || state.dmData) && !$("comic").hidden ? Comic.onKey(e) : false;
     if (handled) e.preventDefault();
   });
   for (const b of document.querySelectorAll("#lens [data-lens]")) b.addEventListener("click", () => setLens(b.dataset.lens));

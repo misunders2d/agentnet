@@ -579,3 +579,12 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 .person-setup p { margin: 0; color: var(--muted); font-size: 13px; }
 .person-me { padding: 2px 8px 6px; }
 .person-name { font-weight: 650; }
+
+/* Zoom: people, apart from device contacts (no lines join them). */
+.zoom-group { margin: 0; font-size: 12px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.zoom-people-set { display: grid; gap: 8px; justify-items: start; }
+.person-cards { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.person-card { width: 100%; display: grid; justify-items: center; gap: 6px; padding: 14px 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--text); text-align: center; }
+.person-card:hover { background: var(--hover); }
+.person-card.danger { border-color: var(--danger); }
+.person-card .node-name { box-shadow: none; padding: 0; }
