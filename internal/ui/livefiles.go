@@ -67,29 +67,48 @@ func (l *Live) StageFile(name string, r io.Reader) (string, error) {
 	return id, nil
 }
 
+// DiscardFiles implements Files.
+func (l *Live) DiscardFiles(ids []string) {
+	l.staged.mu.Lock()
+	defer l.staged.mu.Unlock()
+	for _, id := range ids {
+		if f, ok := l.staged.files[id]; ok {
+			f.cleanup()
+			delete(l.staged.files, id)
+		}
+	}
+}
+
 // takeStaged hands over the staged files ids name, and the cleanup that
-// removes them (whatever the send did).
+// removes them (whatever the send did). A send takes every file it names,
+// even when one of them is gone: those found are removed with the refusal,
+// and the page hands the files over again.
 func (l *Live) takeStaged(ids []string) ([]client.OutgoingFile, func(), error) {
 	l.staged.mu.Lock()
 	defer l.staged.mu.Unlock()
 	var out []client.OutgoingFile
 	var cleanups []func()
+	missing := false
 	for _, id := range ids {
 		f, ok := l.staged.files[id]
 		if !ok {
-			return nil, nil, Refuse("A file to send is no longer here: add it again.")
+			missing = true
+			continue
 		}
+		delete(l.staged.files, id)
 		out = append(out, client.OutgoingFile{Name: f.name, Path: f.path})
 		cleanups = append(cleanups, f.cleanup)
 	}
-	for _, id := range ids {
-		delete(l.staged.files, id)
-	}
-	return out, func() {
+	cleanup := func() {
 		for _, c := range cleanups {
 			c()
 		}
-	}, nil
+	}
+	if missing {
+		cleanup()
+		return nil, nil, Refuse("A file to send is no longer with AgentNet on this computer (it restarted, or an hour passed): send again to hand it over again.")
+	}
+	return out, cleanup, nil
 }
 
 // OpenFile implements Files: the received file, checked and decrypted, and

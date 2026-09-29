@@ -114,8 +114,14 @@ const rasterTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const fileLimits = () => (state.overview && state.overview.files) || null; // {max_file, max_message, max_count}
 let fileSeq = 0;
 
-// filesAllowed: a DM open, sendable, writing to the person (not asking an agent).
-const filesAllowed = () => !!(fileLimits() && state.dm && state.dmData && !state.dmData.frozen && !state.dmAgent);
+// filesAllowed: a DM open, sendable, writing to the person (not asking an
+// agent), or a device conversation open, sendable, not answering (an
+// answer goes without files).
+const filesAllowed = () => !!(fileLimits() && (state.dm ? state.dmData && !state.dmData.frozen && !state.dmAgent
+  : state.thread && state.data && !state.data.key.pending && !state.answering));
+// noFilesWhy says why the open conversation takes no files now.
+const noFilesWhy = () => (state.answering ? "An answer goes without files: send them in a message of their own."
+  : state.dmAgent ? "Asking an agent takes no files." : "Files cannot be sent here.");
 
 const fileExt = (name) => ((name.includes(".") ? name.split(".").pop() : "") || "FILE").slice(0, 4).toUpperCase();
 const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
@@ -155,7 +161,7 @@ function pushFiles(list, pasted) {
 }
 
 function addFiles(list, pasted) {
-  if (!filesAllowed()) { $("compose-error").textContent = "Files go in a DM with a person."; return; }
+  if (!filesAllowed()) { $("compose-error").textContent = noFilesWhy(); return; }
   pushFiles(list, pasted);
   $("compose-error").textContent = overLimit(state.files);
   renderPending();
@@ -173,6 +179,7 @@ function pastedFiles(e) {
 function removeFile(key) {
   const f = state.files.find((x) => x.key === key);
   if (f && f.url) URL.revokeObjectURL(f.url);
+  if (f && f.staged) discardStaged([f]);
   state.files = state.files.filter((x) => x.key !== key);
   $("compose-error").textContent = state.files.length ? overLimit(state.files) : "";
   renderPending();
@@ -199,18 +206,33 @@ function renderPending() { pendingChips($("attach-list")); }
 
 // preparedFiles hands the files to whatever sends them: the browser
 // device's engine encrypts them itself; this computer's page first gives
-// the bytes to its own AgentNet (never to the server), one at a time.
+// the bytes to its own AgentNet (never to the server), one at a time. Each
+// file keeps the id it was handed over under (f.staged) until a send names
+// it or it is removed, so a retry after a failure hands over only the rest.
 async function preparedFiles(files) {
   if (!files.length) return [];
   if (window.agentnetEngine) return files.map((f) => ({ name: f.name, size: f.size, arrayBuffer: () => f.file.arrayBuffer() }));
-  const ids = [];
   for (const [i, f] of files.entries()) {
+    if (f.staged) continue;
     $("compose-hint").textContent = "Handing " + (i + 1) + " of " + files.length + " files to AgentNet on this computer…";
     const r = await fetch("/api/upload?name=" + encodeURIComponent(f.name), { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f.file });
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
-    ids.push((await r.json()).id);
+    f.staged = (await r.json()).id;
   }
-  return ids;
+  return files.map((f) => f.staged);
+}
+
+// sentStaged: a send took the files it named, sent or refused; if it is
+// tried again, they are handed over again.
+function sentStaged(files) { for (const f of files) f.staged = ""; }
+
+// discardStaged tells this computer's AgentNet to drop files handed over
+// and no longer sent (removed from a draft). If that fails, it drops them
+// itself within the hour, or when it starts again.
+function discardStaged(files) {
+  const ids = files.map((f) => f.staged).filter(Boolean);
+  sentStaged(files);
+  if (ids.length) api("/api/upload/discard", { ids }).catch(() => {});
 }
 
 // fileChips are a message's files: name and size, and Open for a received one.
@@ -1262,8 +1284,12 @@ async function sendDM() {
   syncComposer();
   $("compose-error").textContent = "";
   try {
-    const r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind: kindValue() === "task" ? "task" : "question", body: text })
-      : await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "", files: await preparedFiles(files) });
+    let r;
+    if (agent) r = await api("/api/dm/agent/ask", { pid: agent, kind: kindValue() === "task" ? "task" : "question", body: text });
+    else {
+      const ids = await preparedFiles(files); // a failure here keeps what was handed over, for the retry
+      try { r = await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "", files: ids }); } finally { sentStaged(files); }
+    }
     announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     if (state.draftKey === key) {
@@ -1904,7 +1930,7 @@ function syncComposer() {
     return;
   }
   $("kind").hidden = false;
-  $("attach").hidden = true; // files go in DMs; a device conversation takes them from the command line (agentnet send --file)
+  $("attach").hidden = !filesAllowed();
   for (const r of document.querySelectorAll('input[name="kind"]')) { const l = r.closest && r.closest("label"); if (l) l.hidden = false; }
   const t = state.data;
   const blocked = !t || !!t.key.pending;
@@ -1927,9 +1953,11 @@ async function send(ev) {
   if (state.sending || !t || t.key.pending) return; // one send at a time, to a loaded conversation
   // Everything this send needs is fixed now: switching conversation or a
   // refresh while it is on its way changes none of it.
-  const key = state.draftKey, text = $("body").value, answering = state.answering;
+  const key = state.draftKey, text = $("body").value, answering = state.answering, files = answering ? [] : state.files.slice();
   const last = t.messages[t.messages.length - 1];
   const draft = { to: t.peer, kind: kindValue(), body: text, reply_to: last ? last.id : "" };
+  if (answering && state.files.length) { $("compose-error").textContent = noFilesWhy(); return; }
+  if (files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
   state.sending = true;
   syncComposer();
   $("compose-error").textContent = "";
@@ -1937,7 +1965,9 @@ async function send(ev) {
     if (answering) {
       await act({ do: "reply", id: answering.id, body: text });
     } else {
-      const r = await api("/api/send", draft);
+      if (files.length) draft.files = await preparedFiles(files); // a failure here keeps what was handed over, for the retry
+      let r;
+      try { r = await api("/api/send", draft); } finally { sentStaged(files); }
       announce(r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     }
     // Clear only what was sent: text typed meanwhile, or in another
@@ -1945,11 +1975,17 @@ async function send(ev) {
     if (state.draftKey === key) {
       if ($("body").value === text) { $("body").value = ""; grow(); }
       if (state.answering === answering) setAnswering(null);
-    } else if (state.drafts[key] && state.drafts[key].text === text) {
-      delete state.drafts[key];
+      dropFiles(files);
+    } else if (state.drafts[key]) { // that conversation's draft keeps only what was not sent
+      const d = state.drafts[key];
+      files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
+      d.files = (d.files || []).filter((x) => !files.includes(x));
+      if (d.text === text) d.text = "";
+      if (d.answering === answering) d.answering = null;
+      if (!d.text && !d.files.length && !d.answering) delete state.drafts[key];
     }
   } catch (e) {
-    if (state.draftKey === key) $("compose-error").textContent = e.message;
+    if (state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
     else announce("Not sent to " + t.peer + ": " + e.message + " Your text is kept in that conversation.");
   } finally {
     state.sending = false;

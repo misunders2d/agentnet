@@ -215,12 +215,18 @@ type FileView struct {
 	Saved string `json:"saved,omitempty"`
 }
 
-// Files is implemented by providers that send files in DMs and open
-// received ones (MEL-489). Bytes the page hands over are kept privately
-// until sent; a received file is opened only after it matches what its
-// sender signed.
+// Files is implemented by providers that send files and open received ones
+// (MEL-489). Bytes the page hands over are kept privately until sent; a
+// received file is opened only after it matches what its sender signed.
+//
+// Who owns a staged file: the page, from StageFile until it names the id in
+// a send or discards it. A send takes every id it names, whether it sends
+// or refuses; DiscardFiles removes files the page no longer sends (unknown
+// ids are ignored); what the page never names again is removed after an
+// hour, and whatever a previous run left when this one starts.
 type Files interface {
 	StageFile(name string, r io.Reader) (id string, err error)
+	DiscardFiles(ids []string)
 	OpenFile(ctx context.Context, msgID string, index int) (io.ReadCloser, string, error)
 }
 
@@ -507,10 +513,11 @@ type File struct {
 
 // Draft is a message to send.
 type Draft struct {
-	To      string `json:"to"`
-	Kind    string `json:"kind"` // message, question or task
-	Body    string `json:"body"`
-	ReplyTo string `json:"reply_to,omitempty"`
+	To      string   `json:"to"`
+	Kind    string   `json:"kind"` // message, question or task
+	Body    string   `json:"body"`
+	ReplyTo string   `json:"reply_to,omitempty"`
+	Files   []string `json:"files,omitempty"` // ids of files the page handed over (Files.StageFile)
 }
 
 // Sent is the outcome of Send.

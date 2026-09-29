@@ -111,6 +111,8 @@ let refreshReply = { text: "Connection unknown" }; // the one check made when a 
 const dmThreads = {}; // DMs by id, for /api/dm
 const resolvable = {}; // notification channels this device resolves, for /api/notify/resolve
 let uploads = 0, uploadFails = false; // files handed to /api/upload
+let uploadTries = 0, uploadFailAt = 0; // the one upload try (counted from 1) that fails
+let dmSendRefuses = ""; // what /api/dm/send refuses with, if set
 const served = {}; // received files' bytes, by /api/files path
 const calls = [];
 const hold = {};
@@ -128,12 +130,16 @@ function fetch(url, opts) {
   else if (u.pathname === "/api/send") data = { id: "new", state: "delivered" };
   else if (u.pathname === "/api/refresh") data = refreshReply;
   else if (u.pathname === "/api/dm") data = dmThreads[u.searchParams.get("id")] || {};
-  else if (u.pathname === "/api/dm/send") data = { id: "sent-dm", state: "custody" };
+  else if (u.pathname === "/api/dm/send") {
+    if (dmSendRefuses) return Promise.resolve({ ok: false, status: 409, text: async () => dmSendRefuses, statusText: "" });
+    data = { id: "sent-dm", state: "custody" };
+  }
   else if (u.pathname === "/api/dm/new") data = { id: "d3" };
   else if (u.pathname.startsWith("/api/dm/agent/")) data = u.pathname.endsWith("/ask") ? { id: "asked", state: "custody" } : {};
   else if (u.pathname === "/api/notify/resolve") data = { conv: resolvable[u.searchParams.get("chan")] || "" };
   else if (u.pathname === "/api/upload") {
-    if (uploadFails) return Promise.resolve({ ok: false, text: async () => "no space left for this file", statusText: "" });
+    uploadTries++;
+    if (uploadFails || uploadTries === uploadFailAt) return Promise.resolve({ ok: false, text: async () => "no space left for this file", statusText: "" });
     data = { id: "up-" + (++uploads) };
   } else if (u.pathname.startsWith("/api/files/")) {
     const bytes = served[u.pathname] || new Uint8Array([1, 2, 3]);
@@ -882,6 +888,79 @@ const ev = { preventDefault() {} };
   check(withFiles && withFiles.body.body === "" && JSON.stringify(withFiles.body.files) === JSON.stringify(["up-" + (uploads - 1), "up-" + uploads]) &&
     calls.filter((c) => c.path === "/api/upload").length === 2, "a file-only message names the handed-over files: " + JSON.stringify(withFiles && withFiles.body));
   check(run("state.files").length === 0 && $("attach-list").hidden, "sent files leave the composer");
+  // Staged files belong to the draft until a send names them: a failure
+  // part way keeps what was handed over, and the retry hands over only the
+  // rest; a refused send took what it named, so the next try hands them
+  // over again; a removed file is discarded.
+  run("addFiles")([fileOf("one.txt", 3, "text/plain"), fileOf("two.txt", 4, "text/plain")]);
+  calls.length = 0;
+  uploadTries = 0;
+  uploadFailAt = 2;
+  await run("send")(ev);
+  const firstID = run("state.files")[0].staged;
+  check(firstID && !run("state.files")[1].staged && calls.filter((c) => c.path === "/api/upload").length === 2 && !calls.some((c) => c.path === "/api/dm/send") &&
+    $("compose-error").textContent.includes("still here"), "a failure part way keeps the first file's hand-over and sends nothing");
+  uploadFailAt = 0;
+  dmSendRefuses = "A file to send is no longer with AgentNet on this computer: send again.";
+  calls.length = 0;
+  await run("send")(ev);
+  const refused = calls.find((c) => c.path === "/api/dm/send");
+  check(calls.filter((c) => c.path === "/api/upload").length === 1 && refused && refused.body.files[0] === firstID && refused.body.files.length === 2,
+    "the retry hands over only the rest and names both: " + JSON.stringify(refused && refused.body.files));
+  check(run("state.files").length === 2 && run("state.files").every((f) => !f.staged) && $("compose-error").textContent.includes("send again"),
+    "a refused send keeps the files, their hand-over spent: " + $("compose-error").textContent);
+  dmSendRefuses = "";
+  calls.length = 0;
+  await run("send")(ev);
+  check(calls.filter((c) => c.path === "/api/upload").length === 2 && run("state.files").length === 0, "the next try hands both over again and sends");
+  run("addFiles")([fileOf("drop.txt", 3, "text/plain")]);
+  await run("preparedFiles")(run("state.files"));
+  const dropID = run("state.files")[0].staged;
+  calls.length = 0;
+  run("removeFile")(run("state.files")[0].key);
+  await tick();
+  const disc = calls.find((c) => c.path === "/api/upload/discard");
+  check(dropID && disc && JSON.stringify(disc.body.ids) === JSON.stringify([dropID]) && run("state.files").length === 0, "a removed file is discarded by its id");
+  // Device conversations (v1) take files too: each keeps its own; an answer
+  // goes without them; a conversation blocked by a key change takes none.
+  await run('openThread("a1")');
+  check($("attach").hidden === false, "a device conversation offers to attach files");
+  run("addFiles")([fileOf("v1.txt", 6, "text/plain")]);
+  await run('openThread("c1")');
+  check(run("state.files").length === 0, "another device conversation has its own (empty) files");
+  run("addFiles")([fileOf("c1.txt", 2, "text/plain")]);
+  run("setAnswering")(run("state.data").messages.find((m) => (m.actions || []).includes("reply")));
+  check($("attach").hidden === true, "answering takes no files");
+  calls.length = 0;
+  $("body").value = "port 8080";
+  await run("send")(ev);
+  check(!calls.some((c) => c.path === "/api/act" || c.path === "/api/upload") && $("compose-error").textContent.includes("without files"),
+    "an answer with files waiting is not sent, and says why: " + $("compose-error").textContent);
+  run("setAnswering")(null);
+  run("removeFile")(run("state.files")[0].key);
+  $("body").value = "";
+  await run('openThread("b1")');
+  check($("attach").hidden === true, "a conversation blocked by a key change takes no files");
+  await run('openThread("a1")');
+  check(run("state.files").length === 1 && run("state.files")[0].name === "v1.txt", "coming back, the conversation still has its file");
+  $("body").value = "";
+  calls.length = 0;
+  await run("send")(ev);
+  const v1send = calls.find((c) => c.path === "/api/send");
+  check(v1send && v1send.body.to === "alice/desk" && v1send.body.body === "" && v1send.body.files.length === 1 && v1send.body.files[0].startsWith("up-") &&
+    run("state.files").length === 0, "a file-only message in a device conversation names the handed-over file: " + JSON.stringify(v1send && v1send.body));
+  run('setLens("zoom")');
+  await run('Zoom.go(2, { thread: "a1" })');
+  run("addFiles")([fileOf("z.txt", 1, "text/plain")]);
+  run("writeDialog(state.data, null)");
+  check(JSON.stringify($("dialog-body").children.map(textOf)).includes("z.txt"), "Zoom's write dialog holds the conversation's file");
+  byId["write-body"].value = "from zoom";
+  calls.length = 0;
+  await $("dialog-ok").onclick();
+  const zv1 = calls.find((c) => c.path === "/api/send");
+  check(zv1 && zv1.body.files.length === 1 && run("state.files").length === 0, "and sends it: " + JSON.stringify(zv1 && zv1.body));
+  run('setLens("classic")');
+  await run('openDM("d2")');
   // Asking an agent takes no files.
   dmThreads.d2.agents = [agentV("pidF", { state: "active", host: alice, host_here: false, inviter: me, can_ask: true })];
   await run('openDM("d2")');

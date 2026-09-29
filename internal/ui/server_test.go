@@ -294,8 +294,11 @@ func TestRemindersAbsentWithoutProvider(t *testing.T) {
 // uploads and downloads, without a daemon.
 type filesFixture struct {
 	*Fixture
-	staged map[string][]byte
+	staged    map[string][]byte
+	discarded []string
 }
+
+func (f *filesFixture) DiscardFiles(ids []string) { f.discarded = append(f.discarded, ids...) }
 
 func (f *filesFixture) StageFile(name string, r io.Reader) (string, error) {
 	b, _ := io.ReadAll(r)
@@ -329,6 +332,7 @@ func TestFileRoutes(t *testing.T) {
 		want int
 	}{
 		"bytes to another route":   {"/api/dm/send", raw, http.StatusUnsupportedMediaType},
+		"bytes to discard":         {"/api/upload/discard", raw, http.StatusUnsupportedMediaType},
 		"an upload without name":   {"/api/upload", raw, http.StatusConflict},
 		"a control in the name":    {"/api/upload?name=a%0Ab", raw, http.StatusConflict},
 		"an upload cross-site":     {"/api/upload?name=a", authed(ts, map[string]string{"Origin": "http://evil.example", "Content-Type": "application/octet-stream"}), http.StatusForbidden},
@@ -337,6 +341,14 @@ func TestFileRoutes(t *testing.T) {
 		if r := do(t, ts, "POST", c.path, "x", c.hdr); r.StatusCode != c.want {
 			t.Errorf("%s: %d, want %d", name, r.StatusCode, c.want)
 		}
+	}
+	// A file removed from a draft is discarded by id; a flood is refused.
+	js := authed(ts, map[string]string{"Origin": ts.URL, "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"})
+	if r := do(t, ts, "POST", "/api/upload/discard", `{"ids":["up-1"]}`, js); r.StatusCode != 200 || strings.Join(f.discarded, ",") != "up-1" {
+		t.Fatalf("discard: %d %v", r.StatusCode, f.discarded)
+	}
+	if r := do(t, ts, "POST", "/api/upload/discard", `{"ids":[`+strings.Repeat(`"x",`, 64)+`"x"]}`, js); r.StatusCode != http.StatusConflict || len(f.discarded) != 1 {
+		t.Fatalf("a discard of 65 ids: %d %v", r.StatusCode, len(f.discarded))
 	}
 	r := do(t, ts, "GET", "/api/files/m1/0", "", authed(ts, nil))
 	body, _ := io.ReadAll(r.Body)
@@ -353,5 +365,15 @@ func TestFileRoutes(t *testing.T) {
 	json.NewDecoder(do(t, ts, "GET", "/api/overview", "", authed(ts, nil)).Body).Decode(&o)
 	if _, ok := o["files"]; ok {
 		t.Fatal("the demo overview offers files")
+	}
+	// Where files cannot be sent, a send naming some is refused, never sent without them.
+	demo, _ := newTestServer(t)
+	for _, c := range []struct{ path, body string }{
+		{"/api/send", `{"to":"alice/desk","kind":"message","body":"x","files":["up-1"]}`},
+		{"/api/dm/send", `{"conv":"d1","body":"x","files":["up-1"]}`},
+	} {
+		if r := do(t, demo, "POST", c.path, c.body, post(demo)); r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s with files in the demo: %d", c.path, r.StatusCode)
+		}
 	}
 }

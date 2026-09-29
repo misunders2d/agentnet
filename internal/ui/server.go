@@ -69,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
 	mux.HandleFunc("POST /api/notify/{what}", s.notify)
 	mux.HandleFunc("POST /api/upload", s.upload)
+	mux.HandleFunc("POST /api/upload/discard", s.discard)
 	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
 	mux.HandleFunc("POST /api/remind", s.remind)
 	mux.HandleFunc("POST /api/remind/{what}", s.remind)
@@ -294,6 +295,41 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, map[string]string{"id": id}, err)
 }
 
+// discard removes files the page handed over and will not send (a file
+// removed from a draft).
+func (s *Server) discard(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(Files)
+	if !ok {
+		writeErr(w, NotFound("files are not available here"))
+		return
+	}
+	var v struct {
+		IDs []string `json:"ids"`
+	}
+	if !readJSON(w, r, &v) {
+		return
+	}
+	if len(v.IDs) > maxDiscard {
+		writeErr(w, Refuse("Too many files at once."))
+		return
+	}
+	p.DiscardFiles(v.IDs)
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// filesHere refuses a send naming files where none can be sent (the demo),
+// rather than sending it without them.
+func (s *Server) filesHere(w http.ResponseWriter, n int) bool {
+	if _, ok := s.p.(Files); n > 0 && !ok {
+		writeErr(w, NotFound("files are not available here"))
+		return false
+	}
+	return true
+}
+
+// maxDiscard bounds one discard: more than a page can have staged.
+const maxDiscard = 64
+
 // file serves a received file, checked and decrypted, only as a download:
 // never a type the browser would run or render as a page.
 func (s *Server) file(w http.ResponseWriter, r *http.Request) {
@@ -449,7 +485,7 @@ func (s *Server) newDM(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) sendDM(w http.ResponseWriter, r *http.Request) {
 	var d DMDraft
-	if !readJSON(w, r, &d) {
+	if !readJSON(w, r, &d) || !s.filesHere(w, len(d.Files)) {
 		return
 	}
 	p, ok := s.persons(w)
@@ -466,7 +502,7 @@ func (s *Server) sendDM(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	var d Draft
-	if !readJSON(w, r, &d) {
+	if !readJSON(w, r, &d) || !s.filesHere(w, len(d.Files)) {
 		return
 	}
 	m, err := s.p.Send(d)

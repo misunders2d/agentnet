@@ -590,6 +590,25 @@ func TestLiveFiles(t *testing.T) {
 	if _, err := pb.SendDM(DMDraft{Conv: conv}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("nothing to send: %v", err)
 	}
+	// A send takes every file it names: with one gone it is refused, and
+	// the ones found go with it, plaintext included; a discarded file goes.
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	kept, _ := pb.StageFile("kept.txt", strings.NewReader("k"))
+	gone, _ := pb.StageFile("gone.txt", strings.NewReader("g"))
+	keptPath, gonePath := pb.staged.files[kept].path, pb.staged.files[gone].path
+	if !exists(keptPath) || !exists(gonePath) {
+		t.Fatal("staged files are not kept")
+	}
+	if _, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{kept, "nope"}}); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "send again") {
+		t.Fatalf("a send naming a file gone: %v", err)
+	}
+	if _, ok := pb.staged.files[kept]; ok || exists(keptPath) {
+		t.Fatal("a refused send left the file it took")
+	}
+	pb.DiscardFiles([]string{gone, "never"})
+	if _, ok := pb.staged.files[gone]; ok || exists(gonePath) || len(pb.staged.files) != 1 {
+		t.Fatalf("a discarded file is kept: %v", pb.staged.files)
+	}
 	sent, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{id}})
 	if err != nil {
 		t.Fatal(err)
@@ -600,6 +619,36 @@ func TestLiveFiles(t *testing.T) {
 	if _, err := pb.SendDM(DMDraft{Conv: conv, Files: []string{id}}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a file sent twice: %v", err)
 	}
+	// A device conversation (v1) takes files too, under the names chosen.
+	v1, _ := pb.StageFile("budget plan.xlsx", strings.NewReader("cells"))
+	v1Sent, err := pb.Send(Draft{To: alice.Address, Kind: KindMessage, Files: []string{v1}})
+	if err != nil || len(pb.staged.files) != 0 {
+		t.Fatalf("a file in a device conversation: %v (staged %d)", err, len(pb.staged.files))
+	}
+	eventually("the v1 file at alice", func() bool {
+		o, _ := pa.Overview()
+		for _, ts := range o.Threads {
+			th, err := pa.Thread(ts.ID)
+			if err != nil || ts.Peer != bob.Address {
+				continue
+			}
+			for _, m := range th.Messages {
+				if m.ID == v1Sent.ID {
+					return len(m.Files) == 1 && m.Files[0].Name == "budget plan.xlsx"
+				}
+			}
+		}
+		return false
+	})
+	// A new run removes what an earlier one staged and never sent.
+	left, _ := pb.StageFile("left.txt", strings.NewReader("l"))
+	leftPath := pb.staged.files[left].path
+	NewLive(bob)
+	if exists(leftPath) {
+		t.Fatal("a new run kept an earlier run's staged file")
+	}
+	delete(pb.staged.files, left)
+
 	var got DMMessage
 	eventually("the file at alice", func() bool {
 		d, err := pa.DM(conv)

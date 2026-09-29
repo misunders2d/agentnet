@@ -22,8 +22,14 @@ type Live struct {
 }
 
 // NewLive returns the Provider for agent a. It is meant to run inside the
-// daemon that owns a's home.
-func NewLive(a *client.Agent) *Live { return &Live{a: a, timeout: 20 * time.Second} }
+// daemon that owns a's home: files a previous run's page handed over and
+// never sent are removed first, as nothing can be staging yet.
+func NewLive(a *client.Agent) *Live {
+	if err := a.CleanStaging(); err != nil && a.Logf != nil {
+		a.Logf("messenger page: files left from an earlier run: %v", err)
+	}
+	return &Live{a: a, timeout: 20 * time.Second}
+}
 
 // Changed implements Provider.
 func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
@@ -247,8 +253,8 @@ func (l *Live) presence(ctx context.Context, peer string) Presence {
 // Send implements Provider.
 func (l *Live) Send(d Draft) (Sent, error) {
 	body := strings.TrimSpace(d.Body)
-	if body == "" {
-		return Sent{}, Refuse("Write a message first.")
+	if body == "" && len(d.Files) == 0 {
+		return Sent{}, Refuse("Write a message or add a file first.")
 	}
 	switch d.Kind {
 	case "", KindMessage, KindQuestion, KindTask:
@@ -263,9 +269,14 @@ func (l *Live) Send(d Draft) (Sent, error) {
 			return Sent{}, Refuse(sentence(err))
 		}
 	}
+	files, cleanup, err := l.takeStaged(d.Files)
+	if err != nil {
+		return Sent{}, err
+	}
+	defer cleanup() // SendMessage encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Kind: d.Kind})
+	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Kind: d.Kind, Named: files})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}

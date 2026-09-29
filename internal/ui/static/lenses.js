@@ -32,10 +32,38 @@ function readDialog(m) {
       m.summary && el("p", { class: "hint" }, "Your responder's summary: " + m.summary), d] });
 }
 
+// dialogFiles is a write dialog's files: the open conversation's draft
+// files, the same the composer shows, added by choosing or by pasting into
+// body.
+function dialogFiles(body) {
+  const list = el("ul", { class: "attach-list", "aria-label": "Files to send" });
+  const input = el("input", { type: "file", id: "write-files", multiple: true, hidden: true });
+  const note = el("p", { class: "error", role: "alert" });
+  const show = () => { pendingChips(list, show); note.textContent = state.files.length ? overLimit(state.files) : ""; renderPending(); };
+  const add = (files, pasted) => { pushFiles(files, pasted); show(); };
+  input.addEventListener("change", () => { add([...input.files]); input.value = ""; });
+  body.addEventListener("paste", (e) => { const files = pastedFiles(e); if (files.length) add(files, true); });
+  show();
+  return [el("button", { type: "button", class: "btn write-attach", onclick: () => input.click() }, "Add files or pictures…"), input, list, note];
+}
+
+// sendWithFiles sends a dialog's message with the draft's files (none when
+// canFiles is false), and takes the sent ones out of the draft.
+async function sendWithFiles(path, body, canFiles) {
+  const files = canFiles ? state.files.slice() : [];
+  if (files.length && overLimit(files)) throw new Error(overLimit(files));
+  const ids = await preparedFiles(files);
+  let r;
+  try { r = await api(path, Object.assign(body, { files: ids })); } finally { sentStaged(files); }
+  dropFiles(files);
+  return r;
+}
+
 // Writing without the composer (Zoom): an answer to m, or a new message in
-// thread t linked to its latest message.
+// thread t linked to its latest message (with the draft's files).
 function writeDialog(t, m) {
   const body = el("textarea", { id: "write-body", rows: "4" });
+  const canFiles = !m && !!fileLimits() && !t.key.pending;
   const kind = el("select", { id: "write-kind" }, ["message", "question", "task"].map((k) => el("option", { value: k }, k[0].toUpperCase() + k.slice(1))));
   const last = t.messages[t.messages.length - 1];
   dialog({
@@ -43,11 +71,12 @@ function writeDialog(t, m) {
     body: [m && el("div", { class: "quote" }, m.body),
       el("label", { for: "write-body", class: "field-label" }, m ? "Your answer" : "Message"), body,
       !m && [el("label", { for: "write-kind", class: "field-label" }, "Send as"), kind],
+      canFiles && dialogFiles(body),
       el("p", { class: "hint" }, m ? "Your answer takes this " + m.kind + " over from your responder." : "It joins this conversation.")],
     ok: "Send", focus: body,
     run: async () => {
       if (m) await act({ do: "reply", id: m.id, body: body.value });
-      else await api("/api/send", { to: t.peer, kind: kind.value, body: body.value, reply_to: last ? last.id : "" });
+      else await sendWithFiles("/api/send", { to: t.peer, kind: kind.value, body: body.value, reply_to: last ? last.id : "" }, canFiles);
     },
   });
   state.dialogRestore = { type: "write", msg: m ? m.id : null };
@@ -58,25 +87,14 @@ function writeDialog(t, m) {
 function dmWriteDialog(d) {
   const body = el("textarea", { id: "write-body", rows: "4" });
   const canFiles = !!fileLimits() && !d.frozen;
-  const list = el("ul", { class: "attach-list", "aria-label": "Files to send" });
-  const input = el("input", { type: "file", id: "write-files", multiple: true, hidden: true });
-  const note = el("p", { class: "error", role: "alert" });
-  const show = () => { pendingChips(list, show); note.textContent = state.files.length ? overLimit(state.files) : ""; renderPending(); };
-  const add = (files, pasted) => { pushFiles(files, pasted); show(); };
-  input.addEventListener("change", () => { add([...input.files]); input.value = ""; });
-  if (canFiles) body.addEventListener("paste", (e) => { const files = pastedFiles(e); if (files.length) add(files, true); });
-  show();
   dialog({
     title: "Write to " + d.peer.label,
     body: [el("label", { for: "write-body", class: "field-label" }, "Message"), body,
-      canFiles && [el("button", { type: "button", class: "btn write-attach", onclick: () => input.click() }, "Add files or pictures…"), input, list, note],
+      canFiles && dialogFiles(body),
       el("p", { class: "hint" }, "It goes to this DM only. A DM is for the person; nothing runs it.")],
     ok: "Send", focus: body,
     run: async () => {
-      const files = canFiles ? state.files.slice() : [];
-      if (files.length && overLimit(files)) throw new Error(overLimit(files));
-      const r = await api("/api/dm/send", { conv: d.id, body: body.value, files: await preparedFiles(files) });
-      dropFiles(files);
+      const r = await sendWithFiles("/api/dm/send", { conv: d.id, body: body.value }, canFiles);
       announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
         : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     },
