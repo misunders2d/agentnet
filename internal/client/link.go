@@ -343,9 +343,21 @@ func (a *Agent) linkAddress(id string) string {
 	return address
 }
 
-// onLinked is what follows a device joining this person here (history,
-// in a later step of this work).
-func (a *Agent) onLinked(id string) {}
+// onLinked starts sending this device's conversations to the device the
+// link added (history.go).
+func (a *Agent) onLinked(id string) {
+	var pub string
+	if err := a.store.db.QueryRow(`SELECT public FROM device_links WHERE offer = ?`, id).Scan(&pub); err != nil {
+		return
+	}
+	var dev identity.Public
+	if json.Unmarshal([]byte(pub), &dev) != nil {
+		return
+	}
+	if err := a.startHistory(dev); err != nil {
+		a.Logf("history for %s: %v", dev.Address, err)
+	}
+}
 
 // retryApprovedLinks publishes approved links the Hub has not taken yet.
 func (a *Agent) retryApprovedLinks(ctx context.Context) {
@@ -463,16 +475,20 @@ func (a *Agent) setLinkState(s LinkStatus) {
 // the step the approver signed), refuses it, or it expires. A device that
 // is not waiting returns its state at once.
 func (a *Agent) AwaitLink(ctx context.Context) (LinkStatus, error) {
+	ad := protocol.SessionAd{Address: a.Address, Session: protocol.NewID()}
+	protocol.SignAd(&ad, a.id.Sign)
+	return a.awaitLink(ctx, "?ad="+ad.Encode(), ad.Session)
+}
+
+// awaitLink is AwaitLink on the stream of session (query: its signed ad).
+func (a *Agent) awaitLink(ctx context.Context, query, session string) (LinkStatus, error) {
 	s := a.LinkState()
 	if s.State != LinkPending {
 		return s, nil
 	}
-	ad := protocol.SessionAd{Address: a.Address, Session: protocol.NewID()}
-	protocol.SignAd(&ad, a.id.Sign)
-	query := "?ad=" + ad.Encode()
 	backoff := time.Second
 	for {
-		linked, err := a.pendingStream(ctx, query)
+		linked, err := a.pendingStream(ctx, query, session)
 		if !linked && err == nil {
 			// The stream ended: activated meanwhile, or ended? A member
 			// request tells (a pending device is refused it).
@@ -506,7 +522,7 @@ func (a *Agent) AwaitLink(ctx context.Context) (LinkStatus, error) {
 
 // pendingStream holds the pending device's stream: pings answered, until
 // "linked" (true) or the stream ends.
-func (a *Agent) pendingStream(ctx context.Context, query string) (linked bool, err error) {
+func (a *Agent) pendingStream(ctx context.Context, query, session string) (linked bool, err error) {
 	req, err := a.hub.request(ctx, "GET", "/v1/stream"+query, nil)
 	if err != nil {
 		return false, err
@@ -519,6 +535,17 @@ func (a *Agent) pendingStream(ctx context.Context, query string) (linked bool, e
 	defer resp.Body.Close()
 	if err := checkStatus(resp); err != nil {
 		return false, err
+	}
+	if resp.Header.Get(protocol.MembersHeader) == "1" {
+		// A member's stream: activated before this stream connected. The
+		// Hub counts this session as live for a while: say what it reads,
+		// as a daemon's session does, so nobody waits on it.
+		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: []string{protocol.CapEnv2, protocol.CapNotify, protocol.CapPerson}, TS: time.Now().Unix()}
+		rec.Sign(a.id.Sign)
+		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
+			a.Logf("capabilities of the waiting session: %v", err)
+		}
+		return true, nil
 	}
 	sc := bufio.NewScanner(resp.Body)
 	var event, data string

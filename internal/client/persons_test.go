@@ -233,3 +233,45 @@ func TestServiceStaysStandalone(t *testing.T) {
 		t.Fatal("a person's device became a service")
 	}
 }
+
+// A DM the new device starts, with someone its person's other device never
+// met, reaches that other device as the person's own conversation.
+func TestLinkedDeviceStartsDM(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone := linked(t, w.alice)
+	conv := newDM(t, phone, w.bob)
+	if _, err := phone.SendConv(tctx(t), conv, ConvOutgoing{Body: "from my phone"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the laptop to hold the phone's DM as its own", func() bool {
+		convs, _ := w.alice.Conversations()
+		msgs, _ := w.alice.ConversationMessages(conv)
+		return len(convs) == 1 && convs[0].ID == conv && len(msgs) == 1 && msgs[0].Dir == "out" && msgs[0].Via == phone.Address
+	})
+	eventually(t, "bob has it", func() bool { return strings.Join(convBodies(t, w.bob, conv), "|") == "in:from my phone" })
+}
+
+// A device waiting in its daemon hears a refusal: its link ends refused.
+func TestDaemonHearsRefusal(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	persons(t, w.alice)
+	o, err := w.alice.NewDeviceLink(tctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tablet, err := JoinAndLink(tctx(t), t.TempDir(), o.Code, "tablet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tablet.Close() })
+	runAgent(t, tablet)
+	req := pendingLink(t, w.alice)
+	if err := w.alice.DecideLink(tctx(t), req.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the tablet refused", func() bool { return tablet.LinkState().State == LinkRefused })
+}

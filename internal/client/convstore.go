@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -101,8 +102,9 @@ func (s *store) conversations() ([]ConversationInfo, error) {
 }
 
 // contentHash identifies what a conversation message says, independently
-// of its per-device copy (envelope id, recipient, time, session): the same
-// sender key and logical id must always carry the same content.
+// of its per-device copy (envelope id, recipient, time, session, whether it
+// is a replica or forwarded history, the blobs its files travel in): the
+// same sender key and logical id must always carry the same content.
 //
 // The participation id is part of it (a message moved to another
 // participation is not the same message). It is left out when empty, so
@@ -116,11 +118,10 @@ func contentHash(in envelope.Inner) string {
 	}
 	c := struct {
 		Conv, LID, Kind, Body, ReplyTo, Status, Sub, Origin, Emotion string
-		Replica                                                      bool
 		Target                                                       *envelope.Target
 		Attachments                                                  []att
 		PID                                                          string `json:",omitempty"`
-	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Replica, in.Target, nil, in.PID}
+	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID}
 	for _, a := range in.Attachments {
 		c.Attachments = append(c.Attachments, att{a.Name, a.Size, a.SHA256})
 	}
@@ -154,6 +155,23 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		return "", err
 	}
 	defer tx.Rollback()
+	// A copy forwarded as history of this message (same claimed key and
+	// logical id) gives way to the one received directly: the direct copy
+	// is stored in its place, under its own authority (history never did
+	// any), keeping only whether it was read.
+	var histID string
+	var histRead sql.NullInt64
+	switch err := tx.QueryRow(`SELECT id, read_at FROM inbox WHERE verified_by IS NULL AND claimed_fp = ? AND lid = ?`, verifiedBy, in.LID).Scan(&histID, &histRead); {
+	case err == nil:
+		if _, err := tx.Exec(`DELETE FROM attachments WHERE message_id = ?`, histID); err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(`DELETE FROM inbox WHERE id = ?`, histID); err != nil {
+			return "", err
+		}
+	case !errors.Is(err, sql.ErrNoRows):
+		return "", err
+	}
 	var stored, storedPID string
 	err = tx.QueryRow(`SELECT coalesce(content_hash, ''), coalesce(pid, '') FROM inbox WHERE verified_by = ? AND lid = ?`, verifiedBy, in.LID).Scan(&stored, &storedPID)
 	if err == nil && stored != hash && in.PID != "" && storedPID == in.PID && stored == legacyContentHash(in) {
@@ -188,6 +206,11 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	if n, _ := res.RowsAffected(); n == 0 {
 		return admittedAgain, nil // this envelope id is stored already
 	}
+	if histRead.Valid {
+		if _, err := tx.Exec(`UPDATE inbox SET read_at = ? WHERE id = ?`, histRead.Int64, in.ID); err != nil {
+			return "", err
+		}
+	}
 	if also != nil {
 		if err := also(tx); err != nil {
 			return "", err
@@ -206,6 +229,61 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	}
 	return admitted, s.done(tx.Commit())
 }
+
+// addHistoryInbox stores in, a message forwarded as history by via (a
+// device of this installation's own person), as claimed sent under key
+// claimedFP: never verified under that key here, never run, never an
+// alert. A message already held under that key and logical id (directly or
+// as history) is kept as it is. also runs with it when it is new.
+// carrier is the id of the envelope that brought it (released from
+// quarantine with it, if held).
+func (s *store) addHistoryInbox(in envelope.Inner, claimedFP, via, carrier string, fromQuarantine bool, also func(*sql.Tx) error) (string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow(`SELECT count(*) FROM inbox WHERE coalesce(verified_by, claimed_fp) = ? AND lid = ?`, claimedFP, in.LID).Scan(&n); err != nil {
+		return "", err
+	}
+	result := admittedAgain
+	if n == 0 {
+		now := time.Now()
+		res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, status, state,
+			conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, claimed_fp, via, acked)
+			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), '', ?, ?, nullif(?, ''), 1, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, 1)`,
+			in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, in.TS, in.Status,
+			in.Conv, in.LID, in.Sub, in.Origin, in.Emotion, targetJSON(in.Target), contentHash(in), now.UnixMilli(), in.PID, claimedFP, via)
+		if err != nil {
+			return "", err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			result = admitted
+			if also != nil {
+				if err := also(tx); err != nil {
+					return "", err
+				}
+			}
+			for i, a := range in.Attachments { // the manifest only: the file comes on request (files.go)
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO attachments(message_id, blob_id, name, size, sha256, ct_size, ct_sha256) VALUES(?, ?, ?, ?, ?, 0, '')`,
+					in.ID, fmt.Sprintf("%s%d", historyBlob, i), a.Name, a.Size, a.SHA256); err != nil {
+					return "", err
+				}
+			}
+		}
+	}
+	if fromQuarantine {
+		if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, carrier); err != nil {
+			return "", err
+		}
+	}
+	return result, s.done(tx.Commit())
+}
+
+// historyBlob starts the placeholder blob id of a file known from history
+// only (its manifest): no ciphertext for this device exists yet.
+const historyBlob = "history-"
 
 func targetJSON(t *envelope.Target) string {
 	if t == nil {
@@ -399,6 +477,12 @@ type ConvMessage struct {
 	// device (State is then the least advanced one's).
 	Via    string     `json:"via,omitempty"`
 	Copies []ConvCopy `json:"copies,omitempty"`
+
+	// History: forwarded by SyncedFrom, a device of this person; its
+	// sender and key (Key is then empty) are that device's word, not
+	// verified here, and it never runs anything.
+	History    bool   `json:"history,omitempty"`
+	SyncedFrom string `json:"synced_from,omitempty"`
 }
 
 // convMessages lists conv's messages; a local request to this device's own
@@ -410,13 +494,13 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 	rows, err := s.db.Query(`
 		SELECT id, lid, 'in', sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
-		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, ''
+		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, '')
 		  FROM inbox WHERE conv = ? AND local = 0
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
 		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient
-		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ?
+		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') != 'history'
 		ORDER BY ms, 1`, conv, self, selfFP, conv)
 	if err != nil {
 		return nil, err
@@ -435,6 +519,9 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		if target != "" {
 			m.Target = &envelope.Target{}
 			json.Unmarshal([]byte(target), m.Target)
+		}
+		if m.Dir == "in" && to != "" { // history: forwarded by another device of this person
+			m.History, m.SyncedFrom, to = true, to, ""
 		}
 		switch {
 		case m.Dir == "out":

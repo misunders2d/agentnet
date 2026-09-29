@@ -276,6 +276,18 @@ CREATE TABLE device_links(
   roster TEXT,
   detail TEXT,
   updated_at INTEGER NOT NULL);
+`, `
+ALTER TABLE inbox ADD COLUMN claimed_fp TEXT;
+ALTER TABLE inbox ADD COLUMN via TEXT;
+CREATE UNIQUE INDEX inbox_logical_any ON inbox(coalesce(verified_by, claimed_fp), lid) WHERE lid IS NOT NULL;
+CREATE TABLE history_jobs(
+  device TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  pos TEXT NOT NULL,
+  convs_total INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL);
 `}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.

@@ -100,7 +100,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		// This device joined to be linked: it is no member until its person
 		// approves it on their other device; it waits on its only stream.
 		a.Logf("waiting for approval of this device on %s", a.LinkState().Approver)
-		if _, err := a.AwaitLink(ctx); err != nil {
+		if _, err := a.awaitLink(ctx, a.adQuery, ad.Session); err != nil { // this run's own session
 			if ctx.Err() != nil {
 				return stopped()
 			}
@@ -151,7 +151,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.Logf("connected to hub as %s", a.Address)
 	a.membersConnected(resp.Header)
 	defer a.membersDisconnected()
-	a.convWork.due(convPublish | convRetry | convRelease) // a new connection: publish, then look again
+	a.convWork.due(convPublish | convRetry | convRelease | convHistory) // a new connection: publish, then look again
 
 	// Three missed pings mean the connection is dead even if TCP has not noticed.
 	watchdog := time.AfterFunc(3*a.heartbeat, cancel)
@@ -173,12 +173,14 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 		}
 	}()
 	defer func() { cancel(); <-workerDone }()
+	a.kickMu.Lock()
 	a.kick = func() {
 		select {
 		case kick <- struct{}{}:
 		default: // a retry pass is already pending
 		}
 	}
+	a.kickMu.Unlock()
 	a.kick()
 
 	sc := bufio.NewScanner(resp.Body)

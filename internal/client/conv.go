@@ -45,6 +45,7 @@ const (
 	convRetryMore                    // continue that look from where the last page ended
 	convRelease                      // look again at waiting conversation messages
 	convPersons                      // compare published person records with the pinned ones
+	convHistory                      // queue the next page of history for a new device of this person (history.go)
 )
 
 // proofPage bounds the held messages looked at in one sync.
@@ -101,6 +102,12 @@ func (a *Agent) convSync(ctx context.Context) {
 	}
 	if work&convRelease != 0 {
 		a.releaseConv(ctx, feats)
+	}
+	if work&convHistory != 0 && a.historyStep(ctx) {
+		a.convWork.due(convHistory) // one page per sync; the next follows at once
+		if a.kick != nil {
+			a.kick()
+		}
 	}
 }
 
@@ -623,6 +630,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	} else if !ok {
 		return hold(reasonInvalid, "the root binds the sender's person to a roster step its chain does not have")
 	}
+	if in.Sub == envelope.SubHistory && sp.info.Person != me.info.Person {
+		return hold(reasonInvalid, "history comes only from a device of this installation's own person")
+	}
 	if _, _, found, err := a.store.conversation(in.Conv); err != nil {
 		return err
 	} else if !found {
@@ -634,6 +644,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		} else if err != nil {
 			return personErr(err)
 		}
+		// Every member pinned, bound as the root says: a root another
+		// device of this person brought may name someone never seen here.
+		for _, m := range root.Members {
+			if ok, err := a.boundIn(ctx, m.Person, m.Roster); err != nil {
+				return personErr(err)
+			} else if !ok {
+				return hold(reasonInvalid, "the root binds a member to a roster step its chain does not have")
+			}
+		}
 		peer := root.Members[0].Person
 		if peer == me.info.Person {
 			peer = root.Members[1].Person
@@ -641,6 +660,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		if err := a.store.addConversation(root, in.Root, peer); err != nil {
 			return err
 		}
+	}
+	if in.Sub == envelope.SubHistory {
+		return a.admitHistory(ctx, env, in, root, hold, fromQuarantine)
 	}
 	if in.ReplyTo != "" { // a reply may name only a message of its own conversation
 		c, err := a.store.convOf(in.ReplyTo)
@@ -663,11 +685,15 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		also = func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, raw) }
 	}
 	now, event := time.Now(), also
-	also = func(tx *sql.Tx) error { // with the message, or not at all
+	forward := a.forwardStale(me, in, sender.Fingerprint(), in.Root) // for this person's devices its sender did not know
+	also = func(tx *sql.Tx) error {                                  // with the message, or not at all
 		if event != nil {
 			if err := event(tx); err != nil {
 				return err
 			}
+		}
+		if err := insertCopies(tx, forward); err != nil {
+			return err
 		}
 		if sp.info.Person == me.info.Person {
 			return nil // this person's own message, from another of its devices: never an alert
@@ -698,6 +724,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if res == admitted {
 		a.wakeWorker() // a request, or an event that may let one run or stop
 		a.wakeAlerts()
+		if len(forward) > 0 {
+			a.kickNow() // the stream's worker sends them now, not at the next ping
+		}
 	}
 	return nil
 }

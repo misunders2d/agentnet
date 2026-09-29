@@ -49,6 +49,7 @@ type Agent struct {
 	heartbeat  time.Duration
 	adQuery    string                     // this run's signed session ad, for the push stream
 	kick       func()                     // wakes the current stream's retry worker
+	kickMu     sync.Mutex                 // guards kick for kickNow
 	wakeWorker func()                     // wakes the question/task worker; a no-op outside Run
 	changes    *changeFeed                // local state changed (changes.go)
 	listed     listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
