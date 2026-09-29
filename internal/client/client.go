@@ -415,6 +415,15 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	}
 	var r protocol.Receipt
 	err := a.uploadAll(ctx, env)
+	if err == nil && len(env.Blobs) > 0 {
+		// Uploading files takes time: decide again, from what is stored
+		// now, just before the message itself is handed over (a person
+		// frozen meanwhile keeps it queued, its files uploaded).
+		if ok, err := a.mayDeliver(env); err != nil || !ok {
+			state, _, _, _ := a.store.outboxState(env.ID)
+			return SendResult{ID: env.ID, State: state}, err
+		}
+	}
 	if err == nil {
 		err = a.hub.do(ctx, "POST", "/v1/messages", env, &r)
 	}

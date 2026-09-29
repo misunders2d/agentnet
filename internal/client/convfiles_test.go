@@ -2,7 +2,10 @@ package client
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -245,5 +248,57 @@ func TestStageUpload(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "staging")); len(entries) != 0 {
 		t.Fatalf("a refused upload stayed: %v", entries)
+	}
+}
+
+// fileGate counts message posts and runs after once a file upload
+// completes.
+type fileGate struct {
+	base     http.RoundTripper
+	after    func()
+	messages int
+}
+
+func (h *fileGate) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method == "POST" && r.URL.Path == "/v1/messages" {
+		h.messages++
+	}
+	resp, err := h.base.RoundTrip(r)
+	if err == nil && r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/complete") {
+		h.after()
+	}
+	return resp, err
+}
+
+// The hand-over is decided again after the files are uploaded, just before
+// the message goes: the recipient's person frozen during the upload keeps
+// it queued (its files uploaded, its spool kept), never posted.
+func TestDMFilesFreezeDuringUpload(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	path, _ := writeFile(t, t.TempDir(), "report.txt", 1000)
+	h := &fileGate{base: w.alice.hub.http.Transport}
+	h.after = func() {
+		me, _, _ := w.bob.store.selfPerson()
+		other := me.roster
+		other.Label = "changed claim"
+		other.Sign(w.bob.id.Sign)
+		raw, _ := json.Marshal(other)
+		if err := w.alice.store.pinPerson(other, raw, w.bob.id.Public(w.bob.Address)); !errors.Is(err, errPersonConflict) {
+			t.Errorf("freeze: %v", err)
+		}
+	}
+	w.alice.hub.http.Transport = h
+	sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "file", Files: []OutgoingFile{{Path: path}}})
+	if err != nil || h.messages != 0 || sent.State != stateQueued {
+		t.Fatalf("after a freeze during the upload: %d posts, %+v %v", h.messages, sent, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool")); len(entries) != 1 {
+		t.Fatalf("spool: %v", entries)
+	}
+	if err := w.alice.FlushOutbox(tctx(t)); err != nil || h.messages != 0 {
+		t.Fatalf("a flush posted it: %d %v", h.messages, err)
 	}
 }
