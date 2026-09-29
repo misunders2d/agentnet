@@ -53,8 +53,8 @@
   fixed in `7247759`. Root accepted `7247759` (source checked; focused race
   tests of waiting, queued, fresh-conflict and normal-recovery sends passed),
   which closes the core's correction gate. The tests are core Claude's and
-  root's evidence. Not built at that point (since built: agents in DMs and
-  Zoom's links, below): linking devices, groups.
+  root's evidence. Not built at that point (since built: agents in DMs,
+  Zoom's links and linking devices, below): linking devices, groups.
 
   Human DMs are **not** complete.
 - **Human DMs on the page: accepted (2026-09-29).** `4a0659c` (Agy's review
@@ -71,8 +71,8 @@
   their device, and DMs by their lines), a DM as an issue in Comic (held and
   kept captions, no decision controls), and Zoom's People group, a person's
   DMs, one DM and a write dialog that sends only to it. Agent invitation,
-  Zoom's person–agent links and the browser device's DMs were built since
-  (below); linking devices is not.
+  Zoom's person–agent links, the browser device's DMs and linking devices
+  were built since (below).
 - **Release gate: a whole-team pre-release review (owner request,
   2026-09-29).** Before this release, Codex (synthesis), core Claude, frontend
   Claude and Agy review a stable candidate SHA against the owner's requested
@@ -216,6 +216,34 @@
   (same-tab regression in the page checks). macOS alerts have no click;
   Windows clicks came later from core and root (`b08e65b`, `ab440c7`;
   their evidence, not shown here).
+- **One person on several devices (MEL-433; 2026-09-29, local commits,
+  review pending).** A clean cut to person v2: a person is a signed roster
+  chain of its devices; a new device joins with one QR from an existing
+  device of that person and is theirs only once a person approves it there
+  (no admin invite per device); every message goes to every device of both
+  people; chats from before reach a new device as history, and its files on
+  request from the device that has them. Core `886afe1`, `80f9717`,
+  `4ea4f92`, `efeb9aa`, `dbb640f` (core Claude), CLI join `c2d34a1` (root);
+  pages `8201b6c`, `0f1026d`, `cd4702f`, `3a0af06`, `9616b1e`, `63ad48e`,
+  `fc897bc`, `d94b84c`; browser device `a94b3d2`, `c050417`, `77dd232`,
+  `63ad48e`, `f5be650`. What the pages show:
+  - setup asks person or service (a browser is always a person's device);
+    you are one node, with "You on N devices" behind one closed disclosure,
+    each device with its conversations or "Write to it…"; people the same;
+  - add a device (a QR and its link, one use, 9–10 minutes), approve or
+    refuse its request in plain words (the key under Details), remove one
+    (never the last); a message says which of your devices sent it, and
+    Details list its copies; history shows its progress ("keep this page
+    open" in a browser);
+  - a history message's file says "Get it from <device>" until it is here.
+  The browser device keeps a copy of each file it sends and the ciphertext
+  of each it receives (IndexedDB), so it can answer another device of yours;
+  storage that fails never blocks a message and is said. It also writes to
+  devices and services again (version 1, as `agentnet send`; the recipient's
+  approvals and acceptance decide; nothing runs in the browser).
+  Evidence: Go/browser tests against real Hubs and daemons, and one sole-tab
+  Chrome journey at 390 px on loopback. Not shown: a phone, a deployed
+  relay; recovering a person whose last device is lost is not built.
 - **The browser device (2026-09-29; local commits, review in progress).**
   `hub serve --web` (or `AGENTNET_WEB=1`; off by default) serves the page at
   the Hub's origin (`7a97aaf`, core), and `admin invite --link` prints a

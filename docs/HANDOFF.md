@@ -321,12 +321,12 @@ If a local database or key file is damaged:
   dedupe, and holds every conversation question/task (nothing runs). Root review defects R1, R2, C1, C2 and the
   frozen-person deferred send are fixed (`9f5bea1`, `5da7fa1`, `7247759`); root accepted `7247759` with focused
   race tests, closing the core correction gate. Agent participation and execution, Zoom's links and the browser
-  device were built since (items below); not built: device linking, groups.
+  device were built since (items below), device linking too (MEL-433 item below); not built: groups.
 - **Human DMs on the page (`4a0659c`, accepted after Agy's review)**: person setup by hand, people listed by their claimed name until checked,
   separate persistent DMs, a message-only DM composer with receipts, held questions/tasks (nothing runs), frozen
   DMs; apart from device history. `9c1d4b4` (candidate, review pending) adds people search and DMs in Comic and
-  Zoom. Agent invitation, Zoom's person–agent links and browser DMs were built since (items below); not built:
-  device linking.
+  Zoom. Agent invitation, Zoom's person–agent links, browser DMs and device linking were built since (items
+  below).
 - **Release gate (owner request, 2026-09-29)**: a whole-team pre-release review of a stable candidate SHA
   (inventory, per-area and cross-area review, one or two challenge rounds, fix and recheck per confirmed defect,
   Codex synthesis, only genuine product decisions to Sergey). Rows R1–R12 are listed in
@@ -389,9 +389,20 @@ If a local database or key file is damaged:
   started by the scheduled task `\agentnet` (native test passed in Actions run 36458378377; a standalone
   daemon is not stopped, an explicit limit)
   ([§19.2b](MESSENGER_ARCHITECTURE.md#19-updates-and-versions)).
-- **Human Identity & Multi-Device Linking (`MEL-433`)**: Architecture agreed. First part built: explicit single-device
-  persons (human-DM core above). Linking devices, roster changes across devices, recovery and history transfer are not
-  built. See [`docs/DECISIONS.md`](DECISIONS.md).
+- **Human Identity & Multi-Device Linking (`MEL-433`, local commits, review pending)**: one person on several devices,
+  a clean cut to person v2 (re-enrollment, no v1 salvage). Core (core Claude): roster chains, own-device links (one QR,
+  approved on an existing device; no admin invite per device), fan-out to every device, history snapshot and
+  forwarding, files of history on request (`886afe1`, `80f9717`, `ef125db`, `4ea4f92`, `efeb9aa`, `dbb640f`); CLI join
+  with a link (`c2d34a1`, root). Pages (frontend Claude): setup as a person or a service, "You on N devices" and each
+  person's devices behind one closed disclosure, add/approve/remove devices with a QR, where each message came from,
+  history progress, history files (`8201b6c`, `0f1026d`, `cd4702f`, `3a0af06`, `9616b1e`, `63ad48e`, `fc897bc`,
+  `d94b84c`); the browser device speaks person v2 and links either way, copies and keeps chats and files
+  (`a94b3d2`, `c050417`, `77dd232`, `63ad48e`) and writes to devices again (v1, `f5be650`; owner's Android report).
+  Evidence: Go/browser tests against real Hubs and daemons (browser as new and as approving device, history,
+  stale-roster forwarding, files after the Hub dropped them, device questions with a stub responder); one sole-tab
+  Chrome journey at phone width on loopback (link, CLI approval, history and its files, Zoom device chat, DM after).
+  Not shown: a phone, a deployed relay, the browser approving a real second browser; recovery of a lost last device
+  is not built. See [`docs/DECISIONS.md`](DECISIONS.md) and [MESSENGER_ARCHITECTURE.md](MESSENGER_ARCHITECTURE.md) (status).
 - **Comic Avatars & Visual Expressions (`MEL-434`)**: Avatar facial emotion requirement agreed (sender emits emotion with turn; cached predefined reaction set; no extra per-message model call); asset generation, emotion vocabulary, art direction, and implementation deferred.
 - **Notification Click Focus (`MEL-435`)**: a click opens its conversation: the browser device's service worker, the daemon's Linux alert (`#conv=`, also in an open tab since `81792ef`), Windows (`b08e65b`, `ab440c7`); macOS alerts have no click.
 - **Owner requests for later (2026-09-29; backlog, not this release)**:
