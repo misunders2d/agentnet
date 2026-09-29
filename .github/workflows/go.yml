@@ -36,6 +36,13 @@ jobs:
       - name: race
         if: runner.os == 'Linux'
         run: go test -race -count=1 -timeout 900s ./...
+      - name: browser storage (real IndexedDB, headless)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          export AGENTNET_CHROME="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium)"
+          test -n "$AGENTNET_CHROME"
+          go test -race -count=1 -timeout 90s -run '^TestDeviceStoreInChrome$' -v ./internal/ui/static
   container:
     if: ${{ !inputs.windows_task_probe }}
     runs-on: ubuntu-latest
