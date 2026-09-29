@@ -19,8 +19,19 @@ const fetchNet = (url, opts) => (offline || (dropPosts && opts && opts.method ==
 // is recorded with its signature headers present.
 let notifyCalls = null;
 const json = (v, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
+// forged stands in for a server that lies: for a person id, a different
+// (validly signed) record at a step already pinned, served as that
+// person's chain and in its device's profile. An honest Hub never does.
+const forged = new Map(); // person id -> { record, address }
 async function fetchImpl(url, opts = {}) {
   const u = new URL(url);
+  for (const [person, f] of forged) {
+    if (u.pathname === "/v1/persons/" + person + "/chain") return json({ records: [JSON.parse(f.record)], more: false });
+    if (u.pathname === "/v1/agents/" + f.address + "/profile") {
+      const real = await (await fetchNet(url, opts)).json();
+      return json({ ...real, person: JSON.parse(f.record) });
+    }
+  }
   if (notifyCalls && u.pathname.startsWith("/v1/notify")) {
     notifyCalls.push({ method: opts.method || "GET", path: u.pathname, body: opts.body ? JSON.parse(opts.body) : null,
       signed: !!(opts.headers && opts.headers["X-Agentnet-Agent"]) });
@@ -67,6 +78,9 @@ async function handle(req) {
     offline = req.on;
     if (offline) engine.offline();
     else engine.online();
+    return {};
+  case "forge": // a lying server: another record for req.person, as its chain and in req.address's profile
+    forged.set(req.person, { record: req.record, address: req.address });
     return {};
   case "dropPosts":
     dropPosts = req.on;

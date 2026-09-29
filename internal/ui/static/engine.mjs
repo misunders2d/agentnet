@@ -139,6 +139,11 @@ function outText(state, peer, detail) {
 }
 
 const iso = (ms) => new Date(ms).toISOString();
+
+// copyOrder is the least advanced of a message's copies (its state is the
+// message's, as the core reports it).
+const copyRank = { failed: 0, waiting: 1, queued: 2, custody: 3, delivered: 4 };
+const copyOrder = (recs) => recs.reduce((a, b) => ((copyRank[b.state] ?? 2) < (copyRank[a.state] ?? 2) ? b : a));
 const firstLine = (s) => {
   const l = (s || "").split("\n")[0];
   return [...l].length > 120 ? [...l].slice(0, 119).join("") + "…" : l;
@@ -335,15 +340,46 @@ export class Engine {
     return address;
   }
 
+  // A person is kept as the chain of roster steps verified here (TOFU on
+  // step 0): { person, label, seq, hash, json (the newest step), hashes
+  // (every step's hash), devices (the newest step's: address,
+  // fingerprint, json), known (every device any step named, for records
+  // they signed), state (self, pinned, conflict) }. address and
+  // fingerprint are the one device a view is about: this one for your own
+  // person, else the first current device.
   personView(p, extra) {
-    return p && { person: p.person, label: p.label, address: p.address, fingerprint: p.fingerprint, state: p.state, ...extra };
+    return p && { person: p.person, label: p.label, address: p.address, fingerprint: p.fingerprint, state: p.state,
+      devices: (p.devices || []).map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint, this: d.address === this.address })),
+      ...extra };
+  }
+
+  // personRecord makes a person to keep from its verified steps (oldest
+  // first), with state, from what was kept before (known devices).
+  async personRecord(steps, state, before) {
+    const r = steps[steps.length - 1];
+    const devices = await Promise.all(r.devices.map(async (d) => ({ address: d.address, fingerprint: await wire.fingerprint(d), json: wire.marshalPublic(d) })));
+    const known = [...((before && before.known) || [])];
+    for (const st of steps) {
+      for (const d of st.devices) {
+        const fp = await wire.fingerprint(d);
+        if (!known.some((k) => k.address === d.address && k.fingerprint === fp)) known.push({ address: d.address, fingerprint: fp, json: wire.marshalPublic(d) });
+      }
+    }
+    const hashes = [...((before && before.hashes) || [])];
+    for (const st of steps) {
+      const h = await wire.rosterHash(st);
+      if (!hashes.includes(h)) hashes.push(h);
+    }
+    const self = devices.find((d) => d.address === this.address);
+    const one = self && state === "self" ? self : devices[0];
+    return { person: r.person, label: r.label, seq: r.seq, hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known,
+      address: one.address, fingerprint: one.fingerprint, state, published: before ? !!before.published : false };
   }
 
   async createPerson(label) {
     if (this.me) throw new Error("This device already speaks for \"" + this.me.label + "\"; a second person is not created.");
     const r = await wire.newRoster(this.keys, this.address, String(label || "").trim());
-    const me = { person: r.person, label: r.label, address: this.address, fingerprint: r.devices[0].fingerprint,
-      hash: await wire.rosterHash(r), json: wire.rosterJSON(r), state: "self", published: false };
+    const me = await this.personRecord([r], "self", null);
     await put(this.store, "kv", "person", me);
     this.me = me;
     this.changed();
@@ -358,7 +394,7 @@ export class Engine {
 
   async publishPerson() {
     if (!this.me || this.me.published) return;
-    if (!(await this.features()).includes("person")) throw new Error("your server does not hold persons (it needs an update)");
+    if (!(await this.features()).includes("person2")) throw new Error("your server does not hold persons (it needs an update)");
     await this.call("PUT", "/v1/person", this.me.json);
     this.me = { ...this.me, published: true };
     await put(this.store, "kv", "person", this.me);
@@ -392,8 +428,23 @@ export class Engine {
     return pin;
   }
 
-  async personByAddress(address) {
-    return (await this.store.all("persons")).find((p) => p.address === address);
+  // pinDevices pins the keys a person's steps name for their devices: a
+  // device pinned before with another key is a changed key, never used.
+  async pinDevices(p) {
+    for (const d of p.devices) {
+      const pin = await this.store.get("pins", d.address);
+      if (!pin) await put(this.store, "pins", d.address, { address: d.address, json: d.json, fingerprint: d.fingerprint, pending: null });
+      else if (pin.fingerprint !== d.fingerprint && !(pin.pending && pin.pending.fingerprint === d.fingerprint)) {
+        await put(this.store, "pins", d.address, { ...pin, pending: { json: d.json, fingerprint: d.fingerprint } });
+      }
+    }
+  }
+
+  // The person whose current devices include address (with fingerprint fp, if given).
+  async personByDevice(address, fp) {
+    const has = (p) => (p.devices || []).some((d) => d.address === address && (!fp || d.fingerprint === fp));
+    if (this.me && has(this.me)) return this.me;
+    return (await this.store.all("persons")).find(has);
   }
 
   async profile(address) {
@@ -401,11 +452,88 @@ export class Engine {
     return this.call("GET", "/v1/agents/" + label + "/" + agent + "/profile");
   }
 
-  // personOf returns the person the device at address speaks for, pinning
-  // its published record (verified against the device's pinned key) the
-  // first time. A conflict is frozen, never replaced.
+  // chain reads person's roster steps after seq from the server, all pages.
+  async chain(person, after) {
+    const out = [];
+    for (;;) {
+      const page = await this.call("GET", "/v1/persons/" + person + "/chain?after=" + after);
+      for (const raw of page.records || []) out.push(await wire.parseRoster(raw));
+      if (!page.more || !(page.records || []).length) return out;
+      after = out[out.length - 1].seq;
+    }
+  }
+
+  // pinChain pins person the first time: its whole chain, verified from
+  // step 0 (trust on first use), and its devices' keys.
+  async pinChain(person) {
+    const known = person === (this.me && this.me.person) ? this.me : await this.store.get("persons", person);
+    if (known) return this.refreshPerson(known);
+    let steps;
+    try {
+      steps = await this.chain(person, -1);
+      if (!steps.length) throw new Error("no roster");
+      await wire.verifyFirst(steps[0]);
+      for (let i = 1; i < steps.length; i++) await wire.verifyNext(steps[i], steps[i - 1]);
+    } catch (e) {
+      if (retryable(e)) throw e;
+      throw new Hold("proof_pending", "person " + person + ": " + e.message);
+    }
+    const p = await this.personRecord(steps, "pinned", null);
+    await put(this.store, "persons", p.person, p);
+    await this.pinDevices(p);
+    return p;
+  }
+
+  // refreshPerson follows p's chain past the step pinned here, verifying
+  // each new step; a different record at a pinned step freezes the person
+  // (a fork is never replaced). Your own person is followed the same way.
+  async refreshPerson(p) {
+    if (!p || p.state === "conflict") return p;
+    let steps;
+    try {
+      steps = await this.chain(p.person, p.seq - 1);
+    } catch (e) {
+      if (retryable(e)) throw e;
+      return p;
+    }
+    if (!steps.length) return p;
+    if ((await wire.rosterHash(steps[0])) !== p.hash) return this.freeze(p);
+    if (steps.length === 1) return p;
+    let prev = await wire.parseRoster(p.json);
+    try {
+      for (const st of steps.slice(1)) {
+        await wire.verifyNext(st, prev);
+        prev = st;
+      }
+    } catch (e) {
+      return p; // a step that does not follow proves nothing here
+    }
+    const next = await this.personRecord([await wire.parseRoster(p.json), ...steps.slice(1)], p.state, p);
+    if (p.state === "self") {
+      this.me = { ...next, published: true };
+      await put(this.store, "kv", "person", this.me);
+      this.changed();
+      return this.me;
+    }
+    await put(this.store, "persons", next.person, next);
+    await this.pinDevices(next);
+    this.changed();
+    return next;
+  }
+
+  async freeze(p) {
+    if (p.state === "self") return p;
+    const f = { ...p, state: "conflict" };
+    await put(this.store, "persons", p.person, f);
+    this.changed();
+    return f;
+  }
+
+  // personOf returns the person the device at address (key pin) speaks
+  // for, as its server lists it: pinned the first time from its whole
+  // chain, followed after. A conflict is frozen, never replaced.
   async personOf(address, pin) {
-    const known = await this.personByAddress(address);
+    const known = await this.personByDevice(address, pin.fingerprint);
     if (known) {
       if (known.state === "conflict") throw new Hold("identity_conflict", "this person's record conflicts with the one kept here; it is frozen");
       return known;
@@ -418,67 +546,41 @@ export class Engine {
       throw e;
     }
     if (!prof || !prof.person) throw new Hold("proof_pending", address + " has no person on this server");
-    const pub = await this.pubOf(pin);
     let r;
     try {
-      r = wire.parseRoster(prof.person);
-      await wire.verifyRoster(r, pub.sign_key);
-      if (r.devices[0].address !== address || r.devices[0].fingerprint !== pin.fingerprint) throw new Error("the record does not name this device's key");
+      r = await wire.parseRoster(prof.person);
     } catch (e) {
       throw new Hold("proof_pending", address + "'s person record: " + e.message);
     }
-    return this.pinPerson(r);
-  }
-
-  async pinPerson(r) {
-    const hash = await wire.rosterHash(r);
-    const d = r.devices[0];
-    const byID = await this.store.get("persons", r.person);
-    const byAddr = await this.personByAddress(d.address);
-    const other = byID || byAddr;
-    if (other) {
-      if (other.hash === hash) return other;
-      await put(this.store, "persons", other.person, { ...other, state: "conflict" });
-      this.changed();
-      throw new Hold("identity_conflict", "a different person record was seen for " + d.address + "; it is frozen");
+    const p = await this.pinChain(r.person);
+    if (p.state === "conflict") throw new Hold("identity_conflict", "this person's record conflicts with the one kept here; it is frozen");
+    if (!p.devices.some((d) => d.address === address && d.fingerprint === pin.fingerprint)) {
+      throw new Hold("proof_pending", address + " is not a current device of its person here");
     }
-    const p = { person: r.person, label: r.label, address: d.address, fingerprint: d.fingerprint, hash, json: wire.rosterJSON(r), state: "pinned" };
-    await put(this.store, "persons", r.person, p);
     return p;
   }
 
-  // observePerson compares a record the server lists for a pinned person's
-  // device with the pinned one: only a verifying, different record counts,
-  // and it freezes the person.
-  async observePerson(address, raw) {
-    if (!raw) return;
-    const p = await this.personByAddress(address);
-    if (!p || p.state !== "pinned") return;
-    const pin = await this.store.get("pins", address);
-    if (!pin || pin.fingerprint !== p.fingerprint) return;
-    try {
-      const r = wire.parseRoster(raw);
-      await wire.verifyRoster(r, (await this.pubOf(pin)).sign_key);
-      if (r.devices[0].address !== address || r.devices[0].fingerprint !== p.fingerprint) return;
-      if ((await wire.rosterHash(r)) === p.hash) return;
-    } catch (e) {
-      return; // no proof of anything
-    }
-    await put(this.store, "persons", p.person, { ...p, state: "conflict" });
-    this.changed();
-  }
-
+  // supports says whether the device at address can be sent a copy of a
+  // conversation message now: it reads version 2 and person rosters (every
+  // session of it says so); the third answer is whether it reads the
+  // attention hint. A newer step of its person seen in its profile is
+  // followed first.
   async supports(address, pin) {
     const f = await this.features();
-    if (!f.includes("env2") || !f.includes("caps")) return [false, "your server cannot carry conversations (it needs an update)"];
+    if (!f.includes("env2") || !f.includes("caps") || !f.includes("person2")) return [false, "your server cannot carry conversations (it needs an update)"];
     const prof = await this.profile(address);
-    await this.observePerson(address, prof && prof.person);
-    const key = (await this.pubOf(pin)).sign_key;
-    if (!(await wire.profileSupports(prof || {}, address, key, wire.CapEnv2))) {
-      return [false, address + "'s AgentNet cannot read conversations now (an older program, or it has not connected since updating)"];
+    if (prof && prof.person) {
+      try {
+        const r = await wire.parseRoster(prof.person);
+        const p = r.person === (this.me && this.me.person) ? this.me : await this.store.get("persons", r.person);
+        if (p && r.seq > p.seq) await this.refreshPerson(p);
+        else if (p && r.seq === p.seq && (await wire.rosterHash(r)) !== p.hash) await this.refreshPerson(p);
+      } catch (e) { /* no proof of anything */ }
     }
-    // The third answer: whether it reads the attention hint (every session
-    // of it says so, and the relay takes it).
+    const key = (await this.pubOf(pin)).sign_key;
+    if (!(await wire.profileSupports(prof || {}, address, key, wire.CapEnv2)) || !(await wire.profileSupports(prof || {}, address, key, wire.CapPerson))) {
+      return [false, address + " needs to update AgentNet to read this conversation (or has not connected since updating)"];
+    }
     return [true, "", f.includes("notify1") && (await wire.profileSupports(prof, address, key, "notify1"))];
   }
 
@@ -487,7 +589,7 @@ export class Engine {
   async newDM(address) {
     if (!this.me) throw new Error("Set up your person first.");
     const f = await this.features();
-    if (!["env2", "person", "caps"].every((x) => f.includes(x))) throw new Error("Your server cannot carry conversations (it needs an update).");
+    if (!["env2", "person2", "caps"].every((x) => f.includes(x))) throw new Error("Your server cannot carry conversations (it needs an update).");
     address = String(address || "").trim();
     const pin = await this.pinned(address);
     if (pin.pending) throw new Error(address + "'s key changed; nothing is started until it is trusted.");
@@ -501,7 +603,8 @@ export class Engine {
     const [ok, why] = await this.supports(address, pin);
     if (!ok) throw new Error(why);
     const now = await this.store.get("persons", them.person);
-    if (!now || now.state !== "pinned" || now.hash !== them.hash) throw new Error("This person's record conflicts with the one kept here; it is frozen.");
+    if (!now || now.state !== "pinned") throw new Error("This person's record conflicts with the one kept here; it is frozen.");
+    them = now;
     const c = await wire.newRoot(this.keys, { person: this.me.person, roster: this.me.hash, address: this.address, fingerprint: this.me.fingerprint },
       { person: them.person, roster: them.hash });
     const id = await wire.rootID(c);
@@ -537,41 +640,55 @@ export class Engine {
   // exact envelope on every retry: a message, a participation record (sub
   // "event") or a request to another device's agent (pid and target).
   async sendConv(c, { kind, body, reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null, files = [] }) {
-    const { why: stop, peer, pin } = await this.gate(c);
+    const { why: stop } = await this.gate(c);
     if (stop) throw new Error(stop);
-    let ok = false, why = "", notify = false;
-    try {
-      [ok, why, notify] = await this.supports(peer.address, pin);
-    } catch (e) {
-      if (this.revoked) throw new Error("This device was removed from its server: nothing more is sent or received here.");
-      why = "cannot reach your server";
+    // Fresh evidence first: newer steps of both persons decide the devices.
+    for (const p of [await this.store.get("persons", c.peer), this.me]) {
+      try { await this.refreshPerson(p); } catch (e) { /* kept as pinned; its profile is read below */ }
     }
-    const again = (await this.gate(c)).why; // the profile just read may have frozen the person
+    const { why: again, peer } = await this.gate(c);
     if (again) throw new Error(again);
-    const id = wire.newID(), lid = wire.newID();
-    const at = this.now();
-    // A turn a person typed asks for the recipient's attention, on this DM's
-    // channel for them, when their device and the relay read the hint.
-    const attention = notify && origin === "ui" && sub === "" && ["message", "question", "task"].includes(kind);
-    const chan = attention ? await wire.notifyChannel(c.id, pin.fingerprint) : "";
-    // Each file is encrypted to the recipient here and kept, with the
-    // message, until the relay has both: the server never sees its bytes.
-    const recipient = await this.pubOf(pin);
-    const sealed = [];
-    for (const f of files) {
-      const bytes = f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer());
-      sealed.push({ ...(await wire.encryptFile(bytes, wire.safeName(f.name), recipient)), uploaded: false });
+    const me = this.me;
+    // One copy for each device of the other person and each other device of
+    // yours (a copy kept as yours there, never run there, unless it is the
+    // request's own target), sealed and its files encrypted to that device.
+    const fan = [{ person: me.person, roster: me.hash }, { person: peer.person, roster: peer.hash }];
+    const devices = [...peer.devices.map((d) => ({ ...d, own: false })), ...me.devices.filter((d) => d.address !== this.address).map((d) => ({ ...d, own: true }))];
+    const lid = wire.newID(), at = this.now();
+    const attention = origin === "ui" && sub === "" && ["message", "question", "task"].includes(kind);
+    const plain = [];
+    for (const f of files) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
+    const recs = [];
+    for (const dev of devices) {
+      const pin = await this.store.get("pins", dev.address);
+      if (!pin || pin.fingerprint !== dev.fingerprint || pin.pending) continue; // a changed key is never used
+      let ok = false, why = "", notify = false;
+      try {
+        [ok, why, notify] = await this.supports(dev.address, pin);
+      } catch (e) {
+        if (this.revoked) throw new Error("This device was removed from its server: nothing more is sent or received here.");
+        why = "cannot reach your server";
+      }
+      const recipient = await this.pubOf(pin);
+      const sealed = [];
+      for (const f of plain) sealed.push({ ...(await wire.encryptFile(f.bytes, f.name, recipient)), uploaded: false });
+      const replica = dev.own && !(target && target.address === dev.address && target.fingerprint === dev.fingerprint);
+      const chan = notify && !dev.own && attention ? await wire.notifyChannel(c.id, dev.fingerprint) : "";
+      const id = wire.newID();
+      const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind,
+        body, reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan, replica, fan, attachments: sealed.map((f) => f.attachment) },
+      this.keys, recipient);
+      recs.push({ id, conv: c.id, lid, body, reply_to: replyTo, kind, origin, sub, pid, target, at, to: dev.address, own: dev.own, envelope,
+        attachments: sealed.map((f) => f.attachment), files: sealed.length ? sealed : undefined, state: ok ? "queued" : "waiting", detail: why });
     }
-    const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: peer.address, ts: Math.floor(at / 1000), kind,
-      body, reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan, attachments: sealed.map((f) => f.attachment) },
-    this.keys, recipient);
-    const rec = { id, conv: c.id, lid, body, reply_to: replyTo, kind, origin, sub, pid, target, at, to: peer.address, envelope,
-      attachments: sealed.map((f) => f.attachment), files: sealed.length ? sealed : undefined,
-      state: ok ? "queued" : "waiting", detail: why };
-    await put(this.store, "outbox", id, rec);
+    if (!recs.length) throw new Error("No device of this conversation can be sent a copy now.");
+    const final = (await this.gate(c)).why; // a profile just read may have frozen the person
+    if (final) throw new Error(final);
+    await this.store.write(recs.map((r) => ({ s: "outbox", k: r.id, v: r })));
     this.changed();
-    if (ok) await this.post(rec);
-    return { id, state: rec.state, detail: rec.detail };
+    for (const r of recs) if (r.state === "queued") await this.post(r);
+    const least = copyOrder(recs);
+    return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map((r) => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
   }
 
   async post(rec) {
@@ -588,7 +705,7 @@ export class Engine {
       // profile read, a message received) stops the handover here, and the
       // message stays queued, saying why.
       if (rec.conv) {
-        const { why } = await this.gate(await this.store.get("convs", rec.conv));
+        const { why } = await this.gate(await this.store.get("convs", rec.conv), rec);
         if (why) {
           rec.detail = why;
           await put(this.store, "outbox", rec.id, rec);
@@ -630,17 +747,29 @@ export class Engine {
   }
 
   // gate says why nothing may be sent in conversation c now ("" when it
-  // may), with the other member's person and pin: their person must be
-  // kept and not in conflict, and the key pinned for their device must be
-  // the one that person names, with no change waiting. A new message and
-  // every kept one pass it before they are sent.
-  async gate(c) {
+  // may), with the other member's person: yours and theirs must be kept
+  // and not in conflict, each bound to a step of its pinned chain; for a
+  // copy (rec), its device must still be a current device of either, with
+  // its key pinned and unchanged. A new message and every kept copy pass
+  // it before they are sent.
+  async gate(c, rec) {
     const peer = c && (await this.store.get("persons", c.peer));
     if (!peer) return { why: "The other member's person record is not kept here." };
     if (peer.state === "conflict") return { why: "This person's record conflicts with the one kept here; the conversation is frozen.", peer };
-    const pin = await this.pinned(peer.address);
-    if (pin.pending || pin.fingerprint !== peer.fingerprint) return { why: peer.address + "'s key is no longer the one its person record names; the conversation is frozen.", peer, pin };
-    return { why: "", peer, pin };
+    if (!this.me) return { why: "This device has no person." };
+    let root;
+    try { root = wire.parseRoot(c.root); } catch (e) { return { why: "This conversation's root is not valid.", peer }; }
+    for (const p of [this.me, peer]) {
+      if (!p.hashes.includes(wire.rootMember(root, p.person))) return { why: "A member's person record here does not follow the one this conversation names.", peer };
+    }
+    if (rec) {
+      const dev = [...peer.devices, ...this.me.devices].find((d) => d.address === rec.to);
+      if (!dev) return { why: rec.to + " is no longer a device of this conversation's people: its copy is not sent.", peer };
+      const pin = await this.store.get("pins", rec.to);
+      if (!pin || pin.pending || pin.fingerprint !== dev.fingerprint) return { why: rec.to + "'s key is no longer the one its person record names; the conversation is frozen.", peer };
+      return { why: "", peer, pin };
+    }
+    return { why: "", peer };
   }
 
   // flushOutbox sends what is kept: queued messages, and waiting ones once
@@ -653,12 +782,12 @@ export class Engine {
       if (rec.state !== "queued" && rec.state !== "waiting") continue;
       const c = await this.store.get("convs", rec.conv);
       let g;
-      try { g = await this.gate(c); } catch (e) { continue; }
+      try { g = await this.gate(c, rec); } catch (e) { continue; }
       if (!g.why && rec.state === "waiting") {
         let ok = false;
-        try { [ok] = await this.supports(g.peer.address, g.pin); } catch (e) { continue; }
+        try { [ok] = await this.supports(rec.to, g.pin); } catch (e) { continue; }
         if (!ok) continue;
-        g = await this.gate(c);
+        g = await this.gate(c, rec);
       }
       if (g.why) {
         if (rec.detail !== g.why) {
@@ -771,32 +900,50 @@ export class Engine {
     }
     if ((await wire.rootID(root)) !== n.conv) throw new Hold("invalid", "its conversation root does not match the conversation");
     if (!this.me) throw new Hold("invalid", "this device has no person");
-    if (wire.rootMember(root, this.me.person) !== this.me.hash) throw new Hold("invalid", "this device's person is not a member");
+    const mine = wire.rootMember(root, this.me.person);
+    if (!mine) throw new Hold("invalid", "this device's person is not a member");
+    if (!this.me.hashes.includes(mine)) {
+      await this.refreshPerson(this.me);
+      if (!this.me.hashes.includes(mine)) throw new Hold("proof_pending", "this device's person record here does not follow the one the conversation names");
+    }
+    // The sender: a current device of a member person, as pinned here (one
+    // of yours, or the other person's).
+    const own = this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint);
+    const sp = own ? this.me : await this.personOf(env.from, pin);
+    const bound = wire.rootMember(root, sp.person);
+    if (!bound) throw new Hold("invalid", "the sender is not a member of this conversation");
+    if (!sp.hashes.includes(bound)) {
+      const again = await this.refreshPerson(sp);
+      if (!again.hashes.includes(bound)) throw new Hold("proof_pending", "the sender's person record here does not follow the one the conversation names");
+    }
     let conv = await this.store.get("convs", n.conv);
     const ops = [];
     if (!conv) {
-      if (env.from !== root.creator.address || pin.fingerprint !== root.creator.fingerprint) {
-        throw new Hold("proof_pending", "only its creator's device can introduce a conversation");
+      // Any member device may bring a conversation: its root is checked
+      // against the creator's key as its person's chain names it, and every
+      // member is pinned.
+      const other = root.members.find((m) => m.person !== this.me.person);
+      if (!other) throw new Hold("invalid", "a DM with yourself");
+      const creator = root.creator.person === this.me.person ? this.me : await this.pinChain(root.creator.person);
+      const peer = other.person === (creator && creator.person) ? creator : await this.pinChain(other.person);
+      if (!creator.hashes.includes(root.creator.roster) || !peer.hashes.includes(other.roster)) {
+        throw new Hold("proof_pending", "a member's person record here does not follow the one the conversation names");
       }
+      const dev = creator.known.find((d) => d.address === root.creator.address && d.fingerprint === root.creator.fingerprint);
+      if (!dev) throw new Hold("proof_pending", "its creator is not a device of its person here");
       try {
-        await wire.verifyRoot(root, (await this.pubOf(pin)).sign_key);
+        await wire.verifyRoot(root, (await wire.parsePublic(JSON.parse(dev.json))).sign_key);
       } catch (e) {
         throw new Hold("invalid", e.message);
       }
-      const creator = await this.personOf(env.from, pin);
-      if (creator.person !== root.creator.person || creator.hash !== root.creator.roster) {
-        throw new Hold("identity_conflict", "the creator's person record differs from the one its root names");
-      }
-      conv = { id: n.conv, root: wire.rootJSON(root), peer: creator.person, created: root.created, creator: env.from };
+      conv = { id: n.conv, root: wire.rootJSON(root), peer: other.person, created: root.created, creator: root.creator.address };
       ops.push({ s: "convs", k: n.conv, v: conv });
     }
-    const sp = await this.personOf(env.from, pin);
-    if (sp.fingerprint !== pin.fingerprint) throw new Hold("identity_conflict", "the sender's key is not the one its person record names");
-    if (wire.rootMember(root, sp.person) !== sp.hash) throw new Hold("invalid", "the sender is not a member of this conversation");
     if (n.reply_to) {
       const m = (await this.store.get("inbox", n.reply_to)) || (await this.store.get("outbox", n.reply_to));
       if (m && m.conv !== n.conv) throw new Hold("invalid", "it replies to a message outside its conversation");
     }
+    if (n.sub === "history") throw new Hold("invalid", "history is not read on this device yet");
     if (n.sub === "event") { // a participation record: the sending device's own, for this very conversation, signed
       let e;
       try {
@@ -810,22 +957,24 @@ export class Engine {
       }
     }
     const hash = wire.hex(await wire.sha256(new TextEncoder().encode(JSON.stringify(
-      [n.kind, n.body, n.reply_to, n.conv, n.sub, n.origin, n.emotion, n.target, n.pid, n.replica, n.status]))));
+      [n.kind, n.body, n.reply_to, n.conv, n.sub, n.origin, n.emotion, n.target, n.pid, n.status]))));
     const key = pin.fingerprint + "/" + n.lid;
     const seen = await this.store.get("lids", key);
     if (seen) {
       if (seen.hash !== hash) throw new Hold("conflicting_duplicate", "a message with the same key and logical id but other content is stored");
       return ops; // the same message again: acknowledged, not stored twice
     }
-    // A request to another device's agent is history here (as the core
-    // keeps it); any other question or task is held for the person. This
-    // browser never runs anything.
+    // A copy from another device of yours is yours: shown as sent (from
+    // there), never held or run here. A request to another device's agent
+    // is history here (as the core keeps it); any other question or task is
+    // held for the person. This browser never runs anything.
     const request = n.kind === "question" || n.kind === "task";
     const rec = { ...base, v: 2, conv: n.conv, lid: n.lid, sub: n.sub, pid: n.pid, origin: n.origin, emotion: n.emotion, replica: n.replica,
-      target: n.target || null, state: request && !(n.target && n.target.address !== this.address) ? "conv_held" : "" };
+      target: n.target || null, own, read: own || base.read,
+      state: !own && request && !(n.target && n.target.address !== this.address) ? "conv_held" : "" };
     // The attention hint is the sender's claim: recorded, checked against
     // this DM's channel here, never used to route anything.
-    if (env.attn) rec.attn = env.chan === (await wire.notifyChannel(n.conv, this.fp)) ? "ok" : "mismatch";
+    if (env.attn && !own) rec.attn = env.chan === (await wire.notifyChannel(n.conv, this.fp)) ? "ok" : "mismatch";
     return [...ops, { s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, hash } }];
   }
 
@@ -988,7 +1137,7 @@ export class Engine {
       const f = await this.features();
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1"])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson])));
       await this.publishPerson().catch(() => {});
       await this.flushReceipts();
       await this.retryHeld();
@@ -1004,7 +1153,16 @@ export class Engine {
       let m;
       try { m = JSON.parse(data); } catch (e) { this.members = { ...this.members, current: false }; this.changed(); return; }
       this.members = { listed: "listed", current: true, at: this.now(), list: Array.isArray(m.members) ? m.members : [], truncated: !!m.truncated };
-      for (const x of this.members.list) if (x.person) await this.observePerson(x.address, x.person);
+      // A member's person reference that is ahead of the step pinned here is
+      // followed (verified step by step); others' claimed names are read
+      // once per step for the people list, never trusted.
+      for (const x of this.members.list) {
+        const ref = x.person;
+        if (!ref || !wire.validID(ref.id)) continue;
+        const p = ref.id === (this.me && this.me.person) ? this.me : await this.store.get("persons", ref.id);
+        if (p && (ref.seq > p.seq || (ref.seq === p.seq && ref.hash !== p.hash))) this.refreshPerson(p).catch(() => {});
+      }
+      this.fillListed().catch(() => {});
       this.changed();
       this.retryHeld().catch(() => {});
     } else if (event === "ping") {
@@ -1016,25 +1174,70 @@ export class Engine {
     }
   }
 
+  // fillListed reads, once per roster step, the person record of members
+  // not pinned here: their claimed name and devices for the people list
+  // (unverified; pinned only when a DM starts).
+  async fillListed() {
+    if (!this.listed) this.listed = new Map();
+    let reads = 0;
+    const want = new Set();
+    for (const m of this.members.list) {
+      const ref = m.person;
+      if (!ref || !wire.validID(ref.id) || !wire.validHash(ref.hash) || m.address === this.address) continue;
+      if (ref.id === (this.me && this.me.person) || (await this.store.get("persons", ref.id))) continue;
+      want.add(ref.hash);
+      if (this.listed.has(ref.hash) || reads >= 64) continue;
+      reads++;
+      try {
+        const prof = await this.profile(m.address);
+        const r = await wire.parseRoster(prof.person);
+        if (r.person === ref.id && (await wire.rosterHash(r)) === ref.hash) {
+          this.listed.set(ref.hash, { person: r.person, label: r.label, devices: r.devices.map((d) => d.address) });
+        }
+      } catch (e) { /* not shown */ }
+    }
+    for (const h of [...this.listed.keys()]) if (!want.has(h)) this.listed.delete(h);
+    this.changed();
+  }
+
+  // convMessages are a conversation's messages as shown: received ones
+  // (those from your other devices are yours, sent from there), and each
+  // message sent here once, with its copies, its state the least advanced
+  // copy's.
+  convMessages(convId, inbox, outbox) {
+    const groups = new Map();
+    for (const r of outbox) {
+      if (r.conv !== convId) continue;
+      const g = groups.get(r.lid || r.id) || [];
+      g.push(r);
+      groups.set(r.lid || r.id, g);
+    }
+    const sent = [...groups.values()].map((g) => {
+      const least = copyOrder(g);
+      return { ...g[0], state: least.state, detail: least.detail, lagging: least.to, copies: g.map((r) => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
+    });
+    return [...inbox.filter((m) => m.conv === convId), ...sent].sort((a, b) => a.at - b.at);
+  }
+
   // ---- what the page reads (the daemon page API's shapes)
 
   async overview() {
     const persons = await this.store.all("persons");
     const people = persons.map((p) => this.personView(p));
-    const byAddr = new Set([this.address, ...persons.map((p) => p.address)]);
+    const listedSeen = new Set();
     for (const m of this.members.list) {
-      if (!m.person || byAddr.has(m.address)) continue;
-      try {
-        const r = wire.parseRoster(m.person);
-        if (r.devices[0].address === m.address) people.push({ label: r.label, address: m.address, state: "listed" });
-      } catch (e) { /* not shown */ }
+      const l = m.person && this.listed && this.listed.get(m.person.hash);
+      if (!l || listedSeen.has(l.person) || persons.some((p) => p.person === l.person)) continue;
+      listedSeen.add(l.person);
+      people.push({ label: l.label, address: l.devices[0], state: "listed",
+        devices: l.devices.map((a) => ({ address: a, name: a.split("/")[1], fingerprint: "" })) });
     }
     const inbox = await this.store.all("inbox");
     const outbox = await this.store.all("outbox");
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
     for (const c of await this.store.all("convs")) {
       const peer = persons.find((p) => p.person === c.peer);
-      const msgs = [...inbox.filter((m) => m.conv === c.id), ...outbox.filter((m) => m.conv === c.id)].sort((a, b) => a.at - b.at);
+      const msgs = this.convMessages(c.id, inbox, outbox);
       for (const info of await this.agentsOf(c)) {
         if (!info.host) continue;
         const ls = links.get(info.host.person) || [];
@@ -1049,7 +1252,7 @@ export class Engine {
       dms.push({ id: c.id, peer: this.personView(peer), created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
         title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? line(msgs[msgs.length - 1]) : "",
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
-        unread: msgs.filter((m) => m.fp && !m.read).length, held: msgs.filter((m) => m.state === "conv_held").length,
+        unread: msgs.filter((m) => m.fp && !m.own && !m.read).length, held: msgs.filter((m) => m.state === "conv_held").length,
         waiting: msgs.filter((m) => m.state === "waiting").length });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
@@ -1076,19 +1279,18 @@ export class Engine {
     const c = await this.store.get("convs", id);
     if (!c) throw new Error("No conversation with that id.");
     const peer = await this.store.get("persons", c.peer);
-    const msgs = [...(await this.store.all("inbox")).filter((m) => m.conv === id), ...(await this.store.all("outbox")).filter((m) => m.conv === id)]
-      .sort((a, b) => a.at - b.at);
+    const msgs = this.convMessages(id, await this.store.all("inbox"), await this.store.all("outbox"));
     return { id, peer: this.personView(peer), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",
       agents: (await this.agentsOf(c)).map((info) => this.agentView(info, msgs, peer)),
       messages: msgs.map((m) => {
-        const out = !m.fp;
+        const here = !m.fp, out = here || !!m.own; // sent here, or from another device of yours
         const event = m.sub === "event" ? this.eventText(m.body, peer) : "";
-        return { id: m.id, dir: out ? "out" : "in", from: out ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: m.reply_to || "",
+        return { id: m.id, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: m.reply_to || "",
           origin: m.origin || "", state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
-          pid: m.pid || "", to: m.target ? m.target.address : "", event,
+          pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own ? m.from : "", copies: here ? m.copies : undefined,
           attachments: (m.attachments || []).map((a, i) => ({ index: i, name: wire.safeName(a.name), size: a.size })),
-          state_text: event ? "" : out ? outText(m.state, peer ? peer.address : "", m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
+          state_text: event ? "" : here ? outText(m.state, m.lagging || (peer ? peer.address : ""), m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
       }) };
   }
 
@@ -1103,7 +1305,7 @@ export class Engine {
     const root = wire.parseRoot(c.root);
     const out = new Map();
     for (const p of [this.me, await this.store.get("persons", c.peer)]) {
-      if (p && p.state !== "conflict" && wire.rootMember(root, p.person) === p.hash) out.set(p.person, p);
+      if (p && p.state !== "conflict" && p.hashes.includes(wire.rootMember(root, p.person))) out.set(p.person, p);
     }
     return out;
   }
@@ -1132,9 +1334,12 @@ export class Engine {
   // it has no effect until its evidence is here.
   resolveAgent(pid, evs, m) {
     const info = { pid, state: "pending", held: 0, host: null, inviter: null, grant: [], taskKeys: [], note: "", invite: "", decision: "", dismissal: "", conflict: "", invited: 0 };
-    const author = (a) => { const p = m.get(a.person); return p && p.hash === a.roster && p.address === a.address && p.fingerprint === a.fingerprint ? p : null; };
-    const host = (h) => { const p = h && m.get(h.person); return p && p.address === h.address && p.fingerprint === h.fingerprint ? p : null; };
-    const memberKey = (fp) => [...m.values()].some((p) => p.fingerprint === fp);
+    // A current device of a member person (the person as seen from it);
+    // an author also names a step of that person's chain.
+    const at = (p, address, fp) => (p && p.devices.some((d) => d.address === address && d.fingerprint === fp) ? { ...p, address, fingerprint: fp } : null);
+    const author = (a) => { const p = m.get(a.person); return p && p.hashes.includes(a.roster) ? at(p, a.address, a.fingerprint) : null; };
+    const host = (h) => (h ? at(m.get(h.person), h.address, h.fingerprint) : null);
+    const memberKey = (fp) => [...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp));
     const invites = new Map(), decisions = [], dismisses = [];
     for (const x of evs.filter((y) => y.e.pid === pid)) {
       if (!author(x.e.author)) { info.held++; continue; }
@@ -1190,7 +1395,10 @@ export class Engine {
     }
     const whose = hostHere ? "your" : label(info.host) + "'s";
     const v = { pid: info.pid, state: info.state, host: this.personView(info.host), host_here: hostHere, inviter: this.personView(info.inviter),
-      note: info.note, shared, missing, tasks_from: info.taskKeys.map((fp) => this.personView(people.find((p) => p.fingerprint === fp))).filter(Boolean),
+      note: info.note, shared, missing, tasks_from: info.taskKeys.map((fp) => {
+        const p = people.find((x) => x.devices.some((d) => d.fingerprint === fp));
+        return p && this.personView({ ...p, fingerprint: fp, address: p.devices.find((d) => d.fingerprint === fp).address });
+      }).filter(Boolean),
       held: info.held, invited: info.invited ? iso(info.invited * 1000) : "", can_decide: false, can_dismiss: false, can_ask: false, state_text: "" };
     switch (info.state) {
     case "pending": v.state_text = "Its invitation is not here yet: nothing counts until it is."; break;
@@ -1236,15 +1444,16 @@ export class Engine {
     if (host === this.address) throw new Error("This browser runs no agent: invite the agent on the other person's computer.");
     const m = await this.dmMembers(c);
     if (!m.has(this.me.person)) throw new Error("This device does not speak for a member of that conversation.");
-    const hp = [...m.values()].find((p) => p.address === host);
-    if (!hp) throw new Error(host + " is not the device of a member of that conversation (or its person is frozen).");
+    const hpp = [...m.values()].find((p) => p.devices.some((d) => d.address === host));
+    if (!hpp) throw new Error(host + " is not the device of a member of that conversation (or its person is frozen).");
+    const hp = { person: hpp.person, address: host, fingerprint: hpp.devices.find((d) => d.address === host).fingerprint };
     const msgs = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))].filter((x) => x.conv === conv);
     const grant = share.map((id) => {
       const x = msgs.find((y) => y.id === id && !y.sub && !y.replica);
       if (!x || !x.lid) throw new Error("A message chosen to share is not an earlier message of this DM that can be shared.");
       return { lid: x.lid, fingerprint: x.fp || this.fp };
     });
-    for (const fp of tasks) if (![...m.values()].some((p) => p.fingerprint === fp)) throw new Error(fp + " is not the key of a member of that conversation.");
+    for (const fp of tasks) if (![...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp))) throw new Error(fp + " is not the key of a member of that conversation.");
     const e = await wire.signEvent(this.keys, { conv, pid: wire.newID(), type: "invite", ts: Math.floor(this.now() / 1000), author: this.author(),
       host: { person: hp.person, address: hp.address, fingerprint: hp.fingerprint }, grant: grant.length ? grant : null,
       audience: "conversation", task_keys: tasks.length ? tasks : null, note: String(note).trim() });
@@ -1322,8 +1531,10 @@ export class Engine {
     for (const p of await this.store.all("persons")) {
       const decided = st.allowed.includes(p.person) || convs.some((c) => c.peer === p.person && c.creator === this.address);
       if (!decided || p.state === "conflict") continue;
-      const pin = await this.store.get("pins", p.address);
-      if (pin && !pin.pending && pin.fingerprint === p.fingerprint) out.push({ address: p.address, fingerprint: p.fingerprint });
+      for (const d of p.devices) { // each of their devices, by its unchanged key
+        const pin = await this.store.get("pins", d.address);
+        if (pin && !pin.pending && pin.fingerprint === d.fingerprint) out.push({ address: d.address, fingerprint: d.fingerprint });
+      }
     }
     return out;
   }

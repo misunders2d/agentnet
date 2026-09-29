@@ -153,6 +153,17 @@ func (r *rawAgent) publish(p protocol.PersonRoster) {
 	}
 }
 
+// forge makes the engine's server lie about p: another record at p's
+// first step (a new label, validly signed by r's device), served as p's
+// chain and in r's profile. An honest Hub never serves one (its chains are
+// linear); a device that sees one freezes the person.
+func (w *engineNode) forge(r *rawAgent, p protocol.PersonRoster, label string) {
+	w.t.Helper()
+	f := protocol.PersonRoster{Person: p.Person, Label: label, Devices: p.Devices}
+	f.Sign(r.id.Sign)
+	w.ok(map[string]any{"op": "forge", "person": p.Person, "record": string(marshalBytes(w.t, f)), "address": r.addr})
+}
+
 // dmRoot is a DM between r's person own and the person peer names (at
 // peerPub's device), made by r, with its JSON.
 func (r *rawAgent) dmRoot(own protocol.PersonRoster, peerPub identity.Public, peer protocol.PersonRoster) (protocol.ConvRoot, []byte) {
@@ -511,20 +522,23 @@ func TestBrowserEngineJourney(t *testing.T) {
 	}
 	n0 = inbox()
 
-	// A root Eve did not make, from Eve: held until proven, never admitted.
+	// A root Eve did not make (it names Dana as its creator), from Eve: any
+	// member device may bring a root, but it must verify with its
+	// creator's key as that person's chain names it: refused, never admitted.
 	other := root
 	other.Creator = protocol.ConvCreator{Person: dRoster.Person, Roster: dRoster.Hash(), Address: "dana/phone", Fingerprint: dPub.Fingerprint()}
 	other.Nonce = protocol.NewID()
 	other.Sign(eve.id.Sign)
 	otherJSON := marshalBytes(t, other)
 	eve.send(dPub, envelope.Inner{V: 2, Kind: "message", Body: "unproven", Conv: other.ID(), LID: protocol.NewID(), Root: otherJSON, Origin: "ui"})
-	w.until("the unproven root held", func() bool { return held() == h0+2 })
-	// Eve publishes another person record for the same device: frozen.
-	eve.roster("Eve again")
-	w.until("eve's DM frozen", func() bool {
-		return w.api("/api/dm?id="+root.ID(), nil)["frozen"] != ""
-	})
+	w.until("the forged root held", func() bool { return held() == h0+2 })
+	// The server shows another record at Eve's pinned step (a fork): the
+	// next send reads it and freezes her, and sends nothing.
+	w.forge(eve, eveRoster, "Eve again")
 	w.refuses("send in a frozen DM", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": root.ID(), "body": "x"}}), "frozen")
+	if w.api("/api/dm?id="+root.ID(), nil)["frozen"] == "" {
+		t.Fatal("eve's DM is not frozen")
+	}
 	eve.send(dPub, msg(protocol.NewID(), "after the change"))
 	w.until("held after the change", func() bool { return held() == h0+3 })
 
@@ -564,7 +578,7 @@ func TestBrowserEngineJourney(t *testing.T) {
 	for _, q := range w.api("/api/overview", nil)["quarantine"].([]any) {
 		reasons[q.(map[string]any)["reason"].(string)]++
 	}
-	for _, want := range []string{"sent different content", "can be checked here", "disagrees with the person record", "changed key"} {
+	for _, want := range []string{"sent different content", "did not verify", "disagrees with the person record", "changed key"} {
 		found := false
 		for r := range reasons {
 			found = found || strings.Contains(r, want)
@@ -718,13 +732,11 @@ func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
 	w.ok(map[string]any{"op": "stopStream"})
 	w.ok(map[string]any{"op": "offline", "on": false})
 
-	// Each device publishes another person; only a profile read shows it.
-	aliceRaw.roster("Alice again")
-	bobRaw.roster("Bob again")
+	// The server shows another record at each one's pinned step (a fork);
+	// only a profile read shows it.
 	for _, r := range []*rawAgent{aliceRaw, bobRaw} {
-		if !aliceRaw.supports(r.addr) {
-			t.Fatalf("%s no longer reads conversations", r.addr)
-		}
+		_, p := aliceRaw.peer(r.addr)
+		w.forge(r, p, p.Label+" again")
 	}
 	w.ok(map[string]any{"op": "flush", "connected": true})
 	rec := w.ok(map[string]any{"op": "outbox", "id": kept["id"]})["rec"].(map[string]any)
@@ -741,7 +753,8 @@ func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
 	// stays queued, saying why.
 	w.ok(map[string]any{"op": "holdUploads"})
 	w.ok(map[string]any{"op": "sendFilesLater", "conv": toErin, "files": []any{map[string]any{"name": "late.txt", "b64": base64.StdEncoding.EncodeToString([]byte("late"))}}})
-	erinRaw.roster("Erin again")
+	_, erinP := aliceRaw.peer(erinRaw.addr)
+	w.forge(erinRaw, erinP, "Erin again")
 	w.refuses("a send that reads Erin's new person", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": toErin, "body": "y"}}), "conflicts")
 	late := w.ok(map[string]any{"op": "releaseUploads"})["v"].(map[string]any)
 	rec = w.ok(map[string]any{"op": "outbox", "id": late["id"]})["rec"].(map[string]any)
@@ -1305,4 +1318,145 @@ func TestBrowserEngineFiles(t *testing.T) {
 	if !bytes.Equal(aliceGot(id2), train) {
 		t.Fatal("the file kept offline is not what alice gets")
 	}
+}
+
+// The browser with a person on two devices (MEL-433): Alice's laptop links
+// her phone; Dana's browser sees one Alice with two devices, its message
+// goes to both (one copy each), a reply from the phone and a DM the laptop
+// starts both reach it.
+func TestBrowserEngineTwoDevicePerson(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
+	base := "https://" + hub.Addr
+	laptop, err := client.Join(ctx, filepath.Join(t.TempDir(), "laptop"), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { laptop.Close() })
+	runDaemon(t, laptop)
+	if _, err := laptop.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	until := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(30 * time.Second); !cond(); time.Sleep(50 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	var offer client.DeviceLinkOffer
+	until("a device link", func() bool { offer, err = laptop.NewDeviceLink(ctx); return err == nil })
+	phone, err := client.JoinAndLink(ctx, filepath.Join(t.TempDir(), "phone"), offer.Code, "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { phone.Close() })
+	runDaemon(t, phone)
+	var req client.LinkRequest
+	until("the phone's request", func() bool {
+		rs, _ := laptop.PendingLinks()
+		for _, r := range rs {
+			if r.State == "pending" {
+				req = r
+			}
+		}
+		return req.ID != ""
+	})
+	if err := laptop.DecideLink(ctx, req.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	until("the phone linked", func() bool { return phone.LinkState().State == "linked" })
+
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": base})
+	code, _ := laptop.Invite(ctx, "dana", time.Hour, false)
+	w.ok(map[string]any{"op": "join", "code": browserCode(t, code), "name": "phone"})
+	w.api("/api/person", map[string]any{"label": "Dana"})
+	w.ok(map[string]any{"op": "start"})
+	w.until("connected with members", func() bool {
+		s := w.ok(map[string]any{"op": "status"})
+		return s["connected"] == true && s["members"] == true
+	})
+	var conv string
+	w.until("a DM with Alice", func() bool {
+		v := w.call(map[string]any{"op": "api", "path": "/api/dm/new", "body": map[string]any{"address": laptop.Address}})
+		if v["error"] != nil {
+			return false
+		}
+		conv = v["v"].(map[string]any)["id"].(string)
+		return true
+	})
+	var alice map[string]any
+	for _, p := range w.api("/api/overview", nil)["people"].([]any) {
+		if p := p.(map[string]any); p["label"] == "Alice" {
+			alice = p
+		}
+	}
+	if alice == nil || len(alice["devices"].([]any)) != 2 {
+		t.Fatalf("one Alice with two devices: %v", alice)
+	}
+	// Dana's message: one copy to each of Alice's devices, both delivered.
+	sent := w.api("/api/dm/send", map[string]any{"conv": conv, "body": "hi both"})
+	if len(sent["copies"].([]any)) != 2 {
+		t.Fatalf("copies: %v", sent)
+	}
+	got := func(a *client.Agent, body string) func() bool {
+		return func() bool {
+			ms, _ := a.ConversationMessages(conv)
+			for _, m := range ms {
+				if m.Body == body && m.Dir == "in" {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	until("the laptop has it", got(laptop, "hi both"))
+	until("the phone has it", got(phone, "hi both"))
+	w.until("both copies delivered", func() bool {
+		ms := w.api("/api/dm?id="+conv, nil)["messages"].([]any)
+		m := ms[len(ms)-1].(map[string]any)
+		cs, _ := m["copies"].([]any)
+		if len(cs) != 2 {
+			return false
+		}
+		for _, c := range cs {
+			if c.(map[string]any)["state"] != "delivered" {
+				return false
+			}
+		}
+		return m["state"] == "delivered"
+	})
+	// A reply from the phone; a DM the laptop starts.
+	if _, err := phone.SendConv(ctx, conv, client.ConvOutgoing{Body: "from alice's phone"}); err != nil {
+		t.Fatal(err)
+	}
+	w.until("the phone's reply", func() bool { return strings.Contains(dmBodies(w.api("/api/dm?id="+conv, nil)), "from alice's phone") })
+	c2, err := laptop.CreateDM(ctx, "dana/phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := laptop.SendConv(ctx, c2, client.ConvOutgoing{Body: "a new DM from the laptop"}); err != nil {
+		t.Fatal(err)
+	}
+	w.until("the laptop's DM", func() bool {
+		v := w.call(map[string]any{"op": "api", "path": "/api/dm?id=" + c2})
+		return v["error"] == nil && strings.Contains(dmBodies(v["v"].(map[string]any)), "a new DM from the laptop")
+	})
+	// The phone sees Dana's messages in the laptop's DM too (Dana's copies
+	// go to both of Alice's devices).
+	w.api("/api/dm/send", map[string]any{"conv": c2, "body": "answer to both"})
+	until("the phone has Dana's answer in the laptop's DM", func() bool {
+		ms, _ := phone.ConversationMessages(c2)
+		for _, m := range ms {
+			if m.Body == "answer to both" {
+				return true
+			}
+		}
+		return false
+	})
 }
