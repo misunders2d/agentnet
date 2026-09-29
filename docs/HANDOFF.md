@@ -346,6 +346,9 @@ If a local database or key file is damaged:
   provider 2xx log). Desktop daemon alerts: core `a85b84c`/`99b2559`, page controls `cd54168`, one Linux pass (native
   banner, suppression, mute, off; click route opened directly). Not shown: deployed HTTPS, phone/iPhone, other
   browsers, macOS/Windows clicks.
+- **Remind me later (S-R, local commits)**: core `ac517b5`, daemon page `0474bda` (set/move/done/cancel on received
+  messages, overdue first in the list and Zoom); one Linux pass: banner at the chosen minute, due shown live, a reply
+  ended it. Not on the browser device.
 - **Browser device (2026-09-29, local commits, review in progress)**: `hub serve --web` serves the page at the Hub
   origin (`7a97aaf`), `admin invite --link` prints browser invite links (`3a588c3`); the human-only browser engine,
   plain join page and installable manifest are `6061c11`, `9ecd3c8`, `2d05b2c`, `e971c16`, `1cab993`. The app icon

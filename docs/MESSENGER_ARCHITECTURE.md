@@ -181,6 +181,19 @@
   only the service worker can show), and the browser's permission prompt
   was answered by the test, not clicked. Not shown: a deployed HTTPS
   relay, a phone or iPhone, other browsers, macOS or Windows.
+- **"Remind me later" (local commits; core `ac517b5`, page `0474bda`).**
+  On the daemon's page a received message (DM or device conversation,
+  never one's own) takes a reminder: in 30 minutes, 2 hours, tomorrow at
+  9:00, or a chosen time, only in the future. A reminded message shows its
+  time or "due since", Change, Done and Cancel; reminders head the list
+  and Zoom's first level, overdue first. It only reminds this person: it
+  sends nothing and changes nothing about the message; a reply to that
+  message ends it. One synthetic pass on this Linux desktop: a reminder
+  set for a chosen minute gave the daemon's banner "AgentNet / A reminder
+  is due" at that minute, the page showed it as due without a reload, and
+  a reply to the question ended it with the question's own state
+  unchanged. The browser device has no reminders (phones come with S-W and
+  S-P).
 - **Desktop alerts from the daemon's page (`cd54168`, on core `a85b84c`,
   `99b2559`).** The page turns the daemon's alerts on and off (never
   asking the browser for permission), mutes DMs, allows people by exact
