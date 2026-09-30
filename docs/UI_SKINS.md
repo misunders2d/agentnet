@@ -8,6 +8,14 @@ interface. It does not change membership, encryption, delivery or permissions.
 This is the trusted package boundary for a future UI marketplace. It does not
 implement marketplace discovery, downloads, signing, sandboxing or billing.
 
+The intended distribution contract is client-owned: a person must be able to
+install, choose and share a skin without changing their relay or other clients.
+Desktop local installation works today. Browser-local package import, storage
+and removal remain follow-up work (MEL-475); the current hosted-browser catalog
+comes from its relay. Relay-provided packages are optional offerings, not the
+required model for future custom skins. Conformance tests and advisory LLM review
+of the exact package are also planned; neither is skin certification today.
+
 ## Install without rebuilding AgentNet
 
 Place a package in `<home>/skins/<id>/` for a laptop daemon, or
