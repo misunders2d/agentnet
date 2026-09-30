@@ -266,21 +266,23 @@ func (h *Hub) handleStreamAck(w http.ResponseWriter, r *http.Request) {
 // and its next request says why.
 func (h *Hub) holdPending(ctx context.Context, caller string, sub *subscriber, ping *time.Ticker, lease time.Duration, write func(string, ...any) bool) {
 	for {
+		// Subscribe first, then read: a decision between authentication and
+		// streams.add had nobody to notify. Check it before waiting, too.
+		a, err := h.store.agent(caller)
+		if err != nil || a.Revoked {
+			return
+		}
+		if !a.Pending {
+			write("event: linked\ndata: {}\n\n")
+			return
+		}
+		if a.PendingUntil <= time.Now().Unix() {
+			return
+		}
 		select {
 		case <-sub.wake:
-			a, err := h.store.agent(caller)
-			if err != nil || a.Revoked {
-				return
-			}
-			if !a.Pending {
-				write("event: linked\ndata: {}\n\n")
-				return
-			}
 		case <-ping.C:
 			if time.Since(time.Unix(0, sub.lastAck.Load())) > lease {
-				return
-			}
-			if a, err := h.store.agent(caller); err != nil || a.Revoked || a.PendingUntil <= time.Now().Unix() {
 				return
 			}
 			if !write("event: ping\ndata: {\"conn\":%q}\n\n", sub.id) {

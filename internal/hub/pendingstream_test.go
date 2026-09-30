@@ -13,7 +13,7 @@ import (
 // A decision can commit after authentication read Pending but before the
 // stream subscribes. Its notification then has no subscriber to wake.
 func TestPendingStreamSeesDecisionBeforeSubscription(t *testing.T) {
-	for _, decision := range []string{"refused", "linked"} {
+	for _, decision := range []string{"refused", "linked", "expired"} {
 		t.Run(decision, func(t *testing.T) {
 			h, owner, _, _ := blobHub(t, 1<<30)
 			head := personOf(t, h, owner)
@@ -28,7 +28,11 @@ func TestPendingStreamSeesDecisionBeforeSubscription(t *testing.T) {
 			if c, e := joinLinked(t, h, secret, phone.addr, offer, head, id); c != http.StatusCreated {
 				t.Fatalf("join: %d %+v", c, e)
 			}
-			if decision == "refused" {
+			if decision == "expired" {
+				if _, err := h.store.db.Exec(`UPDATE agents SET pending_until = ? WHERE address = ?`, time.Now().Unix()-1, phone.addr); err != nil {
+					t.Fatal(err)
+				}
+			} else if decision == "refused" {
 				if c, b := owner.call(t, h, "POST", "/v1/person/device-refuse", protocol.DeviceRefusal{Address: phone.addr}); c != http.StatusNoContent {
 					t.Fatalf("refuse: %d %s", c, b)
 				}
