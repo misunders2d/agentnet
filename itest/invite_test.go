@@ -139,7 +139,7 @@ func TestResponderChoiceAtSetup(t *testing.T) {
 	c.env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
 
 	out, err := c.try("--home", "alice", "join", "--agent", "laptop", c.run("hub", "bootstrap-invite", "--raw", "--data", "hub"))
-	if err != nil || !strings.Contains(out, "next: ask the person how questions and tasks should be handled (agentnet responder list)") {
+	if err != nil || !strings.Contains(out, "next: configure the person's chosen responder on this device (agentnet help responder)") || !strings.Contains(out, "if they have not chosen, ask them or offer manual handling") {
 		t.Fatalf("join: %v\n%s", err, out)
 	}
 	if out := c.run("--home", "alice", "responder", "show"); !strings.Contains(out, "not chosen yet") {

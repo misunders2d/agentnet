@@ -165,7 +165,7 @@ func TestAgentAnswersInTheConversation(t *testing.T) {
 		t.Fatalf("answer at alice: %+v", ans)
 	}
 	prompt := st.last()
-	for _, want := range []string{"deploy failed at step 3", "logs are in the ticket", "please look", "emotion: WORD", "## Question from the other person"} {
+	for _, want := range []string{"deploy failed at step 3", "logs are in the ticket", "please look", "emotion: WORD", "## Question from the other person", "reply with your question for them"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}

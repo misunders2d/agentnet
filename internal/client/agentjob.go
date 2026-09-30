@@ -305,6 +305,7 @@ func (a *Agent) agentPrompt(j job, r *Responder) (string, error) {
 	} else {
 		fmt.Fprintf(&b, "%s asks you the question below. Answer in plain text, concisely. Use the conversation shared with you, your own knowledge, and your skills and the tools you are allowed to use to look things up. "+
 			"Do not change files or take any action with effects for this question.\n", asker)
+		fmt.Fprintf(&b, "If you need information from %s to answer, reply with your question for them. They can answer it in this conversation.\n", asker)
 	}
 	fmt.Fprintf(&b, "If %s must decide or act before this can go further, or this needs an action you are not allowed to take, make your first line exactly %q and then say what they need to decide; nothing will be sent.\n", host, needsHumanMarker)
 	b.WriteString("End your reply with a last line of exactly the form \"emotion: WORD\", WORD being one lowercase word (letters, digits or hyphens, at most 24) for the feeling your reply is shown with. " +

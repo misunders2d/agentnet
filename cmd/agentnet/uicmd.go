@@ -105,7 +105,7 @@ func runUI(ctx context.Context, home string, args []string, out io.Writer) error
 	}
 	addr := ln.Addr().String()
 	token := protocol.NewID() + protocol.NewID()
-	srv := &http.Server{Handler: ui.New(ui.NewFixture(time.Now), addr, token).Handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: ui.New(ui.NewFixture(time.Now), addr, token, filepath.Join(home, "skins")).Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() { <-ctx.Done(); srv.Close() }()
 	fmt.Fprintf(out, "AgentNet messenger demo (invented data; nothing is sent, run or saved)\n")
 	fmt.Fprintf(out, "Open: http://%s/?t=%s\n", addr, token)
@@ -150,7 +150,7 @@ func startDaemonUI(a *client.Agent, home, listen string, logf func(string, ...an
 		ln.Close()
 		return nil, err
 	}
-	page := ui.New(ui.NewLive(a), addr, token)
+	page := ui.New(ui.NewLive(a), addr, token, filepath.Join(home, "skins"))
 	srv := &http.Server{Handler: page.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {

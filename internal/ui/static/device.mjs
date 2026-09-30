@@ -122,7 +122,7 @@ async function main() {
   });
   takeOpen();
   const link = takeInvite();
-  document.querySelector(".app").hidden = true;
+  document.getElementById("skin").hidden = true;
   panel = el("main", { id: "device-setup", class: "join" });
   document.body.prepend(panel);
   show("AgentNet", "Opening…");
@@ -256,7 +256,7 @@ async function start(engine) {
     try { engine.storage = { persisted: await navigator.storage.persisted() }; } catch (e) { engine.storage = { persisted: null }; }
   }
   panel.hidden = true;
-  document.querySelector(".app").hidden = false;
+  document.getElementById("skin").hidden = false;
   window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn) };
   engine.start();
   window.addEventListener("online", () => engine.online());
@@ -266,7 +266,7 @@ async function start(engine) {
       if (e.data && e.data.type === "agentnet-open") openNotified(typeof e.data.chan === "string" ? e.data.chan : "");
     });
   }
-  for (const src of ["/assets/lenses.js", "/assets/app.js"]) {
+  for (const src of ["/assets/loader.js"]) {
     await new Promise((res, rej) => { const s = el("script", { src }); s.onload = res; s.onerror = () => rej(new Error("could not load " + src)); document.head.append(s); });
   }
   if (pendingOpen !== null && window.agentnetOpen) { window.agentnetOpen(pendingOpen); pendingOpen = null; }

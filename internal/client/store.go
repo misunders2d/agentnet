@@ -1058,11 +1058,12 @@ func (s *store) interruptRunning() error {
 func (s *store) threadText(peer, replyTo string, max int) ([]string, error) {
 	var out []string
 	for id := replyTo; id != "" && len(out) < max; {
-		var who, body, next string
-		err := s.db.QueryRow(`SELECT body, coalesce(reply_to, '') FROM inbox WHERE id = ? AND sender = ?`, id, peer).Scan(&body, &next)
+		var who, body, next, kind, state, status string
+		err := s.db.QueryRow(`SELECT body, coalesce(reply_to, ''), kind, state, coalesce(status, '') FROM inbox WHERE id = ? AND sender = ?`, id, peer).Scan(&body, &next, &kind, &state, &status)
 		who = peer
 		if errors.Is(err, sql.ErrNoRows) {
-			err = s.db.QueryRow(`SELECT body, coalesce(reply_to, '') FROM outbox WHERE id = ? AND recipient = ?`, id, peer).Scan(&body, &next)
+			// v1 keeps its kind in the envelope; the kind column belongs to DMs.
+			err = s.db.QueryRow(`SELECT body, coalesce(reply_to, ''), coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, '') FROM outbox WHERE id = ? AND recipient = ?`, id, peer).Scan(&body, &next, &kind, &state, &status)
 			who = "me"
 		}
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1071,7 +1072,11 @@ func (s *store) threadText(peer, replyTo string, max int) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append([]string{who + ": " + body}, out...)
+		label := kind + "; local state: " + state
+		if status != "" {
+			label += "; outcome: " + status
+		}
+		out = append([]string{who + " [" + label + "]: " + body}, out...)
 		id = next
 	}
 	return out, nil

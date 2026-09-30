@@ -78,6 +78,10 @@ func TestRelayServesThePage(t *testing.T) {
 			if ct != "text/html; charset=utf-8" || cache != "no-store" {
 				t.Errorf("%s: %q %q", p, ct, cache)
 			}
+		case strings.HasSuffix(p, ".html"):
+			if ct != "text/html; charset=utf-8" || cache != "no-cache" {
+				t.Errorf("%s: %q %q", p, ct, cache)
+			}
 		case strings.HasSuffix(p, ".css"):
 			if ct != "text/css; charset=utf-8" || cache != "no-cache" {
 				t.Errorf("%s: %q %q", p, ct, cache)

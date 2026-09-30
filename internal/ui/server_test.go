@@ -112,7 +112,7 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	}
 	page := do(t, ts, "GET", "/", "", authed(ts, nil))
 	body, _ := io.ReadAll(page.Body)
-	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/app.js") {
+	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/loader.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}
 	for _, a := range []string{"app.js", "lenses.js", "app.css", "vendor/qr.mjs"} {
@@ -127,7 +127,7 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	icon := do(t, ts, "GET", "/assets/icon-192.png", "", authed(ts, nil))
 	ib, _ := io.ReadAll(icon.Body)
 	if icon.StatusCode != 200 || icon.Header.Get("Content-Type") != "image/png" || string(ib) != string(static.AppIcon(192)) ||
-		!strings.Contains(string(body), `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) || !strings.Contains(string(body), `class="brand-mark" src="/assets/icon-192.png"`) {
+		!strings.Contains(string(body), `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) {
 		t.Errorf("icon: %d %q", icon.StatusCode, icon.Header.Get("Content-Type"))
 	}
 	if r := do(t, ts, "GET", "/assets/icon-512.png", "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
@@ -399,6 +399,25 @@ func TestFileRoutes(t *testing.T) {
 	} {
 		if r := do(t, demo, "POST", c.path, c.body, post(demo)); r.StatusCode != http.StatusNotFound {
 			t.Errorf("%s with files in the demo: %d", c.path, r.StatusCode)
+		}
+	}
+}
+
+func TestSkinCatalogRequiresSession(t *testing.T) {
+	s := New(NewFixture(time.Now), "127.0.0.1:17171", "private-test-token").Handler()
+	for _, authorized := range []bool{false, true} {
+		req := httptest.NewRequest("GET", "http://127.0.0.1:17171/assets/skins/index.json", nil)
+		if authorized {
+			req.AddCookie(&http.Cookie{Name: cookieName, Value: "private-test-token"})
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		want := http.StatusUnauthorized
+		if authorized {
+			want = http.StatusOK
+		}
+		if w.Code != want {
+			t.Fatalf("authorized %v: %d", authorized, w.Code)
 		}
 	}
 }

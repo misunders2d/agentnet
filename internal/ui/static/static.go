@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs manifest.webmanifest sw.js ant.png
+//go:embed index.html default.html loader.js core.css app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs manifest.webmanifest sw.js ant.png
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -34,6 +34,9 @@ var relayFiles = map[string]string{
 	"/":                      "",
 	"/manifest.webmanifest":  "manifest.webmanifest",
 	"/sw.js":                 "sw.js", // the service worker: push and click only (its scope is the origin)
+	"/assets/core.css":       "core.css",
+	"/assets/loader.js":      "loader.js",
+	"/assets/default.html":   "default.html",
 	"/assets/app.css":        "app.css",
 	"/assets/app.js":         "app.js",
 	"/assets/lenses.js":      "lenses.js",
@@ -49,11 +52,10 @@ var relayIcons = map[string]int{"/assets/icon-192.png": 192, "/assets/icon-512.p
 
 // daemonScripts are the daemon page's views; on the relay, device.mjs loads
 // them once the device is ready.
-const daemonScripts = `<script src="/assets/lenses.js" defer></script>
-<script src="/assets/app.js" defer></script>`
+const daemonScripts = `<script src="/assets/loader.js" defer></script>`
 
 // pageStyle is where the device page adds its manifest.
-const pageStyle = `<link rel="stylesheet" href="/assets/app.css">`
+const pageStyle = `<link rel="stylesheet" href="/assets/core.css">`
 
 // devicePage is index.html with its scripts replaced by device.mjs, and
 // the manifest that lets a browser install it as an app.
@@ -225,7 +227,12 @@ const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-s
 // headers that keep the page to its own origin's code and out of frames and
 // other windows. They do not protect against the relay itself: whoever runs
 // it can serve other code (MESSENGER_ARCHITECTURE §6).
-func Relay() http.Handler {
+func Relay(skinsDirectory ...string) http.Handler {
+	dir := ""
+	if len(skinsDirectory) > 0 {
+		dir = skinsDirectory[0]
+	}
+	skins := Skins(dir)
 	content, etags := relayContent(), map[string]string{}
 	for p, c := range content {
 		sum := sha256.Sum256([]byte(c[0]))
@@ -239,6 +246,10 @@ func Relay() http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		if strings.HasPrefix(r.URL.Path, "/assets/skins/") {
+			skins.ServeHTTP(w, r)
+			return
+		}
 		c, ok := content[r.URL.Path]
 		if !ok {
 			http.NotFound(w, r)

@@ -356,3 +356,10 @@ Feel free to open an issue on [GitHub Issues](https://github.com/misunders2d/age
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
+
+### Custom interfaces
+
+The messenger separates its UI from its transport and identity engine. Install a
+trusted UI package under the AgentNet home or Hub data directory, then select it
+in **You → Appearance**. Packages can replace the full layout and interaction
+flow without rebuilding AgentNet. See [UI package contract and example](docs/UI_SKINS.md).

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,8 +49,28 @@ func TestJoinAcceptsDeviceLinks(t *testing.T) {
 				code = "https://example.test/#" + code
 			}
 			home := t.TempDir()
-			if err := runJoin(ctx, home, []string{"--agent", form, code}); err != nil {
+			// Pending linking must not skip the local responder setup reminder.
+			out, err := os.CreateTemp(t.TempDir(), "stderr")
+			if err != nil {
 				t.Fatal(err)
+			}
+			prior := os.Stderr
+			os.Stderr = out
+			joinErr := runJoin(ctx, home, []string{"--agent", form, code})
+			os.Stderr = prior
+			if _, err := out.Seek(0, 0); err != nil {
+				t.Fatal(err)
+			}
+			text, err := io.ReadAll(out)
+			out.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if joinErr != nil {
+				t.Fatal(joinErr)
+			}
+			if !strings.Contains(string(text), "person's chosen responder") {
+				t.Fatalf("missing responder setup: %s", text)
 			}
 			device, err := client.Open(home)
 			if err != nil {

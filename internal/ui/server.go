@@ -32,14 +32,19 @@ type Server struct {
 	host       string // the exact Host header accepted, e.g. 127.0.0.1:43127
 	token      string
 	restarting chan struct{} // closed when the daemon stops to switch programs
+	skins      http.Handler
 	once       sync.Once
 }
 
 // New returns a server that accepts only requests addressed to host (the
 // listener's address) and authenticated by token: once as ?t= on the page,
 // which sets an HttpOnly cookie, then by that cookie.
-func New(p Provider, host, token string) *Server {
-	return &Server{p: p, host: host, token: token, restarting: make(chan struct{})}
+func New(p Provider, host, token string, skinsDirectory ...string) *Server {
+	dir := ""
+	if len(skinsDirectory) > 0 {
+		dir = skinsDirectory[0]
+	}
+	return &Server{p: p, host: host, token: token, restarting: make(chan struct{}), skins: static.Skins(dir)}
 }
 
 // Restarting tells open pages, with a content-free event, that the daemon is
@@ -52,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
+	mux.Handle("GET /assets/skins/", s.skins)
 	mux.HandleFunc("GET /assets/vendor/qr.mjs", s.qrModule)
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /api/overview", s.overview)
@@ -166,7 +172,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		w.Write(static.AppIcon(192))
 		return
 	}
-	types := map[string]string{"app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
+	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8", "default.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
 	ct, ok := types[name]
 	if !ok {
 		http.NotFound(w, r)

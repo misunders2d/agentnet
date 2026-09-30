@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
   drafts: {}, draftKey: null, sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
   dm: null, dmData: null, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
-  files: [], opened: [],
+  files: [], opened: [], contactView: "recent", contactLimit: 20,
   version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
 const lenses = ["classic", "comic", "zoom"];
 
@@ -36,6 +36,7 @@ function el(tag, attrs, ...kids) {
 }
 
 async function api(path, body) {
+  if (window.agentnet) return window.agentnet.api(path, body);
   if (window.agentnetEngine) return window.agentnetEngine.api(path, body); // a browser device (the relay's page)
   const opts = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -92,6 +93,7 @@ async function loadOverview() {
   $("release").hidden = !o.release;
   $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
   renderNotify(o.notify);
+  renderProfile(o);
   renderReview(o.review);
   renderThreads(o.threads);
   renderQuarantine(o.quarantine);
@@ -217,6 +219,7 @@ async function preparedFiles(files) {
   for (const [i, f] of files.entries()) {
     if (f.staged) continue;
     $("compose-hint").textContent = "Handing " + (i + 1) + " of " + files.length + " files to AgentNet on this computer…";
+    if (window.agentnet) { f.staged = await window.agentnet.stage(f.file); continue; }
     const r = await fetch("/api/upload?name=" + encodeURIComponent(f.name), { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f.file });
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
     f.staged = (await r.json()).id;
@@ -278,6 +281,7 @@ async function requestFile(m, i, from, button) {
 // fetchFile gets a received file checked and decrypted: by the browser
 // device itself, or by this computer's AgentNet.
 async function fetchFile(id, i) {
+  if (window.agentnet) { const f = await window.agentnet.file(id, i); return { bytes: f.bytes, image: f.image || sniffImage(f.bytes) }; }
   if (window.agentnetEngine) {
     const f = await api("/api/file?id=" + encodeURIComponent(id) + "&i=" + i);
     return { bytes: f.bytes, image: f.image };
@@ -429,8 +433,8 @@ const notifyPermission = () => (typeof Notification === "undefined" ? "unsupport
 
 function renderNotify(n) {
   const line = $("notify-line");
-  line.hidden = !n;
-  if (!n) return;
+  line.hidden = false;
+  if (!n) { fill(line, "Notifications are not available in this view."); return; }
   // Every change redraws the overview: an unchanged line keeps its button,
   // so a click is never lost to a redraw under the pointer.
   const key = JSON.stringify([n, notifyPermission()]);
@@ -589,7 +593,8 @@ function openNotified(chan) {
     }
   }, 15000);
 }
-window.agentnetOpen = openNotified;
+if (window.agentnet) window.agentnet.onOpen(openNotified);
+else window.agentnetOpen = openNotified;
 
 async function retryOpen() {
   const p = state.pendingOpen;
@@ -663,7 +668,7 @@ function searchKnown(q, threads, dir) {
   // People by the name they give or their device; DMs by their lines or
   // the person's name. Nothing matched is merged or guessed.
   const has = (s) => (s || "").toLowerCase().includes(q);
-  const people = (o.people || []).filter((p) => has(p.label) || has(p.address));
+  const people = (o.people || []).filter((p) => has(p.label) || has(p.address) || devicesOf(p).some((d) => has(d.address) || has(d.name)));
   const dms = (o.dms || []).filter((d) => has(d.title) || has(d.last) || has(d.peer.label));
   const agents = contactsOf(threads).filter((c) => c.peer.toLowerCase().includes(q));
   const known = new Set(threads.map((t) => t.peer));
@@ -822,6 +827,9 @@ function reportLine(c) {
     .sort((a, b) => new Date(b.at) - new Date(a.at));
   if (!all.length) return null;
   const latest = all[0];
+  if (!open.length) return el("details", { class: "report-line seen" },
+    el("summary", {}, "Earlier reports from " + c.peer + " · dismissed"),
+    el("ul", { class: "report-items" }, all.map((r) => el("li", {}, when(r.at), " · ", r.text))));
   const d = el("details", { class: "tech" }, el("summary", {}, "Details"),
     el("ul", { class: "report-items" }, all.map((r) => el("li", {},
       el("time", { datetime: r.at }, when(r.at)), " · ", r.open ? "not dismissed" : "dismissed", " · ",
@@ -927,8 +935,7 @@ function personRow(p, dms) {
         p.state === "conflict" && el("span", { class: "conv-flag danger" }, "Frozen"),
         held > 0 && el("span", { class: "conv-flag calm" }, held + " held"),
         unread > 0 && el("span", { class: "conv-flag unread" }, unread + " new")),
-      el("span", { class: "conv-sub" }, (devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address) +
-        " · " + (personStateText[p.state] || p.state) + (dms.length ? " · " + plural(dms.length, "DM", "DMs") : "")),
+      el("span", { class: "conv-sub" }, plural(dms.length, "chat", "chats") + " · " + plural(devicesOf(p).length, "device", "devices")),
       (p.agents || []).map((a) => el("span", { class: "conv-sub agent-link" }, agentLinkText(a, p)))));
   return el("li", { class: "contact-item" + (current ? " open" : "") }, head);
 }
@@ -1084,7 +1091,7 @@ function personDialog() {
   dialog({
     title: "Set up your person",
     body: [el("p", {}, "A person is you, the human, as others see you in DMs. You set it up once, on this computer; nothing sets it up for you."),
-      el("p", {}, "The name is what you call yourself: others see it as your claim, not a checked identity. If you already set up your person on another computer, do not set up a second one here: linking computers comes later."),
+      el("p", {}, "The name is what you call yourself: others see it as your claim, not a checked identity. If you already use AgentNet on another device, use its Add a device link instead of creating a second person."),
       el("label", { for: "person-name", class: "field-label" }, "Your name"), name],
     ok: "Set up",
     focus: name,
@@ -1690,9 +1697,11 @@ function renderReview(items) {
   const reports = items.filter((it) => it.notice);
   const btn = $("review-btn");
   const n = decisions.length;
-  $("review-count").textContent = n;
-  $("review-word").textContent = n ? "Needs you" : "Nothing needs you";
-  $("review-reports").hidden = !reports.length;
+  const total = n + reports.length + (state.overview.links || []).filter((l) => l.state === "pending").length;
+  $("review-count").textContent = total;
+  $("review-count").hidden = !total;
+  $("review-word").textContent = n ? "Needs you" : reports.length ? "Reports" : "Nothing needs you";
+  $("review-reports").hidden = true;
   $("review-reports").textContent = plural(reports.length, "report", "reports");
   btn.dataset.n = n;
   btn.setAttribute("aria-label", (n === 1 ? "1 item needs your decision" : n + " items need your decision") +
@@ -1702,6 +1711,7 @@ function renderReview(items) {
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
       el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
+  fill($("activity-extra"), remindersSection(), ...linkNotices().map((n) => el("li", {}, n)));
   const senders = [...new Set(reports.map((it) => it.peer))];
   $("reports").hidden = !senders.length;
   fill($("report-list"), ...senders.map((peer) => {
@@ -1714,44 +1724,85 @@ function toggleReview(open) {
   const btn = $("review-btn");
   const show = open ?? btn.getAttribute("aria-expanded") !== "true";
   btn.setAttribute("aria-expanded", show);
+  btn.classList.toggle("selected", show);
+  btn.setAttribute("aria-current", show ? "page" : "false");
+  for (const name of ["chats", "people"]) {
+    const active = !show && (name === "people" ? state.contactView === "people" : state.contactView !== "people");
+    $("nav-" + name).classList.toggle("selected", active);
+    $("nav-" + name).setAttribute("aria-current", active ? "page" : "false");
+  }
   $("review").hidden = !show;
+  $("conv-list").hidden = show;
+  $("search").hidden = show;
+  $("section-title").textContent = show ? "Activity" : state.contactView === "people" ? "People" : "Chats";
+  if (show) {
+    document.body.classList.remove("show-conv");
+    if (state.lens === "zoom") { document.querySelector(".app").hidden = false; $("zoom").hidden = true; }
+  } else if (state.lens === "zoom") { document.querySelector(".app").hidden = true; $("zoom").hidden = false; }
   if (show) $("review").querySelector("button")?.focus();
 }
 
-// renderThreads draws the sidebar: contacts, or search results while a
-// search is typed.
+// The everyday list shows recent people, not every device and conversation.
+// Directory browsing is explicit; search still covers everything held here.
+function sidebarEntries(threads) {
+  const o = state.overview || {}, dms = o.dms || [], contacts = contactsOf(threads);
+  const entries = (o.people || []).map((p) => {
+    const chats = dms.filter((d) => personKey(d.peer) === personKey(p)).sort((a, b) => new Date(b.last_at) - new Date(a.last_at));
+    const devices = contacts.filter((c) => devicesOf(p).some((d) => d.address === c.peer));
+    const times = [...chats.map((d) => d.last_at), ...devices.map((c) => c.lastAt)].filter(Boolean);
+    return { person: p, chats, label: p.label, at: times.sort((a, b) => new Date(b) - new Date(a))[0],
+      unread: chats.reduce((n, d) => n + (d.unread || 0), 0) + devices.reduce((n, c) => n + c.unread, 0) };
+  });
+  for (const c of contacts.filter((c) => !deviceOwner(c.peer) || (state.contactView !== "people" && deviceOwner(c.peer) === o.person))) {
+    entries.push({ contact: c, label: c.peer, at: c.lastAt, unread: c.unread });
+  }
+  return entries.filter((e) => state.contactView === "people" || (state.contactView === "unread" ? e.unread > 0 : !!e.at))
+    .sort(state.contactView === "people" ? (a, b) => a.label.localeCompare(b.label)
+      : (a, b) => new Date(b.at) - new Date(a.at) || a.label.localeCompare(b.label));
+}
+
+function contactRow(c) {
+  const current = sameHub(state.hub, { kind: "device", key: c.peer });
+  const only = !c.reports.length && c.conversations.length + c.singles.length === 1 && [...c.conversations, ...c.singles][0];
+  return el("li", { class: "contact-item" + (current ? " open" : "") },
+    el("button", { type: "button", class: "conv-item contact", "aria-current": String(current),
+      onclick: () => only ? openThread(only.id) : openHub({ kind: "device", key: c.peer }) },
+      avatar(c.peer), el("span", { class: "conv-main" },
+        el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)), el("span", { class: "conv-time" }, when(c.lastAt))),
+        el("span", { class: "conv-bottom" }, el("span", { class: "conv-last" }, c.last || "Reports"),
+          c.keyChanged && el("span", { class: "conv-flag danger" }, "Key changed"), counts(c)))));
+}
+
+function contactControls() {
+  return el("div", { role: "group", "aria-label": "Browse conversations", class: "contact-modes" },
+    Object.entries(state.contactView === "people" ? {} : { recent: "Recent", unread: "Unread" }).map(([key, label]) =>
+      el("button", { type: "button", "aria-pressed": String(state.contactView === key),
+        onclick: () => { state.contactView = key; state.contactLimit = 20; rerenderContacts(); } }, label)));
+}
+
+function moreContacts(total) {
+  return total > state.contactLimit && el("button", { type: "button", class: "chip more-contacts",
+    onclick: () => { state.contactLimit += 20; rerenderContacts(); } }, "Show more · " + (total - state.contactLimit) + " remaining");
+}
+
 function renderThreads(threads) {
   rerenderContacts = rerender;
   const list = $("conv-list");
   if (state.query.trim()) return renderSearch(threads);
-  $("list-title").textContent = "Contacts";
-  const people = peopleSection();
-  const devices = people.length > 0 && el("li", { class: "result-head" }, "Devices and services: messages per installation");
-  const reminders = remindersSection();
-  // A person's devices are under that person, never rows of their own here.
-  const loose = contactsOf(threads).filter((c) => !deviceOwner(c.peer));
-  if (!loose.length) {
-    fill(list, reminders, people, devices, el("li", { class: "hint empty-list" }, threads.length
-      ? "Other devices and services appear here; people's devices are under each person."
-      : "No conversations yet. Start one with the + button, or with someone below."),
-      directorySection(threads));
-    return;
-  }
-  fill(list, reminders, people, devices, ...loose.map((c) => {
-    const current = sameHub(state.hub, { kind: "device", key: c.peer });
-    const only = !c.reports.length && c.conversations.length + c.singles.length === 1 && [...c.conversations, ...c.singles][0];
-    const head = el("button", { type: "button", class: "conv-item contact", "aria-current": String(current),
-      onclick: () => (only ? openThread(only.id) : openHub({ kind: "device", key: c.peer })) },
-      avatar(c.peer),
-      el("span", { class: "conv-main" },
-        el("span", { class: "conv-top" }, el("span", { class: "conv-name" }, who(c.peer)), presenceBadge(c.peer), el("span", { class: "conv-time" }, when(c.lastAt))),
-        el("span", { class: "conv-bottom" },
-          el("span", { class: "conv-last" }, c.last || (c.reports.length ? "Reports only" : "")),
-          c.keyChanged && el("span", { class: "conv-flag danger" }, "Key changed"), counts(c)),
-        el("span", { class: "conv-sub" }, [plural(c.conversations.length, "conversation", "conversations"),
-          c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · "))));
-    return el("li", { class: "contact-item" + (current ? " open" : "") }, head);
-  }), directorySection(threads));
+  const labels = { recent: "Recent", unread: "Unread", people: "People" };
+  $("list-title").textContent = labels[state.contactView];
+  const tabs = state.contactView !== "people" && el("li", { class: "contact-tabs" }, contactControls());
+  const o = state.overview || {}, entries = sidebarEntries(threads), shown = entries.slice(0, state.contactLimit);
+  fill(list, tabs, remindersSection(), ...linkNotices().map((n) => el("li", {}, n)),
+    state.contactView === "people" && (o.person ? el("li", { class: "directory-self" },
+      el("button", { type: "button", class: "text-btn", onclick: showSettings }, "You · " + o.person.label + " · " + plural(devicesOf(o.person).length, "device", "devices"))) :
+      el("li", {}, el("button", { type: "button", class: "text-btn", onclick: showSettings }, "Set up your profile"))),
+    ...shown.map((e) => e.person ? personRow(e.person, e.chats) : contactRow(e.contact)),
+    !entries.length && el("li", { class: "hint empty-list" }, state.contactView === "unread" ? "No unread conversations."
+      : state.contactView === "people" ? "No other people yet. Invite someone with +."
+      : "No recent conversations. Find someone in People or use search."),
+    entries.length > shown.length && el("li", {}, moreContacts(entries.length)),
+    state.contactView === "people" && directorySection(threads));
 }
 
 // searchItems lists what a search finds; each result opens through the
@@ -1953,7 +2004,7 @@ function renderPeerChips(t) {
   const chips = [];
   chips.push(el("button", { type: "button", class: "peer-chip" + (t.approved ? " on" : ""),
     title: t.approved ? "Their questions are answered automatically by your responder" : "Their questions wait for you",
-    onclick: () => approvalDialog(t) }, t.approved ? "Questions: automatic" : "Questions: ask me"));
+    onclick: () => approvalDialog(t) }, t.approved ? "I answer their questions" : "Their questions wait for me"));
   if (t.task_grant) {
     chips.push(el("button", { type: "button", class: "peer-chip on", title: "Tasks from this exact key run without asking: " + t.task_grant,
       onclick: () => revokeDialog(t) }, t.task_grant === "active" ? "Tasks: always (this key)" : "Tasks: grant on hold"));
@@ -2390,6 +2441,14 @@ function kindHint() {
 // One event stream; each event carries only a change counter. When it
 // breaks, say so and wait for the person instead of retrying on a timer.
 function listen() {
+  if (window.agentnet) {
+    window.agentnet.listen((event) => {
+      if (event.type === "change") { const first = state.seq < 0; state.seq = event.seq; refetch(first); }
+      else if (event.type === "restart") { state.updating = true; $("updating").hidden = false; $("lost").hidden = true; recover(recovery.update); }
+      else { $("lost").hidden = false; recover(recovery.missed); }
+    });
+    return;
+  }
   if (window.agentnetEngine) { // a browser device: its engine says when something changed
     window.agentnetEngine.listen((seq) => {
       const first = state.seq < 0;
@@ -2553,11 +2612,96 @@ function announceChanges(o, first) {
   if (changed.length) announce("New activity with " + [...new Set(changed)].join(", "));
 }
 
+// Main navigation belongs to this skin. Identity and every action still come
+// from the same provider on both platforms.
+function selectSection(section) {
+  keepDraft();
+  state.contactView = section === "people" ? "people" : "recent";
+  state.contactLimit = 20;
+  state.query = "";
+  $("search").value = "";
+  $("section-title").textContent = section === "people" ? "People" : "Chats";
+  $("search").placeholder = section === "people" ? "Find people or devices" : "Search conversations";
+  for (const name of ["chats", "people"]) {
+    $("nav-" + name).classList.toggle("selected", name === section);
+    $("nav-" + name).setAttribute("aria-current", name === section ? "page" : "false");
+  }
+  toggleReview(false);
+  document.body.classList.remove("show-conv");
+  if (state.lens === "zoom") { Zoom.level = 0; Zoom.query = ""; }
+  rerender();
+}
+
+function renderProfile(o) {
+  const p = o.person;
+  $("profile-initial").textContent = (p ? p.label : o.me.address).charAt(0).toUpperCase();
+  fill($("profile-card"), p ? el("div", { class: "profile-card" }, avatar(p.label),
+    el("div", {}, el("h3", {}, p.label), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices"))))
+    : setupChoice());
+  fill($("profile-devices"), p ? deviceDisclosure(p, (addr) => { $("settings").close(); openHub({ kind: "device", key: addr }); }) : null,
+    p && el("button", { type: "button", class: "btn", onclick: () => { $("settings").close(); devicesDialog(); } }, "Manage your devices"));
+}
+
+function settingsTab(name) {
+  for (const key of ["profile", "appearance", "notifications", "device"]) $("settings-" + key).hidden = key !== name;
+  for (const b of document.querySelectorAll("[data-settings]")) { b.setAttribute("aria-selected", String(b.dataset.settings === name)); b.setAttribute("aria-pressed", String(b.dataset.settings === name)); b.tabIndex = b.dataset.settings === name ? 0 : -1; }
+}
+function showSettings() {
+  toggleReview(false);
+  if (state.overview) renderProfile(state.overview);
+  settingsTab("profile");
+  $("settings").showModal();
+}
+function setTheme(theme) {
+  if (!["system", "light", "dark"].includes(theme)) theme = "system";
+  document.documentElement.dataset.theme = theme;
+  for (const b of document.querySelectorAll("[data-theme]")) b.setAttribute("aria-pressed", String(b.dataset.theme === theme));
+  try { localStorage.setItem("agentnet-theme", theme); } catch (e) { /* local only */ }
+}
+
 // ---- wiring ------------------------------------------------------------------------
 
 // start wires the page; the relay's page loads this file after the device
 // is ready, when the document has loaded already.
 function start() {
+  $("conversation-details").addEventListener("click", () => {
+    const t = state.dmData || state.data;
+    if (!t) return;
+    const peer = state.dmData ? state.dmData.peer.label : state.data.peer;
+    const actions = state.data ? el("div", { class: "detail-actions" },
+      el("button", { type: "button", class: "btn", onclick: () => approvalDialog(state.data) }, "Question permissions"),
+      state.data.task_grant && el("button", { type: "button", class: "btn", onclick: () => revokeDialog(state.data) }, "Task permissions")) : null;
+    dialog({ title: peer, body: [state.dmData ? deviceDisclosure(state.dmData.peer) : el("p", { class: "mono" }, state.data.key?.pinned || "Key not checked yet"), actions], ok: "Close", run: async () => {} });
+  });
+  $("nav-chats").addEventListener("click", () => selectSection("chats"));
+  $("nav-people").addEventListener("click", () => selectSection("people"));
+  $("profile-btn").addEventListener("click", showSettings);
+  $("settings-tabs").addEventListener("keydown", (e) => {
+    const tabs = [...document.querySelectorAll("[data-settings]")];
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation();
+    const next = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (i + (e.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length;
+    settingsTab(tabs[next].dataset.settings); tabs[next].focus();
+  });
+  $("settings-close").addEventListener("click", () => $("settings").close());
+  for (const b of document.querySelectorAll("[data-settings]")) b.addEventListener("click", () => settingsTab(b.dataset.settings));
+  for (const b of document.querySelectorAll("[data-theme]")) b.addEventListener("click", () => setTheme(b.dataset.theme));
+  $("settings-notifications").append($("notify-line"));
+  if (window.agentnet && window.agentnet.skins.length > 1) {
+    const select = el("select", { "aria-label": "Installed UI", onchange: () => {
+      if (state.files.length || Object.values(state.drafts).some((d) => d.files && d.files.length)) { announce("Send or remove draft attachments before switching UI."); return; }
+      if (!keepForReload()) { announce("Could not save your draft. Finish it before switching UI."); return; }
+      const change = () => window.agentnet.selectSkin(select.value);
+      if (Object.values(state.drafts).some((d) => d.text)) {
+        dialog({ title: "Switch interface?", body: [el("p", {}, "Your unsent text will be kept for when you return to this interface. The other interface has its own drafts.")], ok: "Switch", run: async () => change() });
+      } else change();
+    } }, window.agentnet.skins.map((s) => el("option", { value: s.id }, s.name)));
+    $("settings-appearance").append(el("h3", {}, "Installed interfaces"), select);
+  }
+  let theme = "system";
+  try { theme = localStorage.getItem("agentnet-theme") || theme; } catch (e) { /* default */ }
+  setTheme(theme);
   $("composer").addEventListener("submit", send);
   $("body").addEventListener("input", grow);
   $("body").addEventListener("keydown", (e) => {
@@ -2589,13 +2733,13 @@ function start() {
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("review").hidden) { toggleReview(false); $("review-btn").focus(); return; }
-    if (e.key === "/" && !$("dialog").open && !e.target.closest("input, textarea, select") && state.lens !== "zoom") {
+    if (e.key === "/" && !$("settings").open && !$("dialog").open && !e.target.closest("input, textarea, select") && state.lens !== "zoom") {
       e.preventDefault();
       $("search").focus();
       return;
     }
     // Page turning and zooming keys, unless typing or a dialog is open.
-    if ($("dialog").open || e.target.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if ($("settings").open || $("dialog").open || e.target.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
     const handled = state.lens === "zoom" ? Zoom.onKey(e)
       : state.lens === "comic" && (state.data || state.dmData) && !$("comic").hidden ? Comic.onKey(e) : false;
     if (handled) e.preventDefault();

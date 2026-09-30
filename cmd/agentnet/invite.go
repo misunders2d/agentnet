@@ -197,6 +197,7 @@ func invitePacket(code, inviter string) (string, error) {
 	w("   or working unless you checked, and do not promise it is free: it uses")
 	w("   that assistant's own account and usage. Tools it is already allowed to use")
 	w("   keep their effects, so do not describe it as unable to change anything.")
+	w("   If they already chose one during this setup, apply that choice without asking again.")
 	w("   If they pick one, ask in ordinary words which folder it should work in")
 	w("   (for example a folder for this work). Then:")
 	w("     agentnet responder set --harness NAME --dir DIR   or   agentnet responder off")
@@ -206,6 +207,9 @@ func invitePacket(code, inviter string) (string, error) {
 	w("6. Keep the daemon running so messages arrive: agentnet daemon")
 	w("   To start it at login, follow: agentnet help startup")
 	w("7. Check: agentnet doctor")
+	w("   This checks this terminal's PATH, not a separate daemon's environment.")
+	w("   Preserve the responder PATH in its startup service (agentnet help startup).")
+	w("   Verify a real approved question gets a reply; delivery alone is not enough.")
 	if inviter != "" {
 		w("8. Tell the inviter it worked:")
 		w(`     agentnet send %s "%s/NAME joined AgentNet"`, inviter, inv.Label)

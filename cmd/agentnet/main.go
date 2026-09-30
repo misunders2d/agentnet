@@ -346,15 +346,15 @@ func runJoin(ctx context.Context, home string, args []string) error {
 		return err
 	}
 	defer a.Close()
+	if chosen, err := a.ResponderChosen(); err == nil && !chosen {
+		fmt.Fprintln(os.Stderr, "next: configure the person's chosen responder on this device (agentnet help responder); if they have not chosen, ask them or offer manual handling")
+	}
 	if link := a.LinkState(); link.State == client.LinkPending {
 		fmt.Printf("%s is waiting for approval on %s\nfingerprint %s\n", a.Address, link.Approver, a.Self().Fingerprint())
 		fmt.Fprintln(os.Stderr, "next: start agentnet daemon on this device, then approve the request on your existing device (page or agentnet person links / person approve ID)")
 		return nil
 	}
 	fmt.Printf("enrolled %s\nfingerprint %s\n", a.Address, a.Self().Fingerprint())
-	if chosen, err := a.ResponderChosen(); err == nil && !chosen {
-		fmt.Fprintln(os.Stderr, "next: ask the person how questions and tasks should be handled (agentnet responder list)")
-	}
 	return nil
 }
 

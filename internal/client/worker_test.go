@@ -27,6 +27,7 @@ echo "run cwd=$(pwd) args=$* bg=$AGENTNET_BACKGROUND" >> "$STUB_LOG"
 cat > "$STUB_LOG.stdin"
 case "$*" in *--human*) printf 'AGENTNET: NEEDS-HUMAN\nwhich budget applies?\n'; exit 0 ;; esac
 case "$STUB_MODE" in
+askback) if grep -q "Riga" "$STUB_LOG.stdin"; then echo "Riga: bring a jacket"; else echo "Which city?"; fi ;;
 sleep) sleep 30 & echo $! > "$STUB_LOG.child"; wait ;;
 slow) sleep 1; echo "stub answer" ;;
 fail) echo "boom" >&2; exit 3 ;;
@@ -439,7 +440,7 @@ func TestThreadContextStaysInConversation(t *testing.T) {
 	q2, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "follow-up Q2", ReplyTo: a1.ID, Kind: envelope.KindQuestion})
 	waitState(t, w.bob, q2.ID, stateAnswered)
 	prompt, _ := os.ReadFile(st.log + ".stdin")
-	for _, want := range []string{"admin/alice: first question Q1", "me: stub answer", "follow-up Q2"} {
+	for _, want := range []string{"admin/alice [question; local state: answered]: first question Q1", "me [answer; local state:", "]: stub answer", "follow-up Q2"} {
 		if !strings.Contains(string(prompt), want) {
 			t.Fatalf("multi-turn prompt lacks %q:\n%s", want, prompt)
 		}
@@ -606,5 +607,21 @@ func TestDoctorShowsApprovalsAndWaitingItems(t *testing.T) {
 	}
 	if s, _ := w.bob.store.jobState(q.ID); s != stateHeld {
 		t.Fatalf("approving later released the held question: %s", s)
+	}
+}
+
+func TestQuestionPromptOffersAskingBack(t *testing.T) {
+	w := newWorld(t, "")
+	for _, kind := range []string{envelope.KindQuestion, envelope.KindTask} {
+		prompt, err := w.bob.prompt(job{From: w.alice.Address, Kind: kind}, &Responder{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(prompt, "reply with your question for them"); got != (kind == envelope.KindQuestion) {
+			t.Fatalf("asking back in %s prompt: %v", kind, got)
+		}
+		if !strings.Contains(prompt, needsHumanMarker) {
+			t.Fatal("missing local permission stop")
+		}
 	}
 }

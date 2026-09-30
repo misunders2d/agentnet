@@ -379,7 +379,7 @@ const Zoom = {
       oninput: (e) => { this.query = e.target.value; fill(content, this.content(views)); },
       onkeydown: (e) => { if (e.key === "Escape" && this.query) { e.stopPropagation(); e.target.value = ""; this.query = ""; fill(content, this.content(views)); } } });
     return el("div", { class: "zoom-layer" },
-      el("div", { class: "zoom-side" }, lensSwitch(), search, el("nav", { class: "ladder", "aria-label": "Zoom level" },
+      el("div", { class: "zoom-side" }, search, el("nav", { class: "ladder", "aria-label": "Zoom level" },
         this.names().map((n, i) => el("button", {
           type: "button", class: "rung" + (i === this.level ? " here" : ""), disabled: i > this.level,
           "aria-current": i === this.level ? "step" : "false", onclick: () => i < this.level && this.go(i, {}),
@@ -437,12 +437,12 @@ const Zoom = {
   // people is the group of persons at the top of Level 0: each by the name
   // they give, with their device and DMs, and a line to each agent their
   // device runs in DMs here (the invitation's host, never a name).
-  people() {
+  people(entries) {
     const o = state.overview;
     if (!o.persons) return null;
     const head = el("h3", { class: "zoom-group" }, "People");
     if (!o.person) return el("section", { class: "zoom-people-set" }, head, linkNotices(), el("div", { class: "person-setup" }, setupChoice()));
-    const dms = o.dms || [], people = o.people || [];
+    const dms = o.dms || [], people = entries ? entries.filter((e) => e.person).map((e) => e.person) : o.people || [];
     // Each person is one node, you included (once); their devices open
     // under it on a click, from their checked record.
     const devices = (p) => (p.state === "pinned" || p.state === "self") && deviceDisclosure(p, (addr) => this.go(1, { peer: addr, person: null }));
@@ -469,57 +469,18 @@ const Zoom = {
       !people.length && el("p", { class: "hint" }, "No one else on your server has set up a person yet."));
   },
 
-  // Level 0: the people you have DMs with, and each device you talk to,
-  // around this computer.
+  // Level 0 uses the same bounded people/service list as Classic and Comic.
+  // Devices stay under their person; services do not need a crowded orbit.
   everyone() {
-    const o = state.overview;
-    const list = contactsOf(o.threads).filter((c) => !deviceOwner(c.peer)); // a person's devices are under that person
-    const people = this.people();
-    const devices = people && el("h3", { class: "zoom-group" }, "Devices and services: messages per installation");
-    if (!list.length) {
-      return el("div", { class: "zoom-people" }, zoomReminders(), people, devices,
-        el("p", { class: "hint" }, "No conversations yet: start one with someone on your server."), zoomDirectory(o.threads));
-    }
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 100 100");
-    svg.setAttribute("preserveAspectRatio", "none");
-    svg.setAttribute("class", "net-lines");
-    svg.setAttribute("aria-hidden", "true");
-    const pos = list.map((_, i) => {
-      const a = -Math.PI / 2 + Math.PI / list.length + (2 * Math.PI * i) / list.length;
-      return [50 + 38 * Math.cos(a), 50 + 34 * Math.sin(a)];
-    });
-    // With a person, you are the People node above: the devices and
-    // services have no second "you" at their centre. Without one, this
-    // computer is.
-    const center = !o.person;
-    if (center) pos.forEach(([x, y], i) => {
-      const l = document.createElementNS("http://www.w3.org/2000/svg", "line");
-      for (const [k, v] of [["x1", 50], ["y1", 50], ["x2", x], ["y2", y]]) l.setAttribute(k, v);
-      l.setAttribute("class", "net-line" + (list[i].review ? " hot" : ""));
-      l.setAttribute("vector-effect", "non-scaling-stroke");
-      svg.append(l);
-    });
-    const nodes = list.map((p, i) => {
-      const status = [presenceOf(p.peer), plural(p.conversations.length, "conversation", "conversations"),
-        p.review && p.review + " need" + (p.review === 1 ? "s" : "") + " you", p.keyChanged && "key changed",
-        p.unread && p.unread + " new", p.notices && plural(p.notices, "report", "reports")].filter(Boolean).join(" · ");
-      const node = el("button", { type: "button", class: "node" + (p.review ? " glow" : "") + (p.keyChanged ? " danger" : ""),
-        "aria-label": p.peer + ", " + status },
-        avatar(p.peer, "node-face"), el("span", { class: "node-name" }, who(p.peer)), el("span", { class: "node-status" }, status),
-        p.review ? el("span", { class: "badge" }, String(p.review)) : null);
-      node.style.left = pos[i][0] + "%";
-      node.style.top = pos[i][1] + "%";
-      node.addEventListener("click", () => this.go(1, { peer: p.peer, person: null }, node));
-      return node;
-    });
-    const me = center && el("div", { class: "node me" }, avatar(o.me.address, "node-face"), el("span", { class: "node-name" }, "This computer"),
-      el("span", { class: "node-status" }, o.me.address));
-    if (me) { me.style.left = "50%"; me.style.top = "50%"; }
-    return el("div", { class: "zoom-people" }, zoomReminders(), people, devices,
-      el("div", { class: "network" }, svg, me, nodes,
-        el("p", { class: "zoom-hint" }, "Glowing contacts have something waiting for your decision.")),
-      zoomDirectory(o.threads));
+    const o = state.overview, entries = sidebarEntries(o.threads), shown = entries.slice(0, state.contactLimit);
+    const list = shown.filter((e) => e.contact).map((e) => e.contact);
+    return el("div", { class: "zoom-people" }, contactControls(), zoomReminders(), this.people(shown),
+      list.length > 0 && el("h3", { class: "zoom-group" }, "Devices and services"),
+      el("ul", { class: "thread-list" }, list.map((c) => el("li", {},
+        el("button", { type: "button", class: "thread-row", onclick: () => this.go(1, { peer: c.peer, person: null }) },
+          avatar(c.peer, "sm"), el("span", { class: "thread-title" }, who(c.peer)), counts(c))))),
+      !entries.length && el("p", { class: "hint" }, state.contactView === "unread" ? "No unread conversations." : "No activity yet. People lists everyone."),
+      moreContacts(entries.length), state.contactView === "people" && zoomDirectory(o.threads));
   },
 
   // Level 1 for a person: their separate DMs (the same rows the sidebar

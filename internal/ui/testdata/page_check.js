@@ -355,8 +355,8 @@ const ev = { preventDefault() {} };
   // N3: decisions and reports are counted apart; dismissing touches only
   // that sender's reports and only resolves them.
   run("renderReview")(overview.review);
-  check(String($("review-count").textContent) === "1" && $("review-reports").textContent === "3 reports" && !$("review-reports").hidden,
-    "amber counts decisions only; reports shown apart: " + [$("review-count").textContent, $("review-reports").textContent, $("review-reports").hidden].join("/"));
+  check(String($("review-count").textContent) === "4" && $("review-reports").hidden,
+    "one Activity badge counts decisions and reports: " + [$("review-count").textContent, $("review-reports").textContent, $("review-reports").hidden].join("/"));
   calls.length = 0;
   await run("dismissReports")("hub/ops");
   const acts = calls.filter((c) => c.path === "/api/act").map((c) => c.body);
@@ -559,7 +559,7 @@ const ev = { preventDefault() {} };
   Object.assign(overview, { threads: [], review: [], persons: true, person: null, people: [alicePerson], dms: [] });
   calls.length = 0;
   await run("loadOverview()");
-  let side = JSON.stringify($("conv-list").children.map(textOf));
+  let side = JSON.stringify($("profile-card").children.map(textOf));
   check(side.includes("Set up your person") && !side.includes("Alice"), "without a person the page offers setup and no DMs: " + side);
   check(!calls.some((c) => c.path === "/api/person"), "nothing sets up a person by itself");
   run("personDialog()");
@@ -580,8 +580,8 @@ const ev = { preventDefault() {} };
   dmThreads.d3 = { id: "d3", peer: { person: "p-vit", label: "Vitalii", address: "vitalii/laptop", state: "pinned" }, created: T, mine: true, messages: [] };
   await run("loadOverview()");
   side = JSON.stringify($("conv-list").children.map(textOf));
-  check(side.includes("2 DMs") && side.includes("checked against their computer") && !side.includes("deploy"),
-    "the sidebar has one row for a person, with how they are known, not their DMs: " + side);
+  check(side.includes("2 chats") && side.includes("1 device") && !side.includes("deploy"),
+    "the sidebar has one compact row per person, not their DMs: " + side);
   // A person's row shows their DMs in the main pane, apart; an open DM
   // links back to them; back goes one level up at a time (MEL-494).
   const rowOf = (name) => $("conv-list").children.map((li) => li.children && li.children.find((b) => b.tagName === "button" && textOf(b).includes(name))).find(Boolean);
@@ -796,7 +796,7 @@ const ev = { preventDefault() {} };
   // browser's permission is asked only from that click; the page reports
   // only what the person has in front of them; a click opens the DM this
   // device resolves, never a guess.
-  check($("notify-line").hidden, "no notification controls where the page has none (the daemon's page)");
+  check(!$("notify-line").hidden && textOf($("notify-line")).includes("not available"), "unavailable notifications explain why instead of an empty settings tab");
   overview.notify = { available: true, enabled: false, reason: "", mutes: [], allowed: [] };
   calls.length = 0;
   await run("loadOverview()");
@@ -1170,7 +1170,7 @@ const ev = { preventDefault() {} };
   const keepPerson = overview.person, keepThreads2 = overview.threads;
   Object.assign(overview, { role: "unset", person: null });
   await run("loadOverview()");
-  side = JSON.stringify($("conv-list").children.map(textOf));
+  side = JSON.stringify($("profile-card").children.map(textOf));
   check(side.includes("Who uses this computer?") && side.includes("I do: set up my person") && side.includes("It is a service or bot") &&
     side.includes("Add this device from there"), "setup asks person or service, and points to adding a device: " + side);
   calls.length = 0;
@@ -1179,12 +1179,12 @@ const ev = { preventDefault() {} };
   check(calls.some((c) => c.path === "/api/device/service"), "a service is chosen only by its button");
   overview.role = "service";
   await run("loadOverview()");
-  side = JSON.stringify($("conv-list").children.map(textOf));
+  side = JSON.stringify($("profile-card").children.map(textOf));
   check(side.includes("This computer is a service or bot") && !side.includes("set up my person"), "a service is never asked to set up a person: " + side);
   // A browser is always a person's device; one waiting for approval sets up nothing.
   Object.assign(overview, { role: "unset", device: { online: true, persisted: true, revoked: false } });
   await run("loadOverview()");
-  side = JSON.stringify($("conv-list").children.map(textOf));
+  side = JSON.stringify($("profile-card").children.map(textOf));
   check(side.includes("Set up your person") && !side.includes("service or bot") && !side.includes("Add this device from there"), "a browser is offered a person only: " + side);
   overview.link = { state: "pending" };
   await run("loadOverview()");
@@ -1202,12 +1202,12 @@ const ev = { preventDefault() {} };
     threads: [sum("b9", "bob/phone", { title: "phone hello" }), sum("h1", "hub/ops", { title: "service report" }), sum("m9", "me/phone", { title: "to my phone" })] });
   await run("loadOverview()");
   side = JSON.stringify($("conv-list").children.map(textOf));
-  check(side.includes("on laptop (this one), phone") && side.includes("Your devices") && side.includes("A new device,  tablet , asks to join as you"),
+  check(JSON.stringify(textOf($("profile-card"))).includes("2 devices") && side.includes("A new device,  tablet , asks to join as you"),
     "you, your devices (this one marked) and a new device's request: " + side);
-  check(side.includes("on desk, phone") && side.replace(/\s+/g, "").includes("hub/ops") && !side.replace(/\s+/g, "").includes("bob/phone"),
+  check(side.includes("2 devices") && side.replace(/\s+/g, "").includes("hub/ops") && !side.replace(/\s+/g, "").includes("bob/phone"),
     "a person's devices are named under them; their device is not a row of its own; a service is: " + side);
   // Your own devices' conversations are under you too, one click away.
-  const meTree = (function tree(n, out = []) { if (n && n.children) { out.push(n); n.children.forEach((c) => tree(c, out)); } return out; })($("conv-list"));
+  const meTree = (function tree(n, out = []) { if (n && n.children) { out.push(n); n.children.forEach((c) => tree(c, out)); } return out; })($("profile-devices"));
   const mine = meTree.find((e) => e.tagName === "details" && textOf(e).includes("You on 2 devices"));
   const toPhone = mine && (function tree(n, out = []) { if (n && n.children) { out.push(n); n.children.forEach((c) => tree(c, out)); } return out; })(mine)
     .find((e) => e.tagName === "button" && textOf(e) === "1 device conversation");
@@ -1307,9 +1307,10 @@ const ev = { preventDefault() {} };
 
   // Zoom: people apart from devices, then a person's DMs, then one DM.
   run('setLens("zoom")');
+  run('state.contactView = "people"');
   run("Zoom.go(0, {})");
   let zoom = JSON.stringify($("zoom").children.map(textOf));
-  check(zoom.includes("People") && zoom.includes("Alice") && zoom.includes("Vitalii") && zoom.includes("Devices"), "Zoom shows people apart from devices: " + zoom.slice(0, 300));
+  check(zoom.includes("People") && zoom.includes("Alice") && zoom.includes("Vitalii"), "Zoom shows people apart from devices: " + zoom.slice(0, 300));
   await run('Zoom.go(1, { person: "p-alice", peer: null })');
   zoom = JSON.stringify($("zoom").children.map(textOf));
   check(zoom.includes("budget") && zoom.includes("deploy") && zoom.includes("New DM with Alice"), "a person in Zoom holds their separate DMs");
@@ -1429,6 +1430,40 @@ const ev = { preventDefault() {} };
 
   run('setLens("classic")');
   Object.assign(overview, { persons: false, person: null, people: [], dms: [] });
+
+  // A realistic directory must not turn the everyday list into a wall.
+  const scale = require("./scale_fixture.cjs")(overview);
+  Object.assign(overview, scale.overview, { persons: true, person: { person: "self-scale", label: "You", address: "me/laptop", state: "self" } });
+  Object.assign(dmThreads, scale.conversations);
+  run('state.contactView = "recent"; state.contactLimit = 20; state.query = ""');
+  await run("loadOverview()");
+  const contactRows = () => $("conv-list").children.filter((n) => (n.className || "").includes("contact-item"));
+  check(contactRows().length === 20 && textOf($("conv-list")).includes("60 remaining"), "80 contacts render 20 rows, with more reachable");
+  check(textOf(contactRows()[0]).includes("service29"), "people and services sort together by newest activity");
+  find($("conv-list"), (n) => n.tagName === "button" && textOf(n).startsWith("Show more")).click();
+  check(contactRows().length === 40, "show more reveals the next contacts");
+  find($("conv-list"), (n) => n.tagName === "button" && textOf(n) === "Unread").click();
+  check(contactRows().length === 15 && run("state.contactLimit") === 20, "unread shows ten people and five services, reset to first page");
+  check(run("sidebarEntries")(overview.threads).every((e) => e.unread > 0), "read conversations stay out of Unread");
+  run('selectSection("people")');
+  check(contactRows().length === 20 && textOf(contactRows()[0]).includes("Person 00"), "directory starts alphabetically and remains bounded");
+  const scaleSearch = run("searchKnown")("person37/tablet", overview.threads, overview.directory);
+  check(scaleSearch.people.length === 1 && scaleSearch.people[0].person === "person-37", "search any linked device finds its person");
+  const oldChat = run("searchKnown")("Weekend plans 37", overview.threads, overview.directory);
+  check(oldChat.dms.length === 1 && oldChat.dms[0].id === "scale-37-0", "search reaches an older chat beyond the visible page");
+  run("choosePerson")(scaleSearch.people[0]);
+  check(textOf($("hub")).includes("Weekend plans 37") && textOf($("hub")).includes("Person 37 on 3 devices"), "person page retains all chats and linked devices");
+  const entries = run("sidebarEntries")(overview.threads);
+  check(entries.length === 80 && entries.filter((e) => e.person).length === 50, "150 owned devices do not become duplicate top-level contacts");
+  run('state.contactView = "recent"; state.contactLimit = 20');
+  const zoomScale = run("Zoom.everyone()");
+  check(textOf(zoomScale).includes("60 remaining") && !textOf(zoomScale).includes("Person 00"), "Zoom uses the same bounded activity model");
+  run("renderReview")([{ notice: true, peer: "service00/bot" }]);
+  check($("review-word").textContent === "Reports", "open report never sits beside Nothing needs you");
+  run("renderReview")([]);
+  check($("review-word").textContent === "Nothing needs you" && $("review-reports").hidden, "empty review clears report attention");
+  const dismissed = run("reportLine")({ peer: "old/server", reports: [{ id: "old", last_at: T, title: "Old report" }] });
+  check(dismissed.tagName === "details" && !dismissed.open && textOf(dismissed).includes("dismissed") && !textOf(dismissed).includes("Decide there"), "dismissed reports stay accessible without active instructions");
 
   if (failed) process.exit(1);
   console.log("page logic ok");

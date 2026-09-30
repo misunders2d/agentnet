@@ -821,11 +821,15 @@ uses the default home. These are examples; the tests do not exercise them.
 
 Linux (systemd user service):
   mkdir -p ~/.config/systemd/user
-  cat > ~/.config/systemd/user/agentnet.service <<'UNIT'
+  # Run this from a shell where your chosen responder is found.
+  # Escape the PATH for systemd, then keep it in the service across logins.
+  agentnet_service_path=$(printf '%s' "$PATH" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g')
+  cat > ~/.config/systemd/user/agentnet.service <<UNIT
   [Unit]
   Description=AgentNet daemon
   [Service]
   ExecStart=%h/.local/bin/agentnet daemon
+  Environment="PATH=$agentnet_service_path"
   Restart=on-failure
   [Install]
   WantedBy=default.target
@@ -851,7 +855,15 @@ Windows (runs at logon, PowerShell):
   schtasks /create /sc onlogon /tn agentnet /tr "$env:LOCALAPPDATA\agentnet\bin\agentnet.exe daemon"
   schtasks /run /tn agentnet
 
-A responder harness (e.g. claude) must be on the PATH the daemon sees.`,
+A responder harness (e.g. claude) and its runtime must be on the PATH the
+daemon sees. The Linux recipe saves this shell's PATH in the service; it
+must name stable directories, not temporary or version-specific installs.
+Keep that setting when replacing the unit. A clean re-enrollment has new
+local settings: reapply the person's chosen responder and permissions.
+
+Doctor checks this CLI process's PATH, not a separate daemon's environment.
+After service setup/restart, verify an actual reply to an approved question.
+Do not silently retry failed questions or accepted tasks.`,
 
 	"update": `Usage: agentnet update [--check] [vX.Y.Z]
        agentnet update --status

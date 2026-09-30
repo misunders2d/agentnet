@@ -53,7 +53,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/notify/subscription", h.handlePushUnsubscribe)
 	mux.HandleFunc("POST /v1/notify/seen", h.handleNotifySeen)
 	if h.cfg.Web {
-		mux.Handle("/", static.Relay())
+		mux.Handle("/", static.Relay(filepath.Join(h.cfg.DataDir, "skins")))
 	}
 	return h.countRequests(mux)
 }
