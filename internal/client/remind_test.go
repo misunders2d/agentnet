@@ -102,10 +102,15 @@ func TestReminderDueOnceAndMoved(t *testing.T) {
 
 // Cancelled or done, a reminder never asks for attention.
 func TestReminderCancelAndDone(t *testing.T) {
-	w, n, _ := remindWorld(t)
+	w, n, stopBob := remindWorld(t)
 	a, b := receiveAt(t, w, envelope.KindMessage, "one"), receiveAt(t, w, envelope.KindMessage, "two")
+	stopBob()
+	// End both reminders before advancing the scheduler past their due time.
+	// A live one-second deadline could elapse during setup on a busy runner,
+	// legitimately notifying before CancelReminder or DoneReminder ran.
+	due := time.Now().Add(time.Hour)
 	for _, id := range []string{a, b} {
-		if _, err := w.bob.SetReminder(id, time.Now().Add(time.Second)); err != nil {
+		if _, err := w.bob.SetReminder(id, due); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,9 +123,16 @@ func TestReminderCancelAndDone(t *testing.T) {
 	if err := w.bob.DoneReminder(b); err != ErrNoReminder {
 		t.Fatalf("done twice: %v", err)
 	}
-	time.Sleep(2 * time.Second)
+	if next, err := w.bob.remindDue(due.Add(time.Second)); err != nil || !next.IsZero() {
+		t.Fatalf("ended reminders scheduled: %v, %v", next, err)
+	}
 	if n.count() != 0 {
 		t.Fatal("an ended reminder notified")
+	}
+	for id, state := range map[string]string{a: ReminderCancelled, b: ReminderDone} {
+		if r := reminderOf(t, w.bob, id); r.State != state || r.Alerted {
+			t.Fatalf("ended reminder: %+v, want %s and unalerted", r, state)
+		}
 	}
 	if rs, _ := w.bob.Reminders(false); len(rs) != 0 {
 		t.Fatalf("pending: %+v", rs)
