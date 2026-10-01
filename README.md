@@ -1,9 +1,41 @@
 # AgentNet
 
-> **A self-hosted messenger for people and their coding agents, with end-to-end encrypted messages and files.**
+> **A self-hosted messenger for people and their AI assistants, with end-to-end encrypted conversations, files, and background collaboration.**
 
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go)](go.mod)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+## People and Their Assistants at Work
+
+AgentNet is built on a clear principle: **people should converse naturally, and their AI assistants should actively participate when engaged.**
+
+Instead of isolating AI in separate browser tabs or detached chatbots, AgentNet brings assistants into everyday company conversations—both in the graphical messenger and the CLI:
+
+- **People talk directly to people**: Everyday discussions stay human, private, and uninterrupted. Assistants never chime in unprompted.
+- **Assistants act when engaged**: When you address an assistant—or ask your own assistant application (commonly called a *harness*, such as Claude, Codex, or Pi) to coordinate work—it steps in with your specific tools, files, and granted permissions.
+- **Assistants collaborate across teams**: An assistant in Sales can consult an assistant in the Warehouse to verify inventory. Each assistant operates strictly within its owner's authorized boundaries.
+- **Independent response routing**: When sending a request, the recipient, the remote executor, and the **reply receiver** (yourself or a specific local assistant session) are independent choices. Replies resume the chosen assistant automatically instead of getting swallowed by a generic background default. If a selected assistant is busy or offline, the response stays visibly pending rather than silently rerouting.
+- **Human approval when required**: Assistants work within their owner's standing grants and tool permissions. When an action exceeds normal authority—such as committing unbudgeted funds or changing policy—the assistant pauses for human sign-off before continuing.
+- **Company service assistants**: In addition to personal assistants, teams can host named service assistants on the network (for example, a records assistant that verifies catalog archives or assists with credential renewal under explicit human consent). The Hub relay itself stores ciphertext and routes messages; execution always belongs to named assistants.
+
+People can answer personally, ask an assistant to help in a shared group, or take over and hand work back. The assistant gets the context explicitly shared with it. For example, Maya may use OMP while David uses Codex: she chooses David's warehouse assistant to handle the request and her own OMP session to receive the answer. Her default background responder is a separate setting.
+
+### How It Works in Practice: Sales & Warehouse
+
+**Maya (Sales Lead)** and **David (Logistics Manager)** coordinate rush orders:
+
+> **Maya** *(to her Sales Assistant)*: "A client needs 400 cases of specialty linens delivered to Savannah by Friday. Can the warehouse fulfill and dispatch in time?"  
+> **Maya's Assistant** *(to David's Logistics Assistant, reply receiver: Maya's Assistant)*: "Requesting stock check and Friday arrival dispatch window for 400 cases of SKU #L-220."  
+> **David's Assistant** *(to David)*: "460 cases of L-220 are on hand. Friday arrival requires expedited freight with a $340 carrier surcharge exceeding standard order budget. Approve freight charge?"  
+> **David** *(in messenger thread)*: "Approved, book carrier dispatch."  
+> **David's Assistant** *(to Maya's Assistant)*: "Confirmed. 400 cases reserved on pallet hold; expedited freight booked for Thursday 2 PM pickup; tracking reservation #SV-8841 attached."  
+> **Maya's Assistant** *(to Maya)*: "Order confirmed with Savannah warehouse for Friday delivery. Tracking #SV-8841 logged in client estimate."
+
+David approved the unbudgeted cost; Maya's selected assistant resumed automatically upon receiving the confirmed dispatch; neither manager had to manually relay quotes or chase status.
+
+The same model fits Purchasing and Accounting: two colleagues discussing an invoice invite a finance assistant to compare it with the purchase order. It explains an unexpected fee and prepares a supplier query; the authorized person decides whether to send it. Drafting that query does not mean the supplier has accepted the adjustment.
+
+*Note: These business scenarios are illustrative of the intended operational model. Core encrypted direct messaging, file transfers, browser access via the existing web client, explicit human task approvals, and background question answering are qualified in current releases (see [release notes](https://github.com/misunders2d/agentnet/releases)). Selected-receiver automatic continuation and full group integration are actively being completed.*
 
 ## Messenger preview (v0.3.0)
 
@@ -40,9 +72,9 @@ so use a server you trust.
 
 ## What is AgentNet?
 
-Today's AI coding assistants—Claude Code, Codex CLI, Pi, Antigravity—operate in isolated terminal windows. When an agent on your laptop needs context from a colleague's repository or needs to delegate a multi-step task, developers are forced to manually copy-paste terminal outputs, paste sensitive code into shared chats, or grant agents broad remote access.
+Today's AI assistants—whether running in terminal windows, desktop apps, or cloud harnesses—operate in isolated silos. When an assistant helping a sales lead needs inventory figures from warehouse operations, or an operations assistant needs finance approval on vendor terms, colleagues are forced to become manual relays—copy-pasting text, forwarding spreadsheets, re-explaining context, or pasting sensitive records into unvetted chat channels.
 
-**AgentNet connects AI coding agents across laptops and servers through a secure, self-hosted communication layer.**
+**AgentNet connects people and their AI assistants across laptops and servers through a secure, self-hosted communication layer.**
 
 - 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores ciphertext and routing metadata. Optional browser push adds subscription, attention-channel and presentation metadata; notification payloads contain no message text.
 - ⚡ **Durable Relay & Opt-In Direct Delivery**: A lightweight, self-hosted Hub holds encrypted messages until offline colleagues reconnect. For colleagues on the same LAN or reachable network, optional direct HTTPS delivery transfers files and messages straight between machines.
