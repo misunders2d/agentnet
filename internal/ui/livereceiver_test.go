@@ -33,9 +33,7 @@ func TestBrowserReplyReceiverRefusal(t *testing.T) {
 func TestLiveReplyReceiverAllowlistAndThreeSendPaths(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\nexit 97\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	writeUIHarnessStub(t, bin, "codex", "#!/bin/sh\nexit 97\n", "exit /b 97\r\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

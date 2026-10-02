@@ -623,6 +623,9 @@ func TestAgentHeadOfLine(t *testing.T) {
 	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, q.ID) == 1 })
 	stopBob()
 	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
+	// Fixture delivery may already have advanced the daemon's sweep. Start
+	// this bounded-page check from the first request, with the worker stopped.
+	w.bob.agentSweep = agentSweep{}
 	// The first page holds only requests of the invited participation: the
 	// worker reports that it goes on, without running anything.
 	if !w.bob.runNext(tctx(t), nil) || st.runs() != 0 {

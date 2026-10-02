@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,21 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
+
+// writeUIHarnessStub creates a PATH-discoverable stand-in on either platform.
+// These provider tests must not launch a harness; bodies retain their failure
+// or invocation-marker behavior if that boundary regresses.
+func writeUIHarnessStub(t *testing.T, dir, name, unixBody, windowsBody string) {
+	t.Helper()
+	body := unixBody
+	if runtime.GOOS == "windows" {
+		name += ".cmd"
+		body = "@echo off\r\n" + windowsBody
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // liveWorld enrolls alice (admin) and bob on a local Hub and runs bob's
 // daemon; the page's Provider is over bob's real store.
@@ -522,9 +538,7 @@ func TestLiveResponderControl(t *testing.T) {
 	// stand-in binaries, so the test does not depend on what is installed.
 	bin := t.TempDir()
 	for _, name := range []string{"claude", "codex"} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeUIHarnessStub(t, bin, name, "#!/bin/sh\nexit 0\n", "exit /b 0\r\n")
 	}
 	t.Setenv("PATH", bin)
 	v, err := live.ResponderStatus()

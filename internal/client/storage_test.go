@@ -30,7 +30,7 @@ func localStorageFixture(t *testing.T) (*Agent, map[string]string) {
 		"downloads/id.age": strings.Repeat("d", 13), "downloads/id.direct": strings.Repeat("p", 5),
 		"opened/synthetic-file": strings.Repeat("o", 17),
 		"identity.json":         strings.Repeat("i", 100), "agent.db": strings.Repeat("b", 200),
-		"Downloads/user-saved": strings.Repeat("u", 999), "staging/nested/not-managed": strings.Repeat("n", 888),
+		"user-saved-files/user-saved": strings.Repeat("u", 999), "staging/nested/not-managed": strings.Repeat("n", 888),
 	}
 	for name, data := range files {
 		path := filepath.Join(a.home, filepath.FromSlash(name))

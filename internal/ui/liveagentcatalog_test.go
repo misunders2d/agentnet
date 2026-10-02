@@ -25,9 +25,7 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	bin := t.TempDir()
 	invoked := filepath.Join(bin, "invoked")
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\ntouch "+invoked+"\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	writeUIHarnessStub(t, bin, "pi", "#!/bin/sh\ntouch "+invoked+"\n", "type nul > \""+invoked+"\"\r\n")
 	t.Setenv("PATH", bin)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

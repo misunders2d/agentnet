@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 var v1 = []string{`CREATE TABLE a(x INTEGER);`}
@@ -113,7 +115,7 @@ func TestEmptySnapshotRebuiltBeforeUpgrade(t *testing.T) {
 	}
 	db.Close()
 	backup := path + ".v1.bak"
-	if err = os.WriteFile(backup, nil, 0600); err != nil {
+	if err = secfile.Write(backup, nil); err != nil {
 		t.Fatal(err)
 	}
 	db, err = Open(path, v2)
@@ -152,14 +154,14 @@ func TestExistingSnapshotPreserved(t *testing.T) {
 			}
 			snap := path + ".v1.bak"
 			if kind == "valid" {
+				if err = secfile.Touch(snap); err != nil {
+					t.Fatal(err)
+				}
 				if _, err = db.Exec("VACUUM INTO ?", snap); err != nil {
 					t.Fatal(err)
 				}
-				if err = os.Chmod(snap, 0600); err != nil {
-					t.Fatal(err)
-				}
 			} else {
-				if err = os.WriteFile(snap, []byte("nonempty interrupted snapshot"), 0600); err != nil {
+				if err = secfile.Write(snap, []byte("nonempty interrupted snapshot")); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -290,7 +292,7 @@ func TestConcurrentUpgradeKeepsOriginalSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	if err = os.WriteFile(path+".v1.bak", nil, 0600); err != nil {
+	if err = secfile.Write(path+".v1.bak", nil); err != nil {
 		t.Fatal(err)
 	}
 	errs := make(chan error, 8)

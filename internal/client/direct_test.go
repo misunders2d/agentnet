@@ -437,7 +437,7 @@ func TestSpoolKeptUntilReceiptRecorded(t *testing.T) {
 type slowPuts struct{ base http.RoundTripper }
 
 func (s slowPuts) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Method == "PUT" {
+	if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/v1/blobs/") {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return s.base.RoundTrip(r)
@@ -447,7 +447,7 @@ func (s slowPuts) RoundTrip(r *http.Request) (*http.Response, error) {
 // incoming messages still arrive while it is in progress.
 func TestQueuedUploadDoesNotBlockStream(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hub")
-	const beat = 250 * time.Millisecond // above a signed ack's round trip on slow CI disks
+	const beat = time.Second // allow signed ACK persistence on slow CI disks
 	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat}, "127.0.0.1:0")}
 	w.alice = mustJoin(t, filepath.Join(t.TempDir(), "alice"), testhub.BootstrapCode(t, dir), "alice")
 	code, _ := w.alice.Invite(tctx(t), "bob", time.Hour, false)
@@ -475,10 +475,12 @@ func TestQueuedUploadDoesNotBlockStream(t *testing.T) {
 	if s, _, _, _ := w.alice.store.outboxState(res.ID); s != stateQueued {
 		t.Fatalf("upload finished before the check (state %s); test is not measuring concurrency", s)
 	}
-	time.Sleep(3 * beat)
-	if w.hub.Hub.Stats().Acks.Load() == acks {
-		t.Fatal("no ping acknowledged while the upload ran")
-	}
+	eventually(t, "ping acknowledged during upload", func() bool {
+		if s, _, _, _ := w.alice.store.outboxState(res.ID); s != stateQueued {
+			t.Fatalf("upload finished before ping acknowledgement (state %s); test is not measuring concurrency", s)
+		}
+		return w.hub.Hub.Stats().Acks.Load() > acks
+	})
 	eventually(t, "upload to finish", func() bool { return state(t, w.alice, res.ID) == protocol.StateCustody })
 }
 

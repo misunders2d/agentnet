@@ -18,9 +18,7 @@ import (
 func TestLiveClosedReplyReceiverPreflightAndProjection(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	bin := t.TempDir()
-	if e := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/bin/sh\nexit 97\n"), 0700); e != nil {
-		t.Fatal(e)
-	}
+	writeUIHarnessStub(t, bin, "codex", "#!/bin/sh\nexit 97\n", "exit /b 97\r\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

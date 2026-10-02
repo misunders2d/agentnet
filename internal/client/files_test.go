@@ -622,9 +622,11 @@ func TestSenderOpensKeptDeviceMessageFile(t *testing.T) {
 	}
 	// The recipient's side is unchanged: it opens what it received.
 	msg := receive(t, w)
-	if _, _, err := w.bob.OpenFileFrom(tctx(t), "in", msg.ID, 0); err != nil {
-		t.Fatal(err)
+	r, f, err = w.bob.OpenFileFrom(tctx(t), "in", msg.ID, 0)
+	if err != nil || !bytes.Equal(readAll(t, r), data) || f.Name != "plan.txt" {
+		t.Fatalf("recipient opens file: %+v %v", f, err)
 	}
+	assertOnlyFiles(t, filepath.Join(w.bob.home, "opened"))
 }
 
 // A file received in a device message is kept here (its ciphertext, after

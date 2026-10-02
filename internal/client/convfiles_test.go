@@ -377,7 +377,9 @@ func TestSenderOpensKeptDMFile(t *testing.T) {
 	if m := convMsgByID(t, w.bob, conv, sent.ID); !m.Attachments[0].Openable {
 		t.Fatalf("recipient's view: %+v", m)
 	}
-	if _, _, err := w.bob.OpenFileFrom(tctx(t), "in", sent.ID, 0); err != nil {
-		t.Fatal(err)
+	r, f, err = w.bob.OpenFileFrom(tctx(t), "in", sent.ID, 0)
+	if err != nil || !bytes.Equal(readAll(t, r), imgData) || f.Name != "photo.png" {
+		t.Fatalf("recipient opens file: %+v %v", f, err)
 	}
+	assertOnlyFiles(t, filepath.Join(w.bob.home, "opened"))
 }
