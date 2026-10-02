@@ -1,15 +1,29 @@
-# Next messenger release contract — 2026-10-02
+# Messenger release v0.6.0 — 2026-10-02
 
-Status: implementation and acceptance in progress; not released. This contract
-supersedes older “later”, device-keeper, and isolated-skin proposals where they
-conflict. Historical release evidence remains historical evidence, not proof
-that the current candidate passes.
+Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
+`49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset
+digests verified.
+[CI 36982671958](https://github.com/misunders2d/agentnet/actions/runs/36982671958): native
+Linux/macOS/Windows, container and non-client race checks passed. The client
+race aggregate timed out at 1800s without an assertion failure or race
+diagnostic; the following Chromium stage was skipped. CI is not all green.
+Production: relay HTTPS and both managed client services report v0.6.0.
+Stopped-state backups were retained; client doctor checks exited 0 and identity,
+config, grants, peer pins and history were preserved. The observed client upgrades
+migrated schema 12 (v0.2.1) and schema 22 (v0.5.0) to schema 35.
+Authenticated page and served-app digest checks passed; full production
+navigation remains unqualified by the read-only smoke.
 
-Current candidate checkpoint: human/group conversations, named member and
+This release contract supersedes older “later”, device-keeper, and isolated-skin
+proposals where they conflict. Earlier release evidence remains historical.
+The initial candidate CI had macOS fixture failures; corrected final CI is
+recorded separately above.
+
+Released scope: human/group conversations, named member and
 outside-host participations, selected receivers, linked files/history,
 controls/typing and browser-local interfaces have scoped qualification.
-Accepted combined validation is **composite coverage, not one green command**:
-436 client tests pass, 6 opt-in tests skip; the original whole command timed
+Historical pre-release validation was **composite coverage, not one green command**:
+436 client tests passed, 6 opt-in tests skipped; the original whole command timed
 out. Migration snapshot/rollback checks pass on synthetic databases. Actual
 same-source process replacement does not establish historical schema upgrade
 or physical-platform safety. Source/CLI pointers are in the
@@ -18,8 +32,10 @@ or physical-platform safety. Source/CLI pointers are in the
 Teams snapshot review/invitations and selected history/files have scoped
 native 390px/browser 1280px qualification (MEL-502: In Review). Stale proposals
 require explicit renewed consent; later team changes grant no group authority.
-Still pending: actual Linux visible notification/click routing; physical
-Windows/macOS/Android checks; live non-production Drive permissions.
+Unverified limits accepted for the owner-authorized production rollout: actual
+Linux visible notification/click routing; physical Windows/macOS/Android checks;
+live non-production Drive permissions. Native CI does not establish those
+physical/live outcomes.
 Pi/OMP idle, busy/tool, file and restart delivery and Codex busy queue/clean-close
 backup have scoped actual evidence. OMP 18.4.8 optional clean-close backup has scoped actual evidence with a
 deterministic synthetic managed executable; original session/file preserved,
@@ -30,8 +46,9 @@ a second signed input waits durably during native prompt dispatch, then two
 ordered native turns/physical ACKs occur, default0/no replay, without a terminal
 nudge. In-flight sampling/tool timing remains untested coverage. Claude detached
 SessionEnd does not authorize backup. No blanket harness completion is claimed.
-Owner questions and final release approval remain outstanding. No release,
-installation or deployment is inferred from these passes.
+The owner authorized production publication and rollout with those limitations
+disclosed. Publication and individual production upgrades are established only
+by the verified records above, not inferred from scoped tests.
 
 The release must satisfy all open requirements in the Agent Net Revived Linear
 project, plus the owner's recorded messenger and storage requirements. There

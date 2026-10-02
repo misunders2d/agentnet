@@ -35,17 +35,31 @@ David approved the unbudgeted cost; Maya's selected assistant resumed automatica
 
 The same model fits Purchasing and Accounting: two colleagues discussing an invoice invite a finance assistant to compare it with the purchase order. It explains an unexpected fee and prepares a supplier query; the authorized person decides whether to send it. Drafting that query does not mean the supplier has accepted the adjustment.
 
-*These business scenarios illustrate the product model; they are not live business-operation evidence. The current source candidate includes groups, named participations and selected-receiver continuation with scoped qualification. It is not a newly accepted release or deployment; see [current candidate and remaining gates](docs/NEXT_RELEASE.md).*
+*These business scenarios illustrate the product model; they are not live business-operation evidence. v0.6.0 includes groups, named participations and selected-receiver continuation with scoped qualification; see [release scope and disclosed limits](docs/NEXT_RELEASE.md).*
 
-## Current source candidate — 2026-10-02
+## Current release — v0.6.0
 
-The candidate implements human/group conversations, linked devices, explicit
+Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
+`49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset
+digests verified.
+[CI 36982671958](https://github.com/misunders2d/agentnet/actions/runs/36982671958): native
+Linux/macOS/Windows, container and non-client race checks passed. The client
+race aggregate timed out at 1800s without an assertion failure or race
+diagnostic; the following Chromium stage was skipped. CI is not all green.
+Production: relay HTTPS and both managed client services report v0.6.0.
+Stopped-state backups were retained; client doctor checks exited 0 and identity,
+config, grants, peer pins and history were preserved. The observed client upgrades
+migrated schema 12 (v0.2.1) and schema 22 (v0.5.0) to schema 35.
+Authenticated page and served-app digest checks passed; full production
+navigation remains unqualified by the read-only smoke.
+
+v0.6.0 implements human/group conversations, linked devices, explicit
 member or outside-host assistant participation, authenticated message actions,
 human typing, files, workspaces and client-owned interfaces. Browser devices
 refer to execution hosts; they never run local harnesses. Recipient, addressed
 executor, reply receiver and default background responder remain separate.
 
-Qualification is composite evidence, **not one green full-suite command**:
+Historical pre-release qualification was composite evidence, **not one green full-suite command**:
 436 client tests passed and 6 opt-in tests skipped; the original whole command
 timed out. Focused native/browser and rendered journeys have their own scope.
 Teams snapshot review, group invitations and selected history/files have scoped
@@ -57,9 +71,12 @@ then two ordered native turns/ACKs occur without a terminal nudge or replay.
 In-flight sampling/tool timing remains untested; Claude clean-close backup
 remains unsupported.
 Actual Linux visible notification/click routing, physical Windows/macOS/Android
-checks and live non-production Drive access remain pending. No new release,
-installation or deployment is claimed. [Release contract](docs/NEXT_RELEASE.md)
-and [contributor handoff](docs/HANDOFF.md) describe these boundaries.
+checks and live non-production Drive access remain unverified limitations
+disclosed and accepted for the owner-authorized production rollout. Native CI
+does not establish those physical/live outcomes. The initial candidate CI had
+macOS fixture failures; final corrected CI is recorded separately above.
+[Release contract](docs/NEXT_RELEASE.md) and [contributor handoff](docs/HANDOFF.md)
+describe these boundaries.
 
 ### Opt-in CLI selection in this candidate
 

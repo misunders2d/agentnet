@@ -1,20 +1,37 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-> **Current source candidate — 2026-10-02:** read [NEXT_RELEASE.md](NEXT_RELEASE.md)
+> **Current release — v0.6.0:** read [NEXT_RELEASE.md](NEXT_RELEASE.md)
 > and [opt-in CLI examples](../README.md#opt-in-cli-selection-in-this-candidate).
+> Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
+> `49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset
+> digests verified.
+> [CI 36982671958](https://github.com/misunders2d/agentnet/actions/runs/36982671958): native
+> Linux/macOS/Windows, container and non-client race checks passed. The client
+> race aggregate timed out at 1800s without an assertion failure or race
+> diagnostic; the following Chromium stage was skipped. CI is not all green.
+> Production: relay HTTPS and both managed client services report v0.6.0.
+> Stopped-state backups were retained; client doctor checks exited 0 and identity,
+> config, grants, peer pins and history were preserved. The observed client upgrades
+> migrated schema 12 (v0.2.1) and schema 22 (v0.5.0) to schema 35.
+> Authenticated page and served-app digest checks passed; full production
+> navigation remains unqualified by the read-only smoke.
+>
 > Groups, named member/outside-host participations, selected reply receivers,
 > authenticated controls/typing and linked history/files have scoped native,
-> browser and rendered qualification. The stable candidate has accepted
-> composite regression coverage: 436 client tests pass, 6 opt-in tests skip;
-> the original whole command timed out, so no single-command full-suite pass
-> is claimed. Synthetic migration/snapshot rollback checks also pass; actual
-> same-source updater handoff does not prove historical schema migration.
+> browser and rendered qualification. Historical pre-release accepted
+> composite regression coverage: 436 client tests passed, 6 opt-in tests skipped;
+> the original whole command timed out; that attempt is not a single-command
+> full-suite pass. Synthetic migration/snapshot rollback checks also passed;
+> the earlier same-source updater handoff did not prove historical migration.
+> The production upgrades above establish only their observed upgrade paths.
 > Teams snapshot review/invitations and selected history/files are qualified at
 > native 390px/browser 1280px (MEL-502: In Review). Stale proposals require
 > explicit renewed consent; later team changes grant no group authority. Actual
 > Linux visible notification/click, physical Windows/macOS/Android and live non-prod
-> Drive gates remain open. Historical releases below do not qualify this
-> candidate; no new release or deployment is accepted.
+> Drive checks remain unverified limitations accepted for owner-authorized
+> production rollout; native CI does not establish those physical/live outcomes.
+> Initial candidate CI had macOS fixture failures; corrected final CI is recorded
+> separately above. Earlier releases below remain historical evidence.
 
 > **Target Audience:** Any incoming coding agent (Claude, Codex, Antigravity, Pi) or human engineer starting fresh in this repository without access to prior chat transcripts.
 >
