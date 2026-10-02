@@ -89,8 +89,14 @@ func (l *Live) Overview() (Overview, error) {
 		return o, err
 	}
 	for _, m := range review {
-		o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail),
-			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))})
+		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail),
+			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))}
+		if item.Notice {
+			if r, ok := l.a.NoticeReport(m); ok {
+				item.Report, item.Excerpt = &r, fmt.Sprintf("%s reported %d waiting request(s)", r.Host, len(r.Items))
+			}
+		}
+		o.Review = append(o.Review, item)
 	}
 	q, err := l.a.Quarantine()
 	if err != nil {
@@ -184,19 +190,26 @@ func (l *Live) Thread(id string) (Thread, error) {
 		}
 	}
 	for _, m := range c.Messages {
-		v := Message{ID: m.ID, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, At: m.At,
-			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail}
+		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, At: m.At,
+			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, Controls: m.Controls, Exec: m.Exec}
 		if m.Read != nil && !*m.Read {
 			v.Unread = true
 		}
-		for _, f := range m.Attachments {
-			v.Files = append(v.Files, File{Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath}) // the name it is saved under
+		for i, f := range m.Attachments {
+			fv := File{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Openable: f.Openable} // the name it is saved under
+			if !fv.Openable {
+				fv.Note = notKeptNote
+			}
+			v.Files = append(v.Files, fv)
 		}
 		if m.Dir == "in" {
 			v.Author = Author{Label: m.From, About: "Signed with " + m.From + "'s key. Whether a person or one of their agents wrote it is not recorded."}
 			v.Actions = ActionsFor(m.Kind, m.State)
 		} else {
 			v.Author = Author{Label: "This computer", About: "Sent from this installation: this page, the command line, or an agent session here. Which one is not recorded."}
+		}
+		if m.AgentID != "" {
+			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}
 		}
 		v.StateText = StateText(m.Dir, m.Kind, m.State, c.Peer)
 		switch Next(m.Dir, m.Kind, m.State, c.Peer, replied[m.ID]) {
@@ -280,6 +293,10 @@ func (l *Live) Send(d Draft) (Sent, error) {
 			return Sent{}, Refuse(sentence(err))
 		}
 	}
+	receiver, err := l.selectedReplyReceiver(d.ReplyReceiver)
+	if err != nil {
+		return Sent{}, err
+	}
 	files, cleanup, err := l.takeStaged(d.Files)
 	if err != nil {
 		return Sent{}, err
@@ -287,7 +304,11 @@ func (l *Live) Send(d Draft) (Sent, error) {
 	defer cleanup() // SendMessage encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Kind: d.Kind, Named: files})
+	target, err := l.namedSendTarget(ctx, d)
+	if err != nil {
+		return Sent{}, err
+	}
+	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Kind: d.Kind, Named: files, Target: target, ReplyReceiver: receiver})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}

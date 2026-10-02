@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +32,35 @@ var terminalLauncher = "xdg-terminal-exec"
 // clickOS is the platform whose click routes are built (tests change it).
 var clickOS = runtime.GOOS
 
+// urlOpener opens a URL in the person's browser (tests change it).
+var urlOpener = "xdg-open"
+
+// uiURL is the token-free address of the messenger page this daemon serves,
+// or "". Notification commands are observable outside this process; only the
+// browser's existing session may authenticate a click.
+// the daemon writes it to <home>/ui-url (cmd/agentnet uicmd.go) while it
+// serves one.
+func (a *Agent) uiURL() string {
+	data, err := os.ReadFile(filepath.Join(a.home, "ui-url"))
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(data)), "\n")
+	return publicUIURL(line)
+}
+
+func publicUIURL(line string) string {
+	u, err := url.Parse(line)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Opaque != "" || u.Host == "" {
+		return ""
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return ""
+	}
+	return (&url.URL{Scheme: "http", Host: u.Host, Path: "/"}).String()
+}
+
 // startConsole starts agentnet open in a console of its own (Windows;
 // console_windows.go). Tests replace it.
 var startConsole = startInOwnConsole
@@ -44,6 +75,46 @@ var startConsole = startInOwnConsole
 // or history click) and calls onClick for the standard click action while
 // the notification is live (on Windows, only for a real click on it).
 func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
+	// Local exact items land on their message; remote report snapshots land
+	// on Activity's actionable review surface, never their read-only message.
+	// A click only opens the page; it never accepts or sends anything.
+	// Reuse the daemon's workspace-bound page command when provided. Extra
+	// workspace homes share the shell page and have no separate ui-url file.
+	if a.openConv != nil {
+		argv = append([]string{}, a.openConv("")...)
+	}
+	if len(argv) == 0 && clickOS == "linux" {
+		page := a.uiURL()
+		if opener, err := exec.LookPath(urlOpener); err == nil {
+			if page != "" {
+				argv = []string{opener, page}
+			}
+		}
+	}
+	if len(argv) > 0 {
+		original, err := url.Parse(argv[len(argv)-1])
+		base := publicUIURL(argv[len(argv)-1])
+		if err == nil && base != "" {
+			params, parseErr := url.ParseQuery(original.Fragment)
+			workspace := params.Get("workspace")
+			if parseErr != nil || workspace != "" && !validWorkspaceID(workspace) {
+				return nil, nil
+			}
+			dest := base + "#review"
+			if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
+				dest = base + "#msg=" + target + "&dir=in"
+			}
+			if workspace != "" {
+				dest += "&workspace=" + url.QueryEscape(workspace)
+			}
+			argv[len(argv)-1] = dest
+			return argv, func() {
+				if err := a.launch(argv); err != nil {
+					a.Logf("notification click: %v; review with `agentnet inbox --review`", err)
+				}
+			}
+		}
+	}
 	var term string
 	switch {
 	case clickOS == "windows":
@@ -67,7 +138,7 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 	if term != "" {
 		argv = append([]string{term, "--title=AgentNet review", "--dir=" + a.reviewDir(), "--"}, argv...)
 	}
-	if protocol.ValidID(target) {
+	if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
 		argv = append(argv, target)
 	} else {
 		argv = append(argv, "--review")
@@ -77,6 +148,13 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 			a.Logf("notification click: %v; review with `agentnet inbox --review`", err)
 		}
 	}
+}
+
+// Routing reads only the stored notice classification; it grants nothing.
+func (a *Agent) isReceivedReviewNotice(id string) bool {
+	var yes bool
+	err := a.store.db.QueryRow(`SELECT (`+receivedNotice+`) FROM inbox WHERE id = ?`, envelope.KindMessage, envelope.StatusReviewNotice, id).Scan(&yes)
+	return err == nil && yes
 }
 
 // launch starts argv (never through a shell) in the person's graphical

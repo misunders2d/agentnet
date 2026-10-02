@@ -41,6 +41,10 @@ import (
 // ParticipationDomain starts a participation event's canonical bytes.
 const ParticipationDomain = "agentnet-participation-v1\n"
 
+// CapExternalParticipation covers exact non-member DM hosts and PID-bound
+// claimed excerpts. Every active session must advertise it; agi1 is separate.
+const CapExternalParticipation = "apx1"
+
 // Participation event types.
 const (
 	EventInvite  = "invite"
@@ -62,10 +66,21 @@ const (
 
 // EventAuthor is the device (and its person) that signed an event.
 type EventAuthor struct {
-	Person      string `json:"person"`
-	Roster      string `json:"roster"`
-	Address     string `json:"address"`
-	Fingerprint string `json:"fingerprint"`
+	Person         string `json:"person"`
+	Roster         string `json:"roster"`
+	Address        string `json:"address"`
+	Fingerprint    string `json:"fingerprint"`
+	GroupAdmission string `json:"group_admission,omitempty"`
+}
+
+// ParticipationGroup binds the original group invitation to signed epochs.
+// Current authority/context travels separately in bounded existing carriers.
+type ParticipationGroup struct {
+	Seq            int64    `json:"seq"`
+	Hash           string   `json:"hash"`
+	HostRole       string   `json:"host_role"`
+	HostAdmission  string   `json:"host_admission,omitempty"`
+	TaskAdmissions []string `json:"task_admissions,omitempty"`
 }
 
 // GrantRef names one earlier message of the DM exactly: its logical id and
@@ -80,6 +95,7 @@ type ParticipationHost struct {
 	Person      string `json:"person"`
 	Address     string `json:"address"`
 	Fingerprint string `json:"fingerprint"`
+	AgentID     string `json:"agent_id,omitempty"`
 }
 
 // ParticipationEvent is one signed step of a participation.
@@ -93,11 +109,12 @@ type ParticipationEvent struct {
 	TS     int64       `json:"ts"` // the author's claim; never used for ordering
 
 	// Invite only.
-	Host     *ParticipationHost `json:"host,omitempty"`
-	Grant    []GrantRef         `json:"grant,omitempty"`     // earlier messages of this DM the agent may be given
-	Audience string             `json:"audience,omitempty"`  // AudienceConversation
-	TaskKeys []string           `json:"task_keys,omitempty"` // member key fingerprints allowed follow-up tasks here
-	Note     string             `json:"note,omitempty"`      // shown to the host's person
+	Host     *ParticipationHost  `json:"host,omitempty"`
+	Grant    []GrantRef          `json:"grant,omitempty"`     // earlier messages of this DM the agent may be given
+	Audience string              `json:"audience,omitempty"`  // AudienceConversation
+	TaskKeys []string            `json:"task_keys,omitempty"` // member key fingerprints allowed follow-up tasks here
+	Note     string              `json:"note,omitempty"`      // shown to the host's person
+	Group    *ParticipationGroup `json:"group,omitempty"`
 
 	Sig []byte `json:"sig,omitempty"`
 }
@@ -126,6 +143,9 @@ func (e ParticipationEvent) Validate() error {
 	if !ValidID(a.Person) || !ValidHash(a.Roster) || !ValidFingerprint(a.Fingerprint) {
 		return errors.New("participation: invalid author")
 	}
+	if a.GroupAdmission != "" && !ValidHash(a.GroupAdmission) {
+		return errors.New("participation: invalid author group admission")
+	}
 	if _, _, err := SplitAddress(a.Address); err != nil {
 		return fmt.Errorf("participation: %w", err)
 	}
@@ -135,7 +155,7 @@ func (e ParticipationEvent) Validate() error {
 			return errors.New("participation: an invite has no prev, and names a host and the conversation audience")
 		}
 		h := e.Host
-		if !ValidID(h.Person) || !ValidFingerprint(h.Fingerprint) {
+		if !ValidID(h.Person) || !ValidFingerprint(h.Fingerprint) || (h.AgentID != "" && !ValidAgentID(h.AgentID)) {
 			return errors.New("participation: invalid host")
 		}
 		if _, _, err := SplitAddress(h.Address); err != nil {
@@ -154,6 +174,16 @@ func (e ParticipationEvent) Validate() error {
 		if err := uniqueValid(e.TaskKeys, MaxTaskKeys, ValidFingerprint); err != nil {
 			return fmt.Errorf("participation: task keys: %w", err)
 		}
+		if g := e.Group; g != nil {
+			if g.Seq < 0 || !ValidHash(g.Hash) || !ValidHash(a.GroupAdmission) || (g.HostRole != "member" && g.HostRole != "visitor") || (g.HostRole == "member" && !ValidHash(g.HostAdmission)) || (g.HostRole == "visitor" && g.HostAdmission != "") || len(g.TaskAdmissions) != len(e.TaskKeys) {
+				return errors.New("participation: malformed group invitation scope")
+			}
+			for _, epoch := range g.TaskAdmissions {
+				if !ValidHash(epoch) {
+					return errors.New("participation: invalid task group admission")
+				}
+			}
+		}
 		if len(e.Note) > MaxInviteNote || !utf8.ValidString(e.Note) {
 			return errors.New("participation: note too long or not text")
 		}
@@ -163,7 +193,7 @@ func (e ParticipationEvent) Validate() error {
 			}
 		}
 	case EventAccept, EventDecline, EventDismiss:
-		if !ValidHash(e.Prev) || e.Host != nil || e.Grant != nil || e.Audience != "" || e.TaskKeys != nil || e.Note != "" {
+		if !ValidHash(e.Prev) || e.Host != nil || e.Grant != nil || e.Audience != "" || e.TaskKeys != nil || e.Note != "" || e.Group != nil {
 			return errors.New("participation: an accept, decline or dismiss names only the event it follows")
 		}
 	default:

@@ -46,6 +46,8 @@ Messages and files:
   members    list the agents enrolled on your Hub and whether they are online
   person     create or show the person this installation speaks for
   dm         two-person conversations between persons
+  team       teams in your realm: list, create, join, leave, manage
+  group      create, invite, inspect and explicitly accept/decline groups
 
 Questions and tasks sent to you:
   accept     let your responder run a task or answer a held question
@@ -60,6 +62,7 @@ Questions and tasks sent to you:
   open       review an item (or --review, all waiting) with your coding agent
   review-to  tell another agent of yours, without content, when items wait here
   responder  choose the local harness that answers and runs tasks
+  receivers  inspect local selected reply receiver obligations and input state
 
 Identity and trust:
   join, whoami, fingerprint, trust
@@ -97,6 +100,14 @@ Tested on Linux; macOS and Windows run in CI. Also: docs/revival/INSTALL.md
 
 // topics maps a command (or "command subcommand") to its help text.
 var topics = map[string]string{
+	"receivers": `Usage: agentnet receivers [--json]
+
+Read local selected reply receivers and their input states. Delivery, accepted
+input and completed local continuation are separate. No live-session dispatch.
+
+ask/task/dm send/dm ask-agent accept --reply-receiver human|AGENT_ID.
+Managed receivers require --continue TEXT and --continue-mode question|task.
+--reply-binding ID reuses original receiver/instructions/mode without changes.`,
 	"join": `Usage: agentnet [--home DIR] join --agent NAME CODE-OR-LINK
 
 Enroll this computer as an agent with an invite code from your admin. Creates
@@ -128,7 +139,9 @@ Example (after the person chose "laptop"):
 	"whoami": `Usage: agentnet whoami
 
 Print this agent's address and key fingerprint. Give the fingerprint to
-coworkers who want to confirm they trust the right key.`,
+coworkers who want to confirm they trust the right key. Also ask the Hub
+for this device's admin/member role; show unknown if unavailable or an older
+Hub does not report it. Address labels (including admin/) grant no role.`,
 
 	"send": `Usage: agentnet send [--file PATH]... [--fallback] [--wait 5s] ADDRESS[#SESSION] TEXT
 
@@ -186,9 +199,9 @@ responder is working on it (use agentnet cancel ID first).
 Example:
   agentnet reply 3f9c... "use make deploy-staging"`,
 
-	"inbox": `Usage: agentnet inbox [--unread | --review] [--json]
+	"inbox": `Usage: agentnet inbox [--unread | --review] [--peek] [--json]
 
-List received messages (and mark them read). Questions and tasks show their
+List received messages (and mark them read unless --peek). Questions and tasks show their
 state: pending, held, awaiting, accepted, running, answered, manual, declined,
 failed, cancelled, interrupted, needs_human, resolved. Replies you asked to
 follow up show summarized with the summary. Reading never makes anything run
@@ -220,6 +233,7 @@ Windows desktop). Clicks are not handled on macOS.
 
   --unread   only unread messages
   --review   only items waiting for your decision; does not mark them read
+  --peek     inspect without changing any message's read state
   --json     machine-readable output`,
 
 	"conversation": `Usage: agentnet conversation [--json] [--offset N] [--limit N] ID
@@ -302,6 +316,7 @@ with ADDRESS#SESSION.`,
 
 	"person": `Usage: agentnet person
        agentnet person create NAME
+       agentnet person rename NAME
        agentnet person service
        agentnet person link
        agentnet person links
@@ -314,6 +329,12 @@ your person and its devices, marking this one. create NAME sets up a new
 person explicitly. NAME is a display name, not proof of identity: equal
 names never merge people. service marks an independent server or bot; it
 speaks as itself and does not create a human person.
+
+rename NAME changes your display name through the existing signed person
+record. Your person ID, devices, routing address, history and permissions
+stay the same. Names are self-claimed; copying a name grants no authority.
+Connect to your Hub before renaming. If confirmation is lost, refresh your
+person before retrying; the Hub may already have accepted the change.
 
 To add your phone or another computer, use Your devices on the page, or
 person link on an existing device. The private code expires in ten minutes
@@ -547,8 +568,9 @@ the harness not to change anything, but it is not a sandbox of its own:
           read-only sandbox and anything needing an approval is refused.
           MCP tools your config auto-approves are outside the sandbox and
           keep their effects.
-  pi      your skills, with only the read, grep, find and ls tools; skills
-          that need bash, edit or extension tools cannot work there.
+  pi      your settings, skills and extension tools; bash, edit, write and
+          powershell are off. Pi has no read-only shell or unattended
+          approval gate; extension tools keep their configured effects.
 Before approving a sender, check that what your settings already allow is
 what you would let their questions trigger. Tasks run with the harness's
 normal permissions and only after you accept them (or under a task grant you
@@ -607,16 +629,35 @@ Start it at login: agentnet help startup.`,
 	"doctor": `Usage: agentnet doctor
 
 Check version, keys and their permissions, whether the daemon runs, whether
-the Hub is reachable and speaks the same protocol, membership, the
+the Hub is reachable and speaks the same protocol, membership, Hub admin/member
+role (unknown when unverifiable), the build's VCS revision and clean/dirty state, the
 responder (and how many agents are approved for automatic answers), and how
 many items wait for your decision. Prints one line per check with what to
 do; exits non-zero if a check fails (waiting items are not a failure). On a
 server, where no desktop notification can be shown, this is where waiting
 items show up.`,
 
-	"version": `Usage: agentnet version
+	"team":  "Usage: agentnet " + teamHelp,
+	"group": "Usage: agentnet " + groupHelp,
 
-Print the program version and protocol generation.`,
+	"operator": `Usage: agentnet operator grant ADDRESS | list | revoke ADDRESS
+
+On a machine nobody sits at, let the person at ADDRESS decide the
+requests waiting here from their own messenger: accept, decline, reply,
+resolve, stop. The grant names that device's exact pinned key, is made
+here only, and nothing received can make or widen it. Granted operators
+receive this machine's review reports with the waiting requests named
+(id, sender, kind, state, first line); "agentnet review-to" alone still
+gets a count and nothing more. Each decision is applied once, in the state
+the operator saw; a repeated or stale one is refused and the operator is
+told what the request's state is now.
+`,
+	"version": `Usage: agentnet version [--schema]
+
+Print the program version and protocol generation, followed by the build's
+VCS revision and clean/dirty state when Go recorded them (otherwise unknown).
+The first line stays parseable for updates. --schema prints only that first
+line and the supported home schema, for the updater.`,
 
 	"cleanup": `Usage: agentnet cleanup [--saved]
 

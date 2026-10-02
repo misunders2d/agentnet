@@ -43,7 +43,7 @@ func TestHooksInstallMerge(t *testing.T) {
 	if s := string(first); !strings.Contains(s, "notify-me") || !strings.Contains(s, "guard.sh") {
 		t.Fatalf("other hooks lost: %s", first)
 	}
-	for _, event := range hookEvents {
+	for _, event := range harnessHookEvents("claude") {
 		groups := hooks[event].([]any)
 		last := groups[len(groups)-1].(map[string]any)["hooks"].([]any)[0].(map[string]any)
 		if cmd := last["command"].(string); !strings.HasSuffix(cmd, "hook claude") || !strings.Contains(cmd, `--home '`+home+`'`) {
@@ -251,7 +251,7 @@ func TestMergeHooksPortable(t *testing.T) {
 	a, _ := json.Marshal(once)
 	twice, _ := mergeHooks(parse(string(a)), "claude", cmd)
 	b, _ := json.Marshal(twice)
-	if string(a) != string(b) || strings.Count(string(a), "hook claude") != 5 {
+	if string(a) != string(b) || strings.Count(string(a), "hook claude") != len(harnessHookEvents("claude"))+1 {
 		t.Fatalf("not idempotent:\n%s\n%s", a, b)
 	}
 	removed, _ := mergeHooks(parse(string(b)), "claude", "")

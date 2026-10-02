@@ -22,6 +22,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 	"github.com/misunders2d/agentnet/internal/tlscert"
+	"github.com/misunders2d/agentnet/internal/ui/static"
 )
 
 // BootstrapFile holds the first admin invite inside the data directory.
@@ -54,6 +55,13 @@ type Config struct {
 	// API-only. Browsers need publicly trusted HTTPS (normally PlatformTLS).
 	Web bool
 
+	// BrowserOrigins are the explicit HTTPS origins of browser workspaces
+	// (another relay's page) allowed to call this relay's API and to be
+	// named in the page's connect-src; each request still passes every
+	// signature and membership check. Empty: same-origin only, as before.
+	// No wildcard (browserorigins.go, static/workspaces_origins.go).
+	BrowserOrigins []string
+
 	// PushHosts are push services this Hub sends Web Push to besides
 	// protocol.DefaultPushHosts (each a host name; a subscription's host
 	// must be one of them or a subdomain of one).
@@ -64,6 +72,7 @@ type Config struct {
 type Hub struct {
 	cfg     Config
 	store   *store
+	realmID string // loaded once from the database; independent of endpoint/TLS
 	unlock  func()
 	cert    tls.Certificate
 	certPEM string
@@ -74,10 +83,11 @@ type Hub struct {
 	releaseMu  sync.Mutex
 	releaseGen int64
 	presence   presence
-	membersGen atomic.Int64 // changes with the member list (see members.go)
-	linksGen   atomic.Int64 // changes when a device joins to be linked (persons.go)
-	push       pushKeys     // VAPID key pair (push.go)
-	notifier   *notifier    // sends due notification alerts (notify.go)
+	membersGen atomic.Int64  // changes with the member list (see members.go)
+	linksGen   atomic.Int64  // changes when a device joins to be linked (persons.go)
+	push       pushKeys      // VAPID key pair (push.go)
+	notifier   *notifier     // sends due notification alerts (notify.go)
+	signals    signalRuntime // live typing signals, memory only (signals.go)
 	waiters    waiters
 	stats      Stats
 	heartbeat  time.Duration
@@ -123,6 +133,11 @@ func Open(cfg Config) (*Hub, error) {
 			return nil, fmt.Errorf("invalid push host %q (a host name such as push.example.com)", h)
 		}
 	}
+	if approved, err := static.ValidateBrowserOrigins(cfg.BrowserOrigins); err != nil {
+		return nil, fmt.Errorf("browser origins: %w", err)
+	} else {
+		cfg.BrowserOrigins = approved
+	}
 	cfg.PublicURL = public
 	u, _ := url.Parse(public)
 	if err := secfile.EnsureDir(cfg.DataDir); err != nil {
@@ -144,8 +159,8 @@ func Open(cfg Config) (*Hub, error) {
 		}
 		h.waiters.notifyAll() // some waited-for messages may have expired
 	}, onChange: func(string) { h.membersChanged() }}
-	err = nil
-	if !cfg.PlatformTLS {
+	err = h.loadRealm()
+	if err == nil && !cfg.PlatformTLS {
 		err = h.loadOrCreateCert(u.Hostname())
 	}
 	if err == nil {

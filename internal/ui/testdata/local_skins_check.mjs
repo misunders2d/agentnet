@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {prepare} from '../static/local-skins.mjs';
+const [dir,expected]=process.argv.slice(2);
+const raw=await fs.readFile(dir+'/skin.json'),m=JSON.parse(raw);
+const files=[new File([raw],'skin.json')];for(const name of m.files)files.push(new File([await fs.readFile(dir+'/'+name)],name));
+assert.equal((await prepare(files)).item.digest,expected,'native and browser digest bytes');
+const invalid=async(change)=>{const bad=structuredClone(m);change(bad);await assert.rejects(prepare([new File([JSON.stringify(bad)],'skin.json'),...files.slice(1)]));};
+await invalid(x=>delete x.id);await invalid(x=>x.id='default');await invalid(x=>x.api=2);await invalid(x=>x.files.push(x.files[0]));await invalid(x=>x.files=['../entry.mjs']);await invalid(x=>x.entry='absent.mjs');await invalid(x=>x.files.push('foo.__proto__'));
+await assert.rejects(prepare(files.filter(x=>x.name!=='entry.mjs')));await assert.rejects(prepare([new File(['x'.repeat(16385)],'skin.json')]));
+await assert.rejects(prepare([new File(['null'],'skin.json')]),/Invalid AgentNet interface manifest/);
+console.log('local skin package validation and Go digest parity PASS');

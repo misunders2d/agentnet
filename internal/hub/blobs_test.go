@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -366,7 +367,7 @@ func TestPresenceKeepsNewerConnection(t *testing.T) {
 
 func TestRestoreRejectsUnsafeEntries(t *testing.T) {
 	for _, name := range []string{"../evil", "/abs", "blobs/../../x", "other/dir/file", `..\outside`,
-		`blobs\..\..\x`, `C:\x`, "c:/x", `blobs\0123456789abcdef0123456789abcdef.blob`, "blobs/NOTHEX.blob", "hub.db/.."} {
+		`blobs\..\..\x`, `C:\x`, "c:/x", `blobs\0123456789abcdef0123456789abcdef.blob`, "blobs/NOTHEX.blob", "hub.db/..", "hub.db.upgrade.lock"} {
 		var buf bytes.Buffer
 		gz := gzip.NewWriter(&buf)
 		tw := tar.NewWriter(gz)
@@ -377,6 +378,47 @@ func TestRestoreRejectsUnsafeEntries(t *testing.T) {
 		if _, err := Restore(&buf, filepath.Join(t.TempDir(), "d")); err == nil {
 			t.Fatalf("entry %q accepted", name)
 		}
+	}
+}
+
+func TestBackupExcludesUpgradeLock(t *testing.T) {
+	h, _, _ := testHub(t)
+	dir := h.cfg.DataDir
+	h.Close()
+	m, err := OpenMaintenance(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if _, err := os.Stat(filepath.Join(dir, "hub.db.upgrade.lock")); err != nil {
+		t.Fatalf("database upgrade lock was not produced: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := m.Backup(&buf); err != nil {
+		t.Fatal(err)
+	}
+	gz, err := gzip.NewReader(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	seen := map[string]bool{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !backupEntry.MatchString(hdr.Name) {
+			t.Fatalf("backup produced unrestorable entry %q", hdr.Name)
+		}
+		seen[hdr.Name] = true
+	}
+	if !seen["hub.db"] || !seen[pushKeyFile] {
+		t.Fatalf("backup omitted durable database or push key: %v", seen)
 	}
 }
 

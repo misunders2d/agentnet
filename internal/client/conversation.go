@@ -17,23 +17,27 @@ import (
 // as stored locally. Summary and Detail are local notes about the message,
 // never part of what the peer wrote.
 type ConversationMessage struct {
-	ID          string     `json:"id"`
-	Dir         string     `json:"dir"` // "in" (received) or "out" (sent)
-	From        string     `json:"from"`
-	To          string     `json:"to"`
-	Kind        string     `json:"kind"`
-	Status      string     `json:"status,omitempty"` // outcome carried by an answer or result
-	Body        string     `json:"body"`
-	ReplyTo     string     `json:"reply_to,omitempty"`
-	At          time.Time  `json:"at"`                // when this installation stored it
-	SentAt      time.Time  `json:"sent_at,omitempty"` // the sender's timestamp, for received messages
-	State       string     `json:"state,omitempty"`   // delivery state (out) or response state (in)
-	Path        string     `json:"path,omitempty"`    // relay or direct, for sent messages
-	Responder   string     `json:"responder,omitempty"`
-	Summary     string     `json:"summary,omitempty"` // follow-up summary written by the local responder
-	Detail      string     `json:"detail,omitempty"`  // other local note (failure, needs-human reason)
-	Read        *bool      `json:"read,omitempty"`    // received messages only
-	Attachments []FileInfo `json:"attachments,omitempty"`
+	ID          string           `json:"id"`
+	Dir         string           `json:"dir"` // "in" (received) or "out" (sent)
+	From        string           `json:"from"`
+	To          string           `json:"to"`
+	Kind        string           `json:"kind"`
+	Status      string           `json:"status,omitempty"` // outcome carried by an answer or result
+	Body        string           `json:"body"`
+	ReplyTo     string           `json:"reply_to,omitempty"`
+	At          time.Time        `json:"at"`                // when this installation stored it
+	SentAt      time.Time        `json:"sent_at,omitempty"` // the sender's timestamp, for received messages
+	State       string           `json:"state,omitempty"`   // delivery state (out) or response state (in)
+	Path        string           `json:"path,omitempty"`    // relay or direct, for sent messages
+	Responder   string           `json:"responder,omitempty"`
+	AgentID     string           `json:"agent_id,omitempty"`
+	Target      *envelope.Target `json:"target,omitempty"`
+	Summary     string           `json:"summary,omitempty"` // follow-up summary written by the local responder
+	Detail      string           `json:"detail,omitempty"`  // other local note (failure, needs-human reason)
+	Read        *bool            `json:"read,omitempty"`    // received messages only
+	Attachments []FileInfo       `json:"attachments,omitempty"`
+	Controls                     // reactions, edits and deletion applied to it (controls.go)
+	Exec        *ExecView        `json:"exec,omitempty"` // a sent request: where its executor last said it stands (headless.go)
 }
 
 // Conversation is one page of a conversation with one peer.
@@ -112,9 +116,10 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		if err != nil {
 			return Conversation{}, err
 		}
+		a.markOpenable(m.Attachments, m.Dir != "in")
 		c.Messages = append(c.Messages, m)
 	}
-	return c, nil
+	return c, a.decorateLegacy(peer, c.Messages)
 }
 
 // sortThread orders one thread's messages oldest first. Times have whole
@@ -202,6 +207,8 @@ type link struct {
 // peerLinksQuery reads the link indexes (schema step 8), never message
 // bodies. Conversation (DM) messages are not in reply threads: a link to
 // one ends the thread there, like a link to an unknown id.
+// Control rows (ref_id set) are in the graph too: they reply to nothing,
+// so they join no thread, and peerMessages leaves them out of any page.
 const peerLinksQuery = `SELECT id, coalesce(reply_to, ''), received_at FROM inbox INDEXED BY inbox_links WHERE sender = ? AND conv IS NULL
 	UNION ALL SELECT id, coalesce(reply_to, ''), created_at FROM outbox INDEXED BY outbox_links WHERE recipient = ? AND conv IS NULL`
 
@@ -235,7 +242,8 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			args = append(args, id)
 		}
 		rows, err := s.db.Query(`SELECT id, kind, coalesce(status, ''), body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
-			state, coalesce(responder, ''), coalesce(detail, '') FROM inbox WHERE sender = ? AND conv IS NULL AND id IN (`+marks+`)`, args...)
+			state, coalesce(responder, ''), coalesce(detail, ''),
+			CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(target, '') FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -243,10 +251,16 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			m := ConversationMessage{Dir: "in", From: peer}
 			var ts, recv int64
 			var read bool
-			var detail string
-			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail); err != nil {
+			var detail, target string
+			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail, &m.AgentID, &target); err != nil {
 				rows.Close()
 				return nil, err
+			}
+			if target != "" {
+				if err := json.Unmarshal([]byte(target), &m.Target); err != nil {
+					rows.Close()
+					return nil, err
+				}
 			}
 			m.SentAt, m.At, m.Read = time.Unix(ts, 0), time.Unix(recv, 0), &read
 			if m.State == stateSummary {
@@ -260,18 +274,24 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, '')
-			FROM outbox WHERE recipient = ? AND conv IS NULL AND id IN (`+marks+`)`, args...)
+		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, '')
+			FROM outbox WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			m := ConversationMessage{Dir: "out", To: peer}
-			var data string
+			var data, target string
 			var created int64
-			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail); err != nil {
+			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target); err != nil {
 				rows.Close()
 				return nil, err
+			}
+			if target != "" {
+				if err := json.Unmarshal([]byte(target), &m.Target); err != nil {
+					rows.Close()
+					return nil, err
+				}
 			}
 			var env envelope.Envelope
 			if err := json.Unmarshal([]byte(data), &env); err != nil {

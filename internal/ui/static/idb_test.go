@@ -35,6 +35,16 @@ try {
   for (let pos = "", page; (page = await st.after("held", pos, 2)).length; pos = page[page.length - 1].id) out.pages.push(page.map((v) => v.id).join(""));
   st.close();
   indexedDB.deleteDatabase(name);
+  // Blocked: an older connection (another tab, at version 1) keeps our open
+  // from upgrading; the open is refused at once, and once that connection
+  // goes away the late connection is closed, not left open: the database
+  // can be deleted without waiting on anyone.
+  const name2 = name + "-blocked";
+  const old = await new Promise((res, rej) => { const r = indexedDB.open(name2, 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  try { await openIDB(name2); out.blocked = "opened"; } catch (e) { out.blocked = e.message; }
+  old.close();
+  await new Promise((r) => setTimeout(r, 300)); // the deferred open completes and is closed
+  out.lateClosed = await new Promise((res) => { const d = indexedDB.deleteDatabase(name2); d.onblocked = () => res("blocked by a lingering connection"); d.onsuccess = () => res(true); d.onerror = () => res(String(d.error)); setTimeout(() => res("timeout"), 2000); });
 } catch (e) { out.fail = String(e && e.message || e); }
 await fetch("/result", { method: "POST", body: JSON.stringify(out) });
 </script>`
@@ -102,6 +112,10 @@ func TestDeviceStoreInChrome(t *testing.T) {
 		Kept  any      `json:"kept"`
 		Pages []string `json:"pages"`
 		Fail  string   `json:"fail"`
+		// A blocked open is refused at once; the connection that completes
+		// later is closed, so the database can be deleted right away.
+		Blocked    string `json:"blocked"`
+		LateClosed any    `json:"lateClosed"`
 	}
 	select {
 	case data := <-result:
@@ -121,5 +135,11 @@ func TestDeviceStoreInChrome(t *testing.T) {
 	}
 	if len(got.Pages) != 2 || got.Pages[0] != "ab" || got.Pages[1] != "cd" {
 		t.Fatalf("pages: %v", got.Pages)
+	}
+	if got.Blocked != "storage is blocked by another tab" {
+		t.Fatalf("a blocked open was not refused: %q", got.Blocked)
+	}
+	if got.LateClosed != true {
+		t.Fatalf("the connection that completed after the refusal was not closed: %v", got.LateClosed)
 	}
 }

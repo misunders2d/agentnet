@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -128,5 +129,26 @@ func TestRelayInstalledSkin(t *testing.T) {
 	Relay(home).ServeHTTP(w, httptest.NewRequest("GET", "/assets/skins/notebook/entry.mjs", nil))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "mount") || w.Header().Get("Content-Security-Policy") != relayCSP {
 		t.Fatal(w.Code, w.Header(), w.Body)
+	}
+}
+
+func TestBrowserLocalSkinDigest(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	dir := skinFixture(t)
+	root, err := os.OpenRoot(filepath.Join(dir, "notebook"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	skin, _, err := readSkin(root, "notebook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, "../testdata/local_skins_check.mjs", filepath.Join(dir, "notebook"), skin.Digest).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
 	}
 }

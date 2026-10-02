@@ -153,7 +153,7 @@ async function handle(req) {
   case "convRoot":
     return { root: (await store.get("convs", req.conv)).root };
   case "openFile": {
-    const f = await engine.api("/api/file?id=" + req.id + "&i=" + req.i);
+    const f = await engine.api("/api/file?id=" + req.id + "&i=" + req.i + (req.dir ? "&dir=" + req.dir : ""));
     return { name: f.name, size: f.size, image: f.image, b64: Buffer.from(f.bytes).toString("base64") };
   }
   case "notifyPrefs": // what the relay holds for this device

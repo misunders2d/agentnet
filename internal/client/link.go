@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -486,7 +485,8 @@ func (a *Agent) awaitLink(ctx context.Context, query, session string) (LinkStatu
 	if s.State != LinkPending {
 		return s, nil
 	}
-	backoff := time.Second
+	reconnect := newReconnectBackoff() // never reset: the pending stream is not a healthy connection
+	reconnect.Reset()
 	for {
 		linked, err := a.pendingStream(ctx, query, session)
 		if !linked && err == nil {
@@ -510,13 +510,11 @@ func (a *Agent) awaitLink(ctx context.Context, query, session string) (LinkStatu
 		case ctx.Err() != nil:
 			return s, ctx.Err()
 		}
-		wait := backoff/2 + rand.N(backoff/2+1)
 		select {
 		case <-ctx.Done():
 			return s, ctx.Err()
-		case <-time.After(wait):
+		case <-time.After(reconnect.NextBackOff()):
 		}
-		backoff = min(backoff*2, maxBackoff)
 	}
 }
 
@@ -540,7 +538,7 @@ func (a *Agent) pendingStream(ctx context.Context, query, session string) (linke
 		// A member's stream: activated before this stream connected. The
 		// Hub counts this session as live for a while: say what it reads,
 		// as a daemon's session does, so nobody waits on it.
-		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: []string{protocol.CapEnv2, protocol.CapNotify, protocol.CapPerson}, TS: time.Now().Unix()}
+		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: ownCaps, TS: time.Now().Unix()}
 		rec.Sign(a.id.Sign)
 		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
 			a.Logf("capabilities of the waiting session: %v", err)

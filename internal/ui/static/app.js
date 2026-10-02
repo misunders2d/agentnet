@@ -5,11 +5,29 @@
 
 const $ = (id) => document.getElementById(id);
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {}, lens: "classic",
-  drafts: {}, draftKey: null, sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
+  drafts: {}, draftKey: null, replyReceiver: null, replyReceiverHost: null, receiverCatalog: null, receiverCatalogSeq: 0, receiverBindings: [], sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
   dm: null, dmData: null, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
   files: [], opened: [], contactView: "recent", contactLimit: 20,
-  version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false };
+  version: "", updating: false, newVersion: "", dialogRestore: null, dialogBusy: false, gen: 0, switching: null, capturedFor: null };
 const lenses = ["classic", "comic", "zoom"];
+
+// moduleOf loads one of the program's own modules once (the optional Drive
+// panel and its setup page, installed with the program). A check may put
+// stand-ins in window.agentnetModules.
+const modules = {};
+function moduleOf(name) {
+  if (window.agentnetModules && window.agentnetModules[name]) return Promise.resolve(window.agentnetModules[name]);
+  return modules[name] || (modules[name] = import("/assets/" + name + ".mjs"));
+}
+
+// rawFor is a raw transport bound to the same membership as host (its
+// scoped path when the shell gives one): used only for an upload the JSON
+// API cannot carry. Captured with the host, never the selection later.
+function rawFor(host) {
+  const w = host && host.workspace;
+  const prefix = w && w.handle ? "/workspaces/" + w.id + "/" + w.handle : "";
+  return (path, init) => fetch(prefix + path, init);
+}
 
 // present flattens children and drops the ones a condition left out (false,
 // null, undefined, ""), so they never reach the page as text.
@@ -35,8 +53,11 @@ function el(tag, attrs, ...kids) {
   return e;
 }
 
-async function api(path, body) {
-  if (window.agentnet) return window.agentnet.api(path, body);
+// host is the membership an operation was started for (window.agentnet at
+// that moment, the default): choosing another workspace never retargets it.
+async function api(path, body, host) {
+  host = host || window.agentnet;
+  if (host) return host.api(path, body);
   if (window.agentnetEngine) return window.agentnetEngine.api(path, body); // a browser device (the relay's page)
   const opts = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -46,9 +67,12 @@ async function api(path, body) {
   return r.json();
 }
 
-const time = (s) => new Date(s).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+// A time is an RFC 3339 string, or unix seconds (a host's report and its
+// answers, client.Report, count in seconds).
+const asDate = (s) => new Date(typeof s === "number" && s < 1e11 ? s * 1000 : s);
+const time = (s) => asDate(s).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const when = (s) => {
-  const d = new Date(s);
+  const d = asDate(s);
   return d.toDateString() === new Date().toDateString() ? time(s)
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
@@ -79,8 +103,11 @@ function avatar(addr, cls) {
 // ---- overview ---------------------------------------------------------------
 
 async function loadOverview() {
+  const gen = state.gen;
   const o = await api("/api/overview");
+  if (gen !== state.gen) return o; // answered for a workspace no longer shown: nothing of it is drawn
   state.overview = o;
+  for (const id of ["profile-btn", "new-btn", "conversation-details"]) $(id).disabled = false;
   if (!state.version) state.version = o.version;
   else if (o.version && o.version !== state.version) updated(o.version);
   $("demo").hidden = !o.demo;
@@ -90,6 +117,7 @@ async function loadOverview() {
   $("machine").textContent = m.summary;
   fill($("machine-detail"), ...m.details.filter(Boolean).map((t) => el("p", {}, t)));
   $("new-btn").hidden = !!(o.link && o.link.state === "pending"); // a device waiting for approval sends nothing
+  renderOffline(o);
   $("release").hidden = !o.release;
   $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
   renderNotify(o.notify);
@@ -100,6 +128,8 @@ async function loadOverview() {
   if (state.dm || state.data) setHubBack();
   else if (state.hub && !$("hub").hidden) renderHub();
   if (state.pendingOpen) retryOpen();
+  if (o.reply_receivers) loadReceiverBindings();
+  if (state.dm || state.data) renderReplyReceiver();
   return o;
 }
 
@@ -116,16 +146,19 @@ async function loadOverview() {
 
 const rasterTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const fileLimits = () => (state.overview && state.overview.files) || null; // {max_file, max_message, max_count}
+const dmVisitor = (d = state.dmData) => !!d && d.role === "visitor";
+const humanGroup = (d = state.dmData) => d?.kind === "group";
 let fileSeq = 0;
 
-// filesAllowed: a DM open, sendable, writing to the person (not asking an
-// agent), or a device conversation open, sendable, not answering (an
+// filesAllowed: a DM open and sendable to its person or exact active agent,
+// or a device conversation open, sendable, not answering (an
 // answer goes without files).
-const filesAllowed = () => !!(fileLimits() && (state.dm ? state.dmData && !state.dmData.frozen && !state.dmAgent
+const filesAllowed = () => !!(fileLimits() && (state.dm ? state.dmData && !state.dmData.frozen &&
+  (!dmVisitor() || !!state.dmAgent) && !askGone()
   : state.thread && state.data && !state.data.key.pending && !state.answering));
 // noFilesWhy says why the open conversation takes no files now.
 const noFilesWhy = () => (state.answering ? "An answer goes without files: send them in a message of their own."
-  : state.dmAgent ? "Asking an agent takes no files." : "Files cannot be sent here.");
+  : dmVisitor() ? "This is invited agent context; you are not a member of this DM." : "Files cannot be sent here.");
 
 const fileExt = (name) => ((name.includes(".") ? name.split(".").pop() : "") || "FILE").slice(0, 4).toUpperCase();
 const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
@@ -142,6 +175,7 @@ function sniffImage(b) {
 
 // overLimit says why these files cannot go in one message ("" if they can).
 function overLimit(files) {
+  if (files.some((f) => f.reattachRequired)) return "AgentNet restarted. Remove and reattach the marked files before sending; your draft stays here.";
   const lim = fileLimits();
   if (!lim) return "Files cannot be sent here.";
   if (files.length > lim.max_count) return "A message takes at most " + lim.max_count + " files.";
@@ -201,7 +235,7 @@ function pendingChips(ul, removed) {
   ul.hidden = !state.files.length;
   fill(ul, ...state.files.map((f) => el("li", { class: "attach-chip" },
     f.url ? el("img", { src: f.url, alt: "", class: "attach-thumb" }) : el("span", { class: "file-icon", "aria-hidden": "true" }, fileExt(f.name)),
-    el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name), el("span", { class: "file-size" }, size(f.size))),
+    el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name), el("span", { class: "file-size" }, size(f.size) + (f.reattachRequired ? " · Reattach after restart" : ""))),
     el("button", { type: "button", class: "icon-btn remove-file", "aria-label": "Remove " + f.name, title: "Remove",
       onclick: () => { removeFile(f.key); if (removed) removed(); } }, "×"))));
 }
@@ -213,13 +247,15 @@ function renderPending() { pendingChips($("attach-list")); }
 // the bytes to its own AgentNet (never to the server), one at a time. Each
 // file keeps the id it was handed over under (f.staged) until a send names
 // it or it is removed, so a retry after a failure hands over only the rest.
-async function preparedFiles(files) {
+async function preparedFiles(files, host) {
+  host = host || window.agentnet;
   if (!files.length) return [];
-  if (window.agentnetEngine) return files.map((f) => ({ name: f.name, size: f.size, arrayBuffer: () => f.file.arrayBuffer() }));
+  if (files.some((f) => f.reattachRequired)) throw new Error(overLimit(files));
+  if (window.agentnetEngine && !host) return files.map((f) => ({ name: f.name, size: f.size, arrayBuffer: () => f.file.arrayBuffer() }));
   for (const [i, f] of files.entries()) {
     if (f.staged) continue;
     $("compose-hint").textContent = "Handing " + (i + 1) + " of " + files.length + " files to AgentNet on this computer…";
-    if (window.agentnet) { f.staged = await window.agentnet.stage(f.file); continue; }
+    if (host) { f.staged = await host.stage(f.file); continue; }
     const r = await fetch("/api/upload?name=" + encodeURIComponent(f.name), { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f.file });
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
     f.staged = (await r.json()).id;
@@ -251,16 +287,22 @@ function fileChips(m, files) {
   return el("div", { class: "files" }, files.map((f, i) => {
     const idx = f.index === undefined ? i : f.index;
     const slot = el("span", { class: "file-open" });
-    const action = sentHere ? null
+    const open = el("button", { type: "button", class: "text-btn", onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot, m.dir) }, "Open");
+    // A file sent from here opens only when the backend says a kept copy
+    // is openable; without that word it is with the recipient only. A
+    // received one opens unless the backend says it is not openable.
+    const action = sentHere ? (f.openable === true ? open : el("span", { class: "file-state" }, f.openable === false ? "Not kept on this device" : "Sent"))
       : f.availability === "requestable" ? el("button", { type: "button", class: "text-btn", onclick: (e) => requestFile(m, idx, from, e.currentTarget) }, "Get it from " + from)
         : f.availability === "requested" ? el("span", { class: "file-state" }, "Asked " + from + " for it")
-          : f.availability === "unavailable" ? el("span", { class: "file-state" }, "Not available")
-            : el("button", { type: "button", class: "text-btn", onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot) }, "Open");
+          : f.availability === "unavailable" || f.openable === false ? el("span", { class: "file-state" }, "Not available")
+            : open;
+    const toDrive = state.dm && state.dmData && state.dmData.peer.person && (sentHere ? f.openable === true : f.availability !== "unavailable" && f.openable !== false)
+      && el("button", { type: "button", class: "text-btn file-drive", title: "Copy this file to the DM's Google Drive space (outside encryption)", onclick: () => saveToDrive(m, idx, f.name) }, "To project space…");
     return el("span", { class: "file" }, el("span", { class: "file-icon", "aria-hidden": "true" }, fileExt(f.name)),
       el("span", { class: "file-text" }, el("span", { class: "file-name" }, f.name),
         el("span", { class: "file-size" }, f.saved ? "Saved: " + f.saved : size(f.size)),
         f.note && el("span", { class: "file-note" }, f.note)),
-      action, slot);
+      action, toDrive, slot);
   }));
 }
 
@@ -268,9 +310,11 @@ function fileChips(m, files) {
 // one of its files; it opens once that device sends it.
 async function requestFile(m, i, from, button) {
   button.disabled = true;
+  const host = window.agentnet, gen = state.gen;
   try {
-    await api("/api/file/request", { id: m.id, index: i });
+    await api("/api/file/request", { id: m.id, index: i }, host);
     announce("Asked " + from + " for it: it opens here once that device sends it (it has to be online).");
+    if (gen !== state.gen) return;
     await loadDM();
   } catch (e) {
     button.disabled = false;
@@ -278,15 +322,19 @@ async function requestFile(m, i, from, button) {
   }
 }
 
-// fetchFile gets a received file checked and decrypted: by the browser
-// device itself, or by this computer's AgentNet.
-async function fetchFile(id, i) {
-  if (window.agentnet) { const f = await window.agentnet.file(id, i); return { bytes: f.bytes, image: f.image || sniffImage(f.bytes) }; }
+// fetchFile gets a file checked and decrypted: by the browser device
+// itself, or by this computer's AgentNet. dir is the message's own
+// direction: a received id is the sender's choice and can equal a sent
+// one here, so only dir makes the reference exact.
+async function fetchFile(id, i, dir, host) {
+  const q = dir ? "&dir=" + dir : "";
+  host = host || window.agentnet;
+  if (host) { const f = await host.file(id, i, dir); return { bytes: f.bytes, image: f.image || sniffImage(f.bytes) }; }
   if (window.agentnetEngine) {
-    const f = await api("/api/file?id=" + encodeURIComponent(id) + "&i=" + i);
+    const f = await api("/api/file?id=" + encodeURIComponent(id) + "&i=" + i + q);
     return { bytes: f.bytes, image: f.image };
   }
-  const r = await fetch("/api/files/" + encodeURIComponent(id) + "/" + i);
+  const r = await fetch("/api/files/" + encodeURIComponent(id) + "/" + i + (dir ? "?dir=" + dir : ""));
   if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
   const bytes = new Uint8Array(await r.arrayBuffer());
   return { bytes, image: sniffImage(bytes) };
@@ -294,22 +342,25 @@ async function fetchFile(id, i) {
 
 // openFile shows a received picture in place, or saves any other file
 // under its safe name; its object URL lives until the conversation changes.
-async function openFile(id, i, name, button, slot) {
+async function openFile(id, i, name, button, slot, dir) {
   button.disabled = true;
   button.textContent = "Opening…";
+  const host = window.agentnet, gen = state.gen; // the membership this file is in
   try {
-    const { bytes, image } = await fetchFile(id, i);
+    const { bytes, image } = await fetchFile(id, i, dir, host);
+    if (gen !== state.gen) return; // that workspace is no longer shown
     const url = URL.createObjectURL(new Blob([bytes], { type: image || "application/octet-stream" }));
     state.opened.push(url);
     if (image) {
       fill(slot, el("img", { src: url, alt: name, class: "file-preview" }), el("a", { href: url, download: name, class: "text-btn" }, "Save"));
       button.hidden = true;
     } else {
-      const a = el("a", { href: url, download: name });
-      document.body.append(a);
-      a.click();
-      a.remove();
-      button.textContent = "Open";
+      // Not a picture: a link the person clicks to save it, where their
+      // browser puts downloads. Nothing is claimed about where it went.
+      const a = el("a", { href: url, download: name, class: "text-btn file-download" }, "Download " + name);
+      fill(slot, a);
+      button.hidden = true;
+      a.focus();
     }
   } catch (e) {
     button.textContent = "Open";
@@ -540,7 +591,8 @@ function reportSeen() {
 // showList shows the conversation list, in every lens (a summary alert,
 // or one whose conversation is not here).
 function showList(why) {
-  if (state.lens === "zoom") Zoom.go(0, {});
+  clearTyping();
+  if (state.lens === "zoom" && state.overview) Zoom.go(0, {});
   document.body.classList.remove("show-conv");
   if (why) announce(why);
 }
@@ -549,6 +601,13 @@ function showList(why) {
 // it; otherwise the list, saying so. The id is only looked up, never used
 // any other way.
 async function openClicked(conv) {
+  if (conv && typeof conv === "object" && conv.refused) { showList(conv.refused); return; }
+  if (conv && typeof conv === "object" && conv.workspace) { // named by a notification: shown first, then its conversation
+    try { await switchWorkspace(conv.workspace); } catch (e) { showList(e.message); return; }
+    conv = conv.target;
+  }
+  if (conv && typeof conv === "object" && conv.review) { showList(""); toggleReview(true); return; }
+  if (conv && typeof conv === "object" && conv.msg) { await openMessage({ id: conv.msg, conv: conv.conv, dir: conv.dir }); return; }
   if (!(state.overview.dms || []).some((d) => d.id === conv)) {
     showList("The conversation of that alert is not on this computer.");
     return;
@@ -561,10 +620,28 @@ async function openClicked(conv) {
 // on it) from the address, so going back or reloading never opens it again.
 function takeClicked() {
   const hash = location.hash || "";
-  if (!hash.startsWith("#conv=")) return null;
+  const review = hash === "#review" || hash.startsWith("#review&");
+  if (!review && !hash.startsWith("#msg=") && !hash.startsWith("#conv=")) return null;
   history.replaceState(null, "", location.pathname + location.search);
-  const m = /^#conv=([0-9a-f]{64})$/.exec(hash);
-  return m ? m[1] : null;
+  const q = new URLSearchParams(hash.slice(1));
+  let target;
+  if (review) target = { review: true };
+  else if (hash.startsWith("#msg=")) { // a decision notification: one exact message, optionally its conversation and direction
+    const id = q.get("msg") || "";
+    if (!/^[0-9a-f]{32}$/.test(id)) return null;
+    const conv = q.get("conv") || "", dir = q.get("dir") || "";
+    target = { msg: id, conv: /^[0-9a-f]{64}$/.test(conv) ? conv : "", dir: dir === "in" || dir === "out" ? dir : "" };
+  } else {
+    target = q.get("conv") || "";
+    if (!/^[0-9a-f]{64}$/.test(target)) return null;
+  }
+  // A workspace named (&workspace=ID) must be one registered here: an
+  // unknown one opens nothing, never the current workspace instead.
+  const wid = q.get("workspace");
+  if (wid === null) return target;
+  const w = wsAPI();
+  if (!w || !w.has(wid)) return { refused: "That notification is for a workspace this page does not have; nothing was opened." };
+  return { workspace: wid, target };
 }
 
 // clickedLater is an alert's click in a tab already open on this page: only
@@ -597,6 +674,7 @@ if (window.agentnet) window.agentnet.onOpen(openNotified);
 else window.agentnetOpen = openNotified;
 
 async function retryOpen() {
+  if (state.switching) await state.switching; // a workspace being shown first
   const p = state.pendingOpen;
   if (!p) return;
   const r = await api("/api/notify/resolve?chan=" + encodeURIComponent(p.chan)).catch(() => ({}));
@@ -604,6 +682,22 @@ async function retryOpen() {
   state.pendingOpen = null;
   if (state.lens === "zoom") await Zoom.go(2, { dm: r.conv });
   else await openDM(r.conv);
+}
+
+// renderOffline shows, above the conversations, that THIS workspace is not
+// connected to its server now (a browser device knows its own stream; a
+// computer's page learns it from its device line). Other workspaces are
+// their own connections and say so themselves.
+function renderOffline(o) {
+  const strip = $("offline");
+  if (!strip) return;
+  const d = o.device;
+  const off = !!(d && d.online === false && !d.revoked);
+  strip.hidden = !off;
+  if (off) {
+    const w = window.agentnet && window.agentnet.workspace;
+    strip.textContent = (w && w.name ? w.name + ": not" : "Not") + " connected to your server now. What you write here waits and is sent when it is back" + (w && window.agentnet.workspaces ? "; other workspaces are unaffected." : ".");
+  }
 }
 
 // machineLines says what this computer or browser is in one plain line;
@@ -825,22 +919,31 @@ function reportLine(c) {
   const seen = new Set(open.map((r) => r.id));
   const all = [...open, ...c.reports.filter((t) => !seen.has(t.id)).map((t) => ({ id: t.id, at: t.last_at, text: t.title, open: false }))]
     .sort((a, b) => new Date(b.at) - new Date(a.at));
-  if (!all.length) return null;
-  const latest = all[0];
-  if (!open.length) return el("details", { class: "report-line seen" },
-    el("summary", {}, "Earlier reports from " + c.peer + " · dismissed"),
-    el("ul", { class: "report-items" }, all.map((r) => el("li", {}, when(r.at), " · ", r.text))));
-  const d = el("details", { class: "tech" }, el("summary", {}, "Details"),
+  if (!open.length) return null; // dismissed ones are history: listed under "Earlier reports"
+  const latest = all.find((r) => r.open);
+  const conv = c.conversations[0] || c.singles[0]; // the newest conversation with that machine, if any
+  const d = el("details", { class: "tech" }, el("summary", {}, "Every report"),
     el("ul", { class: "report-items" }, all.map((r) => el("li", {},
       el("time", { datetime: r.at }, when(r.at)), " · ", r.open ? "not dismissed" : "dismissed", " · ",
       el("span", { class: "hint" }, r.text)))));
-  return el("div", { class: "report-line" + (open.length ? "" : " seen") },
-    el("p", {}, el("strong", {}, c.peer), " reported requests waiting for a person on that machine."),
-    el("p", { class: "hint" }, "Latest report " + when(latest.at) + ": \u201c" + firstSentence(latest.text) + "\u201d. Decide there; nothing here can approve them."),
+  const latestItem = ((state.overview && state.overview.review) || []).find((it) => it.notice && it.peer === c.peer && it.id === latest.id);
+  const v2 = latestItem && latestItem.report;
+  // A host's timestamp can name several snapshots in the same second.
+  // Show each, bound to its own report; their order and a live queue are not known.
+  const tied = all.filter((r) => r.open && +new Date(r.at) === +new Date(latest.at));
+  const snapshots = tied.map((r) => ({ r, item: ((state.overview && state.overview.review) || []).find((it) => it.notice && it.peer === c.peer && it.id === r.id) }));
+  const canAct = snapshots.some(({ item }) => item && item.report && item.report.items.some((x) => x.actionable));
+  return el("div", { class: "report-line" },
+    el("p", {}, el("strong", {}, c.peer), " reported at " + when(v2 ? v2.at : latest.at) + (tied.length > 1 ? ": " + tied.length + " snapshots at that time; their order is not known." : v2 ? ", from " + v2.host + ": " + plural(v2.items.length, "request", "requests") + " waiting there." : ": " + firstSentence(latest.text) + ".")),
+    el("p", { class: "hint" }, canAct ? "As their operator you can decide these from here; the host applies a decision only if the request is still in the state you saw."
+      : "That was true on that machine at that time. This page cannot see those requests or decide them: someone with access to " + c.peer + " decides there."),
+    tied.length > 1 ? el("div", {}, snapshots.map(({ r, item }) => el("div", {},
+      el("p", { class: "hint" }, "Snapshot from " + (item && item.report ? item.report.host : c.peer) + " at " + when(r.at) + ". This is what it reported then, not a live queue."),
+      item && item.report ? reportItems(item) : el("p", { class: "hint" }, r.text)))) : v2 && reportItems(latestItem),
     el("div", { class: "report-actions" },
-      open.length ? el("button", { type: "button", class: "chip", onclick: (e) => dismissReports(c.peer, e.currentTarget),
-        title: "Clears these reports on this computer only; the requests still wait on " + c.peer }, "Dismiss " + plural(open.length, "report", "reports"))
-        : el("span", { class: "hint" }, "Dismissed"),
+      conv && el("button", { type: "button", class: "chip", onclick: () => { toggleReview(false); openThread(conv.id); } }, "Open conversation"),
+      el("button", { type: "button", class: "chip", onclick: (e) => dismissReports(c.peer, e.currentTarget),
+        title: "Hides these reports on this computer only; nothing changes on " + c.peer }, "Dismiss " + plural(open.length, "report", "reports") + " here"),
       d));
 }
 
@@ -872,7 +975,11 @@ function contactBody(c, open) {
     c.conversations.length > 0 && el("ul", { class: "thread-list", "aria-label": "Conversations with " + c.peer },
       c.conversations.map((t) => threadRow(t, open, false))),
     c.singles.length > 0 && el("button", { type: "button", class: "singles-toggle", "aria-expanded": String(singlesOpen),
-      onclick: () => { state.singlesOpen[c.peer] = !singlesOpen; rerenderContacts(); } },
+      onclick: () => {
+        state.singlesOpen[c.peer] = !singlesOpen;
+        rerenderContacts();
+        if (state.lens !== "zoom" && !$("hub").hidden && sameHub(state.hub, { kind: "device", key: c.peer })) renderHub();
+      } },
       (singlesOpen ? "Hide " : "") + plural(c.singles.length, "single message", "single messages") +
       (unreadSingles && !singlesOpen ? " · " + unreadSingles + " new" : "") + (singlesOpen ? "" : " (not linked to a conversation)")),
     singlesOpen && el("ul", { class: "thread-list singles", "aria-label": "Single messages from " + c.peer }, c.singles.map((t) => threadRow(t, open, true))),
@@ -912,7 +1019,305 @@ function peopleSection() {
     ...linkNotices().map((n) => el("li", {}, n)),
     el("li", { class: "hint person-me" }, meLine()),
     ...people.map((p) => personRow(p, dms.filter((d) => d.peer.person && d.peer.person === p.person))),
-    !people.length && el("li", { class: "hint empty-list" }, "No one else on your server has set up a person yet.")];
+    !people.length && el("li", { class: "hint empty-list" }, "No one else on your server has set up a person yet."),
+    ...groupsSection(), ...teamsSection()];
+}
+
+function groupInvitationNotices(t) {
+  const o = state.overview, records = o?.group_invitations || [];
+  return records.filter(i => {
+    if (t && i.conv !== t.id) return false;
+    const room = t && t.id === i.conv ? t : (o.dms || []).find(d => d.id === i.conv);
+    if ((room?.members || []).some(m => m.person === i.target)) return false;
+    const other = records.filter(n => n.id !== i.id && n.conv === i.conv && n.target === i.target && n.direction === i.direction);
+    if (i.direction === "out" && i.status === "stale") return !other.some(n => n.status === "pending" || n.status === "accepted");
+    return i.direction === "in" && i.status === "accepted" && !room && !other.some(n => n.status === "pending");
+  });
+}
+function groupInvitationNotice(i) {
+  return i.direction === "out" ? "Invitation to " + personLabelOf(i.target) + " is stale. Review current people and history, send a fresh invitation, and obtain fresh consent."
+    : "Your consent to " + i.title + " is recorded; you have not joined yet. Membership publication is pending. If the group changed, ask the inviter for a fresh invitation and accept that new proposal.";
+}
+async function reviewFreshGroupInvitation(i, open = openDM) {
+  const host = window.agentnet, gen = state.gen, ws = wsNow();
+  await open(i.conv);
+  if (window.agentnet !== host || state.gen !== gen || wsNow() !== ws || state.dmData?.id !== i.conv) return;
+  inviteGroupDialog(state.dmData, i.target);
+}
+
+function groupsSection(open = openDM) {
+  const o = state.overview;
+  if (!o?.groups) return [];
+  return [el("li", { class: "result-head" }, "Groups", el("button", { type: "button", class: "text-btn", onclick: newGroupDialog }, "New group…")),
+    ...(o.group_invitations || []).filter(i => i.direction === "in" && i.status === "pending").map(i => el("li", {},
+      el("button", { type: "button", class: "thread-row", onclick: () => groupInvitationDialog(i) }, "Invitation: " + i.title + " · from " + i.inviter))),
+    ...groupInvitationNotices().map(i => el("li", { class: "hint" }, groupInvitationNotice(i), i.direction === "out" && el("button", { type: "button", class: "text-btn", onclick: () => reviewFreshGroupInvitation(i, open) }, "Review fresh invitation for " + personLabelOf(i.target) + "…"))),
+    ...(o.dms || []).filter(humanGroup).map(d => dmRow(d, open))];
+}
+
+// Team membership is only a reviewed person selection, never room authority.
+function groupPeopleSelection(t, host, gen, ws, initial, onReview = () => {}) {
+  const owner = state.overview?.person?.person, chosen = new Map();
+  const excluded = id => id === owner || (t?.members || []).some(m => m.person === id);
+  const current = () => gen === state.gen && wsNow() === ws && window.agentnet === host && state.overview?.person?.person === owner;
+  const chips = el("div", { class: "person-chips", "aria-label": "Selected people" });
+  const note = el("p", { class: "hint" });
+  const team = el("select", { id: "group-team", "aria-label": "Team" }, el("option", { value: "" }, "Choose a team"));
+  let reviewed = !!initial, loading = false, seq = 0;
+  const draw = () => fill(chips, ...[...chosen.keys()].map(id => el("span", { class: "chip person-chip" }, personLabelOf(id),
+    el("button", { type: "button", class: "chip-x", "aria-label": "Remove " + personLabelOf(id), onclick: () => { if (!state.dialogBusy) { chosen.delete(id); draw(); } } }, "×"))),
+    !chosen.size && el("span", { class: "hint" }, "Nobody selected."));
+  const add = snap => {
+    if (!Array.isArray(snap.persons)) throw Error("The team snapshot has no verified people list.");
+    for (const p of snap.persons) if (p && typeof p.id === "string" && !excluded(p.id)) chosen.set(p.id, p);
+    reviewed = true; onReview(); draw(); note.textContent = "Current team people as verified at " + when(snap.at) + ". Review and remove anyone you do not mean. Later team changes grant no group or history access.";
+  };
+  if (initial) add(initial); else draw();
+  const addTeam = el("button", { type: "button", class: "text-btn", onclick: async () => {
+    if (!current() || state.dialogBusy || loading || !team.value) return;
+    loading = true; addTeam.disabled = true; const request = ++seq;
+    try {
+      const snap = await api("/api/teams/snapshot", { teams: [team.value] }, host);
+      if (current() && request === seq) add(snap);
+    } catch (e) { if (current()) note.textContent = e.message; }
+    finally { loading = false; if (current()) addTeam.disabled = false; }
+  } }, "Add team people");
+  api("/api/teams", undefined, host).then(v => {
+    if (!current()) return;
+    fill(team, el("option", { value: "" }, "Choose a team"),
+      (v.current ? v.teams || [] : []).filter(t => t.listed && !t.archived && !t.conflict).map(t => el("option", { value: t.id }, t.name)));
+    if (!v.current) note.textContent = "Current teams are unavailable. No people were added.";
+  }).catch(e => { if (current()) note.textContent = e.message; });
+  return { nodes: [el("label", { for: "group-team", class: "field-label" }, "Team (optional)"), team, addTeam, chips, note],
+    current, reviewed: () => reviewed, persons: () => { if (loading) throw Error("Wait for the current team snapshot before inviting."); return [...chosen.keys()]; },
+    forget: id => { chosen.delete(id); draw(); } };
+}
+
+function newGroupDialog(initial) {
+  initial = Array.isArray(initial?.persons) ? initial : null;
+  const host = window.agentnet, gen = state.gen, ws = wsNow();
+  const name = el("input", { id: "group-name", maxlength: 64, autocomplete: "off" });
+  const selection = groupPeopleSelection(null, host, gen, ws, initial);
+  let created = null;
+  dialog({ title: "New group", ok: "Create group", focus: name,
+    body: [el("label", { for: "group-name", class: "field-label" }, "Group name"), name, ...selection.nodes,
+      el("p", { class: "hint" }, "Earlier context: this new group has no earlier messages or files to share."),
+      el("p", { class: "hint" }, "You become its first administrator. Others join only after accepting their invitation; ordinary messages never run an agent.")],
+    run: async () => {
+      if (!selection.current()) throw Error("Workspace changed; review your group again.");
+      const people = selection.persons();
+      if (!created) { created = await api("/api/groups/new", { title: name.value.trim() }, host); name.disabled = true; }
+      for (const person of people) {
+        if (!selection.current()) throw Error("Workspace changed; the created group and sent invitations remain there. Review the remaining people again.");
+        try { await api("/api/groups/invite", { conv: created.id, person, history: {} }, host); }
+        catch (e) { throw Error("Group created. Sent invitations remain separate from membership; review remaining people and retry explicitly. " + e.message); }
+        selection.forget(person);
+      }
+      if (!selection.current()) return;
+      if (people.length) announce("Invitations sent separately; each person still must accept. A changed group may require a fresh invitation and consent.");
+      await loadOverview(); if (state.lens === "zoom") await Zoom.go(2, {dm:created.id}); else await openDM(created.id);
+    } });
+}
+
+function groupInvitationDialog(i) {
+  const host = window.agentnet, gen = state.gen, ws = wsNow();
+  const decide = async accept => {
+    if (gen !== state.gen || wsNow() !== ws) throw Error("Workspace changed; review the invitation again.");
+    await api("/api/groups/decide", { id: i.id, accept }, host);
+    if (gen !== state.gen || wsNow() !== ws) return;
+    announce(accept ? "Acceptance recorded. Membership waits for the administrator's verified update." : "Invitation declined.");
+    await loadOverview();
+  };
+  dialog({ title: "Join " + i.title + "?", ok: "Accept invitation",
+    body: [el("p", {}, "Invitation from " + i.inviter + ". Accepting joins this group after the administrator publishes its signed update."),
+      el("p", { class: "hint" }, (i.history || []).length ? "Shared earlier context: " + plural(i.history.length, "selected message", "selected messages") + " and only their attached files. Other earlier messages stay private." : "No earlier messages or files are shared."),
+      el("button", { type: "button", class: "text-btn", onclick: async () => { try { await decide(false); $("dialog").close(); } catch(e) { announce(e.message); } } }, "Decline invitation")],
+    run: () => decide(true) });
+}
+
+function inviteGroupDialog(t, initialPerson) {
+  const host = window.agentnet, gen = state.gen, ws = wsNow();
+  const people = (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !(t.members || []).some(m => m.person === p.person));
+  const person = el("select", { id: "group-invite-person" }, people.map(p => el("option", { value: p.person }, p.label + " · " + p.address)));
+  if (initialPerson) { if (!people.some(p => p.person === initialPerson)) { announce("That person is no longer eligible. Review current group members and people."); return; } person.value = initialPerson; }
+  const selection = groupPeopleSelection(t, host, gen, ws, null, () => { person.disabled = true; });
+  const mode = el("select", { id: "group-history-mode" }, el("option", { value: "none" }, "Share nothing earlier"), el("option", { value: "last" }, "Last messages"), el("option", { value: "since" }, "Messages since a date"), el("option", {value:"selected"},"Selected messages"));
+  const last = el("input", { id: "group-history-last", type: "number", min: 1, max: 64, value: "10" });
+  const since = el("input", { id: "group-history-since", type: "datetime-local" });
+  dialog({ title: "Invite to " + t.title, ok: "Send invitation", focus: person,
+    body: [el("label", { for: "group-invite-person", class: "field-label" }, "Single person (team selection uses the people below)"), person, ...selection.nodes,
+      !people.length && el("p", { class: "hint" }, "No other pinned person available. Open a person's conversation to check their device first."),
+      el("label", { for: "group-history-mode", class: "field-label" }, "Earlier context"), mode,
+      el("label", { for: "group-history-last" }, "Last messages (up to 64)"), last,
+      el("label", { for: "group-history-since" }, "Since"), since,
+      el("fieldset",{class:"share-choices"},el("legend",{},"Selected messages (up to 64)"),(t.messages || []).filter(m=>m.group_ref).slice(-64).map(m=>choice("checkbox","group-history-selected",m.id,el("span",{},dmAuthor(m,t)+": "+(firstLine(m.body,70)||"Files only"),(m.attachments || []).length>0&&el("span",{class:"kind-tag"},"Includes "+plural(m.attachments.length,"file","files")))).row)),
+      el("p", { class: "hint" }, "Selected messages include their attached files. An invitation grants no access until that person accepts; other history stays private.")],
+    run: async () => {
+      if (!selection.current() || state.dm !== t.id) throw Error("Conversation changed; review the invitation again.");
+      const selected=new Set([...document.querySelectorAll('input[name="group-history-selected"]:checked')].map(n=>n.value));
+      const history = mode.value === "last" ? { last: Number(last.value) } : mode.value === "since" ? { since: new Date(since.value).getTime() } : mode.value==="selected"?{refs:t.messages.filter(m=>selected.has(m.id)).map(m=>m.group_ref)}:{};
+      if (mode.value === "since" && !Number.isFinite(history.since)) throw Error("Choose a valid date.");
+      const targets = selection.reviewed() ? selection.persons() : [person.value];
+      if (!targets.length || targets.some(p => !p)) throw Error("Choose at least one person to invite.");
+      for (const target of targets) {
+        if (!selection.current() || state.dm !== t.id) throw Error("Conversation changed; sent invitations stay separate. Review the remaining people again.");
+        try { await api("/api/groups/invite", { conv: t.id, person: target, history }, host); }
+        catch (e) { throw Error("Sent invitations remain separate from membership; review remaining people and retry explicitly. " + e.message); }
+        selection.forget(target);
+      }
+      if (!selection.current()) return;
+      announce("Invitations sent separately; membership waits for each person's explicit acceptance. A changed group may require a fresh invitation and consent."); await loadOverview();
+    } });
+}
+
+function groupMemberCount(t) { return plural(t.members.length, t.frozen ? "last verified member" : "current member", t.frozen ? "last verified members" : "current members"); }
+
+function renderGroupMembers(t) {
+  const box = $("agents"), me = state.overview?.person?.person;
+  const admin = !t.frozen && !dmVisitor(t) && t.members.some(m => m.person === me && m.admin);
+  box.hidden = false;
+  fill(box, el("details", {}, el("summary", {}, groupMemberCount(t)),
+    el("ul", {}, t.members.map(m => el("li", {}, m.label + " · " + m.address + (m.admin ? " · Administrator" : " · Member"),
+      admin && [el("button", { type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,m.admin?"demote":"promote",m) }, m.admin?"Remove administrator role":"Make administrator"), el("button",{type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"remove",m)},"Remove member")])))),
+    ...groupInvitationNotices(t).filter(i => i.direction === "out").map(i => el("p", { class: "hint" }, groupInvitationNotice(i), admin && el("button", {type:"button",class:"text-btn",onclick:()=>inviteGroupDialog(t,i.target)},"Review fresh invitation for " + personLabelOf(i.target) + "…"))),
+    admin && el("button", {type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"rename")},"Rename group…"),
+    admin && el("button", { type: "button", class: "text-btn", onclick: () => inviteGroupDialog(t) }, "Invite a person…"),
+    !t.frozen && !dmVisitor(t) && el("button",{type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"leave")},"Leave group…"));
+}
+
+function groupChangeDialog(t,action,person) {
+  const host=window.agentnet,gen=state.gen,ws=wsNow();
+  const words={rename:"Rename group",promote:"Make administrator",demote:"Remove administrator role",remove:"Remove member",leave:"Leave group"}, name=action==="rename"?el("input",{id:"group-rename",maxlength:64,value:t.title}):null;
+  dialog({title:words[action]+(person?": "+person.label:""),ok:words[action],focus:name,
+    body:[name&&[el("label",{for:"group-rename",class:"field-label"},"Group name"),name],
+      el("p",{class:"hint"},action==="leave"?"Leaving stops future group messages once peers receive your departure. Saved copies remain. The last administrator must appoint a successor first.":action==="remove"?"This removes future group access after the signed change arrives. Saved copies cannot be recalled.":action==="demote"?"The last administrator must appoint a successor first.":action==="promote"?"This person can invite members and manage the group; it grants no task permissions.":"Current members receive the new name; the group's identity and history stay the same.")],
+    run:async()=>{
+      if(gen!==state.gen||wsNow()!==ws||state.dm!==t.id)throw Error("Conversation changed; review this action again.");
+      const r=await api("/api/groups/manage",{conv:t.id,action,...(person?{person:person.person}:{}),...(name?{title:name.value.trim()}:{})},host);
+      if(gen!==state.gen||wsNow()!==ws)return;
+      announce(r.queued?"Departure saved here and queued; other members have not confirmed receipt.":"Group change confirmed.");await loadOverview();await loadDM();
+    }});
+}
+
+// ---- teams (R04): signed person teams of this workspace -------------------------------------
+//
+// A team is a current list of persons, kept by the relay as a signed chain
+// and verified by this device (or its AgentNet). Being in a team grants
+// nothing: no conversation, history, job or permission follows from it.
+// What is shown is the verified state kept here; whether it is current is
+// said, never assumed.
+const teamStatusText = { unknown: "Teams not read yet", unsupported: "This server does not have teams", unavailable: "Teams could not be read now; this is the last verified state", conflict: "A team record conflicts with the one kept here; it is frozen" };
+async function loadTeams() {
+  const host = window.agentnet, gen = state.gen;
+  try {
+    const v = await api("/api/teams", undefined, host);
+    if (gen !== state.gen) return;
+    state.teams = v;
+  } catch (e) {
+    if (gen !== state.gen) return;
+    state.teams = { status: /404/.test(e.message) ? "unsupported" : "unavailable", current: false, reason: e.message, teams: (state.teams && state.teams.teams) || [] };
+  }
+  if (state.contactView === "people" && !state.query.trim()) rerenderContacts();
+  if (state.hub && state.hub.kind === "team" && !$("hub").hidden) renderHub();
+}
+const personLabelOf = (id) => {
+  const o = state.overview || {};
+  if (o.person && o.person.person === id) return "You";
+  const p = (o.people || []).find((x) => x.person === id);
+  return p ? p.label : "someone not on your server now (" + id.slice(0, 8) + "…)";
+};
+function teamsSection() {
+  const v = state.teams;
+  const o = state.overview;
+  const head = el("li", { class: "result-head teams-head" }, "Teams",
+    v && v.status !== "unsupported" && o.person && el("button", { type: "button", class: "text-btn", onclick: () => teamDialog(null) }, "New team…"));
+  if (!v) return [head, el("li", { class: "hint empty-list" }, "Reading teams…")]; // loaded when People is chosen and on each change; rendering never fetches
+  const q = state.query.trim().toLowerCase();
+  const teams = (v.teams || []).filter((t) => !q || (t.name || "").toLowerCase().includes(q)).sort((a, b) => (a.archived !== b.archived ? (a.archived ? 1 : -1) : (a.name || "").localeCompare(b.name || "")));
+  const status = v.status === "available" && v.current ? null
+    : el("li", { class: "hint team-status " + (v.status === "conflict" ? "danger" : "") }, (teamStatusText[v.status] || v.status) + (v.reason && v.status !== "unsupported" ? " (" + v.reason + ")" : "") + (v.at && !v.current && v.teams && v.teams.length ? " · as of " + when(v.at) : ""));
+  return [head, status,
+    ...teams.map(teamRow),
+    !teams.length && v.status !== "unsupported" && el("li", { class: "hint empty-list" }, q ? "No team matches." : "No teams yet.")].filter(Boolean);
+}
+function teamRow(t) {
+  const current = !!(state.hub && state.hub.kind === "team" && state.hub.key === t.id);
+  return el("li", { class: "contact-item team-item" + (current ? " open" : "") },
+    el("button", { type: "button", class: "conv-item contact", "aria-current": String(current), onclick: () => openHub({ kind: "team", key: t.id }) },
+      avatar(t.name || "?"),
+      el("span", { class: "conv-main" },
+        el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, t.name), el("span", { class: "kind-tag" }, "Team")),
+        el("span", { class: "conv-bottom" },
+          el("span", { class: "conv-last" }, plural((t.members || []).length, "member", "members") + (t.managers && t.managers.length ? " · " + plural(t.managers.length, "manager", "managers") : "")),
+          t.conflict && el("span", { class: "conv-flag danger" }, "Frozen"),
+          t.archived && el("span", { class: "conv-flag calm" }, "Archived"),
+          t.manager && el("span", { class: "conv-flag calm" }, "You manage"),
+          !t.manager && t.member && el("span", { class: "conv-flag calm" }, "Member")))));
+}
+// teamAct sends one signed change; the relay's answer (or refusal) is the
+// truth, shown as it comes: nothing is changed here until it is verified.
+async function teamAct(change, done) {
+  const host = window.agentnet, gen = state.gen;
+  try {
+    const st = await api("/api/team", change, host);
+    if (gen !== state.gen) return;
+    announce(change.op === "create" ? "Team created." : change.op === "join" ? "You joined " + st.name + "." : change.op === "leave" ? "You left " + st.name + "." : "Done: " + change.op.replace("-", " ") + ".");
+    await loadTeams();
+    if (done) done(null, st);
+  } catch (e) {
+    announce(e.message);
+    if (done) done(e);
+  }
+}
+function teamDialog(t) {
+  const name = el("input", { id: "team-name", type: "text", maxlength: "64", value: t ? t.name : "", placeholder: "e.g. Data platform", autocomplete: "off" });
+  dialog({ title: t ? "Rename " + t.name : "New team", ok: t ? "Rename" : "Create", focus: name,
+    body: [el("label", { for: "team-name", class: "field-label" }, "Name"), name,
+      el("p", { class: "hint" }, t ? "Managers rename a team; members see the new name once the server has it." : "You become its first member and manager. Others on your server can join it themselves; a team grants no access to anything.")],
+    run: async () => { const n = name.value.trim(); if (!n) throw new Error("Give the team a name."); await new Promise((res, rej) => teamAct(t ? { team: t.id, op: "rename", name: n } : { op: "create", name: n }, (e) => (e ? rej(e) : res()))); } });
+}
+function teamPersonDialog(t, op, who) {
+  const words = { remove: ["Remove " + who.label + " from " + t.name + "?", "Remove", "They can join again themselves; nothing else changes for them."],
+    "manager-add": ["Make " + who.label + " a manager of " + t.name + "?", "Make manager", "Managers rename, archive and manage members."],
+    "manager-remove": ["Take the manager role from " + who.label + "?", "Take role", "The last manager cannot be removed: the server refuses that, so hand the role over first."] };
+  const [title, ok, hint] = words[op];
+  dialog({ title, ok, body: [el("p", { class: "hint" }, hint)], run: async () => { await new Promise((res, rej) => teamAct({ team: t.id, op, target: who.id }, (e) => (e ? rej(e) : res()))); } });
+}
+// Team members are a reviewed selection for independent group invitations.
+function teamHub(t) {
+  const o = state.overview, me = o.person && o.person.person;
+  const v = state.teams || {};
+  const members = (t.members || []).map((id) => ({ id, label: personLabelOf(id), manager: (t.managers || []).includes(id), you: id === me }));
+  const canManage = t.manager && !t.archived && !t.conflict;
+  const note = t.conflict ? "Frozen: a signed record conflicts with the one kept here. Nothing is changed until that is resolved on the server."
+    : !v.current ? "Shown as last verified here" + (v.at ? " (" + when(v.at) + ")" : "") + "; the server could not be read now, so it may have changed."
+      : "";
+  const row = (m) => el("li", { class: "team-member" }, avatar(m.label), el("span", { class: "team-member-name" }, m.label), m.manager && el("span", { class: "kind-tag" }, "Manager"),
+    canManage && !m.you && el("span", { class: "team-member-acts" },
+      el("button", { type: "button", class: "text-btn", onclick: () => teamPersonDialog(t, m.manager ? "manager-remove" : "manager-add", m) }, m.manager ? "Take manager role" : "Make manager"),
+      el("button", { type: "button", class: "text-btn", onclick: () => teamPersonDialog(t, "remove", m) }, "Remove")));
+  return [
+    note && el("p", { class: "hint" }, note),
+    el("ul", { class: "team-members", "aria-label": "Members" }, members.map(row)),
+    !members.length && el("p", { class: "hint empty-list" }, "No members."),
+    el("div", { class: "detail-actions" },
+      o.person && !t.archived && !t.conflict && (t.member
+        ? el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "leave" }) }, "Leave")
+        : el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "join" }) }, "Join")),
+      canManage && el("button", { type: "button", class: "chip", onclick: () => teamDialog(t) }, "Rename…"),
+      canManage && el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "archive" }) }, "Archive"),
+      t.manager && t.archived && !t.conflict && el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "restore" }) }, "Restore"),
+      !t.archived && !t.conflict && members.length > 0 && el("button", { type: "button", class: "chip", onclick: () => teamSelection([t]) }, "Select for a conversation…")),
+    t.member && t.manager && (t.managers || []).length === 1 && el("p", { class: "hint" }, "You are the only manager: the server refuses your leaving or losing the role until another manager exists."),
+  ];
+}
+// Capture the current workspace before expanding teams into a new-group draft.
+async function teamSelection(teams) {
+  const host = window.agentnet, gen = state.gen, ws = wsNow();
+  let snap;
+  try { snap = await api("/api/teams/snapshot", { teams: teams.map(t => t.id) }, host); } catch (e) { if (gen === state.gen && wsNow() === ws && window.agentnet === host) announce(e.message); return; }
+  if (gen !== state.gen || wsNow() !== ws || window.agentnet !== host) return;
+  newGroupDialog(snap);
 }
 
 // personRow is one person in the sidebar: their DMs open in the main pane
@@ -929,7 +1334,7 @@ function personRow(p, dms) {
     avatar(p.label || p.address),
     el("span", { class: "conv-main" },
       el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, p.label),
-        el("span", { class: "kind-tag" }, "Person"), last && el("span", { class: "conv-time" }, when(last.last_at))),
+        el("span", { class: "kind-tag" }, "Person"), p.person && el("span", { class: "kind-tag", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8)), last && el("span", { class: "conv-time" }, when(last.last_at))),
       el("span", { class: "conv-bottom" },
         el("span", { class: "conv-last" }, last ? last.last || "No messages yet" : "No DM yet"),
         p.state === "conflict" && el("span", { class: "conv-flag danger" }, "Frozen"),
@@ -974,6 +1379,7 @@ function choosePerson(p) {
 
 // ownerOf is the person or device contact the open conversation belongs to.
 function ownerOf() {
+  if (humanGroup()) return null;
   if (state.dm) return state.dmData ? { kind: "person", key: personKey(state.dmData.peer) } : null;
   return state.data ? { kind: "device", key: state.data.peer } : null;
 }
@@ -985,6 +1391,10 @@ const sameHub = (a, b) => !!(a && b && a.kind === b.kind && a.key === b.key);
 function hubOf(h) {
   const o = state.overview;
   if (!o || !h) return null;
+  if (h.kind === "team") {
+    const t = ((state.teams && state.teams.teams) || []).find((x) => x.id === h.key);
+    return t ? { label: t.name, team: t, count: (t.members || []).length } : null;
+  }
   if (h.kind === "person") {
     const dms = (o.dms || []).filter((d) => personKey(d.peer) === h.key);
     const p = (o.people || []).find((x) => personKey(x) === h.key) || (dms[0] && dms[0].peer);
@@ -1013,8 +1423,9 @@ function showPane(which) {
   $("timeline").hidden = hub || state.lens === "comic";
   $("comic").hidden = hub || state.lens !== "comic";
   if (hub) {
+    clearTyping();
     $("composer").hidden = true;
-    $("agents").hidden = true;
+    $("agents").hidden = true; $("agents").classList.remove("group-agents");
     $("notice").hidden = true;
     $("hub-back").hidden = true;
     fill($("peer-chips"));
@@ -1032,6 +1443,16 @@ function renderHub() {
     return;
   }
   $("conv-avatar").replaceWith(Object.assign(avatar(x.label), { id: "conv-avatar" }));
+  if (x.team) {
+    const t = x.team;
+    fill($("conv-name"), t.name);
+    $("conv-topic").textContent = "Team · " + plural((t.members || []).length, "member", "members") + (t.archived ? " · archived" : "") + " · grants nothing by itself";
+    $("conv-presence").textContent = (state.teams && state.teams.current ? "Verified now" : "Last verified state") + " · id " + t.id.slice(0, 8) + "…";
+    state.hubUp = null;
+    $("hub-back").hidden = true;
+    fill($("hub"), ...teamHub(t));
+    return;
+  }
   if (x.person) {
     const p = x.person;
     fill($("conv-name"), p.label);
@@ -1080,8 +1501,13 @@ function setHubBack() {
 
 // dmAuthor names who wrote a DM message, as the sending AgentNet says.
 function dmAuthor(m, d) {
+  if (humanGroup(d) && m.claimed_key && m.synced_from) return "Claimed " + m.from + " · forwarded history";
+  if (m.excerpt_pid) return "Claimed " + (m.agent_id ? namedAuthor(m) : m.from || "author") + " · forwarded context";
+  if (m.agent_id) return namedAuthor(m);
   if (m.dir === "out") return m.via ? "You, on your " + myDeviceName(m.via) : "You";
   if ((m.origin || "").startsWith("agent:")) return "An agent on " + m.from + ", as their AgentNet says";
+  if (dmVisitor(d)) return m.from || "Sender not supplied";
+  if (humanGroup(d)) return (d.members || []).find(p => p.devices?.some(v => v.address === m.from) || p.address === m.from)?.label || m.from || "Sender not supplied";
   return d.peer.label;
 }
 
@@ -1135,7 +1561,35 @@ function deviceOwner(address) {
 function deviceDisclosure(p, open) {
   const n = devicesOf(p).length;
   return el("details", { class: "person-devices" },
-    el("summary", {}, (p.state === "self" ? "You" : p.label) + " on " + plural(n, "device", "devices")), deviceList(p, open));
+    el("summary", {}, (p.state === "self" ? "You" : p.label) + " on " + plural(n, "device", "devices")), identityDetails(p), deviceList(p, open));
+}
+
+function identityDetails(p) {
+  const status = p.state === "self" ? "Your signed person record."
+    : p.state === "pinned" ? "This device has pinned this person's keys and checked the signed device record."
+    : p.state === "conflict" ? "Conflicting identity records: this person is frozen here."
+    : "First contact: keys come from your workspace directory and are not pinned here yet.";
+  return el("div", { class: "identity-details" }, el("p", { class: "hint" }, status + " The display name is self-chosen, not proof of who owns the keys."),
+    p.person && el("p", { class: "mono" }, "Person ID: " + p.person),
+    el("p", { class: "hint" }, "Compare a device fingerprint with its owner through another channel before relying on their identity."),
+    devicesOf(p).map((d) => el("p", { class: "mono" }, d.name + " · " + d.address + " · Key: " + (d.fingerprint || "not available"))));
+}
+
+function renamePersonDialog(p) {
+  const host = window.agentnet, workspace = wsNow(), person = p.person;
+  const input = el("input", { id: "person-label", type: "text", maxlength: "64", autocomplete: "off", value: p.label });
+  dialog({ title: "Change your display name", ok: "Save name", focus: input,
+    body: [el("p", {}, "Your person ID, devices, conversations and permissions stay the same. Routing addresses do not change."),
+      el("label", { for: "person-label", class: "field-label" }, "Display name"), input,
+      el("p", { class: "hint" }, "Names are self-chosen. Other people can use the same name; their identities stay separate.")],
+    run: async () => {
+      if (workspace !== wsNow() || state.overview?.person?.person !== person) throw new Error("Your workspace or identity changed. Reopen Profile before saving.");
+      const label = input.value.trim();
+      if (!label) throw new Error("Enter a display name.");
+      await api("/api/person/label", { label }, host);
+      if (workspace === wsNow()) { await loadOverview(); announce("Display name changed."); }
+    },
+  });
 }
 
 // deviceList shows a person's devices, each with its own device
@@ -1336,6 +1790,7 @@ function newDMDialog(p) {
 function beginDM(id) {
   const changed = state.dm !== id;
   if (changed) {
+    clearTyping();
     keepDraft();
     state.files = [];
     renderPending();
@@ -1344,27 +1799,94 @@ function beginDM(id) {
     state.data = null;
     state.dmData = null;
     state.draftKey = null;
+    state.replyReceiver = null;
+    state.replyReceiverHost = null;
+    state.receiverCatalog = null;
     $("body").value = "";
     grow();
     setKind("message");
     setAnswering(null);
     setDMReply(null);
     setDMAgent(null);
+    closeDrivePanel();
   }
   state.dm = id;
   return changed;
 }
 
+// ---- the optional Google Drive space of a DM (MEL-490) ----------------------------------------
+//
+// One panel per open DM, mounted from the program's own module over a
+// provider bound to the membership shown when it opened. Everything Google
+// is explicit there; the panel says when the workspace has it off and
+// points to Settings. Nothing here changes what AgentNet encrypts.
+function driveProviderFor(host) {
+  if (host && host.platform === "browser") return host.api("/api/drive/service"); // the browser's own service: consent bound to the click
+  return moduleOf("drivespace").then((m) => m.daemonDriveProvider((path, body) => api(path, body, host), rawFor(host)));
+}
+function closeDrivePanel() {
+  state.driveOpen = false;
+  const panel = $("drive-panel");
+  if (panel) { panel.hidden = true; fill(panel); }
+}
+function renderDrive(t) {
+  const chips = $("peer-chips");
+  if (!chips || !t || !t.peer.person) return;
+  const on = !!state.driveOpen;
+  chips.append(el("button", { type: "button", class: "peer-chip" + (on ? " on" : ""), title: "This DM's shared Google Drive folder, if the workspace has Drive on; files there are outside AgentNet's encryption",
+    onclick: () => toggleDrivePanel(t) }, "Project space"));
+  if (on) renderDrivePanel(t);
+}
+async function toggleDrivePanel(t) {
+  state.driveOpen = !state.driveOpen;
+  if (!state.driveOpen) { closeDrivePanel(); await loadDM(false); return; }
+  await renderDrivePanel(t);
+  await loadDM(false);
+}
+async function renderDrivePanel(t) {
+  const panel = $("drive-panel");
+  if (!panel || !state.driveOpen) return;
+  if (panel.dataset.conv === t.id) return; // mounted already for this DM
+  fill(panel, el("p", { class: "hint" }, "Opening the project space…"));
+  panel.hidden = false;
+  panel.dataset.conv = t.id;
+  const host = window.agentnet, gen = state.gen;
+  try {
+    const [m, provider] = await Promise.all([moduleOf("drivespace"), driveProviderFor(host)]);
+    if (gen !== state.gen || state.dm !== t.id) return;
+    fill(panel);
+    m.mountDriveSpace(panel, { conv: t.id, provider, agents: (t.agents || []).filter((a) => a.state === "active" && a.host_here),
+      openSettings: () => { showSettings(); settingsTab("storage"); } });
+  } catch (e) {
+    fill(panel, el("p", { class: "hint" }, "The project space is not available on this AgentNet" + (e && e.message ? ": " + e.message : ".")));
+  }
+}
+// saveToDrive copies one received or sent attachment of this DM into its
+// Google Drive space, after the person confirms it leaves AgentNet's
+// encryption. The backend checks the file against what its sender signed.
+function saveToDrive(m, idx, name) {
+  const conv = state.dm, host = window.agentnet;
+  dialog({ title: "Copy " + name + " to the project space?", ok: "Copy outside encryption",
+    body: [el("p", {}, "The file is decrypted here and uploaded to this DM's Google Drive folder. There it is outside AgentNet's end-to-end encryption: Google and everyone the folder is shared with can read it."),
+      el("p", { class: "hint" }, "The copy in AgentNet stays as it is. This needs the workspace's Drive on and your Google account connected in the project space.")],
+    run: async () => {
+      const [mod, provider] = await Promise.all([moduleOf("drivespace"), driveProviderFor(host)]);
+      const r = await mod.saveAttachmentToDrive(provider, conv, m, idx, true);
+      announce("Copied to the project space" + (r && r.file && r.file.name ? ": " + r.file.name : "") + ". " + (r && r.notice ? r.notice : ""));
+    } });
+}
+
 async function openDM(id) {
-  const changed = beginDM(id);
+  const changed = beginDM(id), gen = state.gen;
   document.body.classList.add("show-conv");
   await loadDM(true);
+  if (gen !== state.gen) return;
   await loadOverview();
   if (changed) api("/api/refresh", { id }).catch(() => {}); // once per open: receipts the server still holds
 }
 
 async function loadDM(scrollToEnd) {
-  const id = state.dm;
+  const id = state.dm, gen = state.gen;
   if (!id) return;
   let t;
   try {
@@ -1373,34 +1895,38 @@ async function loadDM(scrollToEnd) {
     announce(e.message);
     return;
   }
-  if (state.dm !== id) return; // another conversation was opened meanwhile
+  if (state.dm !== id || gen !== state.gen) return; // another conversation or workspace was opened meanwhile
   // A participation record is shown as the sentence it stands for, in every view.
-  t.messages = t.messages.map((m) => (m.event ? Object.assign({}, m, { body: m.event }) : m));
+  t.messages = t.messages.map((m) => (m.excerpt_pid ? Object.assign({}, m, { actions: [], can: [] })
+    : m.event ? Object.assign({}, m, { body: m.event }) : m));
   t.agents = t.agents || [];
   state.dmData = t;
-  fill($("conv-name"), t.peer.label);
-  $("conv-topic").textContent = "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
-  $("conv-avatar").replaceWith(Object.assign(avatar(t.peer.label || t.peer.address), { id: "conv-avatar" }));
+  fill($("conv-name"), humanGroup(t) ? t.title : t.peer.label);
+  $("conv-topic").textContent = humanGroup(t) ? dmVisitor(t) ? "Invited agent context · visitor to this group" : "Group conversation · " + groupMemberCount(t) : dmVisitor(t) ? "Invited agent context · you are not a member of this DM"
+    : "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
+  $("conv-avatar").replaceWith(Object.assign(avatar(humanGroup(t) ? t.title : t.peer.label || t.peer.address), { id: "conv-avatar" }));
   const online = presenceOf(t.peer.address); // the server's pushed view, only while current
-  $("conv-presence").textContent = "The name they give · via " + t.peer.address + " · " + (personStateText[t.peer.state] || t.peer.state) +
+  $("conv-presence").textContent = humanGroup(t) ? (t.frozen ? "Last verified audience · current group access unavailable" : dmVisitor(t) ? "Selected agent context only · ordinary room access is not granted" : "Current signed audience · ordinary messages do not run agents") : "The name they give · via " + t.peer.address + " · " + (personStateText[t.peer.state] || t.peer.state) +
     (online ? " · their computer is " + online : "");
   fill($("peer-chips"), ...dmNotifyChips(t));
   const n = $("notice");
-  n.hidden = !t.frozen;
-  fill(n, t.frozen && el("p", {}, t.frozen));
+  n.hidden = !t.frozen && !dmVisitor(t);
+  fill(n, (t.frozen || dmVisitor(t)) && el("p", {}, t.frozen || "Only selected context and requests addressed to this agent are supplied. You cannot send ordinary room messages or change membership."));
   showPane("conv");
-  $("composer").hidden = false;
+  $("composer").hidden = dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask);
   setHubBack();
-  renderAgents(t);
+  if (humanGroup(t)) { renderGroupMembers(t); renderAgents(t, true); } else renderAgents(t);
+  renderDrive(t);
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginDM)
-  else if (state.dmReply && !t.messages.some((m) => m.id === state.dmReply.id)) setDMReply(null);
+  else if (state.dmReply && !t.messages.some((m) => m.id === state.dmReply.id || m.lid === state.dmReply.lid)) setDMReply(null);
   if (state.dmAgent && agentOf(state.dmAgent)) setDMAgent(agentOf(state.dmAgent)); // its state now; a dismissed one stays the target
   state.draftKey = key;
   syncComposer();
   const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
   if (unread.length) api("/api/act", { do: "read", ids: unread }).catch(() => {});
+  await refreshTyping();
 }
 
 // renderDMBody draws the open DM, as a chat or as a comic; Zoom draws
@@ -1412,9 +1938,22 @@ function renderDMBody(scrollToEnd) {
   const tl = $("timeline");
   const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
   fill(tl, t.messages.length ? t.messages.map((m, i) => dmMsg(m, t, t.messages[i - 1]))
-    : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + t.peer.label + " only."));
+    : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + (humanGroup(t) ? "the current members of " + t.title : t.peer.label) + " only."));
   if (scrollToEnd || atEnd) tl.scrollTop = tl.scrollHeight;
   reportSeen();
+}
+
+// A named agent's report refers to its host's request copy. Other audience
+// copies carry that same logical ID; resolve only in this conversation and
+// exact participation/host/agent, never by a similar body or another grant.
+function dmReplyParent(m, t) {
+  if (!m.reply_to) return null;
+  if (humanGroup(t)) { const found = t.messages.filter(x => x.id === m.reply_to || x.lid === m.reply_to); return found.length === 1 ? found[0] : null; }
+  if (!(m.pid && m.agent_id && (m.kind === "answer" || m.kind === "result"))) return t.messages.find(x => x.id === m.reply_to) || null;
+  const candidates = t.messages.filter(x => (x.id === m.reply_to || x.lid === m.reply_to) &&
+    x.pid === m.pid && !x.event && !x.excerpt_pid && (x.kind === "question" || x.kind === "task") &&
+    x.target && x.target.address === m.from && x.target.agent_id === m.agent_id);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 // dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
@@ -1424,58 +1963,67 @@ function dmMsg(m, t, prev) {
     return el("li", { id: "m-" + m.id, class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.at }, when(m.at)));
   }
   const mine = m.dir === "out";
-  const agent = (m.origin || "").startsWith("agent:");
+  const agent = !!m.agent_id || (m.origin || "").startsWith("agent:");
   const author = dmAuthor(m, t);
-  const to = m.to && (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "an agent on " + m.to);
+  const to = m.target && m.target.agent_id ? namedAgentLabel(m.target.agent_id, m.target.address) + " on " + m.target.address : m.to && (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "an agent on " + m.to);
   const sharedWith = t.agents.filter((a) => (a.state === "invited" || a.state === "active") && a.shared.includes(m.id));
-  const cont = prev && !prev.event && prev.dir === m.dir && prev.origin === m.origin && !kindTag[m.kind] && !kindTag[prev.kind] &&
+  const cont = prev && !prev.event && prev.dir === m.dir && prev.origin === m.origin && prev.agent_id === m.agent_id && !kindTag[m.kind] && !kindTag[prev.kind] &&
     !to && !prev.to && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
   const held = m.state === "conv_held";
   const acts = m.actions || []; // a request to your agent: yours to decide on
-  const meta = !cont && el("div", { class: "meta" }, el("span", { class: "who" }, author),
+  const meta = !cont && el("div", { class: "meta" }, el("span", { class: "who", ...(m.agent_id ? { title: namedProvenance(m) } : {}) }, author),
     agent && el("span", { class: "tag" }, "Agent"),
     to && el("span", { class: "tag" }, "To " + to.charAt(0).toLowerCase() + to.slice(1)),
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.unread && el("span", { class: "tag unread" }, "New"),
     el("time", { datetime: m.at }, when(m.at)));
-  const parent = m.reply_to && t.messages.find((x) => x.id === m.reply_to);
+  const parent = dmReplyParent(m, t);
+  const bubble = el("div", { class: "bubble", tabindex: "-1" });
   return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (held || acts.length ? " needs" : "") },
-    !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(t.peer.label || m.from, "sm")),
+    !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(humanGroup(t) ? author : t.peer.label || m.from, "sm")),
     el("div", { class: "col" }, meta,
-      el("div", { class: "bubble", tabindex: "-1" },
-        m.reply_to && (parent ? el("span", { class: "replyref" }, "Reply to: " + firstLine(parent.body, 90))
+      fill(bubble,
+        m.reply_to && (parent ? el("span", { class: "replyref" }, "Reply to: " + (parent.deleted ? "(deleted message)" : firstLine(shownText(parent), 90) || "(files only: " + (parent.attachments || []).map(f => f.name).join(", ") + ")"))
           : el("span", { class: "replyref" }, "Reply to a message not shown here")),
-        m.body && el("p", { class: "body" }, m.body),
-        fileChips(m, m.attachments)),
+        (m.deleted || shownText(m)) && bodyOf(m),
+        !m.deleted && fileChips(humanGroup(t) && (m.synced_from || m.via) ? {...m,dir:"in"} : m, m.attachments)),
+      reactionsRow(m, t.id),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
       acts.length > 0 && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text),
         m.job_detail && el("p", { class: "hint" }, m.job_detail),
         el("div", { class: "acts" }, acts.map((a, i) => actionButton(a, m, t, i === 0)))),
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
-      el("div", { class: "foot" }, !held && !acts.length && m.state_text && el("span", {}, m.state_text),
-        !t.frozen && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
+      el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && m.state_text && el("span", {}, m.state_text),
+        !t.frozen && !dmVisitor(t) && !m.excerpt_pid && !m.deleted && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
         reminderLine(m),
-        dmDetails(m))));
+        dmDetails(m),
+        !t.frozen && messageMenu(m, t.id, bubble))));
 }
 
 function dmDetails(m) {
   const by = m.dir === "out" ? "This installation" : m.from;
-  const origin = m.origin === "ui" ? by + " says a person wrote it. That is its claim, not proof."
+  const origin = m.excerpt_pid ? "Forwarded context: " + (m.from || "the original author") + " is claimed by the forwarding host; authorship is not verified here. This snapshot never runs."
+    : m.origin === "ui" ? by + " says a person wrote it. That is its claim, not proof."
     : (m.origin || "").startsWith("agent:") ? by + " says an agent (" + m.origin.slice(6) + ") wrote it. That is its claim."
       : by + " did not say who wrote it.";
   return el("details", { class: "tech" }, el("summary", {}, "Details"),
     el("dl", {},
       el("dt", {}, "Written by"), el("dd", {}, origin),
+      m.excerpt_pid && [el("dt", {}, "Context grant"), el("dd", { class: "mono" }, m.excerpt_pid)],
+      m.claimed_key && [el("dt", {}, "Claimed author key"), el("dd", { class: "mono" }, m.claimed_key)],
+      m.excerpt_pid && m.synced_from && [el("dt", {}, "Forwarded by"), el("dd", {}, m.synced_from)],
+      namedDetails(m),
       el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
       el("dt", {}, "Device"), el("dd", {}, m.from),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
-      m.synced_from && [el("dt", {}, "Copied here"), el("dd", {}, "from your " + myDeviceName(m.synced_from) + " when this device was added. Who wrote it is that device's word, not checked here; nothing runs it.")],
+      !m.excerpt_pid && m.synced_from && [el("dt", {}, "Copied here"), el("dd", {}, "from your " + myDeviceName(m.synced_from) + " when this device was added. Who wrote it is that device's word, not checked here; nothing runs it.")],
       (m.copies || []).length > 1 && [el("dt", {}, "Copies"), el("dd", {}, el("ul", { class: "copy-list" }, m.copies.map((c) =>
         el("li", {}, c.to + ": " + (copyWord[c.state] || c.state) + (c.detail ? " (" + c.detail + ")" : "")))))],
-      m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")]));
+      m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")],
+      controlDetails(m)));
 }
 
 // myDeviceName is the name of one of your devices, by its address.
@@ -1491,7 +2039,7 @@ const copyWord = { delivered: "delivered", custody: "on your server", queued: "q
 // in DMs here. The link is the invitation's host: that person and device.
 function agentLinkText(a, p) {
   const active = a.dms.filter((d) => d.state === "active").length;
-  return (isMe(p) ? "Your agent" : "Their agent") + " on " + a.address + " · " + plural(a.dms.length, "DM", "DMs") +
+  return (a.agent_id ? namedAgentLabel(a.agent_id, a.address) : isMe(p) ? "Your agent" : "Their agent") + " on " + a.address + " · " + plural(a.dms.length, "DM", "DMs") +
     (active ? " (" + active + " active)" : "");
 }
 
@@ -1503,7 +2051,30 @@ const agentOf = (pid) => state.dmData && (state.dmData.agents || []).find((a) =>
 // goes to the person unless they remove the target themselves.
 const askGone = () => !!state.dmAgent && !(agentOf(state.dmAgent) || {}).can_ask;
 // agentName names an agent by the person whose installation runs it.
-const agentName = (a) => (a.host_here ? "Your agent" : a.host.label + "'s agent");
+// Labels come only from records already read for this exact host and ID.
+const catalogRecords = host => state.targetCatalog && state.targetCatalog.host === host ? state.targetCatalog.agents || [] : [];
+function namedAgentLabel(id, host, records = catalogRecords(host)) {
+  const sameHost = records.filter(a => a.host === host), record = sameHost.find(a => a.id === id);
+  let length = 8;
+  while (length < id.length && sameHost.some(a => a.id !== id && a.id.slice(0, length) === id.slice(0, length))) length++;
+  const short = id.slice(0, length);
+  return record && record.label ? record.label + (sameHost.some(a => a.id !== id && a.label === record.label) ? " · " + short : "") : "Agent " + short;
+}
+const agentName = (a) => a.agent_id ? namedAgentLabel(a.agent_id, a.host.address) : (a.host_here ? "Your agent" : a.host.label + "'s agent");
+const namedAuthor = (m) => namedAgentLabel(m.agent_id, m.from) + " on " + m.from;
+const namedProvenance = (m) => "Agent " + m.agent_id + " on " + m.from + " (host assertion)";
+function namedDetails(m) {
+  return [m.agent_id && [el("dt", {}, "Agent author"), el("dd", {}, namedProvenance(m))],
+    m.target && [el("dt", {}, "Target"), el("dd", {}, m.target.address + (m.target.agent_id ? " · agent " + m.target.agent_id : ""))]];
+}
+
+// Public records are verified by the captured provider; never consume remote executors.
+async function readAgentCatalog(address, host) {
+  const view = await api("/api/agents?host=" + encodeURIComponent(address), undefined, host);
+  if (view.host !== address || !Array.isArray(view.agents) || view.agents.some(a => !a.record || a.record.host !== address || !/^[0-9a-f]{32}$/.test(a.record.id))) throw new Error("Agent list does not match the selected computer.");
+  return view.agents.filter(a => a.enabled !== false).map(a => a.record);
+}
+const catalogLabel = (a, records) => namedAgentLabel(a.id, a.host, records) + " · " + a.host;
 const isMe = (p) => !!p && p.state === "self";
 // taskFree says whether your tasks run without its owner accepting each one
 // (the invitation names your key). Anyone in the DM may still give it a
@@ -1512,16 +2083,18 @@ const taskFree = (a) => a.host_here || a.tasks_from.some(isMe);
 
 // renderAgents shows the agents invited into the open DM: whose each is,
 // what it may be shown, who may give it tasks, and what you can do now.
-function renderAgents(t) {
+function renderAgents(t, append = false) {
   const box = $("agents");
-  const canInvite = !!(state.overview && state.overview.agents && state.overview.person) && !t.frozen;
-  box.hidden = !t.agents.length && !canInvite;
+  box.classList.toggle("group-agents", humanGroup(t));
+  const canInvite = !!(state.overview && state.overview.agents && state.overview.person) && !t.frozen && !dmVisitor(t);
+  if (!append) box.hidden = !t.agents.length && !canInvite;
   const ended = (a) => a.state === "dismissed" || a.state === "declined";
   const past = t.agents.filter(ended);
-  fill(box, t.agents.filter((a) => !ended(a)).map((a) => agentCard(a, t)),
+  const content = [t.agents.filter((a) => !ended(a)).map((a) => agentCard(a, t)),
     past.length > 0 && el("details", { class: "agents-past" }, el("summary", {}, plural(past.length, "earlier agent", "earlier agents")),
       past.map((a) => agentCard(a, t))),
-    canInvite && el("button", { type: "button", class: "text-btn", onclick: () => inviteDialog(t) }, "Invite an agent…"));
+    canInvite && el("button", { type: "button", class: "text-btn", onclick: () => inviteDialog(t) }, "Invite an agent…")];
+  if (append) box.append(...content.flat().filter(Boolean)); else fill(box, ...content);
 }
 
 function agentCard(a, t) {
@@ -1532,10 +2105,11 @@ function agentCard(a, t) {
     a.tasks_from.length ? "tasks without asking from " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ")
       : "tasks wait for " + (a.host_here ? "you" : a.host.label) + " to accept them"];
   return el("div", { class: "agent-card " + a.state },
-    el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", {}, agentName(a)),
+    el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", { ...(a.agent_id ? { title: a.agent_id + " · " + a.host.address } : {}) }, agentName(a)),
       el("span", { class: "hint" }, "on " + a.host.address)),
     el("p", { class: "agent-state" }, a.state_text),
     el("p", { class: "hint" }, facts.join(" · ")),
+    a.external && el("p", { class: "hint" }, "External host · " + a.host.address + ". It is not a room member; it receives only selected context and requests addressed to this agent."),
     a.note && el("p", { class: "agent-note" }, "Note: " + a.note),
     (a.can_decide || a.can_ask || a.can_dismiss) && el("div", { class: "agent-actions" },
       a.can_decide && el("button", { type: "button", class: "btn primary", onclick: () => decideDialog(a, t, true) }, "Accept…"),
@@ -1551,36 +2125,79 @@ function choice(type, name, value, label) {
   return { input, row: el("label", { class: "choice" }, input, el("span", {}, label)) };
 }
 
-// inviteDialog invites the agent on one member's computer. Nothing is
+// inviteDialog invites an agent on a member's or explicitly listed external host. Nothing is
 // chosen for the person: whose agent, what it may be shown and who may
 // give it tasks are all picked here, and both people see them.
 function inviteDialog(t) {
+  if (dmVisitor(t)) { announce("Only DM members can invite an agent."); return; }
   const me = state.overview.person;
-  // A browser device runs no agent: only the other person's can be invited from it.
+  const transport = window.agentnet, gen = state.gen, ws = wsNow();
+  let catalogHost = "", catalog = [], catalogError = "", catalogSeq = 0;
+  const named = el("select", { id: "invite-agent", "aria-label": "Agent on selected host" }, el("option", { value: "" }, "Device default agent"));
+  const catalogStatus = el("p", { class: "hint", role: "status" }, "Choose a computer to see its agents. You can also choose its default agent.");
+  const current = () => gen === state.gen && wsNow() === ws && state.dm === t.id;
+  const loadCatalog = async address => {
+    const seq = ++catalogSeq;
+    catalogHost = address; catalog = []; catalogError = ""; named.disabled = true;
+    fill(named, el("option", { value: "" }, "Device default agent"));
+    catalogStatus.textContent = "Loading agents on " + address + "…";
+    try {
+      const records = await readAgentCatalog(address, transport);
+      if (!current() || seq !== catalogSeq) return;
+      catalog = records;
+      fill(named, el("option", { value: "" }, "Device default agent"), records.map(a => el("option", { value: a.id, title: a.id + " · " + a.host }, catalogLabel(a, records))));
+      catalogStatus.textContent = "Agent names are supplied by this computer. Its owner still decides which tasks may run. Only the earlier messages you choose are shared.";
+    } catch (e) { if (current() && seq === catalogSeq) { catalogError = e.message; catalogStatus.textContent = "Named agents unavailable: " + e.message + " Device default can still be chosen."; } }
+    finally { if (current() && seq === catalogSeq) named.disabled = false; }
+  };
+  // A browser device runs no agent. External hosts come from this workspace's
+  // current directory; listing does not verify a real-world owner or grant trust.
   const browser = !!(state.overview.me && state.overview.me.browser);
-  const hosts = [!browser && choice("radio", "agent-host", me.address, "Yours, on " + me.address),
+  const members = humanGroup(t) ? t.members : [me, t.peer];
+  const devices = humanGroup(t) ? members.flatMap(p => (p.devices?.length ? p.devices : [{address:p.address,fingerprint:p.fingerprint}]).map(d => ({...d,label:p.label,person:p.person}))) : [];
+  const hosts = humanGroup(t) ? [...new Map(devices.filter(d=>d.address && !(browser && d.address===me.address)).map(d=>[d.address,choice("radio","agent-host",d.address,(d.person===me.person?"Yours":d.label+"'s")+", on "+d.address)])).values()] : [!browser && choice("radio", "agent-host", me.address, "Yours, on " + me.address),
     choice("radio", "agent-host", t.peer.address, t.peer.label + "'s, on " + t.peer.address)].filter(Boolean);
-  const share = t.messages.filter((m) => !m.event).slice(-30)
-    .map((m) => choice("checkbox", "agent-share", m.id, dmAuthor(m, t) + ": " + firstLine(m.body, 70)));
-  const tasks = [[me, "You"], [t.peer, t.peer.label]].filter(([p]) => p.fingerprint)
+  const memberAddresses = new Set(humanGroup(t) ? devices.map(d=>d.address) : [me.address, t.peer.address, ...(me.devices || []).map(d => d.address), ...(t.peer.devices || []).map(d => d.address)]);
+  const external = new Set(directory().current ? directory().members.filter(m => !memberAddresses.has(m.address)).map(m => m.address) : []);
+  for (const address of external) hosts.push(choice("radio", "agent-host", address, "External host · " + address));
+  hosts.forEach(c => c.input.addEventListener("change", () => { if (c.input.checked) loadCatalog(c.input.value); }));
+  const share = t.messages.filter((m) => !m.event && !m.excerpt_pid).slice(-30)
+    .map((m) => choice("checkbox", "agent-share", m.id, el("span", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 70) || "(files only)"),
+      (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size))))));
+  const tasks = humanGroup(t) ? [...new Map(devices.filter(d=>d.fingerprint).map(d=>[d.fingerprint,choice("checkbox","agent-tasks",d.fingerprint,(d.person===me.person?"You":d.label)+" on "+d.address)])).values()] : [[me, "You"], [t.peer, t.peer.label]].filter(([p]) => p.fingerprint)
     .map(([p, label]) => choice("checkbox", "agent-tasks", p.fingerprint, label));
   const note = el("input", { id: "agent-note", type: "text", maxlength: "200", autocomplete: "off" });
   const picked = (cs) => cs.filter((c) => c.input.checked).map((c) => c.input.value);
   dialog({
-    title: "Invite an agent into this DM",
-    body: [el("p", {}, "It joins only if its owner accepts, on their computer. You both see the invitation, what it may be shown and who may give it tasks."),
+    title: "Invite an agent into " + (humanGroup(t) ? "this group" : "this DM"),
+    body: [el("p", {}, humanGroup(t) ? "It joins only if its owner accepts, on their computer. Current members see the invitation, what it may be shown and who may give it tasks." : "It joins only if its owner accepts, on their computer. You both see the invitation, what it may be shown and who may give it tasks."),
       el("fieldset", { class: "choices" }, el("legend", {}, "Whose agent"), hosts.map((c) => c.row)),
+      el("p", { class: "hint" }, "External hosts are listed by this workspace's server, not verified real-world owners. Choose an exact named agent; its host must prove support and its owner must accept."),
+      el("label", { for: "invite-agent", class: "field-label" }, "Agent on that host"), named, catalogStatus,
       el("fieldset", { class: "choices" }, el("legend", {}, "Earlier messages it may be shown"),
         share.length ? share.map((c) => c.row) : el("p", { class: "hint" }, "No messages yet."),
-        el("p", { class: "hint" }, "None unless you choose. Nothing else earlier is given.")),
+        el("p", { class: "hint" }, "None unless you choose. Only selected messages and their available attached files become visible to this agent. Unselected history and files are excluded; unavailable bytes are reported as missing. No private agent session is copied.")),
       el("fieldset", { class: "choices" }, el("legend", {}, "Tasks without asking its owner each time"), tasks.map((c) => c.row),
-        el("p", { class: "hint" }, "Either of you can ask it questions or give it tasks. A task from someone not chosen here waits for its owner to accept it.")),
+        el("p", { class: "hint" }, humanGroup(t) ? "Current members can ask questions or give tasks. A task from an exact key not chosen here waits for its owner to accept it." : "Either of you can ask it questions or give it tasks. A task from someone not chosen here waits for its owner to accept it.")),
       el("label", { for: "agent-note", class: "field-label" }, "A note for its owner (optional)"), note],
     ok: "Invite",
     run: async () => {
       const host = picked(hosts)[0];
       if (!host) throw new Error("Choose whose agent to invite.");
-      await api("/api/dm/agent/invite", { conv: t.id, host, share: picked(share), tasks_from: picked(tasks), note: note.value });
+      if (!current()) throw new Error("This invitation belongs to another conversation or workspace. Reopen it there.");
+      const agentID = named.value;
+      if (external.has(host)) {
+        if (!directory().current || !directory().members.some(m => m.address === host)) throw new Error("This external host is no longer in the current workspace directory. Reopen the invitation.");
+        if (!agentID) throw new Error("Choose an exact named agent on this external host.");
+      }
+      if (agentID) {
+        if (host !== catalogHost || named.disabled || catalogError || !catalog.some(a => a.id === agentID)) throw new Error("Load and choose an agent on this computer first.");
+        const fresh = await readAgentCatalog(host, transport);
+        if (!current()) throw new Error("Workspace changed. Reopen this invitation in its workspace.");
+        if (!fresh.some(a => a.id === agentID)) throw new Error("That agent is no longer available on this computer. Nothing was invited.");
+      }
+      await api("/api/dm/agent/invite", { conv: t.id, host, ...(agentID ? { agent_id: agentID } : {}), share: picked(share), tasks_from: picked(tasks), note: note.value }, transport);
+      if (!current()) return;
       announce("Invited. Its owner accepts or declines it on their computer.");
       await loadDM();
     },
@@ -1590,30 +2207,38 @@ function inviteDialog(t) {
 // decideDialog is the host's explicit answer, showing exactly what an
 // accept agrees to.
 function decideDialog(a, t, accept) {
+  const transport = window.agentnet, gen = state.gen, ws = wsNow();
+  const current = () => gen === state.gen && wsNow() === ws && state.dm === t.id;
   const shared = t.messages.filter((m) => a.shared.includes(m.id));
   const who = isMe(a.inviter) ? "You" : a.inviter.label;
   dialog({
-    title: accept ? "Let your agent join this DM?" : "Decline the invitation?",
-    body: accept ? [el("p", {}, who + " invited your agent. If you accept, it answers what either of you asks it here, on this computer with the responder you chose."),
-      !(state.overview.me && state.overview.me.responder) && el("p", { class: "hint" }, "No responder is chosen on this computer yet: what is asked of it waits until you choose one."),
+    title: accept ? "Let " + agentName(a).replace(/^Your/, "your") + " join " + (humanGroup(t) ? "this group?" : "this DM?") : "Decline the invitation?",
+    body: accept ? [el("p", {}, who + " invited " + agentName(a).replace(/^Your/, "your") + ". If you accept, it answers what " + (humanGroup(t) ? "current group members ask" : "either of you asks") + " it here, on " + a.host.address + " with its local executor configuration."),
+      !a.agent_id && !(state.overview.me && state.overview.me.responder) && el("p", { class: "hint" }, "No responder is chosen on this computer yet: what is asked of it waits until you choose one."),
       el("p", {}, shared.length ? "It may be shown these earlier messages:" : "It is shown no earlier messages."),
-      shared.length > 0 && el("ul", { class: "quote-list" }, shared.map((m) => el("li", {}, dmAuthor(m, t) + ": " + firstLine(m.body, 90)))),
+      shared.length > 0 && el("ul", { class: "quote-list" }, shared.map((m) => el("li", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 90) || "(files only)"),
+        (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size)))))),
+      shared.some(m => (m.attachments || []).length) && el("p", { class: "hint" }, "Files attached to selected messages may be read by this agent when available. Missing bytes remain unavailable; unselected room history and files are excluded."),
       a.missing > 0 && el("p", { class: "hint" }, plural(a.missing, "chosen message is", "chosen messages are") + " not on this computer and cannot be shown."),
       el("p", {}, a.tasks_from.length ? "Tasks run without asking you when they come from: " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ") + "."
         : "Every task waits for you to accept it."),
       a.note && el("p", {}, "Their note: " + a.note),
-      el("p", { class: "hint" }, "You accept exactly this, all or nothing. Either of you can dismiss it later.")]
+      el("p", { class: "hint" }, "You accept exactly this, all or nothing. Chosen messages replay as context; no native session is copied. Either of you can dismiss it later.")]
       : [el("p", {}, "Your agent does not join. If you change your mind, they can invite it again.")],
     ok: accept ? "Accept" : "Decline",
     run: async () => {
-      await api("/api/dm/agent/decide", { pid: a.pid, accept });
-      announce(accept ? "Your agent joined this DM." : "Declined.");
+      if (!current()) throw new Error("Workspace or DM changed. Reopen this agent decision there.");
+      await api("/api/dm/agent/decide", { pid: a.pid, accept }, transport);
+      if (!current()) return;
+      announce(accept ? "Your agent joined " + (humanGroup(t) ? "this group." : "this DM.") : "Declined.");
       await loadDM();
     },
   });
 }
 
 function dismissDialog(a) {
+  const transport = window.agentnet, gen = state.gen, ws = wsNow(), conv = state.dm;
+  const current = () => gen === state.gen && wsNow() === ws && state.dm === conv;
   dialog({
     title: "Dismiss " + agentName(a).replace(/^Your/, "your") + "?",
     body: [el("p", {}, "It gets nothing more from this DM and nothing more can be asked of it. What was already said stays. To have it again, invite it again."),
@@ -1621,7 +2246,9 @@ function dismissDialog(a) {
         : "Something it already started on " + a.host.address + " may still finish, and its reply arrive, before the dismissal reaches that computer.")],
     ok: "Dismiss",
     run: async () => {
-      await api("/api/dm/agent/dismiss", { pid: a.pid });
+      if (!current()) throw new Error("Workspace or DM changed. Reopen this dismissal there.");
+      await api("/api/dm/agent/dismiss", { pid: a.pid }, transport);
+      if (!current()) return;
       announce("Dismissed.");
       await loadDM();
     },
@@ -1632,57 +2259,62 @@ function dismissDialog(a) {
 // the person again (null). It is part of that DM's draft and never crosses
 // to another.
 function setDMAgent(a) {
+  const previous = state.dmAgent;
   state.dmAgent = a ? a.pid : null;
   if (a) {
     state.dmReply = null;
     $("replying").hidden = false;
     $("replying-label").textContent = "Asking";
     $("replying-text").textContent = a.host ? agentName(a) + " (on " + a.host.address + ")" + (a.can_ask ? "" : ", cannot be asked now") : "an agent no longer in this DM";
-    setKind("question");
+    if (previous !== a.pid || kindValue() === "message") setKind("question");
   } else if (!state.dmReply && !state.answering) {
     $("replying").hidden = true;
   }
   if (state.dm) syncComposer();
+  if (humanGroup() && previous !== state.dmAgent) refreshTyping();
 }
 
 async function sendDM() {
   const t = state.dmData;
-  if (state.sending || !t || t.frozen) return;
-  const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent, files = agent ? [] : state.files.slice();
+  if (state.sending || !t || t.frozen || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
+  const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent, files = state.files.slice(), kind = kindValue() === "task" ? "task" : "question";
   if (askGone()) { kindHint(); return; } // never sent to the person instead
+  const elsewhere = boundElsewhere();
+  if (elsewhere) { $("compose-error").textContent = elsewhere; return; }
   if (files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
+  if (typingUI) typingUI.stop();
+  const host = window.agentnet, ws = wsNow(), receiverSelection = state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = !!state.overview?.reply_receivers, nativeSessions = !!state.overview?.reply_sessions, receiverContext = receiverCapture(); // captured local delegation
   state.sending = true;
   syncComposer();
   $("compose-error").textContent = "";
   try {
     let r;
-    if (agent) r = await api("/api/dm/agent/ask", { pid: agent, kind: kindValue() === "task" ? "task" : "question", body: text });
-    else {
-      const ids = await preparedFiles(files); // a failure here keeps what was handed over, for the retry
-      try { r = await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "", files: ids }); } finally { sentStaged(files); }
-    }
-    announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
+    const receiver = await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
+    const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
+    try {
+      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: text, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
+        : await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+    } finally { sentStaged(files); }
+    announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
-    if (state.draftKey === key) {
-      if ($("body").value === text) { $("body").value = ""; grow(); }
+    if (wsNow() === ws && state.draftKey === key) {
+      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; }
       if (state.dmReply === reply) setDMReply(null);
       dropFiles(files);
-    } else if (state.drafts[key]) { // that DM's draft keeps only what was not sent
-      const d = state.drafts[key];
+    } else if (draftsOf(ws)[key]) { // that DM's draft keeps only what was not sent
+      const d = draftsOf(ws)[key];
       files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
       d.files = (d.files || []).filter((x) => !files.includes(x));
       if (d.text === text) d.text = "";
       if (d.reply === reply) d.reply = null;
-      if (!d.text && !d.files.length && !d.answering && !d.reply && !d.agent) delete state.drafts[key];
+      if (!d.text && !d.files.length && !d.answering && !d.reply && !d.agent && !d.reply_receiver && !d.reply_receiver_host) delete draftsOf(ws)[key];
     }
   } catch (e) {
-    if (state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
-    else announce("Not sent to " + t.peer.label + ": " + e.message + " Your text is kept in that DM.");
+    if (wsNow() === ws && state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
+    else announce("Not sent to " + (t.title || t.peer?.label || "this conversation") + ": " + e.message + " Your text is kept in that DM.");
   } finally {
-    state.sending = false;
-    kindHint();
-    syncComposer();
-    if (state.newVersion) updated(state.newVersion);
+    if (wsNow() === ws) { state.sending = false; kindHint(); syncComposer(); if (state.newVersion) updated(state.newVersion); }
+    else sentElsewhere(ws);
   }
 }
 
@@ -1713,11 +2345,18 @@ function renderReview(items) {
       el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
   fill($("activity-extra"), remindersSection(), ...linkNotices().map((n) => el("li", {}, n)));
   const senders = [...new Set(reports.map((it) => it.peer))];
-  $("reports").hidden = !senders.length;
+  const contacts = contactsOf(state.overview.threads);
   fill($("report-list"), ...senders.map((peer) => {
-    const c = contactsOf(state.overview.threads).find((x) => x.peer === peer);
+    const c = contacts.find((x) => x.peer === peer);
     return el("li", {}, c ? reportLine(c) : null);
   }));
+  // Dismissed reports are history: folded away, never in the way of what
+  // is current.
+  const earlier = contacts.flatMap((c) => c.reports.filter((t) => !t.notices).map((t) => ({ peer: c.peer, at: t.last_at, text: t.title })))
+    .sort((a, b) => new Date(b.at) - new Date(a.at));
+  $("reports").hidden = !senders.length && !earlier.length;
+  $("reports-earlier").hidden = !earlier.length;
+  fill($("report-earlier-list"), ...earlier.map((r) => el("li", {}, el("time", { datetime: r.at }, when(r.at)), " · ", r.peer, " · ", el("span", { class: "hint" }, r.text))));
 }
 
 function toggleReview(open) {
@@ -1802,7 +2441,8 @@ function renderThreads(threads) {
       : state.contactView === "people" ? "No other people yet. Invite someone with +."
       : "No recent conversations. Find someone in People or use search."),
     entries.length > shown.length && el("li", {}, moreContacts(entries.length)),
-    state.contactView === "people" && directorySection(threads));
+    state.contactView === "people" && directorySection(threads),
+    ...groupsSection(), ...(state.contactView === "people" ? teamsSection() : [])); // group conversations remain distinct from contacts
 }
 
 // searchItems lists what a search finds; each result opens through the
@@ -1819,11 +2459,11 @@ function searchItems(q, threads, open) {
     people.length > 0 && el("li", { class: "result-head" }, plural(people.length, "person", "people")),
     ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.person(p) },
       el("span", { class: "result-kind" }, "Person"),
-      el("span", { class: "result-main" }, el("span", { class: "result-title" }, p.label),
+      el("span", { class: "result-main" }, el("span", { class: "result-title" }, p.label, p.person && el("span", { class: "hint", title: "Person ID: " + p.person }, " · @" + p.person.slice(0, 8))),
         el("span", { class: "hint" }, "via " + p.address + " · " + (personStateText[p.state] || p.state)))))),
-    dms.length > 0 && el("li", { class: "result-head" }, plural(dms.length, "DM", "DMs")),
+    dms.length > 0 && el("li", { class: "result-head" }, dms.some(humanGroup) ? plural(dms.length, "conversation", "conversations") : plural(dms.length, "DM", "DMs")),
     ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.dm(d) },
-      el("span", { class: "result-kind" }, "DM"),
+      el("span", { class: "result-kind" }, humanGroup(d) ? "Group" : "DM"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, d.title || "No messages yet"),
         el("span", { class: "hint" }, "with " + d.peer.label + " · " + when(d.last_at))), dmFlags(d)))),
     agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "agent", "agents")),
@@ -1873,12 +2513,19 @@ function renderQuarantine(items) {
 function beginThread(id) {
   const changed = !!state.dm || !state.data || !state.data.messages.some((m) => m.id === id);
   if (changed) {
+    clearTyping();
     keepDraft();
     state.files = [];
     renderPending();
     releaseOpened();
     state.data = null;
     state.draftKey = null;
+    state.deviceAgentID = "";
+    state.replyReceiver = null;
+    state.replyReceiverHost = null;
+    state.receiverCatalog = null;
+    state.targetCatalog = null;
+    state.targetCatalogSeq = (state.targetCatalogSeq || 0) + 1;
     $("body").value = "";
     grow();
     setKind("message");
@@ -1889,14 +2536,15 @@ function beginThread(id) {
   state.dm = null;
   state.dmData = null;
   state.thread = id;
-  $("agents").hidden = true;
+  $("agents").hidden = true; $("agents").classList.remove("group-agents");
   return changed;
 }
 
 async function openThread(id, focusId) {
-  const changed = beginThread(id);
+  const changed = beginThread(id), gen = state.gen;
   document.body.classList.add("show-conv");
   await loadThread(changed);
+  if (gen !== state.gen) return;
   if (state.data) { // a single message opens with its device's single messages shown
     const s = state.overview && state.overview.threads.find((x) => x.id === state.data.messages[0].id);
     if (s && s.count === 1 && !(s.review || s.running || s.waiting)) state.singlesOpen[s.peer] = true;
@@ -1919,17 +2567,17 @@ function flash(id) {
 // refreshThread asks the network once, when a thread is opened: presence,
 // and receipts for messages the server still holds. Not repeated.
 async function refreshThread() {
-  const id = state.thread;
+  const id = state.thread, gen = state.gen;
   try {
     const p = await api("/api/refresh", { id });
-    if (state.thread !== id || !state.data) return;
+    if (state.thread !== id || gen !== state.gen || !state.data) return;
     state.presence[state.data.peer] = { text: p.text, at: p.at };
     $("conv-presence").textContent = peerPresence(state.data.peer);
   } catch (e) { /* presence stays unknown */ }
 }
 
 async function loadThread(scrollToEnd) {
-  const id = state.thread;
+  const id = state.thread, gen = state.gen;
   if (!id) return;
   let t;
   try {
@@ -1938,7 +2586,7 @@ async function loadThread(scrollToEnd) {
     announce(e.message);
     return;
   }
-  if (state.thread !== id) return; // another thread was opened meanwhile
+  if (state.thread !== id || gen !== state.gen) return; // another thread or workspace was opened meanwhile
   state.data = t;
   fill($("conv-name"), who(t.peer));
   $("conv-topic").textContent = firstLine(t.messages[0].body, 90);
@@ -1953,9 +2601,11 @@ async function loadThread(scrollToEnd) {
   const key = t.messages[0].id; // a conversation's first message names its draft
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginThread)
   state.draftKey = key;
+  if (state.deviceAgentID && !state.targetCatalog) loadTargetCatalog();
   syncComposer();
   const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
   if (unread.length) api("/api/act", { do: "read", ids: unread }).catch(() => {});
+  await refreshTyping();
 }
 
 // renderBody draws the open thread in the chosen presentation. Zoom draws
@@ -2022,11 +2672,253 @@ function renderNotice(t) {
 
 // Messages from the same author within a few minutes form one group.
 function continues(m, prev) {
-  return prev && prev.dir === m.dir && !kindTag[m.kind] && !m.status && prev.author.label === m.author.label &&
+  return prev && prev.dir === m.dir && prev.agent_id === m.agent_id && (prev.target && prev.target.agent_id) === (m.target && m.target.agent_id) && !kindTag[m.kind] && !m.status && prev.author.label === m.author.label &&
     !(prev.actions && prev.actions.length) && !prev.summary && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
 }
 
 const decisionActions = ["accept", "accept_always", "decline", "approve", "resolve", "reply"];
+
+// ---- message controls: reactions, edits, deletion (MEL-476, MEL-477, R08) ----
+//
+// A message carries what controls did to it, as this device resolves them:
+// reactions [{emoji, by, mine}], edited + text (the shown text; body stays
+// what was sent or admitted), deleted, and can (react, edit, delete). The
+// page shows exactly that: an edit changes the text on screen, never what
+// an agent already got; a deletion hides text and files here and on
+// devices that can read one, and undoes nothing else.
+
+const shownText = (m) => (m.deleted ? "" : m.edited && typeof m.text === "string" ? m.text : m.body);
+// A reactor is {id, label} (a person, or a device address): two people with
+// one label stay two entries; the label alone is never an identity.
+const reactorLabel = (b) => (typeof b === "string" ? b : (b && b.label) || (b && b.id) || "someone");
+const reactorNames = (r) => (r.by || []).map(reactorLabel).join(", ");
+const quickEmoji = ["👍", "❤️", "😂", "🎉", "👀", "✅"];
+const canDo = (m, what) => !m.excerpt_pid && !(state.dm && dmVisitor()) && Array.isArray(m.can) && m.can.includes(what);
+const controlRef = (m, conv) => (conv ? { conv, id: m.id, dir: m.dir } : { id: m.id, dir: m.dir });
+
+async function control(what, body, done) {
+  const host = window.agentnet, gen = state.gen; // the membership the message is in
+  try {
+    const r = await api("/api/message/" + what, body, host);
+    announce(r.note || "Done.");
+    if (gen !== state.gen) { if (done) done(null); return; }
+    if (state.dm) await loadDM(false); else await loadThread(false);
+    if (done) done(null);
+  } catch (e) {
+    announce(e.message);
+    if (done) done(e);
+  }
+}
+
+// reactionsRow: each emoji with its count and who; yours toggles off, the
+// others' add yours. A "+" opens the quick picker (any one emoji typed too).
+function reactionsRow(m, conv) {
+  if (m.deleted) return null;
+  const can = canDo(m, "react");
+  const chips = (m.reactions || []).map((r) => {
+    const label = r.emoji + " " + (r.by || []).length;
+    const title = reactorNames(r);
+    return can ? el("button", { type: "button", class: "reaction" + (r.mine ? " mine" : ""), title, "aria-label": r.emoji + " by " + title + (r.mine ? " (you); press to remove yours" : "; press to add yours"),
+      onclick: () => control("react", { ...controlRef(m, conv), emoji: r.emoji, remove: !!r.mine }) }, label)
+      : el("span", { class: "reaction" + (r.mine ? " mine" : ""), title }, label);
+  });
+  if (!chips.length && !can) return null;
+  return el("div", { class: "reactions" }, chips, can && reactPicker(m, conv));
+}
+
+function reactPicker(m, conv) {
+  const d = el("details", { class: "react-pick" });
+  const input = el("input", { type: "text", "aria-label": "Another emoji", placeholder: "…", maxlength: "16", size: "3" });
+  const send = (emoji) => { d.open = false; control("react", { ...controlRef(m, conv), emoji }); };
+  d.append(el("summary", { "aria-label": "Add a reaction", title: "Add a reaction" }, "＋"),
+    el("div", { class: "react-menu" }, quickEmoji.map((e) => el("button", { type: "button", "aria-label": "React " + e, onclick: () => send(e) }, e)),
+      input, el("button", { type: "button", class: "text-btn", onclick: () => { if (input.value.trim()) send(input.value.trim()); } }, "Add")));
+  return d;
+}
+
+// messageMenu: what you may do to a message, reachable by touch and
+// keyboard (a details element, no hover): edit or delete your own, react.
+function messageMenu(m, conv, bubble) {
+  if (m.deleted) return null;
+  const items = [];
+  if (canDo(m, "edit")) items.push(el("button", { type: "button", onclick: (e) => { e.currentTarget.closest("details").open = false; editInPlace(m, conv, bubble); } }, "Edit"));
+  if (canDo(m, "delete")) items.push(el("button", { type: "button", onclick: (e) => { e.currentTarget.closest("details").open = false; deleteDialog(m, conv); } }, "Delete…"));
+  if (!items.length) return null;
+  return el("details", { class: "msg-menu" }, el("summary", { "aria-label": "Message actions", title: "Message actions" }, "⋯"), el("div", { class: "menu-items" }, items));
+}
+
+// editInPlace replaces the bubble's text with a box: Save sends a revision,
+// Cancel keeps everything. A question or task says that its agent keeps
+// what it already got.
+function editInPlace(m, conv, bubble) {
+  const p = bubble.querySelector(".body");
+  if (!p || bubble.querySelector(".edit-box")) return;
+  const box = el("div", { class: "edit-box" });
+  const ta = el("textarea", { rows: "3", "aria-label": "New text" });
+  ta.value = shownText(m);
+  const err = el("p", { class: "error", role: "alert" });
+  const cancel = () => { box.replaceWith(p); };
+  box.append(ta,
+    (m.kind === "question" || m.kind === "task") && el("p", { class: "hint" }, "Editing changes the text shown here and on their devices. What their agent already received stays as sent; nothing runs again."),
+    el("div", { class: "edit-actions" },
+      el("button", { type: "button", class: "btn primary", onclick: () => {
+        const text = ta.value.trim();
+        if (!text) { err.textContent = "Write the new text first."; return; }
+        control("edit", { ...controlRef(m, conv), text }, (e) => { if (e) err.textContent = e.message; });
+      } }, "Save"),
+      el("button", { type: "button", class: "btn", onclick: cancel }, "Cancel")), err);
+  p.replaceWith(box);
+  ta.focus();
+}
+
+function deleteDialog(m, conv) {
+  dialog({ title: "Delete this message?", ok: "Delete",
+    body: [el("div", { class: "quote" }, shownText(m) || "(files only)"),
+      el("p", {}, "It is removed here and on devices that can read deletions. Anyone who already read it, saved its files or gave it to an agent keeps what they have; nothing that is running is stopped."),
+      (m.kind === "question" || m.kind === "task") && el("p", { class: "hint" }, "What was sent to their agent stays on record under Details.")],
+    run: async () => { await control("delete", controlRef(m, conv)); } });
+}
+
+// bodyOf is the message's text as shown: the edit, a deleted marker, or the body.
+// reportText is what a report message says, in a line: the version 2
+// report's count and host (deciding is in Activity), or the older count text.
+function reportText(m) {
+  try {
+    const v = JSON.parse(m.body);
+    if (v && v.v === 2 && Array.isArray(v.items)) return plural(v.items.length, "request", "requests") + " waiting on " + (v.host || m.from) + " at " + when(v.at) + ". See Activity for what they are" + (v.items.some((x) => x.actionable) ? " and to decide them from here." : ".");
+  } catch (e) { /* the older count text */ }
+  return shownText(m);
+}
+// lineOf is a message's first line as the page names it: a report by what it says.
+const lineOf = (m, n) => firstLine(isReport(m) ? reportText(m) : m.body || "(files)", n);
+
+function bodyOf(m) {
+  if (m.deleted) return el("p", { class: "body tombstone" }, "Message deleted");
+  if (isReport(m)) return el("p", { class: "body report-body" }, reportText(m)); // a report from another machine: what it says, never its raw record
+  return el("p", { class: "body" }, shownText(m), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+}
+
+// controlDetails are the rows Details adds: the original text of an edited
+// message, and what was sent of a deleted question or task (on record;
+// never shown in the tombstone).
+function controlDetails(m) {
+  const rows = [];
+  if (m.edited && !m.deleted) rows.push(el("dt", {}, "Original text"), el("dd", {}, m.body));
+  if (m.deleted && (m.kind === "question" || m.kind === "task")) rows.push(el("dt", {}, "What was sent to their agent"), el("dd", {}, m.body));
+  if (m.revision) rows.push(el("dt", {}, "Revision"), el("dd", { class: "mono" }, String(m.revision)));
+  return rows;
+}
+
+// ---- headless: a host's word on a request, reports from other machines,
+// decisions by a granted operator (R05/R06/R09, MEL-497/426/435) ----
+//
+// exec is what the executing host asserted about one request (signed by
+// that host, resolved by core): never derived from delivery, presence or
+// time. Delivery facts stay in the footer as before. An old status is
+// said to be old.
+
+const execWord = { queued: "Queued there", awaiting: "Waiting for their acceptance", running: "Running", needs_human: "Needs a person there", stopped: "Stopped",
+  not_run: "Not run", declined: "Declined there", failed: "Failed there", cancelled: "Cancelled there", interrupted: "Interrupted there",
+  // a host's own state names, as its report shows them (client.stateXxx)
+  held: "Waiting for approval there", pending: "Queued there", accepted: "Accepted there", resolved: "Closed there", answered: "Answered there", cancel_requested: "Stopping there" };
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - asDate(iso)) / 1000);
+  return s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 172800 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago";
+}
+function execLine(m, t) {
+  const e = m.exec;
+  if (!e || !e.state) return null;
+  // The terminal answer or result in this thread supersedes the host's last
+  // word on the request: once it is answered, nothing is "running" for it.
+  if (t && (t.messages || []).some((x) => x.reply_to === m.id && (x.kind === "answer" || x.kind === "result"))) return null;
+  const word = execWord[e.state] || e.state;
+  const detail = e.detail && (blockerWord[e.detail] || e.detail); // a blocker category, or the host's bounded plain reason
+  const text = word + " on " + e.host + (e.state === "running" && e.at ? " since " + when(e.at) : "") + (detail ? ": " + detail : "");
+  return el("span", { class: "exec " + e.state + (e.stale ? " stale" : ""), title: "Asserted by " + e.host + (e.at ? " at " + new Date(e.at).toLocaleString() : "") },
+    text, e.stale && el("span", { class: "exec-stale" }, " · last known " + (e.at ? ago(e.at) : "earlier") + ", not confirmed now"),
+    e.refused && el("span", { class: "exec-refused" }, " · refused: " + e.refused));
+}
+
+// A version 2 report: what a machine said about its own requests at that
+// time. Actions appear only for items core marked actionable (this device's
+// key holds that host's operator grant); everything else is read-only.
+const blockerWord = { awaiting_acceptance: "waits for acceptance", question_not_approved: "asks from a sender not approved for automatic answers", needs_human: "needs a person's decision" };
+function reportItems(it) {
+  const r = it.report;
+  if (!r || !Array.isArray(r.items)) return null;
+  return el("ul", { class: "report-requests" }, r.items.map((x) => {
+    // After a decision the host applied, the state this snapshot shows no
+    // longer holds: no further decision is offered on it (the host's next
+    // report names what waits now); a refusal leaves the choice open.
+    const decided = x.result && !x.result.refused;
+    const acts = x.actionable && !decided ? decisionButtons(it, x) : null;
+    const res = x.result && el("p", { class: "hint" }, x.result.refused ? "Refused: " + x.result.refused
+      : "Now " + (execWord[x.result.state] || x.result.state) + (x.result.at ? " (" + when(x.result.at) + ")" : "") + ", after your decision from here. The host's next report says what waits there now.");
+    return el("li", { class: "report-request" + (x.actionable ? " actionable" : "") },
+      el("div", { class: "report-head" }, el("strong", {}, kindTag[x.kind] || x.kind || "request"), " from ", who(x.from || "?"), " · ", (execWord[x.state] || x.state || "state unknown"),
+        x.blocker && el("span", { class: "hint" }, " · " + (blockerWord[x.blocker] || x.blocker)), x.since && el("span", { class: "hint" }, " · since " + when(x.since))),
+      x.excerpt ? el("p", { class: "report-excerpt" }, x.excerpt) : el("p", { class: "hint" }, "Its text is not shared with this device."),
+      el("p", { class: "hint mono" }, "Request " + x.id.slice(0, 8) + "… on " + r.host),
+      res, acts);
+  }));
+}
+
+const decisionWord = { accept: "Accept and run there…", decline: "Decline there…", reply: "Answer it there…", resolve: "Close it there…", cancel: "Stop it there…" };
+// The decisions a host takes, per the state it reported (client.admitDecision):
+// accept runs a task nobody accepted, answers a held question automatically,
+// or runs again one that stopped; reply and decline take it over by hand;
+// resolve closes what needs a person; cancel stops a run. The host still
+// refuses anything not possible when it looks.
+function decisionButtons(it, x) {
+  const by = { awaiting: ["accept", "decline"], held: ["accept", "reply", "decline"], needs_human: ["reply", "resolve"], running: ["cancel"],
+    interrupted: ["accept"], failed: ["accept"], cancelled: ["accept"] };
+  const again = ["interrupted", "failed", "cancelled"].includes(x.state); // accept there means: run it again
+  const acts = (x.actions && x.actions.length ? x.actions : by[x.state] || []);
+  if (!acts.length) return null;
+  return el("div", { class: "acts" }, acts.map((a, i) => el("button", { type: "button", class: "act" + (i === 0 ? " go" : ""), onclick: () => operatorDialog(it, x, a) }, a === "accept" && again ? "Run it again there…" : decisionWord[a] || a)));
+}
+
+// operatorDialog sends one decision to the host, bound to the state and
+// attempt the operator saw; the host answers with the real resulting
+// state (or a refusal), shown on the item when it arrives.
+function operatorDialog(it, x, action) {
+  const host = it.report.host;
+  const needText = action === "reply" || action === "decline";
+  const ta = needText ? el("textarea", { id: "decide-text", rows: "3", "aria-label": action === "reply" ? "Your answer" : "Why" }) : null;
+  dialog({ title: (decisionWord[action] || action).replace(/…$/, "") + " on " + host + "?", ok: decisionWord[action] ? decisionWord[action].replace(/ there…$/, "") : action,
+    body: [el("p", {}, "The " + (kindTag[x.kind] || x.kind || "request").toLowerCase() + " from " + (x.from || "?") + ", as " + host + " reported it at " + when(it.report.at) + " (" + (execWord[x.state] || x.state) + ")."),
+      x.excerpt && el("div", { class: "quote" }, x.excerpt),
+      ta, el("p", { class: "hint" }, "The host applies this only if the request is still in that state; you see the real outcome here. Nothing runs on this computer.")],
+    run: async () => {
+      const body = { host, id: x.id, key: x.key, action, expect: x.state, attempt: x.attempt, text: ta ? ta.value.trim() : "", report: it.id };
+      if (needText && !body.text) throw new Error(action === "reply" ? "Write the answer first." : "Say why, in a few words.");
+      const r = await api("/api/operator/decide", body);
+      announce(r.note || "Sent to " + host + ".");
+      await loadOverview();
+    } });
+}
+
+// openMessage lands on one exact message (a notification's click, #msg=ID
+// with an optional conv and dir): its conversation opens and it is flashed.
+// Nothing is sent, accepted or read for the person by landing.
+async function openMessage(ref) {
+  if (!ref || !ref.id) return;
+  if (ref.conv && (state.overview.dms || []).some((d) => d.id === ref.conv)) {
+    await openDM(ref.conv);
+    flash(ref.id);
+    return;
+  }
+  if (!ref.conv) {
+    try { await openThread(ref.id, ref.id); if (state.data && state.data.messages.some((m) => m.id === ref.id)) return; } catch (e) { /* not a device thread here */ }
+  }
+  for (const d of state.overview.dms || []) { // a DM's message: found by looking, never guessed
+    try {
+      const v = await api("/api/dm?id=" + encodeURIComponent(d.id));
+      if (v.messages.some((m) => m.id === ref.id && (!ref.dir || m.dir === ref.dir))) { await openDM(d.id); flash(ref.id); return; }
+    } catch (e) { /* next */ }
+  }
+  showList("That message is not on this device.");
+}
 
 function renderMsg(m, byId, prev, t) {
   const cont = continues(m, prev);
@@ -2039,13 +2931,15 @@ function renderMsg(m, byId, prev, t) {
 
   const bubble = el("div", { class: "bubble", tabindex: "-1" },
     m.reply_to && (parent
-      ? el("button", { type: "button", class: "replyref", onclick: () => flash(parent.id) }, refWord + firstLine(parent.body, 90))
+      ? el("button", { type: "button", class: "replyref", onclick: () => flash(parent.id) }, refWord + (parent.deleted ? "(deleted message)" : firstLine(shownText(parent), 90)))
       : el("span", { class: "replyref" }, "Reply to an earlier message not stored here")),
-    el("p", { class: "body" }, m.body),
-    fileChips(m, m.files));
+    bodyOf(m),
+    !m.deleted && fileChips(m, m.files));
 
   const meta = !cont && el("div", { class: "meta" },
-    m.dir === "in" ? who(m.from) : el("span", { class: "who" }, m.author.label),
+    m.agent_id ? el("span", { class: "who", title: namedProvenance(m) }, namedAuthor(m)) : m.dir === "in" ? who(m.from) : el("span", { class: "who" }, m.author.label),
+    m.agent_id && el("span", { class: "tag" }, "Agent"),
+    m.target && m.target.agent_id && el("span", { class: "tag named-agent-id", title: m.target.agent_id + " · " + m.target.address }, "To " + namedAgentLabel(m.target.agent_id, m.target.address) + " on " + m.target.address),
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.status && m.status !== "done" && el("span", { class: "tag" }, statusWord[m.status] || m.status),
     m.unread && el("span", { class: "tag unread" }, "New"),
@@ -2066,12 +2960,12 @@ function renderMsg(m, byId, prev, t) {
 
   const footText = !needs && !working ? m.state_text : "";
   const waiting = m.next && m.next.startsWith("Waiting on") ? m.next : "";
-  const parts = [waiting && el("span", { class: "waiting" }, waiting), footText && el("span", {}, footText), reminderLine(m), details(m)]
+  const parts = [execLine(m, t), waiting && el("span", { class: "waiting" }, waiting), footText && el("span", {}, footText), reminderLine(m), details(m)]
     .filter(Boolean).flatMap((p, i) => i ? [el("span", { class: "sep", "aria-hidden": "true" }, "·"), p] : [p]);
 
-  const col = el("div", { class: "col" }, meta, bubble,
+  const col = el("div", { class: "col" }, meta, bubble, reactionsRow(m, ""),
     m.summary && el("div", { class: "note" }, el("p", { class: "note-label" }, "Summary written on this computer by your responder"), el("p", { class: "body" }, m.summary)),
-    panel, el("div", { class: "foot" }, parts));
+    panel, el("div", { class: "foot" }, parts, messageMenu(m, "", bubble)));
   return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (needs ? " needs" : "") },
     m.dir === "in" && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(m.from, "sm")),
     col);
@@ -2081,6 +2975,7 @@ function details(m) {
   return el("details", { class: "tech" }, el("summary", {}, "Details"),
     el("dl", {},
       el("dt", {}, "Written by"), el("dd", {}, m.author.about),
+      namedDetails(m),
       el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
@@ -2088,6 +2983,7 @@ function details(m) {
       m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],
       m.responder && [el("dt", {}, "Handled by"), el("dd", {}, m.responder === "manual" ? "a reply by hand" : "your responder (" + m.responder + ")")],
       m.path && [el("dt", {}, "Route"), el("dd", {}, m.path === "direct" ? "Direct to their computer" : "Through the server")],
+      controlDetails(m),
       m.dir === "in" && m.files && m.files.some((f) => !f.saved) &&
         [el("dt", {}, "Save files"), el("dd", { class: "mono" }, "agentnet download " + m.id)]));
 }
@@ -2111,8 +3007,8 @@ function actionButton(a, m, t, primary) {
 
 // ---- decisions ---------------------------------------------------------------
 
-async function act(body) {
-  const r = await api("/api/act", body);
+async function act(body, host) {
+  const r = await api("/api/act", body, host);
   if (r.note) announce(r.note);
   return r;
 }
@@ -2126,7 +3022,9 @@ function decide(a, m, t) {
   }
   const quote = el("div", { class: "quote" }, m.body);
   const from = el("dl", {}, el("dt", {}, "From"), el("dd", {}, m.from));
-  const runs = state.overview && state.overview.me.responder
+  const runs = m.target && m.target.agent_id
+    ? namedAgentLabel(m.target.agent_id, m.target.address) + " on " + m.target.address + ", using its local configuration on that computer."
+    : state.overview && state.overview.me.responder
     ? "Your responder (" + state.overview.me.responder + ") in " + state.overview.me.responder_dir
     : "Nothing yet: no responder is set. It stays accepted until you choose one (agentnet responder set).";
   if (a === "accept" || a === "accept_always") {
@@ -2264,16 +3162,376 @@ function newConversationDialog(prefill) {
 
 // ---- composer ------------------------------------------------------------------
 
+// One shared typing presenter also serves Notebook. Its API stays captured
+// to the workspace that opened it; switching never retargets a pending clear.
+let typingUI = null, typingLoading = null;
+function typingScope() {
+  if ($("composer").hidden) return null;
+  if (humanGroup() && (dmVisitor() || state.dmData.frozen || state.dmAgent)) return null;
+  if (state.dm && state.dmData && !state.dmData.frozen) return { conv: state.dm };
+  if (state.thread && state.data && !state.data.key.pending) return { peer: state.data.peer, thread: state.data.messages[0].id };
+  return null;
+}
+async function ensureTyping() {
+  if (typingUI) return typingUI;
+  if (typingLoading) return typingLoading;
+  const gen = state.gen, host = window.agentnet, engine = window.agentnetEngine;
+  typingLoading = moduleOf("typing").then(m => {
+    if (gen !== state.gen) return null;
+    const transport = host ? (path, body) => host.api(path, body) : engine ? (path, body) => engine.api(path, body) : api;
+    return typingUI = m.mountTyping({ api: transport, input: $("body"), line: $("typing-line"), settings: $("typing-settings") });
+  }).catch(() => null).finally(() => { if (gen === state.gen) typingLoading = null; });
+  return typingLoading;
+}
+async function refreshTyping() { const ui = await ensureTyping(); if (ui) await ui.setScope(typingScope()); }
+function clearTyping() { if (typingUI) typingUI.setScope(null); }
+
 const kindValue = () => document.querySelector('input[name="kind"]:checked').value;
 
 function setKind(kind) {
   for (const r of document.querySelectorAll('input[name="kind"]')) r.checked = r.value === kind;
   kindHint();
+  renderTarget();
+}
+
+// targetId names what the composer sends to now: the device, the person of
+// a DM, an agent asked in it, or the message being answered by hand.
+function targetId() {
+  if (state.dm) return state.dmAgent ? "agent:" + state.dmAgent : "dm:" + state.dm;
+  if (state.answering) return "answer:" + state.answering.id;
+  return state.data ? "device:" + state.data.peer + (state.deviceAgentID && kindValue() !== "message" ? ":agent:" + state.deviceAgentID : "") : "";
+}
+
+const deviceAgentMissing = () => !!state.deviceAgentID && !state.answering && kindValue() !== "message" &&
+  (!state.targetCatalog || state.targetCatalog.loading || state.targetCatalog.error || !(state.targetCatalog.agents || []).some(a => a.id === state.deviceAgentID));
+function chooseDeviceAgent(id) {
+  if (state.sending) return;
+  state.deviceAgentID = id;
+  keepDraft(); syncComposer(); kindHint();
+}
+async function loadTargetCatalog() {
+  const t = state.data, gen = state.gen, key = state.draftKey, host = window.agentnet;
+  if (!t || state.dm) return;
+  const seq = state.targetCatalogSeq = (state.targetCatalogSeq || 0) + 1;
+  const current = () => gen === state.gen && key === state.draftKey && state.data && state.data.peer === t.peer && seq === state.targetCatalogSeq;
+  state.targetCatalog = { host: t.peer, loading: true, agents: [] }; syncComposer(); kindHint();
+  try {
+    const agents = await readAgentCatalog(t.peer, host);
+    if (current()) state.targetCatalog = { host: t.peer, agents };
+  } catch (e) { if (current()) state.targetCatalog = { host: t.peer, agents: [], error: e.message }; }
+  if (current()) { syncComposer(); kindHint(); renderBody(false); }
+}
+function renderAgentTarget() {
+  const box = $("agent-target");
+  if (!box) return;
+  const d = state.dmData, t = state.data;
+  box.hidden = state.dm ? !d || (!(d.agents || []).length && !state.dmAgent) : !t || !!state.answering || kindValue() === "message";
+  if (box.hidden) { fill(box); return; }
+  if (state.dm) {
+    const agents = d.agents || [], selected = state.dmAgent || "";
+    const label=humanGroup(d)?"Group recipient":"DM recipient";
+    const picker = el("select", { id: "dm-agent-target", "aria-label": label, disabled: state.sending,
+      onchange: e => { const id = e.currentTarget.value; setDMAgent(id ? agents.find(a => a.pid === id) || { pid: id } : null); keepDraft(); } },
+      el("option", { value: "", selected: !selected }, humanGroup(d)?"Current group members · "+d.title:"Person · " + d.peer.label),
+      agents.map(a => el("option", { value: a.pid, selected: selected === a.pid, title: (a.agent_id || a.pid) + " · " + a.host.address }, agentName(a) + " · " + a.host.address + (a.can_ask ? "" : " · unavailable"))),
+      selected && !agents.some(a => a.pid === selected) && el("option", { value: selected, selected: true, title: selected }, "Selected agent unavailable · " + selected.slice(0, 8)));
+    fill(box, el("label", { for: "dm-agent-target" }, label), picker); return;
+  }
+  const catalog = state.targetCatalog, selected = state.deviceAgentID || "", agents = catalog && catalog.host === t.peer ? catalog.agents || [] : [];
+  const picker = el("select", { id: "device-agent-target", "aria-label": "Question/task agent", disabled: state.sending,
+    onchange: e => chooseDeviceAgent(e.currentTarget.value) },
+    el("option", { value: "", selected: !selected }, "Device default responder"),
+    agents.map(a => el("option", { value: a.id, selected: a.id === selected, title: a.id + " · " + a.host }, catalogLabel(a, agents))),
+    selected && !agents.some(a => a.id === selected) && el("option", { value: selected, selected: true, title: selected }, "Selected agent unavailable · " + namedAgentLabel(selected, t.peer)));
+  fill(box, el("label", { for: "device-agent-target" }, "Question/task agent"), picker,
+    el("button", { type: "button", class: "text-btn", disabled: state.sending || catalog && catalog.loading, onclick: loadTargetCatalog }, "Refresh agents"),
+    catalog && catalog.error && el("p", { class: "error", role: "alert" }, catalog.error));
+}
+
+// Reply destination is explicitly selected, independent of the addressed executor.
+async function localReceiverCatalog(host, expected) {
+  const v = await api("/api/agents", undefined, host);
+  if (!v.local || v.host !== expected || !Array.isArray(v.agents) || v.agents.some(a => !a.record || a.record.host !== expected || !/^[0-9a-f]{32}$/.test(a.record.id))) throw new Error("Local assistant list does not match this workspace's native host.");
+  return v.agents.filter(a => a.enabled && a.responder?.ready);
+}
+async function localReplySessions(host, expected) {
+  const v = await api("/api/reply-sessions", undefined, host);
+  if (!v.local || v.host !== expected || !Array.isArray(v.sessions) || v.sessions.some(s => !s || !/^[A-Za-z0-9_-]{1,128}$/.test(s.handle) || !["pi", "omp", "codex", "claude"].includes(s.harness) || typeof s.label !== "string" || typeof s.active !== "boolean")) throw new Error("Native session list does not match this workspace's host.");
+  return v.sessions;
+}
+function receiverOwnDevices(person) {
+  if (person?.state !== "self" || !Array.isArray(person.devices)) return [];
+  return person.devices.filter(d => typeof d.address === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{8}){3}$/.test(d.fingerprint || ""));
+}
+function receiverCapture() {
+  const o = state.overview, person = o?.person;
+  return { address: o?.me?.address, person: person && { person: person.person, state: person.state, devices: receiverOwnDevices(person).map(d => ({ address: d.address, fingerprint: d.fingerprint })) }, host: state.replyReceiverHost && { ...state.replyReceiverHost } };
+}
+function receiverHostProof(choice, context) {
+  if (!choice || !context?.address || !receiverOwnDevices(context.person).some(d => d.address === context.address) || !receiverOwnDevices(context.person).some(d => d.address === choice.address && d.fingerprint === choice.fingerprint)) throw new Error("Selected reply host is not a current own device with that exact key. Your original choice stays; nothing sent.");
+}
+async function remoteReplySessions(host, choice) {
+  const v = await api("/api/reply-sessions?host=" + encodeURIComponent(choice.address) + "&host_key=" + encodeURIComponent(choice.fingerprint), undefined, host);
+  if (v.local !== false || v.host !== choice.address || v.host_key !== choice.fingerprint || !["pending", "ready", "unavailable"].includes(v.status) || !Array.isArray(v.sessions) || v.sessions.some(s => !s || !/^[A-Za-z0-9_-]{1,128}$/.test(s.handle) || !["pi", "omp", "codex", "claude"].includes(s.harness) || typeof s.label !== "string" || typeof s.active !== "boolean") || new Set(v.sessions.map(s => s.handle)).size !== v.sessions.length || v.status !== "ready" && v.sessions.length) throw new Error("Remote registration snapshot does not match the exact selected host key.");
+  return { ...v, sessions: v.sessions.filter(s => s.harness !== "claude") }; // Claude product receipt gate remains separate
+}
+function chooseReplyHost(address) {
+  if (state.sending) return;
+  const d = receiverOwnDevices(state.overview?.person).find(d => d.address === address);
+  if (address !== state.overview?.me?.address && !d) return;
+  state.replyReceiverHost = address === state.overview.me.address ? null : { address: d.address, fingerprint: d.fingerprint };
+  state.receiverCatalog = null; state.receiverCatalogSeq++;
+  keepDraft(); renderReplyReceiver(); // retained receiver is never silently retargeted
+}
+async function loadReceiverCatalog() {
+  const context = receiverCapture(), choice = context.host;
+  if (!choice && !state.overview?.reply_receivers) return;
+  const host = window.agentnet, ws = wsNow(), gen = state.gen, key = state.draftKey, address = choice?.address || state.overview.me.address, sessionsSupported = !!state.overview.reply_sessions, seq = ++state.receiverCatalogSeq;
+  const current = () => gen === state.gen && ws === wsNow() && host === window.agentnet && key === state.draftKey && seq === state.receiverCatalogSeq && JSON.stringify(choice) === JSON.stringify(state.replyReceiverHost);
+  state.receiverCatalog = { loading: true, host: address, remote: !!choice, fingerprint: choice?.fingerprint, agents: [], sessions: [] };
+  renderReplyReceiver();
+  try {
+    if (choice) {
+      receiverHostProof(choice, context);
+      const [records, snapshot] = await Promise.all([readAgentCatalog(address, host), remoteReplySessions(host, choice)]);
+      if (current()) state.receiverCatalog = { host: address, remote: true, fingerprint: choice.fingerprint, agents: records.map(record => ({ record })), sessions: snapshot.sessions, status: snapshot.status, detail: snapshot.detail, at: snapshot.at };
+    } else {
+      const [agents, sessions] = await Promise.all([localReceiverCatalog(host, address), sessionsSupported ? localReplySessions(host, address) : []]);
+      if (current()) state.receiverCatalog = { host: address, agents, sessions };
+    }
+  } catch (e) { if (current()) state.receiverCatalog = { host: address, remote: !!choice, fingerprint: choice?.fingerprint, agents: [], sessions: [], error: e.message }; }
+  if (current()) renderReplyReceiver();
+}
+async function loadReceiverBindings() {
+  const host = window.agentnet, ws = wsNow(), gen = state.gen;
+  try { const rows = await api("/api/reply-receivers", undefined, host); if (gen === state.gen && ws === wsNow() && host === window.agentnet && Array.isArray(rows)) { state.receiverBindings = rows; renderReceiverStatus(); } }
+  catch (_) { if (gen === state.gen && ws === wsNow()) { state.receiverBindings = []; renderReceiverStatus(); } }
+}
+function chooseReplyReceiver(id) {
+  if (state.sending) return;
+  const a = state.receiverCatalog?.agents.find(a => a.record.id === id), session = state.receiverCatalog?.sessions?.find(s => "session:" + s.handle === id);
+  if (id && !a && !session) return;
+  state.replyReceiver = session ? { kind: "live_session", session_handle: session.handle, label: session.label || session.harness + " session", harness: session.harness, host: state.receiverCatalog.host, ...(state.receiverCatalog.remote ? { fingerprint: state.receiverCatalog.fingerprint } : {}), workspace: wsNow() } : a ? { kind: "managed_agent", agent_id: id, label: a.record.label, host: a.record.host, ...(state.receiverCatalog.remote ? { fingerprint: state.receiverCatalog.fingerprint } : {}), workspace: wsNow(), instructions: "", mode: "" } : null;
+  keepDraft(); renderReplyReceiver();
+}
+function chooseReplyBackup(id) {
+  if (state.sending || state.replyReceiver?.kind !== "live_session") return;
+  if (id && !["pi", "omp", "codex"].includes(state.replyReceiver.harness)) return;
+  const agent = state.receiverCatalog?.agents?.find(a => a.record.id === id);
+  if (id && !agent) return;
+  const { on_close, ...receiver } = state.replyReceiver;
+  state.replyReceiver = id ? { ...receiver, on_close: { agent_id: id, label: agent.record.label, instructions: "", mode: "", configuration: JSON.stringify(state.receiverCatalog.remote ? agent.record : agent.responder) } } : receiver;
+  if (!id && on_close && receiver.harness === "claude") {
+    const error = $("compose-error"), obsolete = "Automatic backup after Claude closes is unavailable. Replies stay with this session. Remove the backup or choose another receiver before sending.";
+    if (error.textContent === obsolete || error.textContent === obsolete + " Your files are still here.") error.textContent = "";
+  }
+  keepDraft(); renderReplyReceiver();
+}
+async function prepareReplyReceiverSelection(selected, host, workspace, supported, sessionsSupported, context = null) {
+  if (selected?.on_close && selected.harness === "claude") throw new Error("Automatic backup after Claude closes is unavailable. Replies stay with this session. Remove the backup or choose another receiver before sending.");
+  const remote = context?.host;
+  if (remote) {
+    receiverHostProof(remote, context);
+    if (selected && (selected.workspace !== workspace || selected.host !== remote.address || selected.fingerprint !== remote.fingerprint)) throw new Error("Selected receiver belongs to another host or workspace. Choose it explicitly; your draft stays.");
+    const backup = selected?.on_close && { ...selected.on_close };
+    if (backup && selected.kind !== "live_session") throw new Error("Closed-session backup requires an exact native reply session.");
+    let receiver = { kind: "human", host: { ...remote } };
+    if (selected) {
+      if (selected.kind === "live_session") {
+        const snapshot = await remoteReplySessions(host, remote);
+        if (snapshot.status !== "ready" || !snapshot.sessions.some(s => s.handle === selected.session_handle && s.harness === selected.harness)) throw new Error(snapshot.detail || "Selected remote session snapshot is pending or unavailable. Nothing sent; no default was chosen.");
+        receiver = { kind: "live_session", session_handle: selected.session_handle, host: { ...remote } };
+      } else if (selected.kind === "managed_agent") {
+        if (!selected.instructions?.trim() || !["question", "task"].includes(selected.mode)) throw new Error("Write original continuation instructions and choose question or task mode.");
+        const agents = await readAgentCatalog(remote.address, host);
+        if (!agents.some(a => a.id === selected.agent_id)) throw new Error("Selected remote assistant is no longer published on this host. Nothing sent; no default was chosen.");
+        receiver = { kind: "managed_agent", agent_id: selected.agent_id, instructions: selected.instructions, mode: selected.mode, host: { ...remote } };
+      } else throw new Error("Unsupported selected reply receiver.");
+      if (backup) {
+        if (!backup.instructions?.trim() || !["question", "task"].includes(backup.mode)) throw new Error("Write original backup instructions and choose question or task mode.");
+        const agents = await readAgentCatalog(remote.address, host), agent = agents.find(a => a.id === backup.agent_id);
+        if (!agent || JSON.stringify(agent) !== backup.configuration) throw new Error("Selected backup public record changed or is unavailable. Choose it again explicitly; no default was chosen.");
+        receiver.on_close = { agent_id: backup.agent_id, instructions: backup.instructions, mode: backup.mode };
+      }
+    }
+    const fresh = await api("/api/overview", undefined, host);
+    if (fresh.me?.address !== context.address || fresh.person?.person !== context.person.person) throw new Error("Reply receiver workspace identity changed. Nothing sent; original draft stays.");
+    receiverHostProof(remote, { address: fresh.me.address, person: fresh.person });
+    return receiver;
+  }
+  if (!selected) return supported ? { kind: "human" } : null;
+  const backup = selected.on_close && { ...selected.on_close };
+  if (backup && selected.kind !== "live_session") throw new Error("Closed-session backup requires an exact native reply session.");
+  if (!supported || selected.workspace !== workspace || selected.fingerprint) throw new Error("Selected reply assistant is unavailable in this workspace. Your draft stays here.");
+  if (selected.kind === "live_session") {
+    if (!sessionsSupported) throw new Error("Native session continuation is unavailable in this workspace. Your draft stays here.");
+    const sessions = await localReplySessions(host, selected.host);
+    const session = sessions.find(s => s.handle === selected.session_handle);
+    if (!session || session.harness !== selected.harness) throw new Error("Selected native reply session is not registered here with that harness. Nothing sent; no default was chosen.");
+    const receiver = { kind: "live_session", session_handle: selected.session_handle };
+    if (backup) {
+      if (!backup.instructions?.trim() || !["question", "task"].includes(backup.mode)) throw new Error("Write original backup instructions and choose question or task mode.");
+      const agents = await localReceiverCatalog(host, selected.host), agent = agents.find(a => a.record.id === backup.agent_id);
+      if (!agent) throw new Error("Selected backup assistant is no longer enabled on this host. Nothing sent; no default was chosen.");
+      if (JSON.stringify(agent.responder) !== backup.configuration) throw new Error("Selected backup assistant configuration changed. Choose it again explicitly. Nothing sent; no default was chosen.");
+      receiver.on_close = { agent_id: backup.agent_id, instructions: backup.instructions, mode: backup.mode };
+    }
+    return receiver;
+  }
+  if (!selected.instructions.trim() || !["question", "task"].includes(selected.mode)) throw new Error("Write original local continuation instructions and choose question or task mode.");
+  const agents = await localReceiverCatalog(host, selected.host);
+  if (!agents.some(a => a.record.id === selected.agent_id)) throw new Error("Selected reply assistant is no longer enabled on this host. Nothing sent; no default was chosen.");
+  return { kind: "managed_agent", agent_id: selected.agent_id, instructions: selected.instructions, mode: selected.mode };
+}
+function renderReplyReceiver() {
+  const box = $("reply-receiver"); if (!box) return;
+  box.hidden = !state.dmData && !state.data || !!state.answering;
+  $("receiver-options").hidden = box.hidden;
+  if (box.hidden) { fill(box); renderReceiverStatus(); return; }
+  const selected = state.replyReceiver, catalog = state.receiverCatalog, choice = state.replyReceiverHost, supported = !!state.overview?.reply_receivers || !!choice;
+  const address = choice?.address || state.overview?.me?.address, devices = receiverOwnDevices(state.overview?.person);
+  const catalogMatches = catalog?.host === address && (!choice || catalog.fingerprint === choice.fingerprint);
+  const live = selected?.kind === "live_session", managed = selected?.kind === "managed_agent", backup = live && selected.on_close, claudeBackup = live && selected.harness === "claude";
+  $("receiver-summary").textContent = "Reply receiver · " + (selected ? selected.label + (live ? " (" + selected.harness + " session · " + selected.session_handle.slice(0, 8) + ")" : "") + " on " + selected.host + (managed ? selected.mode ? " · " + selected.mode : " · choose mode" : "") : "Me (human)" + (choice ? " on " + choice.address : "")) + (live ? backup ? " · backup " + backup.label + " · " + (backup.mode || "choose mode") : " · no backup" : "");
+  if (supported && (!catalog || !catalogMatches)) { if (state.draftKey !== null) loadReceiverCatalog(); return; }
+  const selectedMatches = !selected || selected.host === address && (!choice ? !selected.fingerprint : selected.fingerprint === choice.fingerprint);
+  const agents = supported && catalogMatches ? catalog?.agents || [] : [], sessions = supported && catalogMatches ? catalog?.sessions || [] : [], selectedSession = live && selectedMatches && sessions.find(s => s.handle === selected.session_handle);
+  const picker = el("select", { id: "receiver-picker", "aria-label": "Reply receiver", disabled: state.sending,
+    onchange: e => chooseReplyReceiver(e.currentTarget.value) },
+    el("option", { value: "", selected: !selected }, "Me (human)"),
+    agents.map(a => el("option", { value: a.record.id, selected: selectedMatches && selected?.agent_id === a.record.id, title: a.record.id }, a.record.label + " · " + a.record.host)),
+    sessions.map(s => el("option", { value: "session:" + s.handle, selected: selectedMatches && live && selected.session_handle === s.handle, title: "Registration metadata; not an online check" }, (s.label || s.harness + " session") + " (" + s.harness + " · " + s.handle.slice(0, 8) + ") · " + catalog.host + (s.active ? " · registered" : " · inactive registration"))),
+    selected && (!selectedMatches || (live ? !selectedSession : !agents.some(a => a.record.id === selected.agent_id))) && el("option", { value: live ? "session:" + selected.session_handle : selected.agent_id, selected: true }, selected.label + " · unavailable"));
+  const focused = document.activeElement, editing = focused?.id === "receiver-instructions" || focused?.id === "receiver-backup-instructions", start = editing && focused.selectionStart, end = editing && focused.selectionEnd;
+  const instruction = managed && Object.assign(el("textarea", { id: "receiver-instructions", rows: 2, maxlength: 4096, disabled: state.sending, oninput: e => { state.replyReceiver = { ...state.replyReceiver, instructions: e.currentTarget.value }; keepDraft(); } }), { value: selected.instructions });
+  const hostPicker = el("select", { id: "receiver-host", "aria-label": "Reply receiver device", disabled: state.sending,
+    onchange: e => chooseReplyHost(e.currentTarget.value) },
+    el("option", { value: state.overview?.me?.address, selected: !choice }, "This device · " + state.overview?.me?.address),
+    devices.filter(d => d.address !== state.overview.me.address).map(d => el("option", { value: d.address, selected: choice?.address === d.address && choice.fingerprint === d.fingerprint, title: d.fingerprint }, d.address)),
+    choice && !devices.some(d => d.address === choice.address && d.fingerprint === choice.fingerprint) && el("option", { value: choice.address, selected: true, title: choice.fingerprint }, choice.address + " · selected key unavailable"));
+  fill(box, el("label", { for: "receiver-host" }, "Reply receiver device"), hostPicker,
+    el("label", { for: "receiver-picker" }, "Reply receiver"), picker,
+    supported && el("button", { type: "button", class: "text-btn", disabled: state.sending || catalog?.loading, onclick: loadReceiverCatalog }, choice ? "Refresh receivers" : "Refresh local receivers"),
+    !supported && el("p", { class: "hint" }, "This browser runs no local assistants. Choose a current own device explicitly to receive replies there."),
+    catalog?.loading && el("p", { class: "hint" }, choice ? "Loading selected host records…" : "Loading local receivers…"),
+    catalog?.error && el("p", { class: "error", role: "alert" }, catalog.error),
+    choice && el("p", { class: "hint" }, catalog?.status === "ready" ? "Authenticated registration snapshot; not an online check. Selected host decides approval and exact native configuration." : "Registration snapshot " + (catalog?.status || "pending") + ". Refresh explicitly after its verified reply; no receiver or default is selected automatically."),
+    choice && catalog?.detail && el("p", { class: "hint" }, catalog.detail),
+    managed && [el("label", { for: "receiver-instructions" }, choice ? "Original continuation instructions" : "Original local continuation instructions"), instruction,
+      el("label", { for: "receiver-mode" }, choice ? "Continuation mode" : "Local continuation mode"),
+      el("select", { id: "receiver-mode", "aria-label": choice ? "Continuation mode" : "Local continuation mode", disabled: state.sending, onchange: e => { state.replyReceiver = { ...state.replyReceiver, mode: e.currentTarget.value }; keepDraft(); renderReplyReceiver(); } },
+        el("option", { value: "", selected: !selected.mode }, "Choose question or task"),
+        el("option", { value: "question", selected: selected.mode === "question" }, "Question"),
+        el("option", { value: "task", selected: selected.mode === "task" }, "Task")),
+      el("p", { class: "hint" }, selected.label + " runs on " + selected.host + " when a verified correlated reply arrives. Send delegates these original instructions once; reply text grants no permissions. " + (selected.mode === "task" ? "Local task actions use this assistant's normal permissions." : "Local question mode uses this assistant's normal question permissions."))]);
+  if (live) {
+    box.append(el("p", { class: "hint" }, selectedSession ? (selectedSession.active ? "Registered native adapter; registration is not proof the session is online. " : "Inactive native adapter; registration alone does not prove clean closure. ") + "This receives correlated replies into the existing " + selected.harness + " session on " + selected.host + ", under that session's own task and permissions. Reply text grants no permissions." : "Selected native session is unavailable in this host catalog. Your exact draft stays; no default is chosen."),
+      ...(claudeBackup ? [el("p", { class: "hint" }, "Automatic backup after Claude closes is unavailable. Replies stay with this session." + (backup ? " Remove the backup or choose another receiver before sending." : "")),
+        ...(backup ? [el("p", { class: "error", role: "alert" }, "Retained unsupported backup · " + backup.label + ". Remove it or change receiver explicitly before sending; your original draft and files stay."),
+          el("button", { type: "button", class: "text-btn", disabled: state.sending, onclick: () => chooseReplyBackup("") }, "Remove unsupported backup")] : [])] : [
+        el("label", { for: "receiver-backup-picker" }, choice ? "If this session closes · optional host backup" : "If this session closes · optional local backup"),
+        el("select", { id: "receiver-backup-picker", "aria-label": "Closed-session backup assistant", disabled: state.sending, onchange: e => chooseReplyBackup(e.currentTarget.value) },
+          el("option", { value: "", selected: !backup }, "No backup · keep replies pending"),
+          agents.map(a => el("option", { value: a.record.id, selected: backup?.agent_id === a.record.id, title: a.record.id }, a.record.label + " · " + a.record.host)),
+          backup && !agents.some(a => a.record.id === backup.agent_id) && el("option", { value: backup.agent_id, selected: true }, backup.label + " · unavailable")),
+        el("p", { class: "hint" }, "Only an observed clean native shutdown can hand over unclaimed replies. Unknown crash or uncertain intake stays held; viewing or reloading never starts work.")]));
+    if (backup) {
+      const update = (key, value) => { state.replyReceiver = { ...state.replyReceiver, on_close: { ...state.replyReceiver.on_close, [key]: value } }; keepDraft(); };
+      const backupInstruction = Object.assign(el("textarea", { id: "receiver-backup-instructions", rows: 2, maxlength: 4096, disabled: state.sending || claudeBackup, oninput: e => update("instructions", e.currentTarget.value) }), { value: backup.instructions });
+      box.append(el("label", { for: "receiver-backup-instructions" }, "Original backup continuation instructions"), backupInstruction,
+        el("label", { for: "receiver-backup-mode" }, "Backup continuation mode"),
+        el("select", { id: "receiver-backup-mode", "aria-label": "Backup continuation mode", disabled: state.sending || claudeBackup, onchange: e => { update("mode", e.currentTarget.value); renderReplyReceiver(); } },
+          el("option", { value: "", selected: !backup.mode }, "Choose question or task"),
+          el("option", { value: "question", selected: backup.mode === "question" }, "Question"),
+          el("option", { value: "task", selected: backup.mode === "task" }, "Task")),
+        el("p", { class: "hint" }, claudeBackup ? "These unsupported backup instructions are retained, not delegated. Remove the backup or change receiver explicitly." : "Send explicitly delegates these instructions to " + backup.label + " (" + backup.agent_id.slice(0, 8) + ") on " + selected.host + " after clean closure, under its normal " + (backup.mode || "chosen") + " permissions. " + (choice ? "The selected host verifies and accepts its actual configuration; this browser sees only the published record." : "The native host freezes this exact configuration; later changes refuse, never select a default.")));
+      if (editing && focused.id === "receiver-backup-instructions" && !state.sending) { backupInstruction.focus(); backupInstruction.setSelectionRange(start, end); }
+    }
+  }
+  if (editing && focused.id === "receiver-instructions" && managed && !state.sending) { instruction.focus(); instruction.setSelectionRange(start, end); }
+  renderReceiverStatus();
+}
+function renderReceiverStatus() {
+  const box = $("receiver-status"); if (!box) return;
+  const messages = (state.dm ? state.dmData?.messages : state.data?.messages) || [];
+  const ids = new Set(messages.flatMap(m => [m.id, m.lid]).filter(Boolean));
+  const rows = (state.receiverBindings || []).filter(b => state.dm ? b.conv === state.dm : !b.conv && ids.has(b.request_ref)).slice(-3);
+  box.hidden = !rows.length;
+  const words = { pending: "Waiting for correlated reply", running: "Running locally", completed: "Local continuation completed", canceled: "Canceled", uncertain: "Uncertain · local review needed", refused: "Refused · original selection kept", accepted: "Accepted · completion unconfirmed" };
+  const liveWords = { pending: "Pending native session intake; no unattended handoff proven", accepted: "Accepted into native session; effects completion unconfirmed", completed: "Native input processed; effects completion unconfirmed", canceled: "Canceled", refused: "Refused · exact session binding kept", uncertain: "Uncertain native intake · local review needed" };
+  fill(box, rows.map(b => {
+    const matches = messages.filter(m => m.dir === "out" && !m.excerpt_pid && (m.id === b.request_ref || m.lid === b.request_ref));
+    const request = matches.length === 1 ? matches[0] : null;
+    const caption = request && firstLine(request.body || "Files: " + (request.attachments || []).map(f => f.name).join(", "), 80);
+    const remote = !!b.receiver?.host;
+    const status = request?.state === "receiver_waiting" ? "Awaiting selected-host approval and Ready; original request not sent" : b.receiver?.kind === "human" ? "Replies remain for you; no automatic continuation" : b.receiver?.kind === "live_session" ? liveWords[b.state] || "Native session state " + b.state + "; effects completion unconfirmed" : (remote ? { ...words, running: "Running on selected host", completed: "Selected-host continuation completed", uncertain: "Uncertain · selected-host review needed" } : words)[b.state] || b.state;
+    return el("p", { class: "hint", "data-request": b.request_ref },
+      el("span", { class: "receiver-request", title: b.request_ref }, "Request " + (caption ? "“" + caption + "” · " : "") + b.request_ref.slice(0, 8)),
+      b.label + " on " + b.host + " · " + status + (b.detail ? ": " + b.detail : "") + ". This is continuation state reported by this provider, separate from delivery.",
+      b.receiver?.on_close && el("span", { class: "receiver-request" },
+        ({ preauthorized: "Backup preauthorized; not handed over", held: "Backup held; no safe handoff", handed_over: "Handed over to selected backup; effects completion unconfirmed" }[b.handoff_state] || "Backup state unconfirmed; no handoff claimed") + " · " + (b.handoff_label || "Selected assistant") + " (" + b.receiver.on_close.agent_id.slice(0, 8) + ") on " + b.host));
+  }));
+}
+
+// renderTarget says, above the text, exactly who gets what is typed and
+// how, and names it on the Send button. It reads the same state a send
+// reads, so what it shows is what goes out.
+function renderTarget() {
+  renderAgentTarget();
+  renderReplyReceiver();
+  const set = (to, how, verb) => { $("to-name").textContent = to; $("to-how").textContent = how; $("send-label").textContent = verb; };
+  if (state.dm) {
+    const d = state.dmData;
+    if (!d) { set("", "", "Send"); return; }
+    if (humanGroup(d) && !state.dmAgent) {
+      set(d.title, (d.frozen ? "· Last verified audience: " : "· ") + (d.members || []).map(p => p.state === "self" ? "You" : p.label).join(", ") + (state.dmReply ? " · reply" : ""), "Send to " + d.title); return;
+    }
+    if (state.dmAgent) {
+      const a = agentOf(state.dmAgent);
+      const who = a ? agentName(a).replace(/^Your/, "your") : "an agent no longer in this DM";
+      const task = kindValue() === "task";
+      set(who + (a ? " (on " + a.host.address + ")" : ""),
+        askGone() ? "· cannot be asked now" : task ? "· a task: it runs on " + a.host.address + " once accepted, or by standing permission" : "· a question: that agent answers it",
+        (task ? "Give task to " : "Ask ") + who);
+      return;
+    }
+    set(d.peer.label, state.dmReply ? "· replying to “" + firstLine(state.dmReply.body, 40) + "”" : "· this DM", "Send to " + d.peer.label);
+    return;
+  }
+  const t = state.data;
+  if (!t) { set("", "", "Send"); return; }
+  if (state.answering) { set(t.peer, "· your answer to their " + (kindTag[state.answering.kind] || "message").toLowerCase(), "Send answer"); return; }
+  const last = t.messages[t.messages.length - 1], k = kindValue();
+  if (state.deviceAgentID && k !== "message") {
+    const id = state.deviceAgentID, agent = state.targetCatalog && (state.targetCatalog.agents || []).find(a => a.id === id);
+    const name = namedAgentLabel(id, t.peer) + " on " + t.peer;
+    set(name, deviceAgentMissing() ? "· unavailable; draft kept" : k === "task" ? "· task permission still required" : "· a question for this agent",
+      (k === "task" ? "Give task to " : "Ask ") + (agent ? agent.label : "selected agent")); return;
+  }
+  set(t.peer, (last ? "· continues “" + lineOf(last, 40) + "”" : "· a new conversation") +
+    (k === "task" ? " · as a task they accept first" : k === "question" ? " · as a question their responder may answer" : ""),
+    k === "task" ? "Give task to " + t.peer : k === "question" ? "Ask " + t.peer : "Send to " + t.peer);
+}
+
+// A draft is bound to the conversation and target it was started for
+// (noteTyping). A send checks that binding first: text started for one
+// recipient is never sent to another without the person looking again.
+state.typedFor = null;
+function noteTyping() {
+  if (!$("body").value) { state.typedFor = null; return; }
+  if (!state.typedFor) state.typedFor = { key: state.draftKey, to: targetId() };
+}
+function boundElsewhere() {
+  const b = state.typedFor;
+  if (!b || (b.key === state.draftKey && b.to === targetId())) return "";
+  state.typedFor = null; // looked at: the next send goes where the To line says
+  return "You started this text for someone else. Check the To line, then send again.";
 }
 
 // setDMReply chooses the message of the open DM a new message replies to
 // (or none). It is part of that DM's draft and never crosses to another.
 function setDMReply(m) {
+  if (m && (dmVisitor() || m.excerpt_pid)) return;
   state.dmReply = m ? { id: m.id, body: m.body } : null;
   if (m && state.dmAgent) setDMAgent(null);
   if (!m && (state.answering || state.dmAgent)) return;
@@ -2282,6 +3540,7 @@ function setDMReply(m) {
     $("replying-label").textContent = "Replying to";
     $("replying-text").textContent = firstLine(m.body, 70);
   }
+  renderTarget();
 }
 
 function setAnswering(m) {
@@ -2299,8 +3558,8 @@ function setAnswering(m) {
 function keepDraft() {
   if (state.draftKey === null) return;
   const text = $("body").value;
-  if (text || state.answering || state.dmReply || state.dmAgent || state.files.length) {
-    state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply, agent: state.dmAgent, files: state.files };
+  if (text || state.answering || state.dmReply || state.dmAgent || state.deviceAgentID || state.replyReceiver || state.replyReceiverHost || state.files.length) {
+    state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply, agent: state.dmAgent, agent_id: state.dm ? "" : state.deviceAgentID || "", files: state.files, typedFor: state.typedFor, reply_receiver: state.replyReceiver, ...(state.replyReceiverHost ? { reply_receiver_host: state.replyReceiverHost } : {}) };
   }
   else delete state.drafts[state.draftKey];
 }
@@ -2308,7 +3567,12 @@ function keepDraft() {
 function restoreDraft(key, t) {
   const d = state.drafts[key];
   $("body").value = d ? d.text : "";
+  state.typedFor = (d && d.typedFor) || null;
+  state.replyReceiver = d && d.reply_receiver || null;
+  state.replyReceiverHost = d && d.reply_receiver_host || null;
+  state.receiverCatalog = null;
   state.files = (d && d.files) || [];
+  state.deviceAgentID = !state.dm && d && d.agent_id || "";
   renderPending();
   grow();
   setKind(d ? d.kind : "message");
@@ -2331,12 +3595,14 @@ function syncComposer() {
   if (state.dm) { // a DM: messages only, to the person
     const d = state.dmData;
     const revoked = !!(state.overview && state.overview.device && state.overview.device.revoked);
-    const blocked = !d || !!d.frozen || revoked;
+    const blocked = !d || !!d.frozen || revoked || (dmVisitor(d) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask));
+    $("composer").hidden = dmVisitor(d) && blocked;
     $("body").disabled = blocked;
     $("send").disabled = blocked || state.sending || askGone();
     const a = state.dmAgent && agentOf(state.dmAgent);
     // Asking an agent: a question, or a task when the invitation lets you give it tasks.
     $("kind").hidden = !state.dmAgent;
+    $("kind").disabled = blocked || state.sending || askGone();
     for (const r of document.querySelectorAll('input[name="kind"]')) {
       const l = r.value === "message" && r.closest && r.closest("label");
       if (l) l.hidden = !!state.dmAgent;
@@ -2344,8 +3610,9 @@ function syncComposer() {
     if (a && kindValue() === "message") setKind("question");
     $("attach").hidden = !filesAllowed();
     $("body").placeholder = !d ? "" : revoked ? "This device was removed from its server" : d.frozen ? "Nothing more can be sent in this conversation"
-      : askGone() ? "This agent cannot be asked now" : a ? "Ask " + agentName(a).replace(/^Your/, "your") : "Write to " + d.peer.label;
+      : askGone() ? "This agent cannot be asked now" : a ? "Ask " + agentName(a).replace(/^Your/, "your") : "Write to " + (humanGroup(d) ? d.title : d.peer.label);
     kindHint();
+    renderTarget();
     return;
   }
   $("kind").hidden = false;
@@ -2354,9 +3621,10 @@ function syncComposer() {
   const t = state.data;
   const blocked = !t || !!t.key.pending;
   $("body").disabled = blocked;
-  $("send").disabled = blocked || state.sending;
+  $("send").disabled = blocked || state.sending || deviceAgentMissing();
   $("kind").disabled = blocked || !!state.answering;
   $("body").placeholder = !t ? "" : t.key.pending ? "Sending is blocked until you trust the new key" : "Write to " + t.peer;
+  renderTarget();
 }
 
 function grow() {
@@ -2375,41 +3643,58 @@ async function send(ev) {
   const key = state.draftKey, text = $("body").value, answering = state.answering, files = answering ? [] : state.files.slice();
   const last = t.messages[t.messages.length - 1];
   const draft = { to: t.peer, kind: kindValue(), body: text, reply_to: last ? last.id : "" };
+  const agentID = !answering && draft.kind !== "message" ? state.deviceAgentID || "" : "";
+  if (agentID) draft.agent_id = agentID;
+  if (agentID && deviceAgentMissing()) { $("compose-error").textContent = "Selected agent unavailable. Refresh agents or choose the device default; your draft stays here."; return; }
+  const elsewhere = boundElsewhere();
+  if (elsewhere) { $("compose-error").textContent = elsewhere; return; }
   if (answering && state.files.length) { $("compose-error").textContent = noFilesWhy(); return; }
   if (files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
+  // The membership this send is for: its host carries it, and only its own
+  // drafts are touched when it is done, wherever the person is by then.
+  const host = window.agentnet, ws = wsNow(), receiverSelection = state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = !!state.overview?.reply_receivers, nativeSessions = !!state.overview?.reply_sessions, receiverContext = receiverCapture();
+  if (typingUI) typingUI.stop();
   state.sending = true;
   syncComposer();
   $("compose-error").textContent = "";
   try {
     if (answering) {
-      await act({ do: "reply", id: answering.id, body: text });
+      await act({ do: "reply", id: answering.id, body: text }, host);
     } else {
-      if (files.length) draft.files = await preparedFiles(files); // a failure here keeps what was handed over, for the retry
+      if (agentID) {
+        const agents = await readAgentCatalog(t.peer, host);
+        if (!agents.some(a => a.id === agentID)) {
+          if (wsNow() === ws && state.draftKey === key) state.targetCatalog = { host: t.peer, agents };
+          throw new Error("Selected agent is no longer available on this computer. Nothing sent; no default was chosen.");
+        }
+      }
+      const receiver = await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
+      if (receiver) draft.reply_receiver = receiver;
+      if (files.length) draft.files = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
       let r;
-      try { r = await api("/api/send", draft); } finally { sentStaged(files); }
-      announce(r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
+      try { r = await api("/api/send", draft, host); } finally { sentStaged(files); }
+      announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     }
     // Clear only what was sent: text typed meanwhile, or in another
     // conversation, stays.
-    if (state.draftKey === key) {
-      if ($("body").value === text) { $("body").value = ""; grow(); }
+    if (wsNow() === ws && state.draftKey === key) {
+      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; }
       if (state.answering === answering) setAnswering(null);
       dropFiles(files);
-    } else if (state.drafts[key]) { // that conversation's draft keeps only what was not sent
-      const d = state.drafts[key];
+    } else if (draftsOf(ws)[key]) { // that conversation's draft keeps only what was not sent
+      const d = draftsOf(ws)[key];
       files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
       d.files = (d.files || []).filter((x) => !files.includes(x));
       if (d.text === text) d.text = "";
       if (d.answering === answering) d.answering = null;
-      if (!d.text && !d.files.length && !d.answering) delete state.drafts[key];
+      if (!d.text && !d.files.length && !d.answering && !d.agent_id && !d.reply_receiver && !d.reply_receiver_host) delete draftsOf(ws)[key];
     }
   } catch (e) {
-    if (state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
+    if (wsNow() === ws && state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
     else announce("Not sent to " + t.peer + ": " + e.message + " Your text is kept in that conversation.");
   } finally {
-    state.sending = false;
-    syncComposer();
-    if (state.newVersion) updated(state.newVersion);
+    if (wsNow() === ws) { state.sending = false; syncComposer(); if (state.newVersion) updated(state.newVersion); }
+    else sentElsewhere(ws);
   }
 }
 
@@ -2421,10 +3706,15 @@ function kindHint() {
         ". Your text stays here. To send it to " + (state.dmData ? state.dmData.peer.label : "the person") + " instead, remove the agent (×) first.";
       return;
     }
-    $("compose-hint").textContent = !a ? "A DM message is for the person; nothing runs it. Ctrl+Enter sends."
+    $("compose-hint").textContent = humanGroup() && !a ? (state.dmData.frozen ? "Current group audience unavailable. Saved messages remain; nothing can be sent here now." : "Messages go to the current group members; nothing runs them. Ctrl+Enter sends.") : !a ? "A DM message is for the person; nothing runs it. Ctrl+Enter sends."
       : kindValue() === "task" ? (taskFree(a) ? "It runs on " + a.host.address + " without asking " + (a.host_here ? "you" : a.host.label) + " first."
         : a.host.label + " accepts it first, unless they already allow tasks from your key.") + " Ctrl+Enter sends."
-        : "Both of you see what you ask and what it answers. It runs on " + a.host.address + ". Ctrl+Enter sends.";
+        : (humanGroup() ? "Current group members see what you ask and what it answers. It runs on " : "Both of you see what you ask and what it answers. It runs on ") + a.host.address + ". Ctrl+Enter sends.";
+    return;
+  }
+  if (state.deviceAgentID && !state.answering && kindValue() !== "message") {
+    $("compose-hint").textContent = deviceAgentMissing() ? "Selected agent unavailable. Your draft stays here; refresh agents or choose the device default."
+      : kindValue() === "task" ? "Its owner accepts the task first, unless they already allow tasks from you." : "This agent may answer automatically if its owner approved you.";
     return;
   }
   $("compose-hint").textContent = state.answering
@@ -2436,21 +3726,112 @@ function kindHint() {
     }[kindValue()];
 }
 
+// ---- workspaces ------------------------------------------------------------------------
+//
+// The host (loader.js) keeps one immutable transport per membership and
+// says which one is shown. This page keeps one view per membership: the
+// open conversation, drafts, what was seen, presence, a send under way.
+// Switching puts the view of the workspace left into the host's state for
+// it and takes the next one out; anything asynchronous started before the
+// switch belongs to a generation that is over and draws nothing here.
+const wsNow = () => (window.agentnet && window.agentnet.workspace ? window.agentnet.workspace.id : "default");
+const wsAPI = () => (window.agentnet && window.agentnet.workspaces) || null;
+// savedOf is the view kept for a membership not shown now (null if none).
+function savedOf(id) {
+  const w = wsAPI();
+  if (!w || id === wsNow()) return null;
+  try { return w.state(id).view || null; } catch (e) { return null; } // disconnected: nothing kept
+}
+// draftsOf: a membership's drafts, shown or kept; {} for one no longer here.
+const draftsOf = (id) => (id === wsNow() ? state.drafts : (savedOf(id) || {}).drafts || {});
+function sentElsewhere(id) { const s = savedOf(id); if (s) s.sending = false; }
+const viewKeys = ["thread", "dm", "drafts", "lastSeen", "presence", "seenReported", "singlesOpen", "sending", "version", "newVersion", "contactView", "contactLimit"];
+// workspaceCapture keeps the view shown now for the membership id, in the
+// host's state for it (before the selection changes; once).
+function workspaceCapture(id, st) {
+  // Join/disconnect can capture without switching. Refresh that still-active
+  // draft at the actual pre-switch hook; only suppress the switched fallback.
+  if (!st || state.capturedFor === id && id !== wsNow()) return;
+  keepDraft();
+  const view = {};
+  for (const k of viewKeys) view[k] = state[k];
+  view.scroll = $("timeline").scrollTop;
+  st.view = view;
+  state.capturedFor = id;
+}
+// workspaceSwitched shows the membership selected now: its kept view, or
+// a fresh one, loaded over its own host.
+async function workspaceSwitched(e) {
+  if (e.previous === e.id) return;
+  if (typingUI) typingUI.destroy();
+  typingUI = null; typingLoading = null;
+  if (e.previous !== null && state.capturedFor !== e.previous) {
+    try { workspaceCapture(e.previous, wsAPI().state(e.previous)); } catch (err) { /* left with nothing to keep it in */ }
+  }
+  state.capturedFor = null;
+  const gen = ++state.gen;
+  if (stopListen) { stopListen(); stopListen = null; }
+  const s = (e.state && e.state.view) || {};
+  releaseOpened();
+  closeDrivePanel();
+  fill($("named-agents")); fill($("responder"));
+  Object.assign(state, { thread: null, dm: null, data: null, dmData: null, draftKey: null, deviceAgentID: "", targetCatalog: null, targetCatalogSeq: (state.targetCatalogSeq || 0) + 1, replyReceiver: null, replyReceiverHost: null, receiverCatalog: null, receiverCatalogSeq: (state.receiverCatalogSeq || 0) + 1, receiverBindings: [], files: [], overview: null, seq: -1, hub: null, hubUp: null, pendingOpen: null, typedFor: null, teams: null, driveOpen: false,
+    drafts: {}, lastSeen: {}, presence: {}, seenReported: {}, singlesOpen: {}, sending: false, version: "", newVersion: "", contactView: "recent", contactLimit: 20 });
+  for (const k of viewKeys) if (s[k] !== undefined) state[k] = s[k];
+  $("body").value = ""; grow(); setKind("message"); setAnswering(null); setDMReply(null); setDMAgent(null); renderPending();
+  $("compose-error").textContent = "";
+  $("lost").hidden = true; $("updating").hidden = true;
+  // No plaintext or action from the workspace left may remain on screen
+  // while the newly selected provider is loading, or if that load fails.
+  for (const id of ["timeline", "comic", "agents", "notice", "peer-chips", "conv-list", "review-list", "activity-extra", "report-list", "report-earlier-list", "quarantine-list"]) fill($(id));
+  for (const id of ["conv-avatar", "conv-topic", "conv-presence", "me", "machine", "machine-detail"]) fill($(id));
+  $("conv-avatar").className = "avatar";
+  fill($("conv-name"), "Choose a conversation");
+  for (const id of ["profile-btn", "new-btn", "conversation-details"]) $(id).disabled = true;
+  if ($("dialog").open) $("dialog").close();
+  if ($("settings").open) $("settings").close();
+  Object.assign(Zoom, { level: 0, peer: null, person: null, dm: null, msg: null, origins: [], query: "" });
+  fill($("zoom"), el("p", { class: "hint" }, "Loading this workspace…"));
+  showPane("hub");
+  fill($("hub"), el("p", { class: "hint" }, "Loading this workspace…"));
+  showList("");
+  try { await loadOverview(); } catch (err) { if (gen === state.gen) {
+    $("lost").hidden = false;
+    for (const id of ["hub", "zoom"]) fill($(id), el("p", { class: "hint" }, "This workspace is unavailable. Reload when it is available."));
+  } return; }
+  if (gen !== state.gen) return;
+  if (s.thread) await openThread(s.thread); else if (s.dm) await openDM(s.dm);
+  if (gen !== state.gen) return;
+  if (s.scroll !== undefined && (state.thread || state.dm)) $("timeline").scrollTop = s.scroll;
+  listen();
+}
+// switchWorkspace shows another membership and waits for its view.
+async function switchWorkspace(id) {
+  const w = wsAPI();
+  if (!w || !w.has(id)) throw new Error("That workspace is not on this device.");
+  if (w.active() !== id) w.select(id);
+  if (state.switching) await state.switching;
+}
+
 // ---- push ------------------------------------------------------------------------
 
 // One event stream; each event carries only a change counter. When it
 // breaks, say so and wait for the person instead of retrying on a timer.
+let stopListen = null; // closes the stream listened to now
 function listen() {
+  if (stopListen) { stopListen(); stopListen = null; }
   if (window.agentnet) {
-    window.agentnet.listen((event) => {
+    const host = window.agentnet, ws = wsNow(); // this membership's own stream: its events reach the view only while it is shown
+    stopListen = host.listen((event) => {
+      if (wsNow() !== ws) return;
       if (event.type === "change") { const first = state.seq < 0; state.seq = event.seq; refetch(first); }
       else if (event.type === "restart") { state.updating = true; $("updating").hidden = false; $("lost").hidden = true; recover(recovery.update); }
-      else { $("lost").hidden = false; recover(recovery.missed); }
+      else { if (typingUI) typingUI.disconnect(); $("lost").hidden = false; recover(recovery.missed); }
     });
     return;
   }
   if (window.agentnetEngine) { // a browser device: its engine says when something changed
-    window.agentnetEngine.listen((seq) => {
+    stopListen = window.agentnetEngine.listen((seq) => {
       const first = state.seq < 0;
       state.seq = seq;
       refetch(first);
@@ -2458,6 +3839,7 @@ function listen() {
     return;
   }
   const es = new EventSource("/events");
+  stopListen = () => es.close();
   es.addEventListener("change", (e) => {
     const seq = Number(e.data);
     if (seq === state.seq) return;
@@ -2476,6 +3858,7 @@ function listen() {
   });
   es.onerror = () => {
     es.close();
+    if (typingUI) typingUI.disconnect();
     if (state.updating) return; // already reconnecting
     $("lost").hidden = false;
     recover(recovery.missed); // a switch whose notice was missed comes back quickly
@@ -2502,13 +3885,31 @@ async function recover(schedule) {
 
 // reconnect loads the page's data again and listens; it reports success.
 async function reconnect() {
+  const host = window.agentnet, gen = state.gen, workspace = wsNow();
   try {
     await loadOverview();
+  } catch (e) {
+    if (e.status !== 409 || e.message !== "stale or disconnected workspace" || !window.agentnetWorkspace?.recoverNative || state.sending || state.dialogBusy) return false;
+    try {
+      await window.agentnetWorkspace.recoverNative(host, state.overview?.me);
+      if (gen !== state.gen || wsNow() !== workspace) return false;
+      // Native staged IDs live in the old daemon. Keep the user's file and
+      // metadata, but require an explicit reattachment before any later send.
+      for (const files of [state.files, ...Object.values(state.drafts).map((d) => d.files || [])]) {
+        for (const f of files) if (f.staged) { f.staged = ""; f.reattachRequired = true; }
+      }
+      if (typingUI) typingUI.destroy();
+      typingUI = null; typingLoading = null;
+      await loadOverview();
+      renderPending();
+      if (state.files.some((f) => f.reattachRequired)) $("compose-error").textContent = overLimit(state.files);
+    } catch (err) { announce(err.message); return false; }
+  }
+  if (gen !== state.gen || wsNow() !== workspace) return false;
+  try {
     if (state.thread) await loadThread(false);
     else if (state.dm) await loadDM(false);
-  } catch (e) {
-    return false;
-  }
+  } catch (_) { return false; }
   state.updating = false;
   $("lost").hidden = true;
   if (!state.newVersion) $("updating").hidden = true;
@@ -2516,16 +3917,51 @@ async function reconnect() {
   return true;
 }
 
-// updated: the daemon now runs another version. The page reloads to use
-// it, keeping every unsent text, but never while a send or a confirmation
-// is on its way, and only if what it keeps is stored.
+// Reload persistence keeps only part of a draft. Keep every unsent draft
+// in memory until the person sends or clears it, including other workspaces.
+function hasUnsentDrafts() {
+  const pending = (d) => d && (d.text || d.answering || d.reply || d.agent || d.agent_id || d.reply_receiver || d.reply_receiver_host || d.typedFor || (d.files && d.files.length));
+  if ($("body").value || state.answering || state.dmReply || state.dmAgent || state.deviceAgentID || state.replyReceiver || state.replyReceiverHost || state.typedFor || state.files.length ||
+    Object.values(state.drafts).some(pending) || (state.dialogRestore && $("dialog").open)) return true;
+  const w = wsAPI();
+  if (w) {
+    try {
+      for (const { id } of w.list()) {
+        if (id === wsNow()) continue;
+        const view = w.state(id).view;
+        if (view && (view.sending || Object.values(view.drafts || {}).some(pending))) return true;
+      }
+    } catch (_) { return true; } // an uninspected saved view must not be discarded
+  }
+  return false;
+}
+
+// updated uses the new daemon now, but reloads its page only when no draft
+// can be lost and no send or confirmation is on its way.
 function updated(v) {
   state.newVersion = v;
   if (state.sending || state.dialogBusy) return; // retried when they finish
+  if (hasUnsentDrafts()) {
+    $("updating").hidden = false;
+    $("updating-text").textContent = "AgentNet was updated to " + v + ". Your unsent drafts stay in this window. Send or clear drafts in every workspace before reloading.";
+    $("reload").hidden = false;
+    $("reload").disabled = true;
+    return;
+  }
+  $("reload").disabled = false;
   if (keepForReload()) { location.reload(); return; }
   $("updating").hidden = false;
   $("updating-text").textContent = "AgentNet was updated to " + v + ". Reload to use it; this browser could not keep your unsent text for the reload, so copy it first.";
   $("reload").hidden = false;
+}
+
+function reloadUpdated() {
+  if (state.sending || state.dialogBusy || hasUnsentDrafts()) {
+    announce("Send or clear your unsent drafts in every workspace before reloading.");
+    return false;
+  }
+  location.reload();
+  return true;
 }
 
 const reloadKey = "agentnet-reload";
@@ -2536,13 +3972,13 @@ function keepForReload() {
   keepDraft();
   const drafts = {};
   for (const [k, d] of Object.entries(state.drafts)) {
-    drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? d.answering.id : null, reply: d.reply ? d.reply.id : null };
+    drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? d.answering.id : null, reply: d.reply ? d.reply.id : null, reply_receiver: d.reply_receiver || null, ...(d.reply_receiver_host ? { reply_receiver_host: d.reply_receiver_host } : {}) };
   }
   const fields = {};
   if (state.dialogRestore && $("dialog").open) {
     for (const f of $("dialog-body").querySelectorAll("input[type=text], textarea, select")) if (f.id) fields[f.id] = f.value;
   }
-  const keep = { drafts, thread: state.thread, dm: state.dm, lens: state.lens, dialog: state.dialogRestore && $("dialog").open ? state.dialogRestore : null, fields };
+  const keep = { workspace: wsNow(), drafts, thread: state.thread, dm: state.dm, lens: state.lens, dialog: state.dialogRestore && $("dialog").open ? state.dialogRestore : null, fields };
   try {
     const text = JSON.stringify(keep);
     sessionStorage.setItem(reloadKey, text);
@@ -2560,8 +3996,11 @@ async function restoreAfterReload() {
     sessionStorage.removeItem(reloadKey);
   } catch (e) { /* nothing kept */ }
   if (!keep) return false;
+  if (keep.workspace && keep.workspace !== wsNow()) { // back in the workspace it was kept for, if that is still here
+    try { await switchWorkspace(keep.workspace); } catch (e) { return false; }
+  }
   for (const [k, d] of Object.entries(keep.drafts || {})) {
-    state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null, reply: d.reply ? { id: d.reply } : null };
+    state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null, reply: d.reply ? { id: d.reply } : null, reply_receiver: d.reply_receiver || null };
   }
   if (keep.lens) setLens(keep.lens);
   if (keep.thread) await openThread(keep.thread);
@@ -2588,7 +4027,10 @@ async function refetch(first) {
   try {
     do {
       again = false;
+      const gen = state.gen;
       const o = await loadOverview();
+      if (gen !== state.gen) break; // the workspace changed: its own switch loads the next view
+      if (state.contactView === "people" || (state.hub && state.hub.kind === "team")) await loadTeams(); // the change stream said something changed; teams are read again, never polled
       if (state.thread) await loadThread(false);
       else if (state.dm) await loadDM(false);
       if (state.lens === "zoom") Zoom.refresh();
@@ -2616,6 +4058,7 @@ function announceChanges(o, first) {
 // from the same provider on both platforms.
 function selectSection(section) {
   keepDraft();
+  if (section === "people") loadTeams();
   state.contactView = section === "people" ? "people" : "recent";
   state.contactLimit = 20;
   state.query = "";
@@ -2636,15 +4079,223 @@ function renderProfile(o) {
   const p = o.person;
   $("profile-initial").textContent = (p ? p.label : o.me.address).charAt(0).toUpperCase();
   fill($("profile-card"), p ? el("div", { class: "profile-card" }, avatar(p.label),
-    el("div", {}, el("h3", {}, p.label), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices"))))
+    el("div", {}, el("h3", {}, p.label), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
+      p.person && el("p", { class: "hint", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8))))
     : setupChoice());
   fill($("profile-devices"), p ? deviceDisclosure(p, (addr) => { $("settings").close(); openHub({ kind: "device", key: addr }); }) : null,
+    p && p.state === "self" && el("button", { type: "button", class: "btn", onclick: () => renamePersonDialog(p) }, "Change display name"),
     p && el("button", { type: "button", class: "btn", onclick: () => { $("settings").close(); devicesDialog(); } }, "Manage your devices"));
 }
 
+// renderResponder is the Agent settings: which harness answers here, or
+// none, from GET /api/responder; a change goes through POST /api/responder
+// and shows exactly what the daemon says back. A browser device has no
+// responder and says so. "Installed" is found on this computer's PATH:
+// never logged in or working.
+async function renderResponder() {
+  const box = $("responder");
+  const host = window.agentnet, gen = state.gen, ws = wsNow();
+  const currentView = () => gen === state.gen && wsNow() === ws;
+  if (window.agentnetEngine || (host && host.platform === "browser") || (state.overview && state.overview.device)) {
+    fill(box, el("p", { class: "hint" }, "This browser runs nothing: questions and tasks wait for you. Choose an agent on a computer with AgentNet."));
+    fill($("named-agents"));
+    return;
+  }
+  let r;
+  try { r = await api("/api/responder", undefined, host); } catch (e) {
+    if (!currentView()) return;
+    fill(box, el("p", { class: "hint" }, /404/.test(e.message) ? "This AgentNet does not offer agent settings on the page yet: run agentnet help responder on this computer." : e.message));
+    await renderNamedAgents("", host, gen);
+    return;
+  }
+  if (!currentView()) return;
+  const found = (r.harnesses || []).filter((h) => h.found);
+  const options = [{ value: "manual", label: "No automatic answers: questions and tasks wait for me" },
+    ...(r.harnesses || []).map((h) => ({ value: h.name, label: h.name + (h.found ? " · installed" : " · not found on this computer"), disabled: !h.found }))];
+  const current = !r.chosen ? "" : r.manual ? "manual" : r.harness;
+  const dir = el("input", { type: "text", id: "responder-dir", value: r.dir || "", placeholder: "Folder it works in (absolute path)" });
+  const err = el("p", { class: "error", role: "alert" });
+  const save = async (value) => {
+    const body = value === "manual" ? { manual: true } : { harness: value, dir: dir.value.trim() || undefined };
+    err.textContent = "";
+    try {
+      if (!currentView()) throw new Error("Workspace changed. Reopen Agent settings there.");
+      const res = await api("/api/responder", body, host);
+      if (!currentView()) return;
+      announce(res.note || "Saved.");
+      await loadOverview();
+      renderResponder();
+    } catch (e) { if (currentView()) err.textContent = e.message; }
+  };
+  fill(box,
+    el("p", {}, !r.chosen ? "Nothing chosen yet" + (r.problem ? ": " + r.problem : ".") : r.manual ? "No automatic responder: everything waits for you."
+      : r.harness + " answers approved questions and runs accepted tasks in " + r.dir + (r.ready ? "." : ". Not ready: " + (r.problem || "check the folder and the program."))),
+    el("div", { class: "responder-choice", role: "radiogroup", "aria-label": "Your agent" }, options.map((o) =>
+      el("label", { class: o.disabled ? "off" : "" }, el("input", { type: "radio", name: "responder", value: o.value, checked: o.value === current, disabled: o.disabled,
+        onchange: () => { if (o.value === "manual") save("manual"); } }), " ", o.label))),
+    el("label", { class: "field-label", for: "responder-dir" }, "Works in"), dir,
+    el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn primary", onclick: () => {
+      const chosen = box.querySelector('input[name="responder"]:checked');
+      if (!chosen) { err.textContent = "Choose an agent, or no automatic answers."; return; }
+      save(chosen.value);
+    } }, "Save")),
+    !found.length && el("p", { class: "hint" }, "No supported agent program was found on this computer's PATH as AgentNet runs it."),
+    err);
+  await renderNamedAgents("", host, gen);
+}
+
+async function renderNamedAgents(note = "", host = window.agentnet, gen = state.gen, detail = "") {
+  const box = $("named-agents"), ws = wsNow();
+  const current = () => gen === state.gen && wsNow() === ws;
+  let view;
+  try { view = await api("/api/agents", undefined, host); }
+  catch (e) { if (current()) fill(box, el("p", { class: "hint" }, "Named agent settings unavailable: " + e.message)); return; }
+  if (!current()) return;
+  if (!view.local) { fill(box, el("p", { class: "hint" }, "Local agent configuration belongs on a native AgentNet computer.")); return; }
+  const change = async body => {
+    if (!current()) throw new Error("Workspace changed. Reopen Agent settings there.");
+    const result = await api("/api/agents", body, host);
+    const outcome = result.saved ? result.published ? "Saved on this computer. Agent list updated for others." : "Saved on this computer. Agent list not updated for others. Choose Update agent list to try again." : "Save on this computer not confirmed.";
+    if (current()) await renderNamedAgents(outcome, host, gen, result.note || "");
+  };
+  const edit = entry => {
+    const r = entry && entry.responder;
+    const harness = el("select", { id: "named-harness" }, el("option", { value: "" }, "Choose installed program"),
+      (view.harnesses || []).map(h => el("option", { value: h.name, disabled: !h.found, selected: r && r.harness === h.name }, h.name + (h.found ? " · found" : " · not found"))));
+    const dir = el("input", { type: "text", id: "named-dir", value: r && r.dir || "", placeholder: "Absolute working folder" });
+    const label = !entry && el("input", { type: "text", id: "named-label", maxlength: "64", autocomplete: "off" });
+    const records = (view.agents || []).map(a => a.record);
+    dialog({ title: entry ? "Configure " + namedAgentLabel(entry.record.id, view.host, records) : "Create an agent on this computer", ok: "Save agent",
+      body: [entry ? el("p", { title: entry.record.id + " · " + view.host }, catalogLabel(entry.record, records)) : [el("label", { for: "named-label", class: "field-label" }, "Agent name"), label],
+        el("label", { for: "named-harness", class: "field-label" }, "Local program"), harness,
+        el("label", { for: "named-dir", class: "field-label" }, "Works in"), dir,
+        el("p", { class: "hint" }, "Choose the program and folder this agent works in. Saving also tries to make it available to others. Installed program and folder checks do not test sign-in or model availability. Saving does not run the agent."),
+        entry && el("p", { class: "hint" }, "Its timeout and context files are kept.")],
+      run: async () => {
+        if (!harness.value || !dir.value.trim() || (!entry && !label.value.trim())) throw new Error("Choose an installed program, an absolute working folder and a display label for a new agent.");
+        await change({ action: entry ? "update" : "create", ...(entry ? { id: entry.record.id } : { label: label.value.trim() }), harness: harness.value, dir: dir.value.trim() });
+      } });
+  };
+  const records = (view.agents || []).map(a => a.record);
+  fill(box, el("h3", {}, "Agents on this computer"),
+    el("p", { class: "hint" }, "Give each agent a name, program and working folder. Others can choose available agents; you still decide which tasks may run. Program and folder checks do not test sign-in or model availability."),
+    note && el("p", { class: "named-agent-outcome", role: "status", title: detail }, note),
+    (view.agents || []).map(entry => {
+      const r = entry.responder;
+      return el("section", { class: "named-agent-card", "aria-label": "Local agent " + namedAgentLabel(entry.record.id, view.host, records) },
+        el("strong", { title: entry.record.id + " · " + view.host + " (host-signed agent)" }, namedAgentLabel(entry.record.id, view.host, records)), el("p", {}, "On " + view.host),
+        el("p", { class: "hint" }, !entry.enabled ? "Disabled on this computer. Earlier messages remain." : r ? "Program: " + r.harness + " · " + r.dir + (r.ready ? " · program/folder checks pass" : " · not ready: " + (r.problem || "check program and folder")) : "Program settings unavailable."),
+        r && el("p", { class: "hint" }, "Timeout: " + r.timeout + " seconds · Context files: " + ((r.context || []).join(", ") || "none")),
+        el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn", onclick: () => edit(entry) }, "Configure…"),
+          entry.enabled && el("button", { type: "button", class: "text-btn", onclick: () => dialog({ title: "Disable " + namedAgentLabel(entry.record.id, view.host, records) + "?", ok: "Disable locally",
+            body: [el("p", {}, "Disables this agent on this computer and tries to update the agent list for others. Earlier messages remain. Drafts for this agent keep their recipient.")], run: () => change({ action: "disable", id: entry.record.id }) }) }, "Disable…")));
+    }),
+    !(view.agents || []).length && el("p", { class: "hint" }, "No agents set up on this computer."),
+    el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn", onclick: () => edit(null) }, "Create agent…"),
+      el("button", { type: "button", class: "btn", onclick: async () => { try { await change({ action: "publish" }); } catch (e) { if (current()) fill(box, el("p", { class: "error", role: "alert" }, e.message), el("button", { type: "button", class: "btn", onclick: () => renderNamedAgents("", host, gen) }, "Refresh agents")); } } }, "Update agent list")));
+}
+
+// ---- Storage: where files live, how long, what remains (STORAGE1-8) ----
+//
+// One explicit read of GET /api/storage (the daemon: its five managed
+// folders and the Hub's own-usage report; a browser device: its stored
+// records and the same Hub report). Shown as the API words it: known
+// counts only, "unknown" never zero, file lengths not disk blocks, the
+// Hub's quota is the whole server's, never your allowance. Nothing here
+// cleans, changes or promises retention.
+
+const bytesText = (n) => (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(2) + " GB");
+const amountText = (u) => (u ? plural(u.files, "file", "files") + " · " + bytesText(u.bytes) : "unknown");
+
+function storageArea(a) {
+  return el("li", { class: "storage-area " + (a.status === "available" ? "" : "off") },
+    el("div", { class: "storage-line" }, el("strong", {}, a.label), " ", el("span", { class: "tag" }, a.kind === "plaintext" ? "readable files" : "encrypted"),
+      el("span", { class: "storage-amount" }, a.usage ? amountText(a.usage) : "unknown")),
+    a.reason && el("p", { class: "hint" }, a.reason),
+    el("details", { class: "tech" }, el("summary", {}, "Where and how long"),
+      el("dl", {}, el("dt", {}, "Folder"), el("dd", { class: "mono" }, a.directory), el("dt", {}, "Kept"), el("dd", {}, a.lifetime))));
+}
+
+function storageRemote(r) {
+  if (!r || r.status !== "available" || !r.usage) {
+    return el("div", { class: "storage-block" }, el("h4", {}, "On your server"),
+      el("p", { class: "hint" }, r && r.status === "unsupported" ? (r.reason || "This server does not report storage usage.")
+        : (r && r.reason) || "Not known now: your server did not answer. What is shown above is this device's own view."));
+  }
+  const u = r.usage, own = u.own || {}, stored = own.stored || {}, inc = own.incomplete || {};
+  const bucket = (b) => plural(b.files || 0, "file", "files") + " · " + bytesText(b.reserved_bytes || 0) + " reserved";
+  const pol = u.policy || {};
+  const days = (sec) => (sec ? plural(Math.round(sec / 86400), "day", "days") : "");
+  return el("div", { class: "storage-block" }, el("h4", {}, "On your server"),
+    el("p", {}, "Your encrypted files there: ", el("strong", {}, bucket(stored)), (inc.files ? "; unfinished uploads: " + bucket(inc) : ""), "."),
+    el("p", { class: "hint" }, "Reserved bytes are what counts against the server's quota, not disk blocks. The server holds only ciphertext."),
+    el("p", {}, "The whole server's quota is " + bytesText(u.quota_bytes) + " for everyone together; that is not your allowance, and what is free for you cannot be told from it. Largest file: " + bytesText(u.max_file_bytes) + "."),
+    u.global && el("p", {}, "Everyone on this server (you are an admin): " + bucket(u.global.stored || {}) + (u.global.incomplete && u.global.incomplete.files ? "; unfinished: " + bucket(u.global.incomplete) : "") + "."),
+    el("details", { class: "tech" }, el("summary", {}, "How long the server keeps things"),
+      el("dl", {},
+        el("dt", {}, "Delivered files"), el("dd", {}, pol.delivered_attachments || "unknown"),
+        el("dt", {}, "Undelivered files"), el("dd", {}, pol.undelivered_attachments || "unknown"),
+        el("dt", {}, "Files never attached"), el("dd", {}, pol.unattached_attachments || "unknown"),
+        el("dt", {}, "Messages"), el("dd", {}, pol.message_envelopes || "unknown"),
+        el("dt", {}, "Unfinished uploads"), el("dd", {}, (pol.incomplete_uploads || "unknown") + (u.upload_idle_ttl_seconds ? " (idle limit " + Math.round(u.upload_idle_ttl_seconds / 3600) + " h)" : "")),
+        el("dt", {}, "Operator cleanup defaults"), el("dd", {}, "Only when the operator runs it: delivered files older than " + (days(pol.manual_delivered_age_default_seconds) || "?") + ", unattached older than " + (days(pol.manual_unattached_age_default_seconds) || "?") + ". Nothing expires by itself."),
+        el("dt", {}, "Where"), el("dd", {}, u.location || "the server's data"))));
+}
+
+// renderFileStorage mounts the optional provider setup (Settings > File
+// storage options): the workspace admin's checklist and public client ids,
+// off by default; never a Google login, never a command run. It speaks
+// only to the membership shown when the tab opened.
+async function renderFileStorage() {
+  const box = $("file-storage");
+  if (!box) return;
+  const host = window.agentnet;
+  fill(box, el("p", { class: "hint" }, "Reading…"));
+  try {
+    const m = await moduleOf("drivespace-setup");
+    if (typeof m.mountFileStorageOptions !== "function") throw new Error("no setup module");
+    fill(box);
+    const provider = { storageSetup: (r) => api("/api/drive/setup", !r || !r.action || r.action === "status" ? undefined : r, host) };
+    await m.mountFileStorageOptions(box, { provider });
+  } catch (e) {
+    fill(box, el("p", { class: "hint" }, "File storage options are not available on this AgentNet" + (e && e.message ? " (" + e.message + ")" : "") + ". Encrypted attachments work without them."));
+  }
+}
+
+async function renderStorage() {
+  const box = $("storage");
+  fill(box, el("p", { class: "hint" }, "Reading…"));
+  let v;
+  try { v = await api("/api/storage"); } catch (e) {
+    fill(box, el("p", { class: "hint" }, /404/.test(e.message) ? "This AgentNet does not report storage yet." : "Storage could not be read now."),
+      el("button", { type: "button", class: "btn", onclick: renderStorage }, "Read again"));
+    return;
+  }
+  const local = v.local || {}, areas = local.areas || [];
+  const drafts = state.files.length ? plural(state.files.length, "file", "files") + " waiting in the composer (in memory only)" : "";
+  const known = local.known || { files: 0, bytes: 0 };
+  fill(box,
+    el("div", { class: "storage-block" }, el("h4", {}, "On this " + (local.scope === "browser-device-records" ? "browser" : "computer")),
+      el("p", {}, el("strong", {}, amountText(known)), local.complete ? " held by AgentNet here." : " counted; some of it could not be inspected, so the total is not complete."),
+      local.location && el("p", { class: "hint" }, local.location + "."),
+      drafts && el("p", { class: "hint" }, drafts + "."),
+      local.browser && el("p", { class: "hint" }, local.browser),
+      el("ul", { class: "storage-areas" }, areas.map(storageArea)),
+      local.exclusions && el("p", { class: "hint" }, local.exclusions)),
+    storageRemote(v.remote),
+    el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn", onclick: renderStorage }, "Read again")));
+}
+
 function settingsTab(name) {
-  for (const key of ["profile", "appearance", "notifications", "device"]) $("settings-" + key).hidden = key !== name;
-  for (const b of document.querySelectorAll("[data-settings]")) { b.setAttribute("aria-selected", String(b.dataset.settings === name)); b.setAttribute("aria-pressed", String(b.dataset.settings === name)); b.tabIndex = b.dataset.settings === name ? 0 : -1; }
+  if (name === "notifications") ensureTyping().then(ui => { if (ui) ui.showSettings(); });
+  if (name === "device") renderResponder();
+  if (name === "storage") { renderStorage(); renderFileStorage(); }
+  for (const key of ["profile", "appearance", "notifications", "device", "storage"]) $("settings-" + key).hidden = key !== name;
+  for (const b of document.querySelectorAll("[data-settings]")) {
+    const on = b.dataset.settings === name;
+    b.setAttribute("aria-selected", String(on)); b.setAttribute("aria-pressed", String(on)); b.tabIndex = on ? 0 : -1;
+    if (on && b.scrollIntoView) b.scrollIntoView({ block: "nearest", inline: "nearest" }); // the tab row scrolls on a phone: the chosen tab is always in view
+  }
 }
 function showSettings() {
   toggleReview(false);
@@ -2657,6 +4308,27 @@ function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   for (const b of document.querySelectorAll("[data-theme]")) b.setAttribute("aria-pressed", String(b.dataset.theme === theme));
   try { localStorage.setItem("agentnet-theme", theme); } catch (e) { /* local only */ }
+}
+
+function renderInstalledInterfaces() {
+  // Installed interfaces sit in the same Interface group as Classic, Comic
+  // and Zoom: one choice, whatever package it comes from.
+  for (const b of $("lens").querySelectorAll("[data-skin]")) b.remove();
+  if (window.agentnet && window.agentnet.skins.length > 1) {
+    const switchTo = (id) => {
+      keepDraft();
+      if (state.files.length || Object.values(state.drafts).some((d) => d.files && d.files.length)) { announce("Send or remove draft attachments before switching interface."); return; }
+      if (!keepForReload()) { announce("Could not save your draft. Finish it before switching interface."); return; }
+      const change = () => window.agentnet.selectSkin(id);
+      if (Object.values(state.drafts).some((d) => d.text)) {
+        dialog({ title: "Switch interface?", body: [el("p", {}, "Your unsent text will be kept for when you return to this interface. The other interface has its own drafts.")], ok: "Switch", run: async () => change() });
+      } else change();
+    };
+    for (const s of window.agentnet.skins) {
+      if (s.id === "default") continue;
+      $("lens").append(el("button", { type: "button", "data-skin": s.id, "aria-pressed": "false", onclick: () => switchTo(s.id) }, s.name));
+    }
+  }
 }
 
 // ---- wiring ------------------------------------------------------------------------
@@ -2688,26 +4360,18 @@ function start() {
   for (const b of document.querySelectorAll("[data-settings]")) b.addEventListener("click", () => settingsTab(b.dataset.settings));
   for (const b of document.querySelectorAll("[data-theme]")) b.addEventListener("click", () => setTheme(b.dataset.theme));
   $("settings-notifications").append($("notify-line"));
-  if (window.agentnet && window.agentnet.skins.length > 1) {
-    const select = el("select", { "aria-label": "Installed UI", onchange: () => {
-      if (state.files.length || Object.values(state.drafts).some((d) => d.files && d.files.length)) { announce("Send or remove draft attachments before switching UI."); return; }
-      if (!keepForReload()) { announce("Could not save your draft. Finish it before switching UI."); return; }
-      const change = () => window.agentnet.selectSkin(select.value);
-      if (Object.values(state.drafts).some((d) => d.text)) {
-        dialog({ title: "Switch interface?", body: [el("p", {}, "Your unsent text will be kept for when you return to this interface. The other interface has its own drafts.")], ok: "Switch", run: async () => change() });
-      } else change();
-    } }, window.agentnet.skins.map((s) => el("option", { value: s.id }, s.name)));
-    $("settings-appearance").append(el("h3", {}, "Installed interfaces"), select);
-  }
+  renderInstalledInterfaces();
+  window.addEventListener("agentnet-skins-change", renderInstalledInterfaces);
   let theme = "system";
   try { theme = localStorage.getItem("agentnet-theme") || theme; } catch (e) { /* default */ }
   setTheme(theme);
   $("composer").addEventListener("submit", send);
   $("body").addEventListener("input", grow);
+  $("body").addEventListener("input", noteTyping);
   $("body").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $("composer").requestSubmit(); }
   });
-  $("kind").addEventListener("change", kindHint);
+  $("kind").addEventListener("change", () => { kindHint(); renderTarget(); });
   kindHint();
   $("replying-cancel").addEventListener("click", () => { setAnswering(null); setDMReply(null); setDMAgent(null); });
   // Files: chosen, pasted (an image in the clipboard) or dropped on the composer.
@@ -2758,7 +4422,7 @@ function start() {
   $("reconnect").addEventListener("click", async () => {
     if (!(await reconnect())) announce("Still not connected. If the daemon restarted, run agentnet ui for the new address.");
   });
-  $("reload").addEventListener("click", () => location.reload());
+  $("reload").addEventListener("click", reloadUpdated);
   $("dialog").addEventListener("close", () => { state.dialogRestore = null; });
   window.addEventListener("focus", () => { // a missed change is caught when the person comes back
     if (!$("lost").hidden) return;
@@ -2773,6 +4437,7 @@ function start() {
   // on it: taken once and removed from the address, either way.
   state.clickedAtStart = takeClicked();
   window.addEventListener("hashchange", clickedLater);
+  if (window.agentnetWorkspace) window.agentnetWorkspace.hook({ capture: workspaceCapture, switched: (e) => { state.switching = workspaceSwitched(e); } });
   loadOverview().then(async (o) => {
     setLens(saved);
     const clicked = state.clickedAtStart;

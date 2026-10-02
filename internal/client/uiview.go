@@ -37,12 +37,13 @@ type ThreadSummary struct {
 // threadRow is what a summary needs to know about one message.
 type threadRow struct {
 	link
-	in      bool
-	kind    string
-	state   string
-	unread  bool
-	notice  bool // in only: a review notice (see envelope.StatusReviewNotice)
-	replied bool // out only: a received message replies to it
+	in       bool
+	kind     string
+	state    string
+	unread   bool
+	notice   bool // in only: a review notice (see envelope.StatusReviewNotice)
+	replied  bool // out only: a received message replies to it
+	selected bool // in only: local receiver input, not a remote execution job
 }
 
 // Threads lists every thread with every peer, most recent first.
@@ -125,9 +126,9 @@ func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
 					t.Notices++
 				}
 				continue
-			case r.in && (r.state == stateHeld || r.state == stateAwaiting || r.state == stateNeedHuman):
+			case r.in && !r.selected && (r.state == stateHeld || r.state == stateAwaiting || r.state == stateNeedHuman):
 				t.Review++
-			case r.in && (r.state == stateRunning || r.state == stateCancelReq):
+			case r.in && !r.selected && (r.state == stateRunning || r.state == stateCancelReq):
 				t.Running++
 			}
 			if r.in && r.unread {
@@ -173,7 +174,7 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
-	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), (`+receivedNotice+`) FROM inbox WHERE sender = ? AND conv IS NULL`,
+	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL`,
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
@@ -181,7 +182,7 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	replies := map[string]bool{}
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &r.notice); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &r.notice, &r.selected); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -195,7 +196,7 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox WHERE recipient = ? AND conv IS NULL`, peer)
+	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL`, peer)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +287,7 @@ func (a *Agent) MarkRead(ids []string) error {
 
 // ConvUnread lists, per conversation, the received messages not yet read.
 func (a *Agent) ConvUnread() (map[string][]string, error) {
-	rows, err := a.store.db.Query(`SELECT conv, id FROM inbox WHERE conv IS NOT NULL AND read_at IS NULL`)
+	rows, err := a.store.db.Query(`SELECT conv, id FROM inbox WHERE conv IS NOT NULL AND read_at IS NULL AND ref_id IS NULL`)
 	if err != nil {
 		return nil, err
 	}

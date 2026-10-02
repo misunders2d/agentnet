@@ -531,7 +531,7 @@ func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
 	blanket := []string{"--tools", "--strict-mcp-config", "--mcp-config", "--no-tools", "--no-skills", "--ignore-user-config", "--disable", "--no-builtin-tools"}
 	for name, h := range map[string]harness{"claude": Harnesses["claude"], "codex": Harnesses["codex"], "pi": Harnesses["pi"]} {
 		for _, flag := range blanket {
-			if slices.Contains(h.question, flag) && !(name == "pi" && flag == "--tools") {
+			if slices.Contains(h.question, flag) {
 				t.Errorf("%s question mode uses %s", name, flag)
 			}
 		}
@@ -552,8 +552,19 @@ func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
 		!strings.Contains(r, `approval_policy="never"`) || strings.Contains(r, "--sandbox") {
 		t.Errorf("codex resume: %s", r)
 	}
-	if pi := strings.Join(Harnesses["pi"].question, " "); !strings.Contains(pi, "--tools read,grep,find,ls") {
-		t.Errorf("pi question: %s", pi)
+	// Pi: a denylist of the built-ins that change the machine, nothing
+	// else (Pi's allowlist would switch every extension tool off); tasks
+	// keep the plain preset.
+	pi := Harnesses["pi"]
+	if q := strings.Join(pi.question, " "); q != "-p --no-session --exclude-tools bash,edit,write,powershell" {
+		t.Errorf("pi question: %s", q)
+	}
+	if tk := strings.Join(pi.task, " "); tk != "-p --no-session" {
+		t.Errorf("pi task: %s", tk)
+	}
+	oldPi := harness{bin: "pi", question: []string{"-p", "--no-session", "--tools", "read,grep,find,ls"}}
+	if presetID(oldPi, "question", oldPi.question) == presetID(pi, "question", pi.question) {
+		t.Error("the new pi question preset has the same identity as the old one")
 	}
 	// Sessions started under the earlier no-tools flags are not resumed.
 	old := harness{bin: "claude", question: []string{"-p", "--output-format", "text", "--no-session-persistence",

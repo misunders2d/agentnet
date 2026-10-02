@@ -34,11 +34,11 @@ var piEvents = []string{"SessionStart", "UserPromptSubmit", "Idle", "Stop", "Ack
 // broken or missing AgentNet never disturbs the session. It creates nothing
 // in a missing home.
 func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) error {
-	if len(args) != 1 || (!slices.Contains(hookHarnesses, args[0]) && args[0] != "pi") {
+	if len(args) != 1 || (!slices.Contains(hookHarnesses, args[0]) && args[0] != "pi" && args[0] != "omp") {
 		return fmt.Errorf("usage: hook %s|pi (reads the hook event on stdin)", strings.Join(hookHarnesses, "|"))
 	}
-	pi := args[0] == "pi"
-	events := hookEvents
+	pi := args[0] == "pi" || args[0] == "omp"
+	events := harnessHookEvents(args[0])
 	if pi {
 		events = piEvents
 	}
@@ -46,17 +46,23 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 		return nil // a session the AgentNet worker started: not the user's
 	}
 	var in struct {
-		SessionID      string `json:"session_id"`
-		HookEventName  string `json:"hook_event_name"`
-		StopHookActive bool   `json:"stop_hook_active"`
-		Pos            int64  `json:"pos"`     // Ack (pi)
-		HasPos         bool   `json:"has_pos"` // Ack (pi)
-		Release        string `json:"release"` // Ack (pi)
+		TranscriptPath string                           `json:"transcript_path"`
+		SessionID      string                           `json:"session_id"`
+		HookEventName  string                           `json:"hook_event_name"`
+		StopHookActive bool                             `json:"stop_hook_active"`
+		Pos            int64                            `json:"pos"`     // Ack (pi)
+		HasPos         bool                             `json:"has_pos"` // Ack (pi)
+		Release        string                           `json:"release"` // Ack (pi)
+		ReceiverAction string                           `json:"receiver_action"`
+		Registration   *client.ReplySessionRegistration `json:"registration"`
+		Owner          *client.ReplySessionCall         `json:"owner"`
+		ReceiverAck    *client.ReplyReceiverAck         `json:"receiver_ack"`
+		ReplySession   string                           `json:"reply_session"`
 	}
 	if err := json.NewDecoder(io.LimitReader(stdin, 64<<20)).Decode(&in); err != nil {
 		return nil
 	}
-	if !slices.Contains(events, in.HookEventName) {
+	if in.ReceiverAction == "" && !slices.Contains(events, in.HookEventName) {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(home, "identity.json")); err != nil {
@@ -67,11 +73,77 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 		return nil
 	}
 	defer a.Close()
+	if in.ReceiverAction != "" {
+		if !pi && args[0] != "claude" {
+			return nil
+		}
+		var result any
+		switch in.ReceiverAction {
+		case "register":
+			if !pi || in.Registration == nil {
+				return nil
+			}
+			in.Registration.Harness = args[0]
+			result, err = a.RegisterReplySession(*in.Registration)
+		case "channel-owner":
+			if args[0] != "claude" {
+				return nil
+			}
+			result, err = a.ClaudeReplyChannelOwner(in.SessionID)
+		case "take":
+			if in.Owner == nil {
+				return nil
+			}
+			delivery, e := a.TakeReplyReceiverInput(*in.Owner)
+			err = e
+			result = hookReceiverTakeResult(args[0], in.Owner.SessionID, delivery)
+		case "ack":
+			if in.ReceiverAck == nil {
+				return nil
+			}
+			accepted, e := a.AckReplyReceiverInput(*in.ReceiverAck)
+			err = e
+			result = map[string]bool{"accepted": accepted}
+		case "close":
+			if !pi || in.Owner == nil {
+				return nil
+			}
+			in.Owner.CloseReason = "detached"
+			if in.HookEventName == "SessionShutdown" {
+				in.Owner.CloseReason = "shutdown"
+			}
+			err = a.CloseReplySession(*in.Owner)
+			result = map[string]bool{"closed": err == nil}
+		default:
+			return nil
+		}
+		if err != nil {
+			return nil
+		}
+		return json.NewEncoder(stdout).Encode(result)
+	}
+	if args[0] == "codex" || args[0] == "claude" {
+		if in.TranscriptPath != "" {
+			var handle string
+			var e error
+			if args[0] == "claude" {
+				handle, e = a.ClaudeReplySessionHook(in.HookEventName, in.SessionID, in.TranscriptPath)
+			} else {
+				handle, e = a.CodexReplySessionHook(in.HookEventName, in.SessionID, in.TranscriptPath)
+			}
+			if e == nil {
+				in.ReplySession = handle
+			}
+		}
+		if in.HookEventName == "SessionEnd" {
+			return nil
+		}
+	}
 	if in.HookEventName == "Ack" {
-		a.AckAttention("pi", in.SessionID, in.Pos, in.HasPos, in.Release)
+		a.AckAttention(args[0], in.SessionID, in.Pos, in.HasPos, in.Release)
 		return nil
 	}
-	at, err := a.Attention(client.HookEvent{Harness: args[0], Session: in.SessionID, Event: in.HookEventName, StopActive: in.StopHookActive})
+	at, err := a.Attention(client.HookEvent{Harness: args[0], Session: in.SessionID, Event: in.HookEventName, StopActive: in.StopHookActive, ReplySession: in.ReplySession})
 	if err != nil || at.Text == "" {
 		if err == nil {
 			at.Commit() // records a new session's starting point
@@ -98,6 +170,14 @@ func runHook(home string, args []string, stdin io.Reader, stdout io.Writer) erro
 	}
 	at.Commit()
 	return nil
+}
+
+// Formatting does not acknowledge native persistence or change delivery ownership.
+func hookReceiverTakeResult(harness, sid string, delivery *client.ReplyReceiverDelivery) any {
+	if harness == "claude" && delivery != nil {
+		return map[string]any{"delivery": delivery, "channel": client.ClaudeReplyNotification(sid, delivery)}
+	}
+	return delivery
 }
 
 // hookConfigPath is where each harness reads user-level hooks.
@@ -161,6 +241,13 @@ func isAgentNetHook(handler any, harness string) bool {
 	return base == "agentnet" || base == "agentnet.exe"
 }
 
+func harnessHookEvents(harness string) []string {
+	if harness == "codex" || harness == "claude" {
+		return append(append([]string(nil), hookEvents...), "SessionEnd")
+	}
+	return hookEvents
+}
+
 const hookTimeout = 10 // seconds
 
 // mergeHooks returns config with every AgentNet handler for harness removed
@@ -177,7 +264,7 @@ func mergeHooks(config map[string]any, harness, command string) (map[string]any,
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
-	for _, event := range hookEvents {
+	for _, event := range harnessHookEvents(harness) {
 		if v, ok := hooks[event]; ok {
 			if _, isList := v.([]any); !isList {
 				return nil, fmt.Errorf("hooks.%s is not a list", event)
@@ -221,7 +308,7 @@ func mergeHooks(config map[string]any, harness, command string) (map[string]any,
 		}
 	}
 	if command != "" {
-		for _, event := range hookEvents {
+		for _, event := range harnessHookEvents(harness) {
 			groups, _ := hooks[event].([]any)
 			hooks[event] = append(groups, map[string]any{
 				"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": float64(hookTimeout)}},
@@ -239,19 +326,39 @@ func mergeHooks(config map[string]any, harness, command string) (map[string]any,
 // runHooks shows, installs or removes AgentNet's hooks in a harness's
 // user-level hook configuration.
 func runHooks(home string, args []string) error {
-	usage := errors.New("usage: hooks show|install|remove claude|codex|pi [--file PATH]")
+	usage := errors.New("usage: hooks show|install|remove claude|codex|pi [--file PATH] [--channel (Claude only)]")
 	if len(args) < 2 {
 		return usage
 	}
 	action, harness := args[0], args[1]
-	if harness == "pi" {
-		return runPiHooks(home, action, args[2:])
+	channel := false
+	var rest []string
+	for i := 2; i < len(args); i++ {
+		if args[i] == "--channel" {
+			if channel {
+				return usage
+			}
+			channel = true
+			continue
+		}
+		rest = append(rest, args[i])
+		// A file argument remains a literal path, even if named --channel.
+		if args[i] == "--file" && i+1 < len(args) {
+			i++
+			rest = append(rest, args[i])
+		}
+	}
+	if channel && harness != "claude" {
+		return errors.New("hooks --channel is supported only for Claude")
+	}
+	if harness == "pi" || harness == "omp" {
+		return runNativeHooks(home, harness, action, rest)
 	}
 	if !slices.Contains(hookHarnesses, harness) {
 		return fmt.Errorf("hooks for %q are not supported: only %s hook contracts are implemented; other agents can use `agentnet inbox` and `agentnet conversation`", harness, strings.Join(hookHarnesses, " and "))
 	}
 	file := ""
-	switch rest := args[2:]; {
+	switch {
 	case len(rest) == 2 && rest[0] == "--file":
 		file = rest[1]
 	case len(rest) != 0:
@@ -263,7 +370,15 @@ func runHooks(home string, args []string) error {
 	}
 	if action == "show" {
 		fragment, _ := mergeHooks(nil, harness, command)
-		data, _ := json.MarshalIndent(fragment, "", "  ")
+		var shown any = fragment
+		if channel {
+			mcp, err := applyClaudeChannelAssets(home, action)
+			if err != nil {
+				return err
+			}
+			shown = map[string]any{"settings": fragment, "mcpConfig": mcp}
+		}
+		data, _ := json.MarshalIndent(shown, "", "  ")
 		fmt.Println(string(data))
 		return nil
 	}
@@ -294,28 +409,56 @@ func runHooks(home string, args []string) error {
 	}
 	data, _ := json.MarshalIndent(config, "", "  ")
 	data = append(data, '\n')
+	var channelConfig json.RawMessage
+	if channel {
+		channelConfig, err = applyClaudeChannelAssets(home, action)
+		if err != nil {
+			return fmt.Errorf("settings unchanged; Claude channel asset operation refused or incomplete: %w", err)
+		}
+	}
+	channelNotice := func() {
+		if !channel {
+			return
+		}
+		if action == "install" {
+			fmt.Println("AgentNet Claude channel files installed; native channel is NOT enabled by this install.")
+			fmt.Println("local MCP config fragment:", string(channelConfig))
+			fmt.Println("next: pass this fragment with --mcp-config, explicitly admit server:agentnet with --dangerously-load-development-channels server:agentnet, and complete native channel consent; keep original tools, skills, settings and permissions")
+			fmt.Println("qualified: Claude2.1.286 on Linux, official SDK1.31.0, Node26.10.0; other versions unqualified")
+		} else {
+			fmt.Println("owned Claude channel files removed (or absent); running native sessions are not closed or reassigned")
+		}
+	}
 	if string(data) == string(old) {
 		fmt.Printf("%s already up to date\n", file)
+		channelNotice()
 		return nil
 	}
 	if len(old) > 0 {
 		backup, err := writeBackup(file, old)
 		if err != nil {
+			if channel {
+				return fmt.Errorf("Claude channel assets already processed; settings backup failed, settings unchanged: %w", err)
+			}
 			return err
 		}
 		fmt.Printf("backup %s\n", backup)
 	}
 	if err := writeFileAtomic(file, data); err != nil {
+		if channel {
+			return fmt.Errorf("Claude channel assets already processed; settings write failed: %w", err)
+		}
 		return err
 	}
-	fmt.Printf("%s %s: AgentNet hooks for %s (%s)\n", map[string]string{"install": "updated", "remove": "removed from"}[action], file, harness, strings.Join(hookEvents, ", "))
+	fmt.Printf("%s %s: AgentNet hooks for %s (%s)\n", map[string]string{"install": "updated", "remove": "removed from"}[action], file, harness, strings.Join(harnessHookEvents(harness), ", "))
 	if action == "install" {
 		if harness == "codex" {
-			fmt.Println("next: in Codex open /hooks, review and trust the four AgentNet hooks, then start a new session; untrusted hooks do not run")
+			fmt.Printf("next: in Codex open /hooks, review and trust the %d AgentNet hooks, then start a new session; untrusted hooks do not run\n", len(harnessHookEvents(harness)))
 		} else {
 			fmt.Println("next: start a new Claude Code session (running sessions may not pick up the change)")
 		}
 	}
+	channelNotice()
 	return nil
 }
 

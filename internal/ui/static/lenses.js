@@ -1,7 +1,8 @@
 // Comic and Zoom: two more ways to look at the same threads and DMs. They
 // read the same data as the classic view and every decision goes through the
 // same dialogs and server actions (decide, actionButton in app.js). Faces are
-// initials only. In device history whether a person or one of their agents
+// provisional platform emoji in Comic, initials in Zoom. In device history
+// whether a person or one of their agents
 // wrote a message is not recorded; in a DM it is what the sending AgentNet
 // says, shown as that. Nothing here links a person to an agent: that waits
 // for real participation data.
@@ -21,7 +22,7 @@ function comicDM(d) {
   const me = state.overview && state.overview.person ? state.overview.person.label : "You";
   return { id: "dm:" + d.id, dm: true, peer: d.peer.label, via: d.peer.address,
     messages: d.messages.map((m) => Object.assign({}, m, { dm: true, actions: m.actions || [], author: dmAuthor(m, d),
-      face: m.dir === "out" ? me : d.peer.label || m.from, to: d.peer.label })) };
+      face: m.dir === "out" ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, to: humanGroup(d) ? d.title : d.peer.label })) };
 }
 
 // Full text and details of one message, in a dialog.
@@ -29,7 +30,7 @@ function readDialog(m) {
   const d = m.dm ? dmDetails(m) : details(m);
   d.open = true;
   dialog({ title: (kindTag[m.kind] || "Message") + " · " + authorName(m), ok: "Close", run: async () => {},
-    body: [el("div", { class: "quote" }, m.body), fileChips(m, m.attachments || m.files),
+    body: [el("div", { class: "quote" }, m.deleted ? "Message deleted" : shownText(m)), !m.deleted && fileChips(m, m.attachments || m.files),
       m.summary && el("p", { class: "hint" }, "Your responder's summary: " + m.summary), d] });
 }
 
@@ -89,10 +90,10 @@ function dmWriteDialog(d) {
   const body = el("textarea", { id: "write-body", rows: "4" });
   const canFiles = !!fileLimits() && !d.frozen;
   dialog({
-    title: "Write to " + d.peer.label,
+    title: "Write to " + (humanGroup(d) ? d.title : d.peer.label),
     body: [el("label", { for: "write-body", class: "field-label" }, "Message"), body,
       canFiles && dialogFiles(body),
-      el("p", { class: "hint" }, "It goes to this DM only. A DM is for the person; nothing runs it.")],
+      el("p", { class: "hint" }, humanGroup(d) ? "It goes to the current group members. Ordinary messages do not run agents." : "It goes to this DM only. A DM is for the person; nothing runs it.")],
     ok: "Send", focus: body,
     run: async () => {
       const r = await sendWithFiles("/api/dm/send", { conv: d.id, body: body.value }, canFiles);
@@ -108,6 +109,21 @@ function dmWriteDialog(d) {
 const Comic = {
   pageOf: {}, // page shown per thread
   grid: false,
+
+  // Fixed prototype faces, not generated character art or verified identity.
+  // Only the sender's explicit emotion chooses a face; workflow stays separate.
+  expressions: Object.freeze({ neutral: "😐", happy: "🙂", sad: "😢", focused: "🧐", curious: "🤔", concerned: "😟", celebrating: "🥳" }),
+
+  expressionAvatar(m) {
+    const emotion = typeof m.emotion === "string" && Object.prototype.hasOwnProperty.call(this.expressions, m.emotion) ? m.emotion : "neutral";
+    const face = avatar(faceOf(m), "actor comic-face");
+    face.setAttribute("aria-hidden", "false");
+    face.setAttribute("role", "img");
+    face.setAttribute("aria-label", "Expression: " + emotion + " (prototype)");
+    face.setAttribute("title", "Expression: " + emotion + " (prototype)");
+    face.setAttribute("data-emotion", emotion);
+    return fill(face, el("span", { class: "comic-expression", "aria-hidden": "true" }, this.expressions[emotion]));
+  },
 
   pages(t) {
     const pages = [{ cover: true }];
@@ -272,17 +288,23 @@ const Comic = {
     }
     const mine = m.dir === "out";
     const needs = needsYou(m);
+    const parent = m.reply_to && this.t.messages.find((p) => p.id === m.reply_to);
+    const refWord = m.kind === "answer" ? "Answer to: " : m.kind === "result" ? "Result for: " : "Reply to: ";
     const caption = m.state_text && !needs && el("div", { class: "caption" + (working(m) ? " running" : "") }, m.state_text);
     const waiting = m.next && m.next.startsWith("Waiting on") && el("div", { class: "caption" }, m.next);
     return el("article", { id: "p-" + m.id, class: "panel" + (wide ? " full" : "") + (mine ? " mine" : " theirs") + (needs ? " splash" : "") },
       stampWord[m.kind] && el("span", { class: "stamp" }, stampWord[m.kind] + (m.status && m.status !== "done" ? " · " + (statusWord[m.status] || m.status).toUpperCase() : "")),
       el("button", { type: "button", class: "read-btn", "aria-label": "Read in full", title: "Read in full", onclick: () => readDialog(m) }, "⤢"),
       caption, waiting,
-      el("div", { class: "art" }, avatar(faceOf(m), "actor"),
+      el("div", { class: "art" }, this.expressionAvatar(m),
         el("div", { class: "balloons" },
-          el("div", { class: "balloon speech " + (mine ? "mine" : "theirs") },
-            el("p", { class: "balloon-text" }, m.body),
-            (m.attachments || m.files || []).length > 0 && el("div", { class: "props" }, (m.attachments || m.files).map((f) => el("span", { class: "prop" }, "📎 " + f.name)))),
+          el("div", { class: "balloon speech " + (mine ? "mine" : "theirs") + (m.deleted ? " gone" : "") },
+            m.reply_to && (parent && !parent.event
+              ? el("button", { type: "button", class: "replyref comic-reply", onclick: () => this.focus(parent.id) }, refWord + (parent.deleted ? "(deleted message)" : firstLine(shownText(parent), 90)))
+              : el("span", { class: "replyref comic-reply" }, parent ? "Reply to a conversation event" : "Reply to a message not shown here")),
+            el("p", { class: "balloon-text" }, m.deleted ? "Message deleted" : shownText(m), m.edited && !m.deleted && el("span", { class: "edited" }, " · edited")),
+            !m.deleted && (m.attachments || m.files || []).length > 0 && el("div", { class: "props" }, (m.attachments || m.files).map((f) => el("span", { class: "prop" }, "📎 " + f.name))),
+            (m.reactions || []).length > 0 && el("div", { class: "props" }, m.reactions.map((r) => el("span", { class: "prop" + (r.mine ? " mine" : ""), title: reactorNames(r) }, r.emoji + " " + (r.by || []).length)))),
           m.summary && el("div", { class: "balloon thought mine" },
             el("p", { class: "thought-label" }, "Your responder's summary, only on this computer"),
             el("p", { class: "balloon-text" }, m.summary)))),
@@ -335,6 +357,7 @@ const Zoom = {
     if (this.level === 0) {
       return ["Everyone", state.overview && state.overview.persons ? "Person or contact" : "Contact", "Conversation", "Message"];
     }
+    if (this.dm === state.dm && humanGroup()) return ["Everyone", "Group", state.dmData.title, "Message"];
     if (this.person) {
       const p = this.personOf(), d = state.dmData;
       return ["Everyone", p ? p.label : "Person", d && this.level >= 2 && d.messages[0] ? firstLine(d.messages[0].body, 40) : "DM", "Message"];
@@ -480,12 +503,19 @@ const Zoom = {
         el("button", { type: "button", class: "thread-row", onclick: () => this.go(1, { peer: c.peer, person: null }) },
           avatar(c.peer, "sm"), el("span", { class: "thread-title" }, who(c.peer)), counts(c))))),
       !entries.length && el("p", { class: "hint" }, state.contactView === "unread" ? "No unread conversations." : "No activity yet. People lists everyone."),
-      moreContacts(entries.length), state.contactView === "people" && zoomDirectory(o.threads));
+      moreContacts(entries.length), state.contactView === "people" && zoomDirectory(o.threads),
+      el("ul", {class:"thread-list"}, groupsSection((id,from)=>this.go(2,{dm:id},from))));
   },
 
   // Level 1 for a person: their separate DMs (the same rows the sidebar
   // shows) and a new one.
   personLevel() {
+    if (this.dm === state.dm && humanGroup()) {
+      const d=state.dmData;
+      return el("section", {class:"zoom-person"}, el("h2",{},d.title),
+        el("p",{class:"hint"},groupMemberCount(d) + ". Ordinary messages do not run agents."),
+        el("ul",{class:"thread-list"},dmRow(d,(id,from)=>this.go(2,{dm:id},from))));
+    }
     const p = this.personOf();
     if (!p) return el("p", { class: "hint" }, "That person is not listed here any more.");
     const dms = ((state.overview && state.overview.dms) || []).filter((d) => d.peer.person && d.peer.person === p.person);
@@ -511,7 +541,7 @@ const Zoom = {
     const me = state.overview && state.overview.person ? state.overview.person.label : "You";
     return el("div", { class: "zoom-scene" },
       el("header", { class: "zoom-head" }, el("div", {},
-        el("p", { class: "hint" }, "DM with " + d.peer.label + " (the name they give) · via " + d.peer.address),
+        el("p", { class: "hint" }, humanGroup(d) ? "Group: " + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · via " + d.peer.address),
         el("h2", {}, d.messages[0] ? firstLine(d.messages[0].body, 80) : "No messages yet"))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
       el("ol", { class: "mini-chat" }, d.messages.map((m) => {
@@ -519,14 +549,15 @@ const Zoom = {
         const mine = m.dir === "out";
         const bubble = el("button", { type: "button", class: "mc-bubble" },
           el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + when(m.at)),
-          el("span", { class: "mc-text" }, m.body),
-          (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")));
+          el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
+          !m.deleted && (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")),
+          (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
-        return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, avatar(mine ? me : d.peer.label || m.from, "sm"), bubble,
+        return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, avatar(mine ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), bubble,
           m.state_text && el("p", { class: "narr" }, m.state_text));
       })),
       el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen, onclick: () => dmWriteDialog(d) },
-        d.frozen ? "Nothing more can be sent in this conversation" : "Write in this DM…")));
+        d.frozen ? "Nothing more can be sent in this conversation" : humanGroup(d) ? "Write in this group…" : "Write in this DM…")));
   },
 
   // Level 3 for a person: one DM message with everything known about it.
@@ -536,10 +567,11 @@ const Zoom = {
     det.open = true;
     const me = state.overview && state.overview.person ? state.overview.person.label : "You";
     return el("article", { class: "zoom-message", tabindex: "-1" },
-      el("div", { class: "meta" }, avatar(m.dir === "out" ? me : d.peer.label || m.from, "sm"), el("span", { class: "who" }, dmAuthor(m, d)),
+      el("div", { class: "meta" }, avatar(m.dir === "out" ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("span", { class: "who" }, dmAuthor(m, d)),
         kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.at }, when(m.at))),
-      el("p", { class: "body" }, m.body),
-      fileChips(m, m.attachments),
+      bodyOf(m),
+      !m.deleted && fileChips(m, m.attachments),
+      reactionsRow(m, d.id), messageMenu(m, d.id, { querySelector: () => null }),
       m.state_text && el("p", { class: "hint" }, m.state_text),
       det);
   },
@@ -565,7 +597,8 @@ const Zoom = {
         const mine = m.dir === "out";
         const bubble = el("button", { type: "button", class: "mc-bubble" },
           el("span", { class: "mc-who" }, authorName(m) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + when(m.at)),
-          el("span", { class: "mc-text" }, m.body));
+          el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
+          (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") },
           avatar(mine ? state.overview.me.address : m.from, "sm"), bubble,
@@ -588,8 +621,9 @@ const Zoom = {
     return el("article", { class: "zoom-message", tabindex: "-1" },
       el("div", { class: "meta" }, avatar(m.dir === "out" ? state.overview.me.address : m.from, "sm"), el("span", { class: "who" }, authorName(m)),
         kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.at }, when(m.at))),
-      el("p", { class: "body" }, m.body),
-      m.files && m.files.length && el("p", { class: "hint" }, "Files: " + m.files.map((f) => f.name + " (" + size(f.size) + ")").join(", ")),
+      bodyOf(m),
+      !m.deleted && m.files && m.files.length && el("p", { class: "hint" }, "Files: " + m.files.map((f) => f.name + " (" + size(f.size) + ")").join(", ")),
+      reactionsRow(m, ""), messageMenu(m, "", { querySelector: () => null }),
       m.summary && el("div", { class: "note" }, el("p", { class: "note-label" }, "Summary written on this computer by your responder"), el("p", { class: "body" }, m.summary)),
       m.state_text && el("p", { class: "hint" }, m.state_text),
       (m.actions || []).length > 0 && el("div", { class: "acts" }, m.actions.map((a, i) => actionButton(a, m, t, i === 0))),

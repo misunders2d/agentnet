@@ -33,7 +33,11 @@ function load(windows) {
 const chan = "AbCdEfGhIjKlMnOpQrStUv";
 (async () => {
   const sw = load([]);
-  check(Object.keys(sw.handlers).sort().join(",") === "notificationclick,push", "only push and click are handled (no fetch, no install takeover)");
+  check(Object.keys(sw.handlers).sort().join(",") === "fetch,message,notificationclick,push", "local package fetch/control added without install takeover");
+  for (const url of ["https://relay.example/api/overview", "https://relay.example/assets/app.js", "https://other.example/local-skins/" + "a".repeat(64) + "/entry.mjs"]) {
+    sw.handlers.fetch({ request: { url, method: "GET" }, respondWith() { check(false, "unrelated traffic intercepted: " + url); } });
+  }
+  sw.handlers.message({ source: { url: "https://other.example/" }, data: { type: "agentnet-local-skins-activate" }, waitUntil() { check(false, "foreign worker control accepted"); } });
   const push = (data) => sw.run("push", { data: data === undefined ? null : { json: () => (typeof data === "string" ? JSON.parse(data) : data) } });
   await push({ v: 1, chan });
   await push({ v: 1, chan: "" });

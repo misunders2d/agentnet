@@ -118,12 +118,18 @@ func TestMembersList(t *testing.T) {
 }
 
 // Presence changes are reported once per change of an agent's state:
-// connected, reconnecting (all sessions within grace) or offline.
+// connected, reconnecting (all sessions within grace) or offline; and once
+// more when a session ends while others live, since the device's
+// capabilities are what its live sessions all support (profile.go).
 func TestPresenceStateChanges(t *testing.T) {
 	var mu sync.Mutex // grace ends report from timer goroutines
 	var changes []string
 	done := make(chan struct{}, 8)
-	p := &presence{grace: 30 * time.Millisecond, onEnd: func(string, string) {}}
+	// Exercise state transitions in a fixed order. Equal-deadline grace
+	// callbacks may both end before onChange reads the current state.
+	// Real timer expiry is covered by TestSessionEndWhileConnectedNotifies.
+	p := &presence{grace: time.Hour, onEnd: func(string, string) {}}
+	t.Cleanup(p.close)
 	p.onChange = func(a string) { // called without the presence lock
 		mu.Lock()
 		changes = append(changes, a+" "+p.state(a))
@@ -138,10 +144,13 @@ func TestPresenceStateChanges(t *testing.T) {
 	p.disconnect("a/x", "s2") // -> reconnecting
 	<-done
 	<-done
-	<-done // s1 and s2 end after grace: the last one -> offline
+	p.end("a/x", "s1", p.sessions["a/x"]["s1"])
+	<-done // s1 ends after grace while s2 lives: reported (capabilities)
+	p.end("a/x", "s2", p.sessions["a/x"]["s2"])
+	<-done // s2 ends: -> offline
 	p.connect("a/x", a1)
 	p.drop("a/x") // connected -> offline, at once
-	want := []string{"a/x connected", "a/x reconnecting", "a/x offline", "a/x connected", "a/x offline"}
+	want := []string{"a/x connected", "a/x reconnecting", "a/x reconnecting", "a/x offline", "a/x connected", "a/x offline"}
 	mu.Lock()
 	defer mu.Unlock()
 	if fmt.Sprint(changes) != fmt.Sprint(want) {

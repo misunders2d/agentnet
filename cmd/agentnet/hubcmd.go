@@ -206,6 +206,8 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	quota := fs.String("quota", env("QUOTA", "1GiB"), "total attachment storage")
 	uploadTTL := fs.Duration("upload-ttl", mustDuration(env("UPLOAD_TTL", "24h")), "idle time before an unfinished upload is removed")
 	pushHosts := fs.String("push-hosts", env("PUSH_HOSTS", ""), "comma-separated push services to send Web Push to, besides Apple, Google, Mozilla and Microsoft (env AGENTNET_PUSH_HOSTS)")
+	var browserOrigins repeatedBrowserOrigins
+	fs.Var(&browserOrigins, "browser-origin", "explicit HTTPS browser workspace origin (repeatable; no wildcard)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -242,7 +244,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 		}
 	}
 	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel, PlatformTLS: *platformTLS, Web: *web,
-		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, PushHosts: extra})
+		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, PushHosts: extra, BrowserOrigins: []string(browserOrigins)})
 	if err != nil {
 		return err
 	}
@@ -279,3 +281,9 @@ func defaultListen() string {
 	}
 	return "127.0.0.1:8443"
 }
+
+// repeatedBrowserOrigins preserves explicit origins for Hub.Open validation.
+type repeatedBrowserOrigins []string
+
+func (v *repeatedBrowserOrigins) String() string          { return strings.Join(*v, ",") }
+func (v *repeatedBrowserOrigins) Set(origin string) error { *v = append(*v, origin); return nil }

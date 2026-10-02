@@ -216,7 +216,7 @@ func TestDMFilesQueuedAcrossRestart(t *testing.T) {
 	}
 }
 
-// An agent is told that a shared message had files, never given them.
+// Context lines identify selected files; authorized bytes are supplied separately.
 func TestAgentContextNamesFilesOnly(t *testing.T) {
 	w, conv, _ := dmFiles(t)
 	path, _ := writeFile(t, t.TempDir(), "secret.txt", 500)
@@ -227,7 +227,7 @@ func TestAgentContextNamesFilesOnly(t *testing.T) {
 	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, sent.ID) == 1 })
 	pid := participate(t, w, conv, []string{sent.LID}, nil)
 	c, err := w.bob.ParticipationContext(pid, 0)
-	if err != nil || len(c.lines) != 1 || !strings.Contains(c.lines[0], "see attached (1 attached file(s), not given to you)") ||
+	if err != nil || len(c.lines) != 1 || !strings.Contains(c.lines[0], "see attached (1 selected file(s); byte availability reported separately)") ||
 		strings.Contains(strings.Join(c.lines, "\n"), marker) {
 		t.Fatalf("context: %q %v", c.lines, err)
 	}
@@ -353,5 +353,31 @@ func TestV1NamedFilesAndStagingCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Fatal("CleanStaging removed a file that is not a staged upload")
+	}
+}
+
+// A conversation turn's file opens on the device that sent it (from its
+// kept copy) through the same OpenFile the recipient uses, and the sender's
+// view says so; the recipient's copy stays openable as before.
+func TestSenderOpensKeptDMFile(t *testing.T) {
+	w, conv, _ := dmFiles(t)
+	img, imgData := writeFile(t, t.TempDir(), "photo.png", 30000)
+	sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "look", Files: []OutgoingFile{{Path: img}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, f, err := w.alice.OpenFileFrom(tctx(t), "out", sent.ID, 0)
+	if err != nil || f.Name != "photo.png" || !bytes.Equal(readAll(t, r), imgData) {
+		t.Fatalf("sender opens own file: %+v %v", f, err)
+	}
+	if m := convMsgByID(t, w.alice, conv, sent.ID); m.Dir != "out" || len(m.Attachments) != 1 || !m.Attachments[0].Openable {
+		t.Fatalf("sender's view: %+v", m)
+	}
+	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, sent.ID) == 1 })
+	if m := convMsgByID(t, w.bob, conv, sent.ID); !m.Attachments[0].Openable {
+		t.Fatalf("recipient's view: %+v", m)
+	}
+	if _, _, err := w.bob.OpenFileFrom(tctx(t), "in", sent.ID, 0); err != nil {
+		t.Fatal(err)
 	}
 }

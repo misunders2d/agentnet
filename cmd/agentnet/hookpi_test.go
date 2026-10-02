@@ -123,7 +123,9 @@ const [ext, home, dir] = process.argv.slice(2);
 const h = {};
 const sent = [];
 const notes = [];
-const pi = { on: (ev, fn) => { h[ev] = fn; }, sendMessage: (m, o) => sent.push({ details: m.details, options: o }) };
+const file = dir + "/native.jsonl";
+const persist = () => fs.writeFileSync(file, JSON.stringify({type:"session",id:"S1"}) + "\n" + branch.map(e=>JSON.stringify(e)).join("\n") + "\n");
+const pi = { on: (ev, fn) => { h[ev] = fn; }, sendMessage: (m, o) => { sent.push({ details: m.details, options: o }); branch.push({id:"m"+sent.length,type:"custom_message",customType:m.customType,details:m.details}); persist(); } };
 (await import(ext)).default(pi);
 const out = (x) => console.log(JSON.stringify(x));
 if (!h.session_start) { out({ registered: false }); process.exit(0); }
@@ -134,7 +136,7 @@ const acks = () => log().filter((l) => l.includes('"Ack"')).length;
 const reads = () => log().filter((l) => !l.includes('"Ack"')).length;
 let idle = true, branch = []; // idle when the session starts
 const ctx = { hasUI: true, isIdle: () => idle, ui: { notify: (t) => notes.push(t) },
-  sessionManager: { getSessionId: () => "S1", getBranch: () => branch } };
+  sessionManager: { getSessionId: () => "S1", getSessionFile: () => file, getBranch: () => branch } };
 mode("ok");
 await h.session_start({}, ctx);
 out({ step: "start", acks: acks(), sent: sent.length, triggerTurn: sent[0]?.options?.triggerTurn });
@@ -153,7 +155,7 @@ branch = s0?.entries ? [{ type: "custom_message", customType: "agentnet", detail
 await h.turn_start({}, ctx);
 await sleep(300);
 out({ step: "settle-pending", entries: !!s0?.entries, reads: reads() - n, acks: acks(), pos8: log().some((l) => l.includes('"pos":8')) });
-branch = [];
+branch = [{id:"prompt",type:"custom_message",customType:"agentnet",details:r1.message.details}]; persist();
 await h.message_end({ message: { role: "custom", customType: "agentnet", details: r1.message.details } });
 await sleep(300);
 out({ step: "admitted", acks: acks() });
@@ -174,7 +176,7 @@ mode("ok");
 const s1 = await h.agent_before_settle({});
 await sleep(100);
 out({ step: "settle", continue: s1?.continue, acks: acks() });
-branch = [{ type: "custom_message", customType: "agentnet", details: s1.entries[0].details }];
+branch = [{ id:"settle", type: "custom_message", customType: "agentnet", details: s1.entries[0].details }]; persist();
 await h.turn_start({}, ctx);
 await sleep(300);
 out({ step: "settle-admitted", acks: acks() });

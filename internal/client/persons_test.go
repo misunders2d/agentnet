@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -276,4 +278,47 @@ func TestDaemonHearsRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the tablet refused", func() bool { return tablet.LinkState().State == LinkRefused })
+}
+
+// HubRole is the relay's word on this installation's role, from its own
+// profile only; it is never read off the label in an address, and an
+// unreachable relay gives unknown with the error.
+func TestHubRole(t *testing.T) {
+	w := newWorld(t, "")
+	if role, err := w.alice.HubRole(tctx(t)); err != nil || role != protocol.RoleAdmin {
+		t.Fatalf("alice (the bootstrap admin): %q %v", role, err)
+	}
+	if role, err := w.bob.HubRole(tctx(t)); err != nil || role != protocol.RoleMember {
+		t.Fatalf("bob (invited as a member): %q %v", role, err)
+	}
+	// An older relay's profile (no role field), or one with a value this
+	// program does not know: unknown, and no error.
+	base := w.bob.hub.http.Transport
+	for _, body := range []string{`{"sessions":[],"live":false}`, `{"self_role":"owner"}`} {
+		w.bob.hub.http.Transport = cannedRT{base, "/profile", body}
+		if role, err := w.bob.HubRole(tctx(t)); err != nil || role != HubRoleUnknown {
+			t.Fatalf("profile %s: %q %v", body, role, err)
+		}
+	}
+	w.bob.hub.http.Transport = base
+	w.hub.Stop()
+	if role, err := w.bob.HubRole(tctx(t)); err == nil || role != HubRoleUnknown {
+		t.Fatalf("with the relay down: %q %v", role, err)
+	}
+}
+
+// cannedRT answers requests whose path contains match with body (200),
+// as an older relay would; everything else goes through.
+type cannedRT struct {
+	base  http.RoundTripper
+	match string
+	body  string
+}
+
+func (c cannedRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !strings.Contains(r.URL.Path, c.match) {
+		return c.base.RoundTrip(r)
+	}
+	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(c.body)), Request: r}, nil
 }

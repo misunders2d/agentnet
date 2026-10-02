@@ -72,10 +72,17 @@ var Harnesses = map[string]harness{
 			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have",
 	},
 	"pi": {
-		bin:      "pi",
-		question: []string{"-p", "--no-session", "--tools", "read,grep,find,ls"},
+		bin: "pi",
+		// The user's own Pi setup: settings (defaultTools), skills and
+		// extensions with their tools load as usual; --exclude-tools removes
+		// only the built-ins that change the machine. Pi 0.87.1 has no
+		// unattended permission or read-only mode for its shell, so bash and
+		// powershell are off too (an allowlist would also switch every
+		// extension tool off, which is not the recipient's setup).
+		question: []string{"-p", "--no-session", "--exclude-tools", "bash,edit,write,powershell"},
 		task:     []string{"-p", "--no-session"},
-		limits:   "pi questions load your skills but may use only the read, grep, find and ls tools; skills that need bash, edit or extension tools cannot work there",
+		limits: "pi questions use your Pi settings, skills and extensions with their tools; only bash, edit, write and powershell are off " +
+			"(Pi cannot run its shell read-only or ask), and extension tools keep whatever effects your setup gives them",
 	},
 }
 
@@ -129,6 +136,23 @@ func (a *Agent) SetResponder(r *Responder) error {
 		notifyDaemon(a.home)
 		return nil
 	}
+	if err := validateResponder(r); err != nil {
+		return err
+	}
+	data, _ := json.Marshal(r)
+	if err := a.store.setConfig(map[string]string{"responder": string(data)}); err != nil {
+		return err
+	}
+	if err := a.store.deleteConfig("responder_manual"); err != nil {
+		return err
+	}
+	notifyDaemon(a.home)
+	return nil
+}
+
+// validateResponder is shared by the default and host-local named agents.
+// It validates/normalizes local configuration only, never a received choice.
+func validateResponder(r *Responder) error {
 	if _, ok := Harnesses[r.Harness]; !ok {
 		return fmt.Errorf("unsupported responder %q (supported: %v)", r.Harness, HarnessNames())
 	}
@@ -151,14 +175,6 @@ func (a *Agent) SetResponder(r *Responder) error {
 	if r.Timeout <= 0 {
 		r.Timeout = 5 * time.Minute
 	}
-	data, _ := json.Marshal(r)
-	if err := a.store.setConfig(map[string]string{"responder": string(data)}); err != nil {
-		return err
-	}
-	if err := a.store.deleteConfig("responder_manual"); err != nil {
-		return err
-	}
-	notifyDaemon(a.home)
 	return nil
 }
 

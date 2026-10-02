@@ -111,10 +111,10 @@ func (l *Live) takeStaged(ids []string) ([]client.OutgoingFile, func(), error) {
 	return out, cleanup, nil
 }
 
-// OpenFile implements Files: the received file, checked and decrypted, and
-// its name made safe.
-func (l *Live) OpenFile(ctx context.Context, msgID string, index int) (io.ReadCloser, string, error) {
-	r, f, err := l.a.OpenAttachment(ctx, msgID, index)
+// OpenFile implements Files: the received file, checked and decrypted, or
+// the kept copy of a file sent from this device, with its name made safe.
+func (l *Live) OpenFile(ctx context.Context, dir, msgID string, index int) (io.ReadCloser, string, error) {
+	r, f, err := l.a.OpenFileFrom(ctx, dir, msgID, index)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, "", err
@@ -136,7 +136,14 @@ func (l *Live) RequestFile(ctx context.Context, msgID string, index int) error {
 func fileViews(files []client.FileInfo) []FileView {
 	var out []FileView
 	for i, f := range files {
-		out = append(out, FileView{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Availability: f.Availability})
+		v := FileView{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Availability: f.Availability, Openable: f.Openable}
+		if !v.Openable && v.Availability == "" {
+			v.Note = notKeptNote
+		}
+		out = append(out, v)
 	}
 	return out
 }
+
+// notKeptNote explains a sent file this device cannot open.
+const notKeptNote = "Sent from this device before it kept copies of sent files, or from another device of yours: no copy here to open."

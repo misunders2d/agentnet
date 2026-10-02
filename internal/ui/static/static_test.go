@@ -217,8 +217,8 @@ func TestRelayManifest(t *testing.T) {
 	if !sizes["192x192"] || !sizes["512x512"] {
 		t.Fatalf("icon sizes: %v", sizes)
 	}
-	if page := string(devicePage()); !strings.Contains(page, `<link rel="manifest" href="/manifest.webmanifest">`) {
-		t.Fatal("the device page does not link its manifest")
+	if page := string(devicePage()); strings.Count(page, `rel="manifest"`) != 1 || !strings.Contains(page, `<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">`) {
+		t.Fatal("the device page does not share one credentialed manifest link")
 	}
 	if page := string(devicePage()); strings.Count(page, `rel="icon"`) != 1 || !strings.Contains(page, `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) {
 		t.Fatal("the device page does not name its icon once")

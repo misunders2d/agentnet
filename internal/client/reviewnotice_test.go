@@ -78,13 +78,18 @@ func TestReviewNoticeReachesNamedAgentOnce(t *testing.T) {
 		t.Fatal("covered item not marked")
 	}
 	// The desktop notice on bob failed; the review notice did not replace or
-	// suppress it: bob tried it, and alice showed her own count-only banner.
+	// suppress it: bob tried it. Alice shows no banner: a report from another
+	// machine is not a decision here (owner decision 2026-09-30); it is
+	// listed as a report, apart from her own review items.
 	if bobNotes.count() == 0 {
 		t.Fatal("bob's desktop notification was not attempted")
 	}
-	eventually(t, "alice's banner", func() bool { return aliceNotes.count() > 0 })
-	if strings.Contains(aliceNotes.last(), "private greeting") {
-		t.Fatalf("banner = %q", aliceNotes.last())
+	quiet(t, w.alice, aliceNotes, 0)
+	if review, _ := w.alice.Review(); len(review) != 0 {
+		t.Fatalf("a report is listed as alice's decision: %+v", review)
+	}
+	if reports, _ := w.alice.Notices(); len(reports) != 1 || reports[0].ID != n.ID {
+		t.Fatalf("alice's reports = %+v", reports)
 	}
 
 	// Alice names bob too: her notice is received, not a local request, so

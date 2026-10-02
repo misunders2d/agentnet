@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -508,5 +509,148 @@ func TestRecommendedOnlyNewer(t *testing.T) {
 		if got := recommended(protocol.Release{Version: c.recommended}, c.ok); got != c.want {
 			t.Errorf("running %s, recommended %s: %q, want %q", c.running, c.recommended, got, c.want)
 		}
+	}
+}
+
+// The page sees and changes the responder through the daemon's own view:
+// detection is the daemon's PATH lookup (nothing runs), timeout and context
+// files survive an edit of harness or directory, manual handling is a
+// choice, and an unsupported harness is refused.
+func TestLiveResponderControl(t *testing.T) {
+	_, bob, live := liveWorld(t)
+	// The daemon's PATH decides what can be chosen: a fake PATH with two
+	// stand-in binaries, so the test does not depend on what is installed.
+	bin := t.TempDir()
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	v, err := live.ResponderStatus()
+	if err != nil || v.Chosen || v.Manual || len(v.Harnesses) == 0 || v.Problem == "" {
+		t.Fatalf("before choosing: %+v %v", v, err)
+	}
+	names := map[string]bool{}
+	for _, h := range v.Harnesses {
+		names[h.Name] = true
+	}
+	if !names["claude"] || !names["codex"] || !names["pi"] {
+		t.Fatalf("harnesses = %+v", v.Harnesses)
+	}
+	dir := t.TempDir()
+	if err := bob.SetResponder(&client.Responder{Harness: "claude", Dir: dir, Timeout: 42 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	if _, err := live.SetResponder(ResponderChange{Harness: "codex", Dir: other}); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = live.ResponderStatus()
+	if !v.Chosen || v.Manual || v.Harness != "codex" || v.Dir != other || v.Timeout != 42 {
+		t.Fatalf("after edit (timeout must survive): %+v", v)
+	}
+	if v.Ready == (v.Problem != "") {
+		t.Fatalf("ready and problem disagree: %+v", v)
+	}
+	for _, h := range v.Harnesses {
+		if want := h.Name == "claude" || h.Name == "codex"; h.Found != want {
+			t.Fatalf("detection must follow the daemon's PATH: %+v", h)
+		}
+	}
+	if _, err := live.SetResponder(ResponderChange{Harness: "codex"}); err != nil { // keeps the directory
+		t.Fatal(err)
+	}
+	if v, _ = live.ResponderStatus(); v.Dir != other {
+		t.Fatalf("directory changed by an edit that named none: %+v", v)
+	}
+	if _, err := live.SetResponder(ResponderChange{Harness: "gpt-magic", Dir: other}); err == nil {
+		t.Fatal("an unsupported harness was accepted")
+	}
+	// A supported harness the daemon cannot find is refused with the
+	// reason, and the previous choice stays.
+	if _, err := live.SetResponder(ResponderChange{Harness: "pi", Dir: other}); err == nil || !strings.Contains(err.Error(), "PATH") {
+		t.Fatalf("missing binary accepted: %v", err)
+	}
+	if v, _ = live.ResponderStatus(); v.Harness != "codex" || v.Dir != other || v.Timeout != 42 {
+		t.Fatalf("refusal changed the setting: %+v", v)
+	}
+	if v.Ready != true || v.Problem != "" {
+		t.Fatalf("codex on the fake PATH with an existing directory must be ready: %+v", v)
+	}
+	if _, err := live.SetResponder(ResponderChange{Manual: true}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ = live.ResponderStatus(); !v.Chosen || !v.Manual || v.Harness != "" {
+		t.Fatalf("manual: %+v", v)
+	}
+}
+
+// The page reacts to, edits and deletes through the daemon provider: the
+// view carries the resolved controls and what this device may do; a
+// message named by the wrong direction, an unknown id or another's message
+// for editing is refused; a word is not a reaction.
+func TestLiveMessageControls(t *testing.T) {
+	alice, bob, live := liveWorld(t)
+	alice.Logf = t.Logf
+	run, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { alice.Run(run, client.RunOptions{}); close(done) }() // alice publishes her capabilities
+	t.Cleanup(func() { stop(); <-done })
+	ctx := context.Background()
+	sent, err := alice.Send(ctx, bob.Address, "react to me", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	var note string
+	for {
+		note, err = live.React(ControlAction{ID: sent.ID, Dir: "in", Emoji: "👍"})
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil || !strings.HasPrefix(note, "Reacted") {
+		t.Fatalf("react: %q %v", note, err)
+	}
+	th, err := live.Thread(sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := th.Messages[0]
+	if len(m.Reactions) != 1 || m.Reactions[0].Emoji != "👍" || !m.Reactions[0].Mine || m.Reactions[0].By[0].ID != bob.Address || strings.Join(m.Can, ",") != "react" {
+		t.Fatalf("bob's view of alice's message: %+v", m.Controls)
+	}
+	if _, err := live.React(ControlAction{ID: sent.ID, Dir: "out", Emoji: "👍"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong direction: %v", err)
+	}
+	if _, err := live.React(ControlAction{ID: sent.ID, Dir: "in", Emoji: "wow"}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a word as a reaction: %v", err)
+	}
+	if _, err := live.EditMessage(ControlAction{ID: sent.ID, Dir: "in", Text: "mine now"}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("editing another's message: %v", err)
+	}
+	// Bob's own message: edit and delete from the page.
+	reply, err := bob.Send(ctx, alice.Address, "my typo", sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if note, err := live.EditMessage(ControlAction{ID: reply.ID, Dir: "out", Text: "my fix"}); err != nil || !strings.HasPrefix(note, "Edited") {
+		t.Fatalf("edit: %q %v", note, err)
+	}
+	th, _ = live.Thread(sent.ID)
+	if m := th.Messages[1]; !m.Edited || m.Text != "my fix" || m.Body != "my typo" || strings.Join(m.Can, ",") != "react,edit,delete" {
+		t.Fatalf("bob's edited message: %+v %+v", m.Body, m.Controls)
+	}
+	if _, err := live.DeleteMessage(ControlAction{ID: reply.ID, Dir: "out"}); err != nil {
+		t.Fatal(err)
+	}
+	th, _ = live.Thread(sent.ID)
+	if m := th.Messages[1]; !m.Deleted || len(m.Can) != 0 {
+		t.Fatalf("bob's deleted message: %+v", m.Controls)
+	}
+	if _, err := live.DeleteMessage(ControlAction{ID: "00000000000000000000000000000000", Dir: "out"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown id: %v", err)
 	}
 }

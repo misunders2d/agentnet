@@ -152,7 +152,7 @@ func TestLiveIdentity(t *testing.T) {
 		d, _ := pp.DM(before)
 		return d.Messages[1].Attachments[0].Availability == ""
 	})
-	rc, name, err := pp.OpenFile(ctx, d.Messages[1].ID, 0)
+	rc, name, err := pp.OpenFile(ctx, "in", d.Messages[1].ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

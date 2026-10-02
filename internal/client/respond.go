@@ -81,6 +81,9 @@ func (a *Agent) ReplyWait(ctx context.Context, id, body string, wait time.Durati
 
 // Decline refuses a task (or held question) and tells the sender.
 func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, error) {
+	if in, fp, e := a.storedReceiverSetup(id); e == nil && in.ReceiverRoute.Op == "delegate" {
+		return a.declineReceiverDelegation(ctx, in, fp, reason)
+	}
 	sender, kind, err := a.store.inboxKind(id)
 	if errors.Is(err, ErrConversationItem) {
 		return SendResult{}, err
@@ -105,6 +108,18 @@ func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, err
 // it when the worker claims it (agentjob.go). A question or task for the
 // person (stateConvHeld) is answered in the conversation instead.
 func (a *Agent) Accept(id string) error {
+	if in, _, e := a.storedReceiverSetup(id); e == nil && in.ReceiverRoute.Op == "delegate" {
+		res, e := a.store.db.Exec(`UPDATE inbox SET state=? WHERE id=? AND state=?`, stateAccepted, id, stateAwaiting)
+		if e != nil {
+			return e
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return ErrNotPending
+		}
+		a.NoteChange()
+		notifyDaemon(a.home)
+		return nil
+	}
 	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND (conv IS NULL AND
 		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
 		OR pid IS NOT NULL AND replica = 0 AND ((kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?))))`,
@@ -119,6 +134,7 @@ func (a *Agent) Accept(id string) error {
 	}
 	a.NoteChange() // a worker in this process looks again
 	notifyDaemon(a.home)
+	a.noteStatus(id)
 	return nil
 }
 
@@ -134,6 +150,7 @@ func (a *Agent) Resolve(id string) error {
 		return errors.New("nothing to resolve: not marked needs_human")
 	}
 	notifyDaemon(a.home)
+	a.noteStatus(id)
 	return nil
 }
 

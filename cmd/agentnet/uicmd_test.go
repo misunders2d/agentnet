@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +19,32 @@ import (
 	"github.com/misunders2d/agentnet/internal/secfile"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
+
+func TestWorkspacePageCommandScopesDefaultAndAdditionalHome(t *testing.T) {
+	home := t.TempDir()
+	if err := secfile.Write(filepath.Join(home, uiURLFile), []byte("http://127.0.0.1:4567/?t=PRIVATE\n")); err != nil {
+		t.Fatal(err)
+	}
+	old := pageOS
+	pageOS = "linux"
+	t.Cleanup(func() { pageOS = old })
+	for _, workspace := range []string{client.DefaultWorkspace, strings.Repeat("b", 32)} {
+		for _, conv := range []string{"", strings.Repeat("a", 64)} {
+			args := workspacePageCommand(home, conv, workspace)
+			if len(args) != 2 || strings.Contains(strings.Join(args, " "), "PRIVATE") {
+				t.Fatalf("page command: %v", args)
+			}
+			u, err := url.Parse(args[1])
+			if err != nil || u.RawQuery != "" {
+				t.Fatalf("page URL: %v, %v", u, err)
+			}
+			q, err := url.ParseQuery(u.Fragment)
+			if err != nil || q.Get("workspace") != workspace || q.Get("conv") != conv {
+				t.Fatalf("workspace destination: %v, %v", q, err)
+			}
+		}
+	}
+}
 
 func TestUIRefusesWhatItShouldAndTouchesNoHome(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "no-home")

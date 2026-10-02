@@ -63,6 +63,9 @@ type hubConn struct {
 	key     ed25519.PrivateKey
 	http    *http.Client
 	timeout time.Duration
+	// workspaceCheck, when set, gates every request except the version
+	// probe on the pinned workspace identity (workspaces_realmguard.go).
+	workspaceCheck func(context.Context, string) error
 }
 
 func newHubConn(base, certPEM, agent string, key ed25519.PrivateKey) (*hubConn, error) {
@@ -89,6 +92,11 @@ func newHubConn(base, certPEM, agent string, key ed25519.PrivateKey) (*hubConn, 
 // request builds a request with a raw body, signed unless the connection
 // has no agent yet.
 func (c *hubConn) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
+	if c.workspaceCheck != nil {
+		if err := c.workspaceCheck(ctx, path); err != nil {
+			return nil, err
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

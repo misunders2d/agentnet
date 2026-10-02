@@ -48,7 +48,8 @@ func (a *Agent) Cleanup(saved bool) (CleanupResult, error) {
 	defer releaseSpool()
 
 	keep := map[string]bool{}
-	rows, err := a.store.db.Query(`SELECT u.blob_id FROM uploads u JOIN outbox o ON o.id = u.message_id WHERE o.state = ?`, stateQueued)
+	// A frozen request awaiting receiver setup still owns its exact ciphertext.
+	rows, err := a.store.db.Query(`SELECT u.blob_id FROM uploads u JOIN outbox o ON o.id = u.message_id WHERE o.state IN (?, ?)`, stateQueued, stateReceiverWaiting)
 	if err != nil {
 		return res, err
 	}
@@ -70,7 +71,7 @@ func (a *Agent) Cleanup(saved bool) (CleanupResult, error) {
 		}
 		res.SpoolFiles++
 	}
-	if _, err := a.store.db.Exec(`DELETE FROM uploads WHERE message_id IN (SELECT id FROM outbox WHERE state != ?)`, stateQueued); err != nil {
+	if _, err := a.store.db.Exec(`DELETE FROM uploads WHERE message_id IN (SELECT id FROM outbox WHERE state NOT IN (?, ?))`, stateQueued, stateReceiverWaiting); err != nil {
 		return res, err
 	}
 

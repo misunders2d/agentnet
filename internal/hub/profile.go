@@ -51,7 +51,8 @@ func (h *Hub) handlePutCaps(w http.ResponseWriter, r *http.Request) {
 // handleProfile answers what a device published and which of its sessions
 // decide what it can read: the live ones, or the one that connected last.
 func (h *Hub) handleProfile(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.authenticate(w, r); !ok {
+	caller, ok := h.authenticate(w, r)
+	if !ok {
 		return
 	}
 	address := protocol.Address(r.PathValue("label"), r.PathValue("agent"))
@@ -69,6 +70,14 @@ func (h *Hub) handleProfile(w http.ResponseWriter, r *http.Request) {
 	if len(live) == 0 && last != "" {
 		p.Sessions = []string{last}
 	}
+	if caller == address { // one's own role, for the asking device only
+		if a, err := h.store.agent(caller); err == nil {
+			p.SelfRole = protocol.RoleMember
+			if a.Admin {
+				p.SelfRole = protocol.RoleAdmin
+			}
+		}
+	}
 	if person != "" {
 		p.Person = json.RawMessage(person)
 	}
@@ -81,4 +90,4 @@ func (h *Hub) handleProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 // features lists what this Hub supports (GET /v1/version).
-var features = []string{protocol.FeatureCaps, protocol.FeatureEnv2, protocol.FeatureMembers, protocol.FeaturePerson, protocol.FeatureNotify}
+var features = []string{protocol.FeatureCaps, protocol.FeatureEnv2, protocol.FeatureEnv3, protocol.FeatureMembers, protocol.FeaturePerson, protocol.FeatureNotify, protocol.FeatureTeams, protocol.FeatureSignals}

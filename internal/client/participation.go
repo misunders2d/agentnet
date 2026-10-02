@@ -43,8 +43,10 @@ type ParticipationInfo struct {
 	PID         string              `json:"pid"`
 	Conv        string              `json:"conv"`
 	State       string              `json:"state"`
-	Host        PersonInfo          `json:"host"`      // the host device's person (its device runs the agent)
-	HostHere    bool                `json:"host_here"` // this installation is the host
+	Host        PersonInfo          `json:"host"`               // the host device's person (its device runs the agent)
+	HostHere    bool                `json:"host_here"`          // this installation is the host
+	External    bool                `json:"external,omitempty"` // host person is outside the unchanged DM membership
+	AgentID     string              `json:"agent_id,omitempty"` // host-signed agent selected by the invite
 	Inviter     PersonInfo          `json:"inviter"`
 	Grant       []protocol.GrantRef `json:"grant,omitempty"`     // earlier messages the agent may be given, each exactly
 	TaskKeys    []string            `json:"task_keys,omitempty"` // member keys allowed follow-up tasks here
@@ -63,9 +65,12 @@ type ParticipationInfo struct {
 // roster the root binds it to, is left out. Their devices are the current
 // ones; chains holds each person's pinned roster steps.
 type dmMembers struct {
-	root    protocol.ConvRoot
-	persons map[string]personRow
-	chains  map[string]map[string]bool
+	root         protocol.ConvRoot
+	persons      map[string]personRow
+	hosts        map[string]personRow // verified invite hosts; never member/asker/task authority
+	group        *GroupContext        // verified current context; never ordinary visitor authority
+	groupInvites map[string]bool
+	chains       map[string]map[string]bool
 }
 
 func (a *Agent) dmMembers(conv string) (dmMembers, error) { return membersIn(a.store.db, conv) }
@@ -80,8 +85,17 @@ func membersIn(q dbq, conv string) (dmMembers, error) {
 	if !found {
 		return dmMembers{}, fmt.Errorf("no conversation %s here", conv)
 	}
-	m := dmMembers{root: root, persons: map[string]personRow{}, chains: map[string]map[string]bool{}}
-	for _, mem := range root.Members {
+	if root.Kind == protocol.ConvKindGroup {
+		return controlMembers(q, conv)
+	}
+	return memberRowsIn(q, root, root.Members)
+}
+
+// memberRowsIn shares pinned-roster resolution; its caller supplies verified
+// membership, which is immutable for DMs and current effective state for groups.
+func memberRowsIn(q dbq, root protocol.ConvRoot, members []protocol.ConvMember) (dmMembers, error) {
+	m := dmMembers{root: root, persons: map[string]personRow{}, hosts: map[string]personRow{}, chains: map[string]map[string]bool{}}
+	for _, mem := range members {
 		p, ok, err := personByIDIn(q, mem.Person)
 		if err != nil {
 			return dmMembers{}, err
@@ -114,7 +128,7 @@ func membersIn(q dbq, conv string) (dmMembers, error) {
 // with a roster step of its pinned chain.
 func (m dmMembers) author(au protocol.EventAuthor) (personRow, bool) {
 	p, ok := m.persons[au.Person]
-	return p.at(au.Address), ok && m.chains[au.Person][au.Roster] && p.has(au.Address, au.Fingerprint)
+	return p.at(au.Address), ok && m.chains[au.Person][au.Roster] && p.has(au.Address, au.Fingerprint) && m.authorEpoch(au)
 }
 
 // host reports whether h names a current device of a member person.
@@ -123,6 +137,9 @@ func (m dmMembers) host(h *protocol.ParticipationHost) (personRow, bool) {
 		return personRow{}, false
 	}
 	p, ok := m.persons[h.Person]
+	if !ok {
+		p, ok = m.hosts[h.Person]
+	}
 	return p.at(h.Address), ok && p.has(h.Address, h.Fingerprint)
 }
 
@@ -174,7 +191,12 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 	invites := map[string]protocol.ParticipationEvent{}
 	var decisions, dismisses []protocol.ParticipationEvent
 	for _, ev := range events {
-		if _, ok := m.author(ev.Author); !ok {
+		_, author := m.author(ev.Author)
+		if ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline {
+			p, ok := m.hosts[ev.Author.Person]
+			author = author || ok && m.chains[ev.Author.Person][ev.Author.Roster] && p.has(ev.Author.Address, ev.Author.Fingerprint) && ev.Author.GroupAdmission == ""
+		}
+		if !author {
 			hold(ev)
 			continue
 		}
@@ -184,7 +206,7 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 			for _, fp := range ev.TaskKeys {
 				keysOK = keysOK && m.memberKey(fp)
 			}
-			if _, ok := m.host(ev.Host); !ok || !keysOK {
+			if _, ok := m.host(ev.Host); !ok || !keysOK || !m.inviteEpoch(ev) {
 				hold(ev)
 				continue
 			}
@@ -208,6 +230,9 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		host, _ := m.host(inv.Host)
 		inviter, _ := m.author(inv.Author)
 		info.Host, info.Inviter = host.info, inviter.info
+		info.AgentID = inv.Host.AgentID
+		_, member := m.persons[inv.Host.Person]
+		info.External = !member
 		info.Grant, info.TaskKeys, info.Note, info.Invited = inv.Grant, inv.TaskKeys, inv.Note, inv.TS
 		info.State = PartInvited
 	default:
@@ -276,6 +301,9 @@ func participationIn(q dbq, conv, pid string, m dmMembers, self string) (Partici
 	if len(events) == 0 {
 		return ParticipationInfo{}, ErrNoParticipation
 	}
+	if err := m.loadHosts(q, events); err != nil {
+		return ParticipationInfo{}, err
+	}
 	info := resolve(conv, pid, events, m)
 	info.HostHere = info.Host.Address == self && info.Host.State == personSelf
 	return info, nil
@@ -305,6 +333,28 @@ func (a *Agent) Participations(conv string) ([]ParticipationInfo, error) {
 // (fingerprints) that may ask it for follow-up tasks within this
 // participation. The host's person decides; nothing runs before that.
 func (a *Agent) InviteAgent(ctx context.Context, conv, hostAddress string, grant, taskKeys []string, note string) (ParticipationInfo, error) {
+	return a.inviteAgent(ctx, conv, hostAddress, "", grant, taskKeys, note)
+}
+
+// InviteNamedAgent selects a host-signed identity. The host still accepts the
+// participation and resolves its own local program; the caller chooses no program.
+func (a *Agent) InviteNamedAgent(ctx context.Context, conv, hostAddress, agentID string, grant, taskKeys []string, note string) (ParticipationInfo, error) {
+	if !protocol.ValidID(agentID) {
+		return ParticipationInfo{}, ErrUnknownAgent
+	}
+	records, err := a.AgentCatalog(ctx, hostAddress)
+	if err != nil {
+		return ParticipationInfo{}, err
+	}
+	for _, record := range records {
+		if record.ID == agentID {
+			return a.inviteAgent(ctx, conv, hostAddress, agentID, grant, taskKeys, note)
+		}
+	}
+	return ParticipationInfo{}, ErrUnknownAgent
+}
+
+func (a *Agent) inviteAgent(ctx context.Context, conv, hostAddress, agentID string, grant, taskKeys []string, note string) (ParticipationInfo, error) {
 	m, err := a.dmMembers(conv)
 	if err != nil {
 		return ParticipationInfo{}, err
@@ -319,11 +369,25 @@ func (a *Agent) InviteAgent(ctx context.Context, conv, hostAddress string, grant
 	var host *protocol.ParticipationHost
 	for _, p := range m.persons {
 		if d, ok := p.device(hostAddress); ok {
-			host = &protocol.ParticipationHost{Person: p.info.Person, Address: d.Address, Fingerprint: d.Fingerprint()}
+			host = &protocol.ParticipationHost{Person: p.info.Person, Address: d.Address, Fingerprint: d.Fingerprint(), AgentID: agentID}
 		}
 	}
 	if host == nil {
-		return ParticipationInfo{}, fmt.Errorf("%s is not the device of a member of that conversation (or its person is frozen)", hostAddress)
+		key, err := a.sendKey(ctx, hostAddress)
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
+		p, err := a.personOfKey(ctx, hostAddress, key)
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
+		if !p.has(hostAddress, key.Fingerprint()) || p.info.State != personPinned && p.info.State != personSelf {
+			return ParticipationInfo{}, errors.New("host has no current pinned person/device proof")
+		}
+		if err := a.requireParticipationCaps(ctx, key, protocol.CapExternalParticipation); err != nil {
+			return ParticipationInfo{}, err
+		}
+		host = &protocol.ParticipationHost{Person: p.info.Person, Address: hostAddress, Fingerprint: key.Fingerprint(), AgentID: agentID}
 	}
 	var refs []protocol.GrantRef
 	for _, lid := range grant {
@@ -348,8 +412,18 @@ func (a *Agent) InviteAgent(ctx context.Context, conv, hostAddress string, grant
 	ev := protocol.ParticipationEvent{V: 1, Conv: conv, PID: protocol.NewID(), Type: protocol.EventInvite, TS: time.Now().Unix(),
 		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: me.info.Fingerprint},
 		Host:   host, Grant: refs, Audience: protocol.AudienceConversation, TaskKeys: taskKeys, Note: note}
+	if m.group != nil {
+		if err := m.bindGroupInvite(&ev); err != nil {
+			return ParticipationInfo{}, err
+		}
+	}
 	if err := a.recordAndSend(ctx, ev); err != nil {
 		return ParticipationInfo{}, err
+	}
+	if _, member := m.persons[host.Person]; !member {
+		if err := a.sendGrantedExcerpts(ctx, ev); err != nil {
+			return ParticipationInfo{}, err
+		}
 	}
 	return a.participation(conv, ev.PID)
 }
@@ -440,6 +514,13 @@ func (a *Agent) sign(ctx context.Context, info ParticipationInfo, typ, prev stri
 	}
 	ev := protocol.ParticipationEvent{V: 1, Conv: info.Conv, PID: info.PID, Type: typ, Prev: prev, TS: time.Now().Unix(),
 		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: me.info.Fingerprint}}
+	if m, e := a.dmMembers(info.Conv); e != nil {
+		return info, e
+	} else if m.group != nil {
+		if mem, ok := m.group.State.Member(me.info.Person); ok && m.device(a.Address, me.info.Fingerprint) {
+			ev.Author.GroupAdmission = mem.Admission.Hash()
+		}
+	}
 	if err := a.recordAndSend(ctx, ev); err != nil {
 		return info, err
 	}
@@ -496,7 +577,13 @@ func (a *Agent) recordAndSend(ctx context.Context, ev protocol.ParticipationEven
 // the host device as its one execution target, whose worker decides when
 // it may run (agentjob.go). Asked on the host itself, the message and its
 // local job are recorded together.
-func (a *Agent) AskAgent(ctx context.Context, pid, kind, body string) (ConvSent, error) {
+func (a *Agent) AskAgent(ctx context.Context, pid, kind, body string, files ...OutgoingFile) (ConvSent, error) {
+	return a.AskAgentWithReceiver(ctx, pid, kind, body, nil, files...)
+}
+
+// AskAgentWithReceiver retains AskAgent's own-host job/authority semantics
+// while capturing an independent local return delegation.
+func (a *Agent) AskAgentWithReceiver(ctx context.Context, pid, kind, body string, receiver *ReplyReceiver, files ...OutgoingFile) (ConvSent, error) {
 	info, err := a.Participation(pid)
 	if err != nil {
 		return ConvSent{}, err
@@ -507,8 +594,17 @@ func (a *Agent) AskAgent(ctx context.Context, pid, kind, body string) (ConvSent,
 	if kind != envelope.KindQuestion && kind != envelope.KindTask {
 		return ConvSent{}, errors.New("an agent is asked a question or given a task")
 	}
-	return a.SendConv(ctx, info.Conv, ConvOutgoing{Kind: kind, Body: body, PID: pid, selfJob: info.HostHere,
-		Target: &envelope.Target{Address: info.Host.Address, Fingerprint: info.Host.Fingerprint}})
+	target := &envelope.Target{Address: info.Host.Address, Fingerprint: info.Host.Fingerprint, AgentID: info.AgentID}
+	if m, e := a.dmMembers(info.Conv); e != nil {
+		return ConvSent{}, e
+	} else if m.group != nil {
+		adm, e := groupMemberAdmission(a.store.db, *m.group, a.Address, a.Self().Fingerprint())
+		if e != nil {
+			return ConvSent{}, e
+		}
+		target.GroupAdmission = adm.Hash()
+	}
+	return a.SendConv(ctx, info.Conv, ConvOutgoing{Kind: kind, Body: body, Files: files, PID: pid, selfJob: info.HostHere, ReplyReceiver: receiver, Target: target})
 }
 
 // checkParticipationEvent checks an event received in a DM message from
@@ -565,7 +661,7 @@ func (a *Agent) ParticipationContext(pid string, limit int) (ParticipationContex
 	if err != nil {
 		return ParticipationContext{}, err
 	}
-	if info.State != PartInvited && info.State != PartActive {
+	if info.Held != 0 || info.State != PartInvited && info.State != PartActive {
 		return ParticipationContext{}, fmt.Errorf("the participation is %s: it has no context", info.State)
 	}
 	return a.agentContext(info, "", limit)

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,23 @@ func TestPageLogic(t *testing.T) {
 }
 
 // The service worker (static/sw.js) in node with a stand-in worker scope:
+// TestStreamFraming checks the signed stream's framing (the vendored
+// eventsource-parser as engine.mjs drives it) against the relay's real
+// frames and the SSE grammar: testdata/sse_check.mjs.
+func TestStreamFraming(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	out, err := exec.Command(node, "testdata/sse_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "stream framing ok") {
+		t.Fatalf("%s", out)
+	}
+}
+
 // testdata/sw_check.js.
 func TestServiceWorker(t *testing.T) {
 	node, err := exec.LookPath("node")

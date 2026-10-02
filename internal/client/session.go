@@ -69,7 +69,7 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 	if j.Kind == envelope.KindTask {
 		mode, base = "task", h.task
 	}
-	if h.sessions == noSessions || j.followUp() || j.PID != "" { // an agent's request: a fresh session, its context given anew
+	if h.sessions == noSessions || j.Receiver == nil && (j.followUp() || j.PID != "" || j.AgentID != "") { // named remote jobs stay fresh; local selected continuation owns its native session
 		return sessionPlan{args: slices.Clone(base)}, nil
 	}
 	dir, err := filepath.EvalSymlinks(r.Dir)
@@ -78,6 +78,9 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 	}
 	want := sessionRef{Harness: r.Harness, Mode: mode, Dir: dir, Preset: presetID(h, mode, base)}
 	prev, state, at, err := a.store.sessionAncestor(j.From, j.ID)
+	if j.Receiver != nil {
+		prev, state, at, err = a.store.receiverSessionAncestor(j.Receiver.ID, j.ID)
+	}
 	if err != nil {
 		return sessionPlan{}, err
 	}
@@ -92,7 +95,7 @@ func (a *Agent) planSession(j job, r *Responder, h harness) (sessionPlan, error)
 		note = fmt.Sprintf("the earlier session of this conversation was not reused: it was a %s-mode session and this is a %s", prev.Mode, want.Mode)
 	case prev.Dir != want.Dir || prev.Preset != want.Preset:
 		note = "the earlier session of this conversation was not reused: the responder's directory, flags or program changed since"
-	case state != stateAnswered && state != stateSummary:
+	case state != stateAnswered && state != stateSummary && state != stateContinued:
 		note = fmt.Sprintf("the earlier session of this conversation was not reused: its last job ended as %q, so its state is uncertain", state)
 	case a.store.sessionHead(prev) != at:
 		note = "the earlier session of this conversation was not reused: a later job has run in it since, or its latest job is unknown"

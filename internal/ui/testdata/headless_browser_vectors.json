@@ -1,0 +1,70 @@
+{
+ "note": "browser operator decision: envelope sealed by alice/laptop (browser engine) to bob/desk; open with host_keys; expect inner below",
+ "host": {
+  "address": "bob/desk",
+  "public": "{\"address\":\"bob/desk\",\"sign_key\":\"drKbudsk0OzjPFnMY77nxFEw5UVCU+Ah0u9tUcsZ78I=\",\"box_recipient\":\"age13h4pkvca2cpn0tczd5gc2jwsr46hctxa8xu6pt2909pmek63kdmsc8cwcq\",\"box_sig\":\"zeEnSdjMoIqJrpwBOqQkqpal8hFNgFBfVhyaDrjuXFMqhEbBIqSv03zSIpwBNbt+gBF/spNuo3BS9cHAKlWKAg==\"}",
+  "keys": {
+   "sign": {},
+   "signPublic": {},
+   "box": {}
+  }
+ },
+ "operator": {
+  "address": "alice/laptop",
+  "public": "{\"address\":\"alice/laptop\",\"sign_key\":\"3VVgObtLCqV4zsqBgR07wIoKtjgZh5KH7e9/VXzbzNM=\",\"box_recipient\":\"age1v0hv5hlg3ff2nc3z5j37qalwk3fs7zavm2pqlz9ltlx0zrrc65fqfht882\",\"box_sig\":\"h46YgXACYrsa/d04r5Yvc50V7QS86HWiBG7cq46D4P7wcxlpZzEyjOus+KR9GqwCpFDyoBfs9z2fZzeCrJ7TBQ==\"}"
+ },
+ "decision_envelope": "{\"v\":3,\"id\":\"e20360c634d3a1fc7786fa610263d4cc\",\"from\":\"alice/laptop\",\"to\":\"bob/desk\",\"ts\":1790776715,\"kind\":\"message\",\"ct\":\"YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSA3cWpHc3hKM1B0UksveEpnb0ZzSkZzK0s1OHp0dWNaWXBkWjdkVWVuWEJFCm9kNDVEcXVXeW92NG5uRXliL1BudTE2UVZqNTBIQ04ySXduWUkrMjZSR1kKLS0tIEpXejdOMzhtZWxTSzVLU3JBRHlQTmVGcFJENlAweTNsS29tcFNkRWVZSlUKeoSJiFn43h2t0lMiiGJoHIUGlWz9S5ByOMIpavMbzrO9uXD8E0EG3bts+HolW0/JpT58zeyC7B6bNbekh1c//RCZJv22Uf5I3+tKVjVg3jEURLyS2faHH2sPbqJ4P6e8IjkwS/iTEdRSu92rdy7ZiO4YkVUZV2y1cwBYNz0BI2Y59OlNBrRkejdp/KA5F5FyFCVQNDQkyaO1e27QcoyIq8u6guT/s/+Du3ee9dJ2tryBcRUHEu9x+GmlN9YirnCui1XJns8nY/rir6FObvUzyw21R7uPQh3yGopk9hycWJG6XxHC5dRmKJZjPuLwQG5b3RxFjE0LPOuISwcfoeDno6smxd0v5U6Dxflwfo/MZoZY2z3FQL+Ul1ngmOXuUKcYDxlZp7G2P+47UQCdY6NqsKWalnkm+jWQMZ1shJO8vfA/ZMQ3UVzpgi59VFB5O+QtE50110iS1kVsUKSFr7VRy6aLXhoBsaXCSSPbdifFBIcb2GBvbT6BiULqFdRIZs6PqjtZFamMto93g5MCdKxpFQ==\",\"sig\":\"1O9ErBGDPBgxVX71SUrsneyRdqQ7pv+V9q05c0Ag7V3GHjHvndgqxqJjmlJY02XQm/q7pbczE6CqK/z0CLe2DQ==\"}",
+ "decision_inner": {
+  "v": 3,
+  "id": "e20360c634d3a1fc7786fa610263d4cc",
+  "from": "alice/laptop",
+  "to": "bob/desk",
+  "ts": 1790776715,
+  "kind": "message",
+  "body": {
+   "action": "accept",
+   "expect": "awaiting",
+   "attempt": 1,
+   "text": "",
+   "report": "e1000000000000000000000000000000"
+  },
+  "reply_to": "",
+  "session": "",
+  "fallback": false,
+  "status": "",
+  "conv": "",
+  "lid": "",
+  "root": "",
+  "sub": "decision",
+  "replica": false,
+  "origin": "",
+  "emotion": "",
+  "pid": "",
+  "fan": null,
+  "target": null,
+  "ref": {
+   "id": "d1000000000000000000000000000000",
+   "fingerprint": "01234567-89abcdef-01234567-89abcdef"
+  },
+  "attachments": []
+ },
+ "report": {
+  "v": 2,
+  "at": 1700000300,
+  "host": "bob/desk",
+  "items": [
+   {
+    "id": "d1000000000000000000000000000000",
+    "from": "dave/box",
+    "key": "01234567-89abcdef-01234567-89abcdef",
+    "kind": "task",
+    "state": "awaiting",
+    "blocker": "awaiting_acceptance",
+    "since": 1700000200,
+    "attempt": 1,
+    "excerpt": "deploy the thing",
+    "actionable": true
+   }
+  ]
+ }
+}

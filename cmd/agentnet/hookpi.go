@@ -39,6 +39,9 @@ func piExtensionPath() (string, error) {
 // renderPiExtension fills in this agentnet binary and home as string
 // literals (JSON strings are valid TypeScript string literals).
 func renderPiExtension(home string) ([]byte, error) {
+	return renderNativeExtension(home, "pi")
+}
+func renderNativeExtension(home, harness string) ([]byte, error) {
 	if runtime.GOOS == "windows" {
 		return nil, errors.New("hooks are not supported on Windows yet")
 	}
@@ -56,13 +59,18 @@ func renderPiExtension(home string) ([]byte, error) {
 	h, _ := json.Marshal(home)
 	out := bytes.Replace(piExtension, []byte(`"__AGENTNET_BIN__"`), bin, 1)
 	out = bytes.Replace(out, []byte(`"__AGENTNET_HOME__"`), h, 1)
+	native, _ := json.Marshal(harness)
+	out = bytes.Replace(out, []byte(`"__AGENTNET_HARNESS__"`), native, 1)
 	return out, nil
 }
 
 // runPiHooks shows, installs or removes AgentNet's Pi extension. It never
 // replaces or removes a file it did not write.
 func runPiHooks(home, action string, rest []string) error {
-	usage := errors.New("usage: hooks show|install|remove pi [--file PATH]")
+	return runNativeHooks(home, "pi", action, rest)
+}
+func runNativeHooks(home, harness, action string, rest []string) error {
+	usage := errors.New("usage: hooks show|install|remove pi|omp [--file PATH]")
 	file := ""
 	switch {
 	case len(rest) == 2 && rest[0] == "--file":
@@ -70,7 +78,7 @@ func runPiHooks(home, action string, rest []string) error {
 	case len(rest) != 0:
 		return usage
 	}
-	ext, err := renderPiExtension(home)
+	ext, err := renderNativeExtension(home, harness)
 	if err != nil {
 		return err
 	}
@@ -82,6 +90,9 @@ func runPiHooks(home, action string, rest []string) error {
 		return usage
 	}
 	if file == "" {
+		if harness == "omp" {
+			return errors.New("OMP extension install/remove requires an explicit --file PATH")
+		}
 		if file, err = piExtensionPath(); err != nil {
 			return err
 		}

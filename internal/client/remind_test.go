@@ -88,7 +88,9 @@ func TestReminderDueOnceAndMoved(t *testing.T) {
 	if c, _, _ := n.reminded(); c != 1 {
 		t.Fatalf("notified %d times for one revision", c)
 	}
-	if after, _ := w.bob.store.jobState(q); after != before || count(t, w.bob, "outbox") != 0 {
+	var sent int
+	w.bob.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE ref_id IS NULL`).Scan(&sent) // execution statuses to the requester are not the reminder's doing
+	if after, _ := w.bob.store.jobState(q); after != before || sent != 0 {
 		t.Fatalf("the reminder changed the message (%s -> %s) or sent something", before, after)
 	}
 	if _, err := w.bob.SetReminder(q, time.Now().Add(1200*time.Millisecond)); err != nil {

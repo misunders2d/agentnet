@@ -115,7 +115,7 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/loader.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}
-	for _, a := range []string{"app.js", "lenses.js", "app.css", "vendor/qr.mjs"} {
+	for _, a := range []string{"app.js", "lenses.js", "app.css", "vendor/qr.mjs", "drivespace-setup.mjs"} {
 		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != 200 {
 			t.Errorf("asset %s: %d", a, r.StatusCode)
 		}
@@ -130,13 +130,55 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 		!strings.Contains(string(body), `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) {
 		t.Errorf("icon: %d %q", icon.StatusCode, icon.Header.Get("Content-Type"))
 	}
-	if r := do(t, ts, "GET", "/assets/icon-512.png", "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
-		t.Errorf("another icon size: %d", r.StatusCode)
+	if r := do(t, ts, "GET", "/assets/icon-512.png", "", authed(ts, nil)); r.StatusCode != http.StatusOK {
+		t.Errorf("install icon: %d", r.StatusCode)
 	}
 	csp := page.Header.Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'"} {
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "frame-ancestors 'none'", "manifest-src 'self'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP %q lacks %q", csp, want)
+		}
+	}
+}
+
+func TestNativeManifestRequiresSession(t *testing.T) {
+	const host = "127.0.0.1:12345"
+	s := New(NewFixture(time.Now), host, testToken)
+	for _, tc := range []struct {
+		path, cookie, requestHost string
+		status                    int
+	}{
+		{"/manifest.webmanifest", "", host, 401},
+		{"/manifest.webmanifest?t=" + testToken, "", host, 401},
+		{"/manifest.webmanifest", cookieName + "=wrong", host, 401},
+		{"/manifest.webmanifest", cookieName + "=" + testToken, "foreign.example", 421},
+		{"/manifest.webmanifest", cookieName + "=" + testToken, host, 200},
+		{"/assets/icon-512.png", "", host, 401},
+		{"/assets/icon-512.png", cookieName + "=" + testToken, host, 200},
+	} {
+		r := httptest.NewRequest("GET", "http://"+host+tc.path, nil)
+		r.Host = tc.requestHost
+		r.Header.Set("Cookie", tc.cookie)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("%s: %d want %d", tc.path, w.Code, tc.status)
+		}
+		if w.Code != 200 {
+			continue
+		}
+		if tc.path == "/assets/icon-512.png" {
+			if w.Header().Get("Content-Type") != "image/png" || w.Body.String() != string(static.AppIcon(512)) {
+				t.Fatal("install icon differs from shared app icon")
+			}
+			continue
+		}
+		data, err := fs.ReadFile(static.Files, "manifest.webmanifest")
+		if err != nil || w.Body.String() != string(data) || w.Header().Get("Content-Type") != "application/manifest+json" || w.Header().Get("Cache-Control") != "no-cache" {
+			t.Fatalf("native shared manifest: %v %s", err, w.Header())
+		}
+		if strings.Contains(w.Body.String(), testToken) || !strings.Contains(w.Header().Get("Content-Security-Policy"), "manifest-src 'self'") {
+			t.Fatal("manifest leaked bootstrap token or lacks same-origin CSP")
 		}
 	}
 }
@@ -326,8 +368,8 @@ func (f *filesFixture) StageFile(name string, r io.Reader) (string, error) {
 	return "up-1", nil
 }
 
-func (f *filesFixture) OpenFile(ctx context.Context, id string, i int) (io.ReadCloser, string, error) {
-	if id != "m1" || i != 0 {
+func (f *filesFixture) OpenFile(ctx context.Context, dir, id string, i int) (io.ReadCloser, string, error) {
+	if id != "m1" || i != 0 || (dir != "" && dir != "in") {
 		return nil, "", Refuse("received message has no such file")
 	}
 	return io.NopCloser(strings.NewReader("<html><script>alert(1)</script>")), `evil "name".html`, nil
@@ -378,6 +420,16 @@ func TestFileRoutes(t *testing.T) {
 		!strings.Contains(string(body), "<html>") {
 		t.Fatalf("download: %d %v %q", r.StatusCode, h, body)
 	}
+	// The direction reaches the provider as given; an unknown one is no file.
+	if r := do(t, ts, "GET", "/api/files/m1/0?dir=in", "", authed(ts, nil)); r.StatusCode != 200 {
+		t.Fatalf("open with dir=in: %d", r.StatusCode)
+	}
+	if r := do(t, ts, "GET", "/api/files/m1/0?dir=out", "", authed(ts, nil)); r.StatusCode == 200 {
+		t.Fatal("the fixture has no sent file m1, yet dir=out opened one")
+	}
+	if r := do(t, ts, "GET", "/api/files/m1/0?dir=sideways", "", authed(ts, nil)); r.StatusCode != 404 {
+		t.Fatalf("unknown direction: %d", r.StatusCode)
+	}
 	if r := do(t, ts, "GET", "/api/files/m1/9", "", authed(ts, nil)); r.StatusCode == 200 {
 		t.Fatal("a file that is not there was served")
 	}
@@ -418,6 +470,28 @@ func TestSkinCatalogRequiresSession(t *testing.T) {
 		}
 		if w.Code != want {
 			t.Fatalf("authorized %v: %d", authorized, w.Code)
+		}
+	}
+}
+
+func TestLocalInterfaceAssetsAuthenticated(t *testing.T) {
+	h := New(NewFixture(time.Now), "127.0.0.1:8123", testToken).Handler()
+	// Service worker and importer use the same authenticated asset boundary.
+	for _, path := range []string{"/sw.js", "/assets/local-skins.mjs"} {
+		for _, auth := range []bool{false, true} {
+			r := httptest.NewRequest("GET", "http://127.0.0.1:8123"+path, nil)
+			if auth {
+				r.Header.Set("Cookie", cookieName+"="+testToken)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			want := 401
+			if auth {
+				want = 200
+			}
+			if w.Code != want {
+				t.Fatalf("asset %s auth%v: %d", path, auth, w.Code)
+			}
 		}
 	}
 }

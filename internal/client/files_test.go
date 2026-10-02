@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/sqlitedb"
@@ -39,15 +42,24 @@ func writeFile(t *testing.T, dir, name string, size int) (string, []byte) {
 	return path, data
 }
 
+// receive runs bob's daemon until a message arrived and stops it. The
+// daemon keeps received files' ciphertext in the background (prefetchFiles);
+// these fixtures test fetching itself (faults, tampering, resume, access),
+// so the cache is cleared once the daemon has stopped, and each test fetches
+// from the Hub as a device that has not kept the file yet. Prefetching has
+// its own test (TestReceivedDeviceMessageFilePrefetched).
 func receive(t *testing.T, w *world) Message {
 	t.Helper()
 	stop := runAgent(t, w.bob)
-	defer stop()
 	var msgs []Message
 	eventually(t, "bob to receive", func() bool {
 		msgs, _ = w.bob.Inbox(false, false)
 		return len(msgs) > 0
 	})
+	stop()
+	if err := os.RemoveAll(filepath.Join(w.bob.home, "downloads")); err != nil {
+		t.Fatal(err)
+	}
 	return msgs[len(msgs)-1]
 }
 
@@ -572,5 +584,136 @@ func TestCleanupWaitsForInFlightSpool(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(paths[0]); !bytes.Equal(got, data) {
 		t.Fatal("file differs")
+	}
+}
+
+// A file sent in a device message opens on the sender later, from the copy
+// kept for itself at send time (encrypted to its own key); a sent file
+// with no kept copy is honestly not openable, never substituted.
+func TestSenderOpensKeptDeviceMessageFile(t *testing.T) {
+	w := newWorld(t, "")
+	path, data := writeFile(t, t.TempDir(), "plan.txt", 5000)
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "the plan", "", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoLeak(t, filepath.Join(w.alice.home, "kept"), marker) // kept copies are ciphertext
+	r, f, err := w.alice.OpenFileFrom(tctx(t), "", res.ID, 0)
+	if err != nil || f.Name != "plan.txt" || !bytes.Equal(readAll(t, r), data) {
+		t.Fatalf("open own sent file: %+v %v", f, err)
+	}
+	c, err := w.alice.Conversation(res.ID, 0, 0)
+	if err != nil || len(c.Messages) != 1 || len(c.Messages[0].Attachments) != 1 || !c.Messages[0].Attachments[0].Openable {
+		t.Fatalf("sender's view: %+v %v", c, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "opened")); len(entries) != 0 {
+		t.Fatalf("plaintext left after close: %d", len(entries))
+	}
+	// Without a kept copy (sent before copies were kept): not openable.
+	if err := os.Remove(w.alice.keptPath(f.SHA256)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.alice.OpenFileFrom(tctx(t), "", res.ID, 0); !errors.Is(err, errNotKept) {
+		t.Fatalf("open without a kept copy: %v", err)
+	}
+	c, _ = w.alice.Conversation(res.ID, 0, 0)
+	if c.Messages[0].Attachments[0].Openable {
+		t.Fatal("a sent file with no kept copy is shown openable")
+	}
+	// The recipient's side is unchanged: it opens what it received.
+	msg := receive(t, w)
+	if _, _, err := w.bob.OpenFileFrom(tctx(t), "in", msg.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A file received in a device message is kept here (its ciphertext, after
+// the signed digest matched) without anyone opening it, as conversation
+// files are, so it survives the Hub dropping the blob later.
+func TestReceivedDeviceMessageFilePrefetched(t *testing.T) {
+	w := newWorld(t, "")
+	stop := runAgent(t, w.bob)
+	defer stop()
+	path, _ := writeFile(t, t.TempDir(), "report.bin", 200000)
+	if _, err := w.alice.Send(tctx(t), w.bob.Address, "report", "", path); err != nil {
+		t.Fatal(err)
+	}
+	var msgs []Message
+	eventually(t, "bob to receive", func() bool {
+		msgs, _ = w.bob.Inbox(false, false)
+		return len(msgs) == 1 && len(msgs[0].Attachments) == 1
+	})
+	blob := msgs[0].Attachments[0].BlobID
+	eventually(t, "ciphertext kept without opening", func() bool {
+		_, err := os.Stat(w.bob.downloadPath(blob))
+		return err == nil
+	})
+	if _, err := os.Stat(w.bob.downloadPath(blob) + ".part"); err == nil {
+		t.Fatal("a partial file counts as kept")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.bob.home, "opened")); len(entries) != 0 {
+		t.Fatal("prefetching wrote plaintext")
+	}
+}
+
+// Plaintext an earlier run left while viewing a file is removed when the
+// daemon starts; files the person saved elsewhere are not touched.
+func TestOpenedPlaintextSweptAtDaemonStart(t *testing.T) {
+	w := newWorld(t, "")
+	opened := filepath.Join(w.bob.home, "opened")
+	if err := os.MkdirAll(opened, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leftover := filepath.Join(opened, ".agentnet-123.part")
+	os.WriteFile(leftover, []byte("plaintext"), 0o600)
+	saved, _ := writeFile(t, t.TempDir(), "saved.txt", 10)
+	stop := runAgent(t, w.bob)
+	eventually(t, "leftover removed", func() bool { _, err := os.Stat(leftover); return errors.Is(err, os.ErrNotExist) })
+	stop()
+	if _, err := os.Stat(saved); err != nil {
+		t.Fatal("a saved file was touched")
+	}
+}
+
+// A peer chooses the ids of what it sends, so a received message can carry
+// the id of a message this device sent. The two are different files: an
+// open that names the direction gets exactly that file, and one that does
+// not is refused rather than served the other direction's bytes.
+func TestOpenFileSameIDInBothDirectionsFailsClosed(t *testing.T) {
+	w := newWorld(t, "")
+	path, mine := writeFile(t, t.TempDir(), "mine.bin", 3000)
+	res, err := w.alice.Send(tctx(t), w.bob.Address, "mine", "", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A received message with the SAME id and another manifest (as if bob
+	// had chosen alice's id), stored the way the daemon stores what verified.
+	theirs := []byte("theirs-not-mine")
+	sum := sha256.Sum256(theirs)
+	in := envelope.Inner{V: 1, ID: res.ID, From: w.bob.Address, To: w.alice.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: "theirs",
+		Attachments: []envelope.Attachment{{Blob: envelope.Blob{ID: protocol.NewID(), Size: 200, SHA256: strings.Repeat("ab", 32)}, Name: "theirs.bin", Size: int64(len(theirs)), SHA256: hex.EncodeToString(sum[:])}}}
+	if err := w.alice.store.addInbox(in, w.bob.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.alice.OpenFileFrom(tctx(t), "", res.ID, 0); !errors.Is(err, ErrAmbiguousMessage) {
+		t.Fatalf("ambiguous id: %v", err)
+	}
+	r, f, err := w.alice.OpenFileFrom(tctx(t), "out", res.ID, 0)
+	if err != nil || f.Name != "mine.bin" || !bytes.Equal(readAll(t, r), mine) {
+		t.Fatalf("out: %+v %v", f, err)
+	}
+	r, f, err = w.alice.OpenFileFrom(tctx(t), "in", res.ID, 0)
+	if err == nil {
+		got := readAll(t, r)
+		if bytes.Equal(got, mine) {
+			t.Fatal("the received reference served the sent file")
+		}
+		t.Fatalf("a blob the Hub never held opened: %+v", f)
+	}
+	if f.Name != "theirs.bin" {
+		t.Fatalf("in resolved to %+v", f)
+	}
+	if _, _, err := w.alice.OpenFileFrom(tctx(t), "sideways", res.ID, 0); err == nil {
+		t.Fatal("an unknown direction was accepted")
 	}
 }

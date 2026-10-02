@@ -61,6 +61,7 @@ func run(args []string) error {
 			fmt.Printf("schema %d\n", client.SchemaSteps())
 			return nil
 		}
+		fmt.Println(currentBuildDescription())
 		// A saved recommendation goes to stderr, so the line above stays
 		// parseable; nothing is created and the Hub is not contacted.
 		if r, ok := client.LocalRelease(*home); ok && protocol.Newer(r.Version, protocol.Version) {
@@ -92,8 +93,7 @@ func run(args []string) error {
 	defer a.Close()
 	switch cmd {
 	case "whoami":
-		fmt.Printf("%s\nfingerprint %s\n", a.Address, a.Self().Fingerprint())
-		return nil
+		return runWhoami(ctx, a, os.Stdout)
 	case "send":
 		return runSend(ctx, a, rest, false)
 	case "ask", "task":
@@ -168,11 +168,20 @@ func run(args []string) error {
 		return err
 	case "responder":
 		return runResponder(a, rest)
+	case "operator":
+		return runOperator(a, rest)
+	case "team":
+		return runTeam(ctx, a, rest, os.Stdout, os.Stderr)
+	case "group":
+		return runGroup(ctx, a, rest, os.Stdout, os.Stderr)
 	case "a2a":
 		return runA2A(ctx, a, *home, rest)
 	case "doctor":
 		failed := false
-		for _, c := range a.Doctor(ctx) {
+		for _, c := range append(a.Doctor(ctx), client.Check{Name: "hub-role", OK: true, Result: hubRoleDescription(ctx, a)}) {
+			if c.Name == "version" {
+				c.Result += "; " + currentBuildDescription()
+			}
 			mark := "ok  "
 			if !c.OK {
 				mark, failed = "FAIL", true
@@ -245,7 +254,7 @@ func run(args []string) error {
 				}
 				return stop, nil
 			}
-			opts.OpenConv = func(conv string) []string { return convPageCommand(*home, conv) }
+			opts.OpenConv = func(conv string) []string { return workspacePageCommand(*home, conv, client.DefaultWorkspace) }
 		}
 		err := a.Run(ctx, opts)
 		var rs *client.RestartForUpdate
@@ -262,6 +271,8 @@ func run(args []string) error {
 		return runRemind(a, rest, os.Stdout, time.Now())
 	case "dm":
 		return runDM(ctx, a, rest, os.Stdout)
+	case "receivers":
+		return runReceivers(a, rest, os.Stdout)
 	case "sessions":
 		if len(rest) != 1 {
 			return errors.New("usage: sessions ADDRESS")
@@ -428,6 +439,7 @@ func runInbox(a *client.Agent, args []string) error {
 	fs := flag.NewFlagSet("inbox", flag.ContinueOnError)
 	unread := fs.Bool("unread", false, "only unread messages")
 	review := fs.Bool("review", false, "only items waiting for your decision (does not mark them read)")
+	peek := fs.Bool("peek", false, "inspect without marking messages read")
 	asJSON := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -437,7 +449,7 @@ func runInbox(a *client.Agent, args []string) error {
 	if *review {
 		msgs, err = a.Review()
 	} else {
-		msgs, err = a.Inbox(*unread, true)
+		msgs, err = a.Inbox(*unread, !*peek)
 	}
 	if err != nil {
 		return err
@@ -476,6 +488,20 @@ func runInbox(a *client.Agent, args []string) error {
 				fmt.Printf(" saved %s", f.SavedPath)
 			}
 			fmt.Println()
+		}
+	}
+	if *review {
+		// Reports from other machines: decided there, only read (and
+		// resolved once seen) here. Never counted as decisions here.
+		notices, err := a.Notices()
+		if err != nil {
+			return err
+		}
+		for i, n := range notices {
+			if i == 0 {
+				fmt.Println("reports from other machines (requests wait for a decision THERE, not here; agentnet resolve ID closes a report here):")
+			}
+			fmt.Printf("  %s  %s  %s\n", n.ID, n.From, n.SentAt.Format(time.DateTime))
 		}
 	}
 	return nil
@@ -710,6 +736,8 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
 	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
 	followUp := fs.String("follow-up", "", "when the reply arrives, have your responder process it once with these instructions and keep a summary for you (nothing is sent back)")
+	returnSelection := receiverFlags(fs)
+	remoteAgent := fs.String("agent", "", "exact named remote executor AgentID, independent of reply receiver")
 	replyTo := fs.String("reply-to", "", "continue a conversation: the id of a message you sent to or received from ADDRESS")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -726,7 +754,30 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	if kind == "task" {
 		msgKind = envelope.KindTask
 	}
-	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind, Wait: *wait, FollowUp: *followUp, ReplyTo: *replyTo})
+	receiver, err := returnSelection.selected(a)
+	if err != nil {
+		return err
+	}
+	var target *envelope.Target
+	if *remoteAgent != "" {
+		host, _, e := protocol.SplitTarget(fs.Arg(0))
+		if e != nil {
+			return e
+		}
+		catalog, e := a.AgentCatalog(ctx, host)
+		if e != nil {
+			return e
+		}
+		for _, record := range catalog {
+			if record.ID == *remoteAgent {
+				target = &envelope.Target{Address: host, Fingerprint: record.HostKey, AgentID: record.ID}
+			}
+		}
+		if target == nil {
+			return client.ErrUnknownAgent
+		}
+	}
+	r, err := a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Kind: msgKind, Wait: *wait, FollowUp: *followUp, ReplyTo: *replyTo, ReplyReceiver: receiver, Target: target})
 	if err != nil {
 		return err
 	}

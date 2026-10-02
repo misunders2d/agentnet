@@ -101,7 +101,7 @@ func TestReleasePushedOnStream(t *testing.T) {
 			line := sc.Text()
 			if e, ok := strings.CutPrefix(line, "event: "); ok {
 				event = e
-			} else if d, ok := strings.CutPrefix(line, "data: "); ok && event != "members" {
+			} else if d, ok := strings.CutPrefix(line, "data: "); ok && event != "members" && event != "teams" && event != "groups" { // the directories ride along; not what is awaited here
 				return event, d
 			}
 		}

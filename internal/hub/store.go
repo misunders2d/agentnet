@@ -136,7 +136,15 @@ CREATE INDEX agents_person ON agents(person_id) WHERE person_id IS NOT NULL;
 CREATE INDEX agents_pending ON agents(pending_inviter) WHERE pending_person IS NOT NULL;
 ALTER TABLE invites ADD COLUMN person TEXT;
 ALTER TABLE invites ADD COLUMN offer TEXT;
-`}
+`, `
+CREATE TABLE realm(
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  realm_id TEXT,
+  initialized INTEGER NOT NULL CHECK (initialized IN (0, 1)),
+  CHECK ((initialized = 0 AND realm_id IS NULL) OR
+         (initialized = 1 AND realm_id IS NOT NULL)));
+INSERT INTO realm(id, initialized) VALUES(1, 0);
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the

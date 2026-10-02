@@ -145,7 +145,7 @@ func (m *Maintenance) Cleanup(delivered, unattached, uploadTTL time.Duration) (A
 
 // backupSkip lists files that are not part of a backup.
 func backupSkip(name string) bool {
-	return name == "hub.lock" || strings.HasSuffix(name, "-wal") || strings.HasSuffix(name, "-shm") ||
+	return name == "hub.lock" || name == "hub.db.upgrade.lock" || strings.HasSuffix(name, "-wal") || strings.HasSuffix(name, "-shm") ||
 		strings.Contains(name, ".v") && strings.HasSuffix(name, ".bak")
 }
 

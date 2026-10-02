@@ -7,12 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/cenkalti/backoff/v7"
+	sse "github.com/tmaxmax/go-sse"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/lockfile"
@@ -20,7 +21,15 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-const maxBackoff = time.Minute
+// newReconnectBackoff is the schedule both stream loops wait on between
+// connections (github.com/cenkalti/backoff/v7): waits in [0.5 s, 1 s],
+// [1, 2], [2, 4], [4, 8], [8, 16], [16, 32], then [30 s, 60 s] for good
+// (0.75 s doubling, ±1/3, capped at 45 s), reset after a healthy connection.
+// The library's upper edge may exceed the band by a nanosecond. It never
+// returns backoff.Stop.
+func newReconnectBackoff() *backoff.ExponentialBackOff {
+	return &backoff.ExponentialBackOff{InitialInterval: 750 * time.Millisecond, RandomizationFactor: 1.0 / 3, Multiplier: 2, MaxInterval: 45 * time.Second}
+}
 
 // Quarantine reasons.
 const (
@@ -44,6 +53,9 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 	defer release()
+	if err := a.CleanOpened(); err != nil { // this process alone writes there; nothing is open yet
+		a.Logf("plaintext left by an earlier run: %v", err)
+	}
 	a.exe, a.canSwitch, a.prepare = opts.Executable, opts.CanSwitch, opts.PrepareSwitch
 	a.update.Lock()
 	a.update.pending, a.update.switching, a.update.ready = nil, nil, false
@@ -89,7 +101,8 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	protocol.SignAd(&ad, a.id.Sign)
 	a.adQuery = "?ad=" + ad.Encode()
 	a.Logf("session %s#%s", a.Address, ad.Session)
-	backoff := time.Second
+	reconnect := newReconnectBackoff()
+	reconnect.Reset()
 	stopped := func() error { // ctx ended: a stop, or a switch for an update
 		if r := a.UpdateSwitching(); r != nil {
 			return &RestartForUpdate{Request: *r}
@@ -117,16 +130,15 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 			return err
 		}
 		if healthy {
-			backoff = time.Second
+			reconnect.Reset()
 		}
-		wait := backoff/2 + rand.N(backoff/2+1)
+		wait := reconnect.NextBackOff()
 		a.Logf("hub stream ended (%v); reconnecting in %s", err, wait.Round(time.Millisecond))
 		select {
 		case <-ctx.Done():
 			return stopped()
 		case <-time.After(wait):
 		}
-		backoff = min(backoff*2, maxBackoff)
 	}
 }
 
@@ -151,7 +163,12 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.Logf("connected to hub as %s", a.Address)
 	a.membersConnected(resp.Header)
 	defer a.membersDisconnected()
+	a.teamsConnected(resp.Header) // teams.go: whether this relay pushes the team directory
+	defer a.teamsDisconnected()
+	a.typingConnected(resp.Header)
+	defer a.typingDisconnected()
 	a.convWork.due(convPublish | convRetry | convRelease | convHistory | convServe | convFetch) // a new connection: publish, then look again
+	a.groupWork.recover.Store(true)                                                             // and replay group journal records not yet published (groups.go)
 
 	// Three missed pings mean the connection is dead even if TCP has not noticed.
 	watchdog := time.AfterFunc(3*a.heartbeat, cancel)
@@ -183,35 +200,83 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.kickMu.Unlock()
 	a.kick()
 
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 64<<10), 2*protocol.MaxBody)
-	var event, data string
-	for sc.Scan() {
-		watchdog.Reset(3 * a.heartbeat)
-		line := sc.Text()
-		switch {
-		case line == "":
-			if err := a.dispatch(ctx, event, data); err != nil {
-				return false, err
+	return readStream(resp.Body, func() { watchdog.Reset(3 * a.heartbeat) }, func(event, data string) error { return a.dispatch(ctx, event, data) })
+}
+
+// readStream parses the push stream body with go-sse and hands each event
+// to dispatch in order, synchronously; a dispatch error ends the stream as
+// unhealthy (the Hub redelivers). It returns (true, io.EOF) when the Hub
+// closed the stream, and (true, err) for a read error. touch is called on
+// every read that brings bytes, comments and keepalives included, so the
+// caller's watchdog sees the connection alive.
+//
+// The bound is per EVENT: go-sse's scanner token is one whole event (all
+// its lines up to the blank line; parser.splitFunc), so MaxEventSize caps an
+// event's bytes together, however many short lines it has; the memory held
+// while one event is parsed is O(streamEventLimit) (scanner buffer, the
+// token's copy and the assembled data are each bounded by it), not a precise
+// ceiling. One event over streamEventLimit ends the stream with an explicit
+// error and nothing of it is dispatched (TestStreamBoundIsPerEvent). The Hub
+// writes single-line frames and every frame type must stay under this
+// limit: the member and team directories are bounded by protocol.MaxMembers
+// and MaxTeams; group heads are emitted as bounded batches by the Hub.
+func readStream(body io.Reader, touch func(), dispatch func(event, data string) error) (healthy bool, err error) {
+	r := &streamBody{r: body, touch: touch}
+	for e, rerr := range sse.Read(r, &sse.ReadConfig{MaxEventSize: streamEventLimit}) {
+		if rerr != nil {
+			if errors.Is(rerr, errStreamEnd) || errors.Is(rerr, sse.ErrUnexpectedEOF) {
+				return true, io.EOF // the Hub closed; an unfinished event or line is dropped
 			}
-			event, data = "", ""
-		case strings.HasPrefix(line, "event: "):
-			event = line[len("event: "):]
-		case strings.HasPrefix(line, "data: "):
-			data += line[len("data: "):]
+			if errors.Is(rerr, bufio.ErrTooLong) {
+				return true, fmt.Errorf("push stream event larger than %d bytes: %w", streamEventLimit, rerr)
+			}
+			return true, rerr
+		}
+		if err := dispatch(e.Type, e.Data); err != nil {
+			return false, err
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return true, err
-	}
 	return true, io.EOF
+}
+
+// streamEventLimit is the most one push event may take on the wire, all its
+// lines together (the same 2*MaxBody the scanner allowed one line before).
+const streamEventLimit = 2 * protocol.MaxBody
+
+// errStreamEnd stands in for io.EOF beneath go-sse. sse.Read yields an
+// event still being assembled when it meets a clean EOF (by design, for
+// short LLM-style responses); the SSE specification says an event without
+// its final blank line is not dispatched, and this daemon relies on that: a
+// connection cut mid-event must not deliver half of it. Seeing any other
+// error instead of EOF, sse.Read drops the partial event and reports the
+// error, which readStream turns back into io.EOF.
+var errStreamEnd = errors.New("stream ended")
+
+// streamBody is the push stream's body as go-sse reads it: every read that
+// brings bytes touches the watchdog, and EOF is reported as errStreamEnd.
+type streamBody struct {
+	r     io.Reader
+	touch func()
+}
+
+func (b *streamBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if n > 0 && b.touch != nil {
+		b.touch()
+	}
+	if err == io.EOF {
+		err = errStreamEnd
+	}
+	return n, err
 }
 
 // sync retries queued sends and unsent receipts. The stream's worker runs it
 // on connect and on each Hub ping, so retries ride on existing traffic
 // instead of a poll loop.
 func (a *Agent) sync(ctx context.Context) {
-	a.convSync(ctx) // only what an event made due: no request otherwise
+	a.convSync(ctx)  // only what an event made due: no request otherwise
+	a.syncTeams(ctx) // team references queued by the stream, verified and pinned (teams.go)
+	a.groupSync(ctx) // group journal: pending publications first, then heads the stream said changed (convgroup.go)
 	if err := a.FlushOutbox(ctx); err != nil {
 		a.Logf("outbox: %v", err)
 	}
@@ -240,6 +305,12 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		}
 	case "members":
 		a.onMembers([]byte(data)) // the Hub's member list (members.go)
+	case "signal":
+		a.onSignal([]byte(data)) // live typing only: no inbox, receipt or worker
+	case "teams":
+		a.onTeams([]byte(data)) // the Hub's team directory (teams.go): references queued, verified by the sync worker
+	case "groups":
+		a.onGroupHeads([]byte(data)) // the caller's group journal heads (convgroup.go): noted, fetched by the sync worker
 	case "link":
 		a.onLinkEvent([]byte(data)) // a device asks to join this person (link.go)
 	case "ping":
@@ -338,13 +409,36 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 	if err == nil && in.V == envelope.Version2 {
 		return a.admitConv(ctx, env, in, sender, false)
 	}
+	if err == nil && in.V == envelope.Version3 {
+		return a.admitControl(ctx, env, in, sender, false)
+	}
 	if err == nil {
+		if namedAgentFields(in) {
+			if err := a.checkDeviceAgent(in, sender); err != nil {
+				return a.hold(env, reasonInvalid)
+			}
+		}
+		if in.ReceiverRoute != nil && in.ReceiverRoute.Op != "request" {
+			if err := a.receiverSetupSender(a.store.db, in, sender.Fingerprint()); err != nil {
+				return a.hold(env, reasonInvalid)
+			}
+		}
 		// The key that verified it is the evidence, not whatever is pinned
 		// by the time it is stored.
 		if err := a.store.addInbox(in, sender.Fingerprint()); err != nil {
 			return err
 		}
+		if err := a.processReceiverCatalog(in, sender.Fingerprint()); err != nil {
+			return err
+		}
 		a.wakeWorker()
+		if in.ReceiverRoute == nil || in.ReceiverRoute.Op == "request" {
+			a.noteStatus(in.ID)
+		} // setup is not remote task execution
+		if len(in.Attachments) > 0 {
+			a.convWork.due(convFetch) // keep its files here (historyfiles.go prefetchFiles)
+			a.kickNow()
+		}
 		return nil
 	}
 	// A failure may mean the sender's keys changed; hold the message until

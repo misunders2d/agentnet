@@ -2,17 +2,21 @@ package itest
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // TestCLIRelease: an admin recommends a version with flags before the
 // version; a running member daemon saves it; `version` of a release build
-// keeps its stdout line and adds a newer recommendation on stderr, while a
+// keeps its identity and build diagnostic lines on stdout and adds a newer
+// recommendation on stderr, while a
 // development build that cannot be compared says nothing; `version` for a
 // missing home creates nothing; doctor reports it.
 func TestCLIRelease(t *testing.T) {
@@ -41,16 +45,25 @@ func TestCLIRelease(t *testing.T) {
 		cmd.Wait()
 		return stdout, stderr
 	}
+	versionOutput := func(out, version string) bool {
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		if len(lines) != 2 || lines[0] != fmt.Sprintf("agentnet %s (protocol %d)", version, protocol.ProtocolVersion) {
+			return false
+		}
+		diagnostic, ok := strings.CutPrefix(lines[1], "build revision ")
+		revision, tree, found := strings.Cut(diagnostic, ", working tree ")
+		return ok && found && revision != "" && (tree == "clean" || tree == "dirty" || tree == "unknown")
+	}
 	waitFor(t, "bob saves the recommendation", func() bool {
 		o, e := version(c.bin)
-		return strings.HasPrefix(o, "agentnet v0.3.0 (protocol ") && strings.Count(o, "\n") == 1 &&
+		return versionOutput(o, "v0.3.0") &&
 			strings.Contains(e, "your Hub recommends agentnet v0.3.1 (this is v0.3.0)") && strings.Contains(e, "https://example.test/update")
 	})
 	if out, _ := c.try("--home", "bob", "doctor"); !strings.Contains(out, "the Hub recommends v0.3.1; this is v0.3.0") {
 		t.Fatalf("doctor: %s", out)
 	}
 	// A development build cannot be compared with a release: never told.
-	if o, e := version(devBin); !strings.HasPrefix(o, "agentnet dev (protocol ") || strings.Contains(e, "recommends") {
+	if o, e := version(devBin); !versionOutput(o, "dev") || strings.Contains(e, "recommends") {
 		t.Fatalf("dev build: %q %q", o, e)
 	}
 	dev := *c
@@ -59,7 +72,7 @@ func TestCLIRelease(t *testing.T) {
 		t.Fatalf("dev doctor: %s", out)
 	}
 	missing := filepath.Join(c.dir, "nobody")
-	if out, err := c.try("--home", missing, "version"); err != nil || strings.Contains(out, "recommends") {
+	if out, err := c.try("--home", missing, "version"); err != nil || !versionOutput(out, "v0.3.0") || strings.Contains(out, "recommends") {
 		t.Fatalf("version without a home: %v %s", err, out)
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {

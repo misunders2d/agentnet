@@ -67,13 +67,21 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 		return false // switching for an update: no new job starts
 	}
 	r, err := a.Responder()
-	if err != nil || r == nil {
-		return false // no responder selected: everything waits for a human
+	if err != nil {
+		return false
 	}
-	j, ok, err := a.store.claimJob(r.Harness)
+	name := ""
+	if r != nil {
+		name = r.Harness
+	}
+	resolve := func(q dbq, id string) (*ExecutorStamp, error) { return a.ResolveExecutorIn(q, id, r) }
+	j, ok, err := a.claimReplyReceiverJob()
+	if err == nil && !ok {
+		j, ok, err = a.store.claimJob(name, resolve)
+	}
 	if err == nil && !ok {
 		var more bool
-		if j, ok, more, err = a.claimAgentJob(r.Harness); err == nil && !ok {
+		if j, ok, more, err = a.claimAgentJob(name, resolve); err == nil && !ok {
 			return more // more requests to its agent to look at: go on at once
 		}
 	}
@@ -84,6 +92,16 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 	if !ok {
 		return false
 	}
+	if j.Executor != nil {
+		r = &j.Executor.Responder
+	}
+	if r == nil {
+		a.endJob(j.ID, stateNotRun, "no selected executor")
+		return true
+	}
+	if j.Receiver == nil {
+		a.noteStatus(j.ID)
+	} // selected local continuation is not a remote task
 	a.runJob(ctx, j, r, wake)
 	return true
 }
@@ -91,23 +109,31 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan struct{}) {
 	var prompt string
 	var err error
-	if j.PID != "" {
-		if why := a.agentStop(j); why != "" {
-			a.store.finishJob(j.ID, stateNotRun, "not run: "+why)
+	if j.Receiver != nil {
+		defer a.clearAgentFiles(j.ID)
+		if why := a.receiverStop(j); why != "" {
+			a.endJob(j.ID, stateNotRun, why)
 			return
 		}
-		prompt, err = a.agentPrompt(j, r)
+		prompt, err = a.receiverPrompt(ctx, j, r)
+	} else if j.PID != "" {
+		defer a.clearAgentFiles(j.ID)
+		if why := a.agentStop(j); why != "" {
+			a.endJob(j.ID, stateNotRun, "not run: "+why)
+			return
+		}
+		prompt, err = a.agentPrompt(j, r, ctx)
 	} else {
 		prompt, err = a.prompt(j, r)
 	}
 	if err != nil {
-		a.store.finishJob(j.ID, stateJobFailed, err.Error())
+		a.endJob(j.ID, stateJobFailed, err.Error())
 		return
 	}
 	h := Harnesses[r.Harness]
 	plan, err := a.planSession(j, r, h)
 	if err != nil {
-		a.store.finishJob(j.ID, stateJobFailed, "background session: "+err.Error())
+		a.endJob(j.ID, stateJobFailed, "background session: "+err.Error())
 		return
 	}
 	if plan.note != "" {
@@ -117,7 +143,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if plan.ref != nil && plan.ref.ID != "" {
 		// Known before the run (claude, or any resume): record it first.
 		if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
-			a.store.finishJob(j.ID, stateJobFailed, "background session not recorded, so nothing was run: "+err.Error())
+			a.endJob(j.ID, stateJobFailed, "background session not recorded, so nothing was run: "+err.Error())
 			return
 		}
 	}
@@ -152,7 +178,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 					return
 				}
 			}
-			if j.PID != "" {
+			if j.Receiver != nil {
+				if why := a.receiverStop(j); why != "" {
+					stopWhy = why
+					cancel()
+					return
+				}
+			} else if j.PID != "" {
 				if why := a.agentStop(j); why != "" {
 					stopWhy = why
 					cancel()
@@ -168,7 +200,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if h.out != "" {
 		f, err := os.CreateTemp(a.home, outFilePrefix+"*")
 		if err != nil {
-			a.store.finishJob(j.ID, stateJobFailed, err.Error())
+			a.endJob(j.ID, stateJobFailed, err.Error())
 			return
 		}
 		f.Close()
@@ -185,6 +217,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	// cmd.Environ, after Dir, keeps the PWD=Dir that exec sets when Env is
 	// nil; AgentNet's own hooks stay out of this session.
 	cmd.Env = append(cmd.Environ(), BackgroundEnv+"=1")
+	if j.Receiver != nil {
+		cmd.Env = append(cmd.Env, receiverBindingEnv+"="+j.Receiver.ID, "AGENTNET_HOME="+a.home)
+	}
 	if h.stdin {
 		cmd.Stdin = strings.NewReader(prompt)
 	}
@@ -213,7 +248,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if plan.ref.ID = events.threadID; plan.ref.ID == "" {
 			a.Logf("%s %s: %s reported no session id; the next job of this conversation starts a new session", j.Kind, j.ID, r.Harness)
 		} else if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
-			a.store.finishJob(j.ID, stateJobFailed, fmt.Sprintf("%s ran, but its background session could not be recorded (%v); its result was not used and it is not run again", r.Harness, err))
+			a.endJob(j.ID, stateJobFailed, fmt.Sprintf("%s ran, but its background session could not be recorded (%v); its result was not used and it is not run again", r.Harness, err))
 			return
 		}
 	}
@@ -239,14 +274,18 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	switch {
 	case ctx.Err() != nil:
 		// The daemon is stopping; the job's outcome is unknown.
-		a.store.finishJob(j.ID, stateInterrupt, "the daemon stopped while this was running")
+		a.endJob(j.ID, stateInterrupt, "the daemon stopped while this was running")
 		return
 	case stopWhy != "":
 		detail := "stopped and not sent: " + stopWhy
+		endState := stateNotDelivered
+		if j.Receiver != nil {
+			endState, detail = stateCancelled, "local continuation stopped: "+stopWhy
+		}
 		if out := strings.TrimSpace(stdout.String()); out != "" {
 			detail += ". Its output so far:\n" + out
 		}
-		a.store.finishJob(j.ID, stateNotDelivered, detail)
+		a.endJob(j.ID, endState, detail)
 		a.Logf("%s %s: stopped: %s", j.Kind, j.ID, stopWhy)
 		return
 	case cancelled.Load():
@@ -274,11 +313,13 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		if why == "" {
 			why = r.Harness + " said this needs your decision but gave no reason"
 		}
-		a.store.finishJob(j.ID, stateNeedHuman, why)
+		a.endJob(j.ID, stateNeedHuman, why)
 		a.Logf("%s %s: needs your decision", j.Kind, j.ID)
 		return
 	}
 	switch {
+	case j.Receiver != nil:
+		a.finishReplyReceiver(j, status, body)
 	case j.PID != "":
 		a.finishAgent(ctx, j, r, status, body)
 	case j.followUp():
@@ -298,7 +339,7 @@ func (a *Agent) finishFollowUp(j job, status, body string) {
 	case envelope.StatusFailed, envelope.StatusTimeout:
 		state = stateJobFailed
 	}
-	a.store.finishJob(j.ID, state, body)
+	a.endJob(j.ID, state, body)
 	a.Logf("follow-up of %s: %s", j.ID, state)
 }
 
@@ -318,32 +359,43 @@ func (a *Agent) reviewAttention(ctx context.Context) {
 	a.sendReviewNotice(ctx)
 }
 
-// notifyReview shows one desktop notification, with a count and no
-// content, when items entered human review since the last one. Items are
-// marked notified only when a notification was shown; if it fails, they
-// stay pending and are not retried until other new items arrive, so Hub
-// pings never start a notifier.
+// notifyReview aggregates local decisions and authenticated remote report
+// items without exposing content. Existing flags record successful coverage;
+// failed attempts wait for new work or a restart, never a ping retry loop.
 func (a *Agent) notifyReview() {
 	ids, total, err := a.store.unnotified()
 	if err != nil {
 		a.Logf("review: %v", err)
 		return
 	}
+	remote, err := a.remoteReviewAlerts()
+	if err != nil {
+		a.Logf("review: %v", err)
+		return
+	}
+	// Repeated/superseded/silent snapshots contain no new alert transition.
+	if len(remote.Fresh) == 0 {
+		if err := a.store.markNotified(remote.Covered); err != nil {
+			a.Logf("review: %v", err)
+			return
+		}
+	}
 	if a.notifyTried == nil {
 		a.notifyTried = map[string]bool{}
 	}
 	fresh := false
-	for _, id := range ids {
-		if !a.notifyTried[id] {
-			fresh, a.notifyTried[id] = true, true
+	attempts := append(append([]string{}, ids...), remote.Fresh...)
+	for _, key := range attempts {
+		if !a.notifyTried[key] {
+			fresh = true
+			a.notifyTried[key] = true
 		}
 	}
 	if !fresh {
 		return
 	}
-	// A click opens a review: of the one item waiting, or of the list.
 	target := ""
-	if total == 1 && len(ids) == 1 {
+	if len(remote.Counts) == 0 && total == 1 && len(ids) == 1 {
 		target = ids[0]
 	}
 	argv, onClick := a.reviewClick(target)
@@ -351,19 +403,22 @@ func (a *Agent) notifyReview() {
 	if total != 1 {
 		body = fmt.Sprintf("%d requests need your decision. Click to review them with your coding agent.", total)
 	}
+	if len(remote.Counts) > 0 {
+		body = remoteReviewCopy(remote.Counts, total) + "Click to review AgentNet Activity."
+	}
 	if onClick == nil {
 		body = strings.SplitAfter(body, ". ")[0] + "Ask your coding agent to review pending AgentNet requests."
 	}
 	if err := a.notify("AgentNet", body, argv, onClick); err != nil {
-		a.Logf("desktop notification not shown (%v); %d item(s) wait for you: see `agentnet inbox --review`", err, total)
+		a.Logf("desktop notification not shown (%v); see `agentnet inbox --review`", err)
 		return
 	}
-	if err := a.store.markNotified(ids); err != nil {
+	if err := a.store.markNotified(append(ids, remote.Covered...)); err != nil {
 		a.Logf("review: %v", err)
 		return
 	}
-	for _, id := range ids {
-		delete(a.notifyTried, id) // durably notified; a later return to review is new
+	for _, key := range attempts {
+		delete(a.notifyTried, key)
 	}
 }
 
@@ -379,7 +434,7 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 	}
 	if j.Kind == envelope.KindQuestion && status == envelope.StatusCancelled {
 		// Nothing is sent; the recipient may now reply by hand.
-		a.store.finishJob(j.ID, state, body)
+		a.endJob(j.ID, state, body)
 		return
 	}
 	detail := ""
@@ -397,11 +452,14 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 		}
 		return nil
 	}
-	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: j.ID, Kind: replyKind(j.Kind), Status: status, claim: claim})
+	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: j.ID, Kind: replyKind(j.Kind), Status: status, AgentID: j.AgentID, claim: claim})
 	if err != nil && res.ID == "" {
 		// The reply could not even be stored (e.g. the sender was revoked).
-		a.store.finishJob(j.ID, stateJobFailed, "reply not sent: "+err.Error())
+		a.endJob(j.ID, stateJobFailed, "reply not sent: "+err.Error())
 		return
+	}
+	if status != envelope.StatusDone && status != envelope.StatusDeclined {
+		a.noteStatus(j.ID) // a failure or cancellation the reply itself reports: the state stands beside it
 	}
 	a.Logf("%s %s: %s (reply %s %s)", j.Kind, j.ID, status, res.ID, res.State)
 }

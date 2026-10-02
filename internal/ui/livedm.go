@@ -25,6 +25,11 @@ func personView(p client.PersonInfo) PersonView {
 // dmOverview adds this installation's person, the people and the DMs.
 func (l *Live) dmOverview(o *Overview) error {
 	o.Persons = true
+	o.Groups = true
+	var err error
+	if o.GroupInvitations, err = l.GroupInvitations(); err != nil {
+		return err
+	}
 	me, ok, err := l.a.Person()
 	if err != nil {
 		return err
@@ -66,6 +71,9 @@ func (l *Live) dmOverview(o *Overview) error {
 	// participations as resolved (the host's person and device).
 	links := map[string][]AgentLink{}
 	for _, c := range convs {
+		if c.Kind == protocol.ConvKindGroup {
+			continue
+		}
 		infos, err := l.a.Participations(c.ID)
 		if err != nil {
 			return err
@@ -75,9 +83,9 @@ func (l *Live) dmOverview(o *Overview) error {
 				continue
 			}
 			ls := links[info.Host.Person]
-			i := slices.IndexFunc(ls, func(x AgentLink) bool { return x.Address == info.Host.Address })
+			i := slices.IndexFunc(ls, func(x AgentLink) bool { return x.Address == info.Host.Address && x.AgentID == info.AgentID })
 			if i < 0 {
-				ls, i = append(ls, AgentLink{Address: info.Host.Address}), len(ls)
+				ls, i = append(ls, AgentLink{Address: info.Host.Address, AgentID: info.AgentID}), len(ls)
 			}
 			ls[i].DMs = append(ls[i].DMs, AgentInDM{Conv: c.ID, PID: info.PID, State: info.State})
 			links[info.Host.Person] = ls
@@ -94,8 +102,16 @@ func (l *Live) dmOverview(o *Overview) error {
 		if err != nil {
 			return err
 		}
-		s := DMSummary{ID: c.ID, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
+		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
 			Count: len(msgs), Unread: len(unread[c.ID]), LastAt: time.Unix(c.Created, 0)}
+		s.Kind, s.Frozen = c.Kind, c.Frozen
+		if c.Kind == protocol.ConvKindGroup {
+			s.Title = c.Title
+			s.Peer.Label = c.Title
+			if s.Members, err = l.groupMembers(c); err != nil {
+				return err
+			}
+		}
 		for _, m := range msgs {
 			switch {
 			case m.Dir == "in" && m.State == "conv_held":
@@ -105,7 +121,7 @@ func (l *Live) dmOverview(o *Overview) error {
 			}
 		}
 		if len(msgs) > 0 {
-			people := l.people(c.Peer)
+			people := l.conversationPeople(c)
 			line := func(m client.ConvMessage) string { // a participation record in words, not its body
 				if m.Sub == envelope.SubEvent {
 					return eventText(m.Body, people)
@@ -120,6 +136,9 @@ func (l *Live) dmOverview(o *Overview) error {
 				return firstLine(m.Body)
 			}
 			s.Title, s.Last = line(msgs[0]), line(msgs[len(msgs)-1])
+			if c.Kind == protocol.ConvKindGroup {
+				s.Title = c.Title
+			}
 			s.LastAt = time.Unix(msgs[len(msgs)-1].At, 0)
 		}
 		o.DMs = append(o.DMs, s)
@@ -191,16 +210,49 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, u := range unread[id] {
 			isUnread[u] = true
 		}
-		t := DMThread{ID: id, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
+		t := DMThread{ID: id, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
 			Messages: []DMMessage{}}
+		t.Kind, t.Title, t.Frozen = c.Kind, c.Title, c.Frozen
+		if c.Kind == protocol.ConvKindGroup {
+			t.Peer.Label = c.Title
+			if t.Members, err = l.groupMembers(c); err != nil {
+				return DMThread{}, err
+			}
+		}
+		var groupRefs []protocol.GroupHistoryRef
+		if c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
+			ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
+			groupRefs, err = l.a.SelectGroupHistory(ctx, id, client.GroupHistorySelection{Last: 64})
+			cancel()
+			if err != nil {
+				return DMThread{}, err
+			}
+		}
 		if c.Peer.State == PersonConflict {
 			t.Frozen = c.Peer.Address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it."
 		}
-		people := l.people(c.Peer)
+		people := l.conversationPeople(c)
+		if c.Role == "visitor" && c.Kind != protocol.ConvKindGroup {
+			t.Frozen = "Invited agent context only: this host cannot send ordinary room messages."
+		}
 		for _, m := range msgs {
-			dm := DMMessage{ID: m.ID, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
+			dm := DMMessage{ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, laggingCopy(m, c.Peer.Address), m.Detail),
-				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m)}
+				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
+			dm.ExcerptPID, dm.ClaimedKey = m.ExcerptPID, m.Claimed
+			if c.Kind == protocol.ConvKindGroup {
+				key := m.Key
+				if key == "" {
+					key = m.Claimed
+				}
+				for _, ref := range groupRefs {
+					if ref.LID == m.LID && ref.Author == key {
+						r := ref
+						dm.GroupRef = &r
+						break
+					}
+				}
+			}
 			if m.Target != nil {
 				dm.To = m.Target.Address
 			}
@@ -235,6 +287,10 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	if body == "" && len(d.Files) == 0 {
 		return Sent{}, Refuse("Write a message or add a file first.")
 	}
+	receiver, err := l.selectedReplyReceiver(d.ReplyReceiver)
+	if err != nil {
+		return Sent{}, err
+	}
 	files, cleanup, err := l.takeStaged(d.Files)
 	if err != nil {
 		return Sent{}, err
@@ -242,16 +298,27 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	defer cleanup() // SendConv encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Origin: envelope.OriginUI, Files: files})
+	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Origin: envelope.OriginUI, Files: files, ReplyReceiver: receiver})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}
-	if res.State == protocol.StateCustody { // as a page send does: wait once, in the background, for the receipt
-		go func() {
+	// Each physical audience copy has its own receipt. Waiting only for the
+	// first copy can leave a received second copy displayed as custody.
+	copies := res.Copies
+	if len(copies) == 0 {
+		copies = []client.ConvCopy{{ID: res.ID, State: res.State}}
+	}
+	seen := map[string]bool{}
+	for _, copy := range copies {
+		if copy.ID == "" || copy.State != protocol.StateCustody || seen[copy.ID] {
+			continue
+		}
+		seen[copy.ID] = true
+		go func(id string) {
 			ctx, cancel := context.WithTimeout(context.Background(), receiptWait+l.timeout)
 			defer cancel()
-			l.a.Status(ctx, res.ID, receiptWait)
-		}()
+			l.a.Status(ctx, id, receiptWait)
+		}(copy.ID)
 	}
 	return Sent{ID: res.ID, State: res.State, Detail: res.Detail}, nil
 }
@@ -267,6 +334,9 @@ func (l *Live) refreshDM(id string) (Presence, bool, error) {
 	for _, c := range convs {
 		if c.ID != id {
 			continue
+		}
+		if c.Kind == protocol.ConvKindGroup {
+			return Presence{}, true, nil
 		}
 		msgs, err := l.a.ConversationMessages(id)
 		if err != nil {

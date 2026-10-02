@@ -110,9 +110,26 @@ let down = false;
 let refreshReply = { text: "Connection unknown" }; // the one check made when a thread opens
 const dmThreads = {}; // DMs by id, for /api/dm
 const resolvable = {}; // notification channels this device resolves, for /api/notify/resolve
+let storageReply = null; // what /api/storage answers (an object, or 404)
+let teamsReply = { realm_id: "r", status: "available", current: true, at: "2026-09-28T12:00:00Z", truncated: false, teams: [] }; // what /api/teams answers (an object, or 404)
+let teamSnapshotPersons = [{ id: "p-me", seq: 0, hash: "x" }, { id: "p-alice", seq: 0, hash: "y" }];
+const teamGroupCreates = [], teamGroupInvites = [];
+let teamGroupRefusesPerson = "";
+
+let teamRefuses = ""; // what /api/team refuses with, if set
+let teamResultName = ""; // a returned name may be newer than the retained directory
+const namedA = 'a'.repeat(32), namedB = 'b'.repeat(32), namedC = 'c'.repeat(32);
+const namedRecord = (id, host = 'alice/desk') => ({v:1,id,host,host_key:'SHA256:fixture',label:'Builder',ts:1});
+const agentCatalogs = {'alice/desk':[namedRecord(namedA),namedRecord(namedB)],'me/laptop':[]};
+const catalogResponder = {chosen:true,harness:'codex',dir:'/tmp/fixture',ready:true,timeout:600,context:['/tmp/context']};
+const localAgents = [];
+const replySessions = [{handle:"exact-Pi_handle",harness:"pi",label:"Local Pi",active:false},{handle:"exact-OMP_handle",harness:"omp",label:"Local OMP",active:true}];
+let catalogRefuses = '', catalogPublished = false;
+const teamChanges = []; // changes sent to /api/team
 let uploads = 0, uploadFails = false; // files handed to /api/upload
 let uploadTries = 0, uploadFailAt = 0; // the one upload try (counted from 1) that fails
 let dmSendRefuses = ""; // what /api/dm/send refuses with, if set
+let agentAskRefuses = ""; // the exact agent request may fail without retargeting its files
 let sendRefuses = ""; // what /api/send refuses with, if set
 const served = {}; // received files' bytes, by /api/files path
 const calls = [];
@@ -124,9 +141,12 @@ function fetch(url, opts) {
   const u = new URL(url, "http://127.0.0.1");
   const raw = opts && opts.headers && opts.headers["Content-Type"] === "application/octet-stream";
   const body = opts && opts.body ? (raw ? { bytes: opts.body.size } : JSON.parse(opts.body)) : undefined;
-  calls.push({ path: u.pathname, body });
+  calls.push({ path: u.pathname, body, dir: u.searchParams.get("dir"), host: u.searchParams.get("host") });
   let data = {};
-  if (u.pathname === "/api/thread") data = threads[u.searchParams.get("id")];
+  if (u.pathname === "/api/thread") { // the daemon answers with the thread holding that message
+    const id = u.searchParams.get("id");
+    data = threads[id] || Object.values(threads).find((t) => t.messages.some((m) => m.id === id));
+  }
   else if (u.pathname === "/api/overview") data = Object.assign({ version: serving }, overview);
   else if (u.pathname === "/api/send") {
     if (sendRefuses) return Promise.resolve({ ok: false, status: 409, text: async () => sendRefuses, statusText: "" });
@@ -139,8 +159,51 @@ function fetch(url, opts) {
     data = { id: "sent-dm", state: "custody" };
   }
   else if (u.pathname === "/api/dm/new") data = { id: "d3" };
-  else if (u.pathname.startsWith("/api/dm/agent/")) data = u.pathname.endsWith("/ask") ? { id: "asked", state: "custody" } : {};
+  else if (u.pathname.startsWith("/api/dm/agent/")) {
+    if (u.pathname.endsWith("/ask") && agentAskRefuses) return Promise.resolve({ ok: false, status: 409, text: async () => agentAskRefuses });
+    data = u.pathname.endsWith("/ask") ? { id: "asked", state: "custody" } : {};
+  }
   else if (u.pathname === "/api/notify/resolve") data = { conv: resolvable[u.searchParams.get("chan")] || "" };
+  else if (u.pathname === "/api/operator/decide") data = { note: "Sent to the host.", sent: "dec1" };
+  else if (u.pathname === "/api/teams") {
+    if (teamsReply === 404) return Promise.resolve({ ok: false, status: 404, text: async () => "404 page not found", statusText: "" });
+    data = teamsReply;
+  }
+  else if (u.pathname === "/api/team") {
+    if (teamRefuses) return Promise.resolve({ ok: false, status: 409, text: async () => teamRefuses, statusText: "" });
+    teamChanges.push(body);
+    data = { realm_id: "r", id: body.team || "t-new", name: body.name || teamResultName || "Platform", seq: 1, hash: "h", managers: ["p-me"], members: ["p-me"], archived: false };
+  }
+  else if (u.pathname === "/api/teams/snapshot") data = { realm_id: "r", sources: body.teams.map((id) => ({ id, seq: 1, hash: "h" })), persons: teamSnapshotPersons, at: 1700000000 };
+  else if (u.pathname === "/api/groups/new") {
+    teamGroupCreates.push(body);
+    data = { id: "team-group" };
+    dmThreads[data.id] = { id: data.id, kind: "group", title: body.title, members: [{ person: "p-me", label: "Sergey", address: "me/laptop", admin: true }], messages: [], agents: [], role: "member", frozen: "" };
+  }
+  else if (u.pathname === "/api/groups/invite") {
+    teamGroupInvites.push(body);
+    if (body.person === teamGroupRefusesPerson) return Promise.resolve({ ok: false, status: 409, text: async () => "Group changed; fresh invitation and consent required.", statusText: "" });
+    data = { id: "invite-" + body.person, status: "pending" };
+  }
+  else if (u.pathname === "/api/drive/setup") data = { runtime: "daemon", settings: { config: { enabled: false }, revision: 0, can_admin: true } };
+  else if (u.pathname === '/api/responder') data = {...catalogResponder,harnesses:[{name:'codex',found:true}]};
+  else if (u.pathname === '/api/reply-sessions') data = {host:'me/laptop',local:true,sessions:replySessions};
+  else if (u.pathname === '/api/agents') {
+    if (catalogRefuses) return Promise.resolve({ok:false,status:409,text:async()=>catalogRefuses});
+    const host = u.searchParams.get('host');
+    if (!body) data = host ? {host,local:false,agents:(agentCatalogs[host]||[]).map(record=>({record,enabled:true}))} : {host:'me/laptop',local:true,agents:localAgents,harnesses:[{name:'codex',found:true}]};
+    else {
+      let agent = localAgents.find(a=>a.record.id===body.id);
+      if(body.action==='create') {agent={record:namedRecord(namedC,'me/laptop'),enabled:true,responder:{...catalogResponder,harness:body.harness,dir:body.dir}};localAgents.push(agent);}
+      if(body.action==='update') agent.responder={...agent.responder,harness:body.harness,dir:body.dir};
+      if(body.action==='disable') {agent.enabled=false;delete agent.responder;}
+      data={saved:true,published:catalogPublished,agent,note:catalogPublished?'Hub publication confirmed.':'Publication not confirmed.'};
+    }
+  }
+  else if (u.pathname === "/api/storage") {
+    if (storageReply === 404) return Promise.resolve({ ok: false, status: 404, text: async () => "404 page not found", statusText: "" });
+    data = storageReply;
+  }
   else if (u.pathname === "/api/upload") {
     uploadTries++;
     if (uploadFails || uploadTries === uploadFailAt) return Promise.resolve({ ok: false, text: async () => "no space left for this file", statusText: "" });
@@ -181,7 +244,7 @@ document.visibilityState = "visible";
 document.hasFocus = () => focused;
 let focused = true;
 const ctx = vm.createContext({
-  document, fetch, console, setTimeout, clearTimeout, URL, sessionStorage, Notification, Blob,
+  document, fetch, console, setTimeout, clearTimeout, URL, URLSearchParams, sessionStorage, Notification, Blob,
   window: { innerHeight: 800, matchMedia: () => ({ matches: false }), addEventListener() {} },
   localStorage: { getItem: () => null, setItem() {} },
   location: { reload() { reloads++; }, hash: "", pathname: "/", search: "" },
@@ -243,6 +306,32 @@ const ev = { preventDefault() {} };
   check($("body").value === "newer text for alice" && !$("send").disabled, "a late send clears nothing in another conversation");
   await run('openThread("c1")');
   check($("body").value === "", "the sent draft is gone from its own conversation");
+
+  // R2 (FAIL04): the composer says who gets it and how, and the Send button
+  // names the target; the kind changes the verb, answering changes it too.
+  await run('openThread("a1")');
+  check($("to-name").textContent === "alice/desk" && $("to-how").textContent.includes("continues") && $("send-label").textContent === "Send to alice/desk",
+    "a device conversation names its recipient and what it continues: " + $("to-how").textContent);
+  run("setKind")("task");
+  check($("send-label").textContent === "Give task to alice/desk" && $("to-how").textContent.includes("accept first"), "a task says so on Send: " + $("send-label").textContent);
+  run("setKind")("question");
+  check($("send-label").textContent === "Ask alice/desk", "a question says so on Send");
+  run("setKind")("message");
+  // Text started for one target is not sent to another without a look:
+  // the first send refuses and names the To line; the next one goes.
+  await run('openThread("c1")');
+  $("body").value = "port 8443";
+  run("noteTyping()");
+  run("setAnswering")(run("state.data.messages[0]"));
+  check($("send-label").textContent === "Send answer", "answering by hand says so on Send");
+  calls.length = 0;
+  await run("send")(ev);
+  check(sends().length === 0 && $("compose-error").textContent.includes("Check the To line"), "a draft started for another target is refused once: " + $("compose-error").textContent);
+  await run("send")(ev);
+  check(sends().length === 1, "the next send, after the person looked, goes (" + sends().length + ")");
+  run("setAnswering")(null);
+  $("body").value = "";
+  run("noteTyping()");
 
   // R1: answering mode stays with its conversation too.
   const q = run("state.data.messages[0]");
@@ -313,40 +402,40 @@ const ev = { preventDefault() {} };
   const reports = [sum("n1", "hub/ops", { title: "2 request(s) wait for a person's decision on hub/ops. Review there: agentnet inbox --review", notices: 1, notice_only: true }),
     sum("n2", "hub/ops", { title: "1 request(s) wait", notices: 1, notice_only: true, last_at: "2026-09-28T08:00:00Z" })];
   const laptop = [sum("l1", "admin/laptop", { title: "same person label, other agent" })];
-  const threads = [...zen, ...reports, ...laptop];
-  const contacts = run("contactsOf")(threads);
+  const mixedThreads = [...zen, ...reports, ...laptop];
+  const contacts = run("contactsOf")(mixedThreads);
   const zc = contacts.find((c) => c.peer === "admin/zenbook");
   check(contacts.length === 3 && contacts.filter((c) => c.peer.startsWith("admin/")).length === 2, "one contact per exact address (admin/laptop apart from admin/zenbook)");
   check(zc.conversations.map((t) => t.id).sort().join() === "chain,held" && zc.singles.length === 30 && zc.reports.length === 0,
     "chain and open item listed as conversations, 30 singles kept single");
   const seen = contacts.flatMap((c) => [...c.conversations, ...c.singles, ...c.reports]).map((t) => t.id);
-  check(seen.length === threads.length && new Set(seen).size === threads.length, "every thread reachable exactly once");
+  check(seen.length === mixedThreads.length && new Set(seen).size === mixedThreads.length, "every thread reachable exactly once");
   check(zc.review === 1 && zc.unread === 3 && zc.notices === 0, "zenbook counts: 1 decision, 3 unread");
   const oc = contacts.find((c) => c.peer === "hub/ops");
   check(oc.review === 0 && oc.unread === 0 && oc.notices === 2 && oc.reports.length === 2, "reports counted apart from decisions and unread");
 
   // N2: search finds known agents and conversations, says which is which,
   // opens the exact one, and never offers people or reports.
-  let r = run("searchKnown")("zenbook", threads);
+  let r = run("searchKnown")("zenbook", mixedThreads);
   check(r.agents.length === 1 && r.agents[0].peer === "admin/zenbook" && r.conversations.length === 0, "search by address finds the agent");
-  r = run("searchKnown")("admin", threads);
+  r = run("searchKnown")("admin", mixedThreads);
   check(r.agents.map((c) => c.peer).sort().join() === "admin/laptop,admin/zenbook", "a shared label finds both exact addresses, not one person");
-  r = run("searchKnown")("rollout", threads);
+  r = run("searchKnown")("rollout", mixedThreads);
   check(r.conversations.length === 1 && r.conversations[0].id === "chain", "search finds the conversation by its line");
-  check(run("searchKnown")("request", threads).conversations.length === 0, "reports are not search results");
-  check(run("searchKnown")("   ", threads).agents.length === 0, "an empty search shows nothing");
-  overview.threads = threads;
+  check(run("searchKnown")("request", mixedThreads).conversations.length === 0, "reports are not search results");
+  check(run("searchKnown")("   ", mixedThreads).agents.length === 0, "an empty search shows nothing");
+  overview.threads = mixedThreads;
   overview.review = [{ id: "held", peer: "admin/zenbook", kind: "question", why: "", excerpt: "" },
     { id: "n1", peer: "hub/ops", kind: "message", why: "", excerpt: "", notice: true },
     { id: "n2", peer: "hub/ops", kind: "message", why: "", excerpt: "", notice: true },
     { id: "n3", peer: "carol/ci", kind: "message", why: "", excerpt: "", notice: true }];
-  threads.push(Object.assign({}, threads.find((t) => t.id === "chain"), { id: "c1", peer: "carol/ci", title: "which port?" }));
+  mixedThreads.push(Object.assign({}, mixedThreads.find((t) => t.id === "chain"), { id: "c1", peer: "carol/ci", title: "which port?" }));
   await run("loadOverview()");
   $("search").value = "which port";
   run("state").query = "which port";
   run("rerenderContacts")();
   calls.length = 0;
-  const opened = run("searchKnown")("which port", threads).conversations.find((t) => t.peer === "carol/ci");
+  const opened = run("searchKnown")("which port", mixedThreads).conversations.find((t) => t.peer === "carol/ci");
   await run("openThread")(opened.id);
   check(calls.some((c) => c.path === "/api/thread") && run("state.data.peer") === "carol/ci" && run("state.thread") === "c1",
     "a search result opens exactly that conversation");
@@ -367,7 +456,7 @@ const ev = { preventDefault() {} };
   // Nothing a condition leaves out reaches the page as text: search with
   // only conversation matches, the Zoom write dialog (and its kind picker),
   // a read dialog without a summary, and the contact list.
-  overview.threads = threads;
+  overview.threads = mixedThreads;
   await run("loadOverview()");
   run("state").query = "rollout";
   run("rerenderContacts")();
@@ -409,7 +498,7 @@ const ev = { preventDefault() {} };
   // Update switch: after the restart notice the page reconnects on its own
   // for a bounded time; a missed notice gets a couple of quick tries; if the
   // daemon never returns, the page says so and stops trying.
-  overview.threads = threads; overview.review = [];
+  overview.threads = mixedThreads; overview.review = [];
   run("recovery").update = [0, 0, 0]; run("recovery").missed = [0, 0];
   run("listen")();
   let es = streams[streams.length - 1];
@@ -438,9 +527,8 @@ const ev = { preventDefault() {} };
   down = false;
   await run("reconnect")();
 
-  // A new version: every unsent text is kept across the reload, including
-  // an open dialog's fields but never its consent boxes; nothing reloads
-  // while a send is on its way; without storage the page asks instead.
+  // A real update must not serialize away files or exact targets. Any
+  // unsent draft holds both automatic and explicit reload in this window.
   await run('openThread("a1")');
   $("body").value = "unsent to alice";
   run("state").drafts["c1"] = { text: "carol draft", kind: "task", answering: null };
@@ -454,8 +542,11 @@ const ev = { preventDefault() {} };
   check(reloads === 0, "no reload while a send is on its way");
   run("state").sending = false;
   run("updated")(run("state.newVersion"));
-  check(reloads === 1 && store.has("agentnet-reload"), "reloads once the send is done, with unsent text kept");
-  // What the reloaded page gets back.
+  check(reloads === 0 && !$('updating').hidden && $('reload').disabled && $('body').value === 'unsent to alice' && byId['write-body'].value === 'zoom text', 'unsent text, inactive conversation and dialog hold automatic update reload');
+  check(run('reloadUpdated()') === false && reloads === 0, 'explicit reload cannot silently discard unsent drafts');
+  // Existing text-only persistence remains readable; update no longer
+  // treats this partial representation as an exact draft handoff.
+  check(run('keepForReload()') && store.has('agentnet-reload'), 'existing text snapshot remains supported');
   run("state").drafts = {}; run("state").thread = null; run("state").data = null; run("state").draftKey = null;
   run("state").version = ""; run("state").newVersion = ""; // a fresh page learns its version again
   $("body").value = ""; $("dialog").open = false;
@@ -465,12 +556,24 @@ const ev = { preventDefault() {} };
   check($("dialog").open && byId["write-body"].value === "zoom text" && byId["write-kind"].value === "question",
     "the open dialog is back with its text: " + byId["write-body"].value);
   check(!store.has("agentnet-reload"), "kept text is restored once");
+  $('dialog').open = false; run('state').dialogRestore = null;
+  $('body').value = ''; run('state').drafts = {}; run('state').answering = null; run('state').dmReply = null; run('state').dmAgent = null; run('state').deviceAgentID = ''; run('state').typedFor = null;
+  const unsentUpgrade = { name: 'upgrade.txt', size: 3, staged: 'old-stage', file: { marker: 'exact File object' } };
+  run('state').files = [unsentUpgrade]; run('updated')('v3');
+  check(reloads === 0 && run('state').files[0] === unsentUpgrade && $('reload').disabled && !run('reloadUpdated()'), 'file-only exact object survives version change and explicit reload refuses');
+  run('state').files = [];
+  for (const held of [{ agent: 'pid-exact' }, { agent_id: 'named-exact' }, { typedFor: { to: 'exact-target' } }, { reply: { id: 'exact-reply' } }]) {
+    run('state').drafts = { held }; run('updated')('v3');
+    check(reloads === 0 && run('state').drafts.held === held && !run('reloadUpdated()'), 'target-only saved draft holds exact memory through update');
+  }
+  run('state').drafts = {}; run('updated')('v3');
+  check(reloads === 1 && !$('reload').disabled, 'empty drafts permit ordinary automatic version reload');
   run("newConversationDialog")("admin/zenbook");
   byId["new-body"].value = "new conversation text";
   storageBroken = true;
   reloads = 0;
   run("updated")("v3");
-  check(reloads === 0 && !$("reload").hidden && !$("updating").hidden, "without storage the page asks instead of reloading");
+  check(reloads === 0 && !$("reload").hidden && !$("updating").hidden, "unsent dialog with unavailable storage remains in memory");
   storageBroken = false;
 
   // Directory: who the server lists, found without any history; presence
@@ -1050,13 +1153,190 @@ const ev = { preventDefault() {} };
   await run("loadOverview()");
   run('setLens("classic")');
   await run('openDM("d2")');
-  // Asking an agent takes no files.
+  // Agent asks reuse the same staging, retry and file-only path as DM sends.
   dmThreads.d2.agents = [agentV("pidF", { state: "active", host: alice, host_here: false, inviter: me, can_ask: true })];
   await run('openDM("d2")');
   run("setDMAgent")(dmThreads.d2.agents[0]);
-  check($("attach").hidden === true, "asking an agent takes no files");
+  check($("attach").hidden === false, "an exact active agent can receive attached files");
+  run("addFiles")([fileOf("agent-only.txt", 5, "text/plain")]);
+  $("body").value = "";
+  uploadFails = true; calls.length = 0;
+  await run("send")(ev);
+  check(run("state.files").length === 1 && !calls.some(c => c.path === "/api/dm/agent/ask") && $("compose-error").textContent.includes("still here"), "failed agent staging keeps file and sends nothing");
+  uploadFails = false; agentAskRefuses = "External host unavailable"; calls.length = 0;
+  await run("send")(ev);
+  let fileAsk = calls.find(c => c.path === "/api/dm/agent/ask");
+  check(fileAsk && fileAsk.body.pid === "pidF" && fileAsk.body.kind === "question" && fileAsk.body.body === "" && fileAsk.body.files.length === 1 &&
+    run("state.files").length === 1 && !run("state.files")[0].staged && run("state.dmAgent") === "pidF" && !calls.some(c => c.path === "/api/dm/send"), "refused file-only ask retains exact agent and file, consumed staging cleared");
+  agentAskRefuses = ""; run("setKind")("task"); calls.length = 0;
+  await run("send")(ev);
+  fileAsk = calls.find(c => c.path === "/api/dm/agent/ask");
+  check(fileAsk && fileAsk.body.pid === "pidF" && fileAsk.body.kind === "task" && fileAsk.body.body === "" && fileAsk.body.files.length === 1 &&
+    calls.some(c => c.path === "/api/upload") && run("state.files").length === 0, "file-only task restages and sends to exact agent");
   run("setDMAgent")(null);
   dmThreads.d2.agents = [];
+  // Headless (R05/R06/R09): a host's word on a request is shown apart from
+  // delivery and says when it is old; a version 2 report names requests and
+  // offers actions only where core marked them actionable; a decision is
+  // sent bound to the state and attempt seen; a notification's #msg= lands
+  // on the exact message and does nothing else.
+  {
+    const lensBefore = run("state.lens");
+    run('setLens("classic")');
+    threads.h1 = { id: "h1", peer: "carol/ci", key: { pinned: "SHA256:c" }, messages: [msg("h1", "carol/ci", "ready when you are"),
+      msg("h9", "me/laptop", "run the nightly build", { dir: "out", kind: "task", state: "delivered", state_text: "Delivered to carol/ci",
+        exec: { state: "running", at: new Date(Date.now() - 4 * 60e3).toISOString(), host: "carol/ci", stale: false, attempt: 2, detail: "" } })] };
+    overview.threads.push({ id: "h1", peer: "carol/ci", last_at: T, title: "ready when you are", count: 2, review: 0, unread: 0, running: 0 });
+    await run('openThread("h1")');
+    let tl = JSON.stringify($("timeline").children.map(textOf));
+    check(tl.includes("Running on carol/ci since") && tl.includes("Delivered to carol/ci") && !tl.includes("not confirmed"), "a running request shows the host's word beside delivery: " + tl.slice(-300));
+    threads.h1.messages.at(-1).exec = { state: "needs_human", at: new Date(Date.now() - 3 * 3600e3).toISOString(), host: "carol/ci", stale: true, detail: "awaiting approval of a shell command" };
+    await run("loadThread(false)");
+    tl = JSON.stringify($("timeline").children.map(textOf));
+    check(tl.includes("Needs a person there on carol/ci: awaiting approval of a shell command") && tl.includes("last known 3 h ago, not confirmed now"), "a stale needs-human state says when it was last known: " + tl.slice(-300));
+    threads.h1.messages.at(-1).exec = undefined;
+    // a version 2 report: read-only for a non-operator, actionable for an operator
+    overview.threads.push({ id: "n2", peer: "hub/bot", last_at: T, title: "2 requests reported by hub/bot", count: 1, notice_only: true, notices: 1, review: 0, unread: 0, running: 0 });
+    overview.review = [{ id: "n2", peer: "hub/bot", kind: "message", notice: true, at: T, excerpt: "2 requests reported by hub/bot",
+      report: { host: "hub/bot", at: T, items: [
+        { id: "a".repeat(32), from: "alice/desk", kind: "task", state: "awaiting", blocker: "awaiting_acceptance", since: T, actionable: false },
+        { id: "b".repeat(32), from: "me/laptop", kind: "question", state: "needs_human", blocker: "needs_human", since: T, key: "SHA256:me", attempt: 3, excerpt: "which city?", actionable: true }] } }];
+    await run("loadOverview()");
+    let rl = textOf($("report-list")).replace(/\s+/g, " ");
+    check(rl.includes("reported at") && rl.includes("2 requests waiting there") && rl.includes("waits for acceptance") && rl.includes("Its text is not shared with this device") && rl.includes("which city?"),
+      "a report names its requests, states and blockers; text only where shared: " + rl.slice(0, 400));
+    check(!/Accept and run/.test(rl) && rl.includes("Answer it there") && rl.includes("Close it there"), "actions appear only on the actionable item, matching its state: " + rl.slice(0, 500));
+    const walk = (n, out = []) => { if (n && n.children) { out.push(n); n.children.forEach((c) => walk(c, out)); } return out; };
+    const answerBtn = walk($("report-list")).find((e) => e.tagName === "button" && textOf(e).startsWith("Answer it there"));
+    answerBtn.click();
+    check($("dialog").open && textOf($("dialog-body")).includes("which city?") && textOf($("dialog-body")).includes("only if the request is still in that state"), "the decision dialog quotes the request and the binding");
+    byId["decide-text"].value = "Riga";
+    calls.length = 0;
+    await $("dialog-ok").onclick(); await tick(); await tick();
+    const dec = calls.find((c) => c.path === "/api/operator/decide");
+    check(dec && dec.body.host === "hub/bot" && dec.body.id === "b".repeat(32) && dec.body.key === "SHA256:me" && dec.body.action === "reply" && dec.body.expect === "needs_human" && dec.body.attempt === 3 && dec.body.text === "Riga" && dec.body.report === "n2",
+      "a decision is bound to host, request, key, state seen, attempt and the report: " + JSON.stringify(dec && dec.body));
+    overview.review[0].report.items[1].result = { state: "running", at: T };
+    await run("loadOverview()");
+    rl = textOf($("report-list")).replace(/\s+/g, " ");
+    check(rl.includes("Now Running"), "the host's real outcome shows on the item: " + rl.slice(0, 500));
+    overview.review[0].report.items[1].result = { refused: "stale expect: the request is now running", at: T };
+    await run("loadOverview()");
+    check(textOf($("report-list")).includes("Refused: stale expect"), "a refusal shows as a refusal, not a state");
+    const oldReport = { id: "c".repeat(32), peer: "hub/bot", kind: "message", notice: true, at: T, excerpt: "older snapshot", report: { host: "hub/bot", at: T, items: [{ id: "d".repeat(32), from: "alice/desk", kind: "task", state: "awaiting", key: "SHA256:a", attempt: 1, excerpt: "Earlier settled task", actionable: true, result: { refused: "no longer as you saw it" } }] } };
+    const newReport = { id: "e".repeat(32), peer: "hub/bot", kind: "message", notice: true, at: T, excerpt: "newer snapshot", report: { host: "hub/bot", at: T, items: [{ id: "f".repeat(32), from: "me/laptop", kind: "task", state: "awaiting", key: "SHA256:me", attempt: 2, excerpt: "Newest pending task", actionable: true }] } };
+    for (const order of [[oldReport, newReport], [newReport, oldReport]]) {
+      overview.review = order; await run("loadOverview()");
+      const tied = textOf($("report-list"));
+      check(tied.includes("2 snapshots at that time; their order is not known") && tied.includes("Earlier settled task") && tied.includes("Newest pending task") && tied.includes("Refused: no longer as you saw it"), "same-second native/browser order retains both exact snapshots and host refusal");
+      const pending = walk($("report-list")).find(e => e.tagName === "li" && e.className.includes("report-request") && textOf(e).includes("Newest pending task"));
+      walk(pending).find(e => e.tagName === "button" && textOf(e).startsWith("Accept and run there")).click();
+      calls.length = 0; await $("dialog-ok").onclick();
+      const exact = calls.find(c => c.path === "/api/operator/decide");
+      check(exact && exact.body.report === newReport.id && exact.body.id === newReport.report.items[0].id && exact.body.attempt === 2 && exact.body.host === "hub/bot", "tied pending request binds its own report, host, id and attempt");
+    }
+    overview.review = [newReport]; await run("loadOverview()");
+    check(!textOf($("report-list")).includes("snapshots at that time") && !textOf($("report-list")).includes("Earlier settled task"), "dismissed tied report stays out of open snapshots; single report unchanged");
+    // a notification's #msg= lands on the message, sends nothing
+    ctx.location.hash = "#msg=h1";
+    check(run("takeClicked()") === null, "a malformed #msg is ignored");
+    ctx.location.hash = "#msg=" + "0".repeat(30) + "a1";
+    const clicked = run("takeClicked()");
+    check(clicked && clicked.msg === "0".repeat(30) + "a1" && ctx.location.hash === "", "#msg=ID is taken once from the address");
+    ctx.location.hash = "#msg=" + "0".repeat(30) + "a1&conv=" + "d".repeat(64) + "&dir=out";
+    const clicked2 = run("takeClicked()");
+    check(clicked2.conv === "d".repeat(64) && clicked2.dir === "out", "conv and dir ride along when given");
+    calls.length = 0;
+    await run('openThread("a1")');
+    await run("openClicked")({ msg: "h9", conv: "", dir: "" }); // a device-thread message here
+    check(run("state.data && state.data.peer") === "carol/ci" && run("state.data.messages.some((m) => m.id === 'h9')") && sends().length === 0, "landing opens the exact conversation and sends nothing");
+    overview.threads = overview.threads.filter((t) => t.id !== "h1" && t.id !== "n2"); overview.review = []; delete threads.h1;
+    await run("loadOverview()");
+    run("setLens")(lensBefore);
+  }
+
+  // Storage (STORAGE1-8): one explicit read, shown as the API words it;
+  // unknown is never zero; the server's quota is never an allowance.
+  {
+    const area = (d, label, usage, extra) => Object.assign({ directory: d, label, kind: "ciphertext", status: usage ? "available" : "unavailable", usage, lifetime: "Kept until " + d + " rule." }, extra || {});
+    const hub = { scope: "caller-owned-ciphertext", quota_scope: "hub-global", own: { stored: { files: 2, reserved_bytes: 4096, recorded_received_bytes: 4096 }, incomplete: { files: 0, reserved_bytes: 0, recorded_received_bytes: 0 } },
+      quota_bytes: 1073741824, max_file_bytes: 104857600, upload_idle_ttl_seconds: 86400, location: "the Hub's blobs folder",
+      policy: { delivered_attachments: "kept until the operator cleans up", unattached_attachments: "kept until cleanup", undelivered_attachments: "never removed", message_envelopes: "kept", incomplete_uploads: "reclaimed after idle", manual_delivered_age_default_seconds: 2592000, manual_unattached_age_default_seconds: 86400 } };
+    const normal = { local: { scope: "agent-home-managed-files", location: "This installation's AgentNet home", complete: true, known: { files: 3, bytes: 3300 }, exclusions: "Keys and databases are not counted.",
+      areas: [area("staging", "Files waiting to be sent", { files: 0, bytes: 0 }), area("kept", "Retained sent files", { files: 3, bytes: 3300 })] }, remote: { status: "available", usage: hub } };
+    const textOfStorage = () => textOf($("storage")).replace(/\s+/g, " ");
+    storageReply = normal;
+    await run('settingsTab("storage")'); await tick(); await tick();
+    let t = textOfStorage();
+    check(t.includes("3 files · 3.2 KB") && t.includes("held by AgentNet here") && t.includes("Retained sent files") && t.includes("0 files · 0 B"), "a normal read shows the known local total and each area: " + t.slice(0, 200));
+    check(t.includes("2 files · 4.0 KB reserved") && t.includes("quota is 1.00 GB for everyone together; that is not your allowance") && !t.includes("%"), "the server's own usage and the global quota are labelled apart, no percentage: " + t.slice(0, 400));
+    check(!t.includes("you are an admin"), "a member sees no aggregate");
+    check(t.includes("delivered files older than 30 days") && t.includes("Nothing expires by itself"), "operator cleanup defaults are named as defaults, not schedules");
+    // partial: one area could not be inspected: unknown, not zero, and the total is not complete
+    storageReply = { ...normal, local: { ...normal.local, complete: false, known: { files: 3, bytes: 3300 }, areas: [normal.local.areas[1], area("downloads", "Retained received files", null, { reason: "The managed directory could not be inspected." })] } };
+    await run('renderStorage()'); await tick(); await tick();
+    t = textOfStorage();
+    check(t.includes("could not be inspected") && /Retained received files encrypted unknown/.test(t) && t.includes("not complete") && !/Retained received files encrypted 0 files/.test(t), "an uninspected area says unknown, never zero, and the total is marked incomplete: " + t.slice(0, 300));
+    // offline: the server did not answer; local stays
+    storageReply = { ...normal, remote: { status: "unavailable", reason: "Storage usage could not be verified with the Hub." } };
+    await run('renderStorage()'); await tick(); await tick();
+    t = textOfStorage();
+    check(t.includes("3 files · 3.2 KB") && t.includes("could not be verified") && !t.includes("quota"), "an unreachable server leaves local counts and says the remote is not known: " + t.slice(0, 300));
+    // unsupported server
+    storageReply = { ...normal, remote: { status: "unsupported", reason: "This Hub does not report storage usage." } };
+    await run('renderStorage()'); await tick(); await tick();
+    check(textOfStorage().includes("does not report storage usage"), "an older server is named as not reporting");
+    // admin: the aggregate appears, labelled
+    storageReply = { ...normal, remote: { status: "available", usage: { ...hub, global: { stored: { files: 40, reserved_bytes: 8388608, recorded_received_bytes: 8388608 }, incomplete: { files: 1, reserved_bytes: 100, recorded_received_bytes: 50 } } } } };
+    await run('renderStorage()'); await tick(); await tick();
+    t = textOfStorage();
+    check(t.includes("you are an admin") && t.includes("40 files · 8.0 MB reserved") && t.includes("unfinished: 1 file"), "an admin sees everyone's usage, labelled: " + t.slice(0, 400));
+    // provider without the route
+    storageReply = 404;
+    await run('renderStorage()'); await tick(); await tick();
+    check(textOfStorage().includes("does not report storage yet"), "a provider without storage says so honestly");
+    check(!/\/home\/|\/tmp\/|t=[0-9a-f]{8}|fingerprint|agentnet_ui/.test(textOfStorage()), "no paths, tokens or keys in the storage view");
+    storageReply = null;
+    calls.length = 0;
+  }
+
+  // Message controls (MEL-476/477): what the backend resolved is shown as
+  // is; edits show the new text with the original under Details; a deleted
+  // message is a tombstone without files; only allowed actions appear.
+  {
+    const m2c = dmThreads.d2.messages.find((x) => x.id === "m2"), m3c = dmThreads.d2.messages.find((x) => x.id === "m3");
+    Object.assign(m2c, { edited: true, revision: 2, text: "budget (revised)", can: ["react", "edit", "delete"], reactions: [{ emoji: "👍", by: [{ id: "p-al", label: "Alice" }], mine: false }, { emoji: "🎉", by: [{ id: "p-me", label: "Sergey" }, { id: "p-al2", label: "Sergey" }], mine: true }] });
+    Object.assign(m3c, { can: ["react"], attachments: [{ index: 0, name: "photo.png", size: 10 }] });
+    await run('openDM("d2")');
+    let tl = JSON.stringify($("timeline").children.map(textOf));
+    check(tl.includes("budget (revised)") && tl.includes("· edited"), "an edited message shows its new text with an edited marker: " + tl.slice(0, 200));
+    check(tl.includes("👍 1") && tl.includes("🎉 2"), "reactions show emoji and counts: " + tl.slice(0, 200));
+    check(tl.includes("Original text") && tl.includes("budget"), "the original text stays under Details");
+    const walk = (n, out = []) => { if (n && n.children) { out.push(n); n.children.forEach((c) => walk(c, out)); } return out; };
+    const nodes = walk($("timeline"));
+    const mine = nodes.find((e) => e.tagName === "button" && (e.className || "").includes("reaction") && (e.className || "").includes("mine"));
+    calls.length = 0;
+    mine.click(); await tick();
+    let c = calls.find((x) => x.path === "/api/message/react");
+    check(c && c.body.conv === "d2" && c.body.id === "m2" && c.body.dir === "out" && c.body.emoji === "🎉" && c.body.remove === true, "pressing your own reaction removes it, naming conv, id and dir: " + JSON.stringify(c && c.body));
+    const theirs = nodes.find((e) => e.tagName === "button" && (e.className || "").includes("reaction") && !(e.className || "").includes("mine"));
+    calls.length = 0;
+    theirs.click(); await tick();
+    c = calls.find((x) => x.path === "/api/message/react");
+    check(c && c.body.emoji === "👍" && !c.body.remove, "pressing another's reaction adds yours");
+    const editBtns = nodes.filter((e) => e.tagName === "button" && textOf(e) === "Edit");
+    const delBtns = nodes.filter((e) => e.tagName === "button" && textOf(e) === "Delete…");
+    check(editBtns.length === 1 && delBtns.length === 1, "edit and delete are offered only where allowed (" + editBtns.length + "," + delBtns.length + ")");
+    // a deleted message: tombstone, no files, no actions, the sent text of a question stays on record
+    Object.assign(m3c, { deleted: true, kind: "question" });
+    await run("loadDM(false)");
+    tl = JSON.stringify($("timeline").children.map(textOf));
+    check(tl.includes("Message deleted") && !tl.includes("photo.png") && !tl.includes("can you check?".slice(0, 12) + "\"") , "a deleted message is a tombstone without its files: " + tl.slice(0, 200));
+    check(tl.includes("What was sent to their agent") && tl.includes("can you check?"), "a deleted question keeps what was sent under Details");
+    delete m2c.edited; delete m2c.revision; delete m2c.text; delete m2c.can; delete m2c.reactions;
+    delete m3c.deleted; delete m3c.can; delete m3c.attachments; m3c.kind = "question";
+  }
+
   // Received files: a picture shown in place, anything else saved; sent ones not reopened.
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0]);
   served["/api/files/m3/0"] = png;
@@ -1066,14 +1346,30 @@ const ev = { preventDefault() {} };
   dmThreads.d2.messages.find((x) => x.id === "m2").attachments = [{ index: 0, name: "mine.txt", size: 5 }];
   await run('openDM("d2")');
   tl = JSON.stringify($("timeline").children.map(textOf));
-  check(tl.includes("photo.png") && tl.includes("logo.svg") && tl.includes("mine.txt") && (tl.match(/Open/g) || []).length === 2,
-    "received files offer Open; sent ones only their names: " + tl);
+  check(tl.includes("photo.png") && tl.includes("logo.svg") && tl.includes("mine.txt") && (tl.match(/Open/g) || []).length === 2 && tl.includes("mine.txt 5 B Sent"),
+    "received files offer Open; a sent one without a kept copy says only Sent: " + tl);
+  // A sent file opens only when this device says it kept a copy; one it
+  // did not keep says so instead of offering a dead Open.
+  dmThreads.d2.messages.find((x) => x.id === "m2").attachments = [{ index: 0, name: "mine.txt", size: 5, openable: true }];
+  await run("loadDM(false)");
+  tl = JSON.stringify($("timeline").children.map(textOf));
+  check((tl.match(/Open/g) || []).length === 3, "a kept sent file offers Open: " + tl);
+  dmThreads.d2.messages.find((x) => x.id === "m2").attachments = [{ index: 0, name: "mine.txt", size: 5, openable: false, note: "Not kept on this device." }];
+  await run("loadDM(false)");
+  tl = JSON.stringify($("timeline").children.map(textOf));
+  check((tl.match(/Open/g) || []).length === 2 && tl.includes("Not kept on this device"), "a sent file without a kept copy says so: " + tl);
+  dmThreads.d2.messages.find((x) => x.id === "m2").attachments = [{ index: 0, name: "mine.txt", size: 5 }];
+  await run("loadDM(false)");
   const slot0 = document.createElement("span"), btn0 = document.createElement("button");
-  await run("openFile")("m3", 0, "photo.png", btn0, slot0);
+  calls.length = 0;
+  await run("openFile")("m3", 0, "photo.png", btn0, slot0, "in");
+  check(calls.some((c) => c.path === "/api/files/m3/0" && c.dir === "in"), "opening names the message's own direction: " + JSON.stringify(calls));
   check(slot0.children.some((c) => c.tagName === "img" && String(c.attrs.src).startsWith("blob:")), "a PNG, by its bytes, is shown in place from a blob: URL");
   const slot1 = document.createElement("span"), btn1 = document.createElement("button");
   await run("openFile")("m3", 1, "logo.svg", btn1, slot1);
   check(!slot1.children.some((c) => c.tagName === "img"), "an SVG is never shown as a picture: it is saved");
+  const dl = slot1.children.find((c) => c.tagName === "a");
+  check(dl && dl.attrs.download === "logo.svg" && textOf(dl) === "Download logo.svg" && btn1.hidden, "a non-picture becomes a Download link the person clicks, nothing is claimed saved");
   check(run("state.opened").length === 2, "opened files are tracked to be freed");
   await run('openDM("d1")');
   check(run("state.opened").length === 0, "leaving the conversation frees them");
@@ -1110,7 +1406,7 @@ const ev = { preventDefault() {} };
     "reminders head the list, the overdue one first: " + side.slice(0, 200));
   await run('openDM("d2")');
   tl = JSON.stringify($("timeline").children.map(textOf));
-  check(tl.includes("Reminder today") && tl.includes("Change…") && tl.includes("Done") && (tl.match(/Remind me…/g) || []).length === 0,
+  check((tl.includes("Reminder today") || tl.includes("Reminder tomorrow")) && tl.includes("Change…") && tl.includes("Done") && (tl.match(/Remind me…/g) || []).length === 0,
     "the reminded message shows its reminder; sent messages offer none: " + tl);
   calls.length = 0;
   const m3 = dmThreads.d2.messages.find((x) => x.id === "m3");
@@ -1462,9 +1758,606 @@ const ev = { preventDefault() {} };
   check($("review-word").textContent === "Reports", "open report never sits beside Nothing needs you");
   run("renderReview")([]);
   check($("review-word").textContent === "Nothing needs you" && $("review-reports").hidden, "empty review clears report attention");
-  const dismissed = run("reportLine")({ peer: "old/server", reports: [{ id: "old", last_at: T, title: "Old report" }] });
-  check(dismissed.tagName === "details" && !dismissed.open && textOf(dismissed).includes("dismissed") && !textOf(dismissed).includes("Decide there"), "dismissed reports stay accessible without active instructions");
+  // Dismissed reports are history: not a line of their own, but listed,
+  // folded, under the current ones; a current one names its time and
+  // what this page cannot do, and opens the conversation instead.
+  const dismissed = run("reportLine")({ peer: "old/server", conversations: [], singles: [], reports: [{ id: "old", last_at: T, title: "Old report", notices: 0 }] });
+  check(dismissed === null, "a dismissed-only sender has no current report line");
+  overview.threads.push({ id: "old", peer: "old/server", last_at: T, title: "Old report", count: 1, notice_only: true, notices: 0, review: 0, unread: 0, running: 0 });
+  await run("loadOverview()");
+  check(!$("reports-earlier").hidden && textOf($("report-earlier-list")).includes("Old report") && textOf($("report-earlier-list")).includes("old/server"),
+    "dismissed reports are listed under Earlier reports: " + textOf($("report-earlier-list")));
+  overview.threads.push({ id: "cur", peer: "svc/bot", last_at: T, title: "3 requests wait", count: 1, notice_only: true, notices: 1, review: 0, unread: 0, running: 0 });
+  overview.review = [{ id: "cur", peer: "svc/bot", kind: "message", notice: true, at: T, excerpt: "3 requests wait for a person on svc/bot." }];
+  await run("loadOverview()");
+  const reportText = textOf($("report-list"));
+  check(reportText.includes("svc/bot") && reportText.includes("reported at") && reportText.includes("cannot see") && !reportText.includes("Decide there") && reportText.includes("Dismiss 1 report here"),
+    "a current report says when, what this page cannot do, and offers only honest actions: " + reportText);
+  overview.threads.splice(-2, 2); overview.review = [];
 
-  if (failed) process.exit(1);
+  // Workspaces: the host (loader.js) keeps one immutable transport per
+  // membership and says which is shown; the page keeps one view per
+  // membership. Here: two memberships A and B over stand-in hosts that
+  // record which one carried each call.
+  const wsCalls = { A: [], B: [] };
+  const wsStates = { A: {}, B: {} };
+  const wsListeners = new Set();
+  let wsActive = "A", wsHooks = {};
+  const wsHost = (id) => Object.freeze({ workspace: { id, name: "Workspace " + id }, platform: "daemon",
+    api: async (path, body) => {
+      wsCalls[id].push({ path, body });
+      const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    listen: () => () => {},
+    stage: async (f) => { wsCalls[id].push({ path: "stage", name: f.name }); return "staged-" + id; },
+    file: async () => ({ bytes: new Uint8Array([1]) }),
+    workspaces: {
+      list: () => [{ id: "A" }, { id: "B" }], active: () => wsActive, has: (w) => w === "A" || w === "B",
+      state: (w) => { if (!wsStates[w]) throw new Error("Unknown workspace"); return wsStates[w]; },
+      onChange: (f) => { wsListeners.add(f); return () => wsListeners.delete(f); },
+      select: (w) => { // as loader.js does: capture first, then the shell's change event
+        const previous = wsActive;
+        if (wsHooks.capture) wsHooks.capture(previous, wsStates[previous]);
+        wsActive = w;
+        ctx.window.agentnet = wsHost(w);
+        for (const f of wsListeners) f({ id: w, previous, host: ctx.window.agentnet, state: wsStates[w] });
+      },
+    } });
+  ctx.window.agentnetWorkspace = { hook: (h) => { wsHooks = h; if (h.switched) wsListeners.add(h.switched); } };
+  ctx.window.agentnet = wsHost("A");
+  run('window.agentnetWorkspace.hook({ capture: workspaceCapture, switched: (e) => { state.switching = workspaceSwitched(e); } })');
+  const select = async (w) => { run('window.agentnet.workspaces.select("' + w + '")'); await run("state.switching"); };
+  overview.me.address = "me/A";
+  await run('openThread("a1")');
+  $("body").value = "for alice in A";
+  $("timeline").scrollTop = 120;
+  wsCalls.A.length = 0;
+  overview.me.address = "me/B";
+  await select("B");
+  check(run("state.thread") === null && $("body").value === "" && $("me").textContent === "me/B", "B starts with its own empty view, loaded over B's host");
+  check(wsStates.A.view && wsStates.A.view.drafts.a1.text === "for alice in A" && wsStates.A.view.thread === "a1" && wsStates.A.view.scroll === 120, "A's view (conversation, draft, scroll) is kept for A");
+  check(wsCalls.A.length === 0 && wsCalls.B.some((c) => c.path === "/api/overview"), "nothing of B's load went through A's host");
+  // A send started in B keeps B's host and B's draft, whatever is shown when it ends.
+  await run('openThread("c1")');
+  $("body").value = "for carol in B";
+  hold["/api/send"] = true;
+  calls.length = 0;
+  const inB = run("send")(ev);
+  await tick();
+  check(wsCalls.B.some((c) => c.path === "/api/send" && c.body.to === "carol/ci" && c.body.body === "for carol in B") && !wsCalls.A.some((c) => c.path === "/api/send"), "the send goes through B's host");
+  overview.me.address = "me/A";
+  await select("A");
+  check(run("state.thread") === "a1" && $("body").value === "for alice in A" && run("state.data.peer") === "alice/desk" && !$("send").disabled && $("timeline").scrollTop === 120,
+    "back in A: its conversation, draft and scroll, and Send is free (B's send is B's)");
+  hold["/api/send"] = false;
+  release("/api/send");
+  await inB;
+  check($("body").value === "for alice in A" && run("state.thread") === "a1" && !run("state.sending"), "B's finished send changes nothing shown in A");
+  check(!(wsStates.B.view.drafts.c1) && wsStates.B.view.sending === false, "B's kept view has its sent draft gone and no send under way");
+  overview.me.address = "me/B";
+  await select("B");
+  check(run("state.thread") === "c1" && $("body").value === "" && !$("send").disabled, "B shows its conversation with the sent text gone");
+  // An answer that arrives for a workspace no longer shown draws nothing.
+  hold["/api/overview"] = true;
+  overview.me.address = "me/B-late";
+  const late = run("loadOverview()"); // B asks; answered after A is shown
+  await tick();
+  overview.me.address = "me/A";
+  const switching = select("A"); // A's own load is held too
+  await tick();
+  release("/api/overview"); // B's late answer first
+  await late;
+  check($("me").textContent !== "me/B-late", "B's late answer is not drawn into A");
+  release("/api/overview"); // A's own answer
+  hold["/api/overview"] = false; // A's conversation loads its overview once more, unheld
+  await switching;
+  check($("me").textContent === "me/A" && run("state.thread") === "a1", "A's own answer is drawn");
+  // B's pending/failed load may show no presentation belonging to A.
+  $('body').value = 'private A draft'; run('keepDraft()');
+  $('timeline').append('private A file plaintext'); $('comic').append('private A comic'); $('zoom').append('private A zoom');
+  fillTestHeader();
+  function fillTestHeader() { $('conv-name').textContent = 'private A header'; $('conv-avatar').textContent = 'A'; }
+  const normalB = wsHost('B'); let failB;
+  ctx.window.agentnet = { ...normalB, api: (p, body) => p === '/api/overview' ? new Promise((_resolve, reject) => { failB = reject; }) : normalB.api(p, body) };
+  wsActive = 'B';
+  const unavailableB = run('workspaceSwitched')({ id: 'B', previous: 'A', state: wsStates.B });
+  await tick();
+  check(textOf($('timeline')) === '' && textOf($('comic')) === '' && !textOf($('zoom')).includes('private A') && textOf($('conv-name')) === 'Choose a conversation' && textOf($('conv-avatar')) === '' && $('composer').hidden && $('agents').hidden && $('timeline').hidden && $('comic').hidden && $('conversation-details').disabled, 'pending B synchronously removes A plaintext/header/actions across lenses');
+  failB(Error('synthetic B offline')); await unavailableB;
+  check(!$('lost').hidden && !textOf($('hub')).includes('private A') && textOf($('hub')).includes('unavailable') && $('conversation-details').disabled && $('profile-btn').disabled && wsStates.A.view.drafts.a1.text === 'private A draft', 'failed B remains neutral; saved A draft retained');
+  ctx.window.agentnet = normalB;
+  await select('A');
+  check(run('state.thread') === 'a1' && $('body').value === 'private A draft' && !$('conversation-details').disabled, 'returning to A restores its exact view and draft after B failure');
+  // A notification names its workspace: unknown opens nothing (not the
+  // current one); known switches there first.
+  const dmBase = (overview.dms || []).find((d) => d.id !== clickedID) || (overview.dms || [])[0]; // the DM of that alert, in both memberships' overviews here
+  if (dmBase && !overview.dms.some((d) => d.id === clickedID)) overview.dms.push(Object.assign({}, dmBase, { id: clickedID }));
+  dmThreads[clickedID] = dmThreads[clickedID] || Object.assign({}, dmThreads[dmBase && dmBase.id] || dmThreads.d2, { id: clickedID });
+  ctx.location.hash = "#conv=" + clickedID + "&workspace=Z";
+  run("clickedLater()");
+  await pause(20);
+  check(run("state.dm") === null && run("state.thread") === "a1" && ctx.location.hash === "" && $("live").textContent.includes("nothing was opened"), "an unknown workspace in a notification opens nothing: " + $("live").textContent);
+  ctx.location.hash = "#conv=" + clickedID + "&workspace=B";
+  run("clickedLater()");
+  await pause(40);
+  check(wsActive === "B" && run("state.dm") === clickedID, "a known workspace is shown first, then its conversation: " + JSON.stringify({ wsActive, dm: run("state.dm"), thread: run("state.thread"), live: $("live").textContent, overview: !!run("state.overview") }));
+  ctx.location.hash = "#msg=" + "0".repeat(30) + "a1&workspace=A";
+  const wsClicked = run("takeClicked()");
+  check(wsClicked && wsClicked.workspace === "A" && wsClicked.target.msg === "0".repeat(30) + "a1", "#msg= carries its workspace too");
+  ctx.location.hash = "#review&workspace=Z";
+  const unknownReview = run("takeClicked()");
+  check(unknownReview && unknownReview.refused, "unknown review workspace refuses instead of showing current workspace");
+  ctx.location.hash = "#review&workspace=A";
+  const workspaceReview = run("takeClicked()");
+  check(workspaceReview.workspace === "A" && workspaceReview.target.review, "review notification carries its workspace");
+  calls.length = 0;
+  await run("openClicked")(workspaceReview);
+  check(wsActive === "A" && !$("review").hidden && sends().length === 0, "review opens after switching workspace without sending");
+  run("toggleReview(false)");
+  // A reload keeps the workspace with the drafts: they come back there.
+  await select("A");
+  await run('openThread("a1")');
+  $("body").value = "kept over reload";
+  check(run("keepForReload()") && JSON.parse(store.get("agentnet-reload")).workspace === "A", "what is kept names its workspace");
+  await select("B");
+  check(await run("restoreAfterReload()") && wsActive === "A" && run("state.thread") === "a1" && $("body").value === "kept over reload", "restored in the workspace it was kept for");
+  $("body").value = "";
+  const activeBeforeUpgrade = run('state.drafts'), inactiveBeforeUpgrade = wsStates.B.view.drafts, versionBeforeUpgrade = run('state.newVersion');
+  run('state').drafts = {}; run('state').files = []; run('state').answering = null; run('state').dmReply = null; run('state').dmAgent = null; run('state').deviceAgentID = ''; run('state').typedFor = null;
+  $('dialog').open = false; run('state').dialogRestore = null;
+  const exactInactive = { text: 'private B draft', kind: 'task', agent_id: 'exact-B-agent', typedFor: { to: 'B target' }, files: [unsentUpgrade] };
+  wsStates.B.view.drafts = { inactive: exactInactive }; reloads = 0; run('updated')('v-next');
+  check(reloads === 0 && $('reload').disabled && !run('reloadUpdated()') && wsStates.B.view.drafts.inactive === exactInactive && exactInactive.files[0] === unsentUpgrade, 'inactive workspace exact target/file draft holds automatic and explicit update reload while current workspace is empty');
+  run('state').drafts = activeBeforeUpgrade; wsStates.B.view.drafts = inactiveBeforeUpgrade; run('state').newVersion = versionBeforeUpgrade;
+  delete ctx.window.agentnet; delete ctx.window.agentnetWorkspace;
+
+  // Teams (R04): People lists the workspace's teams as verified; create,
+  // join, leave and manage go to the server and its answer stands; a
+  // refusal (the last manager) is shown as it came; unsupported and
+  // unavailable servers are said so; a selection expands reviewed people
+  // before separate explicit group invitations.
+  const peopleBefore = overview.people, personBefore = overview.person; // the fixture's people stay as they are for later checks
+  overview.person = { person: "p-me", label: "Sergey", address: "me/laptop", state: "self", published: true };
+  overview.people = [{ person: "p-alice", label: "Alice", address: "alice/desk", state: "pinned" }];
+  teamsReply.teams = [{ realm_id: "r", id: "t1", name: "Platform", seq: 2, hash: "h1", managers: ["p-alice"], members: ["p-alice", "p-me"], archived: false, member: true, manager: false, conflict: false, listed: true },
+    { realm_id: "r", id: "t2", name: "Ops", seq: 0, hash: "h2", managers: ["p-me"], members: ["p-me", "p-alice"], archived: false, member: true, manager: true, conflict: false, listed: true }];
+  run('selectSection("people")');
+  await tick();
+  await run("loadTeams()");
+  await run("loadOverview()");
+  const teamsText = () => { const i = textOf($("conv-list")).indexOf("Teams"); return i < 0 ? "(no Teams block)" : textOf($("conv-list")).slice(i); };
+  let tList = teamsText();
+  check(tList.includes("Platform") && tList.includes("2 members") && tList.includes("Ops") && tList.includes("You manage") && !tList.includes("not read"), "People lists the teams with their sizes and your role: " + tList.slice(0, 300));
+  run('openHub({ kind: "team", key: "t2" })');
+  await tick();
+  let tHub = textOf($("hub"));
+  check($("conv-name").children.map(textOf).join("") === "Ops" && tHub.includes("You") && tHub.includes("Manager") && tHub.includes("Rename") && tHub.includes("Archive") && tHub.includes("only manager"),
+    "a team page shows its members and the manager's actions, and says the last manager cannot leave the role: " + tHub.slice(0, 300));
+  const aliceTeamRow = () => $("hub").querySelector(".team-members").children.find((row) => textOf(row).includes("Alice"));
+  aliceTeamRow().querySelector("button").click();
+  check($("dialog-title").textContent === "Make Alice a manager of Ops?", "manager dialog names the selected person, not their object");
+  await $("dialog-ok").onclick();
+  check(teamChanges.at(-1).op === "manager-add" && teamChanges.at(-1).target === "p-alice", "clicked Make manager sends the selected member's exact ID");
+  teamsReply.teams[1].managers.push("p-alice");
+  await run("loadTeams()");
+  aliceTeamRow().querySelector("button").click();
+  check($("dialog-title").textContent === "Take the manager role from Alice?", "manager removal dialog names the selected person");
+  await $("dialog-ok").onclick();
+  check(teamChanges.at(-1).op === "manager-remove" && teamChanges.at(-1).target === "p-alice", "clicked Take role sends the selected member's exact ID");
+  teamsReply.teams[1].managers = ["p-me"];
+  await run("loadTeams()");
+  aliceTeamRow().querySelector(".team-member-acts").children[1].click();
+  check($("dialog-title").textContent === "Remove Alice from Ops?", "membership removal dialog names the selected person");
+  await $("dialog-ok").onclick();
+  check(teamChanges.at(-1).op === "remove" && teamChanges.at(-1).target === "p-alice", "clicked Remove sends the selected member's exact ID");
+  run('openHub({ kind: "team", key: "t1" })');
+  await tick();
+  tHub = textOf($("hub"));
+  check(tHub.includes("Alice") && tHub.includes("Leave") && !tHub.includes("Rename") && !tHub.includes("Make manager"), "a member sees Leave and no management: " + tHub.slice(0, 300));
+  teamResultName = "Server-renamed team";
+  await run('teamAct({ team: "t1", op: "join" })');
+  check($("live").textContent === "You joined Server-renamed team.", "join announcement uses the accepted result, not a stale directory label");
+  teamResultName = "";
+  teamChanges.length = 0;
+  await run('teamAct({ team: "t1", op: "leave" })');
+  check(teamChanges.length === 1 && teamChanges[0].op === "leave" && teamChanges[0].team === "t1" && $("live").textContent.includes("left"), "leaving is one signed change to the server: " + JSON.stringify(teamChanges));
+  run("teamDialog(null)");
+  $("team-name").value = "Data";
+  await $("dialog-ok").onclick();
+  check(teamChanges.some((c) => c.op === "create" && c.name === "Data") && $("live").textContent.includes("created"), "creating a team names it");
+  teamRefuses = "the last manager cannot give up the role: make someone else a manager first";
+  run('openHub({ kind: "team", key: "t2" })');
+  await tick();
+  await run('teamAct({ team: "t2", op: "manager-remove", target: "p-me" })');
+  check($("live").textContent.includes("last manager"), "the server's refusal is shown as it came: " + $("live").textContent);
+  teamRefuses = "";
+  // Current team snapshots are explicit group invitation drafts, never admission.
+  const groupChipButton = label => { const walk = n => n instanceof Elem ? [n, ...n.children.flatMap(walk)] : []; return walk($("dialog-body")).find(n => n.tagName === "button" && n.attrs["aria-label"] === label); };
+  overview.people.push({ person: "p-bob", label: "Bob", address: "bob/desk", state: "pinned" }); await run("loadOverview()");
+  teamSnapshotPersons = [...teamSnapshotPersons, { id: "p-bob", seq: 0, hash: "z" }];
+  await run('teamSelection([{ id: "t1", name: "Platform" }, { id: "t2", name: "Ops" }])');
+  await pause(20);
+  let tBody = textOf($("dialog-body"));
+  check($("dialog").open && tBody.includes("Alice") && tBody.includes("Bob") && !tBody.includes("Remove You") && tBody.includes("no earlier messages") && $("dialog-ok").textContent === "Create group", "team snapshot opens reviewed current people in existing create dialog: " + tBody.slice(0,300));
+  groupChipButton("Remove Bob").click();
+  $("group-name").value = "Reviewed team group";
+  await $("dialog-ok").onclick();
+  check(teamGroupCreates.length === 1 && teamGroupInvites.length === 1 && teamGroupInvites[0].person === "p-alice" && teamGroupInvites[0].conv === "team-group" && Object.keys(teamGroupInvites[0].history).length === 0, "removing person excludes their invitation; new group shares nothing earlier");
+  // Separate successes survive explicit retry without duplicating the created group.
+  teamGroupCreates.length = 0; teamGroupInvites.length = 0; teamGroupRefusesPerson = "p-bob";
+  await run('teamSelection([{ id: "t1", name: "Platform" }])'); await pause(20);
+  $("group-name").value = "Partial team group";
+  await $("dialog-ok").onclick();
+  check($("dialog").open && $("dialog-error").textContent.includes("fresh invitation and consent") && !groupChipButton("Remove Alice") && !!groupChipButton("Remove Bob"), "head refusal stays honest with only remaining target retained");
+  teamGroupRefusesPerson = ""; await $("dialog-ok").onclick();
+  check(teamGroupCreates.length === 1 && teamGroupInvites.filter(i=>i.person==="p-alice").length === 1 && teamGroupInvites.filter(i=>i.person==="p-bob").length === 2, "explicit retry reuses created ID and never repeats successful invitation");
+  // Existing single-person invitation path retains its history selection.
+  teamGroupInvites.length = 0; await run('inviteGroupDialog(state.dmData)'); $("group-invite-person").value="p-alice"; $("group-history-mode").value="last"; $("group-history-last").value="3"; await $("dialog-ok").onclick();
+  check(teamGroupInvites.length===1&&teamGroupInvites[0].person==="p-alice"&&teamGroupInvites[0].history.last===3,"single-person path retains chosen earlier history");
+  await run('inviteGroupDialog(state.dmData)'); await pause(20); $("group-team").value="t1";
+  const walkGroup = n => n instanceof Elem ? [n,...n.children.flatMap(walkGroup)] : [];
+  await walkGroup($("dialog-body")).find(n=>n.tagName==="button"&&textOf(n)==="Add team people").listeners.click[0]();
+  groupChipButton("Remove Bob").click(); $("group-history-mode").value="last";$("group-history-last").value="2"; await $("dialog-ok").onclick();
+  check($("group-invite-person").disabled, "team recipients visibly disable conflicting single-person choice; removable chips are exact targets");
+  check(teamGroupInvites.at(-1).person==="p-alice"&&teamGroupInvites.at(-1).history.last===2,"existing group team draft reviewed removal and chosen history precede invitation");
+  // Exact persisted invitation states remain visible without repeated consent or re-signing.
+  overview.group_invitations = [{id:"stale-a",conv:"team-group",target:"p-alice",direction:"out",status:"stale",title:"Team group"}, {id:"accepted-in",conv:"unjoined-group",target:"self-person",direction:"in",status:"accepted",title:"Waiting group"}]; await run('loadOverview()');
+  check(run('groupInvitationNotices().length')===2 && run('groupInvitationNotice(state.overview.group_invitations[0])').includes("fresh consent"), "stale outgoing and accepted-but-unjoined status visible and truthful");
+  await run('inviteGroupDialog(state.dmData,"p-alice")'); check($("group-invite-person").value==="p-alice", "fresh invitation deliberately prefills exact still-eligible person"); $("dialog").close();
+  overview.group_invitations.push({id:"fresh-a",conv:"team-group",target:"p-alice",direction:"out",status:"pending",title:"Team group"}); await run('loadOverview()');check(!run('groupInvitationNotices().some(i=>i.id==="stale-a")'), "fresh pending proposal supersedes stale row without guessing chronological IDs");
+  overview.dms.push({id:"unjoined-group",kind:"group",members:[{person:"self-person"}],title:"Waiting group",peer:{}});await run('loadOverview()');check(!run('groupInvitationNotices().some(i=>i.id==="accepted-in")'), "joined person no longer falsely appears waiting"); overview.dms.pop();overview.group_invitations=[];await run('loadOverview()');
+  // Captured workspace cannot retarget a reviewed team draft.
+  await run('teamSelection([{ id: "t1", name: "Platform" }])'); const beforeTeamSwitch=teamGroupCreates.length; run('state.gen++'); $("group-name").value="wrong workspace"; await $("dialog-ok").onclick();
+  check(teamGroupCreates.length===beforeTeamSwitch&&$("dialog-error").textContent.includes("Workspace changed"),"late team group draft refuses after workspace generation changed"); $("dialog").close();
+  teamSnapshotPersons = [{ id: "p-me", seq: 0, hash: "x" }, { id: "p-alice", seq: 0, hash: "y" }];
+  // not current: the last verified state is shown as such; unsupported servers say so
+  teamsReply = { ...teamsReply, status: "unavailable", current: false, reason: "cannot reach your server" };
+  await run("loadTeams()");
+  await run("loadOverview()");
+  tList = teamsText();
+  check(tList.includes("last verified state") && tList.includes("Platform"), "offline: the last verified teams stay, marked as such: " + tList.slice(0, 260));
+  teamsReply = 404;
+  await run("loadTeams()");
+  await run("loadOverview()");
+  tList = teamsText();
+  check(tList.includes("does not have teams") && !tList.includes("New team"), "an older server: no teams, no create button: " + tList.slice(0, 200));
+  teamsReply = { realm_id: "r", status: "available", current: true, at: T, truncated: false, teams: [] };
+  overview.people = peopleBefore; overview.person = personBefore;
+  run('selectSection("chats")');
+  await run("loadOverview()");
+
+  // The optional Drive (MEL-490): Settings > File storage options mounts the
+  // program's setup module over the membership shown; a DM's Project space
+  // panel mounts its module over a provider bound to that membership; a
+  // file's copy to the space is confirmed and goes through the module with
+  // the exact DM, message and index. Stand-ins record what they were given.
+  const mounted = [];
+  ctx.window.agentnetModules = {
+    "drivespace-setup": { mountFileStorageOptions: async (box, { provider }) => { const r = await provider.storageSetup({ action: "status" }); mounted.push({ setup: r.settings.can_admin }); box.append(new Elem("p")); } },
+    drivespace: { daemonDriveProvider: (fetchJSON, fetchRaw) => ({ kind: "daemon", fetchJSON, fetchRaw }),
+      mountDriveSpace: (box, { conv, provider, agents, openSettings }) => { mounted.push({ panel: conv, provider: provider.kind, agents: agents.length, settings: typeof openSettings }); box.append(new Elem("section")); },
+      saveAttachmentToDrive: async (provider, conv, m, index, confirm) => { mounted.push({ save: { conv, id: m.id, dir: m.dir, index, confirm, provider: provider.kind } }); return { file: { name: "note.txt" }, notice: "outside encryption" }; } },
+  };
+  storageReply = 404;
+  run('settingsTab("storage")');
+  await pause(20);
+  check(mounted.some((x) => x.setup === true), "Settings > Storage mounts File storage options over the daemon's setup route: " + JSON.stringify(mounted));
+  await run('openDM("d2")');
+  const chip = find($("peer-chips"), (n) => n.tagName === "button" && textOf(n) === "Project space");
+  check(!!chip && $("drive-panel").hidden, "a DM offers its Project space, closed");
+  chip.click();
+  await pause(30);
+  check(!$("drive-panel").hidden && mounted.some((x) => x.panel === "d2" && x.provider === "daemon" && x.settings === "function"), "opening it mounts the module for that DM over a daemon provider with a way to Settings: " + JSON.stringify(mounted.slice(-1)));
+  await run('openDM("d3")');
+  check($("drive-panel").hidden && run("state.driveOpen") === false, "another DM starts with the panel closed");
+  dmThreads.d2.messages.push(dmsg("mf", "in", "", { attachments: [{ index: 0, name: "note.txt", size: 5 }] }));
+  await run('openDM("d2")');
+  const fileMsg = run("state.dmData.messages.find((m) => m.attachments && m.attachments.length && m.dir === 'in')");
+  if (fileMsg) {
+    run("saveToDrive")({ id: fileMsg.id, dir: "in" }, 0, "note.txt");
+    tBody = textOf($("dialog-body"));
+    check($("dialog").open && tBody.includes("outside AgentNet's end-to-end encryption") && $("dialog-ok").textContent.includes("outside encryption"), "copying a file to the space asks first and says what it means: " + tBody.slice(0, 200));
+    await $("dialog-ok").onclick();
+    await pause(20);
+    const saved = mounted.find((x) => x.save);
+    check(saved && saved.save.conv === "d2" && saved.save.id === fileMsg.id && saved.save.dir === "in" && saved.save.index === 0 && saved.save.confirm === true && saved.save.provider === "daemon", "the copy names the DM, message, direction and index, confirmed: " + JSON.stringify(saved));
+  } else check(false, "the fixture DM has no received file to copy");
+  delete ctx.window.agentnetModules;
+
+  // Named identities keep exact IDs through selection, refresh, drafts and workspace switches.
+  wsStates.A.view=null;wsStates.B.view=null;wsActive='B';ctx.window.agentnet=wsHost('B');
+  await select('A');
+  overview.me.address='me/laptop'; delete overview.device;
+  overview.person={person:'p-me',label:'Me',address:'me/laptop',state:'self',fingerprint:'fp-me'};
+  await run('openThread("a1")'); run('setKind("question")');
+  await run('loadTargetCatalog()'); run('chooseDeviceAgent')(namedA);
+  $('body').value='exact A draft'; run('noteTyping()');
+  run('chooseDeviceAgent')(namedB); run('chooseDeviceAgent')(namedA);
+  check(run('targetId()').endsWith(':agent:'+namedA)&&run('boundElsewhere()')==='', 'A/B/A keeps exact target and original text binding');
+  run('keepDraft()'); await run('openThread("c1")'); await run('openThread("a1")'); await tick();
+  check(run('state.deviceAgentID')===namedA&&$('body').value==='exact A draft'&&run('state.drafts.a1.agent_id')===namedA,'named selection persists in conversation draft');
+  await run('loadTargetCatalog()'); calls.length=0; await run('send')(ev);
+  check(calls.some(c=>c.path==='/api/send'&&c.body.agent_id===namedA&&c.body.to==='alice/desk'),'named question posts exact ID/host');
+  $('body').value='message remains device-only';run('setKind("message")');calls.length=0;await run('send')(ev);
+  check(calls.some(c=>c.path==='/api/send'&&!('agent_id' in c.body)&&c.body.kind==='message'),'plain message omits agent_id');
+  run('setKind("question")');$('body').value='keep removed target';run('noteTyping()');
+  agentCatalogs['alice/desk']=[namedRecord(namedB)];calls.length=0;await run('send')(ev);
+  check(!calls.some(c=>c.path==='/api/send')&&run('state.deviceAgentID')===namedA&&$('body').value==='keep removed target'&&$('compose-error').textContent.includes('no default'),'removed ID refuses without fallback and preserves draft');
+  check($('send').disabled&&$('to-name').textContent.includes(namedA.slice(0,8))&&run('state.deviceAgentID')===namedA&&byId['device-agent-target'].children.some(n=>n.attrs.value===namedA&&n.attrs.title===namedA),'missing selection shows short ID while retaining full ID/title');
+  agentCatalogs['alice/desk']=[namedRecord(namedA),namedRecord(namedB)];await run('loadTargetCatalog()');
+  run('chooseDeviceAgent')(namedB);calls.length=0;await run('send')(ev);
+  check(!calls.some(c=>c.path==='/api/send')&&$('compose-error').textContent.includes('someone else'),'retargeted text requires explicit second send');
+  run('chooseDeviceAgent')(namedA);run('noteTyping()');run('keepDraft()');
+  await select('B');check(!run('state.deviceAgentID'),'new workspace does not inherit named selection');await select('A');await tick();
+  check(run('state.deviceAgentID')===namedA&&$('body').value==='keep removed target','workspace A restores its exact selection/text');
+  await run('loadTargetCatalog()');
+  hold['/api/agents']=true;const lateCatalog=run('loadTargetCatalog()');await tick();await select('B');
+  release('/api/agents');hold['/api/agents']=false;await lateCatalog;
+  check(run('state.targetCatalog')===null,'late remote catalog cannot paint another workspace');
+  await select('A');await tick();await run('loadTargetCatalog()');
+  $('body').value='captured named send in A';run('state.typedFor=null');run('noteTyping()');
+  wsCalls.A.length=0;wsCalls.B.length=0;hold['/api/agents']=true;
+  const capturedNamedSend=run('send')(ev);await tick();await select('B');release('/api/agents');hold['/api/agents']=false;await capturedNamedSend;
+  check(wsCalls.A.some(c=>c.path==='/api/send'&&c.body.agent_id===namedA)&&!wsCalls.B.some(c=>c.path==='/api/send')&&$('body').value==='','named send waiting for catalog stays on captured workspace and clears only its own draft');
+  await select('A');await tick();catalogRefuses='Peer does not support named agents.';await run('loadTargetCatalog()');calls.length=0;await run('send')(ev);
+  check(textOf($('agent-target')).includes(catalogRefuses)&&!calls.some(c=>c.path==='/api/send')&&run('state.deviceAgentID')===namedA,'older-peer refusal visible with exact target retained');catalogRefuses='';await run('loadTargetCatalog()');
+  run('keepDraft()');const oldCalls=wsCalls.A.length;
+  hold['/api/agents']=true;const lateSettings=run('renderResponder()');await tick();await select('B');
+  // renderResponder's catalog read is held after its responder read.
+  await tick(); release('/api/agents');hold['/api/agents']=false;await lateSettings;
+  check(!textOf($('named-agents')).includes('Agents on this computer')&&wsCalls.A.length>oldCalls,'late local settings do not paint another workspace');
+  await select('A');await tick();await run('renderResponder()');
+  const namedButton = label => find($('named-agents'),n=>n.tagName==='button'&&textOf(n)===label);
+  namedButton('Create agent…').click();byId['named-label'].value='Builder';byId['named-harness'].value='codex';byId['named-dir'].value='/tmp/named';
+  calls.length=0;await $('dialog-ok').onclick();
+  check(calls.some(c=>c.path==='/api/agents'&&c.body?.action==='create'&&c.body.label==='Builder'&&!('id' in c.body))&&textOf($('named-agents')).includes('Agent list not updated for others'),'local save and availability to others are distinct, stable ID created here');
+  check(!calls.some(c=>c.path==='/api/responder'&&c.body),'named save leaves default responder untouched');
+  namedButton('Configure…').click();byId['named-harness'].value='codex';byId['named-dir'].value='/tmp/changed';calls.length=0;await $('dialog-ok').onclick();
+  const update=calls.find(c=>c.path==='/api/agents'&&c.body?.action==='update');
+  check(update?.body.id===namedC&&!('context' in update.body)&&!('timeout' in update.body)&&localAgents[0].responder.timeout===600&&localAgents[0].responder.context[0]==='/tmp/context','update keeps ID and preserves timeout/context');
+  catalogPublished=true;calls.length=0;namedButton('Update agent list').click();await tick();
+  check(calls.some(c=>c.path==='/api/agents'&&JSON.stringify(c.body)==='{"action":"publish"}')&&textOf($('named-agents')).includes('Agent list updated for others'),'publication retries only through explicit button');
+  namedButton('Disable…').click();calls.length=0;await $('dialog-ok').onclick();
+  check(calls.some(c=>c.path==='/api/agents'&&c.body?.action==='disable'&&c.body.id===namedC)&&textOf($('named-agents')).includes('Disabled on this computer'),'disable is exact and retains identity');
+  namedButton('Configure…').click();byId['named-harness'].value='codex';byId['named-dir'].value='/tmp/stale';await select('B');calls.length=0;await $('dialog-ok').onclick();
+  check(!calls.some(c=>c.path==='/api/agents'&&c.body)&&$('dialog-error').textContent.includes('Workspace changed'),'stale config dialog cannot mutate another workspace');$('dialog').close();await select('A');await tick();
+  ctx.window.agentnet={...wsHost('A'),platform:'browser'};calls.length=0;await run('renderResponder()');
+  check(!calls.some(c=>c.path==='/api/agents'||c.path==='/api/responder')&&!textOf($('named-agents')).includes('Create'),'browser offers no local program configuration');ctx.window.agentnet=wsHost('A');
+  dmThreads.d4.peer={...alicePerson,fingerprint:'fp-alice'};
+  dmThreads.d4.agents=[agentV('named-pid-A',{agent_id:namedA,host:dmThreads.d4.peer,state:'active',can_ask:true}),agentV('named-pid-B',{agent_id:namedB,host:dmThreads.d4.peer,state:'active',can_ask:true})];
+  await run('openDM("d4")');run('setDMAgent')(dmThreads.d4.agents[0]);run('setDMAgent')(dmThreads.d4.agents[1]);run('setDMAgent')(dmThreads.d4.agents[0]);
+  check(run('state.dmAgent')==='named-pid-A'&&textOf($('agent-target')).includes(namedA.slice(0,8))&&byId['dm-agent-target'].children.some(n=>n.attrs.value==='named-pid-A'&&n.attrs.title.includes(namedA)),'accepted DM participations retain exact values/full titles with short display IDs');
+  run('setKind("task")');await run('loadDM()');
+  check(!$('kind').disabled&&run('kindValue()')==='task','DM question/task controls enabled after device switch and same-agent refresh keeps task');
+  run('inviteDialog')(run('state.dmData'));
+  const hostChoice=byId['agent-host:alice/desk'];hostChoice.checked=true;
+  for(const f of hostChoice.listeners.change||[]) f({currentTarget:hostChoice});await tick();
+  byId['invite-agent'].value=namedB;calls.length=0;await $('dialog-ok').onclick();
+  check(calls.some(c=>c.path==='/api/dm/agent/invite'&&c.body.agent_id===namedB&&c.body.host==='alice/desk'),'named invite carries exact ID and chosen host: '+$('dialog-error').textContent+' '+JSON.stringify(calls));
+  run('inviteDialog')(run('state.dmData'));byId['agent-host:alice/desk'].checked=true;calls.length=0;await select('B');await $('dialog-ok').onclick();
+  check(!calls.some(c=>c.path==='/api/dm/agent/invite')&&$('dialog-error').textContent.includes('another conversation or workspace'),'stale invitation refuses workspace retarget: '+$('dialog-error').textContent+' '+JSON.stringify(calls));$('dialog').close();
+  await select('A');await run('openDM("d4")');run('decideDialog')(dmThreads.d4.agents[0],run('state.dmData'),true);await select('B');calls.length=0;await $('dialog-ok').onclick();
+  check(!calls.some(c=>c.path==='/api/dm/agent/decide')&&$('dialog-error').textContent.includes('Workspace or DM changed'),'stale participation decision refuses workspace retarget');$('dialog').close();
+  await select('A');await run('openDM("d4")');run('dismissDialog')(dmThreads.d4.agents[0]);await select('B');calls.length=0;await $('dialog-ok').onclick();
+  check(!calls.some(c=>c.path==='/api/dm/agent/dismiss')&&$('dialog-error').textContent.includes('Workspace or DM changed'),'stale dismissal refuses workspace retarget');$('dialog').close();
+  const namedMessage={...msg('named','alice/desk','answer'),kind:'answer',agent_id:namedB};
+  run('state.targetCatalog=null');
+  check(run('dmAuthor')(namedMessage,dmThreads.d4)==='Agent '+namedB.slice(0,8)+' on alice/desk','unknown author displays short ID and exact host');
+  const records=[namedRecord(namedA),namedRecord(namedB)];
+  run('(records)=>{state.targetCatalog={host:"alice/desk",agents:records}}')(records);
+  check(run('dmAuthor')(namedMessage,dmThreads.d4)==='Builder · '+namedB.slice(0,8)+' on alice/desk'&&run('namedAgentLabel')(namedA,'alice/desk')==='Builder · '+namedA.slice(0,8),'catalog labels disambiguate identical names by short IDs');
+  check(run('namedAgentLabel')(namedA,'other/host')==='Agent '+namedA.slice(0,8),'catalog labels never transfer to another execution host');
+  const namedRendered=run('renderMsg')(namedMessage,{},null,threads.a1);
+  const namedWho=find(namedRendered,n=>n.className==='who');
+  check(textOf(namedWho)==='Builder · '+namedB.slice(0,8)+' on alice/desk'&&namedWho.attrs.title.includes(namedB)&&namedWho.attrs.title.includes('host assertion')&&textOf(run('dmDetails')(namedMessage)).includes(namedB)&&textOf(run('dmDetails')(namedMessage)).includes('host assertion'),'everyday author is readable; full ID and provenance remain in title and Details');
+  check(run('agentLinkText')({agent_id:namedA,address:'alice/desk',dms:[]},alicePerson).includes('Builder · '+namedA.slice(0,8)+' on alice/desk'),'overview uses catalog label, short disambiguator and host');
+
+  // External invitations use a current-workspace address and exact catalog ID.
+  await select('A'); await run('openDM("d4")');
+  overview.directory = { status: 'listed', current: true, members: [{ address: 'outside/host' }] };
+  agentCatalogs['outside/host'] = [namedRecord(namedC, 'outside/host')];
+  const externalShared = dmThreads.d4.messages.find(m => !m.event && !m.excerpt_pid);
+  externalShared.attachments = [{ name: 'chosen-context.txt', size: 7 }];
+  await run('loadOverview()'); await run('loadDM()');
+  run('inviteDialog')(run('state.dmData'));
+  const outside = byId['agent-host:outside/host'];
+  check(outside && textOf($('dialog-body')).includes('not verified real-world owners') && textOf($('dialog-body')).includes('chosen-context.txt') && textOf($('dialog-body')).includes('Unselected history and files are excluded'), 'external picker discloses directory trust and selected file visibility');
+  outside.checked = true;
+  for (const f of outside.listeners.change || []) f({ currentTarget: outside }); await tick();
+  calls.length = 0; await $('dialog-ok').onclick();
+  check(!calls.some(c => c.path === '/api/dm/agent/invite') && $('dialog-error').textContent.includes('exact named agent'), 'external host refuses ambiguous default');
+  byId['invite-agent'].value = namedC; byId['agent-share:' + externalShared.id].checked = true;
+  calls.length = 0; await $('dialog-ok').onclick();
+  check(calls.some(c => c.path === '/api/dm/agent/invite' && c.body.host === 'outside/host' && c.body.agent_id === namedC && JSON.stringify(c.body.share) === JSON.stringify([externalShared.id])), 'external invite shares only exact selected context and named host: ' + $('dialog-error').textContent + ' ' + JSON.stringify(calls));
+  overview.directory.current = false; await run('loadOverview()'); run('inviteDialog')(run('state.dmData'));
+  check(!textOf($('dialog-body')).includes('External host · outside/host'), 'stale directory exposes no external selection'); $('dialog').close();
+
+  // Visitor is an authority boundary even if a provider supplies no frozen text.
+  const savedMessages = dmThreads.d4.messages, savedAgents = dmThreads.d4.agents;
+  dmThreads.d4.role = 'visitor'; dmThreads.d4.frozen = '';
+  dmThreads.d4.messages = [dmsg('snapshot', 'in', 'selected snapshot', { excerpt_pid: 'external-pid', claimed_key: 'claimed-key', synced_from: 'alice/desk', from: 'original/author', kind: 'task', actions: ['accept'], can: ['edit', 'delete', 'react'] }),
+    dmsg('visitor-request', 'in', 'task addressed to your agent', { actions: ['accept'], state_text: 'Needs you: task acceptance', kind: 'task' })];
+  dmThreads.d4.agents = [agentV('external-pid', { state: 'invited', external: true, can_decide: true })];
+  await run('openDM("d4")'); run('setDMAgent')(null);
+  check($('composer').hidden && $('body').disabled && $('send').disabled && $('attach').hidden, 'visitor ordinary composer disabled and hidden');
+  const visitorAgents = textOf($('agents')), visitorTimeline = textOf($('timeline'));
+  check(visitorAgents.includes('External host') && visitorAgents.includes('Accept') && !visitorAgents.includes('Invite an agent'), 'visitor retains provider acceptance only and labels external context');
+  for (const sender of ['alice/desk', 'bob/host']) check(run('dmAuthor')(dmsg('human-' + sender, 'in', 'addressed question', { from: sender, kind: 'question', origin: 'ui' }), { ...run('state.dmData'), peer: { label: 'Different room member' } }) === sender, 'visitor names each actual human sender address independently of peer label: ' + sender);
+  check(visitorTimeline.includes('Claimed original/author') && visitorTimeline.includes('authorship is not verified') && visitorTimeline.includes('This snapshot never runs') && visitorTimeline.includes('claimed-key'), 'excerpt claims and grant are honest in author and Details');
+  check(!run('canDo')(run('state.dmData').messages[0], 'react') && run('state.dmData').messages[0].actions.length === 0 && run('state.dmData').messages[1].actions[0] === 'accept', 'snapshot cannot mutate or execute; addressed request keeps provider action');
+  calls.length = 0; $('body').value = 'cannot write room'; await run('send')(ev); run('inviteDialog')(run('state.dmData'));
+  check(!calls.some(c => c.path === '/api/dm/send' || c.path === '/api/dm/agent/invite'), 'visitor sends and invites no ordinary member operation');
+  delete dmThreads.d4.role; dmThreads.d4.messages = savedMessages; dmThreads.d4.agents = savedAgents; await run('openDM("d4")'); $('body').value = '';
+
+  // Wrapped browser transport must stage through its captured workspace.
+  const savedHost = ctx.window.agentnet, savedEngine = ctx.window.agentnetEngine;
+  ctx.window.agentnetEngine = {};
+  const fileBytes = new Uint8Array([0, 255, 7]), browserFile = { name: 'browser-current.bin', size: 3, arrayBuffer: async () => fileBytes.buffer };
+  let browserStages = 0;
+  const browserHost = { workspace: { id: 'browser-A' }, stage: async f => { browserStages++; return { workspace: 'browser-A', name: f.name, size: f.size, arrayBuffer: () => f.arrayBuffer() }; },
+    api: async (_path, body) => { if (body.files.some(f => f.workspace !== 'browser-A')) throw Error('File belongs to another workspace'); return {}; } };
+  ctx.window.agentnet = browserHost;
+  const wrappedFiles = await run('preparedFiles')([{ file: browserFile, name: browserFile.name, size: 3 }], browserHost);
+  check(browserStages === 1 && wrappedFiles[0].workspace === 'browser-A' && new Uint8Array(await wrappedFiles[0].arrayBuffer())[1] === 255, 'captured browser host stages exact bytes with workspace marker');
+  await browserHost.api('/api/dm/agent/ask', { files: wrappedFiles });
+  let wrongWorkspace = false;
+  try { await browserHost.api('/api/dm/agent/ask', { files: [{ ...wrappedFiles[0], workspace: 'browser-B' }] }); } catch (e) { wrongWorkspace = e.message.includes('another workspace'); }
+  check(wrongWorkspace, 'wrong workspace remains refused');
+  ctx.window.agentnet = null;
+  const directFiles = await run('preparedFiles')([{ file: browserFile, name: browserFile.name, size: 3 }]);
+  check(!directFiles[0].workspace && new Uint8Array(await directFiles[0].arrayBuffer())[1] === 255 && browserStages === 1, 'direct engine fallback preserves exact bytes only without captured host');
+  ctx.window.agentnet = savedHost; ctx.window.agentnetEngine = savedEngine;
+
+  const audienceRequest = dmsg('audience-physical', 'out', '', { lid: 'host-physical', pid: 'exact-pid', kind: 'question', target: { address: 'outside/host', agent_id: namedC }, attachments: [{ name: 'file-only.txt', size: 3 }] });
+  const audienceReport = dmsg('report-copy', 'in', 'report', { pid: 'exact-pid', kind: 'answer', agent_id: namedC, from: 'outside/host', reply_to: 'host-physical' });
+  const audienceThread = { ...dmThreads.d4, messages: [audienceRequest, audienceReport] };
+  check(run('dmReplyParent')(audienceReport, audienceThread) === audienceRequest && textOf(run('dmMsg')(audienceReport, audienceThread)).includes('Reply to: (files only: file-only.txt)'), 'linked audience resolves host-copy report to exact visible file-only request by shared logical identity');
+  for (const wrong of [{ pid: 'other-pid' }, { target: { address: 'other/host', agent_id: namedC } }, { target: { address: 'outside/host', agent_id: namedB } }, { kind: 'message' }, { excerpt_pid: 'context-grant' }]) {
+    check(!run('dmReplyParent')(audienceReport, { ...audienceThread, messages: [{ ...audienceRequest, ...wrong }] }), 'logical reply cannot cross participation/host/agent/kind/context bounds: ' + JSON.stringify(wrong));
+  }
+  check(!run('dmReplyParent')(audienceReport, { ...audienceThread, messages: [audienceRequest, { ...audienceRequest, id: 'another-copy' }] }), 'ambiguous logical identity never selects a parent');
+  const savedDefaultResponder = overview.me.responder;
+  overview.me.responder = ''; await run('loadOverview()');
+  run('decide')('accept', { ...audienceRequest, kind: 'task', from: 'alice/phone' }, audienceThread);
+  check(textOf($('dialog-body')).includes('outside/host, using its local configuration') && textOf($('dialog-body')).includes(namedC.slice(0, 8)) && !textOf($('dialog-body')).includes('no responder is set') && $('dialog-ok').disabled, 'named task decision shows exact local executor without default fallback and keeps acceptance gate');
+  $('dialog').close(); overview.me.responder = savedDefaultResponder; await run('loadOverview()');
+
+  // Native receiver delegation stays distinct from addressed executor and workspace.
+  await select('A'); await run('openThread("a1")');
+  overview.reply_receivers = true;
+  localAgents.push({record:namedRecord(namedA,'me/laptop'),enabled:true,responder:{...catalogResponder}});
+  await run('loadOverview()'); await run('loadReceiverCatalog()');
+  run('chooseReplyReceiver')(namedA);
+  check(run('state.replyReceiver.mode') === '' && run('state.replyReceiver.instructions') === '', 'assistant choice never prechecks task mode or invents instructions');
+  run('state.replyReceiver={...state.replyReceiver,instructions:"ORIGINAL LOCAL",mode:"question"}; keepDraft()');
+  const delegated = run('state.replyReceiver');
+  $('body').value = 'remote request'; run('keepDraft()');
+  await run('openThread("b1")'); check(run('state.replyReceiver') === null, 'another conversation has no receiver from prior draft');
+  await run('openThread("a1")'); check(run('state.replyReceiver') === delegated && $('body').value === 'remote request', 'exact receiver and original instructions restore with conversation');
+  check(run('hasUnsentDrafts()'), 'selected receiver defers automatic/explicit update reload');
+  localAgents.find(a=>a.record.id===namedA).enabled=false;
+  calls.length=0; await run('send')(ev);
+  check(!calls.some(c=>c.path==='/api/send') && $('body').value==='remote request' && run('state.replyReceiver')===delegated && $('compose-error').textContent.includes('no default'), 'removed receiver refuses before send and keeps exact draft');
+  localAgents.find(a=>a.record.id===namedA).enabled=true;
+  hold['/api/agents']=true; calls.length=0; wsCalls.A.length=0; wsCalls.B.length=0;
+  const receiverPending=run('send')(ev); await tick();
+  await select('B');
+  delete hold['/api/agents'];
+  while(held['/api/agents']?.length) release('/api/agents');
+  await receiverPending; await tick();
+  check(wsCalls.A.some(c=>c.path==='/api/send'&&c.body.reply_receiver.agent_id===namedA&&c.body.reply_receiver.instructions==='ORIGINAL LOCAL'&&c.body.reply_receiver.mode==='question') && !wsCalls.B.some(c=>c.path==='/api/send'), 'slow selected send uses captured native workspace and original delegation, never selected B');
+  check(run('state.replyReceiver')===null, 'late A receiver catalog never installs A selection in B');
+  await select('A'); await run('openThread("a1")');
+  run('state.receiverBindings=[{request_ref:"a1",receiver:{kind:"human"},label:"Me (human)",host:"me/laptop",state:"pending"}]; renderReceiverStatus()');
+  check(textOf($('receiver-status')).includes('Replies remain for you; no automatic continuation') && !textOf($('receiver-status')).includes('Waiting for correlated reply'), 'human bindings describe person handling even when native input is pending');
+  run('state.receiverBindings=[{request_ref:"a1",receiver:{kind:"managed_agent"},label:"Selected assistant",host:"me/laptop",state:"pending"}]; renderReceiverStatus()');
+  check(textOf($('receiver-status')).includes('Waiting for correlated reply'), 'managed pending copy still means correlated continuation');
+  run('state.data.messages.push({id:"first-request",dir:"out",body:"FIRST DISTINCT ORIGINAL"},{id:"second-request",dir:"out",body:"SECOND DISTINCT ORIGINAL"});state.receiverBindings=[{request_ref:"first-request",receiver:{kind:"managed_agent"},label:"Same assistant",host:"me/laptop",state:"completed"},{request_ref:"second-request",receiver:{kind:"managed_agent"},label:"Same assistant",host:"me/laptop",state:"completed"}];renderReceiverStatus()');
+  check(textOf($('receiver-status')).includes('“FIRST DISTINCT ORIGINAL”') && textOf($('receiver-status')).includes('“SECOND DISTINCT ORIGINAL”') && textOf($('receiver-status')).includes('first-re') && textOf($('receiver-status')).includes('second-r'), 'two completed bindings for same assistant quote their own exact outbound request and identity');
+  // Safe registered-session metadata binds an opaque local handle, not a native path.
+  overview.reply_sessions=true;overview.files={max_file:1000,max_count:2,max_message:2000}; await run('loadOverview()'); await run('loadReceiverCatalog()');
+  run('chooseReplyReceiver')('session:exact-Pi_handle');
+  const liveReceiver=run('state.replyReceiver');
+  check(liveReceiver.kind==='live_session' && liveReceiver.session_handle==='exact-Pi_handle' && !('mode' in liveReceiver) && !('instructions' in liveReceiver), 'native session choice carries exact handle without managed instructions/mode');
+  check(textOf($('reply-receiver')).includes('Inactive native adapter') && !textOf($('reply-receiver')).includes('online'), 'known inactive registration retained without liveness inference');
+  check($('receiver-instructions').children.length===0 || !textOf($('reply-receiver')).includes('Original continuation instructions'), 'live native selection never presents managed continuation instructions');
+  $('body').value='EXACT LIVE ORIGINAL';run('keepDraft()');await run('openThread("b1")');await run('openThread("a1")');
+  check(run('state.replyReceiver')===liveReceiver && $('body').value==='EXACT LIVE ORIGINAL', 'native exact handle/draft retained across conversation switch');
+  $('body').value='';run('noteTyping()');run('setKind("question")');await run('loadTargetCatalog()');run('chooseDeviceAgent')(namedB);$('body').value='EXACT LIVE ORIGINAL';run('noteTyping()');
+  const nativeDraftFile=fileOf('native-exact.txt',7,'text/plain');run('pushFiles')([nativeDraftFile]);run('keepDraft()');const retainedNativeFile=run('state.files')[0];
+  await select('B');check(run('state.replyReceiver')===null&&!run('state.deviceAgentID')&&!run('state.files').length,'B never inherits native handle/remote target/file draft');await select('A');await tick();
+  check(run('state.replyReceiver')===liveReceiver&&run('state.deviceAgentID')===namedB&&$('body').value==='EXACT LIVE ORIGINAL'&&run('state.files')[0]===retainedNativeFile&&retainedNativeFile.file===nativeDraftFile,'A/B/A restores exact native handle, independent remote target, text and original File object');
+  const preparedLive=await run('prepareReplyReceiverSelection')(liveReceiver,ctx.window.agentnet,'A',true,true);
+  check(JSON.stringify(preparedLive)==='{"kind":"live_session","session_handle":"exact-Pi_handle"}', 'native send emits only exact allowlisted intent');
+  const savedNative=replySessions.shift(); calls.length=0; await run('send')(ev);
+  check(!calls.some(c=>c.path==='/api/send'||c.path==='/api/upload') && $('body').value==='EXACT LIVE ORIGINAL' && run('state.replyReceiver')===liveReceiver && run('state.files')[0]===retainedNativeFile && $('compose-error').textContent.includes('no default'), 'unknown native handle refuses before staging, preserving exact draft with no fallback');
+  replySessions.unshift(savedNative); hold['/api/reply-sessions']=true;wsCalls.A.length=0;wsCalls.B.length=0;
+  const nativePending=run('send')(ev);await tick();await select('B');delete hold['/api/reply-sessions'];while(held['/api/reply-sessions']?.length)release('/api/reply-sessions');await nativePending;await tick();
+  check(wsCalls.A.some(c=>c.path==='/api/send'&&JSON.stringify(c.body.reply_receiver)==='{"kind":"live_session","session_handle":"exact-Pi_handle"}')&&!wsCalls.B.some(c=>c.path==='/api/send')&&run('state.replyReceiver')===null,'delayed native catalog send retains original A host/handle, never installs or sends it in B');
+  await select('A');await run('openThread("a1")');
+  run('state.receiverBindings=[{request_ref:"a1",receiver:{kind:"live_session",session_handle:"exact-Pi_handle"},label:"Local Pi (pi)",host:"me/laptop",state:"accepted"}];renderReceiverStatus()');
+  check(textOf($('receiver-status')).includes('Accepted into native session; effects completion unconfirmed')&&!textOf($('receiver-status')).includes('Running')&&!textOf($('receiver-status')).includes('Completed ·'),'native ACK describes accepted input, not execution or completed effects');
+  // Closed-session backup is deliberate intent, never inferred from the default.
+  await run('loadReceiverCatalog()');run('chooseReplyReceiver')('session:exact-Pi_handle');
+  check(!run('state.replyReceiver.on_close') && $('receiver-summary').textContent.includes('no backup'), 'native receiver has no automatic backup');
+  run('chooseReplyBackup')(namedA);
+  check(run('state.replyReceiver.on_close.mode')==='' && run('state.replyReceiver.on_close.instructions')==='', 'backup selection never invents instructions or task authority');
+  run('state.replyReceiver={...state.replyReceiver,on_close:{...state.replyReceiver.on_close,instructions:"EXPLICIT BACKUP ORIGINAL",mode:"question"}};keepDraft();renderReplyReceiver()');
+  const closedReceiver=run('state.replyReceiver');
+  $('body').value='BEFORE NO-SWITCH CAPTURE';run('noteTyping()');run('pushFiles')([fileOf('backup-exact.txt',9,'text/plain')]);run('workspaceCapture')( 'A',wsStates.A);const closedFile=run('state.files')[0];
+  $('body').value='EXACT BACKUP DRAFT';run('setKind("task")');run('workspaceCapture')('A',wsStates.A);
+  check(wsStates.A.view.drafts.a1.text==='EXACT BACKUP DRAFT'&&wsStates.A.view.drafts.a1.kind==='task'&&wsStates.A.view.drafts.a1.reply_receiver===closedReceiver&&wsStates.A.view.drafts.a1.files[0]===closedFile,'repeated capture without switch refreshes actual current text/kind/exact backup/File');
+  await run('openThread("b1")');await run('openThread("a1")');
+  check(run('state.replyReceiver')===closedReceiver && $('body').value==='EXACT BACKUP DRAFT' && run('state.files')[0]===closedFile, 'conversation restores original backup and File exactly');
+  await select('B');check(run('state.replyReceiver')===null,'other workspace never inherits backup');await select('A');await tick();
+  check(run('state.replyReceiver')===closedReceiver && run('state.files')[0]===closedFile && $('body').value==='EXACT BACKUP DRAFT' && kind()==='task', 'inactive A backup draft restores text/kind/exact receiver/backup/File without reselecting IDs');
+  const preparedClosed=await run('prepareReplyReceiverSelection')(closedReceiver,ctx.window.agentnet,'A',true,true);
+  check(JSON.stringify(preparedClosed)==='{"kind":"live_session","session_handle":"exact-Pi_handle","on_close":{"agent_id":"'+namedA+'","instructions":"EXPLICIT BACKUP ORIGINAL","mode":"question"}}', 'backup wire is strict native intent only; no private catalog configuration');
+  const localBackup=localAgents.find(a=>a.record.id===namedA),backupConfig={...localBackup.responder};
+  localBackup.responder={...localBackup.responder,dir:'/changed-executor'};calls.length=0;await run('send')(ev);
+  check(!calls.some(c=>c.path==='/api/send'||c.path==='/api/upload')&&run('state.replyReceiver')===closedReceiver&&run('state.files')[0]===closedFile&&$('compose-error').textContent.includes('configuration changed'),'changed backup refuses before staging with exact draft kept');
+  localBackup.responder=backupConfig;localBackup.enabled=false;calls.length=0;await run('send')(ev);
+  check(!calls.some(c=>c.path==='/api/send'||c.path==='/api/upload')&&run('state.replyReceiver')===closedReceiver&&$('compose-error').textContent.includes('no default'),'disabled backup refuses before staging without fallback');localBackup.enabled=true;
+  hold['/api/agents']=true;wsCalls.A.length=0;wsCalls.B.length=0;
+  const closedPending=run('send')(ev);await tick();await select('B');delete hold['/api/agents'];while(held['/api/agents']?.length)release('/api/agents');await closedPending;await tick();
+  check(wsCalls.A.some(c=>c.path==='/api/send'&&c.body.reply_receiver.on_close?.agent_id===namedA&&c.body.reply_receiver.on_close.instructions==='EXPLICIT BACKUP ORIGINAL')&&!wsCalls.B.some(c=>c.path==='/api/send')&&run('state.replyReceiver')===null, 'delayed backup catalog keeps original A delegation, no B retarget');
+  await select('A');await run('openThread("a1")');
+  for (const [handoff,words] of [['preauthorized','Backup preauthorized; not handed over'],['held','Backup held; no safe handoff'],['handed_over','Handed over to selected backup; effects completion unconfirmed']]) {
+    run('state.receiverBindings') .splice(0,run('state.receiverBindings.length'),{request_ref:'a1',receiver:{kind:handoff==='handed_over'?'managed_agent':'live_session',on_close:{agent_id:namedA}},label:'Exact receiver',handoff_label:'Chosen A',host:'me/laptop',state:'pending',handoff_state:handoff,detail:handoff==='held'?'uncertain accepted claim retained':''});
+    calls.length=0;run('renderReceiverStatus()');
+    check(textOf($('receiver-status')).includes(words)&&textOf($('receiver-status')).includes('Chosen A ('+namedA.slice(0,8)+')')&&!calls.length,'status projects native '+handoff+' and exact target without action');
+  }
+  await run('loadReceiverCatalog()');run('chooseReplyReceiver')('session:exact-Pi_handle');run('chooseReplyBackup')(namedA);run('chooseReplyBackup')('');
+  check(!run('state.replyReceiver.on_close'),'explicit backup off removes authority rather than hiding it');
+  overview.reply_sessions=false;
+  overview.reply_receivers=false;
+  let unsupportedReceiver=false;
+  try { await run('prepareReplyReceiverSelection')(delegated,ctx.window.agentnet,'A',false); } catch(e) { unsupportedReceiver=e.message.includes('unavailable'); }
+  check(unsupportedReceiver,'relay browser refuses preserved managed receiver selection instead of silently dropping it');
+  run('state.replyReceiver=null; state.receiverCatalog=null; state.receiverBindings=[]');
+  // Human group discussion uses the same explicit local reply receiver choice.
+  overview.groups=true;overview.reply_receivers=true;
+  dmThreads.group0={...dmThreads.d2,id:"group0",kind:"group",title:"Exact human group",members:[overview.person],agents:[],messages:[],frozen:""};
+  overview.dms.push({id:"group0",kind:"group",title:"Exact human group",peer:{label:"Exact human group"},members:[overview.person],count:0,unread:0,last_at:new Date().toISOString()});
+  await run('loadOverview()');await run('openDM("group0")');
+  check(textOf($('conv-list')).includes('New group…')&&textOf($('conv-list')).includes('Exact human group'),'active sidebar exposes distinct group conversations and create action');
+  check(!$('reply-receiver').hidden&&textOf($('reply-receiver')).includes('Me (human)')&&$('compose-hint').textContent.includes('current group members'),'group composer exposes reply receiver and says exact audience');
+  calls.length=0;$('body').value='ordinary group text';await run('send')(ev);
+  const groupSend=calls.find(c=>c.path==='/api/dm/send');
+  check(groupSend&&groupSend.body.conv==='group0'&&groupSend.body.reply_receiver?.kind==='human','ordinary native group Send preserves explicit human reply receiver');
+  run('state.replyReceiver={kind:"managed_agent",agent_id:"unavailable"};state.files=[]');calls.length=0;$('body').value='keep group draft';await run('send')(ev);
+  check(!calls.some(c=>c.path==='/api/dm/send'||c.path==='/api/upload')&&$('body').value==='keep group draft','stale assistant selection refuses group Send without fallback or staging');
+  dmThreads.group0.messages=[{id:'selected-turn',dir:'out',body:'EXACT SELECTED GROUP TURN',group_ref:{lid:'a'.repeat(32),author:'a'.repeat(64),hash:'b'.repeat(64)},attachments:[{name:'selected.bin',size:3}]}];
+  run('inviteGroupDialog')(dmThreads.group0);
+  check(textOf($('dialog-body')).includes('EXACT SELECTED GROUP TURN')&&textOf($('dialog-body')).includes('Includes 1 file')&&!textOf($('dialog-body')).includes('[object Object]'),'selected history renders actual checkbox row and explicit file notice');$('dialog').close();
+  const savedTypingUI=run('typingUI');
+  run('globalThis.groupTypingScopes=[];typingUI={setScope(scope){groupTypingScopes.push(scope);return Promise.resolve();}}');
+  run('setDMAgent')({pid:'exact-typing-pid',host:{label:'Bob',address:'bob/desk'},can_ask:true});await Promise.resolve();await Promise.resolve();
+  run('setDMAgent')(null);await Promise.resolve();await Promise.resolve();
+  check(run('groupTypingScopes').length===2&&run('groupTypingScopes')[0]===null&&run('groupTypingScopes')[1]?.conv==='group0','ordinary group → Ask → Cancel rearms current typing scope without a message/refresh');
+  run('setDMAgent')(null);await Promise.resolve();await Promise.resolve();
+  check(run('groupTypingScopes').length===2,'unchanged group target does not reset typing generation');
+  run('typingUI=null');
+  run('state.replyReceiver=null');dmThreads.group0.frozen='current group access unavailable';await run('loadDM()');run('kindHint()');
+  check(textOf($('agents')).includes('last verified member')&&$('conv-presence').textContent.includes('Last verified audience')&&$('to-how').textContent.includes('Last verified audience')&&$('compose-hint').textContent.includes('Current group audience unavailable'),'frozen group labels last verified audience and refuses implied current sending');
+  run('state.replyReceiver=null');run('groupInvitationDialog')({id:'exact-invite',title:'No history',inviter:'alice/desk',history:null});
+  check(textOf($('dialog-body')).includes('No earlier messages or files are shared'),'native nil selected history renders without implying room access');$('dialog').close();
+  // Display direction stays original; group files use their exact physical table.
+  run('globalThis.originalGroupFileChips=fileChips;globalThis.physicalGroupFiles=[];fileChips=(m)=>{physicalGroupFiles.push(m);return null;}');
+  const physicalThread={id:'physical-group',kind:'group',title:'Group',peer:{label:'Group'},members:[],agents:[],messages:[],role:'member'},physicalRow={id:'exact-history-file',dir:'out',from:'me/laptop',kind:'message',body:'',at:'2026-09-28T12:00:00Z',attachments:[{name:'z.txt',size:1}],can:[]};
+  run('dmMsg')({...physicalRow,synced_from:'me/laptop'},physicalThread);
+  run('dmMsg')({...physicalRow,via:'me/phone'},physicalThread);
+  run('dmMsg')(physicalRow,physicalThread);
+  run('dmMsg')({...physicalRow,synced_from:'me/laptop'},{...physicalThread,kind:'dm'});
+  check(run('physicalGroupFiles').map(m=>m.dir).join(',')==='in,in,out,out'&&physicalRow.dir==='out'&&run('physicalGroupFiles')[0].id===physicalRow.id,'group forwarded files route exact inbox while original display, local outbox and DM remain unchanged');
+  run('fileChips=originalGroupFileChips');
+    if (failed) process.exit(1);
+  finished = true;
   console.log("page logic ok");
 })().catch((e) => { console.error(e); process.exit(1); });
+// A wait that never ends would let node exit quietly with nothing checked
+// after it: that is a failure, said so.
+let finished = false;
+process.on("beforeExit", () => { if (!finished) { console.error("FAIL: the checks ended early: something awaited never answered"); process.exit(1); } });

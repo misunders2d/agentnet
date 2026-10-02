@@ -1,5 +1,11 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+> **Current contract:** [NEXT_RELEASE.md](NEXT_RELEASE.md) records the Sep 30
+> owner scope and reconciled group, agent, workspace, storage and interface
+> decisions. It supersedes conflicting older deferrals/proposals below.
+> Implementation and acceptance remain incomplete; historical issue statuses
+> in this document are not a current Linear export.
+
 > **Target Audience:** Any incoming coding agent or human contributor evaluating architecture choices, historical debates, or future roadmap items.
 >
 > **Companion Document:** [`docs/HANDOFF.md`](HANDOFF.md) (Operational state and verification matrix).
@@ -331,4 +337,104 @@ not a substitute. No archive policy, schema, endpoint or new service is approved
    - Append new migration steps at the end of the array. Pre-migration backups (`*.vN.bak`) must be preserved.
 
 5. **Group Messaging Scope**:
-   - Group messaging is deferred from the initial slice; point-to-point end-to-end encrypted messaging remains the foundation.
+   - Groups were deferred from the initial slice. They are required by the
+     Sep 30 next-release contract; see [NEXT_RELEASE.md](NEXT_RELEASE.md).
+
+## 7. Workspaces and cooperating relays (MEL-436, Sep 30)
+
+The existing Claude/AGY discussion and the Sep 30 seven-question review inform
+these design choices. This completes a design exploration, not federation
+implementation. MEL-495 separately requires a working workspace switcher and
+isolation journeys. No mesh availability, throughput or deployment is claimed.
+
+1. **Identity and authority.** A workspace has a persistent opaque ID that
+   survives endpoint and TLS-certificate changes. The ID names the workspace;
+   it does not authenticate an endpoint or confer trust. Current enrollments
+   keep authenticated TLS endpoints and their existing pins. Future multiple
+   relay endpoints require a separately pinned workspace authority statement
+   and authenticated key/endpoint continuity. A `/version` ID alone is not
+   that future authority protocol.
+2. **Credentials and personas.** New independent workspace enrollments use
+   separate device credentials and workspace-scoped person records. Existing
+   identities remain intact. A local account association stays local unless
+   its owner publishes a cross-workspace claim; even then it grants no history
+   or permissions. Separate stores limit application routing errors and the
+   compromise of one workspace key, not compromise of the whole OS account
+   or a trusted client package.
+3. **Guests and execution context.** Workspace admission, conversation
+   membership, history sharing, agent participation and execution grants are
+   separate. Discovery/transit confers none of them. Workers use the explicitly
+   selected host context and allowed AgentNet transcript, never another
+   workspace's native session. Harness tools retain their real permissions;
+   a transcript boundary is not a sandbox for unrestricted Bash or MCP. If
+   the host cannot meet its intended company-data boundary, it must choose a
+   suitable responder configuration before enabling guest execution.
+4. **Contact discovery.** Prefer targeted, policy-authorized lookup over
+   whole-directory replication. A device-signed advertisement binds workspace,
+   identity, route, generation and expiry. Another relay cannot silently
+   replace a pinned device key. Push and reconnect refresh preserve the
+   no-polling model. Unknown, contradictory or expired required authority
+   evidence blocks the affected route; a signature alone does not prove
+   freshness against a withholding relay.
+5. **Peering and transit.** Bilateral agreements grant selective discovery,
+   transit and durable custody independently. No transitive grant is implied.
+   A future first experiment uses two domains and one explicit bilateral
+   route. Selected third-party transit would additionally need bounded paths,
+   expiry, hop/loop checks and deduplication. Direct delivery uses the same
+   recipient authority, with an authorized relay fallback; lack of a route
+   never authorizes broader discovery. No DHT or generic routing service is
+   justified by this exploration.
+6. **Custody and availability.** Begin with one accountable custody owner per
+   message, durable storage and tested backup/restore. A handoff releases the
+   source obligation only after destination custody is authenticated and
+   stored. Lost acknowledgements can leave duplicate ciphertext, so admission
+   must stay idempotent. Future cross-domain delivery proof must authenticate
+   the destination: today's Hub receipt is not portable recipient-signed
+   proof. Blob authorization, quota and retention belong to the accountable
+   holder. Do not expire deduplication while valid replay could rerun work.
+   Same-domain HA needs an explicit outage/data-loss target and fenced owner
+   recovery before selecting replication; two SQLite files are not failover.
+7. **Human identity and invitations.** Person roster consent continues to
+   govern linked readers. A workspace admin cannot silently add a device to
+   someone's person or recover lost private keys. A workspace invitation
+   imports no prior conversations or grants. New conversation members receive
+   selected earlier history. External agents participate through explicit
+   host identities and context grants without making their whole workspace
+   readers of the room.
+
+Before implementing peering, test forged foreign keys, expired/withheld
+authority, selective discovery, denied third-party transit, offline custody,
+restart/lost acknowledgements/duplicate replay, and device revocation. Keep
+same-named accounts in independent workspaces isolated throughout. These are
+future experiment gates; none is represented as a completed mesh test.
+
+## 8. Terminal messenger request (post-release, Sep 30)
+
+Sergey requests an `agentnet tui`: a messenger in the terminal, usable both
+standalone and through a possible Herdr plugin, with the same functionality
+as the GUI wherever practical. This is a separate, explicitly non-blocking
+feature request. Debate with the participating agents **after the current
+release**; do not add implementation or dependency work to its critical path.
+
+Initial feasibility: the Go client already exposes conversation, send,
+decision and message-action operations, and the GUI uses a provider with
+push-based changes. A terminal presentation can reuse those operations and
+authority checks. This is a feasible direction, not an implemented TUI or
+verified Herdr plugin contract.
+
+Post-release discussion must resolve:
+
+- Standalone invocation and Herdr integration: launching the same TUI in a
+  pane versus a supported plugin. Verify Herdr's actual extension contract;
+  do not assume an existing plugin API.
+- Shared client/provider behavior, identity, workspace state and daemon
+  ownership; avoid a second messaging protocol, permission model or poller.
+- Keyboard-first navigation, composing/replies, people/teams/groups,
+  participant selection, agent step-in/decisions and message actions.
+- Practical parity for files, images, reactions, expressions, notifications
+  and accessibility, with explicit terminal limitations and fallbacks.
+- Packaging/library choice and maintainable shared tests only after the
+  product/interaction debate. No framework or new dependency chosen now.
+
+No TUI code, prototype, Herdr change or release commitment is authorized by
+this recorded request alone. Root owns bringing it to the post-release debate.

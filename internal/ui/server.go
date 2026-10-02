@@ -57,6 +57,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
+	mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
+		r.SetPathValue("name", "manifest.webmanifest")
+		s.asset(w, r)
+	})
 	mux.Handle("GET /assets/skins/", s.skins)
 	mux.HandleFunc("GET /assets/vendor/qr.mjs", s.qrModule)
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -67,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/act", s.act)
 	mux.HandleFunc("POST /api/simulate", s.simulate)
 	mux.HandleFunc("POST /api/person", s.person)
+	mux.HandleFunc("POST /api/person/label", s.renamePerson)
 	mux.HandleFunc("POST /api/device/{what}", s.device)
 	mux.HandleFunc("GET /api/dm", s.dm)
 	mux.HandleFunc("POST /api/dm/new", s.newDM)
@@ -80,6 +85,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/upload/discard", s.discard)
 	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
 	mux.HandleFunc("POST /api/file/request", s.requestFile)
+	mux.HandleFunc("POST /api/message/{what}", s.control)
+	mux.HandleFunc("POST /api/operator/decide", s.decide)
+	mux.HandleFunc("GET /api/drive", s.drive) // drivespace.go: a conversation's shared Drive space
+	mux.HandleFunc("POST /api/drive", s.drive)
+	mux.HandleFunc("POST /api/drive/upload", s.driveUpload)
+	mux.HandleFunc("GET /api/drive/setup", s.driveSetup) // Settings > File storage options (workspace admin)
+	mux.HandleFunc("POST /api/drive/setup", s.driveSetup)
+	mux.HandleFunc("GET /api/teams", s.teams) // liveteams.go: this realm's teams (pJ module)
+	mux.HandleFunc("GET /api/groups/invitations", s.groups)
+	for _, action := range []string{"new", "invite", "decide", "publish", "manage"} {
+		mux.HandleFunc("POST /api/groups/"+action, s.groups)
+	}
+	mux.HandleFunc("POST /api/team", s.changeTeam)
+	mux.HandleFunc("POST /api/teams/snapshot", s.teamSnapshot)
+	mux.HandleFunc("GET /api/typing", s.typingView)
+	mux.HandleFunc("POST /api/typing", s.sendTyping)
+	mux.HandleFunc("POST /api/typing/preferences", s.typingPreferences)
+	mux.HandleFunc("GET /api/storage", s.storage) // livestorage.go: where this device's files live and how much, read-only
+	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) { r.SetPathValue("name", "sw.js"); s.asset(w, r) })
+	mux.HandleFunc("GET /api/responder", s.responder)
+	mux.HandleFunc("POST /api/responder", s.setResponder)
+	mux.HandleFunc("GET /api/reply-receivers", s.replyReceivers)
+	mux.HandleFunc("GET /api/reply-sessions", s.replySessions)
+	mux.HandleFunc("GET /api/agents", s.agentCatalog)
+	mux.HandleFunc("POST /api/agents", s.changeAgent)
 	mux.HandleFunc("POST /api/remind", s.remind)
 	mux.HandleFunc("POST /api/remind/{what}", s.remind)
 	mux.HandleFunc("GET /events", s.events)
@@ -94,7 +124,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; "+
-			"img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+			"img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cache-Control", "no-store")
@@ -121,7 +151,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			limit := int64(maxBody)
 			switch {
-			case r.URL.Path == "/api/upload" && mt == "application/octet-stream": // a file's bytes, handed to this computer's AgentNet
+			case (r.URL.Path == "/api/upload" || r.URL.Path == "/api/drive/upload") && mt == "application/octet-stream": // a file's bytes, handed to this computer's AgentNet (or its Drive space)
 				limit = maxUpload
 			case mt != "application/json":
 				http.Error(w, "JSON only", http.StatusUnsupportedMediaType)
@@ -166,13 +196,20 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 // asset serves one embedded file; there are no directory listings.
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if name == "icon-192.png" { // the favicon and the header's mark
+	if name == "icon-192.png" || name == "icon-512.png" { // shared install icons, favicon and header's mark
+		size := 192
+		if name == "icon-512.png" {
+			size = 512
+		}
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "no-cache")
-		w.Write(static.AppIcon(192))
+		w.Write(static.AppIcon(size))
 		return
 	}
-	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8", "default.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
+	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8", "default.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
+		"manifest.webmanifest": "application/manifest+json",
+		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
+		"drivespace.mjs":       "text/javascript; charset=utf-8", "drivespace.css": "text/css; charset=utf-8", "workspaces.mjs": "text/javascript; charset=utf-8", "workspaces.css": "text/css; charset=utf-8", "teams.mjs": "text/javascript; charset=utf-8", "typing.mjs": "text/javascript; charset=utf-8", "local-skins.mjs": "text/javascript; charset=utf-8", "sw.js": "text/javascript; charset=utf-8"}
 	ct, ok := types[name]
 	if !ok {
 		http.NotFound(w, r)
@@ -208,6 +245,8 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, o.Agents = s.p.(Participants)
+	_, o.ReplyReceivers = s.p.(ReplyReceivers)
+	_, o.ReplySessions = s.p.(ReplySessionCatalogProvider)
 	writeJSON(w, o)
 }
 
@@ -358,8 +397,84 @@ func (s *Server) filesHere(w http.ResponseWriter, n int) bool {
 // maxDiscard bounds one discard: more than a page can have staged.
 const maxDiscard = 64
 
-// file serves a received file, checked and decrypted, only as a download:
-// never a type the browser would run or render as a page.
+// decide sends this device's decision on a request another machine holds.
+func (s *Server) decide(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(OperatorDecisions)
+	if !ok {
+		writeErr(w, NotFound("deciding for another machine is not available here"))
+		return
+	}
+	var v DecisionAction
+	if !readJSON(w, r, &v) {
+		return
+	}
+	note, err := p.Decide(v)
+	writeResult(w, map[string]string{"note": note}, err)
+}
+
+// control reacts to, edits or deletes a message (MessageControls).
+func (s *Server) control(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(MessageControls)
+	if !ok {
+		writeErr(w, NotFound("reactions, edits and deletions are not available here"))
+		return
+	}
+	var v ControlAction
+	if !readJSON(w, r, &v) {
+		return
+	}
+	var note string
+	var err error
+	switch r.PathValue("what") {
+	case "react":
+		note, err = p.React(v)
+	case "edit":
+		note, err = p.EditMessage(v)
+	case "delete":
+		note, err = p.DeleteMessage(v)
+	default:
+		err = NotFound("no such message control")
+	}
+	writeResult(w, map[string]string{"note": note}, err)
+}
+
+// responder reports how this computer handles questions and tasks.
+func (s *Server) responder(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(ResponderControl)
+	if !ok {
+		writeErr(w, NotFound("responder settings are not available here: this device runs nothing"))
+		return
+	}
+	v, err := p.ResponderStatus()
+	writeResult(w, v, err)
+}
+
+// setResponder changes it: manual handling, or a harness and directory.
+func (s *Server) setResponder(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.p.(ResponderControl)
+	if !ok {
+		writeErr(w, NotFound("responder settings are not available here: this device runs nothing"))
+		return
+	}
+	var v ResponderChange
+	if !readJSON(w, r, &v) {
+		return
+	}
+	note, err := p.SetResponder(v)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	status, err := p.ResponderStatus()
+	writeResult(w, struct {
+		Note string `json:"note"`
+		ResponderView
+	}{note, status}, err)
+}
+
+// file serves a file, checked and decrypted, only as a download: never a
+// type the browser would run or render as a page. The message may be one
+// this device received or one it sent (FileView.Openable).
 func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.p.(Files)
 	if !ok {
@@ -371,7 +486,14 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, NotFound("no such file"))
 		return
 	}
-	rc, name, err := p.OpenFile(r.Context(), r.PathValue("id"), i)
+	// ?dir=in|out names the message's direction, as the page shows it: the
+	// exact reference (a received id can equal a sent one).
+	dir := r.URL.Query().Get("dir")
+	if dir != "" && dir != "in" && dir != "out" {
+		writeErr(w, NotFound("no such file"))
+		return
+	}
+	rc, name, err := p.OpenFile(r.Context(), dir, r.PathValue("id"), i)
 	if err != nil {
 		writeErr(w, err)
 		return

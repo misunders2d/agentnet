@@ -41,12 +41,18 @@ import (
 
 // fileMsg is the body of a sub "file" message.
 type fileMsg struct {
-	V         int    `json:"v"`
-	Type      string `json:"type"` // request or offer
-	LID       string `json:"lid"`  // the message the file belongs to
-	SHA256    string `json:"sha256"`
-	Available bool   `json:"available,omitempty"` // offer: attached
-	Detail    string `json:"detail,omitempty"`    // offer: why not
+	V              int    `json:"v"`
+	Type           string `json:"type"` // request or offer
+	LID            string `json:"lid"`  // the message the file belongs to
+	SHA256         string `json:"sha256"`
+	Available      bool   `json:"available,omitempty"` // offer: attached
+	Detail         string `json:"detail,omitempty"`    // offer: why not
+	Author         string `json:"author,omitempty"`
+	Hash           string `json:"hash,omitempty"`
+	Index          *int   `json:"index,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Size           *int64 `json:"size,omitempty"`
+	GroupAdmission string `json:"group_admission,omitempty"`
 }
 
 func (a *Agent) keptPath(sha string) string { return filepath.Join(a.home, "kept", sha+".age") }
@@ -109,6 +115,11 @@ func (a *Agent) RequestFile(ctx context.Context, msgID string, index int) error 
 	if err != nil {
 		return err
 	}
+	if root, _, found, e := a.store.conversation(conv); e != nil {
+		return e
+	} else if found && root.Kind == protocol.ConvKindGroup {
+		return a.requestGroupHistoryFile(ctx, msgID, index)
+	}
 	files, err := a.store.attachments(msgID)
 	if err != nil {
 		return err
@@ -170,13 +181,39 @@ func (a *Agent) fileCarrier(to identity.Public, conv string, raw []byte, body st
 	if err != nil {
 		return outCopy{}, err
 	}
-	return outCopy{env: env, in: in, state: stateQueued}, nil
+	copy := outCopy{env: env, in: in, state: stateQueued}
+	if root, e := protocol.ParseConvRoot(raw); e == nil && root.Kind == protocol.ConvKindGroup {
+		packet, e := groupTurnPacketIn(a.store.db, conv)
+		if e != nil {
+			return outCopy{}, e
+		}
+		if e = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); e != nil {
+			return outCopy{}, e
+		}
+		if e = groupTurnCheck(a.store.db, packet, to.Address, to.Fingerprint()); e != nil {
+			return outCopy{}, e
+		}
+		me, ok, e := a.store.selfPerson(a.Address)
+		if e != nil || !ok || !me.has(to.Address, to.Fingerprint()) {
+			return outCopy{}, errors.New("group file copy is not a current own device")
+		}
+		copy.required, copy.recipientFP = protocol.CapGroup, to.Fingerprint()
+	}
+	return copy, nil
 }
 
 // admitFile takes a sub "file" message from another device of this
 // person: a request is queued for the worker (serveFiles); an offer
 // completes the history message's file.
-func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(string, string) error) error {
+func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(string, string) error, checks ...func(dbq) error) error {
+	check := func(q dbq) error {
+		for _, guard := range checks {
+			if err := guard(q); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	var m fileMsg
 	if err := decodeStrict([]byte(in.Body), &m); err != nil || m.V != 1 || !protocol.ValidID(m.LID) || !protocol.ValidHash(m.SHA256) {
 		return hold(reasonInvalid, "a malformed file message")
@@ -184,8 +221,19 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 	now := time.Now().Unix()
 	switch m.Type {
 	case "request":
-		if _, err := a.store.db.Exec(`INSERT OR IGNORE INTO file_serves(id, device, conv, lid, sha256, state, updated_at) VALUES(?, ?, ?, ?, ?, 'pending', ?)`,
+		tx, err := a.store.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err = check(tx); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO file_serves(id, device, conv, lid, sha256, state, updated_at) VALUES(?, ?, ?, ?, ?, 'pending', ?)`,
 			env.ID, env.From, in.Conv, m.LID, m.SHA256, now); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
 			return err
 		}
 		a.convWork.due(convServe)
@@ -203,9 +251,20 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 			return err
 		}
 		if !m.Available {
-			_, err := a.store.db.Exec(`UPDATE file_requests SET state = 'unavailable', detail = ?, updated_at = ? WHERE message_id = ? AND sha256 = ?`,
+			tx, err := a.store.db.Begin()
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			if err = check(tx); err != nil {
+				return err
+			}
+			_, err = tx.Exec(`UPDATE file_requests SET state = 'unavailable', detail = ?, updated_at = ? WHERE message_id = ? AND sha256 = ?`,
 				m.Detail, now, msgID, m.SHA256)
-			return a.store.done(err)
+			if err != nil {
+				return err
+			}
+			return a.store.done(tx.Commit())
 		}
 		if len(in.Attachments) != 1 || in.Attachments[0].SHA256 != m.SHA256 {
 			return hold(reasonInvalid, "a file offer without that file")
@@ -216,6 +275,9 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 			return err
 		}
 		defer tx.Rollback()
+		if err = check(tx); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`UPDATE attachments SET blob_id = ?, ct_size = ?, ct_sha256 = ? WHERE message_id = ? AND sha256 = ? AND blob_id LIKE ?`,
 			att.Blob.ID, att.Blob.Size, att.Blob.SHA256, msgID, m.SHA256, historyBlob+"%"); err != nil {
 			return err
@@ -232,10 +294,28 @@ func (a *Agent) admitFile(env envelope.Envelope, in envelope.Inner, hold func(st
 // this person) and reports whether more wait.
 func (a *Agent) serveFiles(ctx context.Context) (more bool) {
 	var id, device, conv, lid, sha string
-	err := a.store.db.QueryRow(`SELECT id, device, conv, lid, sha256 FROM file_serves WHERE state = 'pending' ORDER BY updated_at, id LIMIT 1`).
-		Scan(&id, &device, &conv, &lid, &sha)
+	var descriptor []byte
+	err := a.store.db.QueryRow(`SELECT id, device, conv, lid, sha256,group_descriptor FROM file_serves WHERE state = 'pending' ORDER BY updated_at, id LIMIT 1`).
+		Scan(&id, &device, &conv, &lid, &sha, &descriptor)
 	if err != nil {
 		return false
+	}
+	if len(descriptor) > 0 {
+		var job groupFileServe
+		if decodeStrict(descriptor, &job) != nil || !protocol.ValidFingerprint(job.Key) || !groupFileMessageValid(job.Message) {
+			err = errors.Join(errPermanent, errors.New("group: invalid persisted file request"))
+		} else {
+			err = a.serveGroupHistoryFile(ctx, id, device, conv, job)
+		}
+		if err != nil {
+			if retryable(err) {
+				return false
+			}
+			a.store.db.Exec(`UPDATE file_serves SET state='unavailable',updated_at=? WHERE id=?`, time.Now().Unix(), id)
+		}
+		var n int
+		a.store.db.QueryRow(`SELECT count(*) FROM file_serves WHERE state='pending'`).Scan(&n)
+		return n > 0
 	}
 	state, detail := "served", ""
 	if err := a.serveFile(ctx, device, conv, lid, sha); err != nil {
@@ -350,38 +430,150 @@ func (a *Agent) fileSource(ctx context.Context, conv, lid, sha string) (path, na
 	if err != nil {
 		return "", "", err
 	}
+	path, err = a.openKept(dir, sha, f.Size)
+	if err != nil {
+		return "", "", err
+	}
+	return path, f.Name, nil
+}
+
+// errNotKept means this device holds no copy of a file it sent.
+var errNotKept = errors.New("this device kept no copy of that file")
+
+// keptHere reports whether this device holds its own copy of the file with
+// digest sha.
+func (a *Agent) keptHere(sha string) bool {
+	_, err := os.Stat(a.keptPath(sha))
+	return err == nil
+}
+
+// openKept decrypts this device's kept copy of the file with digest sha
+// into a new private temporary file in dir, checked against size and sha,
+// and returns its path.
+func (a *Agent) openKept(dir, sha string, size int64) (string, error) {
 	src, err := os.Open(a.keptPath(sha))
 	if err != nil {
-		return "", "", fmt.Errorf("%w: this device kept no copy of that file", errPermanent)
+		return "", fmt.Errorf("%w: %w", errPermanent, errNotKept)
 	}
 	defer src.Close()
 	r, err := age.Decrypt(src, a.id.Box)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: %v", errPermanent, err)
+		return "", fmt.Errorf("%w: %v", errPermanent, err)
 	}
 	tmp, err := secfile.CreateTemp(dir, ".agentnet-*.part")
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	if _, err := io.Copy(tmp, io.LimitReader(r, f.Size+1)); err != nil {
+	ok := false
+	defer func() {
+		if !ok {
+			os.Remove(tmp.Name())
+		}
+	}()
+	pt := newCountingHash()
+	if _, err := io.Copy(io.MultiWriter(tmp, pt), io.LimitReader(r, size+1)); err != nil {
 		tmp.Close()
-		os.Remove(tmp.Name())
-		return "", "", err
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return "", "", err
+		return "", err
 	}
-	return tmp.Name(), f.Name, nil
+	if pt.n != size || pt.hex() != sha {
+		return "", fmt.Errorf("%w: the kept file no longer matches its manifest", errPermanent)
+	}
+	ok = true
+	return tmp.Name(), nil
 }
 
-// prefetchFiles fetches (and keeps) the ciphertext of one received
-// conversation file not held here yet, and reports whether more wait.
+// OpenSentAttachment opens attachment index of a message this device sent
+// (a conversation turn or a device message), from the copy it kept for
+// itself at send time; closing it removes the temporary plaintext. A
+// message sent before copies were kept, or from another device of this
+// person, has no copy here: errNotKept, never a substitute.
+func (a *Agent) OpenSentAttachment(ctx context.Context, msgID string, index int) (io.ReadCloser, FileInfo, error) {
+	files, err := a.store.sentAttachments(msgID)
+	if err != nil {
+		return nil, FileInfo{}, err
+	}
+	if index < 0 || index >= len(files) {
+		return nil, FileInfo{}, fmt.Errorf("sent message %s has no attachment %d", msgID, index)
+	}
+	f := files[index]
+	dir := filepath.Join(a.home, "opened")
+	if err := secfile.EnsureDir(dir); err != nil {
+		return nil, f, err
+	}
+	tmp, err := a.openKept(dir, f.SHA256, f.Size)
+	if err != nil {
+		return nil, f, err
+	}
+	r, err := os.Open(tmp)
+	if err != nil {
+		os.Remove(tmp)
+		return nil, f, err
+	}
+	return &removeOnClose{File: r}, f, nil
+}
+
+// ErrAmbiguousMessage means an id names both a received and a sent
+// message here (a peer chooses the ids of what it sends, so it can pick one
+// this device used), and the caller did not say which.
+var ErrAmbiguousMessage = errors.New("that id names both a received and a sent message here: say which (dir in or out)")
+
+// OpenFileFrom opens attachment index of message msgID: dir "in" a message
+// received (OpenAttachment), "out" one sent by this device
+// (OpenSentAttachment). With dir "" the direction is the one table the id
+// is in; an id in both fails closed (ErrAmbiguousMessage) rather than
+// serve the other direction's file. The one file API the messenger page
+// uses for both directions.
+func (a *Agent) OpenFileFrom(ctx context.Context, dir, msgID string, index int) (io.ReadCloser, FileInfo, error) {
+	switch dir {
+	case "in":
+		return a.OpenAttachment(ctx, msgID, index)
+	case "out":
+		return a.OpenSentAttachment(ctx, msgID, index)
+	case "":
+	default:
+		return nil, FileInfo{}, fmt.Errorf("unknown direction %q (in or out)", dir)
+	}
+	var received, sent int
+	if err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE id = ?), (SELECT count(*) FROM outbox WHERE id = ?)`,
+		msgID, msgID).Scan(&received, &sent); err != nil {
+		return nil, FileInfo{}, err
+	}
+	switch {
+	case received > 0 && sent > 0:
+		return nil, FileInfo{}, ErrAmbiguousMessage
+	case sent > 0:
+		return a.OpenSentAttachment(ctx, msgID, index)
+	}
+	return a.OpenAttachment(ctx, msgID, index)
+}
+
+// markOpenable fills Openable for files of one message: sent files open
+// from a kept copy; received files open unless known from history only.
+func (a *Agent) markOpenable(files []FileInfo, sent bool) {
+	for i := range files {
+		switch {
+		case sent:
+			files[i].Openable = a.keptHere(files[i].SHA256)
+		default:
+			files[i].Openable = !strings.HasPrefix(files[i].BlobID, historyBlob)
+		}
+	}
+}
+
+// prefetchFiles fetches (and keeps) the ciphertext of one received file
+// not held here yet, newest message first, and reports whether more wait:
+// conversation files and device-message files alike, so a file survives
+// the Hub dropping its blob later. Nothing counts as held before the
+// ciphertext matched the sender's signed size and digest (fetchCiphertext).
 // Files that failed are left for a later run.
 func (a *Agent) prefetchFiles(ctx context.Context) (more bool) {
 	rows, err := a.store.db.Query(`SELECT a.blob_id, a.name, a.size, a.sha256, a.ct_size, a.ct_sha256
 		FROM attachments a JOIN inbox i ON i.id = a.message_id
-		WHERE i.conv IS NOT NULL AND i.local = 0 AND a.blob_id NOT LIKE ? ORDER BY i.received_ms DESC`, historyBlob+"%")
+		WHERE i.local = 0 AND a.blob_id NOT LIKE ? AND NOT `+retractedClause+`
+		ORDER BY coalesce(i.received_ms, i.received_at * 1000) DESC`, historyBlob+"%")
 	if err != nil {
 		return false
 	}

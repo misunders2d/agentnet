@@ -19,9 +19,19 @@ import (
 // dmPeople names the two members of a DM for the page: you and them.
 type dmPeople struct {
 	me, peer PersonView
+	role     string
+	group    bool
+	members  []PersonView
 }
 
 func (p dmPeople) byPerson(id string) (PersonView, bool) {
+	if p.group && id != "" {
+		for _, m := range p.members {
+			if m.Person == id {
+				return m, true
+			}
+		}
+	}
 	switch id {
 	case "":
 	case p.me.Person:
@@ -33,6 +43,18 @@ func (p dmPeople) byPerson(id string) (PersonView, bool) {
 }
 
 func (p dmPeople) byKey(fp string) (PersonView, bool) {
+	if p.group && fp != "" {
+		for _, m := range p.members {
+			if m.Fingerprint == fp {
+				return m, true
+			}
+			for _, d := range m.Devices {
+				if d.Fingerprint == fp {
+					return m, true
+				}
+			}
+		}
+	}
 	switch fp {
 	case "":
 	case p.me.Fingerprint:
@@ -50,6 +72,9 @@ func (p dmPeople) who(id string) string {
 	}
 	if v, ok := p.byPerson(id); ok {
 		return v.Label
+	}
+	if p.role == "visitor" {
+		return "A DM member"
 	}
 	return "Someone not in this DM"
 }
@@ -73,6 +98,18 @@ func (l *Live) people(peer client.PersonInfo) dmPeople {
 	return p
 }
 
+func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
+	p := l.people(c.Peer)
+	p.role = c.Role
+	p.group = c.Kind == protocol.ConvKindGroup
+	if p.group {
+		for _, m := range c.Members {
+			p.members = append(p.members, personView(m))
+		}
+	}
+	return p
+}
+
 // eventText says what a participation record does, for the DM's timeline.
 func eventText(body string, p dmPeople) string {
 	ev, err := protocol.ParseParticipationEvent([]byte(body))
@@ -80,19 +117,35 @@ func eventText(body string, p dmPeople) string {
 		return "A record about an agent that cannot be read here."
 	}
 	who := p.who(ev.Author.Person)
+	room := "this DM"
+	if p.group {
+		room = "this group"
+		if _, known := p.byPerson(ev.Author.Person); !known {
+			who = ev.Author.Address
+		}
+	}
 	switch ev.Type {
 	case protocol.EventInvite:
 		host := "an agent"
 		if ev.Host != nil {
 			host = p.whose(ev.Host.Person) + " agent (on " + ev.Host.Address + ")"
+			if p.group && ev.Group != nil && ev.Group.HostRole == "visitor" {
+				host = "an outside host's agent (on " + ev.Host.Address + ")"
+			}
 		}
-		return who + " invited " + host + " into this DM."
+		return who + " invited " + host + " into " + room + "."
 	case protocol.EventAccept:
-		return who + " accepted: the agent joins this DM."
+		if p.group {
+			if ev.Author.GroupAdmission == "" {
+				return "Outside host " + ev.Author.Address + " accepted participation in this group."
+			}
+			return who + " accepted: the agent participates in this group."
+		}
+		return who + " accepted: the agent joins " + room + "."
 	case protocol.EventDecline:
 		return who + " declined the invitation for the agent."
 	case protocol.EventDismiss:
-		return who + " dismissed the agent: it gets nothing more from this DM."
+		return who + " dismissed the agent: it gets nothing more from " + room + "."
 	}
 	return "A record about an agent (" + ev.Type + ")."
 }
@@ -105,7 +158,7 @@ func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([
 	}
 	out := make([]AgentView, 0, len(infos))
 	for _, info := range infos {
-		out = append(out, agentView(info, p, msgs, l.hasResponder()))
+		out = append(out, agentView(info, p, msgs, l.namedAgentReady(info)))
 	}
 	return out, nil
 }
@@ -118,15 +171,18 @@ func (l *Live) hasResponder() bool {
 }
 
 func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMessage, responder bool) AgentView {
-	v := AgentView{PID: info.PID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
+	v := AgentView{PID: info.PID, AgentID: info.AgentID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
 		Inviter: personView(info.Inviter), Note: info.Note, Shared: []string{}, TasksFrom: []PersonView{}, Held: info.Held}
+	v.External = info.External
 	if info.Invited != 0 {
 		v.Invited = time.Unix(info.Invited, 0)
 	}
 	for _, g := range info.Grant {
 		found := false
 		for _, m := range msgs {
-			if m.LID == g.LID && m.Key == g.Fingerprint && m.Sub == "" && !m.Replica {
+			direct := m.Key == g.Fingerprint && !m.Replica
+			claimed := m.ExcerptPID == info.PID && m.Claimed == g.Fingerprint && m.SyncedFrom == info.Inviter.Address && m.History
+			if m.LID == g.LID && m.Sub == "" && (direct || claimed) {
 				v.Shared, found = append(v.Shared, m.ID), true
 				break
 			}
@@ -141,6 +197,9 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 		}
 	}
 	host := p.whose(info.Host.Person)
+	if info.External {
+		host = info.Host.Label + "'s"
+	}
 	switch info.State {
 	case client.PartPending:
 		v.StateText = "Its invitation is not here yet: nothing counts until it is."
@@ -158,6 +217,9 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 			v.StateText = "In this DM. It answers what either of you asks it, here with your own setup, and is shown only what was shared and what is asked of it here."
 			if !responder {
 				v.StateText = "In this DM, but no responder is chosen on this computer: what is asked of it waits until you choose one (agentnet responder)."
+				if info.AgentID != "" {
+					v.StateText = "In this DM, but the selected agent is not ready on this host. Check its local agent configuration."
+				}
 			}
 		}
 		v.CanDismiss, v.CanAsk = true, info.Claimable()
@@ -175,6 +237,18 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 	if info.Held > 0 {
 		v.StateText += " Some of its records do not count here yet."
 	}
+	if p.role == "visitor" {
+		v.CanAsk, v.CanDismiss = false, false
+		if info.State == client.PartActive {
+			v.StateText = "Invited agent context for this DM's two members. Only selected snapshots and requests addressed to this agent are supplied."
+		}
+	}
+	if p.group {
+		v.StateText = strings.ReplaceAll(strings.ReplaceAll(v.StateText, "this DM", "this group"), "either of you", "current group members")
+		if p.role == "visitor" && info.State == client.PartActive {
+			v.StateText = "Invited agent context for this group. Only selected snapshots and requests addressed to this agent are supplied."
+		}
+	}
 	return v
 }
 
@@ -187,7 +261,8 @@ func (l *Live) dmOf(conv string) (client.ConversationInfo, []client.ConvMessage,
 	for _, c := range convs {
 		if c.ID == conv {
 			msgs, err := l.a.ConversationMessages(conv)
-			return c, msgs, l.people(c.Peer), err
+			people := l.conversationPeople(c)
+			return c, msgs, people, err
 		}
 	}
 	return client.ConversationInfo{}, nil, dmPeople{}, NotFound("no conversation with that id")
@@ -205,7 +280,7 @@ func (l *Live) agentResult(info client.ParticipationInfo, err error) (AgentView,
 	if derr != nil {
 		return AgentView{}, derr
 	}
-	return agentView(info, p, msgs, l.hasResponder()), nil
+	return agentView(info, p, msgs, l.namedAgentReady(info)), nil
 }
 
 // InviteAgent implements Participants.
@@ -229,6 +304,9 @@ func (l *Live) InviteAgent(d AgentInvite) (AgentView, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	if d.AgentID != "" {
+		return l.agentResult(l.a.InviteNamedAgent(ctx, d.Conv, strings.TrimSpace(d.Host), d.AgentID, lids, d.TasksFrom, strings.TrimSpace(d.Note)))
+	}
 	return l.agentResult(l.a.InviteAgent(ctx, d.Conv, strings.TrimSpace(d.Host), lids, d.TasksFrom, strings.TrimSpace(d.Note)))
 }
 
@@ -252,16 +330,31 @@ func (l *Live) DismissAgent(pid string) (AgentView, error) {
 // AskAgent implements Participants.
 func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 	body := strings.TrimSpace(d.Body)
-	if body == "" {
-		return Sent{}, Refuse("Write what to ask first.")
+	if body == "" && len(d.Files) == 0 {
+		return Sent{}, Refuse("Write what to ask or attach a file first.")
 	}
 	kind := d.Kind
 	if kind == "" {
 		kind = envelope.KindQuestion
 	}
+	if kind != envelope.KindQuestion && kind != envelope.KindTask {
+		return Sent{}, Refuse("Choose a question or task for this agent.")
+	}
+	if len(d.Files) > envelope.MaxAttachments {
+		return Sent{}, Refuse("Too many files for one request.")
+	}
+	receiver, err := l.selectedReplyReceiver(d.ReplyReceiver)
+	if err != nil {
+		return Sent{}, err
+	}
+	files, cleanup, err := l.takeStaged(d.Files)
+	if err != nil {
+		return Sent{}, err
+	}
+	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.AskAgent(ctx, d.PID, kind, body)
+	res, err := l.a.AskAgentWithReceiver(ctx, d.PID, kind, body, receiver, files...)
 	if err != nil {
 		if errors.Is(err, client.ErrNoParticipation) {
 			return Sent{}, NotFound("no such agent in a DM here")

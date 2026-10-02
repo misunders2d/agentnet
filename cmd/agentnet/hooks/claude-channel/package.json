@@ -1,0 +1,14 @@
+{
+  "name": "agentnet-claude-channel",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Build input for the opt-in bundled local Claude channel. Never installed at runtime.",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "chokidar": "5.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

@@ -37,11 +37,15 @@ var ErrConversationItem = errors.New("this message belongs to a conversation: an
 
 // ConversationInfo is one conversation this installation holds.
 type ConversationInfo struct {
-	ID      string     `json:"id"`
-	Kind    string     `json:"kind"`
-	Peer    PersonInfo `json:"peer"`    // the other member
-	Created int64      `json:"created"` // the creator's claim, unix seconds
-	Creator string     `json:"creator"` // the creating device
+	ID      string       `json:"id"`
+	Kind    string       `json:"kind"`
+	Peer    PersonInfo   `json:"peer"`           // the other member
+	Created int64        `json:"created"`        // the creator's claim, unix seconds
+	Creator string       `json:"creator"`        // the creating device
+	Role    string       `json:"role,omitempty"` // computed member or invited visitor; never authority
+	Title   string       `json:"title,omitempty"`
+	Members []PersonInfo `json:"members,omitempty"` // current group persons; never root membership substitution
+	Frozen  string       `json:"frozen,omitempty"`  // current group eligibility prevents sending
 }
 
 func (s *store) conversation(id string) (protocol.ConvRoot, []byte, bool, error) {
@@ -52,7 +56,20 @@ func conversationIn(q querier, id string) (protocol.ConvRoot, []byte, bool, erro
 	var raw string
 	err := q.QueryRow(`SELECT root FROM conversations WHERE id = ?`, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		return protocol.ConvRoot{}, nil, false, nil
+		var packet GroupContext
+		var data []byte
+		err = q.QueryRow(`SELECT payload FROM group_context WHERE conv=?`, id).Scan(&data)
+		if errors.Is(err, sql.ErrNoRows) {
+			return protocol.ConvRoot{}, nil, false, nil
+		}
+		if err != nil {
+			return protocol.ConvRoot{}, nil, false, err
+		}
+		if err = json.Unmarshal(data, &packet); err != nil {
+			return protocol.ConvRoot{}, nil, false, err
+		}
+		root, _ := json.Marshal(packet.Root)
+		return packet.Root, root, true, nil
 	}
 	if err != nil {
 		return protocol.ConvRoot{}, nil, false, err
@@ -121,8 +138,10 @@ func contentHash(in envelope.Inner) string {
 		Conv, LID, Kind, Body, ReplyTo, Status, Sub, Origin, Emotion string
 		Target                                                       *envelope.Target
 		Attachments                                                  []att
-		PID                                                          string `json:",omitempty"`
-	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID}
+		PID                                                          string                  `json:",omitempty"`
+		AgentID                                                      string                  `json:",omitempty"`
+		ReceiverRoute                                                *envelope.ReceiverRoute `json:",omitempty"`
+	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID, in.AgentID, in.ReceiverRoute}
 	for _, a := range in.Attachments {
 		c.Attachments = append(c.Attachments, att{a.Name, a.Size, a.SHA256})
 	}
@@ -134,6 +153,14 @@ func contentHash(in envelope.Inner) string {
 func legacyContentHash(in envelope.Inner) string {
 	in.PID = ""
 	return contentHash(in)
+}
+
+// refCols are the ref columns of a row: a control's target, else NULL.
+func refCols(r *envelope.Ref) (any, any) {
+	if r == nil {
+		return nil, nil
+	}
+	return r.ID, r.Fingerprint
 }
 
 // Results of addConvInbox.
@@ -196,11 +223,13 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		return "", err
 	}
 	now := time.Now()
+	in = tombstoned(tx, in, verifiedBy) // deleted already (whatever order things arrive in): no text stored
+	refID, refFP := refCols(in.Ref)
 	res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by,
-		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid)
-		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''))`,
+		conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, ref_id, ref_fp, agent_id, receiver_route)
+		VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, nullif(?, ''),nullif(?,''))`,
 		in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy,
-		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli(), in.PID)
+		in.Conv, in.LID, in.Sub, in.Replica, in.Origin, in.Emotion, targetJSON(in.Target), hash, now.UnixMilli(), in.PID, refID, refFP, in.AgentID, receiverRouteJSON(in.ReceiverRoute))
 	if err != nil {
 		return "", err
 	}
@@ -223,6 +252,9 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 			return "", err
 		}
 	}
+	if err := bindReplyReceiverInput(tx, in, verifiedBy); err != nil {
+		return "", err
+	}
 	if fromQuarantine {
 		if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
 			return "", err
@@ -240,12 +272,20 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 // quarantine with it, if held).
 // at (unix ms) places it in the conversation as the forwarding device had
 // it (0: now).
-func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, carrier string, fromQuarantine bool, also func(*sql.Tx) error) (string, error) {
+func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, carrier string, fromQuarantine bool, also func(*sql.Tx) error, guards ...func(*sql.Tx) error) (string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
+	for _, guard := range guards {
+		if err := guard(tx); err != nil {
+			return "", err
+		}
+	}
+	if err := receiverHistoryRoute(tx, in, claimedFP); err != nil {
+		return "", err
+	}
 	var n int
 	if err := tx.QueryRow(`SELECT count(*) FROM inbox WHERE coalesce(verified_by, claimed_fp) = ? AND lid = ?`, claimedFP, in.LID).Scan(&n); err != nil {
 		return "", err
@@ -255,16 +295,23 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 		if at <= 0 || at > time.Now().UnixMilli() {
 			at = time.Now().UnixMilli()
 		}
+		in = tombstoned(tx, in, claimedFP) // history of a deleted message carries no text
+		refID, refFP := refCols(in.Ref)
 		res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, status, state,
-			conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, claimed_fp, via, acked)
-			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), '', ?, ?, nullif(?, ''), 1, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, 1)`,
+			conv, lid, sub, replica, origin, emotion, target, content_hash, received_ms, pid, claimed_fp, via, acked, ref_id, ref_fp, agent_id)
+			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), '', ?, ?, nullif(?, ''), 1, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), ?, ?, 1, ?, ?, nullif(?, ''))`,
 			in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, in.TS, in.Status,
-			in.Conv, in.LID, in.Sub, in.Origin, in.Emotion, targetJSON(in.Target), contentHash(in), at, in.PID, claimedFP, via)
+			in.Conv, in.LID, in.Sub, in.Origin, in.Emotion, targetJSON(in.Target), contentHash(in), at, in.PID, claimedFP, via, refID, refFP, in.AgentID)
 		if err != nil {
 			return "", err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			result = admitted
+			if in.ReceiverRoute != nil {
+				if _, err = tx.Exec(`UPDATE inbox SET receiver_route=? WHERE id=? AND claimed_fp=? AND conv=?`, receiverRouteJSON(in.ReceiverRoute), in.ID, claimedFP, in.Conv); err != nil {
+					return "", err
+				}
+			}
 			if also != nil {
 				if err := also(tx); err != nil {
 					return "", err
@@ -363,7 +410,19 @@ func (s *store) heldAfter(reason string, pos heldPos, limit int) ([]envelope.Env
 // jobKey, if set, also records the message as a local request to this
 // device's own agent (agentjob.go), verified by that key: one message in
 // the conversation, one job, both or neither.
-func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string) error {
+func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func(*sql.Tx, string) error, jobKey string, selected ...*replyBinding) error {
+	originals := copies
+	if len(selected) > 0 && selected[0] != nil {
+		originals = nil
+		for _, c := range copies {
+			if c.in.Sub == "" {
+				originals = append(originals, c)
+			}
+		}
+	}
+	if len(selected) > 0 && selected[0] != nil && selected[0].setup != nil {
+		copies = append(append([]outCopy(nil), copies...), *selected[0].setup)
+	}
 	now := time.Now()
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -382,10 +441,11 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 	for i, c := range copies {
 		env, in := c.env, c.in
 		data, _ := json.Marshal(env)
-		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub)
-			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''))`,
+		refID, refFP := refCols(in.Ref)
+		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, reply_to, status, conv, lid, kind, origin, emotion, target, created_ms, pid, sub, ref_id, ref_fp, agent_id, required_cap, recipient_fp,group_admission)
+			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''),nullif(?,''))`,
 			env.ID, env.To, in.Body, string(data), c.state, c.why, now.Unix(), in.ReplyTo, in.Status, in.Conv, in.LID,
-			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub); err != nil {
+			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub, refID, refFP, in.AgentID, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
 			return err
 		}
 		if i == 0 {
@@ -405,6 +465,11 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			}
 		}
 	}
+	if len(selected) > 0 {
+		if err := bindReplyReceiver(tx, selected[0], originals); err != nil {
+			return err
+		}
+	}
 	if jobKey != "" {
 		in := local
 		if len(copies) > 0 {
@@ -422,21 +487,26 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 	return s.done(tx.Commit())
 }
 
+// waitingCopy is a waiting conversation copy: its recipient and sub (a
+// dedicated record needs its own capability before release).
+type waitingCopy struct{ to, sub, required string }
+
 // convWaiting returns the ids and recipients of waiting conversation
 // messages.
-func (s *store) convWaiting() (map[string]string, error) {
-	rows, err := s.db.Query(`SELECT id, recipient FROM outbox WHERE state = ?`, stateConvWaiting)
+func (s *store) convWaiting() (map[string]waitingCopy, error) {
+	rows, err := s.db.Query(`SELECT id, recipient, coalesce(sub, ''), coalesce(required_cap, '') FROM outbox WHERE state = ?`, stateConvWaiting)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]string{}
+	out := map[string]waitingCopy{}
 	for rows.Next() {
-		var id, to string
-		if err := rows.Scan(&id, &to); err != nil {
+		var id string
+		var w waitingCopy
+		if err := rows.Scan(&id, &w.to, &w.sub, &w.required); err != nil {
 			return nil, err
 		}
-		out[id] = to
+		out[id] = w
 	}
 	return out, rows.Err()
 }
@@ -450,23 +520,26 @@ func (s *store) releaseWaiting(id string) error {
 // ConvMessage is one message of a conversation as this installation holds
 // it, sent or received.
 type ConvMessage struct {
-	ID      string           `json:"id"`  // this copy's envelope id
-	LID     string           `json:"lid"` // the logical id
-	Dir     string           `json:"dir"` // in or out
-	From    string           `json:"from"`
-	Kind    string           `json:"kind"`
-	Body    string           `json:"body"`
-	ReplyTo string           `json:"reply_to,omitempty"`
-	Sub     string           `json:"sub,omitempty"`
-	Replica bool             `json:"replica,omitempty"`
-	Origin  string           `json:"origin,omitempty"`  // the sender's assertion ("" for none)
-	Emotion string           `json:"emotion,omitempty"` // "" means none sent
-	Target  *envelope.Target `json:"target,omitempty"`
-	PID     string           `json:"pid,omitempty"` // the agent participation it is for, from or about
-	Key     string           `json:"key"`           // the sender's key fingerprint (received: the key that verified it)
-	State   string           `json:"state"`         // inbox: its response state; outbox: queued, waiting, custody, delivered, not_delivered, …
-	Detail  string           `json:"detail,omitempty"`
-	At      int64            `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
+	ExcerptPID string           `json:"excerpt_pid,omitempty"` // scope of a claimed snapshot; original PID stays PID
+	ID         string           `json:"id"`                    // this copy's envelope id
+	LID        string           `json:"lid"`                   // the logical id
+	Dir        string           `json:"dir"`                   // in or out
+	From       string           `json:"from"`
+	Kind       string           `json:"kind"`
+	Body       string           `json:"body"`
+	ReplyTo    string           `json:"reply_to,omitempty"`
+	Sub        string           `json:"sub,omitempty"`
+	Replica    bool             `json:"replica,omitempty"`
+	Origin     string           `json:"origin,omitempty"`  // the sender's assertion ("" for none)
+	Emotion    string           `json:"emotion,omitempty"` // "" means none sent
+	Target     *envelope.Target `json:"target,omitempty"`
+	PID        string           `json:"pid,omitempty"`         // the agent participation it is for, from or about
+	AgentID    string           `json:"agent_id,omitempty"`    // the named answer/result author, asserted by its host
+	Key        string           `json:"key"`                   // the sender's key fingerprint (received: the key that verified it)
+	Claimed    string           `json:"claimed_key,omitempty"` // history only: the key the forwarding device says sent it (Key is then empty)
+	State      string           `json:"state"`                 // inbox: its response state; outbox: queued, waiting, custody, delivered, not_delivered, …
+	Detail     string           `json:"detail,omitempty"`
+	At         int64            `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
 
 	// A request this device's agent runs (received, or asked here by this
 	// device's own person): the job's state and detail here (agentjob.go).
@@ -486,8 +559,10 @@ type ConvMessage struct {
 	// History: forwarded by SyncedFrom, a device of this person; its
 	// sender and key (Key is then empty) are that device's word, not
 	// verified here, and it never runs anything.
-	History    bool   `json:"history,omitempty"`
-	SyncedFrom string `json:"synced_from,omitempty"`
+	History    bool      `json:"history,omitempty"`
+	SyncedFrom string    `json:"synced_from,omitempty"`
+	Controls             // reactions, edits and deletion applied to it (controls.go)
+	Exec       *ExecView `json:"exec,omitempty"` // a request: where its executor last said it stands (headless.go)
 }
 
 // convMessages lists conv's messages; a local request to this device's own
@@ -496,16 +571,20 @@ type ConvMessage struct {
 // chain): received messages from them are this person's own, sent from
 // another device.
 func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]ConvMessage, error) {
+	// A received request's agent_id is its local executor stamp. The
+	// request remains its human sender's turn; only replies name an author.
 	rows, err := s.db.Query(`
 		SELECT id, lid, 'in', sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(sub, ''), replica, coalesce(origin, ''),
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
-		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, '')
-		  FROM inbox WHERE conv = ? AND local = 0
+		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
+		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
+		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END
+		  FROM inbox WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN ('drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal')
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient
-		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('history', 'file')
+		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, '')
+		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		ORDER BY ms, 1`, conv, self, selfFP, conv)
 	if err != nil {
 		return nil, err
@@ -518,7 +597,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		var target, to string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID); err != nil {
 			return nil, err
 		}
 		if target != "" {

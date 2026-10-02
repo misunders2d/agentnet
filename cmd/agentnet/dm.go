@@ -16,7 +16,7 @@ import (
 // runPerson shows or sets up this installation's person and its devices
 // (agentnet help person).
 func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
-	usage := errors.New("usage: person | person create NAME | person service | person link | person links | person approve ID | person refuse ID | person remove ADDRESS (see agentnet help person)")
+	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve ID | person refuse ID | person remove ADDRESS (see agentnet help person)")
 	if len(args) == 0 {
 		p, ok, err := a.Person()
 		if err != nil {
@@ -40,6 +40,8 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		return nil
 	}
 	switch {
+	case args[0] == "rename":
+		return runPersonLabel(ctx, a, args[1:], stdout)
 	case args[0] == "create" && len(args) == 2:
 		p, err := a.CreatePerson(ctx, args[1])
 		if errors.Is(err, client.ErrNotPublished) {
@@ -167,12 +169,18 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fs.SetOutput(io.Discard)
 		question := fs.Bool("question", false, "ask the person a question")
 		task := fs.Bool("task", false, "ask the person for work")
+		returnSelection := receiverFlags(fs)
+		replyTo := fs.String("reply-to", "", "reply to exact same-conversation physical/logical reference")
 		var files []client.OutgoingFile
 		fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, client.OutgoingFile{Path: p}); return nil })
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() < 1 || fs.NArg() > 2 || (fs.NArg() == 1 && len(files) == 0) || (*question && *task) {
 			return errors.New("usage: dm send [--question|--task] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
 		}
-		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1), Files: files}
+		receiver, err := returnSelection.selected(a)
+		if err != nil {
+			return err
+		}
+		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1), Files: files, ReplyReceiver: receiver, ReplyTo: *replyTo}
 		if *question {
 			m.Kind = envelope.KindQuestion
 		}
@@ -245,6 +253,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fs := flag.NewFlagSet("dm ask-agent", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		task := fs.Bool("task", false, "a task instead of a question")
+		returnSelection := receiverFlags(fs)
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
 			return errors.New("usage: dm ask-agent [--task] PID TEXT")
 		}
@@ -252,7 +261,11 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if *task {
 			kind = envelope.KindTask
 		}
-		sent, err := a.AskAgent(ctx, fs.Arg(0), kind, fs.Arg(1))
+		receiver, err := returnSelection.selected(a)
+		if err != nil {
+			return err
+		}
+		sent, err := a.AskAgentWithReceiver(ctx, fs.Arg(0), kind, fs.Arg(1), receiver)
 		if err != nil {
 			return err
 		}

@@ -3,11 +3,13 @@
 // when the person asks (with an invitation for this server), then starts
 // the engine and the usual views (app.js, lenses.js) over it.
 import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
-import { decodeInvite, decodeOffer, support, validName } from "./wire.mjs";
+import { decodeInvite, decodeOffer, newID, support, validName } from "./wire.mjs";
+import * as ws from "./workspaces.mjs";
 
 const invitePrefix = "#agentnet-invite-v1:";
 const linkPrefix = "#agentnet-link-v2:"; // a device link from another device of your person (its QR)
 const openPrefix = "#agentnet-open:"; // a notification's click (sw.js)
+const wsOpenPrefix = "#agentnet-workspace-open:"; // a click on another workspace's notification (workspaces-sw.js): <id>:<chan>
 
 // push is the engine's Web Push adapter. The service worker is registered
 // only when the person turns notifications on (or they were on already).
@@ -39,10 +41,101 @@ function openNotified(chan) {
   else pendingOpen = chan;
 }
 function takeOpen() {
+  if (location.hash.startsWith(wsOpenPrefix)) { // opened only once the workspace it names is registered here
+    const [id, chan] = location.hash.slice(wsOpenPrefix.length).split(":");
+    history.replaceState(null, "", location.pathname + location.search);
+    pendingWorkspaceOpen = { id: /^[a-f0-9]{32}$/.test(id) ? id : "", chan: /^[A-Za-z0-9_-]{0,22}$/.test(chan || "") ? chan : "" };
+    if (shell) openWorkspaceRoute();
+    return;
+  }
   if (!location.hash.startsWith(openPrefix)) return;
   const chan = location.hash.slice(openPrefix.length);
   history.replaceState(null, "", location.pathname + location.search);
   openNotified(/^[A-Za-z0-9_-]{0,22}$/.test(chan) ? chan : "");
+}
+
+// ---- workspaces ------------------------------------------------------------------
+//
+// The device this page enrolled (in this site's own store, under its own
+// lock) is the default workspace, adopted as it is. Other workspaces are
+// enrollments of their own (workspaces.mjs): each with its own keys,
+// store, lock, stream and push registration, at the server its invitation
+// named. Nothing received can add a server: only the person's Join, with
+// an invitation, and only to a server this relay's page may connect to.
+let shell = null, memberships = null;
+const pushAdapters = new Map(); // workspace id -> its push adapter (its own registration)
+let pendingWorkspaceOpen = null;
+const originsKey = "agentnet.workspaces.origins.v1"; // servers the person joined by invitation, explicitly
+const consented = () => { try { const l = JSON.parse(localStorage.getItem(originsKey) || "[]"); return Array.isArray(l) ? l : []; } catch (e) { return []; } };
+const consent = (base) => { const l = consented(); if (!l.includes(base)) { l.push(base); localStorage.setItem(originsKey, JSON.stringify(l)); } };
+// pageConnects lists what this page's own policy lets it connect to (the
+// relay's admin sets it: agentnet hub serve --browser-origin), or null when
+// it cannot be read here. The browser enforces it either way.
+async function pageConnects() {
+  try {
+    const r = await fetch(location.pathname, { method: "HEAD", cache: "no-store" });
+    const csp = r.headers.get("content-security-policy");
+    if (!csp) return null;
+    const m = /(?:^|;)\s*connect-src([^;]*)/.exec(csp);
+    return m ? m[1].trim().split(/\s+/) : [];
+  } catch (e) { return null; }
+}
+// allowOrigin: a workspace's server is reached only if the person joined
+// it by invitation here and this page may connect to it. Never from traffic.
+async function allowOrigin(base) {
+  if (base === location.origin) return;
+  const host = new URL(base).host;
+  if (!consented().includes(base)) throw new Error("This browser has not joined a workspace at " + host + ".");
+  const allowed = await pageConnects();
+  if (allowed !== null && !allowed.includes(base)) throw new Error("This server's page may not connect to " + host + ". The admin of this server can allow it (agentnet hub serve --browser-origin).");
+}
+async function workspaces(engine) {
+  shell = new ws.WorkspaceShell();
+  const problems = [];
+  try {
+    memberships = new ws.BrowserMemberships({ shell, Engine, openIDB, locks: navigator.locks, storage: localStorage, fetch: (u, o) => fetch(u, o),
+      decodeInvite, newID, allowOrigin, pushFor: (id) => { const a = ws.workspacePush(id); pushAdapters.set(id, a); return a; } });
+    memberships.adoptDefault(engine, { name: "This server" }); // the device enrolled here, as it is: its store, lock and stream stay
+  } catch (e) { problems.push("Joined workspaces could not be read here: " + e.message); memberships = null; }
+  if (!shell.members.has("default")) shell.register({ id: "default", handle: newID(), name: "This server", endpoint: location.origin, address: engine.address, realm: "", state: "enrolled" }, engine);
+  if (memberships) {
+    for (const r of memberships.records) { // each on its own: one that cannot start now (its server unreachable) keeps the others going
+      if (r.state !== "enrolled" || shell.members.has(r.id)) continue;
+      try { await memberships.start(r); } catch (e) { problems.push(r.name + ": " + e.message); }
+    }
+  }
+  window.agentnetWorkspaces = {
+    shell,
+    async join({ name, invite, agent }) {
+      if (!memberships) throw new Error("Joined workspaces cannot be kept in this browser.");
+      if (!validName(agent || "")) throw new Error("Use lowercase letters, numbers and dashes for the device name, like phone or work-laptop.");
+      let inv;
+      try { inv = decodeInvite(invite); } catch (e) { throw new Error("That is not a complete invitation code. Copy all of it again, or ask the sender for a new link."); }
+      if (inv.cert) throw new Error("This invitation is for the AgentNet program on a computer, not for a browser. Ask the sender for a browser invite link.");
+      const base = ws.workspaceEndpoint(inv.hub);
+      if (base === location.origin) throw new Error("That invitation is for this server, which this browser already holds as its own workspace.");
+      consent(base); // the person's Join with an invitation naming that server
+      return memberships.join({ name, invite, agent });
+    },
+    async disconnect(id) {
+      if (!memberships) throw new Error("Unknown workspace");
+      await memberships.disconnect(id);
+      const still = memberships.records.filter((r) => r.state !== "disconnected").map((r) => r.endpoint);
+      localStorage.setItem(originsKey, JSON.stringify(consented().filter((o) => still.includes(o))));
+    },
+  };
+  return problems;
+}
+// openWorkspaceRoute opens what a workspace notification's click in a new
+// window named, once that workspace is registered here; an unknown one
+// opens nothing (never the workspace shown instead).
+function openWorkspaceRoute() {
+  const p = pendingWorkspaceOpen;
+  if (!p || !shell) return;
+  pendingWorkspaceOpen = null;
+  const e = p.id && shell.members.get(p.id);
+  if (!e || !e.connected) return;
+  shell.openFromRegistration(p.id, p.chan, (chan) => openNotified(chan));
 }
 
 function el(tag, attrs, ...kids) {
@@ -258,18 +351,36 @@ async function start(engine) {
   panel.hidden = true;
   document.getElementById("skin").hidden = false;
   window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn) };
+  // The shell first: adopting this device installs the realm guard on its
+  // transport, and the first stream must not outrun it.
+  const problems = await workspaces(engine);
   engine.start();
   window.addEventListener("online", () => engine.online());
   window.addEventListener("offline", () => engine.offline());
   if (navigator.serviceWorker) {
     navigator.serviceWorker.addEventListener("message", (e) => {
-      if (e.data && e.data.type === "agentnet-open") openNotified(typeof e.data.chan === "string" ? e.data.chan : "");
+      if (!e.data) return;
+      const chan = typeof e.data.chan === "string" ? e.data.chan : "";
+      if (e.data.type === "agentnet-open") { openNotified(chan); return; }
+      if (e.data.type !== "agentnet-workspace-open" || !shell) return;
+      // Routed by which registration the worker belongs to, never by
+      // anything the message says; an unknown source opens nothing.
+      for (const [id, a] of pushAdapters) {
+        if (a.workspaceForEvent(e) !== id) continue;
+        try { shell.openFromRegistration(id, chan, (c) => openNotified(c)); } catch (err) { /* not registered here */ }
+        return;
+      }
     });
   }
   for (const src of ["/assets/loader.js"]) {
     await new Promise((res, rej) => { const s = el("script", { src }); s.onload = res; s.onerror = () => rej(new Error("could not load " + src)); document.head.append(s); });
   }
   if (pendingOpen !== null && window.agentnetOpen) { window.agentnetOpen(pendingOpen); pendingOpen = null; }
+  openWorkspaceRoute();
+  if (problems.length) { // said once, on the page: a workspace that could not start here is not silently gone
+    const note = el("p", { class: "workspace-problems", role: "status" }, "Not connected now: " + problems.join(" · "));
+    document.body.prepend(note);
+  }
 }
 
 main().catch((e) => show("AgentNet", "AgentNet could not start here: " + e.message));

@@ -74,8 +74,10 @@ func (p *presence) end(agent, id string, s *session) {
 		p.mu.Unlock()
 		return // reconnected, or already replaced
 	}
-	before := p.stateLocked(agent)
-	defer func() { p.changedAfterUnlock(agent, before) }()
+	// A session's end changes what the device supports as a whole (every
+	// live session's capabilities count, profile.go) even while another
+	// session keeps it connected: those waiting on it must look again.
+	defer func() { p.mu.Unlock(); p.notify(agent) }()
 	delete(p.sessions[agent], id)
 	if len(p.sessions[agent]) == 0 {
 		delete(p.sessions, agent)

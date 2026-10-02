@@ -218,3 +218,31 @@ func TestFeaturesAndVersion2(t *testing.T) {
 }
 
 func httptestGet(path string) *http.Request { return httptest.NewRequest("GET", path, nil) }
+
+// A profile tells its own device its relay role and nobody else's: the
+// field is set only when the caller asks about itself.
+func TestProfileTellsOwnRoleOnly(t *testing.T) {
+	h, _, _ := testHub(t)
+	bob := joinMember(t, h, "bob")
+	adminID, _ := identity.Generate()
+	secret := protocol.NewID()
+	if err := h.store.createInvite(secret, "boss", true, time.Hour, "admin/test"); err != nil {
+		t.Fatal(err)
+	}
+	if code, e := joinAs(t, h, secret, "boss/x", adminID); code != http.StatusCreated {
+		t.Fatalf("join boss: %d %+v", code, e)
+	}
+	admin := member{id: adminID, addr: "boss/x"}
+	if p := profileOf(t, h, admin, admin); p.SelfRole != protocol.RoleAdmin {
+		t.Fatalf("the admin's own profile: %q", p.SelfRole)
+	}
+	if p := profileOf(t, h, bob, bob); p.SelfRole != protocol.RoleMember {
+		t.Fatalf("a member's own profile: %q", p.SelfRole)
+	}
+	if p := profileOf(t, h, bob, admin); p.SelfRole != "" {
+		t.Fatalf("another's profile carries a role: %q", p.SelfRole)
+	}
+	if p := profileOf(t, h, admin, bob); p.SelfRole != "" {
+		t.Fatalf("another's profile carries a role: %q", p.SelfRole)
+	}
+}

@@ -126,11 +126,18 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 	return v.Features, err
 }
 
+// ownCaps is what a session of this program reads (sorted, as the relay
+// requires). Every session of a device advertises the same list: the
+// relay takes a device to support only what ALL its live sessions do, so a
+// session that said less (link.go's waiting one) would keep senders
+// holding controls, Drive records and statuses for it.
+var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapExternalParticipation, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapNotify, protocol.CapPerson, protocol.CapReplyReceiver, protocol.CapTyping}
+
 // publishOwn publishes this run's capability record and, once per roster,
 // this installation's person.
 func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 	if slices.Contains(feats, protocol.FeatureCaps) && a.session != "" {
-		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: []string{protocol.CapEnv2, protocol.CapNotify, protocol.CapPerson}, TS: time.Now().Unix()}
+		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: ownCaps, TS: time.Now().Unix()}
 		rec.Sign(a.id.Sign)
 		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
 			return err
@@ -243,23 +250,58 @@ func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
 }
 
 // Conversations lists the conversations this installation holds.
-func (a *Agent) Conversations() ([]ConversationInfo, error) { return a.store.conversations() }
+func (a *Agent) Conversations() ([]ConversationInfo, error) {
+	rows, err := a.store.conversations()
+	if err != nil {
+		return nil, err
+	}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		root, _, found, err := a.store.conversation(rows[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		if !found || !externalDM(root) {
+			continue
+		}
+		rows[i].Role = "visitor"
+		if _, member := root.Member(me.info.Person); ok && member {
+			rows[i].Role = "member"
+		}
+	}
+	return a.projectGroupConversations(rows)
+}
 
 // ConversationMessages lists a conversation's messages here, oldest first.
 func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
-	return a.store.convMessages(conv, a.Address, a.id.Public(a.Address).Fingerprint(), a.ownDevices())
+	msgs, err := a.store.convMessages(conv, a.Address, a.id.Public(a.Address).Fingerprint(), a.ownDevices())
+	if err != nil {
+		return nil, err
+	}
+	msgs = a.showExcerpts(msgs)
+	for i := range msgs {
+		// A turn sent from this device opens from its kept copy; one sent
+		// from another device of this person (Via) is a received copy.
+		a.markOpenable(msgs[i].Attachments, msgs[i].Dir == "out" && msgs[i].Via == "")
+	}
+	return msgs, a.decorateConv(conv, msgs)
 }
 
 // ConvOutgoing is a message to send in a conversation.
 type ConvOutgoing struct {
-	Kind    string // message (default), question or task
-	Body    string
-	ReplyTo string
-	Origin  string           // envelope.OriginUI (default) or "agent:<harness>"
-	Emotion string           // required with an agent origin
-	Target  *envelope.Target // the one execution recipient of a question or task, if any
-	PID     string           // the agent participation (AskAgent sets it with the target)
-	Files   []OutgoingFile   // files to attach (a turn only): encrypted to the recipient while sending
+	Kind          string // message (default), question or task
+	Body          string
+	ReplyTo       string
+	Origin        string           // envelope.OriginUI (default) or "agent:<harness>"
+	Emotion       string           // required with an agent origin
+	Target        *envelope.Target // the one execution recipient of a question or task, if any
+	PID           string           // the agent participation (AskAgent sets it with the target)
+	AgentID       string           // named executor author on an answer/result
+	Files         []OutgoingFile   // files to attach (a turn only): encrypted to the recipient while sending
+	ReplyReceiver *ReplyReceiver   // private local return selection
 
 	stored  func()                                 // the message and its files are stored: the spool is theirs
 	sub     string                                 // envelope.SubEvent for participation events (participation.go)
@@ -287,10 +329,13 @@ type ConvCopy struct {
 
 // outCopy is one device's copy being stored.
 type outCopy struct {
-	env   envelope.Envelope
-	in    envelope.Inner
-	state string
-	why   string
+	env            envelope.Envelope
+	in             envelope.Inner
+	state          string
+	why            string
+	required       string
+	recipientFP    string // exact sealed ordinary group recipient; never inferred on retry
+	groupAdmission string // ordinary: original own admission; history: frozen receiver grant epoch
 }
 
 // SendConv sends m in conversation conv: one copy to each current device of
@@ -300,6 +345,13 @@ type outCopy struct {
 // to this person's own devices are replicas (history: never executed),
 // except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
+	binding, err := a.prepareReplyReceiver(m.ReplyReceiver)
+	if err != nil {
+		return ConvSent{}, err
+	}
+	if binding != nil {
+		m.ReplyReceiver = &binding.receiver
+	}
 	root, raw, found, err := a.store.conversation(conv)
 	if err != nil {
 		return ConvSent{}, err
@@ -307,6 +359,31 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if !found {
 		return ConvSent{}, fmt.Errorf("no conversation %s here", conv)
 	}
+	if root.Kind == protocol.ConvKindGroup {
+		if m.PID != "" {
+			info, e := a.participation(conv, m.PID)
+			if e != nil {
+				return ConvSent{}, e
+			}
+			return a.sendExternalParticipation(ctx, root, raw, info, m)
+		}
+		return a.sendGroupTurn(ctx, conv, m, binding)
+	}
+	if m.PID != "" {
+		info, err := a.participation(conv, m.PID)
+		if err != nil {
+			return ConvSent{}, err
+		}
+		if info.External {
+			return a.sendExternalParticipation(ctx, root, raw, info, m)
+		}
+	}
+	receiverStored := false
+	defer func() {
+		if !receiverStored && binding != nil && binding.setup != nil {
+			a.releaseSpool(envelope.Envelope{Blobs: blobsOf(binding.setup.in.Attachments)})
+		}
+	}()
 	me, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return ConvSent{}, err
@@ -323,7 +400,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if m.Kind == "" {
 		m.Kind = envelope.KindMessage
 	}
-	if m.Origin == "" {
+	if m.Origin == "" && m.sub != envelope.SubDriveSpace { // a dedicated record carries no origin
 		m.Origin = envelope.OriginUI
 	}
 	if m.ReplyTo != "" { // a reply stays within its own conversation
@@ -334,7 +411,15 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 	}
 	if len(m.Files) > 0 {
-		if m.sub != "" || m.PID != "" || m.claim != nil || m.selfJob {
+		addressed := false
+		if m.PID != "" && m.Target != nil && (m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) {
+			info, err := a.participation(conv, m.PID)
+			if err != nil {
+				return ConvSent{}, err
+			}
+			addressed = info.Claimable() && m.Target.Address == info.Host.Address && m.Target.Fingerprint == info.Host.Fingerprint && m.Target.AgentID == info.AgentID
+		}
+		if m.sub != "" || m.claim != nil || (m.PID != "" || m.selfJob) && !addressed {
 			return ConvSent{}, errors.New("files go only with a message, question or task a person sends")
 		}
 		if len(m.Files) > envelope.MaxAttachments {
@@ -422,9 +507,15 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
 			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
-			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan}
+			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID}
+		if binding != nil && binding.receiver.Host != nil && target {
+			in.ID = lid
+		}
 		copies = append(copies, outCopy{in: in}) // listed before spooling, so a failure releases what it spooled
 		c := &copies[len(copies)-1]
+		if binding != nil {
+			c.recipientFP = key.Fingerprint()
+		}
 		for _, f := range m.Files {
 			att, err := a.spoolNamed(f, recipient)
 			if err != nil {
@@ -435,6 +526,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		supported, why, notify := false, "cannot reach the Hub", false
 		if ferr == nil {
 			supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
+			if supported && m.sub == envelope.SubDriveSpace { // a dedicated record: only devices that read it
+				supported, why = a.capSupport(ctx, dev.Address, key, feats, protocol.CapDriveSpace)
+			}
 		} else {
 			why += ": " + ferr.Error()
 		}
@@ -464,12 +558,24 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		jobKey = me.info.Fingerprint
 	}
 	local := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan}
-	if err := a.store.addConvOutbox(copies, local, m.claim, jobKey); err != nil {
+		Kind: m.Kind, Body: m.Body, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
+	if binding != nil && m.Target == nil {
+		binding.person = peerID
+	}
+	if err := a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
 	}
+	if err := a.store.addConvOutbox(copies, local, m.claim, jobKey, binding); err != nil {
+		return ConvSent{}, err
+	}
+	receiverStored = true
 	if m.stored != nil {
 		m.stored()
+	}
+	if binding != nil && binding.setup != nil {
+		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
+			return ConvSent{}, e
+		}
 	}
 	defer notifyDaemon(a.home)
 	sent := ConvSent{LID: lid, State: protocol.StateDelivered}
@@ -534,17 +640,25 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 		return
 	}
 	checked := map[string]bool{}
-	for id, to := range waiting {
-		ok, seen := checked[to]
+	for id, w := range waiting {
+		to := w.to
+		cacheKey := to + "\x00" + w.sub + "\x00" + w.required
+		ok, seen := checked[cacheKey]
 		if !seen {
 			key, _, found, err := a.store.peer(to)
 			if err == nil && found {
 				ok, _, _ = a.convSupport(ctx, to, key, feats)
+				if ok && w.sub == envelope.SubDriveSpace {
+					ok, _ = a.capSupport(ctx, to, key, feats, protocol.CapDriveSpace)
+				}
+				if ok && w.required != "" {
+					ok = a.requireParticipationCaps(ctx, key, w.required) == nil
+				}
 			}
 			// Support alone is not enough: the profile just read may have
 			// frozen the person, and a frozen person gets nothing.
 			ok = ok && a.personSendable(to, "")
-			checked[to] = ok
+			checked[cacheKey] = ok
 		}
 		if ok {
 			if err := a.store.releaseWaiting(id); err != nil {
@@ -579,10 +693,14 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 			continue
 		}
 		in, err := envelope.Open(env, a.id, a.Address, sender)
-		if err != nil || in.V != envelope.Version2 {
+		if err != nil || (in.V != envelope.Version2 && in.V != envelope.Version3) {
 			continue
 		}
-		if err := a.admitConv(ctx, env, in, sender, true); err != nil && retryable(err) {
+		admit := a.admitConv
+		if in.V == envelope.Version3 {
+			admit = a.admitControl
+		}
+		if err := admit(ctx, env, in, sender, true); err != nil && retryable(err) {
 			a.convWork.due(convRetry) // the Hub is out of reach: look again from the start next time
 			return false
 		}
@@ -625,16 +743,39 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if !ok {
 		return hold(reasonInvalid, "this installation has no person")
 	}
+	sp, err := a.personOfKey(ctx, env.From, sender)
+	if err != nil {
+		return personErr(err)
+	}
+	if in.Sub == envelope.SubGroupWithdrawal {
+		return a.admitGroupWithdrawalCarrier(ctx, env, in, root, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubGroupInvite || in.Sub == envelope.SubGroupConsent {
+		return a.admitGroupLifecycle(ctx, env, in, root, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubGroupProof || in.Sub == envelope.SubGroupContext {
+		return a.admitGroupCarrier(ctx, env, in, root, sender, fromQuarantine, hold)
+	}
+	if root.Kind == protocol.ConvKindGroup && in.PID != "" {
+		if handled, e := a.admitGroupVisitorInvite(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
+			return e
+		}
+		if handled, e := a.admitExternalParticipation(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
+			return e
+		}
+	}
+	if root.Kind == protocol.ConvKindGroup {
+		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
+	}
+	if handled, err := a.admitExternalParticipation(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
+		return err
+	}
 	if r, member := root.Member(me.info.Person); !member {
 		return hold(reasonInvalid, "this installation's person is not a member")
 	} else if ok, err := a.boundIn(ctx, me.info.Person, r); err != nil {
 		return personErr(err)
 	} else if !ok {
 		return hold(reasonInvalid, "the root binds this person to a roster step it never had")
-	}
-	sp, err := a.personOfKey(ctx, env.From, sender)
-	if err != nil {
-		return personErr(err)
 	}
 	if r, member := root.Member(sp.info.Person); !member {
 		return hold(reasonInvalid, "the sender is not a member of this conversation")
@@ -679,6 +820,14 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return a.admitHistory(ctx, env, in, root, hold, fromQuarantine)
 	case envelope.SubFile:
 		return a.admitFile(env, in, hold)
+	case envelope.SubDriveSpace: // the conversation's Drive space record (drivespace_wire.go): applied under the sender's person, stored quietly
+		return a.admitDriveControl(ctx, env, in, sender, fromQuarantine)
+	}
+	if reason, err := a.checkConversationAgent(in, sender); err != nil {
+		if reason != "" {
+			return hold(reason, err.Error())
+		}
+		return err
 	}
 	if in.ReplyTo != "" { // a reply may name only a message of its own conversation
 		c, err := a.store.convOf(in.ReplyTo)
@@ -738,6 +887,10 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return hold(reasonDuplicate, "a message with the same key and logical id but other content is stored")
 	}
 	if res == admitted {
+		if in.Sub == envelope.SubEvent {
+			a.convWork.due(convRetry)
+			a.kickNow()
+		}
 		a.wakeWorker() // a request, or an event that may let one run or stop
 		a.wakeAlerts()
 		if len(forward) > 0 {

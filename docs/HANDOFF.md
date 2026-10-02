@@ -1,14 +1,30 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+> **Current source candidate — 2026-10-02:** read [NEXT_RELEASE.md](NEXT_RELEASE.md)
+> and [opt-in CLI examples](../README.md#opt-in-cli-selection-in-this-candidate).
+> Groups, named member/outside-host participations, selected reply receivers,
+> authenticated controls/typing and linked history/files have scoped native,
+> browser and rendered qualification. The stable candidate has accepted
+> composite regression coverage: 436 client tests pass, 6 opt-in tests skip;
+> the original whole command timed out, so no single-command full-suite pass
+> is claimed. Synthetic migration/snapshot rollback checks also pass; actual
+> same-source updater handoff does not prove historical schema migration.
+> Teams snapshot review/invitations and selected history/files are qualified at
+> native 390px/browser 1280px (MEL-502: In Review). Stale proposals require
+> explicit renewed consent; later team changes grant no group authority. Actual
+> Linux visible notification/click, physical Windows/macOS/Android and live non-prod
+> Drive gates remain open. Historical releases below do not qualify this
+> candidate; no new release or deployment is accepted.
+
 > **Target Audience:** Any incoming coding agent (Claude, Codex, Antigravity, Pi) or human engineer starting fresh in this repository without access to prior chat transcripts.
 >
-> **Current messenger preview — 2026-09-30:** [v0.5.0](https://github.com/misunders2d/agentnet/releases/tag/v0.5.0) is published from `d30c087`. [Final CI 36698046881](https://github.com/misunders2d/agentnet/actions/runs/36698046881) passed native Linux, macOS and Windows, Linux race and real IndexedDB checks, and the container journey. Seven uploaded asset digests match the final archive build. Stable/latest remains v0.2.1; other clients install this preview explicitly with `agentnet update v0.5.0`. No schema or wire-version change from v0.4.0.
+> **Historical published preview — 2026-09-30:** [v0.5.0](https://github.com/misunders2d/agentnet/releases/tag/v0.5.0) is published from `d30c087`. [Final CI 36698046881](https://github.com/misunders2d/agentnet/actions/runs/36698046881) passed native Linux, macOS and Windows, Linux race and real IndexedDB checks, and the container journey. Seven uploaded asset digests match the final archive build. Stable/latest remains v0.2.1; other clients install this preview explicitly with `agentnet update v0.5.0`. No schema or wire-version change from v0.4.0.
 >
-> **Current live rollout:** the operator's relay and Linux laptop run v0.5.0. The relay image is `agentnet-revived:v0.5.0-d30c087`, using the unchanged external volume `agentnet-revived-v040-09c4da6`; public HTTPS reports v0.5.0. The laptop's official updater verified the release and switched its running daemon at the same UI address. Notebook is installed in the laptop's local skins directory only. No custom skin was installed on the relay; its catalog lists the default UI only. Deployment configuration owns the relay hostname, never product defaults. Other clients, including the remote responder installations, are not claimed updated by this rollout.
+> **Historical rollout observation — 2026-09-30:** the operator's relay and Linux laptop run v0.5.0. The relay image is `agentnet-revived:v0.5.0-d30c087`, using the unchanged external volume `agentnet-revived-v040-09c4da6`; public HTTPS reports v0.5.0. The laptop's official updater verified the release and switched its running daemon at the same UI address. Notebook is installed in the laptop's local skins directory only. No custom skin was installed on the relay; its catalog lists the default UI only. Deployment configuration owns the relay hostname, never product defaults. Other clients, including the remote responder installations, are not claimed updated by this rollout.
 >
-> **Live UI evidence:** the sole Chrome tab passed laptop Chats/People/Activity/profile and existing Zenbook-thread checks at 1280 and 390 pixels, with no overflow or page errors. The laptop profile lists laptop/pixel/zenbook. Locally installed Notebook mounted independently, read the same 13-message thread and switched back to the default UI. No send/decision/link/notification-setting POST was made during this smoke. Hosted landing/assets/version checks passed; the relay catalog contains only default. Hosted loader/app bytes match release source. Screenshots remain private. Physical-phone installation, standalone app launch and push were not tested; narrow settings tabs still scroll, and grouped device conversations still require an extra navigation step.
+> **Historical v0.5.0 live UI evidence:** the sole Chrome tab passed laptop Chats/People/Activity/profile and existing Zenbook-thread checks at 1280 and 390 pixels, with no overflow or page errors. The laptop profile lists laptop/pixel/zenbook. Locally installed Notebook mounted independently, read the same 13-message thread and switched back to the default UI. No send/decision/link/notification-setting POST was made during this smoke. Hosted landing/assets/version checks passed; the relay catalog contains only default. Hosted loader/app bytes match release source. Screenshots remain private. Physical-phone installation, standalone app launch and push were not tested; narrow settings tabs still scroll, and grouped device conversations still require an extra navigation step.
 >
-> **Batch scope and remaining work:** compact Chats/People/Activity/profile navigation, scalable lists, settings/appearance, independently loaded trusted UI packages, question clarification guidance, labeled earlier task context and linked-device setup guidance shipped. CI also exposed a pending-link subscription race: `bfa4d84` reads persisted refusal/activation/expiry before waiting; deterministic regressions cover all three. The later Windows reminder failure was a fixture deadline racing cancellation; test-only `d30c087` cancels first, then evaluates past the deadline explicitly. MEL-475 owns the remaining skin contract/conformance/sharing work; skins must ultimately install per client without relay cooperation. Desktop local installation exists; browser-local package installation does not yet exist (the hosted-browser catalog currently comes from its relay). LLM review is advisory, not a security guarantee. MEL-498 tracks further human UX refinements; MEL-497 retains task clarification/remote review gaps; MEL-499 covers task context and MEL-500 the linking race.
+> **Historical v0.5.0 batch scope and remaining work:** compact Chats/People/Activity/profile navigation, scalable lists, settings/appearance, independently loaded trusted UI packages, question clarification guidance, labeled earlier task context and linked-device setup guidance shipped. CI also exposed a pending-link subscription race: `bfa4d84` reads persisted refusal/activation/expiry before waiting; deterministic regressions cover all three. The later Windows reminder failure was a fixture deadline racing cancellation; test-only `d30c087` cancels first, then evaluates past the deadline explicitly. MEL-475 owns the remaining skin contract/conformance/sharing work; skins must ultimately install per client without relay cooperation. Desktop local installation exists; browser-local package installation does not yet exist (the hosted-browser catalog currently comes from its relay). LLM review is advisory, not a security guarantee. MEL-498 tracks further human UX refinements; MEL-497 retains task clarification/remote review gaps; MEL-499 covers task context and MEL-500 the linking race.
 >
 > **Messenger preview — 2026-09-29:** [v0.4.0](https://github.com/misunders2d/agentnet/releases/tag/v0.4.0) is published as a prerelease from `09c4da6`. [Final CI 36609670816](https://github.com/misunders2d/agentnet/actions/runs/36609670816) passed native Linux, macOS and Windows, Linux race and real IndexedDB checks, and the container journey. The preceding Windows failures were corrected in test-only commits `b0b8e7f` (close an opened file) and `09c4da6` (realistic heartbeat timing); their failed run remains recorded. All seven uploaded release asset digests match the reproducible build. Stable/latest remains v0.2.1; install this preview with `agentnet update v0.4.0`.
 >
@@ -79,25 +95,21 @@ Every change to AgentNet must uphold these fundamental invariants:
    - Inbox checks, file updates, and review notices wake reactively via daemon stream events, local socket kicks, or job completions.
 
 5. **Questions vs Tasks vs Follow-ups**:
-   - **Question (`agentnet ask`)**: Automatically answered **only** if the sender is approved (`agentnet approve <address>`) and a responder is active. Runs with the recipient's **own setup** (skills, plugins, MCP servers, permissions), with harness-specific fencing:
+   - **Direct-device default question (`agentnet ask`)**: Automatically answered **only** if the sender is approved (`agentnet approve <address>`) and a responder is active. Runs with the recipient's **own setup** (skills, plugins, MCP servers, permissions), with harness-specific fencing:
      - Claude Code: `--permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit`.
      - Codex CLI: `--sandbox read-only -c approval_policy="never"`.
-     - Pi: `--tools read,grep,find,ls` (read-only tool subset).
+     - Pi: `--exclude-tools bash,edit,write,powershell`; recipient extension tools remain available with their configured effects. Pi has no read-only shell or unattended approval gate. The new preset has isolated SDK tool-selection evidence, not live-model qualification.
      - Tools and Bash commands already permitted by user settings keep their native effects (not a blanket sandbox). If the model cannot answer without forbidden tools, it responds `AGENTNET: NEEDS-HUMAN`.
-   - **Task (`agentnet task`)**: Stored as `awaiting` for the person and run only after `agentnet accept <id>` (or declined with `agentnet decline <id>`), unless the recipient has given that sender's **exact verified key** standing permission (`agentnet approve --tasks ADDRESS` or `agentnet accept --always <id>`). A grant is local only, never set by anything received or by names, stops holding when that key changes (until granted again), and never reruns failed or interrupted work; either way the responder runs with the recipient's normal permissions. A task inside a DM (conversation) is held for the person and nothing runs it. Workers never touch open user sessions.
-   - **Follow-Up (`--follow-up <text>`)**: Stored locally on the sender's machine with the outgoing request. When the peer's first reply arrives, it triggers a single local summary run (`summarized` or `needs_human`). It sends nothing back to the coworker and never auto-executes tasks.
+   - **Task (`agentnet task`)**: Stored as `awaiting` for the person and run only after `agentnet accept <id>` (or declined with `agentnet decline <id>`), unless the recipient has given that sender's **exact verified key** standing permission (`agentnet approve --tasks ADDRESS` or `agentnet accept --always <id>`). A grant is local only, never set by anything received or by names, stops holding when that key changes (until granted again), and never reruns failed or interrupted work; either way the responder runs with the recipient's normal permissions. An ordinary conversation question/task addressed to the person does not execute. A request addressed to an accepted agent participation can execute under its exact current host/member/epoch and task grants. Background workers use their own sessions; only an explicitly selected, verified native receiver adapter may deliver continuation input to a user session.
+   - **Legacy follow-up (`--follow-up <text>`)**: One local summary of the first correlated reply; sends nothing back. This is separate from explicit selected-receiver continuation.
+   - **Selected reply receiver**: `--reply-receiver human|AGENT_ID|session:HANDLE` binds before enqueue. Managed receivers need original `--continue TEXT --continue-mode question|task`; exact native sessions use verified adapter registration. `--reply-binding ID` reuses frozen authority/context. Optional `--on-close-agent AGENT_ID` authorizes a managed backup at send time, only on a supported verified normal shutdown. Unknown/changed bindings never fall back to the default. Registration is not liveness; accepted input is not completed effects. Receiver-local authority is separate from remote task grants.
 
 6. **Interactive Session Awareness & Hooks Contract**:
-   - `agentnet hooks install claude|codex|pi`: Installs handlers (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`; for Pi, an extension with the matching events and an idle watch).
-   - **Durable History vs Model Context**: Hooks provide metadata only (arrival summaries, at most 8 items per call). Full conversation text stays behind explicit `agentnet conversation <id>` reads.
-   - **Per-Harness & Per-Session Cursors**: Each interactive session maintains its own cursor over `inbox.arrival`, independent of other sessions.
-   - **No Idle Wake**: Claude and Codex sessions check arrivals only at natural turn hook points; an idle session waiting at a prompt is not woken up. Pi (below) shows a notice while idle without starting a model turn.
-   - **Claude Stop Hook**: Live (`decision: "block"`, `reason: text`).
-   - **Codex Hooks Adoption**: Installed into `~/.codex/hooks.json`; adoption requires manual user trust in `/hooks`.
-   - **Windows Hooks Refused**: Hook installation is explicitly refused on Windows (`MEL-414`).
-   - **Pi Hooks**: `agentnet hooks install pi` writes an extension for upstream Pi 0.87.1 (see [M4](revival/M4.md)): metadata-only notices at session start, with a prompt, at the end of a run, and while idle (a notice plus a message for the next turn, without starting a model turn). Evidence: tests and a live Pi run in RPC mode without a model; not run in an interactive Pi TUI or with OMP.
-   - **Antigravity Hooks**: Unsupported (no verified hook contract).
-   - Parallel hook calls in one session may repeat an arrival. Codex trust/adoption on the operator laptop remains unconfirmed; installation is not live proof. No request-origin routing chooses one foreground session: cursors are independent for each hooked session.
+   - Inspect `agentnet hooks show claude|codex|pi|omp`; install only by explicit local choice. Codex requires native hook trust. Windows hooks and Antigravity remain unsupported.
+   - Generic arrival attention keeps per-harness/session cursors and bounded metadata; it does not choose a receiver or grant authority. Full history remains an explicit `agentnet conversation ID` read.
+   - Explicit selected native receivers reuse verified adapters and durable correlation/receipt checks. Pi/OMP actual idle, busy/tool, file and restart delivery and Codex busy queue/clean-close backup have scoped evidence. OMP 18.4.8 clean-close backup also has scoped actual evidence: original session/file preserved and the selected managed backup ran once after daemon restart, using a deterministic synthetic executable. Claude selected-session idle continuation has actual product evidence: one exact physical reply ACK and a native turn boundary. Dispatch-busy continuation is also qualified: a second signed input waits durably during native prompt dispatch, followed by two ordered native turns and exact physical ACKs, default0/no replay, without a terminal nudge. In-flight sampling/tool timing and business-tool effects remain untested. Inactive or uncertain input stays bound/pending without arbitrary terminal injection or reassignment.
+   - Claude's opt-in Linux channel assets are shown/installed with `hooks show|install claude --channel`; installation prints an MCP fragment, never enables channels, installs Node, or changes MCP configuration. Native development-channel admission and consent remain explicit. SessionEnd marks detached, not a verified normal shutdown for backup; input acceptance never proves model completion.
+   - Historical hook versions and qualification are retained in [M4](revival/M4.md) and the release ledger below. Source contracts: [hook dispatcher](../cmd/agentnet/hook.go), [selection flags](../cmd/agentnet/receivers.go), [native registration](../internal/client/replysessions.go).
 
 7. **Persistent Background Sessions & Context Retention (MEL-425)**:
    - Claude/Codex store `session_ref` on an inbox job and `session_head` per harness/session ID. Resume requires the first linked ancestor to be the latest job in that native session, to have ended cleanly, and to match peer, mode, canonical directory and preset. Branching from an older job, a changed preset/directory/mode, or interrupted/failed/cancelled/needs_human state starts fresh. Failed resume is not retried automatically. There is no context-exhaustion recovery mechanism in AgentNet. Native context lives in the harness store with harness-controlled retention; AgentNet history is separate. Pi stays one-shot. See M4 for full rules.
@@ -111,7 +123,7 @@ Every change to AgentNet must uphold these fundamental invariants:
 
 ---
 
-## 3. Shipped State & Verification Matrix
+## 3. Historical Shipped State & Verification Matrix
 
 ### 3.1 Stable Release Baseline (preview status above)
 - **Client Version:** `v0.2.1`
@@ -130,7 +142,7 @@ All native source qualification jobs passed in GitHub Actions ([Run 36341139910]
 - **Container**: Hub image build, bootstrap, backup/restore, offline catchup (`scripts/hub-container-test.sh`).
 
 ### 3.3 Live Verification Ledger
-The following capabilities have been tested and verified on live machines:
+The following historical milestone capabilities were tested on live machines; they do not qualify the current source candidate:
 - **Claude Code 2.1.283 (Linux)**:
   - Native background session resumption verified live at `c7b5d1a` / `0a73a04`.
   - Skills-on question mode verified live (`8ce73cc` / `8ed75da`): synthetic skill read delivered secret; file creation request answered `AGENTNET: NEEDS-HUMAN`; Write tool removed by flags.
@@ -152,7 +164,7 @@ The following capabilities have been tested and verified on live machines:
 ### 3.4 Honest Qualification Limits (What is NOT Claimed)
 - **Runtime Tool Refusal**: Models answered `NEEDS-HUMAN` per system prompt; active refusal by the sandbox/harness was not exercised.
 - **Allowed Bash/MCP Effects**: Tools and commands already auto-approved in user settings keep their effects; AgentNet does not provide a hypervisor sandbox.
-- **Pi Broad Qualification & Persistent Sessions**: Pi is qualified **only** for the single diagnostic question and accepted task demonstrated; persistent sessions are not supported for Pi.
+- **Historical Pi background qualification**: These milestone runs proved one diagnostic question and accepted task, not persistent background sessions. Current explicit Pi native-session receiver evidence is separate from this old background-worker limit.
 - **macOS & Windows Desktop UI**: macOS `osascript` builds and passes test suites, but has NO live desktop API execution evidence. Windows `Shell_NotifyIconW` passes native API execution in CI, but real physical desktop balloon display has not been verified live.
 - **Platform Deployments**: Hub platform TLS tested with local proxy; not deployed to Railway or cloud PaaS.
 - **Security boundary:** local history is plaintext in owner-only storage, not an encrypted local database. The Hub sees routing metadata and is trusted at first contact; compare fingerprints independently. There is no forward secrecy or retroactive removal of delivered data. Responder plaintext reaches its chosen model provider. See M1 for the full limits.
@@ -291,7 +303,12 @@ If a local database or key file is damaged:
 
 ---
 
-## 6. What to Do Next & Active Boundaries
+## 6. Historical Roadmap & Recorded Boundaries
+
+The entries below preserve earlier releases, decisions and their then-open
+limits. They are not the current implementation inventory or worker roster.
+Use [NEXT_RELEASE.md](NEXT_RELEASE.md) for current acceptance gates; current
+source supports groups and explicit selected receivers as described above.
 
 ### 6.1 Immediate Focus Areas
 1. **Pilot Deployment & Real-World Use**:

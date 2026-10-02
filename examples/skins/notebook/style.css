@@ -1,12 +1,49 @@
-#skin.notebook { display: block; overflow-y: auto; padding: 32px max(20px, calc((100vw - 800px) / 2)); background: #f6f3eb; color: #292f36; font-family: Georgia, serif; }
-.notebook header { border-bottom: 2px solid #292f36; padding-bottom: 20px; }
+#skin.notebook { display: block; overflow-y: auto; padding: 24px max(16px, calc((100vw - 960px) / 2)) 80px; background: #f6f3eb; color: #292f36; font-family: Georgia, serif; min-height: 100%; box-sizing: border-box; }
+.notebook header { border-bottom: 2px solid #292f36; padding-bottom: 16px; }
 .notebook h1 { font-size: 36px; margin: 0 0 8px; }
-.notebook select { max-width: 100%; margin: 12px 0 0; padding: 10px; color: #292f36; background: white; border: 1px solid #8b9094; }
-.notebook .message { padding: 20px 0; border-bottom: 1px solid #d7d2c6; }
+.notebook h2 { font-size: 24px; margin: 0 0 12px; }
+.notebook h3 { font: 600 12px system-ui; letter-spacing: .06em; text-transform: uppercase; color: #595f64; margin: 16px 0 6px; }
+.notebook .me, .notebook .limits { font: 13px system-ui; color: #595f64; margin: 6px 0 0; }
+.notebook .columns { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.notebook nav ul { list-style: none; margin: 0; padding: 0; }
+.notebook nav li { margin: 0 0 4px; }
+.notebook nav button { display: block; width: 100%; text-align: left; padding: 8px 10px; margin: 0; border: 1px solid transparent; background: transparent; color: #292f36; border-radius: 6px; font: inherit; }
+.notebook nav button:hover { background: #efeadc; }
+.notebook nav button[aria-current="true"] { border-color: #316764; background: #e6efe9; }
+.notebook nav button strong { font-weight: 600; }
+.notebook nav button span { color: #595f64; font-size: 13px; }
+.notebook nav button em { color: #992d20; font-style: normal; font-size: 12px; }
+.notebook .message { padding: 16px 0; border-bottom: 1px solid #d7d2c6; }
 .notebook .message.out { border-left: 3px solid #316764; padding-left: 16px; }
+.notebook .message .event { font-style: italic; color: #595f64; }
 .notebook p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
-.notebook small { font: 12px system-ui; color: #595f64; }
-.notebook form { padding: 24px 0 60px; }
-.notebook textarea { width: 100%; min-height: 90px; padding: 12px; background: white; color: #292f36; border: 1px solid #8b9094; }
-.notebook button { padding: 10px 20px; margin: 8px; border: 1px solid #316764; background: #316764; color: white; border-radius: 3px; }
-.notebook .status { color: #992d20; }
+.notebook small { font: 12px system-ui; color: #595f64; display: block; }
+.notebook .files, .notebook .clippings { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.notebook .clipping { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 10px; background: #fff; border: 1px solid #d7d2c6; border-radius: 4px; font: 13px system-ui; }
+.notebook .clipping small { display: inline; }
+.notebook .clipping button { padding: 4px 10px; margin: 0; }
+.notebook .clipping img { display: block; max-width: 100%; max-height: 320px; margin: 6px 0; }
+.notebook .clipping a { color: #316764; }
+.notebook form { padding: 24px 0 56px; position: sticky; bottom: 0; background: #f6f3eb; } /* room under Send for the host's AgentNet button */
+.notebook .to { font: 13px system-ui; color: #316764; margin: 0 0 6px; min-height: 1.2em; }
+.notebook textarea { width: 100%; min-height: 90px; padding: 12px; background: white; color: #292f36; border: 1px solid #8b9094; box-sizing: border-box; font: inherit; }
+.notebook select { margin: 8px; padding: 8px; font: inherit; color: #292f36; background: white; border: 1px solid #8b9094; }
+.notebook button { padding: 10px 20px; margin: 8px 8px 0 0; border: 1px solid #316764; background: #316764; color: white; border-radius: 3px; font: inherit; }
+.notebook button.send { float: right; }
+.notebook .status { color: #992d20; font: 13px system-ui; min-height: 1.2em; }
+@media (max-width: 760px) {
+  .notebook form { position: static; padding-bottom: 60px; } /* the page scrolls past the composer; nothing sits under the host button */
+  .notebook button.send { float: none; display: block; width: 100%; margin: 8px 0 0; }
+  .notebook .columns { grid-template-columns: 1fr; }
+  .notebook nav { max-height: 30vh; overflow-y: auto; border-bottom: 1px solid #d7d2c6; }
+}
+.notebook .gone { color: #595f64; font-style: italic; }
+.notebook .reactions, .notebook .tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+.notebook .reactions button, .notebook .tools button { padding: 4px 10px; margin: 0; font: 13px system-ui; }
+.notebook .reactions .reaction { background: #fff; color: #292f36; border-color: #8b9094; }
+.notebook .reactions .reaction.mine { background: #e6efe9; border-color: #316764; }
+.notebook .reactions .pick { background: transparent; color: #292f36; border-color: #d7d2c6; }
+.notebook .editbox { display: grid; gap: 6px; margin-top: 8px; }
+.notebook .editbox textarea { min-height: 60px; }
+.notebook .typing-preference { display: flex; align-items: flex-start; gap: .5rem; margin: .65rem 0; }
+.notebook .typing-preference input { flex: 0 0 auto; width: auto; margin-top: .2rem; }

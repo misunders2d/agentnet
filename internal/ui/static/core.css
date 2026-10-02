@@ -85,3 +85,41 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 
 #skin { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .skin-switch { position: fixed; right: 10px; bottom: 10px; z-index: 100; padding: 8px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 8px; }
+
+/* The host's own strip over an installed skin (#host-bar in the page, its
+   contents in a shadow tree that links this file). Above everything, never
+   inside the skin's mount, so no skin stylesheet can hide or move it. */
+#host-bar { position: fixed; right: 10px; bottom: 10px; z-index: 2147483647; display: flex; align-items: flex-end; gap: 8px; max-width: calc(100vw - 20px); font: 13px/1.4 system-ui, sans-serif; color: var(--text); }
+.host-notification { max-width: min(240px, calc(100vw - 150px)); }
+.host-notification[hidden] { display: none; }
+.host-notification .host-pill { max-width: 100%; white-space: normal; text-align: left; }
+.host-notification span.host-pill { cursor: default; }
+.host-pill { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); cursor: pointer; font: inherit; }
+.host-pill:focus-visible, .host-menu button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.host-menu { position: absolute; right: 0; bottom: 44px; min-width: 230px; display: grid; gap: 2px; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+.host-menu[hidden] { display: none; }
+.host-menu button { display: block; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.host-menu button:hover { background: var(--hover); }
+.host-menu p { margin: 0; padding: 6px 10px; color: var(--muted); font-size: 12px; }
+/* An installed skin's root inside its shadow tree: the box the skin owns. */
+.skin-root { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+
+/* The workspace strip (#workspace-shell, host-owned, above every
+   interface): the module's selector (workspaces.css) plus Join and
+   Disconnect, and the join form under it. */
+#workspace-shell .workspace-tools { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+#workspace-shell .workspace-tools .btn { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); cursor: pointer; }
+#workspace-shell .workspace-tools .btn:focus-visible, #workspace-shell .workspace-join button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+#workspace-shell .workspace-note { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+#workspace-shell .workspace-join { display: grid; gap: 6px; max-width: 34rem; padding: 10px 16px 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
+#workspace-shell .workspace-join label { display: grid; gap: 3px; font-size: 13px; font-weight: 600; }
+#workspace-shell .workspace-join input, #workspace-shell .workspace-join textarea { width: 100%; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-weight: 400; }
+#workspace-shell .workspace-join textarea { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; resize: vertical; }
+#workspace-shell .workspace-join .btn { justify-self: start; font: inherit; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); cursor: pointer; }
+#workspace-shell .workspace-join .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+#workspace-shell .workspace-error { margin: 0; color: var(--danger); font-size: 13px; }
+#workspace-shell .workspace-error:empty { display: none; }
+.workspace-problems { margin: 0; padding: 6px 16px; font-size: 13px; background: var(--attn-soft); color: var(--attn); border-bottom: 1px solid var(--attn-line); }
+@media (max-width: 480px) { #workspace-shell .workspace-tools { margin-left: 0; width: 100%; } }
+
+.join-card p { overflow-wrap: anywhere; }

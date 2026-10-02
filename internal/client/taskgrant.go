@@ -52,6 +52,9 @@ func demoteGranted(tx *sql.Tx, address, keep, why string) error {
 	_, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ?, notified = 0, review_sent = 0
 		WHERE sender = ? AND kind = ? AND state = ? AND (? = '' OR verified_by IS NOT ?)`,
 		stateAwaiting, "not run without asking: "+why+"; accept ID runs it once", address, envelope.KindTask, statePending, keep, keep)
+	if err == nil { // back in review: reported afresh to each recipient
+		_, err = tx.Exec(`DELETE FROM reported WHERE item IN (SELECT id FROM inbox WHERE sender = ? AND kind = ? AND state = ? AND review_sent = 0)`, address, envelope.KindTask, stateAwaiting)
+	}
 	return err
 }
 

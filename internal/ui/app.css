@@ -1,0 +1,2 @@
+/* This workspace is not connected to its server now (a status, not an alert). */
+.offline { background: var(--attn-soft); color: var(--attn); border-bottom: 1px solid var(--attn-line); }

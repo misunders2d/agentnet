@@ -290,14 +290,23 @@ type ConvRoot struct {
 	Members []ConvMember `json:"members"`
 	Nonce   string       `json:"nonce"`
 	Created int64        `json:"created"`
-	Sig     []byte       `json:"sig,omitempty"`
+	// Group roots only (version 3, protocol/group*.go): a DM root (version
+	// 2) carries none of these, so its canonical bytes are unchanged.
+	Realm  string   `json:"realm,omitempty"`
+	Title  string   `json:"title,omitempty"`
+	Admins []string `json:"admins,omitempty"`
+	Sig    []byte   `json:"sig,omitempty"`
 }
 
 // Canonical returns the bytes the creator signs; ID is their hash.
 func (c ConvRoot) Canonical() []byte {
 	c.Sig = nil
 	data, _ := json.Marshal(c)
-	return append([]byte(ConvRootDomain), data...)
+	domain := ConvRootDomain
+	if c.V == GroupRootVersion { // group roots (groups.go); DM bytes unchanged
+		domain = GroupRootDomain
+	}
+	return append([]byte(domain), data...)
 }
 
 // ID is the conversation id.
@@ -318,8 +327,14 @@ func (c ConvRoot) Member(person string) (roster string, ok bool) {
 
 // Validate checks the shape of c (not its signature or rosters).
 func (c ConvRoot) Validate() error {
+	if c.V == GroupRootVersion {
+		return ValidateGroupRoot(c)
+	}
 	if c.V != ConvRootVersion || c.Kind != ConvKindDM {
 		return errors.New("conversation: unsupported root")
+	}
+	if c.Realm != "" || c.Title != "" || len(c.Admins) != 0 {
+		return errors.New("conversation: a DM root carries no realm, title or admins")
 	}
 	if !ValidID(c.Creator.Person) || !ValidHash(c.Creator.Roster) || !ValidFingerprint(c.Creator.Fingerprint) {
 		return errors.New("conversation: invalid creator")
@@ -361,11 +376,14 @@ func (c ConvRoot) Verify(creatorKey ed25519.PublicKey) error {
 // ParseConvRoot decodes a signed root strictly and checks its shape.
 func ParseConvRoot(data []byte) (ConvRoot, error) {
 	var c ConvRoot
-	if len(data) > MaxConvRoot {
+	if len(data) > MaxGroupRoot {
 		return c, errors.New("conversation: root too large")
 	}
 	if err := decodeStrictJSON(data, &c); err != nil {
 		return c, fmt.Errorf("conversation: %w", err)
+	}
+	if len(data) > ConvRootVersionLimit(c.V) { // a DM root keeps its 2 KiB bound
+		return c, errors.New("conversation: root too large")
 	}
 	return c, c.Validate()
 }
@@ -393,6 +411,25 @@ const CapEnv2 = "env2"
 // roots of version 2, fan-out sends and history (a device without it is
 // asked to update, never sent a partial conversation).
 const CapPerson = "person2"
+
+// Relay membership roles (Profile.SelfRole).
+const (
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+)
+
+// CapDriveSpace means the device reads a conversation's Drive space record
+// (envelope.SubDriveSpace): a dedicated version 2 record, not a control.
+const CapDriveSpace = "drv1"
+
+// CapHeadless means the device reads execution status and operator
+// decisions (version 3 controls "status" and "decision") and structured
+// review reports. CapControl alone says nothing about these.
+const CapHeadless = "hdl1"
+
+// CapControl means the device reads version 3 controls (reactions,
+// revisions, retractions of messages).
+const CapControl = "ctl3"
 
 // Bounds of a capability record.
 const (
@@ -474,8 +511,12 @@ func ParseCapsRecord(data []byte) (CapsRecord, error) {
 // and new programs count as the least capable. Signatures prove each record,
 // not the relay's freshness claim.
 type Profile struct {
-	Person   json.RawMessage   `json:"person,omitempty"`
-	Sessions []string          `json:"sessions,omitempty"`
+	Person   json.RawMessage `json:"person,omitempty"`
+	Sessions []string        `json:"sessions,omitempty"`
+	// SelfRole is the caller's own membership role on this relay ("admin"
+	// or "member"), set only when the caller asks for its own profile;
+	// absent for anyone else's profile and on older relays.
+	SelfRole string            `json:"self_role,omitempty"`
 	Live     bool              `json:"live"` // Sessions are live now (else: the last one)
 	Caps     []json.RawMessage `json:"caps,omitempty"`
 }
@@ -511,6 +552,7 @@ const (
 	FeatureEnv2    = "env2"    // accepts envelope version 2
 	FeaturePerson  = "person2" // person roster chains: PUT /v1/person, chains, device links, profiles
 	FeatureCaps    = "caps"    // PUT /v1/caps, profiles
+	FeatureEnv3    = "env3"    // accepts envelope version 3 (controls)
 )
 
 // ValidHash reports whether s is a lowercase hex SHA-256.

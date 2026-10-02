@@ -16,6 +16,10 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Provider is what the page needs from its backing store. It covers only
@@ -53,15 +57,19 @@ type Simulator interface {
 
 // Overview is what the page shows around the open thread.
 type Overview struct {
-	Demo       bool             `json:"demo"`
-	Me         Me               `json:"me"`
-	Threads    []ThreadSummary  `json:"threads"`
-	Review     []ReviewItem     `json:"review"`
-	Quarantine []QuarantineItem `json:"quarantine"`
-	Release    string           `json:"release,omitempty"` // a recommended build other than this one
-	Seq        uint64           `json:"seq"`
-	Version    string           `json:"version"` // the program serving the page (an update changes it)
-	Directory  Directory        `json:"directory"`
+	Groups           bool                  `json:"groups"` // explicit human group operations; never agent execution
+	GroupInvitations []GroupInvitationView `json:"group_invitations,omitempty"`
+	ReplyReceivers   bool                  `json:"reply_receivers"` // native local continuation selection/read-only state
+	ReplySessions    bool                  `json:"reply_sessions"`  // safe native registration catalog, not process liveness
+	Demo             bool                  `json:"demo"`
+	Me               Me                    `json:"me"`
+	Threads          []ThreadSummary       `json:"threads"`
+	Review           []ReviewItem          `json:"review"`
+	Quarantine       []QuarantineItem      `json:"quarantine"`
+	Release          string                `json:"release,omitempty"` // a recommended build other than this one
+	Seq              uint64                `json:"seq"`
+	Version          string                `json:"version"` // the program serving the page (an update changes it)
+	Directory        Directory             `json:"directory"`
 	// Human DMs, when the provider holds them (Persons): this installation's
 	// person (nil until the person creates one), the people known or listed,
 	// and the two-person conversations. They are never part of Threads.
@@ -195,6 +203,7 @@ type PersonView struct {
 // AgentLink is one person's agent, on their device, and the DMs it was
 // invited into here.
 type AgentLink struct {
+	AgentID string      `json:"agent_id,omitempty"`
 	Address string      `json:"address"` // the device that runs it
 	DMs     []AgentInDM `json:"dms"`
 }
@@ -208,47 +217,61 @@ type AgentInDM struct {
 
 // DMSummary is one two-person conversation in the sidebar.
 type DMSummary struct {
-	ID      string     `json:"id"`
-	Peer    PersonView `json:"peer"`
-	Created time.Time  `json:"created"` // the creator's claim
-	Mine    bool       `json:"mine"`    // started on this installation
-	Count   int        `json:"count"`
-	Title   string     `json:"title"` // first line of the first message
-	Last    string     `json:"last"`  // first line of the latest message
-	LastAt  time.Time  `json:"last_at"`
-	Unread  int        `json:"unread"`
-	Held    int        `json:"held"`    // their questions or tasks held for the person; nothing runs them
-	Waiting int        `json:"waiting"` // messages kept here because they cannot read conversations now
+	Kind    string            `json:"kind,omitempty"`
+	Members []GroupMemberView `json:"members,omitempty"`
+	Frozen  string            `json:"frozen,omitempty"`
+	Role    string            `json:"role,omitempty"` // member or invited visitor, computed from native proof
+	ID      string            `json:"id"`
+	Peer    PersonView        `json:"peer"`
+	Created time.Time         `json:"created"` // the creator's claim
+	Mine    bool              `json:"mine"`    // started on this installation
+	Count   int               `json:"count"`
+	Title   string            `json:"title"` // first line of the first message
+	Last    string            `json:"last"`  // first line of the latest message
+	LastAt  time.Time         `json:"last_at"`
+	Unread  int               `json:"unread"`
+	Held    int               `json:"held"`    // their questions or tasks held for the person; nothing runs them
+	Waiting int               `json:"waiting"` // messages kept here because they cannot read conversations now
 }
 
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
-	ID       string      `json:"id"`
-	Peer     PersonView  `json:"peer"`
-	Created  time.Time   `json:"created"`
-	Mine     bool        `json:"mine"`
-	Frozen   string      `json:"frozen,omitempty"` // why nothing can be sent in it
-	Messages []DMMessage `json:"messages"`
-	Agents   []AgentView `json:"agents"` // agents invited into it, oldest first
+	Kind     string            `json:"kind,omitempty"`
+	Title    string            `json:"title,omitempty"`
+	Members  []GroupMemberView `json:"members,omitempty"`
+	Role     string            `json:"role,omitempty"` // visitor context confers no ordinary room actions
+	ID       string            `json:"id"`
+	Peer     PersonView        `json:"peer"`
+	Created  time.Time         `json:"created"`
+	Mine     bool              `json:"mine"`
+	Frozen   string            `json:"frozen,omitempty"` // why nothing can be sent in it
+	Messages []DMMessage       `json:"messages"`
+	Agents   []AgentView       `json:"agents"` // agents invited into it, oldest first
 }
 
 // DMMessage is one message of a DM.
 type DMMessage struct {
-	ID          string     `json:"id"`
-	Dir         string     `json:"dir"` // in or out
-	From        string     `json:"from"`
-	Kind        string     `json:"kind"`
-	Body        string     `json:"body"`
-	ReplyTo     string     `json:"reply_to,omitempty"`
-	Origin      string     `json:"origin,omitempty"` // what the sending device says wrote it, not proof
-	State       string     `json:"state"`
-	StateText   string     `json:"state_text"`
-	Detail      string     `json:"detail,omitempty"`
-	At          time.Time  `json:"at"`
-	Unread      bool       `json:"unread,omitempty"`
-	Replica     bool       `json:"replica,omitempty"`
-	PID         string     `json:"pid,omitempty"` // the agent participation it is for, from or about
-	Attachments []FileView `json:"attachments,omitempty"`
+	GroupRef    *protocol.GroupHistoryRef `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
+	ExcerptPID  string                    `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
+	ClaimedKey  string                    `json:"claimed_key,omitempty"` // forwarded authorship, never verified here
+	Target      *envelope.Target          `json:"target,omitempty"`
+	AgentID     string                    `json:"agent_id,omitempty"`
+	ID          string                    `json:"id"`
+	LID         string                    `json:"lid,omitempty"`
+	Dir         string                    `json:"dir"` // in or out
+	From        string                    `json:"from"`
+	Kind        string                    `json:"kind"`
+	Body        string                    `json:"body"`
+	ReplyTo     string                    `json:"reply_to,omitempty"`
+	Origin      string                    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
+	State       string                    `json:"state"`
+	StateText   string                    `json:"state_text"`
+	Detail      string                    `json:"detail,omitempty"`
+	At          time.Time                 `json:"at"`
+	Unread      bool                      `json:"unread,omitempty"`
+	Replica     bool                      `json:"replica,omitempty"`
+	PID         string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
+	Attachments []FileView                `json:"attachments,omitempty"`
 	// Sent by you: Via is the device of yours it was sent from when that is
 	// not this one; Copies are this device's copies, one per device it went
 	// to (the other person's and your own), with how far each got.
@@ -257,9 +280,11 @@ type DMMessage struct {
 	// SyncedFrom is the device of yours this message came from as history
 	// (copied when this device was added): who sent it is that device's
 	// word, not checked here, and nothing runs it.
-	SyncedFrom string `json:"synced_from,omitempty"`
-	To         string `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
-	Event      string `json:"event,omitempty"` // a participation record, said in words (its body is the record)
+	SyncedFrom string           `json:"synced_from,omitempty"`
+	To         string           `json:"to,omitempty"`    // a request's one target: the device whose agent is asked
+	Event      string           `json:"event,omitempty"` // a participation record, said in words (its body is the record)
+	Controls                    // reactions, edit and deletion applied to it (client.Controls, flattened)
+	Exec       *client.ExecView `json:"exec,omitempty"` // a request: where its executing device last said it stands
 	// A request to this device's agent: what its person can do with it
 	// here (accept, cancel, resolve), and what the run left to say.
 	Actions   []string `json:"actions,omitempty"`
@@ -312,11 +337,21 @@ type FileView struct {
 	// more when there is more to say (the browser device: not kept here).
 	Availability string `json:"availability,omitempty"`
 	Note         string `json:"note,omitempty"`
+	// Openable says GET /api/files/{message}/{index}?dir=in|out (dir: the
+	// message's Dir) can serve this file
+	// now: a received file this device holds or can fetch, or a file sent
+	// from this device, from the copy it kept for itself at send time.
+	// False (with Note) for a sent file this device kept no copy of: one
+	// sent before copies were kept, or from another device of this
+	// person. The page shows Open only when true; never a fake Open.
+	Openable bool `json:"openable"`
 }
 
-// Files is implemented by providers that send files and open received ones
-// (MEL-489). Bytes the page hands over are kept privately until sent; a
-// received file is opened only after it matches what its sender signed.
+// Files is implemented by providers that send files and open them (MEL-489).
+// Bytes the page hands over are kept privately until sent; a received file
+// is opened only after it matches what its sender signed; a file sent from
+// this device opens from the copy kept for the sender at send time (a
+// message id from either direction works; FileView.Openable says whether).
 //
 // Who owns a staged file: the page, from StageFile until it names the id in
 // a send or discards it. A send takes every id it names, whether it sends
@@ -326,7 +361,79 @@ type FileView struct {
 type Files interface {
 	StageFile(name string, r io.Reader) (id string, err error)
 	DiscardFiles(ids []string)
-	OpenFile(ctx context.Context, msgID string, index int) (io.ReadCloser, string, error)
+	// OpenFile: dir is the message's direction as the page shows it, "in"
+	// or "out" (DMMessage.Dir, Message.Dir); a message id is chosen by its
+	// sender, so a received id can equal a sent one, and only the direction
+	// makes the reference exact. With dir "" an id in both directions is
+	// refused, never resolved to the other file.
+	OpenFile(ctx context.Context, dir, msgID string, index int) (io.ReadCloser, string, error)
+}
+
+// MessageControls is implemented by providers that can react to, edit and
+// delete messages (MEL-476, MEL-477): reactions by anyone in the thread or
+// conversation, edits and deletions by the sender only; every control is
+// signed and sent to the devices that can read one (an older peer is
+// refused, never sent something else). None of them runs, cancels or
+// decides anything.
+type MessageControls interface {
+	React(ControlAction) (string, error)
+	EditMessage(ControlAction) (string, error)
+	DeleteMessage(ControlAction) (string, error)
+}
+
+// ControlAction names the message as the page shows it (its conversation
+// or "", its id and direction) and what to do.
+type ControlAction struct {
+	Conv   string `json:"conv,omitempty"`
+	ID     string `json:"id"`
+	Dir    string `json:"dir"` // in or out: the message's own
+	Emoji  string `json:"emoji,omitempty"`
+	Remove bool   `json:"remove,omitempty"` // react: take the emoji off
+	Text   string `json:"text,omitempty"`   // edit: the new text
+}
+
+// ResponderControl is implemented by the daemon provider: the person sees
+// and changes how questions and tasks are handled on this computer (their
+// responder, MEL-428/MEL-498). Detection is the daemon's own PATH lookup;
+// nothing is run to find out, so Found says installed, not working. The
+// browser device never implements it: it runs nothing.
+type ResponderControl interface {
+	ResponderStatus() (ResponderView, error)
+	SetResponder(ResponderChange) (string, error)
+}
+
+// ResponderView is how this computer handles questions and tasks now.
+type ResponderView struct {
+	Chosen  bool     `json:"chosen"`            // the person has decided (a harness, or manual)
+	Manual  bool     `json:"manual"`            // no automatic responder: everything waits for the person
+	Harness string   `json:"harness,omitempty"` // the chosen harness, when not manual
+	Dir     string   `json:"dir,omitempty"`     // where it runs
+	Timeout int      `json:"timeout_seconds,omitempty"`
+	Context []string `json:"context,omitempty"` // files given with every question (kept across edits)
+	// Ready says the chosen harness is on the daemon's PATH and Dir exists.
+	// Problem says why not, in plain words. Ready never claims it is
+	// logged in or working: only running a job shows that.
+	Ready     bool          `json:"ready"`
+	Problem   string        `json:"problem,omitempty"`
+	Harnesses []HarnessView `json:"harnesses"` // every supported harness, found or not
+}
+
+// HarnessView is one supported harness as seen from the daemon.
+type HarnessView struct {
+	Name         string `json:"name"`
+	Found        bool   `json:"found"`
+	Path         string `json:"path,omitempty"`
+	TestedLive   string `json:"tested_live,omitempty"`
+	QuestionMode string `json:"question_mode,omitempty"`
+}
+
+// ResponderChange is what the page may change: manual handling, or the
+// harness and its directory. Timeout and context files are kept as they
+// are (the CLI sets them); an empty Dir keeps the current one.
+type ResponderChange struct {
+	Manual  bool   `json:"manual"`
+	Harness string `json:"harness"`
+	Dir     string `json:"dir"`
 }
 
 // HistoryFiles is implemented by providers whose person's devices share
@@ -396,6 +503,7 @@ type Participants interface {
 // that DM, each exactly) and the member keys that may give it follow-up
 // tasks (TasksFrom, fingerprints).
 type AgentInvite struct {
+	AgentID   string   `json:"agent_id,omitempty"`
 	Conv      string   `json:"conv"`
 	Host      string   `json:"host"`
 	Share     []string `json:"share"`
@@ -405,15 +513,19 @@ type AgentInvite struct {
 
 // AgentAsk is a question (or task) for an active participation's agent.
 type AgentAsk struct {
-	PID  string `json:"pid"`
-	Kind string `json:"kind"`
-	Body string `json:"body"`
+	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
+	PID           string                  `json:"pid"`
+	Kind          string                  `json:"kind"`
+	Body          string                  `json:"body"`
+	Files         []string                `json:"files,omitempty"` // staged-file IDs owned by this provider; no task authority
 }
 
 // AgentView is an agent invited into a DM, as the page shows it: whose
 // installation runs it, who invited it, what it may be shown and who may
 // give it tasks. The host's person decides; either person can end it.
 type AgentView struct {
+	External   bool         `json:"external,omitempty"` // exact invited host outside the DM member persons
+	AgentID    string       `json:"agent_id,omitempty"`
 	PID        string       `json:"pid"`
 	State      string       `json:"state"` // pending, invited, active, declined, conflict, dismissed
 	StateText  string       `json:"state_text"`
@@ -435,10 +547,11 @@ type AgentView struct {
 // only: a DM's question or task would run nowhere yet. Files are the ids of
 // files the page handed over (Files.StageFile).
 type DMDraft struct {
-	Conv    string   `json:"conv"`
-	Body    string   `json:"body"`
-	ReplyTo string   `json:"reply_to,omitempty"`
-	Files   []string `json:"files,omitempty"`
+	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
+	Conv          string                  `json:"conv"`
+	Body          string                  `json:"body"`
+	ReplyTo       string                  `json:"reply_to,omitempty"`
+	Files         []string                `json:"files,omitempty"`
 }
 
 // DMStateText is what the page says about a DM message's state.
@@ -536,6 +649,33 @@ type ReviewItem struct {
 	Excerpt string    `json:"excerpt"`
 	At      time.Time `json:"at"`
 	Notice  bool      `json:"notice,omitempty"`
+	// Report: a notice that names the waiting requests (client.Report): the
+	// host's snapshot at Report.At, never a live queue. Items marked
+	// actionable may be decided from here (this device is a granted
+	// operator on that host: POST /api/operator/decide); their Result is
+	// the host's answer to this device's last decision. A count-only
+	// notice has no Report and offers nothing but reading and dismissing.
+	Report *client.Report `json:"report,omitempty"`
+}
+
+// OperatorDecisions is implemented by the daemon provider: deciding a
+// request another machine holds, as one of its granted operators. The
+// host applies the decision once, in the state and attempt named, and
+// answers; nothing is decided by reading, clicking or dismissing.
+type OperatorDecisions interface {
+	Decide(DecisionAction) (string, error)
+}
+
+// DecisionAction names a reported request exactly and what to do with it.
+type DecisionAction struct {
+	Host    string `json:"host"`
+	ID      string `json:"id"`  // the request's id on the host (ReportItem.ID)
+	Key     string `json:"key"` // the requester's key (ReportItem.Key)
+	Action  string `json:"action"`
+	Expect  string `json:"expect"`  // the state the item showed
+	Attempt int64  `json:"attempt"` // the attempt the item showed
+	Text    string `json:"text,omitempty"`
+	Report  string `json:"report"` // the notice (ReviewItem.ID) the item came from
 }
 
 // StatusReviewNotice is the status of a review notice (a plain message).
@@ -582,27 +722,43 @@ type Presence struct {
 
 // Message is one row of a thread.
 type Message struct {
-	ID        string    `json:"id"`
-	Dir       string    `json:"dir"` // in or out
-	From      string    `json:"from"`
-	To        string    `json:"to"`
-	Kind      string    `json:"kind"`
-	Body      string    `json:"body"`
-	ReplyTo   string    `json:"reply_to,omitempty"`
-	At        time.Time `json:"at"`
-	State     string    `json:"state,omitempty"`  // stored state, shown under details
-	Status    string    `json:"status,omitempty"` // outcome carried by an answer or result
-	Path      string    `json:"path,omitempty"`   // relay or direct
-	Responder string    `json:"responder,omitempty"`
-	Summary   string    `json:"summary,omitempty"` // follow-up summary written locally
-	Detail    string    `json:"detail,omitempty"`  // local note: failure or needs-human reason
-	Unread    bool      `json:"unread,omitempty"`
-	Files     []File    `json:"files,omitempty"`
-	Author    Author    `json:"author"`
-	StateText string    `json:"state_text,omitempty"`
-	Next      string    `json:"next,omitempty"`
-	Actions   []string  `json:"actions,omitempty"` // decisions available on this message
+	Target    *envelope.Target `json:"target,omitempty"`
+	AgentID   string           `json:"agent_id,omitempty"`
+	ID        string           `json:"id"`
+	Dir       string           `json:"dir"` // in or out
+	From      string           `json:"from"`
+	To        string           `json:"to"`
+	Kind      string           `json:"kind"`
+	Body      string           `json:"body"`
+	ReplyTo   string           `json:"reply_to,omitempty"`
+	At        time.Time        `json:"at"`
+	State     string           `json:"state,omitempty"`  // stored state, shown under details
+	Status    string           `json:"status,omitempty"` // outcome carried by an answer or result
+	Path      string           `json:"path,omitempty"`   // relay or direct
+	Responder string           `json:"responder,omitempty"`
+	Summary   string           `json:"summary,omitempty"` // follow-up summary written locally
+	Detail    string           `json:"detail,omitempty"`  // local note: failure or needs-human reason
+	Unread    bool             `json:"unread,omitempty"`
+	Files     []File           `json:"files,omitempty"`
+	Author    Author           `json:"author"`
+	StateText string           `json:"state_text,omitempty"`
+	Next      string           `json:"next,omitempty"`
+	Actions   []string         `json:"actions,omitempty"` // decisions available on this message
+	Controls                   // reactions, edit and deletion applied to it (client.Controls, flattened)
+	// Exec: a request this device sent, where its executor last said it
+	// stands (client.ExecView): from the executing device only, never from
+	// delivery or presence; absent when it never said. Stale: that device
+	// is not connected now.
+	Exec *client.ExecView `json:"exec,omitempty"`
 }
+
+// Controls is what reactions, edits and deletion did to a message, as
+// this device resolves them (client.Controls). Body stays what was sent
+// or admitted; when Edited, Text is what to show, and a question or task
+// keeps running on Body. Deleted hides Body and files; nothing was
+// cancelled or recalled. Can lists what this device may do: react, edit,
+// delete (POST /api/message/{what}).
+type Controls = client.Controls
 
 // Author says who wrote a message, only as far as it is recorded.
 type Author struct {
@@ -615,15 +771,22 @@ type File struct {
 	Name  string `json:"name"`
 	Size  int64  `json:"size"`
 	Saved string `json:"saved,omitempty"` // where it was downloaded, if it was
+	// Index and Openable are as FileView's: GET /api/files/{message}/{index}
+	// serves the file when Openable, for received and sent messages alike.
+	Index    int    `json:"index"`
+	Openable bool   `json:"openable"`
+	Note     string `json:"note,omitempty"`
 }
 
 // Draft is a message to send.
 type Draft struct {
-	To      string   `json:"to"`
-	Kind    string   `json:"kind"` // message, question or task
-	Body    string   `json:"body"`
-	ReplyTo string   `json:"reply_to,omitempty"`
-	Files   []string `json:"files,omitempty"` // ids of files the page handed over (Files.StageFile)
+	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
+	AgentID       string                  `json:"agent_id,omitempty"`
+	To            string                  `json:"to"`
+	Kind          string                  `json:"kind"` // message, question or task
+	Body          string                  `json:"body"`
+	ReplyTo       string                  `json:"reply_to,omitempty"`
+	Files         []string                `json:"files,omitempty"` // ids of files the page handed over (Files.StageFile)
 }
 
 // Sent is the outcome of Send.

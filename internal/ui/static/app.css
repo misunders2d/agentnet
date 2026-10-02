@@ -222,7 +222,7 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 .notice .btn { background: var(--surface); }
 
 .timeline {
-  flex: 1; overflow: auto; display: flex; flex-direction: column;
+  flex: 1; min-height: 80px; overflow: auto; display: flex; flex-direction: column;
   padding: 20px max(20px, calc((100% - 880px) / 2)) 28px;
 }
 
@@ -319,10 +319,24 @@ details.tech dt { color: var(--muted); }
 details.tech dd { margin: 0; overflow-wrap: anywhere; color: var(--text); }
 
 /* composer */
-.composer { padding: 8px max(20px, calc((100% - 880px) / 2)) 16px; }
+.composer { min-height: 0; flex-shrink: 0; display: flex; flex-direction: column; padding: 8px max(20px, calc((100% - 880px) / 2)) 16px; }
+.target { padding: 0 6px 6px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.to-label { font-weight: 600; color: var(--text); }
+.to-name { font-weight: 600; color: var(--accent-text); overflow-wrap: anywhere; }
+.to-how { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.file-download { display: inline-block; margin-top: 4px; }
+.reports-earlier { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.reports-earlier summary { cursor: pointer; }
+.reports-earlier ul { display: grid; gap: 2px; margin-top: 4px; padding-left: 0; list-style: none; }
+#responder { min-width: 0; overflow-wrap: anywhere; }
+.responder-choice { display: grid; gap: 6px; margin: 10px 0; }
+.responder-choice label { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.responder-choice label.off { color: var(--muted); }
+#responder input[type="text"] { width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); margin-top: 6px; }
 .replying { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--muted); padding: 0 6px 6px; }
 .replying-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compose-box {
+  min-height: 0; flex-shrink: 0; display: flex; flex-direction: column;
   background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
   padding: 10px 10px 8px 16px;
 }
@@ -527,8 +541,12 @@ button.node:hover { background: rgb(127 127 127 / .08); }
   .msg { max-width: 94%; }
   .composer { padding: 6px 10px 10px; }
   .compose-box { padding: 8px 8px 6px 12px; }
-  .send span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .send { padding: 9px 12px; }
+  /* The Send button keeps its target-naming label on a phone: the action
+     and its recipient stay legible beside each other. */
+  .send { padding: 8px 12px; font-size: 13px; max-width: 100%; }
+  .send span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .target { padding: 0 2px 6px; }
+  .to-how { white-space: normal; }
   .reader { padding: 0 8px 8px; position: relative; }
   .turn-btn { position: absolute; z-index: 4; bottom: 18px; width: 40px; height: 40px; font-size: 22px; box-shadow: 2px 2px 0 var(--ink); }
   .turn-btn.prev { left: 16px; }
@@ -614,6 +632,7 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 
 /* Agents in a DM: who runs each, what it may see, and what you can do. */
 .agents { display: grid; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--surface); justify-items: start; }
+.agents.group-agents { max-height: min(28vh, 260px); overflow: auto; flex-shrink: 0; }
 .agent-card { width: min(640px, 100%); border: 1px solid var(--line); border-radius: var(--r-card); padding: 10px 12px; display: grid; gap: 4px; background: var(--canvas); }
 .agent-card.invited { border-color: var(--attn-line); background: var(--attn-soft); }
 .agent-card p { margin: 0; }
@@ -633,7 +652,7 @@ button.node:hover { background: rgb(127 127 127 / .08); }
 .choice input { margin-top: 3px; flex: none; }
 .choices .hint { margin: 2px 0 0; }
 .quote-list { margin: 4px 0 8px; padding-left: 18px; font-size: 13.5px; }
-@media (max-width: 720px) { .agents { padding: 8px 12px; } }
+@media (max-width: 720px) { .agents { padding: 8px 12px; } .agents.group-agents { max-height: min(24vh, 200px); } }
 .panel.narration { min-height: 0; justify-content: space-between; gap: 6px; }
 .panel.narration .caption { position: static; align-self: flex-start; }
 /* A person and the agents their device runs: joined by a line (ownership, not presence). */
@@ -760,6 +779,7 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
 .settings-panel .lens-switch { margin: 0; min-height: 44px; }
 .profile-card { display: flex; gap: 12px; align-items: center; }
 .profile-card h3 { font-size: 20px; }
+.identity-details { overflow-wrap: anywhere; }
 .settings-panel #theme-choice { padding: 0; border: 0; }
 @media (max-width: 760px) {
   .workspace { flex-direction: column-reverse; }
@@ -775,7 +795,7 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
   .composer { padding: 6px 10px 10px; }
   .compose-foot { display: none; }
   .settings-head { padding: 16px 18px 10px; }
-  .settings-tabs { padding: 0 10px 10px; }
+  .settings-tabs { padding: 0 10px 10px; flex-wrap: wrap; overflow-x: visible; } /* every tab visible on a phone; nothing to scroll */
   .settings-panel { padding: 18px; }
 }
 
@@ -790,3 +810,119 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
 
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
+
+/* message controls: reactions, edits, deletion */
+.tombstone { color: var(--muted); font-style: italic; }
+.msg.out .tombstone { color: rgb(255 255 255 / .8); }
+.edited { color: var(--muted); font-size: 12px; }
+.msg.out .edited { color: rgb(255 255 255 / .8); }
+.reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+button.reaction { cursor: pointer; }
+.reaction.mine { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.react-pick { position: relative; }
+.react-pick > summary { list-style: none; cursor: pointer; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 999px; border: 1px dashed var(--line); color: var(--muted); font-size: 14px; }
+.react-pick > summary::-webkit-details-marker { display: none; }
+.react-menu { position: absolute; z-index: 5; left: 0; top: 30px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.react-menu button { border: 0; background: transparent; font-size: 20px; padding: 4px 6px; border-radius: 8px; cursor: pointer; }
+.react-menu button:hover { background: var(--hover); }
+.react-menu input { width: 3.5em; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); font-size: 16px; }
+.msg-menu { position: relative; display: inline-block; }
+.msg-menu > summary { list-style: none; cursor: pointer; padding: 0 8px; border-radius: 8px; color: var(--muted); font-size: 16px; line-height: 1.2; }
+.msg-menu > summary::-webkit-details-marker { display: none; }
+.msg-menu > summary:focus-visible { outline: 2px solid var(--focus); }
+.menu-items { position: absolute; z-index: 5; right: 0; bottom: 26px; min-width: 140px; display: grid; gap: 2px; padding: 6px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.menu-items button { border: 0; background: transparent; text-align: left; padding: 8px 10px; border-radius: 8px; font: inherit; color: var(--text); cursor: pointer; }
+.menu-items button:hover { background: var(--hover); }
+.edit-box { display: grid; gap: 6px; min-width: min(420px, 70vw); }
+.edit-box textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); color: var(--text); font: inherit; resize: vertical; }
+.edit-actions { display: flex; gap: 8px; }
+.balloon.gone .balloon-text { color: var(--muted); font-style: italic; }
+
+/* storage */
+.storage-block { margin: 12px 0; }
+.storage-block h4 { font-size: 14px; font-weight: 650; margin: 0 0 6px; }
+.storage-areas { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.storage-area { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.storage-area.off { color: var(--muted); }
+.storage-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.storage-amount { margin-left: auto; color: var(--muted); font-size: 13px; }
+
+/* headless: a host's word on a request; reports with real actions only */
+.exec { color: var(--muted); font-size: 13px; }
+.exec.running { color: var(--accent-text); }
+.exec.needs_human, .exec.failed, .exec.interrupted { color: var(--attn); }
+.exec.stale { font-style: italic; }
+.exec-stale, .exec-refused { color: var(--muted); font-style: italic; }
+.report-requests { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.report-request { padding: 8px 10px; border-radius: 10px; background: var(--sunken); }
+.report-request.actionable { background: var(--attn-soft); border: 1px solid var(--attn-line); }
+.report-head { font-size: 13.5px; }
+.report-excerpt { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The DM's project space (Google Drive) panel: the module's own markup inside our box. */
+.drive-panel { padding: 10px 20px; border-bottom: 1px solid var(--line); background: var(--surface); max-height: 46vh; overflow: auto; }
+.drive-panel .drive-space { display: grid; gap: 6px; font-size: 14px; }
+.drive-panel .drive-space h3 { margin: 0; font-size: 15px; }
+.drive-panel .drive-space p { margin: 0; color: var(--muted); font-size: 13px; }
+.drive-panel .drive-space label { display: grid; gap: 3px; font-size: 13px; }
+.drive-panel .drive-space input, .drive-panel .drive-space select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
+.drive-panel .drive-space button, #file-storage .drive-space button { font: inherit; font-size: 13px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); cursor: pointer; justify-self: start; }
+#file-storage .drive-space { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; font-size: 14px; overflow-wrap: anywhere; }
+#file-storage .drive-space p { margin: 0; color: var(--muted); font-size: 13px; }
+#file-storage .drive-space pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+#file-storage .drive-space label { display: grid; gap: 3px; font-size: 13px; }
+#file-storage .drive-space input { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); }
+#file-storage .drive-space input[type="checkbox"] { justify-self: start; padding: 0; }
+.file-drive { font-size: 12px; }
+/* Teams (People > Teams) and a team's page. */
+.teams-head { display: flex; justify-content: space-between; align-items: baseline; }
+.team-status.danger { color: var(--danger); }
+.team-members { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 6px; }
+.team-member { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.team-member-name { font-weight: 600; }
+.team-member-acts { margin-left: auto; display: flex; gap: 8px; }
+.person-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.person-chip { display: inline-flex; align-items: center; gap: 4px; }
+.chip-x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; padding: 0 2px; }
+/* Named identities: local configuration and explicit per-message targets. */
+#named-agents { display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }
+.named-agent-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 6px; min-width: 0; }
+.named-agent-card .detail-actions { flex-wrap: wrap; }
+.named-agent-outcome { font-size: 14px; }
+.agent-target { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; min-width: 0; }
+.agent-target select { min-width: 0; max-width: 100%; flex: 1 1 220px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.agent-target p { flex-basis: 100%; }
+.named-agent-id { white-space: normal; overflow-wrap: anywhere; }
+#typing-settings .typing-preference { display: flex; align-items: flex-start; gap: .5rem; margin: .65rem 0; }
+#typing-settings .typing-preference input { flex: 0 0 auto; width: auto; margin-top: .2rem; }
+
+#local-interfaces label { display: block; margin: .7rem 0; }
+#local-interfaces input { display: block; max-width: 100%; }
+#local-interfaces p { overflow-wrap: anywhere; }
+
+/* Comic prototype faces reuse local platform emoji; identity stays in the
+   author line. No animation or generated asset/provider is introduced. */
+.comic .avatar.comic-face { background: var(--paper); color: var(--ink); }
+.comic .comic-reply { color: var(--ink); text-align: start; white-space: normal; overflow-wrap: anywhere; }
+.comic .comic-expression { font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", emoji; font-size: 38px; line-height: 1; }
+@media (max-width: 700px) {
+  .comic .comic-expression { font-size: 27px; }
+  .comic .panel.mine .art { padding-top: 28px; }
+}
+
+.reply-receiver { display: grid; gap: 6px; width: 100%; min-width: 0; margin-top: 8px; font-size: 13px; }
+.reply-receiver select, .reply-receiver textarea { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.reply-receiver .text-btn { justify-self: start; }
+.reply-receiver p, .receiver-status p { margin: 0; overflow-wrap: anywhere; }
+.receiver-status { margin-top: 8px; }
+
+/* Keep addressed recipient and Send outside optional receiver scrolling. */
+.receiver-options { width: 100%; min-width: 0; }
+.receiver-options summary { cursor: pointer; color: var(--text); }
+.receiver-options-body { max-height: min(28vh, 240px); overflow-y: auto; padding: 0 2px 4px; }
+.composer:has(#compose-error:not(:empty)) .receiver-options-body { max-height: min(20vh, 180px); }
+@media (max-width: 760px) {
+  .receiver-options-body { max-height: min(18vh, 150px); }
+  .composer:has(#compose-error:not(:empty)) .receiver-options-body { max-height: min(10vh, 80px); }
+}
+.receiver-request { display: block; font-weight: 600; color: var(--text); }

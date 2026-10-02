@@ -304,7 +304,25 @@ CREATE TABLE file_serves(
   sha256 TEXT NOT NULL,
   state TEXT NOT NULL,
   updated_at INTEGER NOT NULL);
-`}
+`, `
+ALTER TABLE inbox ADD COLUMN ref_id TEXT;
+ALTER TABLE inbox ADD COLUMN ref_fp TEXT;
+ALTER TABLE outbox ADD COLUMN ref_id TEXT;
+ALTER TABLE outbox ADD COLUMN ref_fp TEXT;
+CREATE INDEX inbox_ref ON inbox(ref_id, ref_fp) WHERE ref_id IS NOT NULL;
+CREATE INDEX outbox_ref ON outbox(ref_id, ref_fp) WHERE ref_id IS NOT NULL;
+`, `
+CREATE TABLE operators(
+  address TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  public TEXT NOT NULL,
+  added_at INTEGER NOT NULL);
+CREATE TABLE reported(
+  item TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  sent_at INTEGER NOT NULL,
+  PRIMARY KEY(item, recipient));
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -435,7 +453,11 @@ func pinnedKey(q querier, address string) (identity.Public, bool, error) {
 // uploads in one transaction, together with claim (if any), which marks what
 // the message answers. followUp, if set, binds the first reply from the
 // recipient to one background follow-up job (see initialState).
-func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp string, claim func(tx *sql.Tx, replyID string) error) error {
+func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp string, claim func(tx *sql.Tx, replyID string) error, selected ...boundOutgoing) error {
+	if len(selected) > 0 && selected[0].binding != nil && selected[0].binding.remote != nil && selected[0].binding.remote.Role == "origin" {
+		b := selected[0].binding
+		return s.addConvOutbox([]outCopy{{in: in, env: env, state: stateReceiverWaiting, recipientFP: selected[0].fingerprint}}, envelope.Inner{}, claim, "", b)
+	}
 	data, _ := json.Marshal(env)
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -447,10 +469,18 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up, status)
-		VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
-		env.ID, env.To, in.Body, string(data), stateQueued, time.Now().Unix(), in.ReplyTo, followUp, in.Status); err != nil {
+	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up, status, target, agent_id, required_cap)
+		VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
+		env.ID, env.To, in.Body, string(data), stateQueued, time.Now().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in)); err != nil {
 		return err
+	}
+	if len(selected) > 0 && selected[0].binding != nil {
+		if followUp != "" {
+			return errors.New("explicit reply receiver cannot use legacy follow-up")
+		}
+		if err := bindReplyReceiver(tx, selected[0].binding, []outCopy{{in: in, env: env, recipientFP: selected[0].fingerprint}}); err != nil {
+			return err
+		}
 	}
 	if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
 		return err
@@ -555,8 +585,8 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by)
-	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''))`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id)
+	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''))`
 
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
@@ -587,7 +617,7 @@ const (
 // reviewStates are the states that wait for the local human's decision.
 var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld}
 
-const inReview = `state IN (?, ?, ?, ?)`
+const inReview = `state IN (?, ?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // alertReviewStates are the review states that ask for attention by the
 // legacy desktop review notification and the review notice to another
@@ -598,15 +628,21 @@ const inReview = `state IN (?, ?, ?, ?)`
 // needs_human) keeps them.
 var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
 
-const inAlertReview = `state IN (?, ?, ?)`
+const inAlertReview = `state IN (?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state, verifiedBy}
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID}
 }
 
 // initialState decides whether a new message waits for anything.
 // verifiedBy is the fingerprint of the key that verified in ("" if unknown).
 func initialState(db querier, in envelope.Inner, verifiedBy string) (string, error) {
+	if route := in.ReceiverRoute; route != nil && route.Op != "request" {
+		if route.Op == "delegate" {
+			return stateAwaiting, nil // local setup approval, never a model task
+		}
+		return stateNotRun, nil // catalog and ready carry no execution request
+	}
 	switch in.Kind {
 	case envelope.KindQuestion:
 		var n int
@@ -681,12 +717,18 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	if err != nil {
 		return err
 	}
+	in = tombstoned(tx, in, verifiedBy) // a message deleted before it arrived here keeps no text
 	res, err := tx.Exec(insertInbox, inboxArgs(in, state, verifiedBy)...)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil // already stored
+	}
+	if in.ReceiverRoute != nil {
+		if _, err := tx.Exec(`UPDATE inbox SET receiver_route=? WHERE id=?`, receiverRouteJSON(in.ReceiverRoute), in.ID); err != nil {
+			return err
+		}
 	}
 	if state == stateNeedHuman { // a review notice: say locally what it is
 		if _, err := tx.Exec(`UPDATE inbox SET detail = ? WHERE id = ?`, reviewNoticeDetail(in.From), in.ID); err != nil {
@@ -696,6 +738,9 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	// The inbox_arrival trigger numbers the row (see schema step 8), for
 	// this and any older writer alike.
 	if err := bindFollowUp(tx, in); err != nil {
+		return err
+	}
+	if err := bindReplyReceiverInput(tx, in, verifiedBy); err != nil {
 		return err
 	}
 	db := tx
@@ -810,19 +855,21 @@ func (s *store) markAcked(r receipt) error {
 
 // Message is a received message as shown to the user.
 type Message struct {
-	ID          string     `json:"id"`
-	From        string     `json:"from"`
-	Kind        string     `json:"kind"`
-	State       string     `json:"state,omitempty"`  // response state of a question or task
-	Status      string     `json:"status,omitempty"` // outcome carried by an answer or result
-	Responder   string     `json:"responder,omitempty"`
-	Detail      string     `json:"detail,omitempty"`
-	Body        string     `json:"body"`
-	ReplyTo     string     `json:"reply_to,omitempty"`
-	SentAt      time.Time  `json:"sent_at"`
-	ReceivedAt  time.Time  `json:"received_at"`
-	Read        bool       `json:"read"`
-	Attachments []FileInfo `json:"attachments,omitempty"`
+	ID          string           `json:"id"`
+	From        string           `json:"from"`
+	Kind        string           `json:"kind"`
+	State       string           `json:"state,omitempty"`  // response state of a question or task
+	Status      string           `json:"status,omitempty"` // outcome carried by an answer or result
+	Responder   string           `json:"responder,omitempty"`
+	AgentID     string           `json:"agent_id,omitempty"`
+	Target      *envelope.Target `json:"target,omitempty"`
+	Detail      string           `json:"detail,omitempty"`
+	Body        string           `json:"body"`
+	ReplyTo     string           `json:"reply_to,omitempty"`
+	SentAt      time.Time        `json:"sent_at"`
+	ReceivedAt  time.Time        `json:"received_at"`
+	Read        bool             `json:"read"`
+	Attachments []FileInfo       `json:"attachments,omitempty"`
 }
 
 // FileInfo describes a received attachment from its encrypted manifest.
@@ -836,6 +883,11 @@ type FileInfo struct {
 	// this person for it: RequestFile), "requested", or "unavailable" (no
 	// device of this person could provide it). Empty: here, or fetched.
 	Availability string `json:"availability,omitempty"`
+	// Openable says this device can open the file now (OpenFile): a
+	// received file it holds or can fetch, or a sent file it kept a copy
+	// of. False for a sent file this device kept no copy of (sent before
+	// copies were kept, or from another device) and for history-only files.
+	Openable bool `json:"openable"`
 
 	ctSize   int64
 	ctSHA256 string
@@ -844,7 +896,7 @@ type FileInfo struct {
 // inbox lists received messages; a local request to this device's own
 // agent (agentjob.go) is not one.
 func (s *store) inbox(unreadOnly bool) ([]Message, error) {
-	where := ` WHERE local = 0`
+	where := ` WHERE local = 0 AND ref_id IS NULL`
 	if unreadOnly {
 		where += ` AND read_at IS NULL`
 	}
@@ -862,7 +914,7 @@ func (s *store) inboxMessage(id string) (*Message, error) {
 
 func (s *store) messages(where string, args ...any) ([]Message, error) {
 	q := `SELECT id, sender, kind, body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
-		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, '') FROM inbox`
+		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, ''), coalesce(agent_id, ''), coalesce(target, '') FROM inbox`
 	rows, err := s.db.Query(q+where+` ORDER BY received_at, id`, args...)
 	if err != nil {
 		return nil, err
@@ -871,10 +923,17 @@ func (s *store) messages(where string, args ...any) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var ts, recv int64
+		var target string
 		if err := rows.Scan(&m.ID, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &ts, &recv, &m.Read,
-			&m.State, &m.Status, &m.Responder, &m.Detail); err != nil {
+			&m.State, &m.Status, &m.Responder, &m.Detail, &m.AgentID, &target); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if target != "" {
+			if err := json.Unmarshal([]byte(target), &m.Target); err != nil {
+				rows.Close()
+				return nil, err
+			}
 		}
 		m.SentAt, m.ReceivedAt = time.Unix(ts, 0), time.Unix(recv, 0)
 		out = append(out, m)
@@ -955,6 +1014,10 @@ type job struct {
 	ID, From, Kind, Body, ReplyTo, Status string
 	Attachments                           int
 
+	AgentID  string
+	Executor *ExecutorStamp
+	Receiver *ReplyReceiverBinding // explicit local continuation, separate from wire author
+
 	// A request to this device's agent in a DM (agentjob.go).
 	Conv, PID, Key string // Key: the fingerprint that verified it
 	Target         *envelope.Target
@@ -972,27 +1035,83 @@ func (j job) followUp() bool {
 // question or task is eligible if the local user accepted it, or if it is
 // pending and, at claim time, its sender is still approved (question) or
 // still holds a task grant for the key that verified it (task).
-func (s *store) claimJob(responder string) (job, bool, error) {
-	var j job
-	err := s.db.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL,
-		attempts = attempts + 1, last_attempt_at = unixepoch()
-		WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (state = ?
-		              OR (state = ? AND (kind NOT IN (?, ?)
-		                OR (kind = ? AND sender IN (SELECT address FROM approvals))
-		                OR (kind = ? AND `+taskGrantHolds+`))))
-		            ORDER BY received_at, id LIMIT 1)
-		RETURNING id, sender, kind, body, coalesce(reply_to, ''), coalesce(status, '')`,
-		stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
-		envelope.KindQuestion, envelope.KindTask).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status)
-	if errors.Is(err, sql.ErrNoRows) {
-		return j, false, nil
-	}
+func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*ExecutorStamp, error)) (job, bool, error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return j, false, err
+		return job{}, false, err
 	}
-	s.changed()
-	err = s.db.QueryRow(`SELECT count(*) FROM attachments WHERE message_id = ?`, j.ID).Scan(&j.Attachments)
-	return j, true, err
+	defer tx.Rollback()
+	changed := false
+	for {
+		var j job
+		var target string
+		err = tx.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL,
+   attempts = attempts + 1, last_attempt_at = unixepoch()
+   WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
+    OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND sender IN (SELECT address FROM approvals))
+     OR (kind = ? AND `+taskGrantHolds+`))))
+    AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
+    ORDER BY received_at, id LIMIT 1)
+   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,'')`,
+			stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
+			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target)
+		if errors.Is(err, sql.ErrNoRows) {
+			if err = tx.Commit(); err != nil {
+				return job{}, false, err
+			}
+			if changed {
+				s.changed()
+			}
+			return job{}, false, nil
+		}
+		if err != nil {
+			return job{}, false, err
+		}
+		changed = true
+		if target != "" {
+			j.Target = &envelope.Target{}
+			if json.Unmarshal([]byte(target), j.Target) != nil {
+				return job{}, false, errors.New("invalid stored execution target")
+			}
+			j.AgentID = j.Target.AgentID
+		}
+		var stamp *ExecutorStamp
+		if len(resolve) > 0 {
+			stamp, err = resolve[0](tx, j.AgentID)
+		} else if j.AgentID != "" {
+			err = ErrUnknownAgent
+		}
+		if err == nil && j.AgentID != "" && (stamp == nil || stamp.Record == nil || stamp.AgentID != j.AgentID || stamp.Record.Host != j.Target.Address || stamp.Record.HostKey != j.Target.Fingerprint) {
+			err = ErrUnknownAgent
+		}
+		if err != nil && !errors.Is(err, ErrUnknownAgent) {
+			return job{}, false, err
+		}
+		if err != nil || (len(resolve) > 0 && stamp == nil) {
+			if err == nil {
+				err = ErrUnknownAgent
+			}
+			if _, err = tx.Exec(`UPDATE inbox SET state=?, detail=? WHERE id=? AND state=?`, stateNotRun, "not run: selected agent unavailable", j.ID, stateRunning); err != nil {
+				return job{}, false, err
+			}
+			continue // no fallback; a removed identity cannot starve the next job
+		}
+		if stamp != nil {
+			raw, _ := json.Marshal(stamp)
+			if _, err = tx.Exec(`UPDATE inbox SET executor=?,agent_id=?,responder=? WHERE id=? AND state=?`, string(raw), stamp.AgentID, stamp.Responder.Harness, j.ID, stateRunning); err != nil {
+				return job{}, false, err
+			}
+			j.Executor = stamp
+		}
+		if err = tx.QueryRow(`SELECT count(*) FROM attachments WHERE message_id=?`, j.ID).Scan(&j.Attachments); err != nil {
+			return job{}, false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return job{}, false, err
+		}
+		s.changed()
+		return j, true, nil
+	}
 }
 
 func (s *store) jobState(id string) (string, error) {
@@ -1004,16 +1123,25 @@ func (s *store) jobState(id string) (string, error) {
 // finishJob records a job's end without a reply. A new needs_human
 // outcome is notified afresh.
 func (s *store) finishJob(id, state, detail string) error {
-	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?)`,
+	res, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?)`,
 		state, detail, id, stateRunning, stateCancelReq)
+	if err == nil {
+		if n, _ := res.RowsAffected(); n == 1 {
+			_, err = s.db.Exec(`DELETE FROM reported WHERE item = ?`, id) // back in review: reported afresh to each recipient
+		}
+	}
 	return s.done(err)
 }
 
-// unnotified returns the ids of items waiting for the human that no desktop
-// notification has covered yet, and how many such items wait in all (a
-// person's DM turn is not one: alertReviewStates).
+// unnotified returns the ids of items waiting for this person's decision
+// HERE that no desktop notification has covered yet, and how many such
+// items wait in all. A person's DM turn is not one (alertReviewStates),
+// and neither is a review notice received from another machine: that is a
+// report about decisions waiting THERE (unnotifiedNotices), never one
+// waiting here.
 func (s *store) unnotified() (ids []string, total int, err error) {
-	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview, alertReviewStates...)
+	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
+	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`)`, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1075,6 +1203,11 @@ func (s *store) threadText(peer, replyTo string, max int) ([]string, error) {
 		label := kind + "; local state: " + state
 		if status != "" {
 			label += "; outcome: " + status
+		}
+		if d := s.legacyDisplay(id, peer); d.Deleted {
+			body = "(deleted by its author)"
+		} else if d.Edited {
+			body, label = d.Text, label+"; edited"
 		}
 		out = append([]string{who + " [" + label + "]: " + body}, out...)
 		id = next

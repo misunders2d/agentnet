@@ -25,15 +25,15 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// The vendored age library and QR encoder are exactly what
-// webvendor/build.sh makes from the pinned package graph.
+// The vendored age library, QR encoder, idb and eventsource-parser are
+// exactly what webvendor/build.sh makes from the pinned package graph.
 func TestVendoredAgeMatchesRecipe(t *testing.T) {
 	sums, err := os.ReadFile("webvendor/SHA256SUMS")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := ""
-	for _, name := range []string{"age.mjs", "qr.mjs"} {
+	for _, name := range []string{"age.mjs", "qr.mjs", "idb.mjs", "sse.mjs"} {
 		data, err := os.ReadFile("static/vendor/" + name)
 		if err != nil {
 			t.Fatal(err)
@@ -423,6 +423,44 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 		return envelope.Inner{ID: protocol.NewID(), From: "bob/desk", To: dana, TS: now, Kind: "question", Body: body}
 	}
 
+	t.Run("version 3 controls", func(t *testing.T) {
+		// The device seals a control Go accepts, in the version 3 domain, and
+		// opens Go's; the shapes both refuse are refused on both sides.
+		ref := map[string]any{"id": protocol.NewID(), "fingerprint": pub.Fingerprint()}
+		env3, in3 := seal(t, map[string]any{"v": 3, "id": protocol.NewID(), "to": "bob/desk", "ts": now, "kind": "message",
+			"sub": "reaction", "body": `{"emoji":"👍","op":"add","n":1}`, "ref": ref})
+		if env3.V != envelope.Version3 || in3.V != envelope.Version3 || in3.Ref == nil || in3.Ref.ID != ref["id"] || in3.Sub != envelope.SubReaction {
+			t.Fatalf("device-sealed control: %+v %+v", env3, in3)
+		}
+		as2 := env3
+		as2.V = envelope.Version2
+		if as2.VerifySig(pub.SignKey) == nil {
+			t.Fatal("a device's version 3 signature verified as version 2")
+		}
+		goIn := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: "bob/desk", To: dana, TS: now, Kind: "message",
+			Sub: envelope.SubRevision, Body: `{"rev":1,"text":"fixed"}`, Ref: &envelope.Ref{ID: protocol.NewID(), Fingerprint: pub.Fingerprint()}}
+		v := open(goSeal(t, goIn, bobID.Sign, danaRecipient), bob)
+		got, _ := v["inner"].(map[string]any)
+		if got == nil || got["v"] != float64(3) || got["sub"] != envelope.SubRevision || got["ref"].(map[string]any)["id"] != goIn.Ref.ID {
+			t.Fatalf("Go's control in the device: %v", v)
+		}
+		for what, m := range map[string]map[string]any{
+			"a word as emoji":       {"v": 3, "id": protocol.NewID(), "to": "bob/desk", "ts": now, "kind": "message", "sub": "reaction", "body": `{"emoji":"lol","op":"add","n":1}`, "ref": ref},
+			"a fan on a device one": {"v": 3, "id": protocol.NewID(), "to": "bob/desk", "ts": now, "kind": "message", "sub": "retraction", "body": `{}`, "ref": ref, "fan": []map[string]any{{"person": protocol.NewID(), "roster": strings.Repeat("a", 64)}}},
+			"an executor":           {"v": 3, "id": protocol.NewID(), "to": "bob/desk", "ts": now, "kind": "question", "sub": "retraction", "body": `{}`, "ref": ref},
+			"no ref":                {"v": 3, "id": protocol.NewID(), "to": "bob/desk", "ts": now, "kind": "message", "sub": "retraction", "body": `{}`},
+		} {
+			if v := w.call(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": m}); v["error"] == nil {
+				t.Errorf("%s: the device sealed it", what)
+			}
+		}
+		bad := goIn
+		bad.Fan = []envelope.Fan{{Person: protocol.NewID(), Roster: strings.Repeat("a", 64)}}
+		if _, err := envelope.Seal(bad, bobID.Sign, danaRecipient); err == nil {
+			t.Fatal("Go sealed a fan on a device-thread control")
+		}
+	})
+
 	t.Run("Go to device", func(t *testing.T) {
 		body := "which port? <script>&</script> \u2028 \u2029 😀 \x00 \t"
 		in := inner(body)
@@ -512,13 +550,13 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 		}
 		w.refuses("unpadded base64", w.call(map[string]any{"op": "open", "envelope": unpadded, "from": publicJSON(t, bob)}), "base64")
 
-		v3 := env
-		v3.V = 3
-		signEnvelope(&v3, bobID.Sign)
-		if v3.VerifySig(bob.SignKey) == nil {
+		v4 := env // versions 1-3 exist; 4 does not
+		v4.V = 4
+		signEnvelope(&v4, bobID.Sign)
+		if v4.VerifySig(bob.SignKey) == nil {
 			t.Fatal("Go accepts an unknown envelope version")
 		}
-		w.refuses("other version", open(v3, bob), "unsupported envelope version")
+		w.refuses("other version", open(v4, bob), "unsupported envelope version")
 
 		huge := env
 		huge.CT = make([]byte, envelope.MaxCiphertext+1)

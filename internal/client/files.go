@@ -343,6 +343,10 @@ func finalNames(files []FileInfo) []string {
 
 // fetchCiphertext completes the private ciphertext copy, resuming a partial
 // one, and verifies it against the signed size and digest.
+// Classifiable signed-integrity failure; ordinary file callers may redownload
+// after the corrupt partial is removed, while internal carriers fail closed.
+var errFileCiphertextIntegrity = errors.New("signed ciphertext integrity mismatch")
+
 func (a *Agent) fetchCiphertext(ctx context.Context, f FileInfo) error {
 	done := a.downloadPath(f.BlobID)
 	if _, err := os.Stat(done); err == nil {
@@ -394,7 +398,7 @@ func (a *Agent) fetchCiphertext(ctx context.Context, f FileInfo) error {
 		return err
 	}
 	if size != f.ctSize || sum != f.ctSHA256 {
-		return a.discard(part, "downloaded attachment does not match the sender's signed digest")
+		return errors.Join(errFileCiphertextIntegrity, a.discard(part, "downloaded attachment does not match the sender's signed digest"))
 	}
 	if err := os.Rename(part, done); err != nil {
 		return err
@@ -505,6 +509,11 @@ func (a *Agent) OpenAttachment(ctx context.Context, msgID string, index int) (io
 	if strings.HasPrefix(f.BlobID, historyBlob) {
 		return nil, f, errors.New("this file came with the conversation's history: ask your other device for it first (RequestFile)")
 	}
+	if retracted, err := a.store.retracted(msgID); err != nil {
+		return nil, f, err
+	} else if retracted {
+		return nil, f, errors.New("its sender deleted this message: its files are not shown here any more (what you saved stays yours)")
+	}
 	if err := a.fetchCiphertext(ctx, f); err != nil {
 		return nil, f, err
 	}
@@ -546,6 +555,31 @@ func (a *Agent) CleanStaging() error {
 			continue
 		}
 		if err := os.Remove(m); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// CleanOpened removes plaintext left in the private opened/ folder by an
+// earlier run (a file being viewed or served when the daemon stopped or
+// crashed). Call it only in the daemon that owns the home, before anything
+// opens a file: only this process ever writes there. Files a person saved
+// (Download) live where they chose and are never touched.
+func (a *Agent) CleanOpened() error {
+	entries, err := os.ReadDir(filepath.Join(a.home, "opened"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var first error
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(a.home, "opened", e.Name())); err != nil && first == nil {
 			first = err
 		}
 	}

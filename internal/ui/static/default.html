@@ -10,6 +10,7 @@
   </span>
 </div>
 
+<div id="offline" class="lost offline" role="status" hidden></div>
 <div id="lost" class="lost" role="alert" hidden>
   <span>Lost connection to agentnet. You are seeing what the page last loaded.</span>
   <button type="button" id="reconnect" class="chip">Reconnect</button>
@@ -59,8 +60,12 @@
             <ul id="review-list"></ul><ul id="activity-extra"></ul>
             <div id="reports" hidden>
               <h2>Reported by other machines</h2>
-              <p class="hint">Requests wait for a person on those machines. Nothing here can approve them.</p>
+              <p class="hint">Each report is what that machine sent at that time, not a live queue. Each one says whether you can decide its requests from here.</p>
               <ul id="report-list"></ul>
+              <details id="reports-earlier" class="reports-earlier" hidden>
+                <summary>Earlier reports, dismissed</summary>
+                <ul id="report-earlier-list"></ul>
+              </details>
             </div>
           </div>
     <h2 class="sr-only" id="list-title">Contacts</h2>
@@ -80,16 +85,29 @@
         <h1 id="conv-name">Choose a conversation</h1>
         <p id="conv-topic" class="topic"></p>
         <p id="conv-presence" class="presence"></p>
+        <p id="typing-line" class="presence" hidden></p>
       </div>
       <div id="peer-chips" class="peer-chips"></div><button id="conversation-details" class="icon-btn" type="button" aria-label="Conversation details">⋯</button>
     </header>
     <div id="notice" class="notice" role="alert" hidden></div>
     <section id="agents" class="agents" aria-label="Agents in this DM" hidden></section>
+    <section id="drive-panel" class="drive-panel" aria-label="Project space" hidden></section>
     <section id="hub" class="hub" aria-labelledby="conv-name" hidden></section>
     <ol id="timeline" class="timeline" tabindex="-1" aria-label="Messages"></ol>
     <div id="comic" class="comic" aria-label="Messages as a comic" hidden></div>
 
     <form id="composer" class="composer" hidden>
+      <div id="target" class="target" aria-live="polite">
+        <span id="to-line" class="to-line"><span class="to-label">To</span> <span id="to-name" class="to-name"></span> <span id="to-how" class="to-how"></span></span>
+        <div id="agent-target" class="agent-target" hidden></div>
+        <details id="receiver-options" class="receiver-options" hidden>
+          <summary id="receiver-summary">Reply receiver · Me (human)</summary>
+          <div class="receiver-options-body">
+            <div id="reply-receiver" class="reply-receiver" hidden></div>
+            <div id="receiver-status" class="receiver-status" hidden></div>
+          </div>
+        </details>
+      </div>
       <div id="replying" class="replying" hidden>
         <span class="replying-text"><span id="replying-label">Answering</span> <span id="replying-text"></span></span>
         <button type="button" id="replying-cancel" class="text-btn">Cancel</button>
@@ -110,7 +128,7 @@
             <label><input type="radio" name="kind" value="task"><span>Task</span></label>
           </fieldset>
           <button type="submit" id="send" class="send">
-            <span>Send</span>
+            <span id="send-label">Send</span>
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
         </div>
@@ -136,21 +154,36 @@
     <button type="button" role="tab" id="settings-tab-profile" aria-controls="settings-profile" data-settings="profile" aria-pressed="true">Profile</button>
     <button type="button" role="tab" id="settings-tab-appearance" aria-controls="settings-appearance" data-settings="appearance" aria-pressed="false">Appearance</button>
     <button type="button" role="tab" id="settings-tab-notifications" aria-controls="settings-notifications" data-settings="notifications" aria-pressed="false">Notifications</button>
-    <button type="button" role="tab" id="settings-tab-device" aria-controls="settings-device" data-settings="device" aria-pressed="false">This device</button>
+    <button type="button" role="tab" id="settings-tab-device" aria-controls="settings-device" data-settings="device" aria-pressed="false">Agent</button>
+    <button type="button" role="tab" id="settings-tab-storage" aria-controls="settings-storage" data-settings="storage" aria-pressed="false">Storage</button>
   </nav>
   <section id="settings-profile" role="tabpanel" aria-labelledby="settings-tab-profile" class="settings-panel"><div id="profile-card"></div><div id="profile-devices"></div></section>
   <section id="settings-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" class="settings-panel" hidden>
-    <h3>Conversation layout</h3><p class="hint">Different ways to read the same conversations.</p>
-      <div id="lens" class="lens-switch" role="group" aria-label="Show conversations as">
+    <h3>Interface</h3><p class="hint">Different ways to use the same conversations. Installed interfaces appear here too.</p>
+      <div id="lens" class="lens-switch" role="group" aria-label="Interface">
         <button type="button" data-lens="classic" aria-pressed="true">Classic</button>
         <button type="button" data-lens="comic" aria-pressed="false">Comic</button>
         <button type="button" data-lens="zoom" aria-pressed="false">Zoom</button>
       </div>
     <h3>Color theme</h3><div id="theme-choice" class="settings-tabs"><button type="button" data-theme="system">System</button><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button></div>
     <p class="hint">Appearance is saved in this browser.</p>
+    <div id="local-interfaces"></div>
   </section>
-  <section id="settings-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications" class="settings-panel" hidden></section>
-  <section id="settings-device" role="tabpanel" aria-labelledby="settings-tab-device" class="settings-panel" hidden><div id="me" class="mono"></div>
+  <section id="settings-notifications" role="tabpanel" aria-labelledby="settings-tab-notifications" class="settings-panel" hidden><div id="typing-settings"></div></section>
+  <section id="settings-storage" role="tabpanel" aria-labelledby="settings-tab-storage" class="settings-panel" hidden>
+    <h3>Where your files live</h3>
+    <p class="hint">What AgentNet holds for you here and on your server, read once when you open this. Nothing is cleaned, moved or changed by looking.</p>
+    <div id="storage"></div>
+    <h3>File storage options</h3>
+    <p class="hint">Optional Google Drive for project folders, off unless the workspace admin turns it on. Encrypted attachments never depend on it. Files in a Drive folder are outside AgentNet's encryption.</p>
+    <div id="file-storage"></div>
+  </section>
+  <section id="settings-device" role="tabpanel" aria-labelledby="settings-tab-device" class="settings-panel" hidden>
+    <h3>Your agent on this computer</h3>
+    <p class="hint">Who answers approved questions and runs accepted tasks here. Installed means found on this computer, not logged in or working.</p>
+    <div id="responder"></div>
+    <div id="named-agents"></div>
+    <details class="machine-more"><summary>Technical details</summary><div id="me" class="mono"></div></details>
     <footer class="side-foot">
       <details id="quarantine" class="held-back" hidden>
         <summary id="quarantine-summary"></summary>

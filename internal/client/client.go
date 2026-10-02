@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -45,6 +46,9 @@ type Agent struct {
 	home           string
 	id             *identity.Identity
 	store          *store
+	teams          teamRuntime   // the relay's team directory as last seen (teams.go)
+	typing         typingRuntime // live typing signals, memory only (typing.go)
+	groupWork      groupWork     // group journal upkeep due on the next sync (convgroup.go)
 	hub            *hubConn
 	heartbeat      time.Duration
 	adQuery        string                     // this run's signed session ad, for the push stream
@@ -139,6 +143,11 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 	if v.Protocol != protocol.ProtocolVersion {
 		return nil, fmt.Errorf("the Hub speaks protocol %d and this agentnet %d; update the older one", v.Protocol, protocol.ProtocolVersion)
 	}
+	if v.RealmID != "" { // the relay's workspace identity (realm.go); an older relay names none, and none is invented
+		if err := st.recordRealm(v.RealmID); err != nil {
+			return nil, err
+		}
+	}
 	req := protocol.JoinRequest{Secret: inv.Secret, Public: id.Public(address)}
 	saved := map[string]string{"enrolled": "1"}
 	if link != nil {
@@ -212,11 +221,16 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, fmt.Errorf("corrupt agent config: %w", err)
 	}
+	a.hub.workspaceCheck = a.WorkspaceRequestGuard()
+	a.typing.groupMembers = a.GroupMembers // verified effective group membership (groups.go); never the frozen root
 	return a, nil
 }
 
 // Close releases local storage.
-func (a *Agent) Close() error { return a.store.db.Close() }
+func (a *Agent) Close() error {
+	a.typingDisconnected()
+	return a.store.db.Close()
+}
 
 // Self returns this agent's own directory entry.
 func (a *Agent) Self() identity.Public { return a.id.Public(a.Address) }
@@ -291,13 +305,16 @@ type Outgoing struct {
 	Kind     string         // envelope.KindMessage (default), KindQuestion or KindTask
 	// Wait, if positive, waits up to this long for the recipient's receipt
 	// after the Hub takes custody (one request, woken by the receipt).
-	Wait   time.Duration
-	Status string // outcome, for answers and results
+	Wait    time.Duration
+	Status  string           // outcome, for answers and results
+	Target  *envelope.Target // named executor on a question/task; negotiated with agi1
+	AgentID string           // named executor author on an answer/result
 	// FollowUp, if set, stays local: when the recipient's first reply
 	// arrives, the worker processes it once with these instructions and
 	// stores a summary (or a needs-human flag) for the local user. It never
 	// sends anything back.
-	FollowUp string
+	FollowUp      string
+	ReplyReceiver *ReplyReceiver // explicit local return selection; never sent on wire
 
 	releaseSpoolLock func()
 
@@ -329,6 +346,19 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...str
 // are encrypted into a private spool first; if the Hub is unreachable the
 // message stays queued and the daemon resumes it.
 func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error) {
+	binding, err := a.prepareReplyReceiver(m.ReplyReceiver)
+	if err != nil {
+		return SendResult{}, err
+	}
+	receiverStored := false
+	defer func() {
+		if !receiverStored && binding != nil && binding.setup != nil {
+			a.releaseSpool(envelope.Envelope{Blobs: blobsOf(binding.setup.in.Attachments)})
+		}
+	}()
+	if binding != nil && m.FollowUp != "" {
+		return SendResult{}, errors.New("explicit reply receiver cannot use legacy follow-up")
+	}
 	if m.ReplyTo != "" { // never continue a conversation (DM) in the older format
 		if conv, err := a.store.convOf(m.ReplyTo); err != nil {
 			return SendResult{}, err
@@ -367,6 +397,15 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	in := envelope.Inner{
 		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback, Status: m.Status,
+		Target: m.Target, AgentID: m.AgentID,
+	}
+	if namedAgentFields(in) {
+		if m.Target != nil && (m.Target.Address != to || m.Target.Fingerprint != peer.Fingerprint()) {
+			return SendResult{}, errors.New("selected agent does not belong to the verified recipient key")
+		}
+		if err := a.requireAgentIdentity(ctx, peer); err != nil && !retryable(err) {
+			return SendResult{}, err
+		}
 	}
 	if len(m.Files)+len(m.Named) > 0 {
 		// Cleanup must not see spooled files before the outbox refers to them.
@@ -389,18 +428,93 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		}
 		in.Attachments = append(in.Attachments, att)
 	}
-	env, err := envelope.Seal(in, a.id.Sign, recipient)
+	for _, f := range append(files, m.Named...) {
+		// This device's own copy (encrypted to its own key), so the sender
+		// can open what it sent later: the spooled copy is readable by the
+		// recipient only (historyfiles.go keepSent, as conversation sends do).
+		if err := a.keepSent(f.Path); err != nil {
+			a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
+			return SendResult{}, err
+		}
+	}
+	returnHost, e := a.receiverReturnHost(ctx, in.ReplyTo)
+	if e != nil {
+		a.releaseSpool(envelope.Envelope{Blobs: blobsOf(in.Attachments)})
+		return SendResult{}, e
+	}
+	var returnCopy *outCopy
+	defer func() {
+		if !receiverStored && returnCopy != nil {
+			a.releaseSpool(envelope.Envelope{Blobs: blobsOf(returnCopy.in.Attachments)})
+		}
+	}()
+	if returnHost != nil {
+		if binding != nil {
+			return SendResult{}, errors.New("an explicit new receiver cannot replace an original request return destination")
+		}
+		c, e := a.receiverReturnCopy(ctx, in, append(files, m.Named...), *returnHost)
+		if e != nil {
+			return SendResult{}, e
+		}
+		returnCopy = &c
+	}
+	var remoteCopies []outCopy
+	if binding != nil && binding.receiver.Host != nil {
+		remoteCopies = []outCopy{{in: in, recipientFP: peer.Fingerprint()}}
+		if err := a.prepareRemoteCopies(ctx, binding, remoteCopies, append(files, m.Named...)); err != nil {
+			a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
+			if binding.setup != nil {
+				a.releaseSpool(envelope.Envelope{Blobs: blobsOf(binding.setup.in.Attachments)})
+			}
+			return SendResult{}, err
+		}
+		in = remoteCopies[0].in
+	}
+	var env envelope.Envelope
+	if len(remoteCopies) > 0 {
+		env = remoteCopies[0].env
+	} else {
+		env, err = envelope.Seal(in, a.id.Sign, recipient)
+	}
 	if err == nil {
 		beforeOutbox()
-		err = a.store.addOutbox(env, in, m.FollowUp, m.claim)
+		if returnCopy != nil {
+			if m.FollowUp != "" {
+				return SendResult{}, errors.New("legacy follow-up cannot replace committed return fanout")
+			}
+			guard := func(tx *sql.Tx, id string) error {
+				if e := receiverReturnCurrent(tx, in.ReplyTo, *returnHost); e != nil {
+					return e
+				}
+				if m.claim != nil {
+					return m.claim(tx, id)
+				}
+				return nil
+			}
+			err = a.store.addConvOutbox([]outCopy{{in: in, env: env, state: stateQueued, recipientFP: peer.Fingerprint()}, *returnCopy}, envelope.Inner{}, guard, "")
+		} else {
+			err = a.store.addOutbox(env, in, m.FollowUp, m.claim, boundOutgoing{binding: binding, fingerprint: peer.Fingerprint()})
+		}
 	}
 	if err != nil {
 		a.releaseSpool(envelope.Envelope{ID: in.ID, Blobs: blobsOf(in.Attachments)})
 		return SendResult{}, err
 	}
+	receiverStored = true
 	defer notifyDaemon(a.home) // a messenger page open in the daemon shows the message and its state
 	if m.releaseSpoolLock != nil {
 		m.releaseSpoolLock()
+	}
+	if binding != nil && binding.remote != nil && binding.remote.Role == "origin" {
+		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {
+			return SendResult{ID: env.ID, State: stateReceiverWaiting, Detail: err.Error()}, err
+		}
+		return SendResult{ID: env.ID, State: stateReceiverWaiting, Detail: "awaiting exact selected-host delegation approval"}, nil
+	}
+	if returnCopy != nil {
+		if _, e := a.deliver(ctx, returnCopy.env, nil); e != nil && !retryable(e) {
+			return SendResult{ID: env.ID, State: stateQueued, Detail: e.Error()}, e
+		}
 	}
 	res, err := a.deliver(ctx, env, route)
 	if err != nil || m.Wait <= 0 || res.Path != protocol.PathRelay || res.State != protocol.StateCustody {
@@ -426,6 +540,75 @@ func blobsOf(atts []envelope.Attachment) []envelope.Blob {
 // deliver tries the direct route (if any) and then the Hub. The spool is
 // released only once one of them has confirmed custody of the message.
 func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *protocol.SessionAd) (SendResult, error) {
+	if state, _, found, e := a.store.outboxState(env.ID); e != nil {
+		return SendResult{}, e
+	} else if found && state == stateReceiverWaiting {
+		return SendResult{ID: env.ID, State: state}, nil
+	}
+	if ok, err := a.receiverOriginalMayDeliver(env); err != nil || !ok {
+		state, _, _, _ := a.store.outboxState(env.ID)
+		return SendResult{ID: env.ID, State: state}, err
+	}
+	var required, conv, sub, body, pid string
+	if err := a.store.db.QueryRow(`SELECT coalesce(required_cap, ''), coalesce(conv, ''),coalesce(sub,''),body,coalesce(pid,'') FROM outbox WHERE id=?`, env.ID).Scan(&required, &conv, &sub, &body, &pid); err != nil {
+		return SendResult{}, err
+	}
+	receiverCap, err := receiverCopyNeedsCapability(a.store.db, env.ID, sub, body)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if required == "" && receiverCap {
+		required = protocol.CapReplyReceiver
+	}
+	if required != "" {
+		key, err := a.sendKey(ctx, env.To)
+		if err == nil {
+			err = a.requireParticipationCaps(ctx, key, required)
+			if err == nil && receiverCap && required != protocol.CapReplyReceiver {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapReplyReceiver)
+			}
+			control := env.V == envelope.Version3 && groupControlSub(sub)
+			status := sub == envelope.SubStatus
+			var historical HistoryItem
+			if sub == envelope.SubHistory {
+				var item HistoryItem
+				if json.Unmarshal([]byte(body), &item) == nil {
+					control = groupControlSub(item.Sub)
+					status = item.Sub == envelope.SubStatus
+					historical = item
+					pid = item.PID
+				}
+			}
+			if err == nil && required == protocol.CapGroup && control {
+				err = a.requireGroupControlCapability(ctx, key)
+			}
+			if err == nil && required == protocol.CapGroup && status {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapHeadless)
+			}
+			if err == nil && required == protocol.CapGroup && historical.PID != "" {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity)
+			}
+			if err == nil && required == protocol.CapGroup && pid != "" {
+				cap := protocol.CapAgentIdentity
+				if sub == envelope.SubGroupProof || sub == envelope.SubGroupContext {
+					cap = protocol.CapExternalParticipation
+				} else if p, e := a.participation(conv, pid); e == nil && p.External && (p.Host.Address == env.To || historical.PID != "") {
+					cap = protocol.CapExternalParticipation
+				}
+				err = a.requireParticipationCaps(ctx, key, cap)
+			}
+		}
+		if err != nil {
+			if conv != "" && errors.Is(err, errAgentIdentityUnsupported) {
+				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, err.Error(), "")
+			}
+			if retryable(err) {
+				return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error(), "")
+			}
+			a.store.setOutboxState(env.ID, stateFailed, err.Error(), "")
+			return SendResult{ID: env.ID, State: stateFailed}, err
+		}
+	}
 	if ok, err := a.mayDeliver(env); err != nil || !ok {
 		state, _, _, _ := a.store.outboxState(env.ID)
 		return SendResult{ID: env.ID, State: state}, err
@@ -441,11 +624,15 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		}
 	}
 	var r protocol.Receipt
-	err := a.uploadAll(ctx, env)
+	err = a.uploadAll(ctx, env)
 	if err == nil && len(env.Blobs) > 0 {
 		// Uploading files takes time: decide again, from what is stored
 		// now, just before the message itself is handed over (a person
 		// frozen meanwhile keeps it queued, its files uploaded).
+		if ok, err := a.receiverOriginalMayDeliver(env); err != nil || !ok {
+			state, _, _, _ := a.store.outboxState(env.ID)
+			return SendResult{ID: env.ID, State: state}, err
+		}
 		if ok, err := a.mayDeliver(env); err != nil || !ok {
 			state, _, _, _ := a.store.outboxState(env.ID)
 			return SendResult{ID: env.ID, State: state}, err
@@ -559,9 +746,19 @@ func (a *Agent) Inbox(unreadOnly, markRead bool) ([]Message, error) {
 
 // Review lists received items waiting for the local human's decision: held
 // questions, tasks awaiting acceptance, and items the responder marked
-// needs_human. Listing changes nothing, not even read state.
+// needs_human. A review notice from another machine is not one (it reports
+// decisions waiting there: Notices). Listing changes nothing, not even
+// read state.
 func (a *Agent) Review() ([]Message, error) {
-	return a.store.messages(` WHERE `+inReview, reviewStates...)
+	args := append(append([]any{}, reviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
+	return a.store.messages(` WHERE `+inReview+` AND NOT (`+receivedNotice+`)`, args...)
+}
+
+// Notices lists the open review notices: reports from other machines that
+// requests wait for a person's decision there. They are decided there;
+// here they can only be read and resolved (Resolve).
+func (a *Agent) Notices() ([]Message, error) {
+	return a.store.messages(` WHERE state = ? AND (`+receivedNotice+`)`, stateNeedHuman, envelope.KindMessage, envelope.StatusReviewNotice)
 }
 
 // Fingerprints returns the pinned fingerprint ("" if none) and the one the
@@ -619,6 +816,11 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 				return "", err
 			}
 			continue
+		}
+		if namedAgentFields(in) {
+			if err := a.checkDeviceAgent(in, e.Public); err != nil {
+				continue
+			}
 		}
 		if err := a.store.promote(in, e.Public.Fingerprint()); err != nil {
 			return "", err

@@ -35,9 +35,86 @@ David approved the unbudgeted cost; Maya's selected assistant resumed automatica
 
 The same model fits Purchasing and Accounting: two colleagues discussing an invoice invite a finance assistant to compare it with the purchase order. It explains an unexpected fee and prepares a supplier query; the authorized person decides whether to send it. Drafting that query does not mean the supplier has accepted the adjustment.
 
-*Note: These business scenarios are illustrative of the intended operational model. Core encrypted direct messaging, file transfers, browser access via the existing web client, explicit human task approvals, and background question answering are qualified in current releases (see [release notes](https://github.com/misunders2d/agentnet/releases)). Selected-receiver automatic continuation and full group integration are actively being completed.*
+*These business scenarios illustrate the product model; they are not live business-operation evidence. The current source candidate includes groups, named participations and selected-receiver continuation with scoped qualification. It is not a newly accepted release or deployment; see [current candidate and remaining gates](docs/NEXT_RELEASE.md).*
 
-## Messenger preview (v0.3.0)
+## Current source candidate — 2026-10-02
+
+The candidate implements human/group conversations, linked devices, explicit
+member or outside-host assistant participation, authenticated message actions,
+human typing, files, workspaces and client-owned interfaces. Browser devices
+refer to execution hosts; they never run local harnesses. Recipient, addressed
+executor, reply receiver and default background responder remain separate.
+
+Qualification is composite evidence, **not one green full-suite command**:
+436 client tests passed and 6 opt-in tests skipped; the original whole command
+timed out. Focused native/browser and rendered journeys have their own scope.
+Teams snapshot review, group invitations and selected history/files have scoped
+native 390px/browser 1280px qualification (MEL-502: In Review). A stale proposal
+requires explicit renewed consent; later team changes grant no group authority.
+Claude selected-session idle and dispatch-busy continuation have scoped actual
+evidence: the second signed input waits durably during native prompt dispatch,
+then two ordered native turns/ACKs occur without a terminal nudge or replay.
+In-flight sampling/tool timing remains untested; Claude clean-close backup
+remains unsupported.
+Actual Linux visible notification/click routing, physical Windows/macOS/Android
+checks and live non-production Drive access remain pending. No new release,
+installation or deployment is claimed. [Release contract](docs/NEXT_RELEASE.md)
+and [contributor handoff](docs/HANDOFF.md) describe these boundaries.
+
+### Opt-in CLI selection in this candidate
+
+Use IDs from the configured named-agent catalog and registered session list;
+place flags before positional arguments. These examples configure nothing
+unless you run them:
+
+```bash
+# Inspect registrations/bindings; registered does not mean live or idle.
+agentnet receivers --sessions --json
+agentnet receivers --json
+
+# Exact remote executor; replies remain for the person.
+agentnet ask --agent REMOTE_AGENT_ID --reply-receiver human bob/desk "Stock check?"
+
+# Exact local managed receiver, with original local continuation authority.
+agentnet ask --agent REMOTE_AGENT_ID --reply-receiver LOCAL_AGENT_ID --continue "Explain the stock answer" --continue-mode question bob/desk "Stock check?"
+
+# Exact registered native session; no default-recipient fallback.
+agentnet ask --reply-receiver session:HANDLE bob/desk "Stock check?"
+
+# Optional backup, authorized when sending, for supported normal shutdown.
+agentnet ask --reply-receiver session:HANDLE --on-close-agent LOCAL_AGENT_ID --continue "Summarize the answer" --continue-mode question bob/desk "Stock check?"
+
+# Group invitations select history explicitly; PERSON_ID is an exact person.
+agentnet group create "Dispatch"
+agentnet group invite --history-last 2 CONV_ID PERSON_ID
+agentnet group invitations
+agentnet group accept INVITATION_ID
+agentnet dm send CONV_ID "Friday dispatch confirmed"
+agentnet dm agents CONV_ID
+agentnet dm ask-agent --reply-receiver human PID "Check the dispatch window"
+```
+
+Named-agent creation/configuration uses the native messenger catalog; there is
+no named-agent registration CLI command. `ask --agent` selects an exact catalog
+executor. `dm invite` chooses a host; use the messenger picker to select an
+exact named participation. Invitations share only selected history/files and
+require host acceptance. Tasks still require the host's explicit grants or
+acceptance; a reply never creates permission. Unknown/unavailable selections
+are refused or remain pending, without substitution.
+
+For Claude channel setup on Linux, inspect first with
+`agentnet hooks show claude --channel`; opt in with
+`agentnet hooks install claude --channel`. Installation prints a local MCP
+fragment, does not enable a channel or install a runtime. Pass that fragment
+with Claude's `--mcp-config`, explicitly admit
+`--dangerously-load-development-channels server:agentnet`, and complete native
+consent while retaining your tools/settings/permissions. Input acceptance is
+not completed model work. Claude SessionEnd is **detached**, not proof of clean
+shutdown and not permission for automatic backup. Other harness adapters use
+`agentnet hooks show|install pi|omp|codex`; Codex hook trust is explicit.
+See [current hook/receiver contracts](docs/HANDOFF.md#2-core-invariants--product-contracts).
+
+## Historical messenger preview (v0.3.0)
 
 The first messenger release is a preview for early testing. See the
 [v0.3.0 release](https://github.com/misunders2d/agentnet/releases/tag/v0.3.0)
@@ -79,7 +156,7 @@ Today's AI assistants—whether running in terminal windows, desktop apps, or cl
 - 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores ciphertext and routing metadata. Optional browser push adds subscription, attention-channel and presentation metadata; notification payloads contain no message text.
 - ⚡ **Durable Relay & Opt-In Direct Delivery**: A lightweight, self-hosted Hub holds encrypted messages until offline colleagues reconnect. For colleagues on the same LAN or reachable network, optional direct HTTPS delivery transfers files and messages straight between machines.
 - 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. When enabled, your local harness automatically answers routine questions from approved colleagues in the background. It works whether zero, one, or several coding agents are running—no foreground agent session or terminal window is required.
-- 🛡️ **Human Gate for Tasks & Skills-Enabled Questions**: Questions from approved colleagues run with the recipient's own setup (skills, plugins, MCP servers, and permissions) without editing tools or new approvals (`dontAsk` for Claude Code; read-only shell sandbox and `approval_policy="never"` for Codex; read-only tool subset for Pi). The recipient's existing permission grants remain the authority: tools and Bash commands their configuration already allows keep their effects (not a blanket read-only guarantee). **Tasks run only with your permission.** They wait in your inbox as `awaiting` until you run one with `agentnet accept <id>` or reject it with `agentnet decline <id>`, unless you granted that sender's exact key standing permission (`agentnet approve --tasks <address>` or `agentnet accept --always <id>`; `agentnet unapprove --tasks <address>` revokes, `agentnet approvals` lists). A grant never follows a changed key and never reruns failed work.
+- 🛡️ **Human Gate for Tasks & Skills-Enabled Questions**: Questions from approved colleagues run with the recipient's own setup (skills, plugins, MCP servers, and permissions) without editing tools or new approvals (`dontAsk` for Claude Code; read-only shell sandbox and `approval_policy="never"` for Codex; shell and file-editing tools excluded for Pi, with recipient extension tools retained). The recipient's existing permission grants remain the authority: tools and Bash commands their configuration already allows keep their effects (not a blanket read-only guarantee). **Tasks run only with your permission.** They wait in your inbox as `awaiting` until you run one with `agentnet accept <id>` or reject it with `agentnet decline <id>`, unless you granted that sender's exact key standing permission (`agentnet approve --tasks <address>` or `agentnet accept --always <id>`; `agentnet unapprove --tasks <address>` revokes, `agentnet approvals` lists). A grant never follows a changed key and never reruns failed work.
 - 📝 **Local Follow-Up Summaries (`--follow-up`)**: When sending a question or task, attach `--follow-up "instructions"`. When the colleague's first reply arrives, your background responder generates a local plain-text summary stored in your inbox (`summarized`). Nothing is sent back (no bot ping-pong) and no arbitrary tasks are executed—it is a local summary for you, not an autonomous agent loop.
 - 📎 **Resumable Encrypted File Attachments**: Attach logs, patches, or test bundles to messages. Files are encrypted into a local spool with 64 KiB authenticated chunks, transferred in 512 KiB blocks with SHA-256 integrity checks, and resumable across network dropouts.
 - 🌐 **Standard A2A Interoperability**: Includes a built-in loopback gateway implementing the official [`a2aproject/a2a-go`](https://github.com/a2aproject/a2a-go) SDK. Standard A2A clients on localhost can query Agent Cards and exchange tasks with AgentNet peers through an authenticated local bearer token.
@@ -263,7 +340,7 @@ When the automatic responder runs, it executes the selected CLI harness in a fre
   - Background Sessions: Conversational follow-ups resume native sessions (removing `--ephemeral`), maintaining read-only and approval gates.
   - Evidence: Tasks (`9575b2a`), follow-up summaries, and background sessions verified live in earlier milestone testing; skills-on question lookup verified live at `8ce73cc` / `8ed75da` (read-only shell sandbox active; change request answered `AGENTNET: NEEDS-HUMAN`).
 - **Pi**:
-  - Question mode: Runs with read-only tool subset (`--tools read,grep,find,ls`); skills load, but skills requiring bash, edit, or extension tools cannot work. Diagnostic question lookup verified live at `611b633` / `v0.2.1` using read-only records.
+  - Question mode: Keeps recipient settings, skills and extension tools; `--exclude-tools bash,edit,write,powershell` removes shell and file-editing tools. Pi has no read-only shell or unattended approval gate; extension tools keep their configured effects. Tool selection verified with an isolated, no-model Pi 0.87.1 SDK fixture; this preset has not been tested live. The earlier diagnostic lookup at `611b633` / `v0.2.1` used the previous restricted preset.
   - Task mode: Runs with standard preset only after explicit operator `accept` or under a per-key task grant (grants not exercised live). Verified live at `611b633` / `v0.2.1`: accepted task sent single Telegram notification via canonical skill/tool setup (`done`, delivery ledger verified, zero duplicates). Headless environment used dedicated PATH wrapper invoking host Infisical runner (no secrets in daemon, no product dependency). Persistent sessions not supported.
 - **Antigravity**: Manual use only (can read and reply via CLI; not an automated responder).
 - **Honest Limits (Not Claimed)**: An attempted forbidden action being refused at runtime (models answered `NEEDS-HUMAN` per instructions), effects of Bash or MCP tools the user's settings already allow (they keep effects and are not fenced), Pi persistent sessions, or broad harness qualification for Pi beyond the verified single diagnostic question and accepted task. Full flag matrices and qualification logs are maintained in [docs/revival/M4.md](docs/revival/M4.md).

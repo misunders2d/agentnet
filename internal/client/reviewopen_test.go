@@ -13,6 +13,56 @@ import (
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
+func TestReviewURLDropsCredentialsAndRequiresLoopback(t *testing.T) {
+	a := &Agent{home: t.TempDir()}
+	for _, tc := range []struct{ raw, want string }{
+		{"http://127.0.0.1:43111/?t=private-token#old", "http://127.0.0.1:43111/"},
+		{"http://localhost:43111/private?token=private-token", "http://localhost:43111/"},
+		{"http://[::1]:43111/?t=private-token", "http://[::1]:43111/"},
+		{"http://localhost.attacker.invalid:43111/?t=private-token", ""},
+		{"http://127.0.0.1.attacker.invalid:43111/", ""},
+		{"http://127.0.0.1:43111@attacker.invalid/", ""},
+		{"http://user:password@127.0.0.1:43111/", ""},
+		{"https://127.0.0.1:43111/", ""},
+		{"http://192.0.2.1:43111/", ""},
+		{"http://127.0.0.1:bad/", ""},
+	} {
+		if err := os.WriteFile(filepath.Join(a.home, "ui-url"), []byte(tc.raw+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := a.uiURL(); got != tc.want {
+			t.Errorf("URL %q: got %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestReviewClickKeepsWorkspaceWithoutToken(t *testing.T) {
+	w := newWorld(t, "")
+	workspace := strings.Repeat("b", 32)
+	original := []string{"fake-page-opener", "http://127.0.0.1:43111/?t=private-token#conv=&workspace=" + workspace}
+	w.bob.openConv = func(string) []string { return original }
+	for _, target := range []string{"", strings.Repeat("a", 32)} {
+		args, click := w.bob.reviewClick(target)
+		fragment := "#review"
+		if target != "" {
+			fragment = "#msg=" + target + "&dir=in"
+		}
+		want := "http://127.0.0.1:43111/" + fragment + "&workspace=" + workspace
+		if len(args) != 2 || args[1] != want || click == nil {
+			t.Fatalf("workspace click: %v, want %s", args, want)
+		}
+	}
+	if !strings.Contains(original[1], "private-token") {
+		t.Fatal("modified caller-owned command")
+	}
+	w.bob.openConv = func(string) []string {
+		return []string{"fake-page-opener", "http://127.0.0.1:43111/#workspace=not-a-workspace"}
+	}
+	if args, click := w.bob.reviewClick(""); args != nil || click != nil {
+		t.Fatal("malformed workspace fell back to another workspace")
+	}
+}
+
 // stubTerminal records the arguments and working directory it was started
 // with, like xdg-terminal-exec would receive them.
 func stubTerminal(t *testing.T) (log string) {

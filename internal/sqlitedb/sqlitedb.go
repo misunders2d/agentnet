@@ -3,11 +3,15 @@ package sqlitedb
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
@@ -21,6 +25,13 @@ func Open(path string, steps []string) (*sql.DB, error) {
 	if err := secfile.Touch(path); err != nil {
 		return nil, err
 	}
+	// Cooperating Open calls serialize the snapshot and migration together.
+	// The existing OS lock releases on process death; waiting is synchronous.
+	unlock, err := lockfile.Wait(path + ".upgrade.lock")
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -78,15 +89,85 @@ func snapshotBeforeUpgrade(db *sql.DB, path string, target int) error {
 		return nil
 	}
 	snap := fmt.Sprintf("%s.v%d.bak", path, current)
-	if _, err := os.Stat(snap); err == nil {
-		return nil // an earlier attempt already saved it
-	}
-	if err := secfile.Touch(snap); err != nil {
+	if info, err := os.Lstat(snap); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("%s: snapshot must be a regular owner-only file", snap)
+		}
+		if err := secfile.Touch(snap); err != nil {
+			return err
+		}
+		if info.Size() != 0 {
+			if err := validateSnapshot(snap, current); err != nil {
+				return fmt.Errorf("%s: unusable pre-upgrade snapshot (preserved); restore a verified version-%d backup or move this file aside before retrying: %w", snap, current, err)
+			}
+			return secfile.SyncDir(filepath.Dir(snap))
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if _, err := db.Exec(`VACUUM INTO ?`, snap); err != nil {
-		os.Remove(snap)
+	// An interrupted INTO output never gets the published backup name. A stale
+	// zero-byte target is replaced only after a complete snapshot is validated.
+	tmp, err := secfile.CreateTemp(filepath.Dir(snap), filepath.Base(snap)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`VACUUM INTO ?`, name); err != nil {
 		return fmt.Errorf("saving %s before upgrading: %w", snap, err)
+	}
+	if err := validateSnapshot(name, current); err != nil {
+		return fmt.Errorf("validating %s before upgrading: %w", snap, err)
+	}
+	f, err := os.OpenFile(name, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(name, snap); err != nil {
+		return err
+	}
+	return secfile.SyncDir(filepath.Dir(snap))
+}
+
+func validateSnapshot(path string, version int) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	uriPath := filepath.ToSlash(abs)
+	if filepath.VolumeName(abs) != "" {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro&immutable=1"}
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var current int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
+		return err
+	}
+	if current != version {
+		return fmt.Errorf("schema version %d, expected %d", current, version)
+	}
+	var integrity string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+		return err
+	}
+	if integrity != "ok" {
+		return errors.New("SQLite integrity check failed")
 	}
 	return nil
 }

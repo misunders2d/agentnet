@@ -19,7 +19,7 @@ import (
 func (h *Hub) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/version", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion, Features: features})
+		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion, Features: features, RealmID: h.RealmID()})
 	})
 	mux.HandleFunc("POST /v1/join", h.handleJoin)
 	mux.HandleFunc("GET /v1/agents", h.handleMembers)
@@ -32,6 +32,9 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /v1/persons/{id}/chain", h.handleChain)
 	mux.HandleFunc("PUT /v1/caps", h.handlePutCaps)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
+	mux.HandleFunc("POST /v1/signal", h.handleSignal)
+	mux.HandleFunc("PUT /v1/agent-catalog", h.handleAgentCatalogPut)
+	mux.HandleFunc("GET /v1/agents/{label}/{agent}/agent-catalog", h.handleAgentCatalogGet)
 	mux.HandleFunc("GET /v1/messages/{id}", h.handleMessageState)
 	mux.HandleFunc("POST /v1/messages/{id}/ack", h.handleAck)
 	mux.HandleFunc("GET /v1/messages/{id}/wait", h.handleReceiptWait)
@@ -42,6 +45,14 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("PUT /v1/blobs/{id}", h.handleBlobChunk)
 	mux.HandleFunc("POST /v1/blobs/{id}/complete", h.handleBlobComplete)
 	mux.HandleFunc("GET /v1/blobs/{id}/data", h.handleBlobData)
+	mux.HandleFunc("GET /v1/storage", h.handleStorage)                     // hub/storage.go: the caller's own ciphertext usage, read-only
+	mux.HandleFunc("GET /v1/storage/drive", h.handleDriveStorageGet)       // hub/drivestorage.go: public Drive storage config (no tokens)
+	mux.HandleFunc("PUT /v1/admin/storage/drive", h.handleDriveStoragePut) // admin only, compare-and-swap
+	mux.HandleFunc("GET /v1/teams", h.handleTeams)                         // hub/teams.go: signed team directory
+	mux.HandleFunc("PUT /v1/team", h.handlePutTeam)
+	mux.HandleFunc("GET /v1/teams/{id}/chain", h.handleTeamChain)
+	mux.HandleFunc("POST /v1/groups/{id}/chain", h.handleGroupCommit) // hub/groups.go: encrypted signed group journal (admins)
+	mux.HandleFunc("GET /v1/groups/{id}/chain", h.handleGroupChain)
 	mux.HandleFunc("POST /v1/admin/invites", h.handleInvite)
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
@@ -53,9 +64,17 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/notify/subscription", h.handlePushUnsubscribe)
 	mux.HandleFunc("POST /v1/notify/seen", h.handleNotifySeen)
 	if h.cfg.Web {
-		mux.Handle("/", static.Relay(filepath.Join(h.cfg.DataDir, "skins")))
+		relay := http.Handler(static.Relay(filepath.Join(h.cfg.DataDir, "skins")))
+		if wrapped, err := static.WithConnectOrigins(relay, h.cfg.BrowserOrigins); err == nil { // validated in Open
+			relay = wrapped
+		}
+		mux.Handle("/", relay)
 	}
-	return h.countRequests(mux)
+	var handler http.Handler = mux
+	if wrapped, err := WithBrowserOrigins(mux, h.cfg.PublicURL, h.cfg.BrowserOrigins); err == nil { // validated in Open; empty = same-origin only
+		handler = wrapped
+	}
+	return h.countRequests(handler)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

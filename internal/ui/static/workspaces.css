@@ -1,0 +1,5 @@
+.workspace-bar{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap;padding:.5rem .8rem;border-bottom:1px solid var(--border,#ddd);background:var(--surface,#fff);color:var(--text,#222);position:relative;z-index:2}
+.workspace-bar label{display:flex;align-items:center;gap:.4rem;min-width:0}
+.workspace-bar select{font:inherit;max-width:min(70vw,34rem);min-width:0;padding:.3rem;border-radius:.4rem;background:var(--surface,#fff);color:inherit;border:1px solid var(--border,#aaa)}
+.workspace-detail{font-size:.8rem;overflow-wrap:anywhere}
+@media(max-width:480px){.workspace-bar{gap:.25rem}.workspace-detail{width:100%}.workspace-bar select{max-width:72vw}}

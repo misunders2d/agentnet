@@ -666,7 +666,7 @@ func TestLiveFiles(t *testing.T) {
 	if o, _ := pa.Overview(); len(o.DMs) != 1 || o.DMs[0].Last != "📎 _numbers.csv" {
 		t.Fatalf("alice's DM list: %+v", o.DMs)
 	}
-	r, name, err := pa.OpenFile(ctx, got.ID, 0)
+	r, name, err := pa.OpenFile(ctx, "in", got.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -675,11 +675,18 @@ func TestLiveFiles(t *testing.T) {
 	if !bytes.Equal(opened, content) || name != "_numbers.csv" {
 		t.Fatalf("opened %q as %q", opened, name)
 	}
-	if _, _, err := pa.OpenFile(ctx, got.ID, 1); !errors.Is(err, ErrRefused) {
+	if _, _, err := pa.OpenFile(ctx, "in", got.ID, 1); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a file that is not there: %v", err)
 	}
-	if _, _, err := pb.OpenFile(ctx, sent.ID, 0); !errors.Is(err, ErrRefused) {
+	// Bob reopens what he sent from the copy his device kept for itself.
+	r, name, err = pb.OpenFile(ctx, "out", sent.ID, 0)
+	if err != nil {
 		t.Fatalf("bob reopening what he sent: %v", err)
+	}
+	opened, _ = io.ReadAll(r)
+	r.Close()
+	if !bytes.Equal(opened, content) || name != "_numbers.csv" {
+		t.Fatalf("bob reopened %q as %q", opened, name)
 	}
 	if d, _ := pb.DM(conv); len(d.Messages[0].Attachments) != 1 || d.Messages[0].Attachments[0].Name != "_numbers.csv" {
 		t.Fatalf("bob's page lists his sent file: %+v", d.Messages[0])

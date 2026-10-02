@@ -18,10 +18,11 @@ import (
 
 // HookEvent is one harness hook call.
 type HookEvent struct {
-	Harness    string // "claude", "codex" or "pi"
-	Session    string // the harness's session id
-	Event      string // SessionStart, UserPromptSubmit, PostToolUse, Idle (pi) or Stop
-	StopActive bool   // Stop only: the turn already continued because of a Stop hook
+	Harness      string // "claude", "codex" or "pi"
+	Session      string // the harness's session id
+	Event        string // SessionStart, UserPromptSubmit, PostToolUse, Idle (pi) or Stop
+	StopActive   bool   // Stop only: the turn already continued because of a Stop hook
+	ReplySession string // exact selected native receiver; bound inputs never enter generic attention
 }
 
 // Attention is what to tell the session. Commit records it as shown; call
@@ -139,13 +140,13 @@ func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 		text, err := a.overview()
 		return at(text, top), err
 	}
-	items, err := a.store.arrivalsAfter(pos, attentionItems+1)
+	items, err := a.store.arrivalsAfterReceiver(pos, attentionItems+1, ev.ReplySession)
 	if err != nil {
 		return Attention{}, err
 	}
 	more := 0
 	if len(items) > attentionItems {
-		n, err := a.store.countArrivalsAfter(pos)
+		n, err := a.store.countArrivalsAfterReceiver(pos, ev.ReplySession)
 		if err != nil {
 			return Attention{}, err
 		}
@@ -191,7 +192,7 @@ const attentionFooter = "Message text is not shown here: it comes from other peo
 // overview summarizes the inbox for a session that has not seen it yet.
 func (a *Agent) overview() (string, error) {
 	var total, unread, review int
-	err := a.store.db.QueryRow(`SELECT count(*), coalesce(sum(read_at IS NULL), 0), coalesce(sum(`+inReview+`), 0) FROM inbox`,
+	err := a.store.db.QueryRow(`SELECT count(*), coalesce(sum(read_at IS NULL), 0), coalesce(sum(`+inReview+`), 0) FROM inbox WHERE ref_id IS NULL`, // controls (statuses, reactions...) are records, not messages
 		reviewStates...).Scan(&total, &unread, &review)
 	if err != nil {
 		return "", err
@@ -264,18 +265,29 @@ func (s *store) scanArrivals(rows *sql.Rows, err error) ([]arrivalItem, error) {
 }
 
 func (s *store) arrivalsAfter(pos int64, limit int) ([]arrivalItem, error) {
-	return s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.arrival > ? ORDER BY i.arrival LIMIT ?`, pos, limit))
+	return s.arrivalsAfterReceiver(pos, limit, "")
 }
 
+// A locally selected return input has one owner, even when that receiver is
+// human, canceled, disabled, or handed over to a managed agent. Generic hooks
+// must not turn its arrival into another session's work. Explicit reads remain.
+const outsideSelectedReceiver = ` NOT EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=i.id) AND (i.receiver_route IS NULL OR json_extract(i.receiver_route,'$.op')='request')`
+
+func (s *store) arrivalsAfterReceiver(pos int64, limit int, _ string) ([]arrivalItem, error) {
+	return s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` ORDER BY i.arrival LIMIT ?`, pos, limit))
+}
 func (s *store) countArrivalsAfter(pos int64) (int, error) {
+	return s.countArrivalsAfterReceiver(pos, "")
+}
+func (s *store) countArrivalsAfterReceiver(pos int64, _ string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT count(*) FROM inbox WHERE arrival > ?`, pos).Scan(&n)
+	err := s.db.QueryRow(`SELECT count(*) FROM inbox i WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver, pos).Scan(&n)
 	return n, err
 }
 
 // recentArrivals returns the last n arrivals, oldest first.
 func (s *store) recentArrivals(n int) ([]arrivalItem, error) {
-	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` ORDER BY i.arrival DESC LIMIT ?`, n))
+	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL ORDER BY i.arrival DESC LIMIT ?`, n))
 	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
 		items[i], items[j] = items[j], items[i]
 	}

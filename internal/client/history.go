@@ -1,10 +1,12 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -42,29 +44,36 @@ import (
 // HistoryItem is one message (or participation event, as the message that
 // carried it) forwarded as history.
 type HistoryItem struct {
-	V           int                   `json:"v"`
-	From        string                `json:"from"`
-	FromKey     string                `json:"from_key"` // the key it was sent under (claimed)
-	ID          string                `json:"id"`
-	LID         string                `json:"lid"`
-	TS          int64                 `json:"ts"`
-	Kind        string                `json:"kind"`
-	Body        string                `json:"body"`
-	ReplyTo     string                `json:"reply_to,omitempty"`
-	Status      string                `json:"status,omitempty"`
-	Sub         string                `json:"sub,omitempty"`
-	Origin      string                `json:"origin,omitempty"`
-	Emotion     string                `json:"emotion,omitempty"`
-	Target      *envelope.Target      `json:"target,omitempty"`
-	PID         string                `json:"pid,omitempty"`
-	Attachments []envelope.Attachment `json:"attachments,omitempty"` // manifests (name, size, sha256); no blob for the new device
-	At          int64                 `json:"at"`                    // when the forwarding device got or sent it (unix ms): its place in the conversation
+	V              int                     `json:"v"`
+	From           string                  `json:"from"`
+	FromKey        string                  `json:"from_key"` // the key it was sent under (claimed)
+	ID             string                  `json:"id"`
+	LID            string                  `json:"lid"`
+	TS             int64                   `json:"ts"`
+	Kind           string                  `json:"kind"`
+	Body           string                  `json:"body"`
+	ReplyTo        string                  `json:"reply_to,omitempty"`
+	Status         string                  `json:"status,omitempty"`
+	Sub            string                  `json:"sub,omitempty"`
+	Origin         string                  `json:"origin,omitempty"`
+	Emotion        string                  `json:"emotion,omitempty"`
+	Target         *envelope.Target        `json:"target,omitempty"`
+	PID            string                  `json:"pid,omitempty"`
+	Attachments    []envelope.Attachment   `json:"attachments,omitempty"` // manifests (name, size, sha256); no blob for the new device
+	At             int64                   `json:"at"`                    // when the forwarding device got or sent it (unix ms): its place in the conversation
+	Ref            *envelope.Ref           `json:"ref,omitempty"`         // a control's target (controls.go)
+	AgentID        string                  `json:"agent_id,omitempty"`
+	GroupAdmission string                  `json:"group_admission,omitempty"` // only direct live admission, vouched for by an own linked device
+	ReceiverRoute  *envelope.ReceiverRoute `json:"receiver_route,omitempty"`  // provenance only; history never installs a delegation
 }
 
 // inner is the item as the message it records.
 func (h HistoryItem) inner(conv string) envelope.Inner {
 	in := envelope.Inner{V: envelope.Version2, ID: h.ID, From: h.From, TS: h.TS, Kind: h.Kind, Body: h.Body, ReplyTo: h.ReplyTo,
-		Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true}
+		Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true, AgentID: h.AgentID, ReceiverRoute: h.ReceiverRoute}
+	if envelope.IsControl(h.Sub) { // a control travels as history with its target reference
+		in.V, in.Ref = envelope.Version3, h.Ref
+	}
 	for _, a := range h.Attachments {
 		in.Attachments = append(in.Attachments, envelope.Attachment{Name: a.Name, Size: a.Size, SHA256: a.SHA256})
 	}
@@ -73,7 +82,7 @@ func (h HistoryItem) inner(conv string) envelope.Inner {
 
 func itemOf(in envelope.Inner, key string, at int64) HistoryItem {
 	h := HistoryItem{V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo,
-		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at}
+		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at, Ref: in.Ref, AgentID: in.AgentID, ReceiverRoute: in.ReceiverRoute}
 	for _, a := range in.Attachments {
 		h.Attachments = append(h.Attachments, envelope.Attachment{Name: a.Name, Size: a.Size, SHA256: a.SHA256})
 	}
@@ -82,7 +91,70 @@ func itemOf(in envelope.Inner, key string, at int64) HistoryItem {
 
 // historyCopy seals item as history for the device to, in conversation
 // conv (root raw).
-func (a *Agent) historyCopy(to identity.Public, conv string, raw []byte, item HistoryItem) (outCopy, error) {
+func (a *Agent) historyCopy(to identity.Public, conv string, raw []byte, item HistoryItem, proofs ...*groupControlIngressProof) (outCopy, error) {
+	root, err := protocol.ParseConvRoot(raw)
+	if err != nil {
+		return outCopy{}, err
+	}
+	if externalDM(root) {
+		me, ok, err := a.store.selfPerson(a.Address)
+		if err != nil {
+			return outCopy{}, err
+		}
+		if _, member := root.Member(me.info.Person); !ok || !member || !me.has(to.Address, to.Fingerprint()) {
+			return outCopy{}, errors.New("DM history goes only to a current linked device of a human room member")
+		}
+	}
+	if root.Kind == protocol.ConvKindGroup {
+		packet, e := groupTurnPacketIn(a.store.db, conv)
+		if e != nil {
+			return outCopy{}, e
+		}
+		if e = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); e != nil {
+			return outCopy{}, e
+		}
+		if e = groupTurnCheck(a.store.db, packet, to.Address, to.Fingerprint()); e != nil {
+			return outCopy{}, e
+		}
+		me, ok, e := a.store.selfPerson(a.Address)
+		if e != nil || !ok || !me.has(to.Address, to.Fingerprint()) {
+			return outCopy{}, errors.New("group history goes only to a current own linked device")
+		}
+		admission, e := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
+		if e != nil {
+			return outCopy{}, e
+		}
+		if groupParticipationHistoryItem(item) {
+			stamp, e := a.groupParticipationSourceAdmission(a.store.db, packet, item)
+			if e != nil {
+				return outCopy{}, e
+			}
+			item.GroupAdmission = stamp
+		}
+		if groupControlSub(item.Sub) {
+			var proof *groupControlIngressProof
+			if len(proofs) > 0 {
+				proof = proofs[0]
+			}
+			stamp, e := a.groupControlSourceAdmission(a.store.db, packet, item, proof)
+			if e != nil {
+				return outCopy{}, e
+			}
+			item.GroupAdmission = stamp
+		}
+		if item.GroupAdmission == "" {
+			e = a.store.db.QueryRow(`SELECT coalesce(group_admission,'') FROM inbox WHERE conv=? AND lid=? AND coalesce(verified_by,claimed_fp)=? UNION ALL SELECT coalesce(group_admission,'') FROM outbox WHERE conv=? AND lid=? AND sub IS NULL LIMIT 1`, conv, item.LID, item.FromKey, conv, item.LID).Scan(&item.GroupAdmission)
+			if e != nil && !errors.Is(e, sql.ErrNoRows) {
+				return outCopy{}, e
+			}
+		}
+		if item.GroupAdmission != admission.Hash() {
+			if e = groupHistorySelected(a.store.db, packet, to.Address, to.Fingerprint(), historyRef(conv, item)); e != nil {
+				return outCopy{}, errors.New("group: own history lacks current live admission or selected grant")
+			}
+			item.GroupAdmission = ""
+		}
+	}
 	recipient, err := to.Recipient()
 	if err != nil {
 		return outCopy{}, err
@@ -94,7 +166,30 @@ func (a *Agent) historyCopy(to identity.Public, conv string, raw []byte, item Hi
 	if err != nil {
 		return outCopy{}, err
 	}
-	return outCopy{env: env, in: in, state: stateQueued}, nil
+	copy := outCopy{env: env, in: in, state: stateQueued}
+	if root.Kind == protocol.ConvKindGroup {
+		copy.required = protocol.CapGroup
+		copy.recipientFP = to.Fingerprint()
+		packet, e := groupTurnPacketIn(a.store.db, conv)
+		if e != nil {
+			return outCopy{}, e
+		}
+		admission, e := groupMemberAdmission(a.store.db, packet, to.Address, to.Fingerprint())
+		if e != nil {
+			return outCopy{}, e
+		}
+		copy.groupAdmission = admission.Hash()
+	}
+	if item.PID != "" {
+		p, err := a.participation(conv, item.PID)
+		if err != nil && !errors.Is(err, ErrNoParticipation) {
+			return outCopy{}, err
+		}
+		if err == nil && p.External && root.Kind != protocol.ConvKindGroup {
+			copy.required = protocol.CapExternalParticipation
+		}
+	}
+	return copy, nil
 }
 
 // insertCopies stores history copies in the outbox, within tx.
@@ -102,9 +197,21 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 	now := time.Now()
 	for _, c := range copies {
 		data, _ := json.Marshal(c.env)
-		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, conv, lid, kind, created_ms, sub)
-			VALUES(?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.env.ID, c.env.To, string(data), c.state, now.Unix(), c.in.Conv, c.in.LID, c.in.Kind, now.UnixMilli(), c.in.Sub); err != nil {
+		body := ""
+		if c.required == protocol.CapGroup {
+			body = c.in.Body
+		} else if c.in.Sub == envelope.SubHistory {
+			var item HistoryItem
+			if err := json.Unmarshal([]byte(c.in.Body), &item); err != nil {
+				return err
+			}
+			if item.ReceiverRoute != nil {
+				body = c.in.Body
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, conv, lid, kind, created_ms, sub, required_cap,recipient_fp,group_admission)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, nullif(?, ''),nullif(?,''),nullif(?,''))`,
+			c.env.ID, c.env.To, body, string(data), c.state, now.Unix(), c.in.Conv, c.in.LID, c.in.Kind, now.UnixMilli(), c.in.Sub, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
 			return err
 		}
 	}
@@ -115,7 +222,16 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 // person p, verified under key) for the current devices of this
 // installation's person that the roster the sender sent to (fan) lacks:
 // copies the sender could not know to send.
-func (a *Agent) forwardStale(me personRow, in envelope.Inner, key string, raw []byte) []outCopy {
+func (a *Agent) forwardStale(me personRow, in envelope.Inner, key string, raw []byte, stamps ...string) []outCopy {
+	return a.forwardStaleWithControlProof(me, in, key, raw, nil, stamps...)
+}
+
+func (a *Agent) forwardStaleWithControlProof(me personRow, in envelope.Inner, key string, raw []byte, proof *groupControlIngressProof, stamps ...string) []outCopy {
+	if root, err := protocol.ParseConvRoot(raw); err != nil {
+		return nil
+	} else if _, member := root.Member(me.info.Person); externalDM(root) && !member {
+		return nil
+	}
 	var sentTo string
 	for _, f := range in.Fan {
 		if f.Person == me.info.Person {
@@ -130,12 +246,15 @@ func (a *Agent) forwardStale(me personRow, in envelope.Inner, key string, raw []
 		return nil // a roster not in this person's chain: nothing to go by
 	}
 	item := itemOf(in, key, time.Now().UnixMilli())
+	if len(stamps) > 0 {
+		item.GroupAdmission = stamps[0]
+	}
 	var copies []outCopy
 	for _, d := range me.roster.Devices {
 		if d.Address == a.Address || old.Has(d.Address, d.Fingerprint()) || d.Address == in.From {
 			continue
 		}
-		c, err := a.historyCopy(d, in.Conv, raw, item)
+		c, err := a.historyCopy(d, in.Conv, raw, item, proof)
 		if err != nil {
 			a.Logf("forwarding %s to %s: %v", in.ID, d.Address, err)
 			continue
@@ -156,6 +275,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		return hold(reasonInvalid, "a malformed history item")
 	}
 	owner := ""
+	external := false
 	var key identity.Public
 	for pass := 0; pass < 2 && owner == ""; pass++ {
 		for _, m := range root.Members {
@@ -170,6 +290,35 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 			}
 		}
 	}
+	// A linked human member may retain its invited agent's outputs and signed
+	// acceptance/decline. The original host's pinned roster proof supplies
+	// authorship only, never
+	// room membership; an outside host's linked devices still fail the
+	// caller's recipient membership check.
+	output := item.AgentID != "" && item.Sub == "" && (item.Kind == envelope.KindAnswer || item.Kind == envelope.KindResult)
+	decision := false
+	if item.Sub == envelope.SubEvent {
+		if ev, err := protocol.ParseParticipationEvent([]byte(item.Body)); err == nil {
+			decision = ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline
+		}
+	}
+	if owner == "" && item.PID != "" && (output || decision) {
+		p, err := a.participation(in.Conv, item.PID)
+		if errors.Is(err, ErrNoParticipation) {
+			return hold(reasonProof, err.Error())
+		}
+		if err != nil {
+			return err
+		}
+		if p.Invite == "" || p.State == PartConflict {
+			return hold(reasonProof, "external output history has no unambiguous invitation")
+		}
+		if p.External && (!output || item.AgentID == p.AgentID) && item.From == p.Host.Address && item.FromKey == p.Host.Fingerprint {
+			if k, ok := a.store.deviceKey(p.Host.Person, item.From, item.FromKey); ok {
+				owner, key, external = p.Host.Person, k, true
+			}
+		}
+	}
 	if owner == "" {
 		return hold(reasonInvalid, "the history item's sender is no device of a member of this conversation")
 	}
@@ -179,21 +328,117 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		return hold(reasonConflict, errPersonConflict.Error())
 	}
 	orig := item.inner(in.Conv)
+	if err := receiverHistoryRoute(a.store.db, orig, item.FromKey); err != nil {
+		return hold(reasonInvalid, err.Error())
+	}
+	if reason, err := a.checkConversationAgent(orig, key); err != nil {
+		if reason != "" {
+			return hold(reason, err.Error())
+		}
+		return err
+	}
+	if orig.Sub == envelope.SubDriveSpace { // applied under the original author's person, as a direct one is
+		if err := a.admitDriveHistory(owner, orig); err != nil {
+			return hold(reasonProof, err.Error())
+		}
+	}
+	if envelope.IsControl(orig.Sub) {
+		// A control carried as history is applied under the same rules as
+		// one received directly (controls.go): its claimed author is the
+		// forwarding device's word, as the turn's is, but who may edit or
+		// delete what is checked here, before anything is stored or removed.
+		if orig.Ref == nil {
+			return hold(reasonInvalid, "a control in history names no message")
+		}
+		m, err := a.dmMembers(in.Conv)
+		if err != nil {
+			return err
+		}
+		if reason, why := a.controlAuthorized(m, orig, owner); reason != "" {
+			return hold(reason, why)
+		}
+	}
 	var also func(*sql.Tx) error
 	if orig.Sub == envelope.SubEvent { // the signed event itself, verified under its author's key
 		ev, err := checkParticipationEvent(orig, key.Fingerprint(), key.SignKey)
 		if err != nil {
 			return hold(reasonInvalid, err.Error())
 		}
+		if ev.Type == protocol.EventInvite && ev.Host != nil && externalDM(root) {
+			if _, member := root.Member(ev.Host.Person); !member {
+				if reason, err := a.externalHostProof(ctx, ev.Host); err != nil {
+					if reason != "" {
+						return hold(reason, err.Error())
+					}
+					if errors.Is(err, errPersonConflict) {
+						return hold(reasonConflict, err.Error())
+					}
+					if errors.Is(err, ErrNoPerson) || errors.Is(err, errPersonRecord) || errors.Is(err, errRootInvalid) {
+						return hold(reasonProof, err.Error())
+					}
+					return err
+				}
+			}
+		}
+		if decision {
+			m, err := a.dmMembers(in.Conv)
+			if err != nil {
+				return err
+			}
+			p, err := participationIn(a.store.db, in.Conv, item.PID, m, a.Address)
+			if err != nil {
+				return err
+			}
+			if p.External {
+				if err := externalTurn(orig, p, m, key.Address, key.Fingerprint()); err != nil {
+					return hold(reasonInvalid, err.Error())
+				}
+			}
+		}
 		raw := []byte(orig.Body)
 		also = func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, raw) }
+	}
+	if external {
+		event := also
+		also = func(tx *sql.Tx) error {
+			m, err := membersIn(tx, in.Conv)
+			if err != nil {
+				return err
+			}
+			p, err := participationIn(tx, in.Conv, item.PID, m, a.Address)
+			if err != nil {
+				return err
+			}
+			if !p.External || p.Invite == "" || p.State == PartConflict || p.Host.Address != key.Address || p.Host.Fingerprint != key.Fingerprint() {
+				return errors.New("external history host proof changed before admission")
+			}
+			if output {
+				if orig.AgentID != p.AgentID {
+					return errors.New("external history agent changed before admission")
+				}
+				if _, err := externalOutputRequest(tx, orig, p, m, a.Address, a.Self().Fingerprint()); err != nil {
+					return err
+				}
+			} else if err := externalTurn(orig, p, m, key.Address, key.Fingerprint()); err != nil {
+				return err
+			}
+			if event != nil {
+				return event(tx)
+			}
+			return nil
+		}
 	}
 	res, err := a.store.addHistoryInbox(orig, item.At, item.FromKey, env.From, env.ID, fromQuarantine, also)
 	if errors.Is(err, errTooManyEvents) {
 		return hold(reasonInvalid, err.Error())
 	}
 	if err == nil && res == admitted && orig.Sub == envelope.SubEvent {
+		a.convWork.due(convRetry)
+		a.kickNow()
 		a.wakeWorker() // a participation may resolve differently; nothing here runs from history
+	}
+	if err == nil && res == admitted {
+		a.applyRetraction(orig) // a deletion reaching this device as history removes the text and cache here too
 	}
 	return err
 }
@@ -242,19 +487,19 @@ func (a *Agent) kickNow() {
 // historyStep queues one page of every running snapshot and reports
 // whether any has more.
 func (a *Agent) historyStep(ctx context.Context) (more bool) {
-	rows, err := a.store.db.Query(`SELECT device, fingerprint, pos FROM history_jobs WHERE state = 'running'`)
+	rows, err := a.store.db.Query(`SELECT device, fingerprint, pos, state FROM history_jobs WHERE state IN ('running', 'done')`)
 	if err != nil {
 		return false
 	}
 	type job struct {
-		device, fp string
-		pos        historyPos
+		device, fp, state string
+		pos               historyPos
 	}
 	var jobs []job
 	for rows.Next() {
 		var j job
 		var pos string
-		if rows.Scan(&j.device, &j.fp, &pos) == nil && json.Unmarshal([]byte(pos), &j.pos) == nil {
+		if rows.Scan(&j.device, &j.fp, &pos, &j.state) == nil && json.Unmarshal([]byte(pos), &j.pos) == nil {
 			jobs = append(jobs, j)
 		}
 	}
@@ -269,9 +514,10 @@ func (a *Agent) historyStep(ctx context.Context) (more bool) {
 			a.store.db.Exec(`UPDATE history_jobs SET state = 'ended', updated_at = ? WHERE device = ?`, time.Now().Unix(), j.device)
 			continue // no longer a device of this person
 		}
-		m, err := a.historyPageFor(dev, j.pos)
+		m, err := a.historyPage(ctx, dev, j.pos, j.state == "done")
 		if err != nil {
 			a.Logf("history for %s: %v", j.device, err)
+			a.convWork.due(convHistory) // retry on the next existing wake/push, without a timer or immediate error loop
 			continue
 		}
 		more = more || m
@@ -279,56 +525,247 @@ func (a *Agent) historyStep(ctx context.Context) (more bool) {
 	return more
 }
 
-// historyPageFor queues the next page of history for dev after pos, and
-// saves where it ended in the same transaction.
-func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, err error) {
-	self := a.Self().Fingerprint()
-	rows, err := a.store.db.Query(`
-		SELECT conv, ms, id, 'in', sender, coalesce(verified_by, claimed_fp, ''), ts, kind, body, coalesce(reply_to, ''), coalesce(status, ''), coalesce(sub, ''),
-		       coalesce(origin, ''), coalesce(emotion, ''), coalesce(target, ''), coalesce(pid, ''), lid FROM (
-		  SELECT conv, received_ms AS ms, id, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid
-		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') != 'history'
-		  UNION ALL
-		  SELECT o.conv, o.created_ms, o.id, ?, ?, NULL, o.created_at, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid
-		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('history', 'file')
-		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid))
-		WHERE (conv, ms, id) > (?, ?, ?) AND conv IN (SELECT id FROM conversations)
-		ORDER BY conv, ms, id LIMIT ?`, a.Address, self, pos.Conv, pos.Ms, pos.ID, historyPage)
+// Existing outbox rows are the durable batch marker: every deterministic
+// proof page and current context must have an exact signed usable carrier.
+// Terminal failure/expiration does not suppress the existing job's recovery.
+type groupHistoryBatch struct {
+	packet   GroupContext
+	payloads []groupDeliveryPayload
+	copies   []outCopy
+}
+
+func (a *Agent) groupHistoryBatchPresent(q dbq, dev identity.Public, packet GroupContext, payloads []groupDeliveryPayload) (bool, error) {
+	rows, err := q.Query(`SELECT sub,body,envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND required_cap=? AND coalesce(pid,'')='' AND sub IN ('group-proof','group-context') AND state IN ('queued','waiting','custody','delivered')`, packet.State.Conv, dev.Address, dev.Fingerprint(), protocol.CapGroup)
 	if err != nil {
 		return false, err
 	}
+	defer rows.Close()
+	seen := make([]bool, len(payloads))
+	for rows.Next() {
+		var sub, body, raw string
+		if err := rows.Scan(&sub, &body, &raw); err != nil {
+			return false, err
+		}
+		var descriptor protocol.GroupCarrier
+		var env envelope.Envelope
+		if decodeStrict([]byte(body), &descriptor) != nil || descriptor.Validate() != nil || descriptor.ToKey != dev.Fingerprint() || json.Unmarshal([]byte(raw), &env) != nil || env.V != envelope.Version2 || env.From != a.Address || env.To != dev.Address || env.Kind != envelope.KindMessage || len(env.Blobs) != 1 || env.VerifySig(a.Self().SignKey) != nil {
+			continue
+		}
+		for i, p := range payloads {
+			if sub == p.sub && descriptor.Seq == p.descriptor.Seq && descriptor.Hash == p.descriptor.Hash {
+				seen[i] = true
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	for _, ok := range seen {
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (a *Agent) checkGroupHistoryBatch(q dbq, dev identity.Public, batch groupHistoryBatch) error {
+	own, ok, err := scanPersonIn(q, "state = ?", personSelf)
+	if err != nil {
+		return err
+	}
+	if !ok || !own.has(a.Address, a.Self().Fingerprint()) || !own.has(dev.Address, dev.Fingerprint()) {
+		return ErrGroupContextPending
+	}
+	current, err := groupTurnPacketIn(q, batch.packet.State.Conv)
+	if err != nil {
+		return err
+	}
+	old, _ := json.Marshal(batch.packet)
+	raw, _ := json.Marshal(current)
+	if !bytes.Equal(old, raw) {
+		return ErrGroupContextPending
+	}
+	for _, address := range []identity.Public{a.Self(), dev} {
+		if err := groupTurnCheck(q, current, address.Address, address.Fingerprint()); err != nil {
+			return err
+		}
+	}
+	payloads, err := groupDeliveryPayloads(q, current)
+	if err != nil {
+		return err
+	}
+	if len(payloads) != len(batch.payloads) {
+		return ErrGroupContextPending
+	}
+	for i, p := range payloads {
+		if p.sub != batch.payloads[i].sub || p.descriptor != batch.payloads[i].descriptor || !bytes.Equal(p.raw, batch.payloads[i].raw) {
+			return ErrGroupContextPending
+		}
+	}
+	return nil
+}
+
+func (a *Agent) prepareGroupHistoryCarriers(ctx context.Context, dev identity.Public) (batches []groupHistoryBatch, err error) {
+	defer func() {
+		if err != nil {
+			for _, b := range batches {
+				a.releaseGroupCopies(b.copies)
+			}
+		}
+	}()
+	own, ok, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || !own.has(a.Address, a.Self().Fingerprint()) || !own.has(dev.Address, dev.Fingerprint()) {
+		return nil, ErrGroupContextPending
+	}
+	if dev.Address == a.Address {
+		return nil, nil
+	}
+	rows, err := a.store.db.Query(`SELECT conv FROM group_context ORDER BY conv`)
+	if err != nil {
+		return nil, err
+	}
+	var convs []string
+	for rows.Next() {
+		var conv string
+		if err = rows.Scan(&conv); err != nil {
+			break
+		}
+		convs = append(convs, conv)
+	}
+	rowErr := rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if rowErr != nil {
+		return nil, rowErr
+	}
+	for _, conv := range convs {
+		packet, e := groupTurnPacketIn(a.store.db, conv)
+		if e != nil {
+			return batches, e
+		}
+		member, present := packet.State.Member(own.info.Person)
+		if !present || packet.State.Withdrawn(member, packet.Withdrawals) {
+			continue
+		} // visitor/removed person has no own-history authority
+		var withdrawn int
+		if e = a.store.db.QueryRow(`SELECT count(*) FROM (SELECT admission FROM group_withdrawals WHERE conv=? AND person=? AND admission=? UNION ALL SELECT admission FROM group_pending_withdrawals WHERE conv=? AND person=? AND admission=?)`, conv, member.Person, member.Admission.Hash(), conv, member.Person, member.Admission.Hash()).Scan(&withdrawn); e != nil {
+			return batches, e
+		}
+		if withdrawn != 0 {
+			continue
+		}
+		batch := groupHistoryBatch{packet: packet}
+		batch.payloads, e = groupDeliveryPayloads(a.store.db, packet)
+		if e != nil {
+			return batches, e
+		}
+		if e = a.checkGroupHistoryBatch(a.store.db, dev, batch); e != nil {
+			return batches, e
+		}
+		complete, e := a.groupHistoryBatchPresent(a.store.db, dev, packet, batch.payloads)
+		if e != nil {
+			return batches, e
+		}
+		if complete {
+			batches = append(batches, batch)
+			continue
+		}
+		batch.copies, e = a.groupDeliveryTo(ctx, packet, batch.payloads, dev)
+		if e != nil {
+			return batches, e
+		}
+		batches = append(batches, batch)
+	}
+	return batches, nil
+}
+
+// historyPageFor queues the next page of history for dev after pos, and
+// saves where it ended in the same transaction.
+func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, err error) {
+	return a.historyPage(context.Background(), dev, pos, false)
+}
+
+func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos historyPos, contextOnly bool) (more bool, err error) {
+	release, err := lockfile.Wait(a.spoolLockPath())
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	batches, err := a.prepareGroupHistoryCarriers(ctx, dev)
+	if err != nil {
+		return false, err
+	}
+	var prepared []outCopy
+	for _, batch := range batches {
+		prepared = append(prepared, batch.copies...)
+	}
+	defer func() { a.releaseGroupCopies(prepared) }()
+	if contextOnly && len(prepared) == 0 {
+		return false, nil
+	} // completed jobs with complete batches do not write/wake again
+
+	self := a.Self().Fingerprint()
+	// Local request execution stamps are not signed author identities and
+	// must not be exported as the original question/task's AgentID.
 	var items []struct {
 		conv string
+		dir  string
 		in   envelope.Inner
 		key  string
 		pos  historyPos
 	}
-	for rows.Next() {
-		var conv, dir, key, target string
-		var ms int64
-		var in envelope.Inner
-		if err := rows.Scan(&conv, &ms, &in.ID, &dir, &in.From, &key, &in.TS, &in.Kind, &in.Body, &in.ReplyTo, &in.Status, &in.Sub,
-			&in.Origin, &in.Emotion, &target, &in.PID, &in.LID); err != nil {
-			rows.Close()
+	if !contextOnly {
+		rows, err := a.store.db.Query(`
+		SELECT conv, ms, id, dir, sender, coalesce(verified_by, claimed_fp, ''), ts, kind, body, coalesce(reply_to, ''), coalesce(status, ''), coalesce(sub, ''),
+		       coalesce(origin, ''), coalesce(emotion, ''), coalesce(target, ''), coalesce(pid, ''), lid, coalesce(ref_id, ''), coalesce(ref_fp, ''), coalesce(agent_id, '') FROM (
+		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
+		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id
+		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('history', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
+		  UNION ALL
+		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN (coalesce(o.pid,'') <> '' OR o.sub='status') AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id
+		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('history', 'file', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
+		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid))
+		WHERE (conv, ms, id) > (?, ?, ?) AND conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context)
+		ORDER BY conv, ms, id LIMIT ?`, a.Address, self, pos.Conv, pos.Ms, pos.ID, historyPage)
+		if err != nil {
 			return false, err
 		}
-		if target != "" {
-			in.Target = &envelope.Target{}
-			json.Unmarshal([]byte(target), in.Target)
+		for rows.Next() {
+			var conv, dir, key, target, refID, refFP string
+			var ms int64
+			var in envelope.Inner
+			if err := rows.Scan(&conv, &ms, &in.ID, &dir, &in.From, &key, &in.TS, &in.Kind, &in.Body, &in.ReplyTo, &in.Status, &in.Sub,
+				&in.Origin, &in.Emotion, &target, &in.PID, &in.LID, &refID, &refFP, &in.AgentID); err != nil {
+				rows.Close()
+				return false, err
+			}
+			if target != "" {
+				in.Target = &envelope.Target{}
+				json.Unmarshal([]byte(target), in.Target)
+			}
+			if refID != "" {
+				in.Ref = &envelope.Ref{ID: refID, Fingerprint: refFP}
+			}
+			in.Conv = conv
+			items = append(items, struct {
+				conv string
+				dir  string
+				in   envelope.Inner
+				key  string
+				pos  historyPos
+			}{conv, dir, in, key, historyPos{conv, ms, in.ID}})
 		}
-		in.Conv = conv
-		items = append(items, struct {
-			conv string
-			in   envelope.Inner
-			key  string
-			pos  historyPos
-		}{conv, in, key, historyPos{conv, ms, in.ID}})
+		rows.Close()
 	}
-	rows.Close()
 	var copies []outCopy
 	roots := map[string][]byte{}
 	for _, it := range items {
-		files, err := a.store.attachmentManifest(it.in.ID)
+		files, err := a.store.attachmentManifest(it.in.ID, it.dir)
 		if err != nil {
 			return false, err
 		}
@@ -341,8 +778,89 @@ func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, 
 			}
 			roots[it.conv] = raw
 		}
-		c, err := a.historyCopy(dev, it.conv, raw, itemOf(it.in, it.key, it.pos.Ms))
+		if root, err := protocol.ParseConvRoot(raw); err != nil {
+			return false, err
+		} else if externalDM(root) {
+			me, ok, err := a.store.selfPerson(a.Address)
+			if err != nil {
+				return false, err
+			}
+			if _, member := root.Member(me.info.Person); !ok || !member {
+				continue // advance the snapshot cursor without copying visitor context
+			}
+		}
+		it.in.ReceiverRoute, err = receiverStoredRoute(a.store.db, it.dir, it.in.ID)
 		if err != nil {
+			return false, err
+		}
+		prepared := itemOf(it.in, it.key, it.pos.Ms)
+		if root, e := protocol.ParseConvRoot(raw); e == nil && root.Kind == protocol.ConvKindGroup {
+			packet, e := groupTurnPacketIn(a.store.db, it.conv)
+			if e != nil {
+				return false, e
+			}
+			me, ok, e := a.store.selfPerson(a.Address)
+			if e != nil {
+				return false, e
+			}
+			member, present := packet.State.Member(me.info.Person)
+			var withdrawn int
+			if present {
+				if e = a.store.db.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, it.conv, member.Person, member.Admission.Hash()).Scan(&withdrawn); e != nil {
+					return false, e
+				}
+			}
+			if !ok || !present || withdrawn != 0 || packet.State.Withdrawn(member, packet.Withdrawals) {
+				continue
+			}
+			if e = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); e != nil {
+				return false, e
+			}
+			if e = groupTurnCheck(a.store.db, packet, dev.Address, dev.Fingerprint()); e != nil {
+				return false, e
+			}
+			// Visitors and previous admissions cannot become an own-history source.
+			if !me.has(dev.Address, dev.Fingerprint()) {
+				continue
+			}
+			if ordinaryGroupTurn(prepared.inner(it.conv)) {
+				if retractedRef(a.store.db, it.conv, prepared.LID, prepared.FromKey) {
+					continue
+				}
+				sources, e := a.groupHistorySources(a.store.db, it.conv, prepared.LID, prepared.FromKey, 0, 64)
+				if e != nil {
+					return false, e
+				}
+				found := false
+				for _, source := range sources {
+					if source.item.ID == prepared.ID {
+						// Existing resolver checks every logical duplicate against the
+						// visible content hash; never choose a conflicting first row.
+						verified, e := a.groupHistorySourceIn(a.store.db, it.conv, historyRef(it.conv, source.item))
+						if e != nil {
+							return false, e
+						}
+						prepared = source.item
+						prepared.GroupAdmission = verified.stamp
+						found = true
+						break
+					}
+				}
+				if !found {
+					return false, ErrGroupHistoryUnavailable
+				}
+				if prepared.GroupAdmission != member.Admission.Hash() && !member.Admission.AllowsHistory(historyRef(it.conv, prepared)) {
+					continue // a known earlier admission is not a new own-live grant
+				}
+			} else if !groupControlSub(prepared.Sub) && !groupParticipationHistoryItem(prepared) {
+				continue // separately admitted PID traffic has its own history policy
+			}
+		}
+		c, err := a.historyCopy(dev, it.conv, raw, prepared)
+		if err != nil {
+			if errors.Is(err, errGroupControlHistoryEpoch) || errors.Is(err, errGroupParticipationHistoryEpoch) {
+				continue
+			}
 			return false, err
 		}
 		copies = append(copies, c)
@@ -351,7 +869,7 @@ func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, 
 	if len(items) > 0 {
 		next = items[len(items)-1].pos
 	}
-	if len(items) < historyPage {
+	if contextOnly || len(items) < historyPage {
 		state = "done"
 	}
 	data, _ := json.Marshal(next)
@@ -360,26 +878,118 @@ func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, 
 		return false, err
 	}
 	defer tx.Rollback()
-	if err := insertCopies(tx, copies); err != nil {
+	var carriers []outCopy
+	for _, batch := range batches {
+		if e := a.checkGroupHistoryBatch(tx, dev, batch); e != nil {
+			return false, e
+		}
+		complete, e := a.groupHistoryBatchPresent(tx, dev, batch.packet, batch.payloads)
+		if e != nil {
+			return false, e
+		}
+		if !complete {
+			if len(batch.copies) == 0 {
+				return false, ErrGroupContextPending
+			} // usable marker changed after preparation; retry fresh
+			carriers = append(carriers, batch.copies...)
+		}
+	}
+	for _, copy := range copies {
+		root, e := protocol.ParseConvRoot(copy.in.Root)
+		if e != nil {
+			return false, e
+		}
+		if root.Kind != protocol.ConvKindGroup {
+			continue
+		}
+		packet, e := groupTurnPacketIn(tx, copy.in.Conv)
+		if e != nil {
+			return false, e
+		}
+		var item HistoryItem
+		if e = decodeStrict([]byte(copy.in.Body), &item); e != nil {
+			return false, e
+		}
+		own, ok, e := scanPersonIn(tx, "state = ?", personSelf)
+		if e != nil {
+			return false, e
+		}
+		if !ok || !own.has(copy.env.To, copy.recipientFP) {
+			return false, ErrGroupContextPending
+		}
+		admission, e := groupMemberAdmission(tx, packet, copy.env.To, copy.recipientFP)
+		if e != nil {
+			return false, e
+		}
+		if admission.Hash() != copy.groupAdmission {
+			return false, ErrGroupContextPending
+		}
+		if groupControlSub(item.Sub) {
+			stamp, e := a.groupControlSourceAdmission(tx, packet, item, nil)
+			if e != nil {
+				return false, e
+			}
+			if stamp != item.GroupAdmission {
+				return false, ErrGroupContextPending
+			}
+			if e = a.groupControlHistoryCheck(tx, root, a.Self(), item); e != nil {
+				return false, e
+			}
+		} else if groupParticipationHistoryItem(item) {
+			if e = a.groupParticipationHistoryOutboundCheck(tx, packet, copy.env.To, copy.recipientFP, item); e != nil {
+				return false, e
+			}
+		} else if e = a.groupHistoryOutboundCheck(tx, packet, copy.env.To, copy.recipientFP, item); e != nil {
+			return false, e
+		}
+	}
+	if err := insertCopies(tx, append(carriers, copies...)); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(`UPDATE history_jobs SET pos = ?, state = ?, updated_at = ? WHERE device = ?`, string(data), state, time.Now().Unix(), dev.Address); err != nil {
+	// Carriers reuse the ordinary durable upload ledger; legacy history has no blobs.
+	for _, c := range carriers {
+		for _, att := range c.in.Attachments {
+			if _, err := tx.Exec(`INSERT INTO sent_attachments(message_id,blob_id,name,size,sha256) VALUES(?,?,?,?,?)`, c.env.ID, att.Blob.ID, att.Name, att.Size, att.SHA256); err != nil {
+				return false, err
+			}
+		}
+		for _, blob := range c.env.Blobs {
+			if _, err := tx.Exec(`INSERT INTO uploads(blob_id,message_id,state) VALUES(?,?,?)`, blob.ID, c.env.ID, protocol.BlobUploading); err != nil {
+				return false, err
+			}
+		}
+	}
+	if _, err := tx.Exec(`UPDATE history_jobs SET pos = ?, state = ?, updated_at = ? WHERE device = ? AND fingerprint = ?`, string(data), state, time.Now().Unix(), dev.Address, dev.Fingerprint()); err != nil {
 		return false, err
 	}
 	if err := a.store.done(tx.Commit()); err != nil {
 		return false, err
 	}
-	if len(copies) > 0 {
+	// Only newly committed spools survive; duplicate preparations release below.
+	committed := map[string]bool{}
+	for _, c := range carriers {
+		committed[c.in.ID] = true
+	}
+	kept := prepared[:0]
+	for _, c := range prepared {
+		if !committed[c.in.ID] {
+			kept = append(kept, c)
+		}
+	}
+	prepared = kept
+	if len(copies)+len(carriers) > 0 {
 		notifyDaemon(a.home)
 	}
 	return state == "running", nil
 }
 
-// attachmentManifest returns the files of a stored message (received or
-// sent), as manifests.
-func (s *store) attachmentManifest(id string) ([]envelope.Attachment, error) {
-	rows, err := s.db.Query(`SELECT name, size, sha256 FROM attachments WHERE message_id = ?
-		UNION ALL SELECT name, size, sha256 FROM sent_attachments WHERE message_id = ? ORDER BY 1`, id, id)
+// attachmentManifest preserves the original attachment indices in one direction.
+func (s *store) attachmentManifest(id, dir string) ([]envelope.Attachment, error) {
+	table := "attachments"
+	if dir == "out" {
+		table = "sent_attachments"
+	}
+	rows, err := s.db.Query("SELECT name, size, sha256 FROM "+table+" WHERE message_id = ? ORDER BY rowid", id)
 	if err != nil {
 		return nil, err
 	}

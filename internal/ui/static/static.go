@@ -19,32 +19,43 @@ import (
 	"time"
 )
 
-//go:embed index.html default.html loader.js core.css app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs manifest.webmanifest sw.js ant.png
+//go:embed index.html default.html loader.js core.css app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
 // browser device the relay serves (the same page and views, started by
-// device.mjs over engine.mjs, wire.mjs and vendor/age.mjs).
+// device.mjs over engine.mjs, wire.mjs and vendor/age.mjs, idb.mjs, sse.mjs).
 var Files fs.FS = files
 
 // relayFiles are the bundle files Relay serves, and the file behind each; ""
 // is the device page, made from index.html. With relayIcons, they are the
 // only paths it serves.
 var relayFiles = map[string]string{
-	"/":                      "",
-	"/manifest.webmanifest":  "manifest.webmanifest",
-	"/sw.js":                 "sw.js", // the service worker: push and click only (its scope is the origin)
-	"/assets/core.css":       "core.css",
-	"/assets/loader.js":      "loader.js",
-	"/assets/default.html":   "default.html",
-	"/assets/app.css":        "app.css",
-	"/assets/app.js":         "app.js",
-	"/assets/lenses.js":      "lenses.js",
-	"/assets/device.mjs":     "device.mjs",
-	"/assets/engine.mjs":     "engine.mjs",
-	"/assets/wire.mjs":       "wire.mjs",
-	"/assets/vendor/age.mjs": "vendor/age.mjs",
-	"/assets/vendor/qr.mjs":  "vendor/qr.mjs", // loaded only to show a new device's link
+	"/":                            "",
+	"/manifest.webmanifest":        "manifest.webmanifest",
+	"/sw.js":                       "sw.js",            // push/click and explicitly selected local-package assets (origin scope)
+	"/workspaces-sw.js":            "workspaces-sw.js", // the workspace switcher's worker: registered per local workspace id (workspaces.mjs)
+	"/assets/core.css":             "core.css",
+	"/assets/loader.js":            "loader.js",
+	"/assets/default.html":         "default.html",
+	"/assets/app.css":              "app.css",
+	"/assets/app.js":               "app.js",
+	"/assets/lenses.js":            "lenses.js",
+	"/assets/device.mjs":           "device.mjs",
+	"/assets/engine.mjs":           "engine.mjs",
+	"/assets/wire.mjs":             "wire.mjs",
+	"/assets/vendor/age.mjs":       "vendor/age.mjs",
+	"/assets/vendor/qr.mjs":        "vendor/qr.mjs",  // loaded only to show a new device's link
+	"/assets/vendor/idb.mjs":       "vendor/idb.mjs", // idb: the device store's IndexedDB plumbing
+	"/assets/vendor/sse.mjs":       "vendor/sse.mjs", // eventsource-parser: the signed stream's framing
+	"/assets/drivespace.mjs":       "drivespace.mjs",
+	"/assets/drivespace.css":       "drivespace.css",
+	"/assets/drivespace-setup.mjs": "drivespace-setup.mjs",
+	"/assets/local-skins.mjs":      "local-skins.mjs",
+	"/assets/typing.mjs":           "typing.mjs",
+	"/assets/teams.mjs":            "teams.mjs",
+	"/assets/workspaces.mjs":       "workspaces.mjs",
+	"/assets/workspaces.css":       "workspaces.css",
 }
 
 // relayIcons are the app icon's paths and sizes, named by the manifest.
@@ -54,18 +65,17 @@ var relayIcons = map[string]int{"/assets/icon-192.png": 192, "/assets/icon-512.p
 // them once the device is ready.
 const daemonScripts = `<script src="/assets/loader.js" defer></script>`
 
-// pageStyle is where the device page adds its manifest.
+// pageStyle is the shared page's core stylesheet marker.
 const pageStyle = `<link rel="stylesheet" href="/assets/core.css">`
 
-// devicePage is index.html with its scripts replaced by device.mjs, and
-// the manifest that lets a browser install it as an app.
+// devicePage keeps index.html's shared install metadata and replaces only
+// its daemon scripts with the browser enrollment engine.
 func devicePage() []byte {
 	page, err := fs.ReadFile(files, "index.html")
 	if err != nil || !bytes.Contains(page, []byte(daemonScripts)) || !bytes.Contains(page, []byte(pageStyle)) {
 		panic("static: index.html has no view scripts or style to replace") // a build error
 	}
-	page = bytes.Replace(page, []byte(daemonScripts), []byte(`<script type="module" src="/assets/device.mjs"></script>`), 1)
-	return bytes.Replace(page, []byte(pageStyle), []byte(pageStyle+"\n"+`<link rel="manifest" href="/manifest.webmanifest">`), 1)
+	return bytes.Replace(page, []byte(daemonScripts), []byte(`<script type="module" src="/assets/device.mjs"></script>`), 1)
 }
 
 // The app icon is the logo (ant.png: a dark teal ant, the owner's choice)

@@ -1173,7 +1173,18 @@ func TestBrowserEngineFiles(t *testing.T) {
 	if sum := sha256.Sum256(notes); in.Attachments[0].SHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatal("the manifest's plaintext digest is not the file's")
 	}
-	w.refuses("a sent file read back", w.call(map[string]any{"op": "openFile", "id": sent["id"], "i": 0}), "not kept")
+	// The browser device reopens what it sent from the copy it kept for
+	// itself (as the Go client does from kept/).
+	back := w.ok(map[string]any{"op": "openFile", "id": sent["id"], "i": 0})
+	if gotBack, _ := base64.StdEncoding.DecodeString(back["b64"].(string)); !bytes.Equal(gotBack, notes) || back["name"] != "notes.txt" {
+		t.Fatalf("a sent file read back: name %v equal %v", back["name"], bytes.Equal(gotBack, notes))
+	}
+	// The direction is exact: asked as a received message, a sent id opens
+	// nothing (never the kept copy); asked as sent, it opens the kept copy.
+	w.refuses("a sent id asked as incoming", w.call(map[string]any{"op": "openFile", "id": sent["id"], "i": 0, "dir": "in"}), "No received message")
+	if out := w.ok(map[string]any{"op": "openFile", "id": sent["id"], "i": 0, "dir": "out"}); out["name"] != "notes.txt" {
+		t.Fatalf("a sent id asked as sent: %v", out["name"])
+	}
 	for _, d := range w.api("/api/overview", nil)["dms"].([]any) {
 		if d := d.(map[string]any); d["id"] == conv && d["last"] != "📎 notes.txt" {
 			t.Fatalf("a message of files only in the DM list: %q", d["last"])

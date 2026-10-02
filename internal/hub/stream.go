@@ -148,6 +148,8 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if !a.Pending {
 		w.Header().Set(protocol.MembersHeader, "1")
+		w.Header().Set(protocol.TeamsHeader, "1") // the team directory rides on the members generation (teams.go)
+		w.Header().Set(protocol.SignalsHeader, "1")
 	}
 	w.WriteHeader(http.StatusOK)
 	http.NewResponseController(w).Flush()
@@ -173,11 +175,14 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 		h.holdPending(ctx, caller, sub, ping, lease, write)
 		return
 	}
+	signals := h.signals.subscribe(caller, sub)
+	defer h.signals.unsubscribe(caller, sub)
 	var lastSeq int64
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
 	sentLinks := int64(-1)   // and the devices waiting for this one's approval
 	linked := map[string]bool{}
+	sentGroupHeads := "" // the caller's group journal heads, sent when they change (groups.go)
 	for {
 		if rel, gen := h.currentRelease(); gen != sentRelease {
 			data, _ := json.Marshal(rel)
@@ -197,7 +202,18 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !write("event: members\ndata: %s\n\n", data) {
 				return
 			}
+			if dir, err := h.teamDirectory(); err == nil { // the same generation moves both
+				data, _ := json.Marshal(dir)
+				if !write("event: teams\ndata: %s\n\n", data) {
+					return
+				}
+			}
 			sentMembers = gen
+		}
+		if heads, err := h.store.groupHeads(caller); err != nil {
+			return
+		} else if !writeGroupHeads(heads, &sentGroupHeads, write) {
+			return
 		}
 		if gen := h.linksGen.Load(); gen != sentLinks {
 			links, err := h.store.pendingLinks(caller)
@@ -228,6 +244,14 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			continue // more backlog
 		}
 		select {
+		case signal := <-signals:
+			if signal.Session != ad.Session || signal.TS <= time.Now().Add(-protocol.SignalTTL).UnixMilli() {
+				continue // never move a stale signal or another recipient run into this stream
+			}
+			data, _ := json.Marshal(signal)
+			if !write("event: signal\ndata: %s\n\n", data) {
+				return
+			}
 		case <-sub.wake:
 		case <-ping.C:
 			if time.Since(time.Unix(0, sub.lastAck.Load())) > lease {
@@ -243,6 +267,56 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+const groupHeadsFrameLimit = 512 << 10
+const groupHeadsFrame = "event: groups\ndata: %s\n\n"
+
+// writeGroupHeads keeps the existing independent-head arrays, bounding the
+// complete frame. The snapshot is marked sent only after every batch flushes.
+func writeGroupHeads(heads []protocol.GroupHead, sent *string, write func(string, ...any) bool) bool {
+	if heads == nil {
+		heads = []protocol.GroupHead{}
+	}
+	all, err := json.Marshal(heads)
+	if err != nil {
+		return false
+	}
+	if string(all) == *sent {
+		return true
+	}
+	const overhead = len("event: groups\ndata: \n\n")
+	batch := make([]json.RawMessage, 0)
+	size := overhead + 2 // brackets
+	flush := func() bool {
+		data, err := json.Marshal(batch)
+		return err == nil && len(data)+overhead <= groupHeadsFrameLimit && write(groupHeadsFrame, data)
+	}
+	for _, head := range heads {
+		raw, err := json.Marshal(head)
+		if err != nil || len(raw)+overhead+2 > groupHeadsFrameLimit {
+			return false
+		}
+		extra := len(raw)
+		if len(batch) != 0 {
+			extra++ // comma
+		}
+		if size+extra > groupHeadsFrameLimit {
+			if !flush() {
+				return false
+			}
+			batch = batch[:0]
+			size = overhead + 2
+			extra = len(raw)
+		}
+		batch = append(batch, raw)
+		size += extra
+	}
+	if !flush() {
+		return false
+	}
+	*sent = string(all)
+	return true
 }
 
 func (h *Hub) handleStreamAck(w http.ResponseWriter, r *http.Request) {

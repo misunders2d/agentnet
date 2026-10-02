@@ -490,31 +490,27 @@ func TestAgentHeldAndEmotion(t *testing.T) {
 		t.Fatalf("with a record held: %s, runs %d", s, st.runs())
 	}
 
+	// A reply without an emotion line, or with one that cannot be read, is
+	// delivered all the same, shown neutral (MEL-434): a formatting slip is
+	// not a decision for a person, and nothing runs again for it.
 	pid2 := participate(t, w, conv, nil, nil)
 	for _, mode := range []string{"bare", "bad"} {
 		st.mode(mode)
+		runs := st.runs()
 		q, err := w.alice.AskAgent(tctx(t), pid2, envelope.KindQuestion, "feel? "+mode)
 		if err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, "needs_human", func() bool { return jobState(t, w.bob, q.ID) == stateNeedHuman })
-		if m, _ := w.bob.store.inboxMessage(q.ID); !strings.Contains(m.Detail, "the deploy failed at step 3") {
-			t.Fatalf("the reply was not kept: %+v", m)
+		eventually(t, "answered", func() bool { return jobState(t, w.bob, q.ID) == stateAnswered })
+		if a := replyAt(t, w.alice, conv, q.ID); a.Emotion != "neutral" || a.Body != "the deploy failed at step 3" {
+			t.Fatalf("%s: %+v", mode, a)
 		}
-		noReply(t, w.alice, conv, q.ID)
-		if mode == "bad" {
-			runs := st.runs()
-			time.Sleep(200 * time.Millisecond)
-			if st.runs() != runs {
-				t.Fatal("a missing emotion started another run")
-			}
-			st.mode("emotion")
-			if err := w.bob.Accept(q.ID); err != nil {
-				t.Fatal(err)
-			}
-			if a := replyAt(t, w.alice, conv, q.ID); a.Emotion != "concerned" {
-				t.Fatalf("rerun: %+v", a)
-			}
+		time.Sleep(200 * time.Millisecond)
+		if st.runs() != runs+1 {
+			t.Fatalf("%s: ran %d time(s)", mode, st.runs()-runs)
+		}
+		if review, _ := w.bob.Review(); len(review) != 0 {
+			t.Fatalf("%s: a missing emotion became a decision: %+v", mode, review)
 		}
 	}
 }

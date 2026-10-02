@@ -487,3 +487,44 @@ func TestQuestionCounterQuestionRoundTrip(t *testing.T) {
 		t.Fatal("counter-question sent a review notice")
 	}
 }
+
+// A review notice from another machine is a report about decisions waiting
+// THERE: it never counts as a request waiting here, raises no desktop
+// notification, and stays out of the review list; a real decision here
+// still notifies with the right count.
+func TestReportNoticeIsNotADecision(t *testing.T) {
+	w := newWorld(t, "")
+	n := fakeNotify(w.bob)
+	runWith(t, w, w.bob, RunOptions{})
+
+	notice, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage,
+		Status: envelope.StatusReviewNotice, Body: "5 request(s) wait for a decision here"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, notice.ID, stateNeedHuman)
+	quiet(t, w.bob, n, 0)
+	if review, _ := w.bob.Review(); len(review) != 0 {
+		t.Fatalf("a report is listed as a decision here: %+v", review)
+	}
+	if notices, _ := w.bob.Notices(); len(notices) != 1 || notices[0].ID != notice.ID {
+		t.Fatalf("notices = %+v", notices)
+	}
+
+	task, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "real task", Kind: envelope.KindTask})
+	waitState(t, w.bob, task.ID, stateAwaiting)
+	eventually(t, "the real decision notifies", func() bool { return n.count() == 1 })
+	if !strings.HasPrefix(n.last(), "AgentNet: 1 request needs your decision") {
+		t.Fatalf("notification %q (the report must not be counted)", n.last())
+	}
+	if review, _ := w.bob.Review(); len(review) != 1 || review[0].ID != task.ID {
+		t.Fatalf("review = %+v", review)
+	}
+	quiet(t, w.bob, n, 1)
+	if err := w.bob.Resolve(notice.ID); err != nil {
+		t.Fatal(err)
+	}
+	if notices, _ := w.bob.Notices(); len(notices) != 0 {
+		t.Fatalf("resolved report still open: %+v", notices)
+	}
+}

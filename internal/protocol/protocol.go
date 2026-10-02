@@ -36,6 +36,7 @@ type VersionInfo struct {
 	Version  string   `json:"version"`
 	Protocol int      `json:"protocol"`
 	Features []string `json:"features,omitempty"` // Feature*; absent on older relays
+	RealmID  string   `json:"realm_id,omitempty"` // opaque workspace namespace; not authority
 }
 
 // MaxBody bounds every request body the Hub reads.

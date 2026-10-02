@@ -150,8 +150,13 @@ func startDaemonUI(a *client.Agent, home, listen string, logf func(string, ...an
 		ln.Close()
 		return nil, err
 	}
-	page := ui.New(ui.NewLive(a), addr, token, filepath.Join(home, "skins"))
-	srv := &http.Server{Handler: page.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	page, workspaceHandler, stopWorkspaces, err := startWorkspaceUI(a, home, addr, token, filepath.Join(home, "skins"))
+	if err != nil {
+		ln.Close()
+		os.Remove(path)
+		return nil, err
+	}
+	srv := &http.Server{Handler: workspaceHandler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 			logf("messenger page stopped: %v", err)
@@ -174,6 +179,7 @@ func startDaemonUI(a *client.Agent, home, listen string, logf func(string, ...an
 			}
 		}
 		srv.Close()
+		stopWorkspaces()
 		os.Remove(path)
 	}, nil
 }

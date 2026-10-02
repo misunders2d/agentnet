@@ -1,5 +1,11 @@
 # Messenger architecture (reviewed design, partly built)
 
+> **Sep 30 contract update:** [NEXT_RELEASE.md](NEXT_RELEASE.md) supersedes
+> conflicting proposals below, including single-device keepers, deferred
+> groups/workspaces and sandbox claims for trusted interface packages.
+> The next-release candidate is not yet accepted. Older slice evidence does
+> not imply completion of its full messenger requirements.
+
 **Status:**
 - Reviewed design. Codex, Agy and core Claude reviewed the initial draft, the
   author corrected it, and Codex checked the corrections.

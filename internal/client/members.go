@@ -110,7 +110,7 @@ func (a *Agent) onMembers(data []byte) {
 		a.members.view.Current = false
 		a.members.mu.Unlock()
 		a.Logf("hub member list ignored: %v", err)
-		a.changes.bump()
+		a.typingMembershipChanged()
 		return
 	}
 	a.members.view = MemberView{Listed: MembersListed, Members: m, At: time.Now(), Current: true}
@@ -126,7 +126,7 @@ func (a *Agent) onMembers(data []byte) {
 		more = ", list truncated"
 	}
 	a.Logf("hub members: %d listed, %d connected%s", len(m.Members), connected, more)
-	a.changes.bump()
+	a.typingMembershipChanged()
 	// Presence, persons or capabilities may have changed: look again at
 	// held conversation messages on the stream's worker.
 	a.convWork.due(convPersons | convRetry | convRelease)
