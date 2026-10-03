@@ -143,3 +143,23 @@ func TestValidEmoji(t *testing.T) {
 		}
 	}
 }
+
+// A reaction composed here is one emoji; what peers already sent within
+// ValidEmoji stays readable.
+func TestOneEmoji(t *testing.T) {
+	for _, ok := range []string{"👍", "❤️", "🇱🇻", "👍🏽", "1️⃣", "#️⃣", "👨‍👩‍👧‍👦", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "✓", "☕", "★", "©️", "↔️", "🫩"} {
+		if !OneEmoji(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"$", "+", "€", "^", "×", "𠀀", "👍👍", strings.Repeat("👍", MaxEmojiRunes), "🇱🇻🇺🇸", "🇱🇻👍", "11⃣", "\u200d👍", "👍\u200d", "👍\u200d$", "a", ""} {
+		if OneEmoji(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	for _, sent := range []string{"$", "+", "𠀀", strings.Repeat("👍", MaxEmojiRunes)} {
+		if !ValidEmoji(sent) {
+			t.Errorf("%q, as peers sent it, is no longer readable", sent)
+		}
+	}
+}

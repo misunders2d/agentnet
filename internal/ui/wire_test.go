@@ -580,6 +580,18 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 		}
 	})
 
+	t.Run("emoji judged as Go judges them", func(t *testing.T) {
+		list := []string{"👍", "❤️", "🇱🇻", "👍🏽", "1️\u20e3", "#️\u20e3", "👨\u200d👩\u200d👧\u200d👦", "✓", "☕", "★", "©️", "↔️", "🫩",
+			"$", "+", "€", "^", "×", "𠀀", "👍👍", strings.Repeat("👍", 12), "🇱🇻🇺🇸", "🇱🇻👍", "11\u20e3", "\u200d👍", "👍\u200d", "a", ""} // invalid UTF-8 cannot travel as JSON: envelope.TestValidEmoji covers it
+		got := w.ok(map[string]any{"op": "emoji", "list": list})
+		valid, one := got["valid"].([]any), got["one"].([]any)
+		for i, s := range list {
+			if valid[i] != envelope.ValidEmoji(s) || one[i] != envelope.OneEmoji(s) {
+				t.Errorf("%q: JS valid %v one %v, Go valid %v one %v", s, valid[i], one[i], envelope.ValidEmoji(s), envelope.OneEmoji(s))
+			}
+		}
+	})
+
 	t.Run("keys after a reload", func(t *testing.T) {
 		again := w.ok(map[string]any{"op": "reload"})
 		if again["public"] != setup["public"] || again["extractable"] != false || again["export_refused"] != true {

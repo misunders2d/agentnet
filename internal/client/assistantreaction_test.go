@@ -24,6 +24,8 @@ func TestSplitReaction(t *testing.T) {
 		{"reaction: 👍", "reaction: 👍", "", false, false}, // nothing would be left to answer
 		{"reaction: 👍\nthe answer", "reaction: 👍\nthe answer", "", false, false},
 		{"plain answer", "plain answer", "", false, false},
+		{"the answer\nreaction: 👍👍👍", "the answer\nreaction: 👍👍👍", "", false, false}, // one emoji, not a row
+		{"the answer\nreaction: $", "the answer\nreaction: $", "", false, false},
 	} {
 		rest, choice := splitReaction(c.in)
 		if rest != c.rest || (choice != nil) != c.ok || choice != nil && (choice.emoji != c.emoji || choice.remove != c.remove) {

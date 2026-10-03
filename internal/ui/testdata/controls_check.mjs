@@ -558,6 +558,34 @@ async function makeWorld() {
   check((await A.store.all("outbox")).length === queued, "nothing was queued for a deleted message");
 }
 
+// A reaction composed here is one emoji, and taking off one that is not
+// there is refused, both before anything is sent (client
+// TestReactionIsOneEmoji, TestRemovingAbsentReactionRefused).
+{
+  const { store, e } = await fresh();
+  await store.write([
+    { s: "inbox", k: ID, v: { id: ID, v: 1, from: "peer/desk", fp: PEER, kind: "message", body: "theirs", at: 1 } },
+    { s: "outbox", k: ID2, v: { ...ctl(ID2, wire.SubReaction, JSON.stringify({ emoji: "👍", op: "add", n: 1 }), { id: ID, fingerprint: PEER }, "me/phone"), to: "peer/desk", aside: true, state: "delivered" } },
+    { s: "inbox", k: "c9".padEnd(32, "0"), v: ctl("c9".padEnd(32, "0"), wire.SubReaction, JSON.stringify({ emoji: "👀", op: "add", n: 1 }), { id: ID, fingerprint: PEER }) },
+  ]);
+  for (const emoji of ["$", "+", "€", "𠀀", "👍".repeat(12), "👍👍", "🇱🇻🇺🇸"]) {
+    let why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji }); } catch (err) { why = err.message; }
+    check(why === "A reaction is one emoji.", JSON.stringify(emoji) + " is refused as a reaction: " + why);
+  }
+  for (const emoji of ["🎉", "👀"]) { // never added here; the peer's own is not mine to take off
+    let why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji, remove: true }); } catch (err) { why = err.message; }
+    check(why.includes("no " + emoji + " reaction of yours"), "removing " + emoji + " that is not mine is refused: " + why);
+  }
+  let why = "";
+  try { await e.messageControl("react", { id: ID, dir: "in", emoji: "👍", remove: true }); } catch (err) { why = err.message; }
+  check(!why.includes("reaction of yours"), "removing my own reaction goes on to be sent: " + why);
+  check((await store.all("outbox")).length === 1, "nothing was queued for a refused reaction");
+  for (const [emoji, ok] of [["👍🏽", true], ["🇱🇻", true], ["✓", true], ["$", false], ["👍👍", false], ["𠀀", false]]) check(wire.oneEmoji(emoji) === ok, "oneEmoji(" + emoji + ")");
+  check(wire.validEmoji("$") && wire.validEmoji("👍".repeat(12)), "what peers already sent stays readable");
+}
+
 // Equal counters from two devices of one person: the tie is broken on the
 // control's logical id, the same in every copy, never on the id of the copy
 // this device holds (client TestConcurrentControlsResolveAlikeOnEveryDevice).

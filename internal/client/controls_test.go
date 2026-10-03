@@ -952,6 +952,88 @@ func TestLateLinkedDeviceGetsNoDeletedText(t *testing.T) {
 	}
 }
 
+// A reaction composed here is one emoji: a currency or math sign, another
+// script's character or a row of emoji is refused before anything is sent,
+// while sequences that render as one emoji (skin tone, flag, family) go.
+func TestReactionIsOneEmoji(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "react to me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.alice, ref, "👍🏽", false) // also waits for bob's capabilities
+	for _, bad := range []string{"$", "+", "€", "𠀀", strings.Repeat("👍", 12), "👍👍", "🇱🇻🇺🇸"} {
+		if _, err := w.alice.React(tctx(t), ref, bad, false); err == nil {
+			t.Errorf("%q accepted as a reaction", bad)
+		}
+	}
+	for _, good := range []string{"🇱🇻", "👨‍👩‍👧‍👦", "1️⃣", "❤️", "✓"} {
+		if _, err := w.alice.React(tctx(t), ref, good, false); err != nil {
+			t.Errorf("%q refused: %v", good, err)
+		}
+	}
+	var n int
+	w.alice.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE sub = ?`, envelope.SubReaction).Scan(&n)
+	if n != 6 {
+		t.Fatalf("%d reactions sent, want 6", n)
+	}
+}
+
+// Taking off a reaction that is not there says so instead of reporting it
+// removed, and sends nothing.
+func TestRemovingAbsentReactionRefused(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "react to me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.alice, ref, "👍", false) // also waits for bob's capabilities
+	bobRef, err := w.bob.RefOf(conv, turn.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.bob, bobRef, "👀", false) // bob's own reaction is not alice's to take off
+	eventually(t, "alice to show bob's reaction", func() bool { return len(convMsgByID(t, w.alice, conv, turn.ID).Reactions) == 2 })
+	sent := func() int {
+		var n int
+		w.alice.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE sub = ?`, envelope.SubReaction).Scan(&n)
+		return n
+	}
+	before := sent()
+	for _, emoji := range []string{"🎉", "👀"} {
+		if _, err := w.alice.React(tctx(t), ref, emoji, true); err == nil || !strings.Contains(err.Error(), "no "+emoji+" reaction of yours") {
+			t.Errorf("removing %s alice never added: %v", emoji, err)
+		}
+	}
+	if sent() != before {
+		t.Fatal("a removal of nothing was sent")
+	}
+	if _, err := w.alice.React(tctx(t), ref, "👍", true); err != nil {
+		t.Fatalf("removing her own reaction: %v", err)
+	}
+	if _, err := w.alice.React(tctx(t), ref, "👍", true); err == nil {
+		t.Fatal("the same reaction removed twice")
+	}
+}
+
 // A deleted message takes no more controls: its author can neither edit
 // nor delete it again, and no one can react to it. Each is refused before
 // anything is stored or sent, in a conversation and in a device thread.

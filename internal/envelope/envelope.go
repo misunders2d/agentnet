@@ -344,6 +344,63 @@ func ValidEmoji(s string) bool {
 	return symbol
 }
 
+// OneEmoji reports whether s is one emoji as a reaction composed here
+// must be: ValidEmoji, and exactly one emoji sequence (a base emoji, or a
+// pair of regional indicators, joined to more only by zero-width joiners,
+// with its selectors, keycap, tags and skin tone), whose base runes are
+// pictographs or other symbols, never currency, math or modifier signs or
+// characters of other planes. A row of emoji is not one. What arrives is
+// still judged by ValidEmoji alone, so reactions peers already sent stay
+// readable.
+func OneEmoji(s string) bool {
+	if !ValidEmoji(s) {
+		return false
+	}
+	bases, joined, pairing := 0, false, false
+	for _, r := range s {
+		switch {
+		case r == 0x200D:
+			joined = true
+			continue
+		case r == 0xFE0F, r == 0xFE0E, r == 0x20E3, r >= 0xE0020 && r <= 0xE007F, r >= 0x1F3FB && r <= 0x1F3FF:
+			continue // part of the emoji before it
+		case r >= 0x1F1E6 && r <= 0x1F1FF: // regional indicators: two make one flag
+			if pairing {
+				pairing = false
+				continue
+			}
+			pairing = true
+		case r >= '0' && r <= '9', r == '#', r == '*': // a keycap's base (ValidEmoji holds them to one)
+			pairing = false
+		case emojiBase(r):
+			pairing = false
+		default:
+			return false
+		}
+		if !joined {
+			bases++
+		}
+		joined = false
+	}
+	return bases == 1 && !joined
+}
+
+// emojiBase reports whether r may be the base of an emoji: any rune of the
+// emoji blocks (U+1F000 to U+1FAFF, also ones assigned after this
+// program), an arrow, or another symbol of the Basic Multilingual Plane
+// (©, ☕, ★, ✓).
+func emojiBase(r rune) bool {
+	switch {
+	case r >= 0x1F000 && r <= 0x1FAFF:
+		return true
+	case r > 0xFFFF:
+		return false
+	case r >= 0x2190 && r <= 0x21FF:
+		return true
+	}
+	return unicode.Is(unicode.So, r)
+}
+
 // checkVersion3 validates a control: only a plain message with a known
 // control sub, an exact Ref, a bounded payload of that sub's shape, and
 // none of the fields of a turn (root, target, participation, fan, files,

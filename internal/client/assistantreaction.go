@@ -52,7 +52,7 @@ func splitReaction(text string) (string, *reactionChoice) {
 	if i >= 0 {
 		rest = strings.TrimSpace(text[:i])
 	}
-	if !envelope.ValidEmoji(choice.emoji) || rest == "" {
+	if !envelope.OneEmoji(choice.emoji) || rest == "" {
 		return text, nil
 	}
 	return rest, choice
@@ -124,7 +124,7 @@ func (a *Agent) sendAssistantReaction(ctx context.Context, j job, harness string
 }
 
 func (a *Agent) reactAsAssistant(ctx context.Context, id, harness, emoji string, remove bool) (ControlSent, error) {
-	if !envelope.ValidEmoji(emoji) {
+	if !envelope.OneEmoji(emoji) {
 		return ControlSent{}, errors.New("a reaction is one emoji")
 	}
 	t, err := reactionTargetIn(a.store.db, id)

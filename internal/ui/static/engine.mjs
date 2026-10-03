@@ -4919,6 +4919,18 @@ export class Engine {
     return out;
   }
 
+  // reactedHere says whether this person (in a device thread, this device)
+  // has emoji on the message ref names, as its view resolves it
+  // (client Agent.controlsOf): only that can be taken off.
+  async reactedHere(conv, ref, emoji) {
+    const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))].filter((r) => r.control && r.sub === wire.SubReaction &&
+      (r.conv || "") === conv && r.ref && r.ref.id === ref.id && r.ref.fingerprint === ref.fingerprint);
+    const me = this.me && this.me.person;
+    const view = conv ? this.controlsOn(rows, "", (x) => x.person || "", () => "", (p) => !!me && p === me)
+      : this.controlsOn(rows, "", (x) => x.fp || this.fp, () => "", (fp) => fp === this.fp);
+    return (view.reactions || []).some((r) => r.emoji === emoji && r.mine);
+  }
+
   // nextCounter is this author's next counter for a control on ref (one
   // more than the highest held from any device of this person), so
   // devices seeing controls in any order agree.
@@ -4969,8 +4981,9 @@ export class Engine {
     const deleted = await this.isRetracted(rec); // it shows nothing more to react to, edit or delete (client Agent.deleted)
     let sub, payload;
     if (what === "react") {
-      if (!wire.validEmoji(x.emoji || "")) throw new Error("A reaction is one emoji.");
+      if (!wire.oneEmoji(x.emoji || "")) throw new Error("A reaction is one emoji.");
       if (deleted) throw new Error("That message was deleted: it takes no reactions.");
+      if (x.remove && !(await this.reactedHere(conv, ref, x.emoji))) throw new Error("There is no " + x.emoji + " reaction of yours on that message to remove.");
       sub = wire.SubReaction;
       payload = { emoji: x.emoji, op: x.remove ? "remove" : "add", n: await this.nextCounter(conv, ref, sub, x.emoji) };
     } else if (what === "edit" || what === "delete") {

@@ -164,9 +164,11 @@ func (a *Agent) RefOf(conv, id, dir string) (ControlRef, error) {
 	return ControlRef{Conv: conv, ID: lid, Fingerprint: fp}, nil
 }
 
-// React adds (or, with remove, removes) emoji on the message ref names.
+// React adds (or, with remove, removes) emoji on the message ref names. A
+// removal takes off this person's (in a device thread, this device's) own
+// reaction only, so one that is not there is refused, not sent.
 func (a *Agent) React(ctx context.Context, ref ControlRef, emoji string, remove bool) (ControlSent, error) {
-	if !envelope.ValidEmoji(emoji) {
+	if !envelope.OneEmoji(emoji) {
 		return ControlSent{}, errors.New("a reaction is one emoji")
 	}
 	if a.deleted(ref) {
@@ -175,6 +177,13 @@ func (a *Agent) React(ctx context.Context, ref ControlRef, emoji string, remove 
 	op := "add"
 	if remove {
 		op = "remove"
+		c, err := a.controlsOf(ref)
+		if err != nil {
+			return ControlSent{}, err
+		}
+		if !slices.ContainsFunc(c.Reactions, func(v ReactionView) bool { return v.Emoji == emoji && v.Mine }) {
+			return ControlSent{}, fmt.Errorf("there is no %s reaction of yours on that message to remove", emoji)
+		}
 	}
 	n, err := a.store.nextCounter(ref, envelope.SubReaction, emoji)
 	if err != nil {
@@ -1353,6 +1362,72 @@ func (a *Agent) personOfKeyIn(m dmMembers, fp string) string {
 	return ""
 }
 
+// controlsOf is what the controls held here did to the one message ref
+// names, resolved as its view resolves them (decorateLegacy, decorateConv).
+func (a *Agent) controlsOf(ref ControlRef) (Controls, error) {
+	self, selfFP := a.Address, a.Self().Fingerprint()
+	target := ControlRef{ID: ref.ID, Fingerprint: ref.Fingerprint}
+	if ref.Conv == "" {
+		peer, err := a.threadPeer(ref)
+		if err != nil {
+			return Controls{}, err
+		}
+		rows, err := a.store.legacyControls(peer, self, selfFP)
+		if err != nil {
+			return Controls{}, err
+		}
+		return resolveControls(rows, legacyAuthority(peer, self, selfFP))[target], nil
+	}
+	rows, err := a.store.convControls(ref.Conv, self, selfFP)
+	if err != nil {
+		return Controls{}, err
+	}
+	m, err := controlMembers(a.store.db, ref.Conv)
+	if err != nil {
+		return Controls{}, err
+	}
+	me, _, err := a.store.selfPerson(a.Address)
+	if err != nil {
+		return Controls{}, err
+	}
+	auth, _ := a.convAuthority(ref.Conv, m, me)
+	return resolveControls(rows, auth)[target], nil
+}
+
+// convAuthority is how the controls of conversation conv resolve here: a
+// reaction counts per member person (an assistant's as its own), an edit
+// or deletion only from the target's person, as the members m pinned now
+// say; me is this device's person. person is the member person of a key.
+func (a *Agent) convAuthority(conv string, m dmMembers, me personRow) (auth authority, person func(fp string) string) {
+	personOf := map[string]string{}
+	person = func(fp string) string {
+		if p, ok := personOf[fp]; ok {
+			return p
+		}
+		p := a.personOfKeyIn(m, fp)
+		personOf[fp] = p
+		return p
+	}
+	auth = func(c controlRow, target ControlRef) (who, label string, mine, mayReact, mayAuthor bool) {
+		if who, ok := assistantWho(c); ok { // admitted as the participation's own: never a person's mark
+			host := c.author
+			if p, e := a.participation(conv, c.pid); e == nil && p.Host.Label != "" {
+				host = p.Host.Label
+			}
+			return who, assistantLabel(host, c.agentID), false, true, false
+		}
+		who = person(c.authorFP)
+		if who == "" {
+			return "", "", false, false, false // no member's key: nothing
+		}
+		label = m.persons[who].info.Label
+		mine = who == me.info.Person
+		owner := person(target.Fingerprint)
+		return who, label, mine, true, owner != "" && owner == who
+	}
+	return auth, person
+}
+
 // decorateConv fills Controls and Can on the turns of conversation conv.
 func (a *Agent) decorateConv(conv string, msgs []ConvMessage) error {
 	if _, _, found, err := a.store.conversation(conv); err != nil || !found {
@@ -1376,32 +1451,7 @@ func (a *Agent) decorateConv(conv string, msgs []ConvMessage) error {
 	if err != nil {
 		return err
 	}
-	personOf := map[string]string{}
-	person := func(fp string) string {
-		if p, ok := personOf[fp]; ok {
-			return p
-		}
-		p := a.personOfKeyIn(m, fp)
-		personOf[fp] = p
-		return p
-	}
-	auth := func(c controlRow, target ControlRef) (who, label string, mine, mayReact, mayAuthor bool) {
-		if who, ok := assistantWho(c); ok { // admitted as the participation's own: never a person's mark
-			host := c.author
-			if p, e := a.participation(conv, c.pid); e == nil && p.Host.Label != "" {
-				host = p.Host.Label
-			}
-			return who, assistantLabel(host, c.agentID), false, true, false
-		}
-		who = person(c.authorFP)
-		if who == "" {
-			return "", "", false, false, false // no member's key: nothing
-		}
-		label = m.persons[who].info.Label
-		mine = who == me.info.Person
-		owner := person(target.Fingerprint)
-		return who, label, mine, true, owner != "" && owner == who
-	}
+	auth, person := a.convAuthority(conv, m, me)
 	resolved := resolveControls(rows, auth)
 	a.labelOwnAssistants(resolved)
 	execs := execViews(rows)
