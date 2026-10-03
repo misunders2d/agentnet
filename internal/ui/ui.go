@@ -275,9 +275,11 @@ type DMMessage struct {
 	PID         string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
 	Attachments []FileView                `json:"attachments,omitempty"`
 
-	// VerifiedAgent: an agent wrote it, as its participation's exact host
-	// key proves (client.ConvMessage.VerifiedAgent). An agent's turn is
-	// labeled from this, never from Origin or AgentID.
+	// VerifiedAgent: an agent's turn as sent, by its participation's exact
+	// host key (client.ConvMessage.VerifiedAgent). UIs should label an
+	// agent's turn only from this, never from Origin or AgentID. It speaks
+	// for the turn as sent (Body): an edit, which any device of the host's
+	// person may make, shows as Edited, and its Text is not the host key's.
 	VerifiedAgent bool `json:"verified_agent"`
 
 	// Sent by you: Via is the device of yours it was sent from when that is

@@ -202,6 +202,12 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 		return reasonInvalid, errors.New("an agent's turn is not from its participation's exact host")
 	}
 	if agent && !historical {
+		// Ended is final, failing closed: an output still in flight when
+		// its participation was declined or dismissed is refused for good
+		// on a device that learned of the end first, while a device that
+		// admitted it earlier keeps it, and one linked later receives that
+		// copy as history. Devices may disagree on such an output; that is
+		// a known limit (ROOM_V1 §4.1).
 		switch {
 		case p.State == PartDeclined || p.State == PartDismissed:
 			return reasonInvalid, errors.New("an agent's turn after its participation ended")

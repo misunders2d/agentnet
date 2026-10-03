@@ -214,7 +214,9 @@ const agentTurn = (n) => !n.sub && (!!n.pid && (n.kind === "answer" || n.kind ==
 // verifiedAgent is client.verifyAgents for one shown row: an agent's turn
 // that its participation's exact host key sent (from, fp: this device, the
 // key that verified it, or for history the original key its own device
-// vouched for). A claimed excerpt, an origin or a name alone never is.
+// vouched for). A claimed excerpt, an origin or a name alone never is. It
+// speaks for the turn as sent: an edit by another device of the host's
+// person is not the host key's.
 const verifiedAgent = (m, info, from, fp) => !m.excerpt_pid && !!m.pid && agentTurn(m) && !!info?.invite && !!info.host && info.state !== "conflict" && info.role !== "human" && from === info.host.address && fp === info.host.fingerprint;
 const rel0 = (ctls) => ctls.some((x) => x.pid && x.sub === wire.SubReaction); // any assistant reaction to label
 // assistantActor is client.assistantWho with its Reactor: an assistant's own
@@ -5529,6 +5531,9 @@ export class Engine {
     if (!info.invite || !info.host || info.state === "conflict") throw new Hold("proof_pending", "named participation has no unambiguous verified invitation");
     if (n.target && (n.target.agent_id !== info.agent_id || n.target.address !== info.host.address || n.target.fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "named request differs from its participation host");
     if (agent && (info.role === "human" || address !== info.host.address || fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "an agent's turn is not from its participation's exact host");
+    // Ended is final, failing closed: an output still in flight at the end is
+    // refused for good here if the end arrived first, while a device that
+    // admitted it earlier keeps it (a known limit, ROOM_V1 §4.1).
     if (agent && !historical && (info.state === "declined" || info.state === "dismissed")) throw new Hold("invalid", "an agent's turn after its participation ended");
     if (agent && !historical && (info.state !== "active" || info.held)) throw new Hold("proof_pending", "an agent's turn waits for its participation to be active");
     if (n.agent_id && (n.agent_id !== info.agent_id || address !== info.host.address || fingerprint !== info.host.fingerprint || !["answer", "result"].includes(n.kind) && !progressOutput(n) || !n.reply_to || n.sub)) throw new Hold("invalid", "named answer differs from its participation host");

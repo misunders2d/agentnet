@@ -177,13 +177,30 @@ Group followers verify membership from the group-context and group-proof carrier
 
 ### 4.1 Attribution (no wire change)
 
-**Admission check.** In `checkConversationAgent` (`agentwire.go:165`) and in the engine, these turns must come from the participation's exact host address and key:
+**Admission check.** In `checkConversationAgent` (`agentwire.go:180`) and in the engine (`engine.mjs:5525`), these turns must come from the participation's exact host address and key:
 - every output-shaped PID turn (answer, result, progress);
-- every agent-origin turn.
+- every agent-origin turn; one without a participation is refused.
 
-The participation must also be active, or the turn historical. Today the function returns early when `AgentID==""`, so a member device can post as another member's default agent (review X3).
+A human-role participation has no agent, so an agent-shaped turn under one is refused even from its host.
 
-**View-model.** It gains a `verified_agent` flag. `app.js:2021` labels a turn as an agent's only from that flag, never from `origin`.
+The participation must also be active, or the turn historical:
+- invited, or with any of its events held here: the turn waits (`proof_pending`) and is retried when the evidence arrives;
+- declined or dismissed: refused (`invalid`);
+- historical: checked against its original key only; it may outlive the participation.
+
+Before P0a the function returned early when `AgentID==""`, so a member device could post as another member's default agent (review X3). That forgery is now exercised: `TestAgentTurnsComeOnlyFromTheExactHost` and the matching block of `agent_engine_check.mjs` fail when the rule is turned off (the Go test then finds the forged answer stored).
+
+**Known limit (fail closed).** An output still in flight when its participation is declined or dismissed is refused for good on a device that learns of the end first. A device that admitted it before the end keeps it, and a device linked later receives that copy as history (which skips the state check) and shows it. So devices may disagree about such an output. Accepted as is.
+
+**View-model.** It gains a `verified_agent` flag: `ConvMessage.VerifiedAgent` (`verifyAgents`, `agentwire.go:237`), `DMMessage.VerifiedAgent`, and the engine's DM and group views (`verifiedAgent`, `engine.mjs:220`).
+- It is computed when the view is built, from the key that verified the turn (the original key for history). It is never stored, and never derived from `origin` or `agent_id`, so rows an older reader admitted are not marked.
+- It speaks for the turn as sent. An edit, which any device of the host's person may make, shows as edited and is not the host key's.
+
+**Labels.** UIs must label a turn as an agent's only from `verified_agent`, never from `origin`. Still open (P0a follow-up):
+- `app.js` labels from `origin` and `agent_id` (`:1543`, `:2021`, `:2062`);
+- the new default UI (`internal/ui/web`) switches to `verified_agent` at integration.
+
+Until both do, a forged row that an older reader admitted still renders as an agent's.
 
 ### 4.2 Posts and mentions
 
@@ -336,7 +353,7 @@ The engine reads; it never hosts, decides or runs.
 - advertise `rm1` with the layered gate (`:1415-1443`, `:1522`);
 - follower `humanPlan`, and follower copies in `sendDM`/`sendGroupTurn`;
 - `Human` in `admitGroupTurn` (`:2354`);
-- the attribution check;
+- the attribution check (done in P0a);
 - group `inviteHuman` (`:5419`) and `changeHuman` (`:5389`);
 - dismiss by any member;
 - follower views, labels for agent-authored requests, read-only needs-you, and result files.
@@ -346,9 +363,12 @@ Until visitor-context ingest lands, the engine refuses to accept a group-guest i
 ## 9. Phases (each ships alone, with its tests)
 
 **P0: no capability needed; each item can be vetoed on its own.**
-- **a. Attribution (§4.1).** Tests:
+- **a. Attribution (§4.1).** Tests (`TestAgentTurnsComeOnlyFromTheExactHost`, `TestAgentTurnUnderAHumanParticipationIsRefused`, and the matching blocks of `agent_engine_check.mjs`):
   - A member's unnamed PID answer is held.
   - A host output passes.
+  - The host's address under another key is held, live and as history, and never marked.
+  - An output waits while its participation is invited or has a held event, and is refused after a decline or dismissal.
+  - An agent-shaped turn under a human participation is refused, even from its host.
   - History is checked against the original key.
 - **b. Run guard.** Every listed command is refused, while progress to the env request still works.
 - **c. D3.** Tests:
@@ -450,5 +470,4 @@ Every phase runs `go vet ./...` and `go test -race -count=1 -timeout 600s ./...`
 - What Codex's read-only sandbox can read, and whether `--add-dir` makes a folder writable.
 - Pi's file tools.
 - Whether v0.6.2 readers accept DM result files (the P0f gate).
-- The X3 forgery: found by reading the code, not exercised.
 - Relay withholding: reasoned through, not exercised.

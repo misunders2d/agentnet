@@ -571,7 +571,9 @@ type ConvMessage struct {
 	// An agent's turn (agentTurn) sent by its participation's exact host
 	// key, as admission checks it (checkConversationAgent): for history,
 	// the original key its own device vouched for. Never inferred from
-	// Origin or AgentID; a claimed excerpt is never one. status is the
+	// Origin or AgentID; a claimed excerpt is never one. It speaks for the
+	// turn as sent (Body): an edit, which any device of the host's person
+	// may make, shows in Controls and is not the host key's. status is the
 	// turn's own (an agent's progress is a message).
 	VerifiedAgent bool `json:"verified_agent"`
 	status        string
