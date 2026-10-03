@@ -112,6 +112,18 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var prompt string
 	var err error
 	var lookup questionLookup // a receiver continuation keeps its delegation; no lookups
+	h := Harnesses[r.Harness]
+	// The session is planned first: whether the run gets an outbox, and its
+	// prompt names one, depends on it (runfiles.go). A planning error ends
+	// the job below, after the checks that come first.
+	plan, planErr := a.planSession(j, r, h)
+	if j.run = a.newRun(j, planErr == nil && outboxFor(j, h, plan.resume)); j.run != nil {
+		defer func() {
+			if err := j.run.remove(); err != nil {
+				a.Logf("%s %s: run folder not removed: %v", j.Kind, j.ID, err)
+			}
+		}()
+	}
 	if j.Receiver != nil {
 		defer a.clearAgentFiles(j.ID)
 		if why := a.receiverStop(j); why != "" {
@@ -120,7 +132,6 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		prompt, err = a.receiverPrompt(ctx, j, r)
 	} else if j.PID != "" {
-		defer a.clearAgentFiles(j.ID)
 		if why := a.agentStop(j); why != "" {
 			a.endJob(j.ID, stateNotRun, "not run: "+why)
 			return
@@ -129,16 +140,19 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		prompt, err = a.agentPrompt(j, r, lookup.text, ctx)
 	} else {
 		lookup = a.questionSetup(j, r.Harness)
-		prompt, err = a.promptWith(j, r, lookup.text)
+		prompt, err = a.promptWith(ctx, j, r, lookup.text)
+	}
+	if err == nil {
+		if err = j.run.seal(); err != nil {
+			err = fmt.Errorf("its files could not be made read-only, so nothing was run: %w", err)
+		}
 	}
 	if err != nil {
 		a.endJob(j.ID, stateJobFailed, err.Error())
 		return
 	}
-	h := Harnesses[r.Harness]
-	plan, err := a.planSession(j, r, h)
-	if err != nil {
-		a.endJob(j.ID, stateJobFailed, "background session: "+err.Error())
+	if planErr != nil {
+		a.endJob(j.ID, stateJobFailed, "background session: "+planErr.Error())
 		return
 	}
 	if plan.note != "" {
@@ -152,7 +166,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			return
 		}
 	}
-	args := append(plan.args, lookup.args...)
+	args := append(append(plan.args, lookup.args...), j.run.args(h)...)
 	runCtx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
@@ -255,6 +269,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	ownProcessGroup(cmd)
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
 	runErr := cmd.Run()
+	if j.run.outPath() != "" {
+		// Nothing the run started may change its outbox, or the copies sent
+		// from it, once it has ended: what is left of its process group is
+		// stopped before the outbox is read (finish).
+		stopGroup(cmd)
+	}
 	cancel()
 	<-watchDone
 	if events != nil {
@@ -485,6 +505,16 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 	if status != envelope.StatusDone {
 		detail = body
 	}
+	// A completed task's outbox goes with its result; any violation holds
+	// back every file, and the result and the job say why (runfiles.go).
+	var files []OutgoingFile
+	if status == envelope.StatusDone {
+		var why []string
+		if files, why = j.run.collectOutbox(); len(why) > 0 {
+			detail = "files in the outbox were held back: " + strings.Join(why, "; ")
+			body += "\n\n(" + detail + ".)"
+		}
+	}
 	claim := func(tx *sql.Tx, replyID string) error {
 		res, err := tx.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), result_id = ? WHERE id = ? AND state IN (?, ?)`,
 			state, detail, replyID, j.ID, stateRunning, stateCancelReq)
@@ -496,7 +526,14 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 		}
 		return nil
 	}
-	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: j.ID, Kind: replyKind(j.Kind), Status: status, AgentID: j.AgentID, claim: claim})
+	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: j.ID, Kind: replyKind(j.Kind), Status: status, AgentID: j.AgentID, Named: files, claim: claim})
+	if err != nil && res.ID == "" && len(files) > 0 {
+		// The files could not go (nothing was stored): the result goes
+		// without them, saying so; the local reason stays here.
+		detail = "files in the outbox were not sent: " + err.Error()
+		res, err = a.SendMessage(ctx, Outgoing{To: j.From, Body: body + "\n\n(The files in the outbox could not be sent with this result.)", ReplyTo: j.ID,
+			Kind: replyKind(j.Kind), Status: status, AgentID: j.AgentID, claim: claim})
+	}
 	if err != nil && res.ID == "" {
 		// The reply could not even be stored (e.g. the sender was revoked).
 		a.endJob(j.ID, stateJobFailed, "reply not sent: "+err.Error())
@@ -513,11 +550,12 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 // follow-up job instead gets the local user's own follow-up instructions and
 // the peer's reply.
 func (a *Agent) prompt(j job, r *Responder) (string, error) {
-	return a.promptWith(j, r, a.questionSetup(j, r.Harness).text)
+	return a.promptWith(context.Background(), j, r, a.questionSetup(j, r.Harness).text)
 }
 
-// promptWith is prompt with the question's lookup text as configured.
-func (a *Agent) promptWith(j job, r *Responder, lookupText string) (string, error) {
+// promptWith is prompt with the question's lookup text as configured. The
+// request's files are staged in its run folder (runfiles.go).
+func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText string) (string, error) {
 	var b strings.Builder
 	switch {
 	case j.followUp():
@@ -532,6 +570,7 @@ func (a *Agent) promptWith(j job, r *Responder, lookupText string) (string, erro
 	case j.Kind == envelope.KindTask:
 		fmt.Fprintf(&b, "You are running a task that the AgentNet coworker %s sent to %s. The local user accepted it.\n", j.From, a.Address)
 		b.WriteString("Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n")
+		b.WriteString(outboxPrompt(j.run))
 	default:
 		fmt.Fprintf(&b, "You are answering a question that the AgentNet coworker %s sent to %s.\n", j.From, a.Address)
 		b.WriteString("Answer in plain text, concisely. Use the context below, your own knowledge, and your skills and the tools you are allowed to use to look things up. " +
@@ -568,7 +607,7 @@ func (a *Agent) promptWith(j job, r *Responder, lookupText string) (string, erro
 		fmt.Fprintf(&b, "\n## Context: %s\n%s\n", path, data)
 	}
 	if j.Attachments > 0 {
-		fmt.Fprintf(&b, "\n(%d attached file(s) were not opened; the recipient can download them.)\n", j.Attachments)
+		b.WriteString(a.requestFiles(ctx, j))
 	}
 	heading := strings.ToUpper(j.Kind[:1]) + j.Kind[1:]
 	if j.Status != "" {

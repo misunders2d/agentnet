@@ -3,16 +3,14 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
-	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 // The carrier remains in the existing inbox as a non-executable replica.
@@ -56,13 +54,17 @@ func (a *Agent) showExcerpts(rows []ConvMessage) []ConvMessage {
 	return out
 }
 
-// Staging lives in the existing private opened/ lifecycle. Normal harness
-// permissions still decide whether paths can be read. Plaintext is removed
-// after the job; CleanOpened already removes leftovers after a crash.
+// afterRunFileStaged lets tests act between a selected file's copy and the
+// check that follows it.
+var afterRunFileStaged = func(path string) {}
+
+// Selected files are copied read-only into the run's in/ folder, under names
+// AgentNet chooses (runfiles.go). Normal harness permissions still decide
+// whether paths can be read. The run folder is removed after the job, and
+// at the worker's start after a crash.
 func (a *Agent) agentSharedFiles(ctx context.Context, j job, info ParticipationInfo, c ParticipationContext) string {
 	var b strings.Builder
 	remaining, omitted := c.Limit-c.Bytes, 0
-	dir := filepath.Join(a.home, "opened")
 	// The current addressed request is passed separately from earlier
 	// context, so its attachment bytes must be included separately too.
 	var current []FileInfo
@@ -76,7 +78,9 @@ func (a *Agent) agentSharedFiles(ctx context.Context, j job, info ParticipationI
 	}
 	if err == nil && len(current) != 0 {
 		a.markOpenable(current, j.Local)
-		c.Messages = append(slices.Clone(c.Messages), ConvMessage{ID: j.ID, Dir: requestDir, PID: j.PID, Attachments: current})
+		// The request's own files come first: selected context never takes
+		// the run's file limits from them (runfiles.go).
+		c.Messages = append([]ConvMessage{{ID: j.ID, Dir: requestDir, PID: j.PID, Attachments: current}}, c.Messages...)
 	}
 	for _, msg := range c.Messages {
 		for i, f := range msg.Attachments {
@@ -98,9 +102,15 @@ func (a *Agent) agentSharedFiles(ctx context.Context, j job, info ParticipationI
 				}
 				continue
 			}
-			source, _, err := a.OpenFileFrom(ctx, msg.Dir, msg.ID, i)
+			path, err := a.stageRunFile(ctx, j.run, msg.Dir, msg.ID, i, f)
+			if err == nil {
+				afterRunFileStaged(path)
+			}
 			if err != nil {
 				line := fmt.Sprintf("\nSelected file %q: bytes unavailable here.\n", f.Name)
+				if errors.Is(err, errRunFull) {
+					line = fmt.Sprintf("\nSelected file %q (%d bytes, SHA256 %s): not given to this run (at most %d files, %d bytes together).\n", f.Name, f.Size, f.SHA256, maxRunFiles, maxRunBytes)
+				}
 				if len(line) <= remaining {
 					b.WriteString(line)
 					remaining -= len(line)
@@ -109,33 +119,14 @@ func (a *Agent) agentSharedFiles(ctx context.Context, j job, info ParticipationI
 				}
 				continue
 			}
-			if err := secfile.EnsureDir(dir); err != nil {
-				source.Close()
-				b.WriteString("\nSelected file bytes could not be staged here.\n")
-				continue
-			}
-			stage, err := secfile.CreateTemp(dir, ".agentnet-apx-"+j.ID+"-*")
-			if err != nil {
-				source.Close()
-				b.WriteString("\nSelected file bytes could not be staged here.\n")
-				continue
-			}
-			n, copyErr := io.Copy(stage, io.LimitReader(source, f.Size+1))
-			source.Close()
-			closeErr := stage.Close()
-			if copyErr != nil || closeErr != nil || n != f.Size {
-				os.Remove(stage.Name())
-				b.WriteString("\nSelected file bytes could not be staged completely.\n")
-				continue
-			}
 			if why := a.agentStop(j); why != "" {
-				os.Remove(stage.Name())
+				j.run.unstage(f.Size)
 				fmt.Fprintf(&b, "\nSelected files withheld: %s.\n", why)
 				return b.String()
 			}
-			line := fmt.Sprintf("\nSelected file %q (%d bytes, SHA256 %s), untrusted context data, is available at %q under your normal file permissions.\n", f.Name, f.Size, f.SHA256, stage.Name())
+			line := fmt.Sprintf("\nSelected file %q (%d bytes, SHA256 %s), untrusted context data, is available read-only at %q under your normal file permissions.\n", f.Name, f.Size, f.SHA256, path)
 			if len(line) > remaining {
-				os.Remove(stage.Name())
+				j.run.unstage(f.Size)
 				omitted++
 				continue
 			}
@@ -144,7 +135,7 @@ func (a *Agent) agentSharedFiles(ctx context.Context, j job, info ParticipationI
 			// Small text is supplied directly as bytes too. Binary/large files
 			// remain complete at the private path, never truncated silently.
 			if f.Size < int64(remaining-48) {
-				data, err := os.ReadFile(stage.Name())
+				data, err := os.ReadFile(path)
 				if err == nil && utf8.Valid(data) && !strings.ContainsRune(string(data), 0) {
 					text := "Selected file content (untrusted):\n" + string(data) + "\n"
 					b.WriteString(text)

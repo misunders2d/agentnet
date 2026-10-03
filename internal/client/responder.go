@@ -35,6 +35,8 @@ type harness struct {
 	limits   string       // what question mode allows, for the person choosing
 	tested   string       // what was run live with the real harness (docs/revival/M4.md); empty: nothing
 	sessions sessionStyle // how the worker keeps a background session per conversation (session.go)
+	addDir   string       // flag adding a run's folder for the harness to use (runfiles.go); empty: none
+	addIn    bool         // a run's in/ is added too, not only a task's out/
 }
 
 // Harnesses lists the supported automatic responders. Flags were checked
@@ -52,11 +54,15 @@ var Harnesses = map[string]harness{
 		stdin:    true,
 		tested:   "tasks and a skill-backed question tested live",
 		sessions: claudeSessions,
+		addDir:   "--add-dir",
+		addIn:    true,
 		limits: "claude questions use your Claude settings, skills, plugins and MCP servers; only tools your settings already allow run " +
 			"(permission mode dontAsk: anything else is refused, never asked) and Edit, Write and NotebookEdit are off, " +
 			"but Bash commands and MCP tools your settings allow keep whatever effects they have; " +
 			"questions may also run fixed read-only AgentNet lookups of this device (version, whoami, inbox without marking read, approvals, status of a message this device sent) " +
-			"through the exact installed agentnet program, as exact allow rules your own deny and ask rules still override (none when the program's path would need shell quoting)",
+			"through the exact installed agentnet program, as exact allow rules your own deny and ask rules still override (none when the program's path would need shell quoting); " +
+			"files a question or task receives are read-only copies, under names AgentNet chooses, in a run folder added with --add-dir, " +
+			"and a device task's outbox folder is added the same way (your settings decide whether Claude may write there)",
 	},
 	"codex": {
 		bin: "codex",
@@ -70,9 +76,14 @@ var Harnesses = map[string]harness{
 		out:      "-o",
 		tested:   "tasks and a skill-backed question tested live",
 		sessions: codexSessions,
+		addDir:   "--add-dir",
 		limits: "codex questions use your Codex config, skills and MCP servers; shell commands run in a read-only sandbox and anything that would need an approval is refused, " +
 			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have; " +
-			"questions are told the read-only AgentNet lookups of this device, which run inside that sandbox (status shows the local record without network)",
+			"questions are told the read-only AgentNet lookups of this device, which run inside that sandbox (status shows the local record without network); " +
+			"files a question or task receives are read-only copies it is told the paths of, read as your sandbox allows; " +
+			"a device task run gets one extra writable folder, its outbox, through --add-dir (which codex documents as writable alongside the workspace); " +
+			"that folder is the only change to your sandbox: AgentNet never passes --sandbox or a bypass to a task; " +
+			"a resumed session, where codex cannot add a folder, gets no outbox and is not told of one",
 	},
 	"pi": {
 		bin: "pi",
@@ -86,7 +97,8 @@ var Harnesses = map[string]harness{
 		task:     []string{"-p", "--no-session"},
 		limits: "pi questions use your Pi settings, skills and extensions with their tools; only bash, edit, write and powershell are off " +
 			"(Pi cannot run its shell read-only or ask), and extension tools keep whatever effects your setup gives them; " +
-			"an AgentNet lookup tool runs only the installed agentnet program's fixed read-only lookups (version, whoami, inbox without marking read, approvals, status of a message this device sent)",
+			"an AgentNet lookup tool runs only the installed agentnet program's fixed read-only lookups (version, whoami, inbox without marking read, approvals, status of a message this device sent); " +
+			"files a question or task receives are read-only copies it is told the paths of, and a device task is told its outbox folder; no folder is added for Pi, whose own tools decide",
 	},
 }
 

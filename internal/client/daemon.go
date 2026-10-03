@@ -481,6 +481,9 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 			os.Remove(f) // answers of jobs a previous daemon left running
 		}
 	}
+	if err := a.cleanRuns(); err != nil { // their run folders too (runfiles.go)
+		a.Logf("run folders left by an earlier run: %v", err)
+	}
 	a.notifyTried, a.reviewTried, a.reviewGen, a.releaseTried = nil, nil, "", "" // a new run tries failed notices once more
 	wake := make(chan struct{}, 1)
 	a.wakeWorker = func() {

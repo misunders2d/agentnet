@@ -100,35 +100,8 @@ func TestCLIMembers(t *testing.T) {
 // Opt-in: it needs the tag in a local repository (AGENTNET_COMPAT_REPO,
 // default the one this test is in) and a Go build of it.
 func TestCLIMembersCompat(t *testing.T) {
-	tag := os.Getenv("AGENTNET_COMPAT_TAG")
-	if tag == "" {
-		t.Skip("set AGENTNET_COMPAT_TAG to a released tag, e.g. v0.2.1")
-	}
-	repo := os.Getenv("AGENTNET_COMPAT_REPO")
-	if repo == "" {
-		repo = ".."
-	}
 	c := buildCLI(t)
-	src := t.TempDir()
-	tarball := filepath.Join(t.TempDir(), "src.tar")
-	for _, cmd := range []*exec.Cmd{
-		exec.Command("git", "-C", repo, "archive", "-o", tarball, tag),
-		exec.Command("tar", "-x", "-f", tarball, "-C", src),
-	} {
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("extract %s: %v\n%s", tag, err, out)
-		}
-	}
-	oldBin := filepath.Join(c.dir, "agentnet-"+tag)
-	build := exec.Command("go", "build", "-o", oldBin, "./cmd/agentnet")
-	build.Dir = src
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build %s: %v\n%s", tag, err, out)
-	}
-	old := &cli{t: t, bin: oldBin, dir: c.dir}
-	if v := old.run("version"); !strings.Contains(v, tag) {
-		t.Logf("%s reports %q", tag, v)
-	}
+	old := buildCompatCLI(t, c)
 	// received: the inbox (read with that home's own program) holds id.
 	received := func(p *cli, home, id string) func() bool {
 		return func() bool {
@@ -195,4 +168,39 @@ func TestCLIMembersCompat(t *testing.T) {
 			t.Fatalf("the older daemon reconnected %d times", n)
 		}
 	})
+}
+
+// buildCompatCLI builds the released version named by AGENTNET_COMPAT_TAG
+// (a tag or commit, e.g. v0.2.1) from a local repository
+// (AGENTNET_COMPAT_REPO, default the one this test is in), to run in c's
+// directory; without the tag the test is skipped.
+func buildCompatCLI(t *testing.T, c *cli) *cli {
+	t.Helper()
+	tag := os.Getenv("AGENTNET_COMPAT_TAG")
+	if tag == "" {
+		t.Skip("set AGENTNET_COMPAT_TAG to a released tag, e.g. v0.2.1")
+	}
+	repo := os.Getenv("AGENTNET_COMPAT_REPO")
+	if repo == "" {
+		repo = ".."
+	}
+	src := t.TempDir()
+	tarball := filepath.Join(t.TempDir(), "src.tar")
+	for _, cmd := range []*exec.Cmd{
+		exec.Command("git", "-C", repo, "archive", "-o", tarball, tag),
+		exec.Command("tar", "-x", "-f", tarball, "-C", src),
+	} {
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("extract %s: %v\n%s", tag, err, out)
+		}
+	}
+	oldBin := filepath.Join(c.dir, "agentnet-"+tag)
+	build := exec.Command("go", "build", "-o", oldBin, "./cmd/agentnet")
+	build.Dir = src
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", tag, err, out)
+	}
+	old := &cli{t: t, bin: oldBin, dir: c.dir}
+	t.Logf("%s reports %q", tag, old.run("version"))
+	return old
 }

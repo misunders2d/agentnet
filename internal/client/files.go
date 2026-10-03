@@ -68,6 +68,12 @@ type OutgoingFile struct {
 // maxFileName bounds a file's shown name (bytes).
 const maxFileName = 255
 
+// validSendName reports whether name may be a sent file's shown name: text
+// of at most maxFileName bytes without control characters.
+func validSendName(name string) bool {
+	return len(name) <= maxFileName && utf8.ValidString(name) && strings.IndexFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) < 0
+}
+
 // spoolFile encrypts path to recipient into the private spool, returning its
 // manifest entry. The spooled ciphertext is what gets uploaded, so a resumed
 // upload always sends identical bytes.
@@ -83,7 +89,7 @@ func (a *Agent) spoolNamed(f OutgoingFile, recipient age.Recipient) (envelope.At
 	if name == "" {
 		name = filepath.Base(path)
 	}
-	if len(name) > maxFileName || !utf8.ValidString(name) || strings.IndexFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+	if !validSendName(name) {
 		return envelope.Attachment{}, fmt.Errorf("file name %q: at most %d bytes of text, no control characters", name, maxFileName)
 	}
 	var att envelope.Attachment

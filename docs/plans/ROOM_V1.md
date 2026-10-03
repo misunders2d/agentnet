@@ -290,7 +290,9 @@ Each auto-accept shows a local notice with a dismiss button. An invite that fail
 - Files are named `NN-<sha8>-<SafeName>`, so a sender can never plant a `CLAUDE.md` or `AGENTS.md` (review X8). The original name, size and SHA-256 go into the prompt as untrusted data.
 - `agentStop` is checked around each copy.
 
-**Outbox (`out/`, task runs only).** Files are collected after a `done` run, before `finishAgent`'s `SendConv` (`agentjob.go:476`):
+**Outbox (`out/`, task runs only).** Decided substitution (decider, 2026-10-04): P0f ships the outbox for **device-thread** task results (version 1, collected in the worker's `finish` before `SendMessage`); the **conversation-result** outbox described below (`finishAgent`'s `SendConv`) moves to P2. The checks are the same for both.
+
+Files are collected after a `done` run, before `finishAgent`'s `SendConv` (`agentjob.go:476`):
 1. Open the run folder with `os.OpenRoot(run)` (Go 1.26). `Lstat` must show `out` as the same directory (device and inode) the daemon created.
 2. Open `root.OpenRoot("out")` and read only the top level.
 3. Accept only regular files with `nlink==1` owned by the daemon user. Open each with `O_RDONLY|O_NOFOLLOW`, and require `fstat` to equal `Lstat`.
@@ -312,7 +314,7 @@ The docs must say that the outbox does not prevent exfiltration.
 | Harness | Questions | Tasks |
 |---|---|---|
 | claude | `--add-dir <run>/in` | `--add-dir <run>/in --add-dir <run>/out` |
-| codex | unchanged | `--add-dir <run>/out`. Never `--sandbox` or a bypass; a read-only setup reports "no files produced" |
+| codex | unchanged | `--add-dir <run>/out`. Never `--sandbox` or a bypass; a read-only setup reports "no files produced". A resumed session (`codex exec resume` has no `--add-dir`) gets no outbox and its prompt names none |
 | pi | none | none |
 
 Update each harness's `limits` text to match.
@@ -380,10 +382,13 @@ Until visitor-context ingest lands, the engine refuses to accept a group-guest i
   - File modes are correct, and no name equals `CLAUDE.md`.
   - Cleanup runs after the job and after a crash.
   - Golden argument slices for each harness.
-- **f. D5 outbox.** It ships in P0 only if a HEAD receive test plus the opt-in `AGENTNET_COMPAT_TAG` itest (`itest/members_test.go:97`) prove that v0.6.2 readers accept DM result files. Otherwise it moves to P2. Tests:
-  - Each is refused: a symlink, a symlinked `out`, a hardlink, a FIFO, a subfolder, an oversized file, a 9th file, a file swapped after `Lstat`.
-  - Paths in the output are ignored.
-  - Questions get no `out/`.
+- **f. D5 outbox.** It ships in P0 only if a HEAD receive test plus the opt-in `AGENTNET_COMPAT_TAG` itest (`itest/members_test.go:97`) prove that v0.6.2 readers accept DM result files. Otherwise it moves to P2.
+  - **Shipped for device threads (accepted substitution, §6).** Gate evidence, 2026-10-04: the HEAD receive test `TestDeviceTaskOutboxSendsFiles`, and the opt-in itest `TestCLIOutboxCompat` (a v0.6.x requester sends a device-thread task with a file; this build's run copies it into its outbox; the requester receives the result with that file and downloads the same bytes), passing with `AGENTNET_COMPAT_TAG=v0.6.0` (newest local tag) and with `5342aa3` (v0.6.2's commit).
+  - **Conversation results** (DM, guest, outside host, group; Go and browser readers) get their outbox in P2, behind the same gate for those readers.
+  - Tests:
+    - Each is refused: a symlink, a symlinked `out`, a hardlink, a FIFO, a subfolder, an oversized file, a 9th file, a file swapped after `Lstat`.
+    - Paths in the output are ignored.
+    - Questions get no `out/`.
 - **g. D6 and the last-10 preselection** (UI only).
 
 **P1: the `rm1` reader.** Go and engine ship together, and `rm1` is advertised last. Covers §2 plus the receiver half of §3. Tests:
@@ -402,7 +407,7 @@ Until visitor-context ingest lands, the engine refuses to accept a group-guest i
   - The implication holds, and a 17-token record parses.
   - Go and JS agree both ways.
 
-**P2: DM followers.** The §3 send side for DMs, deferred excerpts, room context and posts. Tests:
+**P2: DM followers.** The §3 send side for DMs, deferred excerpts, room context and posts, and the conversation-result outbox (§6), shipped once the P0f gate holds for conversation readers. Tests:
 - An invite needs rm1 on the host and on every member device.
 - A 17th follower is refused.
 - Delivery happens only while the follower is active.
@@ -469,5 +474,5 @@ Every phase runs `go vet ./...` and `go test -race -count=1 -timeout 600s ./...`
 - Whether Claude loads instruction files from `--add-dir` folders. Renaming the files mitigates this.
 - What Codex's read-only sandbox can read, and whether `--add-dir` makes a folder writable.
 - Pi's file tools.
-- Whether v0.6.2 readers accept DM result files (the P0f gate).
+- Whether v0.6.2 readers accept DM and other conversation result files (the gate for the P2 conversation-result outbox). Device-thread result files are shown accepted by v0.6.0 and v0.6.2 CLI readers (§9 P0f); the browser engine's acceptance is read from its code only.
 - Relay withholding: reasoned through, not exercised.

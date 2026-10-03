@@ -380,7 +380,7 @@ func TestHarnessFlagsExist(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s --help: %v", name, err)
 		}
-		for _, arg := range append(append([]string{h.out}, h.question...), h.task...) {
+		for _, arg := range append(append([]string{h.out, h.addDir}, h.question...), h.task...) {
 			if strings.HasPrefix(arg, "-") && !strings.Contains(string(help), arg) {
 				t.Errorf("%s --help does not list %s", name, arg)
 			}
