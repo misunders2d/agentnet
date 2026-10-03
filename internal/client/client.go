@@ -746,6 +746,14 @@ func (a *Agent) Status(ctx context.Context, id string, wait time.Duration) (prot
 	if err != nil {
 		return protocol.Receipt{}, err
 	}
+	if !found { // the Hub answers a recipient too: never report a received message as one sent
+		var sender string
+		if err := a.store.db.QueryRow(`SELECT sender FROM inbox WHERE id = ? AND local = 0`, id).Scan(&sender); err == nil {
+			return protocol.Receipt{}, fmt.Errorf("%s is a message received here from %s: status reports messages sent from here", id, sender)
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return protocol.Receipt{}, err
+		}
+	}
 	if found && path == protocol.PathDirect {
 		return protocol.Receipt{ID: id, State: state, Path: path}, nil
 	}
@@ -763,6 +771,19 @@ func (a *Agent) Status(ctx context.Context, id string, wait time.Duration) (prot
 	if found && hubUnreachable(err) {
 		return protocol.Receipt{ID: id, State: state, Path: path}, &LocalStatus{Cause: err}
 	}
+	var he *HubError
+	if errors.As(err, &he) && he.Status == 404 && he.Msg == "unknown message" {
+		if !found {
+			return protocol.Receipt{}, fmt.Errorf("no message %s was sent from here, and the Hub does not hold one", id)
+		}
+		// Never handed to the Hub (kept waiting, failed, or still queued):
+		// only this device's record says anything, with its reason.
+		var why string
+		if err := a.store.db.QueryRow(`SELECT coalesce(error, '') FROM outbox WHERE id = ?`, id).Scan(&why); err != nil {
+			return protocol.Receipt{}, err
+		}
+		return protocol.Receipt{ID: id, State: state, Path: path}, &LocalStatus{Detail: why}
+	}
 	if found {
 		r.Path = protocol.PathRelay
 		if err == nil && r.State != protocol.StateCustody && r.State != state {
@@ -772,12 +793,24 @@ func (a *Agent) Status(ctx context.Context, id string, wait time.Duration) (prot
 	return r, err
 }
 
-// LocalStatus says the Hub could not be reached at all, so the receipt
-// beside it is only this device's own stored record of a message it sent:
-// possibly stale, never evidence of current delivery.
-type LocalStatus struct{ Cause error }
+// LocalStatus says the receipt beside it is only this device's own stored
+// record of a message it sent: possibly stale, never evidence of current
+// delivery. Either the Hub could not be reached at all (Cause), or it holds
+// no such message (Cause nil): this device never handed it over, and
+// Detail says why when the record knows (kept waiting, failed, or the last
+// error of a send still retried).
+type LocalStatus struct {
+	Cause  error
+	Detail string
+}
 
 func (e *LocalStatus) Error() string {
+	if e.Cause == nil {
+		if e.Detail == "" {
+			return "not at the Hub; local record only"
+		}
+		return "not at the Hub; local record only: " + e.Detail
+	}
 	return "Hub not reachable; local record only: " + e.Cause.Error()
 }
 func (e *LocalStatus) Unwrap() error { return e.Cause }

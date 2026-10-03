@@ -228,7 +228,14 @@ func run(args []string) error {
 		r, err := a.Status(ctx, fs.Arg(0), *wait)
 		var local *client.LocalStatus
 		if errors.As(err, &local) { // this device's own record, marked as such
-			fmt.Printf("%s %s %s (local record; Hub not reachable)\n", r.ID, r.State, r.Path)
+			why := "Hub not reachable"
+			if local.Cause == nil {
+				why = "not at the Hub"
+				if local.Detail != "" {
+					why += ": " + local.Detail
+				}
+			}
+			fmt.Printf("%s %s %s (local record; %s)\n", r.ID, r.State, r.Path, why)
 			return nil
 		}
 		if err != nil {
