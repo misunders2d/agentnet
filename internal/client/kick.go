@@ -48,7 +48,9 @@ func notifyDaemon(home string) {
 }
 
 // listenKicks forwards connections on the daemon socket to wake. The caller
-// holds the daemon lock, so an existing socket file is stale.
+// holds the daemon lock, so an existing socket file is stale. stop returns
+// once no wake runs any more, so what its caller changes next is never
+// raced by a wake still running.
 func listenKicks(home string, wake func()) (stop func(), err error) {
 	path := sockPath(home)
 	os.Remove(path)
@@ -56,7 +58,9 @@ func listenKicks(home string, wake func()) (stop func(), err error) {
 	if err != nil {
 		return nil, err
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for {
 			c, err := ln.Accept()
 			if err != nil {
@@ -66,5 +70,5 @@ func listenKicks(home string, wake func()) (stop func(), err error) {
 			wake()
 		}
 	}()
-	return func() { ln.Close(); os.Remove(path) }, nil
+	return func() { ln.Close(); <-done; os.Remove(path) }, nil
 }
