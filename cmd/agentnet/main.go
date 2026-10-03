@@ -305,12 +305,7 @@ func run(args []string) error {
 		if len(rest) != 1 {
 			return errors.New("usage: fingerprint ADDRESS")
 		}
-		pinned, current, err := a.Fingerprints(ctx, rest[0])
-		if pinned == "" {
-			pinned = "(not yet trusted)"
-		}
-		fmt.Printf("trusted   %s\ndirectory %s\n", pinned, current)
-		return err
+		return runFingerprint(ctx, a, rest[0], os.Stdout)
 	case "trust":
 		if len(rest) != 1 {
 			return errors.New("usage: trust ADDRESS")
@@ -912,6 +907,22 @@ func runTaskGrant(a *client.Agent, cmd, arg string) error {
 		for _, id := range running {
 			fmt.Printf("still running: %s (it may finish; stop it with agentnet cancel %s)\n", id, id)
 		}
+	}
+	return nil
+}
+
+// runFingerprint shows the key trusted here for address and the directory's.
+func runFingerprint(ctx context.Context, a *client.Agent, address string, stdout io.Writer) error {
+	pinned, current, err := a.Fingerprints(ctx, address)
+	if pinned == "" {
+		pinned = "(not yet trusted)"
+	}
+	fmt.Fprintf(stdout, "trusted   %s\ndirectory %s\n", pinned, current)
+	if err != nil {
+		return err
+	}
+	if revoked, _ := a.Revoked(ctx, address); revoked {
+		fmt.Fprintln(stdout, "status    revoked by a Hub admin: nothing from or to it counts, and trust refuses it")
 	}
 	return nil
 }

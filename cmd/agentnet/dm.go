@@ -31,10 +31,14 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 			return errors.New("no person on this installation (agentnet person create NAME, or link this device from your other one)")
 		}
 		fmt.Fprintf(stdout, "%s  %q  roster %d\n", p.Person, p.Label, p.Seq)
+		lookup, cancel := context.WithTimeout(ctx, 5*time.Second) // the Hub's word on each device, briefly
+		defer cancel()
 		for _, d := range p.Devices {
 			this := ""
 			if d.This {
 				this = "  (this device)"
+			} else if revoked, _ := a.Revoked(lookup, d.Address); revoked { // offline: not known here, nothing said
+				this = "  (revoked by a Hub admin: agentnet person remove " + d.Address + " takes it off your person)"
 			}
 			fmt.Fprintf(stdout, "  %s  %s%s\n", d.Address, d.Fingerprint, this)
 		}

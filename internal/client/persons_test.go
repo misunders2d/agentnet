@@ -322,3 +322,31 @@ func (c cannedRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
 		Body: io.NopCloser(strings.NewReader(c.body)), Request: r}, nil
 }
+
+// BUG-39a: a Hub admin's revoke of one device of a person shows where it
+// matters: trust refuses the revoked key, and a group invitation to that
+// person names the revoked device and what its person does about it.
+func TestRevokedDeviceRefusedPlainly(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone := linked(t, w.bob)
+	if err := w.alice.Revoke(tctx(t), phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	if fp, err := w.alice.Trust(tctx(t), phone.Address); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("trusted a revoked device: %q %v", fp, err)
+	}
+	group, err := w.alice.CreateGroup(tctx(t), "Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, _, err := w.bob.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.alice.InviteGroup(tctx(t), group.Root.ID(), bob.Person, nil); err == nil || !strings.Contains(err.Error(), "person remove "+phone.Address) {
+		t.Fatalf("invitation to a person with a revoked device: %v", err)
+	}
+}

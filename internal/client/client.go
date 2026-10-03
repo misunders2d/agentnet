@@ -847,6 +847,14 @@ func (a *Agent) Fingerprints(ctx context.Context, address string) (pinned, curre
 	return pinned, e.Public.Fingerprint(), nil
 }
 
+// Revoked reports whether the Hub's directory says a Hub admin revoked
+// address. A person's signed roster may still list such a device until that
+// person removes it (agentnet person remove).
+func (a *Agent) Revoked(ctx context.Context, address string) (bool, error) {
+	e, err := a.directory(ctx, address)
+	return err == nil && e.Revoked, err
+}
+
 // Trust pins the directory's current keys for address and promotes messages
 // held because of a key change that now verify. Each message moves to the
 // inbox atomically, so an interrupted Trust can simply be run again.
@@ -862,6 +870,9 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 	e, err := a.directory(ctx, address)
 	if err != nil {
 		return "", err
+	}
+	if e.Revoked { // fail closed: nothing from or to it counts any more
+		return "", fmt.Errorf("%s was revoked by a Hub admin: there is no key of it to trust, and nothing was trusted", address)
 	}
 	if got := e.Public.Fingerprint(); expect != "" && got != expect {
 		return "", fmt.Errorf("%s's key is now %s, not the %s you compared; nothing was trusted: compare the new fingerprint", address, got, expect)

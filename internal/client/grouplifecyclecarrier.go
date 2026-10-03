@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 
@@ -129,6 +130,9 @@ func (a *Agent) groupInvitationCopies(ctx context.Context, p protocol.GroupInvit
 	}
 	for _, device := range target.Devices {
 		key, e := a.sendKey(ctx, device.Address)
+		if errors.Is(e, ErrPeerRevoked) { // every device of the person gets the proposal, or none does
+			return copies, fmt.Errorf("%w: %s, a device of the invited person, was revoked by a Hub admin; that person takes it off their devices first (agentnet person remove %s), then invite again", e, device.Address, device.Address)
+		}
 		if e != nil {
 			return copies, e
 		}
