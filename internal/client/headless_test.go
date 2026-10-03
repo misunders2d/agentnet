@@ -348,6 +348,51 @@ func TestForgedReportNotBelievedOrApplied(t *testing.T) {
 		w.alice.store.db.QueryRow(`SELECT body FROM inbox WHERE sender = ? AND sub = ? AND body LIKE ?`, bob.Address, envelope.SubStatus, `%"decision":"`+sent.ID+`"%`).Scan(&body)
 		return strings.Contains(body, "refused")
 	})
+	// The refusal tells the operator nothing about the request: not its
+	// state, with or without its sender's key, nor when the same decision
+	// meets its recorded refusal again.
+	answers := func(decision string) []string {
+		var bodies []string
+		rows, err := w.alice.store.db.Query(`SELECT body FROM inbox WHERE sender = ? AND sub = ? AND body LIKE ?`, bob.Address, envelope.SubStatus, `%"decision":"`+decision+`"%`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var b string
+			rows.Scan(&b)
+			bodies = append(bodies, b)
+		}
+		return bodies
+	}
+	toldNothing := func(what, decision string, n int) {
+		t.Helper()
+		var got []string
+		eventually(t, what, func() bool { got = answers(decision); return len(got) >= n })
+		for _, b := range got {
+			if !strings.Contains(b, `"state":"not_run"`) || !strings.Contains(b, refusedNoReport) {
+				t.Fatalf("%s: the refusal told the request's state: %s", what, b)
+			}
+		}
+	}
+	toldNothing("the refusal of the forged report's decision", sent.ID, 1)
+	wrongKey, err := w.alice.Decide(tctx(t), bob.Address, task.ID, w.alice.Self().Fingerprint(), "accept", stateAwaiting, 0, "", protocol.NewID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	toldNothing("the refusal of a decision without the request's key", wrongKey.ID, 1)
+	env, err := w.alice.store.outboxEnvelope(sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := envelope.Open(env, bob.id, bob.Address, w.alice.Self())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bob.admitDecision(tctx(t), env, in, w.alice.Self()); err != nil { // its recorded outcome again
+		t.Fatal(err)
+	}
+	toldNothing("the recorded refusal again", sent.ID, 2)
 	time.Sleep(300 * time.Millisecond)
 	if s, _ := bob.store.jobState(task.ID); s != stateAwaiting || st.count() != 0 {
 		t.Fatalf("a decision on a forged report applied: state %s, %d run(s)", s, st.count())

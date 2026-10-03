@@ -377,6 +377,9 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	var recorded sql.NullString
 	if err := a.store.db.QueryRow(`SELECT detail FROM inbox WHERE id = ?`, in.ID).Scan(&recorded); err == nil {
 		state, _ := a.store.jobState(in.Ref.ID)
+		if tellsNothing(recorded.String) {
+			state = ""
+		}
 		answer(state, recorded.String)
 		return nil
 	}
@@ -395,8 +398,8 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		}
 		a.Logf("decision %s from %s refused: %s", in.ID, env.From, why)
 		state, _ := a.store.jobState(in.Ref.ID)
-		if ok, _ := operatorHolds(a.store.db, env.From, senderFP); !ok {
-			state = "" // nothing about the request for a non-operator
+		if ok, _ := operatorHolds(a.store.db, env.From, senderFP); !ok || tellsNothing(why) {
+			state = "" // nothing about the request for a non-operator, or one that named it wrong
 		}
 		answer(state, why)
 		return nil
@@ -415,6 +418,9 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		// The report the operator acted on is one this machine sent that
 		// operator, listing that request as the decision names it: a notice
 		// from anyone else naming this machine is never grounds to act here.
+		// A report erased here since (the chat with that operator deleted:
+		// eraseCoveredIn blanks it) lists nothing, so a decision on it is
+		// refused: it fails closed.
 		var report string
 		err = tx.QueryRow(`SELECT body FROM outbox WHERE id = ? AND recipient = ? AND status = ? AND conv IS NULL`,
 			d.Report, env.From, envelope.StatusReviewNotice).Scan(&report)
@@ -422,14 +428,14 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			return "", err
 		}
 		if !reportLists(report, in.Ref.ID, in.Ref.Fingerprint, d.Expect, d.Attempt) {
-			return "this machine sent you no report listing that request as you saw it", nil
+			return refusedNoReport, nil
 		}
 		var state string
 		var attempts int64
 		err = tx.QueryRow(`SELECT state, kind, sender, attempts FROM inbox WHERE id = ? AND verified_by = ? AND conv IS NULL AND local = 0 AND ref_id IS NULL`,
 			in.Ref.ID, in.Ref.Fingerprint).Scan(&state, &kind, &from, &attempts)
 		if errors.Is(err, sql.ErrNoRows) {
-			return "no such request here", nil
+			return refusedNoRequest, nil
 		}
 		if err != nil {
 			return "", err
@@ -484,7 +490,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		if refused != "" {
 			a.Logf("decision %s from %s on %s refused: %s", in.ID, env.From, in.Ref.ID, refused)
 			state, _ := a.store.jobState(in.Ref.ID)
-			if refused == ErrNotOperator.Error() || refused == "no such request here" {
+			if tellsNothing(refused) {
 				state = ""
 			}
 			answer(state, refused)
@@ -539,6 +545,23 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	answer(now, "")
 	a.noteStatus(in.Ref.ID) // the requester learns too
 	return nil
+}
+
+// refusedNoReport refuses a decision that names no report this machine
+// sent that operator listing the request as the decision names it;
+// refusedNoRequest one naming no request here under that key. Neither
+// answer tells the request's state (tellsNothing): an operator who did not
+// get it from this machine's report learns nothing about a request, even
+// with its id, by deciding on it.
+const (
+	refusedNoReport  = "this machine sent you no report listing that request as you saw it"
+	refusedNoRequest = "no such request here"
+)
+
+// tellsNothing reports whether a decision refused with why is answered
+// without the request's state.
+func tellsNothing(why string) bool {
+	return why == ErrNotOperator.Error() || why == refusedNoReport || why == refusedNoRequest
 }
 
 // reportLists reports whether body, a report this machine sent, lists
