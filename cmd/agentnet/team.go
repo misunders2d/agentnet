@@ -41,7 +41,7 @@ func runTeam(ctx context.Context, a *client.Agent, args []string, stdout, stderr
 			if t.Conflict {
 				role += " conflict"
 			}
-			fmt.Fprintf(stdout, "%s  %s  %d members%s\n", t.ID, t.Name, len(t.Members), role)
+			fmt.Fprintf(stdout, "%s  %s  %d members%s\n", t.ID, termText(t.Name, ""), len(t.Members), role)
 		}
 		if !v.Current {
 			fmt.Fprintln(stderr, v.Reason)
@@ -68,7 +68,7 @@ func runTeam(ctx context.Context, a *client.Agent, args []string, stdout, stderr
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s  %s  %d members  step %d\n", v.ID, v.Name, len(v.Members), v.Seq)
+	fmt.Fprintf(stdout, "%s  %s  %d members  step %d\n", v.ID, termText(v.Name, ""), len(v.Members), v.Seq)
 	return nil
 }
 

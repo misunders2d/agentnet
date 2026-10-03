@@ -129,43 +129,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if err != nil {
 			return err
 		}
-		for _, m := range msgs {
-			who := m.From
-			if m.Via != "" {
-				who = "you on " + m.Via
-			}
-			if m.Origin != "" && m.Emotion != "" {
-				who += " [" + m.Origin + ", " + m.Emotion + "]"
-			} else if m.Origin != "" {
-				who += " [" + m.Origin + "]"
-			}
-			state := m.State
-			if m.Detail != "" {
-				state += ": " + m.Detail
-			}
-			if m.Job != "" && m.Job != m.State { // a request to this device's agent, asked here
-				state += "; agent job " + m.Job
-				if m.JobDetail != "" {
-					state += ": " + m.JobDetail
-				}
-			}
-			kind := m.Kind
-			if m.Sub != "" {
-				kind += " " + m.Sub
-			}
-			if m.PID != "" {
-				kind += " pid " + m.PID
-			}
-			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s lid %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state,
-				m.ID, m.LID, strings.ReplaceAll(m.Body, "\n", "\n  "))
-			for _, f := range m.Attachments {
-				line := fmt.Sprintf("  [file] %q %d bytes", f.Name, f.Size)
-				if f.SavedPath != "" {
-					line += " saved " + f.SavedPath
-				}
-				fmt.Fprintln(stdout, line)
-			}
-		}
+		printConvMessages(stdout, msgs)
 		return nil
 	case "send":
 		fs := flag.NewFlagSet("dm send", flag.ContinueOnError)
@@ -280,6 +244,48 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		return nil
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+// printConvMessages prints a conversation's messages (dm show), oldest
+// first.
+func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
+	for _, m := range msgs {
+		who := m.From
+		if m.Via != "" {
+			who = "you on " + m.Via
+		}
+		if m.Origin != "" && m.Emotion != "" {
+			who += " [" + m.Origin + ", " + m.Emotion + "]"
+		} else if m.Origin != "" {
+			who += " [" + m.Origin + "]"
+		}
+		state := m.State
+		if m.Detail != "" {
+			state += ": " + m.Detail
+		}
+		if m.Job != "" && m.Job != m.State { // a request to this device's agent, asked here
+			state += "; agent job " + m.Job
+			if m.JobDetail != "" {
+				state += ": " + m.JobDetail
+			}
+		}
+		kind := m.Kind
+		if m.Sub != "" {
+			kind += " " + m.Sub
+		}
+		if m.PID != "" {
+			kind += " pid " + m.PID
+		}
+		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
+		fmt.Fprintf(stdout, "%s\n  %s\n", termText(header, "  "), termText(m.Body, "  "))
+		for _, f := range m.Attachments {
+			line := fmt.Sprintf("  [file] %q %d bytes", f.Name, f.Size)
+			if f.SavedPath != "" {
+				line += " saved " + f.SavedPath
+			}
+			fmt.Fprintln(stdout, line)
+		}
+	}
 }
 
 func splitList(s string) []string {

@@ -502,13 +502,13 @@ func runInbox(a *client.Agent, args []string) error {
 		if m.Status != "" {
 			kind += " (" + m.Status + ")"
 		}
-		fmt.Printf("%s %s  %s  %s  %s\n", mark, m.ID, m.From, m.SentAt.Format(time.DateTime), kind)
+		fmt.Printf("%s %s  %s  %s  %s\n", mark, m.ID, m.From, m.SentAt.Format(time.DateTime), termText(kind, "  "))
 		if m.ReplyTo != "" {
 			fmt.Printf("  (reply to %s)\n", m.ReplyTo)
 		}
-		fmt.Printf("  %s\n", strings.ReplaceAll(m.Body, "\n", "\n  "))
+		fmt.Printf("  %s\n", termText(m.Body, "  "))
 		if m.Detail != "" {
-			fmt.Printf("  [%s] %s\n", detailLabel(m.State), strings.ReplaceAll(m.Detail, "\n", "\n  "))
+			fmt.Printf("  [%s] %s\n", detailLabel(m.State), termText(m.Detail, "  "))
 		}
 		for _, f := range m.Attachments {
 			fmt.Printf("  [file] %q %d bytes", f.Name, f.Size)
@@ -625,13 +625,13 @@ func runConversation(a *client.Agent, args []string) error {
 		if m.State != "" {
 			kind += " [" + m.State + "]"
 		}
-		fmt.Printf("%s %s  %s  %s  %s\n", arrow, m.ID, m.From, m.At.Format(time.DateTime), kind)
-		fmt.Printf("  %s\n", strings.ReplaceAll(m.Body, "\n", "\n  "))
+		fmt.Printf("%s %s  %s  %s  %s\n", arrow, m.ID, m.From, m.At.Format(time.DateTime), termText(kind, "  "))
+		fmt.Printf("  %s\n", termText(m.Body, "  "))
 		if m.Summary != "" {
-			fmt.Printf("  [follow-up summary] %s\n", strings.ReplaceAll(m.Summary, "\n", "\n  "))
+			fmt.Printf("  [follow-up summary] %s\n", termText(m.Summary, "  "))
 		}
 		if m.Detail != "" {
-			fmt.Printf("  [note] %s\n", strings.ReplaceAll(m.Detail, "\n", "\n  "))
+			fmt.Printf("  [note] %s\n", termText(m.Detail, "  "))
 		}
 		for _, f := range m.Attachments {
 			fmt.Printf("  [file] %q %d bytes sha256 %s\n", f.Name, f.Size, f.SHA256)

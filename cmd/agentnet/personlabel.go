@@ -18,6 +18,6 @@ func runPersonLabel(ctx context.Context, a *client.Agent, args []string, stdout 
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "Display label: %s\nPerson ID: %s\nAddress unchanged: %s\n", p.Label, p.Person, a.Address)
+	_, err = fmt.Fprintf(stdout, "Display label: %s\nPerson ID: %s\nAddress unchanged: %s\n", termText(p.Label, ""), p.Person, a.Address)
 	return err
 }

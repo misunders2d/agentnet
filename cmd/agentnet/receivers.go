@@ -101,7 +101,7 @@ func runReceivers(a *client.Agent, args []string, out io.Writer) error {
 			return json.NewEncoder(out).Encode(rows)
 		}
 		for _, r := range rows {
-			fmt.Fprintf(out, "%s %s %s registered=%t\n", r.Handle, r.Harness, r.Label, r.Active)
+			fmt.Fprintf(out, "%s %s %s registered=%t\n", r.Handle, r.Harness, termText(r.Label, ""), r.Active)
 		}
 		return nil
 	}
@@ -118,12 +118,12 @@ func runReceivers(a *client.Agent, args []string, out io.Writer) error {
 			fmt.Fprintln(out, "  handoff:", b.HandoffState)
 		}
 		if b.Detail != "" {
-			fmt.Fprintln(out, "  "+b.Detail)
+			fmt.Fprintln(out, "  "+termText(b.Detail, "  "))
 		}
 		for _, in := range b.Inputs {
 			fmt.Fprintf(out, "  %s %s\n", in.ID, in.State)
 			if in.Detail != "" {
-				fmt.Fprintln(out, "    "+in.Detail)
+				fmt.Fprintln(out, "    "+termText(in.Detail, "    "))
 			}
 		}
 	}
