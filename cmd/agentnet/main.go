@@ -48,6 +48,9 @@ func run(args []string) error {
 	if len(args) == 0 || wantsHelp(args) {
 		return printHelp(os.Stdout, args) // before anything touches the home
 	}
+	if err := runGuard(args[0], args[1:]); err != nil { // inside a run: before any command
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	cmd, rest := args[0], args[1:]
@@ -85,9 +88,6 @@ func run(args []string) error {
 	}
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
-	}
-	if err := runGuard(cmd, rest); err != nil {
-		return err
 	}
 	if cmd == "daemon" {
 		keepDaemonInstallDirOnPath(os.Args[0])
@@ -471,26 +471,37 @@ func runDownload(ctx context.Context, a *client.Agent, args []string) error {
 	return err
 }
 
-func runInbox(a *client.Agent, args []string) error {
+type inboxFlags struct{ unread, review, peek, asJSON *bool }
+
+// parseInbox parses inbox's flags (also for the run guard, which allows
+// only --peek).
+func parseInbox(args []string) (*flag.FlagSet, inboxFlags, error) {
 	fs := flag.NewFlagSet("inbox", flag.ContinueOnError)
-	unread := fs.Bool("unread", false, "only unread messages")
-	review := fs.Bool("review", false, "only items waiting for your decision (does not mark them read)")
-	peek := fs.Bool("peek", false, "inspect without marking messages read")
-	asJSON := fs.Bool("json", false, "JSON output")
-	if err := fs.Parse(args); err != nil {
+	fs.SetOutput(io.Discard)
+	f := inboxFlags{
+		unread: fs.Bool("unread", false, "only unread messages"),
+		review: fs.Bool("review", false, "only items waiting for your decision (does not mark them read)"),
+		peek:   fs.Bool("peek", false, "inspect without marking messages read"),
+		asJSON: fs.Bool("json", false, "JSON output"),
+	}
+	return fs, f, fs.Parse(args)
+}
+
+func runInbox(a *client.Agent, args []string) error {
+	_, f, err := parseInbox(args)
+	if err != nil {
 		return err
 	}
 	var msgs []client.Message
-	var err error
-	if *review {
+	if *f.review {
 		msgs, err = a.Review()
 	} else {
-		msgs, err = a.Inbox(*unread, !*peek)
+		msgs, err = a.Inbox(*f.unread, !*f.peek)
 	}
 	if err != nil {
 		return err
 	}
-	if *asJSON {
+	if *f.asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if msgs == nil {
@@ -526,7 +537,7 @@ func runInbox(a *client.Agent, args []string) error {
 			fmt.Println()
 		}
 	}
-	if *review {
+	if *f.review {
 		// Reports from other machines: decided there, only read (and
 		// resolved once seen) here. Never counted as decisions here.
 		notices, err := a.Notices()
@@ -780,6 +791,15 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	}
 	if fs.NArg() != 2 {
 		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
+	}
+	beyond := ""
+	if *remoteAgent != "" {
+		beyond = "with --agent"
+	} else if *followUp != "" {
+		beyond = "with --follow-up"
+	}
+	if err := receiverGuard(a, kind, beyond, *replyTo); err != nil {
+		return err
 	}
 	if *replyTo != "" {
 		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {
