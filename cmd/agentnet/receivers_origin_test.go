@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"flag"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,29 +44,29 @@ func TestCLIOriginSelection(t *testing.T) {
 	for _, k := range []string{"AGENTNET_REPLY_SESSION", "AGENTNET_REPLY_BINDING", "AGENTNET_BACKGROUND", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"} {
 		t.Setenv(k, "")
 	}
-	plain := originSelection(t, true)
-	if kind, err := plain(); kind != "" || err != nil {
+	request := originSelection(t, true)
+	if kind, err := request(); kind != "" || err != nil {
 		t.Fatalf("plain command: %q %v", kind, err)
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "synthetic-claude-session")
-	if kind, err := plain(); kind != "" || err == nil || !strings.Contains(err.Error(), "Claude Code session synthetic-claude-session") || !strings.Contains(err.Error(), "--reply-receiver human") {
+	if kind, err := request(); kind != "" || err == nil || !strings.Contains(err.Error(), "Claude Code session synthetic-claude-session") || !strings.Contains(err.Error(), "--reply-receiver human") {
 		t.Fatalf("unregistered Claude origin: %q %v", kind, err)
 	}
 	if kind, err := originSelection(t, true, "--reply-receiver", "human")(); kind != "human" || err != nil {
 		t.Fatalf("explicit human override: %q %v", kind, err)
 	}
 	t.Setenv("AGENTNET_BACKGROUND", "1")
-	if kind, err := plain(); kind != "" || err != nil {
+	if kind, err := request(); kind != "" || err != nil {
 		t.Fatalf("background job captured an interactive origin: %q %v", kind, err)
 	}
 	t.Setenv("AGENTNET_BACKGROUND", "")
 	t.Setenv("CODEX_THREAD_ID", "synthetic-codex-thread")
-	if _, err := plain(); err == nil || !strings.Contains(err.Error(), "cannot tell which assistant") {
+	if _, err := request(); err == nil || !strings.Contains(err.Error(), "cannot tell which assistant") {
 		t.Fatalf("both harness names: %v", err)
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	t.Setenv("CODEX_HOME", t.TempDir())
-	if _, err := plain(); err == nil || !strings.Contains(err.Error(), "Codex thread synthetic-codex-thread") {
+	if _, err := request(); err == nil || !strings.Contains(err.Error(), "Codex thread synthetic-codex-thread") {
 		t.Fatalf("unregistered Codex origin: %v", err)
 	}
 }
@@ -137,12 +139,60 @@ func TestCLIPlainMessageSkipsOrigin(t *testing.T) {
 	if _, err := originSelection(t, false, "--on-close-agent", strings.Repeat("a", 32))(); err == nil || !strings.Contains(err.Error(), "Claude Code session synthetic-claude-session") {
 		t.Fatalf("on-close-agent on a plain message skipped origin: %v", err)
 	}
+
+	// A registered session that could take the answer is no different: a
+	// plain message from it still binds nothing, a request returns to it, and
+	// --on-close-agent still binds it for that continuation.
+	a, home := diagnosticAgent(t)
+	file := filepath.Join(t.TempDir(), "native.jsonl")
+	if err := os.WriteFile(file, []byte(`{"type":"session","id":"s1"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := a.RegisterReplySession(client.ReplySessionRegistration{Harness: "pi", SessionID: "s1", File: file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range origins {
+		t.Setenv(k, "")
+	}
+	t.Setenv("AGENTNET_REPLY_SESSION", owner.Handle)
+	t.Setenv("AGENTNET_REPLY_SESSION_HOME", home)
+	t.Setenv("AGENTNET_REPLY_SESSION_GENERATION", strconv.FormatInt(owner.Generation, 10))
+	registered := func(request bool, args ...string) (*client.ReplyReceiver, error) {
+		fs := flag.NewFlagSet("dm send", flag.ContinueOnError)
+		f := receiverFlags(fs)
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		return f.selected(a, request)
+	}
+	if r, err := registered(false); r != nil || err != nil {
+		t.Fatalf("plain message from a registered session bound a receiver: %+v %v", r, err)
+	}
+	if r, err := registered(true); err != nil || r == nil || r.Kind != "live_session" || r.SessionHandle != owner.Handle {
+		t.Fatalf("request from a registered session lost origin return: %+v %v", r, err)
+	}
+	if r, err := registered(false, "--on-close-agent", strings.Repeat("a", 32)); err != nil || r == nil || r.Kind != "live_session" || r.SessionHandle != owner.Handle || r.OnClose == nil {
+		t.Fatalf("on-close-agent on a plain message from a registered session: %+v %v", r, err)
+	}
+}
+
+// The receivers help states the origin rules the code keeps: a request
+// returns only to a registered session or is refused, and a plain message
+// selects no receiver unless --on-close-agent is given.
+func TestReceiversHelpStatesOriginRules(t *testing.T) {
+	text := topics["receivers"]
+	for _, want := range []string{"Pi/OMP, Claude Code or Codex", "registered session", "refused", "unless --on-close-agent", "background job"} {
+		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
+			t.Errorf("receivers help lacks %q:\n%s", want, text)
+		}
+	}
 }
 
 // The live audit: dm send run by Claude Code in a session AgentNet cannot
 // return answers to (no Claude config here). The plain message is stored with
-// no receiver bound; a question from that session is refused and stores
-// nothing.
+// no receiver bound; a question or task from that session (dm send
+// --question/--task, dm ask-agent) is refused and stores nothing.
 func TestCLIDMSendPlainFromHarnessSession(t *testing.T) {
 	for _, k := range []string{"AGENTNET_REPLY_SESSION", "AGENTNET_REPLY_BINDING", "AGENTNET_BACKGROUND", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR"} {
 		t.Setenv(k, "")
@@ -200,6 +250,14 @@ func TestCLIDMSendPlainFromHarnessSession(t *testing.T) {
 	}
 	if err = runDM(ctx, a, []string{"send", "--question", conv, "where is the shipment?"}, io.Discard); err == nil || !strings.Contains(err.Error(), ".claude") || !strings.Contains(err.Error(), "--reply-receiver human") {
 		t.Fatalf("question from an unregistered Claude session: %v", err)
+	}
+	if err = runDM(ctx, a, []string{"send", "--task", conv, "ship it today"}, io.Discard); err == nil || !strings.Contains(err.Error(), ".claude") || !strings.Contains(err.Error(), "--reply-receiver human") {
+		t.Fatalf("task from an unregistered Claude session: %v", err)
+	}
+	// The receiver is chosen before the participation is looked up, so any
+	// participation id reaches the origin check.
+	if err = runDM(ctx, a, []string{"ask-agent", "any-pid", "where is the shipment?"}, io.Discard); err == nil || !strings.Contains(err.Error(), ".claude") || !strings.Contains(err.Error(), "--reply-receiver human") {
+		t.Fatalf("ask-agent from an unregistered Claude session: %v", err)
 	}
 	msgs, err := a.ConversationMessages(conv)
 	if err != nil || len(msgs) != 1 || msgs[0].Kind != envelope.KindMessage || msgs[0].Body != "plain note" {

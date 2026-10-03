@@ -106,8 +106,10 @@ Read local selected reply receivers and their input states. Delivery, accepted
 input and completed local continuation are separate. No live-session dispatch.
 
 ask/task/dm send/dm ask-agent accept --reply-receiver human|AGENT_ID.
-Without it, a question or task asked from a Pi, Claude Code or Codex session
-returns to that session; a plain dm send message selects no receiver.
+Without it, a question or task asked from a Pi/OMP, Claude Code or Codex
+session returns to that registered session, or the command is refused and
+says why; a plain dm send message selects no receiver unless --on-close-agent
+is given. A background job uses only its own reply binding, if any.
 Managed receivers require --continue TEXT and --continue-mode question|task.
 --reply-binding ID reuses original receiver/instructions/mode without changes.`,
 	"join": `Usage: agentnet [--home DIR] join --agent NAME CODE-OR-LINK
