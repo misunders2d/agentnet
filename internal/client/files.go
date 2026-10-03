@@ -236,7 +236,9 @@ var errRetractedFiles = errors.New("its sender deleted this message: its files a
 // exactly the manifest's content counts as saved, so an interrupted
 // download can simply be repeated; any other existing file is kept unless
 // overwrite is set. The files of a message its sender deleted are refused,
-// as OpenAttachment refuses them.
+// as OpenAttachment refuses them. A file known here only from a
+// conversation's history is not fetched: it is named in the error with
+// how to request it, and the other files are still saved.
 func (a *Agent) Download(ctx context.Context, id, dir string, overwrite bool) ([]string, error) {
 	files, err := a.store.attachments(id)
 	if err != nil {
@@ -256,14 +258,40 @@ func (a *Agent) Download(ctx context.Context, id, dir string, overwrite bool) ([
 			notifyDaemon(a.home) // a messenger page shows where files were saved
 		}
 	}()
+	var notHere []error
 	for i, name := range finalNames(files) {
 		f, final := files[i], filepath.Join(dir, name)
+		if strings.HasPrefix(f.BlobID, historyBlob) {
+			os.Remove(a.downloadPath(f.BlobID) + ".lock") // left by an earlier version that tried to fetch it
+			notHere = append(notHere, fmt.Errorf("%s: %w", f.Name, a.historyFileError(id, i)))
+			continue
+		}
 		if err := a.downloadOne(ctx, id, f, final, overwrite); err != nil {
-			return saved, fmt.Errorf("%s: %w", f.Name, err)
+			return saved, errors.Join(append(notHere, fmt.Errorf("%s: %w", f.Name, err))...)
 		}
 		saved = append(saved, final)
 	}
-	return saved, nil
+	return saved, errors.Join(notHere...)
+}
+
+// errHistoryFile refuses a file known here only from a conversation's
+// history (its manifest): its bytes come once requested.
+var errHistoryFile = errors.New("this file came with the conversation's history and is not here yet")
+
+// historyFileError says how to request file index of history message
+// msgID: in a group from the member device that forwarded it, in a DM from
+// this person's other device (asked from the messenger page).
+func (a *Agent) historyFileError(msgID string, index int) error {
+	conv, err := a.store.convOf(msgID)
+	if err != nil {
+		return err
+	}
+	if root, _, found, err := a.store.conversation(conv); err != nil {
+		return err
+	} else if found && root.Kind == protocol.ConvKindGroup {
+		return fmt.Errorf("%w: request it first with agentnet group request-file %s %s %d", errHistoryFile, conv, msgID, index)
+	}
+	return fmt.Errorf("%w: ask your other device for it first from the messenger page", errHistoryFile)
 }
 
 func (a *Agent) downloadOne(ctx context.Context, msgID string, f FileInfo, final string, overwrite bool) error {

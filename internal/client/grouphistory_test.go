@@ -439,6 +439,12 @@ func TestGroupHistorySelectedTextAdmission(t *testing.T) {
 		files, e := carol.store.attachments(rows[0].ID)
 		return e == nil && len(files) == 2 && !strings.HasPrefix(files[0].BlobID, historyBlob) && strings.HasPrefix(files[1].BlobID, historyBlob)
 	})
+	// Saved before file 1 is requested: file 0 is saved, and file 1 names
+	// the command that requests it (never a false integrity failure).
+	early, err := carol.Download(tctx(t), rows[0].ID, t.TempDir(), false)
+	if len(early) != 1 || err == nil || !strings.Contains(err.Error(), "agentnet group request-file "+p.State.Conv+" "+rows[0].ID+" 1") {
+		t.Fatalf("download before file 1 was requested: %v %v", early, err)
+	}
 	if err = carol.RequestFile(tctx(t), rows[0].ID, 1); err != nil {
 		t.Fatal(err)
 	}
