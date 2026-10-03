@@ -194,7 +194,7 @@ func TestLiveGuestInvitedBackCanSend(t *testing.T) {
 
 // BUG-40b: the timeline names an outside host whose person is known here
 // (pinned) instead of calling them "an unknown person" or "someone not in
-// this DM".
+// this DM", and marks that name: the label is the person's own claim.
 func TestLiveTimelineNamesKnownOutsideHost(t *testing.T) {
 	alice, bob, carol, conv, eventually := liveGuestWorld(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -226,7 +226,7 @@ func TestLiveTimelineNamesKnownOutsideHost(t *testing.T) {
 		lines = eventLines(d.Messages)
 		return strings.Contains(lines, "accepted")
 	})
-	for _, want := range []string{"Alice invited Carol's agent (on " + carol.Address + ") into this DM.", "Carol accepted: the agent joins this DM."} {
+	for _, want := range []string{"Alice invited Carol (not in this DM)'s agent (on " + carol.Address + ") into this DM.", "Carol (not in this DM) accepted: the agent joins this DM."} {
 		if !strings.Contains(lines, want) {
 			t.Fatalf("timeline %q lacks %q", lines, want)
 		}

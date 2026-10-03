@@ -23,7 +23,7 @@ type dmPeople struct {
 	group    bool
 	members  []PersonView
 	humans   map[string]client.ParticipationInfo // human participations of the DM, by PID
-	known    map[string]PersonView               // other persons pinned here, by id: names for outside hosts, nothing more
+	known    map[string]PersonView               // other persons pinned here, by id: names for outside hosts, nothing more (marked: outsider)
 }
 
 // humanHidden: a guest sees another guest only once that guest's acceptance
@@ -131,12 +131,35 @@ func (p dmPeople) byKey(fp string) (PersonView, bool) {
 	return PersonView{}, false
 }
 
+// outsider: id is named here only because its person is pinned here
+// (p.known): not a member of this DM and not an accepted guest in it now.
+// Its label is that person's own claim, so it is marked where it is used.
+func (p dmPeople) outsider(id string) bool {
+	if _, ok := p.known[id]; !ok || id == p.me.Person || id == p.peer.Person {
+		return false
+	}
+	for _, m := range p.members {
+		if m.Person == id {
+			return false
+		}
+	}
+	for _, info := range p.humans {
+		if info.Host.Person == id && info.HumanActive() {
+			return false
+		}
+	}
+	return true
+}
+
 // who is a person as the subject of a sentence; whose, as an owner.
 func (p dmPeople) who(id string) string {
 	if id == p.me.Person && id != "" {
 		return "You"
 	}
 	if v, ok := p.byPerson(id); ok {
+		if p.outsider(id) {
+			return v.Label + " (not in this DM)"
+		}
 		return v.Label
 	}
 	if p.role == "visitor" && len(p.members) < 2 { // an original not held here may be the author
@@ -150,6 +173,9 @@ func (p dmPeople) whose(id string) string {
 		return "your"
 	}
 	if v, ok := p.byPerson(id); ok {
+		if p.outsider(id) {
+			return v.Label + " (not in this DM)'s"
+		}
 		return v.Label + "'s"
 	}
 	return "an unknown person's"

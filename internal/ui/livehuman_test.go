@@ -35,6 +35,47 @@ func TestEventTextVisitorNeverCallsAnOutsiderAMember(t *testing.T) {
 	}
 }
 
+// BUG-40b review: a person pinned here but outside this DM is named by the
+// label they chose, which nothing verifies; the timeline marks that name, so
+// an outsider labelled like a member never reads as that member. A member,
+// and a person who is an accepted guest here now, are not marked.
+func TestEventTextMarksAKnownOutsider(t *testing.T) {
+	person := func(label, address string) PersonView {
+		return PersonView{Person: protocol.NewID(), Label: label, Address: address, Fingerprint: "11111111-22222222-33333333-44444444"}
+	}
+	alice, bob, carol, outsider := person("Alice", "alice/laptop"), person("Bob", "bob/desk"), person("Carol", "carol/box"), person("Alice", "mallory/box")
+	accept := func(by PersonView) string {
+		ev := protocol.ParticipationEvent{V: 1, Conv: strings.Repeat("a", 64), PID: protocol.NewID(), Type: protocol.EventAccept, Prev: strings.Repeat("b", 64), TS: 1,
+			Author: protocol.EventAuthor{Person: by.Person, Roster: strings.Repeat("c", 64), Address: by.Address, Fingerprint: by.Fingerprint}}
+		raw, _ := json.Marshal(ev)
+		return string(raw)
+	}
+	known := map[string]PersonView{alice.Person: alice, carol.Person: carol, outsider.Person: outsider}
+	member := dmPeople{me: bob, peer: alice, role: "member", known: known}
+	guest := dmPeople{me: carol, peer: alice, role: "visitor", members: []PersonView{alice, bob}, known: map[string]PersonView{bob.Person: bob, outsider.Person: outsider}}
+	for _, p := range []dmPeople{member, guest} {
+		if got := eventText(accept(outsider), p); got != "Alice (not in this DM) accepted: the agent joins this DM." {
+			t.Fatalf("an outsider labelled like a member, seen by %s: %q", p.role, got)
+		}
+		if got := p.whose(outsider.Person); got != "Alice (not in this DM)'s" {
+			t.Fatalf("an outsider's agent, seen by %s: %q", p.role, got)
+		}
+		if got := eventText(accept(alice), p); got != "Alice accepted: the agent joins this DM." {
+			t.Fatalf("a member's acceptance, seen by %s: %q", p.role, got)
+		}
+		if got := p.whose(alice.Person); got != "Alice's" {
+			t.Fatalf("a member's agent, seen by %s: %q", p.role, got)
+		}
+	}
+	if got := member.who(carol.Person); got != "Carol (not in this DM)" {
+		t.Fatalf("a pinned person who is no guest here: %q", got)
+	}
+	member.humans = map[string]client.ParticipationInfo{"guest": {PID: "guest", Role: protocol.RoleHuman, State: client.PartActive, Host: client.PersonInfo{Person: carol.Person, Label: "Carol"}}}
+	if got := member.who(carol.Person); got != "Carol" {
+		t.Fatalf("an accepted guest marked as not in this DM: %q", got)
+	}
+}
+
 func TestHumanGuestProjectionTruthAndPositiveAuthority(t *testing.T) {
 	p := client.ParticipationInfo{PID: "guest", Role: protocol.RoleHuman, State: client.PartInvited, HostHere: true}
 	v := guestView(p, false, guestEnd{})
