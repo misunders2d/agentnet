@@ -868,6 +868,7 @@ type Message struct {
 	AgentID     string           `json:"agent_id,omitempty"`
 	Target      *envelope.Target `json:"target,omitempty"`
 	Detail      string           `json:"detail,omitempty"`
+	Sub         string           `json:"sub,omitempty"` // a conversation record's subtype: "event" is a participation event (its signed JSON is the body)
 	Body        string           `json:"body"`
 	ReplyTo     string           `json:"reply_to,omitempty"`
 	SentAt      time.Time        `json:"sent_at"`
@@ -897,10 +898,15 @@ type FileInfo struct {
 	ctSHA256 string
 }
 
+// recordSubs are the received records between devices that are never a
+// message: group proofs, contexts, invitations, consents and withdrawals,
+// and Drive space records (a conversation's view leaves them out too).
+const recordSubs = `('drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+
 // inbox lists received messages; a local request to this device's own
-// agent (agentjob.go) is not one.
+// agent (agentjob.go) is not one, nor is a record between devices.
 func (s *store) inbox(unreadOnly bool) ([]Message, error) {
-	where := ` WHERE local = 0 AND ref_id IS NULL`
+	where := ` WHERE local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN ` + recordSubs
 	if unreadOnly {
 		where += ` AND read_at IS NULL`
 	}
@@ -918,7 +924,7 @@ func (s *store) inboxMessage(id string) (*Message, error) {
 
 func (s *store) messages(where string, args ...any) ([]Message, error) {
 	q := `SELECT id, sender, kind, body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
-		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, ''), coalesce(agent_id, ''), coalesce(target, '') FROM inbox`
+		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, ''), coalesce(agent_id, ''), coalesce(target, ''), coalesce(sub, '') FROM inbox`
 	// In arrival order: to the millisecond where it is known, then as
 	// stored (an id is random, so it never orders one second's arrivals).
 	rows, err := s.db.Query(q+where+` ORDER BY coalesce(received_ms, received_at * 1000), rowid`, args...)
@@ -931,7 +937,7 @@ func (s *store) messages(where string, args ...any) ([]Message, error) {
 		var ts, recv int64
 		var target string
 		if err := rows.Scan(&m.ID, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &ts, &recv, &m.Read,
-			&m.State, &m.Status, &m.Responder, &m.Detail, &m.AgentID, &target); err != nil {
+			&m.State, &m.Status, &m.Responder, &m.Detail, &m.AgentID, &target, &m.Sub); err != nil {
 			rows.Close()
 			return nil, err
 		}

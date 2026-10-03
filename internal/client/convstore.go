@@ -606,7 +606,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
 		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END
-		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN ('drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal')
+		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
 		   AND NOT `+erasedIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),

@@ -37,3 +37,30 @@ func TestInboxListsSameSecondArrivalsInOrder(t *testing.T) {
 		t.Fatalf("inbox order %v", got)
 	}
 }
+
+// BUG-28: records between devices (group proofs, contexts, invitations,
+// consents, withdrawals, Drive space records) are never listed as
+// messages; a participation event is (the CLI words it).
+func TestInboxLeavesOutProtocolRecords(t *testing.T) {
+	w := newWorld(t, "")
+	subs := []string{"", envelope.SubEvent, envelope.SubGroupProof, envelope.SubGroupContext, envelope.SubGroupInvite,
+		envelope.SubGroupConsent, envelope.SubGroupWithdrawal, envelope.SubDriveSpace}
+	for i, sub := range subs {
+		id := strings.Repeat(string(rune('a'+i)), 32)
+		if _, err := w.bob.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, state, conv, sub) VALUES(?, ?, 1, 'message', ?, 1, '', ?, nullif(?, ''))`,
+			id, w.alice.Address, "body "+sub, strings.Repeat("c", 64), sub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msgs, err := w.bob.Inbox(false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range msgs {
+		got = append(got, m.Body)
+	}
+	if strings.Join(got, "|") != "body |body event" {
+		t.Fatalf("inbox lists %q", got)
+	}
+}

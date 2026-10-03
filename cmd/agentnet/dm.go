@@ -11,6 +11,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // runPerson shows or sets up this installation's person and its devices
@@ -156,8 +157,12 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			if m.PID != "" {
 				kind += " pid " + m.PID
 			}
+			body := m.Body
+			if m.Sub == envelope.SubEvent {
+				body = eventLine(m.Body)
+			}
 			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s lid %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state,
-				m.ID, m.LID, strings.ReplaceAll(m.Body, "\n", "\n  "))
+				m.ID, m.LID, strings.ReplaceAll(body, "\n", "\n  "))
 			for _, f := range m.Attachments {
 				line := fmt.Sprintf("  [file] %q %d bytes", f.Name, f.Size)
 				if f.SavedPath != "" {
@@ -280,6 +285,32 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		return nil
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+// eventLine says what a participation event records, in place of its
+// signed JSON (the messenger page words it with the people's names).
+func eventLine(body string) string {
+	ev, err := protocol.ParseParticipationEvent([]byte(body))
+	if err != nil {
+		return "(a participation record that cannot be read here)"
+	}
+	switch ev.Type {
+	case protocol.EventInvite, protocol.EventScope:
+		invited := "an agent"
+		if ev.Host != nil && ev.Role == protocol.RoleHuman {
+			invited = "the person on " + ev.Host.Address + " as a guest"
+		} else if ev.Host != nil {
+			invited = "the agent on " + ev.Host.Address
+		}
+		return fmt.Sprintf("%s invited %s (participation %s)", ev.Author.Address, invited, ev.PID)
+	case protocol.EventAccept:
+		return fmt.Sprintf("%s accepted (participation %s)", ev.Author.Address, ev.PID)
+	case protocol.EventDecline:
+		return fmt.Sprintf("%s declined (participation %s)", ev.Author.Address, ev.PID)
+	case protocol.EventDismiss:
+		return fmt.Sprintf("%s ended it (participation %s)", ev.Author.Address, ev.PID)
+	}
+	return fmt.Sprintf("%s recorded %q (participation %s)", ev.Author.Address, ev.Type, ev.PID)
 }
 
 func splitList(s string) []string {

@@ -496,6 +496,9 @@ func runInbox(a *client.Agent, args []string) error {
 			mark = "*"
 		}
 		kind := m.Kind
+		if m.Sub != "" {
+			kind += " " + m.Sub
+		}
 		if m.State != "" {
 			kind += " [" + m.State + "]"
 		}
@@ -506,7 +509,11 @@ func runInbox(a *client.Agent, args []string) error {
 		if m.ReplyTo != "" {
 			fmt.Printf("  (reply to %s)\n", m.ReplyTo)
 		}
-		fmt.Printf("  %s\n", strings.ReplaceAll(m.Body, "\n", "\n  "))
+		body := m.Body
+		if m.Sub == envelope.SubEvent {
+			body = eventLine(m.Body)
+		}
+		fmt.Printf("  %s\n", strings.ReplaceAll(body, "\n", "\n  "))
 		if m.Detail != "" {
 			fmt.Printf("  [%s] %s\n", detailLabel(m.State), strings.ReplaceAll(m.Detail, "\n", "\n  "))
 		}
