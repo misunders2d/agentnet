@@ -87,9 +87,9 @@ func originalViews(c client.ConversationInfo) []GroupMemberView {
 // guestEnd is how a dismissed guest participation ended, from its exact
 // records held here (guestEnds).
 type guestEnd struct {
-	left    bool   // the guest's own device ended it
-	unheard bool   // this device ended an accepted guest whose device has not stored the end yet
-	held    string // then: its copy to the guest's device that the server still holds, if any
+	left    bool     // the guest's own device ended it
+	unheard bool     // this device ended an accepted guest, and a device of the DM (a member's or the guest's) has not stored the end yet
+	held    []string // then: its copies of the end that the server still holds
 }
 
 func guestView(info client.ParticipationInfo, member bool, end guestEnd) GuestView {
@@ -106,7 +106,7 @@ func guestView(info client.ParticipationInfo, member bool, end guestEnd) GuestVi
 		case end.left:
 			v.StateText = "Left this DM. Previously shared copies remain."
 		case end.unheard:
-			v.StateText = "Ended here. Their device has not received the end yet: until it does, a device that has not applied it may still send to them. Previously shared copies remain."
+			v.StateText = "Ended here. Until every device in this DM has stored the end, one that has not may still send to them. Previously shared copies remain."
 			v.AudiencePending = true
 		default:
 			v.StateText = "Ended. Previously shared copies remain."
@@ -154,9 +154,9 @@ func (l *Live) guestViews(conv string) ([]GuestView, error) {
 // from conv's records held here. A guest who left applied that end before
 // anyone else, and an invitation never accepted shared nothing: neither
 // leaves anything pending. When a member ends an accepted guest, only the
-// device that ended it has proof of when the guest's device stored the end
-// (its copy delivered); until then a device that has not applied the end may
-// still send to the guest.
+// device that ended it has proof of when each device of the DM stored the
+// end (its copy to that device delivered); until every one has, a device
+// that has not applied the end may still send to the guest.
 func (l *Live) guestEnds(conv string, infos []client.ParticipationInfo) (map[string]guestEnd, error) {
 	ends := map[string]guestEnd{}
 	dismissed := map[string]client.ParticipationInfo{}
@@ -188,10 +188,11 @@ func (l *Live) guestEnds(conv string, infos []client.ParticipationInfo) (map[str
 		case ev.Type == protocol.EventDismiss && ev.Hash() == p.Dismissal:
 			end := guestEnd{left: ev.Author.Person == p.Host.Person && ev.Author.Address == p.Host.Address && ev.Author.Fingerprint == p.Host.Fingerprint}
 			if !end.left && m.Dir == "out" && m.Via == "" {
-				end.unheard = !slices.ContainsFunc(m.Copies, func(c client.ConvCopy) bool { return c.To == p.Host.Address && c.State == protocol.StateDelivered })
+				end.unheard = len(m.Copies) == 0 && m.State != protocol.StateDelivered ||
+					slices.ContainsFunc(m.Copies, func(c client.ConvCopy) bool { return c.State != protocol.StateDelivered })
 				for _, c := range m.Copies {
-					if c.To == p.Host.Address && c.State == protocol.StateCustody {
-						end.held = c.ID
+					if c.ID != "" && c.State == protocol.StateCustody && !slices.Contains(end.held, c.ID) {
+						end.held = append(end.held, c.ID)
 					}
 				}
 			}
@@ -242,12 +243,16 @@ func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error
 	if err != nil {
 		return GuestView{}, err
 	}
-	if id := ends[info.PID].held; c.Action == "end" && id != "" {
-		go func() { // as a send does: the guest's device storing the end settles the audience
-			ctx, cancel := context.WithTimeout(context.Background(), receiptWait+l.timeout)
-			defer cancel()
-			l.a.Status(ctx, id, receiptWait)
-		}()
+	if c.Action == "end" {
+		// As a send does, one receipt wait per copy: every device of the DM
+		// storing the end settles the audience.
+		for _, id := range ends[info.PID].held {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), receiptWait+l.timeout)
+				defer cancel()
+				l.a.Status(ctx, id, receiptWait)
+			}()
+		}
 	}
 	return guestView(info, l.guestMember(info.Conv), ends[info.PID]), nil
 }

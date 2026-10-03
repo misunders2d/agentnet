@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
 // liveGuestWorld: alice and bob with persons and a DM between them, and
 // carol, a person on the same server who can be invited into it as a guest.
-// Every daemon runs.
-func liveGuestWorld(t *testing.T) (alice, bob, carol *client.Agent, conv string, eventually func(string, func() bool)) {
+// Every daemon runs; stop stops one (runDaemon starts it again).
+func liveGuestWorld(t *testing.T) (alice, bob, carol *client.Agent, conv string, eventually func(string, func() bool), stop map[*client.Agent]func()) {
 	t.Helper()
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -41,8 +42,9 @@ func liveGuestWorld(t *testing.T) (alice, bob, carol *client.Agent, conv string,
 			carol = join(code, "box")
 		}
 	}
+	stop = map[*client.Agent]func(){}
 	for _, a := range []*client.Agent{alice, bob, carol} {
-		runDaemon(t, a)
+		stop[a] = runDaemon(t, a)
 	}
 	for _, p := range []struct {
 		a     *client.Agent
@@ -65,7 +67,7 @@ func liveGuestWorld(t *testing.T) (alice, bob, carol *client.Agent, conv string,
 		conv, err = alice.CreateDM(ctx, bob.Address)
 		return err == nil
 	})
-	return alice, bob, carol, conv, eventually
+	return alice, bob, carol, conv, eventually, stop
 }
 
 // inviteGuest has alice invite carol into conv and carol accept; both see
@@ -113,9 +115,11 @@ func guestOf(t *testing.T, live *Live, conv, pid string) (DMThread, GuestView) {
 // BUG-40a: "audience pending" ends. A guest who left applied that end
 // first, so nothing new can reach them: nobody shows it pending. When a
 // member ends an accepted guest, the device that ended it shows it pending
-// only until the guest's device has stored the end.
+// until every device in the DM has stored the end: one that has not (bob's,
+// offline here) may still send to the guest, even once the guest's own
+// device holds it.
 func TestLiveGuestEndSettlesAudience(t *testing.T) {
-	alice, bob, carol, conv, eventually := liveGuestWorld(t)
+	alice, bob, carol, conv, eventually, stop := liveGuestWorld(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	lives := map[string]*Live{"alice": NewLive(alice), "bob": NewLive(bob), "carol": NewLive(carol)}
@@ -140,24 +144,62 @@ func TestLiveGuestEndSettlesAudience(t *testing.T) {
 	settled("carol's leaving", left.PID, "Left")
 
 	removed := inviteGuest(t, alice, carol, conv, eventually)
+	eventually("bob holds carol's acceptance", func() bool {
+		got, err := bob.Participation(removed.PID)
+		return err == nil && got.HumanActive()
+	})
+	stop[bob]() // bob's device will not store the end until it is back
 	ended, err := lives["alice"].ChangeHuman(ctx, GuestAction{Action: "end", PID: removed.PID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ended.AudiencePending || !strings.Contains(ended.StateText, "not received the end") {
-		t.Fatalf("just ended, before the guest's device has it: %+v", ended)
+	if !ended.AudiencePending {
+		t.Fatalf("just ended, before the other devices have it: %+v", ended)
 	}
 	eventually("carol holds her removal", func() bool {
 		got, err := carol.Participation(removed.PID)
 		return err == nil && got.State == client.PartDismissed
 	})
+	eventually("alice holds the receipt of carol's copy of the end", func() bool {
+		lives["alice"].Refresh(conv)
+		msgs, err := alice.ConversationMessages(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range msgs {
+			if ev, err := protocol.ParseParticipationEvent([]byte(m.Body)); err != nil || m.PID != removed.PID || m.Dir != "out" || ev.Type != protocol.EventDismiss {
+				continue
+			}
+			for _, c := range m.Copies {
+				if c.To == carol.Address && c.State == protocol.StateDelivered {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	if _, g := guestOf(t, lives["alice"], conv, removed.PID); !g.AudiencePending {
+		t.Fatalf("pending cleared while bob's device has not stored the end: %+v", g)
+	}
+	for _, text := range []string{ended.StateText, guestOfText(t, lives["alice"], conv, removed.PID)} {
+		if !strings.Contains(text, "Until every device in this DM has stored the end") {
+			t.Fatalf("pending end worded as if only the guest's device mattered: %q", text)
+		}
+	}
+	runDaemon(t, bob)
 	settled("carol's removal", removed.PID, "Ended")
+}
+
+func guestOfText(t *testing.T, live *Live, conv, pid string) string {
+	t.Helper()
+	_, g := guestOf(t, live, conv, pid)
+	return g.StateText
 }
 
 // BUG-18: a guest invited back after leaving can send. The page acts on the
 // guest's active participation, not on the first (ended) one it holds.
 func TestLiveGuestInvitedBackCanSend(t *testing.T) {
-	alice, _, carol, conv, eventually := liveGuestWorld(t)
+	alice, _, carol, conv, eventually, _ := liveGuestWorld(t)
 	live := NewLive(carol)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -196,7 +238,7 @@ func TestLiveGuestInvitedBackCanSend(t *testing.T) {
 // (pinned) instead of calling them "an unknown person" or "someone not in
 // this DM", and marks that name: the label is the person's own claim.
 func TestLiveTimelineNamesKnownOutsideHost(t *testing.T) {
-	alice, bob, carol, conv, eventually := liveGuestWorld(t)
+	alice, bob, carol, conv, eventually, _ := liveGuestWorld(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	eventually("bob's DM with carol (carol pinned at bob)", func() bool {
