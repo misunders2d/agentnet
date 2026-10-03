@@ -293,8 +293,9 @@
   - Received files open only on request, after the checks: PNG, JPEG, GIF or
     WebP, known by their bytes, are shown in place from `blob:` URLs;
     anything else, SVG and HTML included, is saved under its safe name; the
-    URLs are freed when the conversation changes. An agent in the DM is told
-    a message had files, never given them.
+    URLs are freed when the conversation changes. An agent's run gets
+    read-only copies of the files it is asked about or granted, under names
+    AgentNet chooses (M4.md, "Run folders and the outbox").
   - The browser device encrypts each file to the recipient's device (binary
     age), uploads it resumably, posts the message only after every file is
     stored and after the conversation's gate is checked again (a person
