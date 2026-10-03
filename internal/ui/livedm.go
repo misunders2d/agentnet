@@ -113,14 +113,11 @@ func (l *Live) dmOverview(o *Overview) error {
 			if e != nil {
 				return e
 			}
-			for _, v := range views {
-				if v.HostHere {
-					s.Role = "human_guest"
-					s.Frozen = guestFrozen(v)
-					if v.CanSend {
-						s.Frozen = ""
-					}
-					break
+			if v, ok := hostGuest(views); ok {
+				s.Role = "human_guest"
+				s.Frozen = guestFrozen(v)
+				if v.CanSend {
+					s.Frozen = ""
 				}
 			}
 		}
@@ -263,14 +260,11 @@ func (l *Live) DM(id string) (DMThread, error) {
 		}
 		if c.Role == "visitor" && c.Kind != protocol.ConvKindGroup {
 			t.Frozen = "Invited agent context only: this host cannot send ordinary room messages."
-			for _, guest := range t.Guests {
-				if guest.HostHere {
-					t.Role = "human_guest"
-					t.Frozen = guestFrozen(guest)
-					if guest.CanSend {
-						t.Frozen = ""
-					}
-					break
+			if guest, ok := hostGuest(t.Guests); ok {
+				t.Role = "human_guest"
+				t.Frozen = guestFrozen(guest)
+				if guest.CanSend {
+					t.Frozen = ""
 				}
 			}
 		}

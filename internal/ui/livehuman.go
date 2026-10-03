@@ -38,6 +38,32 @@ type HumanParticipationProvider interface {
 	ChangeHuman(context.Context, GuestAction) (GuestView, error)
 }
 
+// hostGuest is this device's own guest participation that the page acts on:
+// the one it can send in, else one waiting for its decision, else the first.
+// A guest invited back keeps its earlier, ended participations.
+func hostGuest(views []GuestView) (GuestView, bool) {
+	var found []GuestView
+	for _, v := range views {
+		if v.HostHere {
+			found = append(found, v)
+		}
+	}
+	if len(found) == 0 {
+		return GuestView{}, false
+	}
+	for _, v := range found {
+		if v.CanSend {
+			return v, true
+		}
+	}
+	for _, v := range found {
+		if v.State == client.PartInvited {
+			return v, true
+		}
+	}
+	return found[0], true
+}
+
 // guestFrozen says why this guest device cannot send now, in the page's words.
 func guestFrozen(v GuestView) string {
 	if v.State == client.PartInvited {
