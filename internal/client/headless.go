@@ -36,10 +36,12 @@ import (
 //     with a time, never a live queue.
 //   - decision: a granted operator (operators.go) accepts, declines,
 //     resolves, replies to or stops one request the host holds, naming the
-//     state and attempt they saw. The host applies it in one transaction
-//     with the decision's own storage, so a replay, a double click or a
-//     crash never runs anything twice, and answers with a status naming
-//     the decision: the resulting state, or why it was refused.
+//     state and attempt they saw in a report the host itself sent them (a
+//     report is believed only from its host). The host applies it in one
+//     transaction with the decision's own storage, so a replay, a double
+//     click or a crash never runs anything twice, and answers with a
+//     status naming the decision: the resulting state, or why it was
+//     refused.
 //
 // Nothing here creates a job, an alert or a chat turn; nothing received
 // grants anything (operators are named locally, once).
@@ -410,6 +412,18 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		if !ok {
 			return ErrNotOperator.Error(), nil
 		}
+		// The report the operator acted on is one this machine sent that
+		// operator, listing that request as the decision names it: a notice
+		// from anyone else naming this machine is never grounds to act here.
+		var report string
+		err = tx.QueryRow(`SELECT body FROM outbox WHERE id = ? AND recipient = ? AND status = ? AND conv IS NULL`,
+			d.Report, env.From, envelope.StatusReviewNotice).Scan(&report)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+		if !reportLists(report, in.Ref.ID, in.Ref.Fingerprint, d.Expect, d.Attempt) {
+			return "this machine sent you no report listing that request as you saw it", nil
+		}
 		var state string
 		var attempts int64
 		err = tx.QueryRow(`SELECT state, kind, sender, attempts FROM inbox WHERE id = ? AND verified_by = ? AND conv IS NULL AND local = 0 AND ref_id IS NULL`,
@@ -525,6 +539,21 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	answer(now, "")
 	a.noteStatus(in.Ref.ID) // the requester learns too
 	return nil
+}
+
+// reportLists reports whether body, a report this machine sent, lists
+// request id under key in state at attempt.
+func reportLists(body, id, key, state string, attempt int64) bool {
+	r, ok := ParseReport(body)
+	if !ok {
+		return false
+	}
+	for _, it := range r.Items {
+		if it.ID == id && it.Key == key && it.State == state && it.Attempt == attempt {
+			return true
+		}
+	}
+	return false
 }
 
 // decisionRefused ends a reply's outbox transaction: the decision does not
@@ -669,15 +698,15 @@ func (a *Agent) decisionResults(host, reportID string, r *Report) {
 }
 
 // NoticeReport returns the report a received review notice carries, with
-// this device's decision results, or false for a count-only notice.
+// this device's decision results, or false for a count-only notice. A
+// machine reports only its own requests: a body naming another host is
+// not a report (the authenticated sender is the host, never the body).
 func (a *Agent) NoticeReport(m Message) (Report, bool) {
 	r, ok := ParseReport(m.Body)
-	if !ok {
+	if !ok || (r.Host != "" && r.Host != m.From) {
 		return Report{}, false
 	}
-	if r.Host == "" {
-		r.Host = m.From
-	}
+	r.Host = m.From
 	a.decisionResults(m.From, m.ID, &r)
 	return r, true
 }

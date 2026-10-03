@@ -343,6 +343,10 @@ async function makeWorld() {
   await store.write([{ s: "inbox", k: "rq".padEnd(32, "0"), v: { id: "rq".padEnd(32, "0"), v: 1, from: "hub/bot", fp: PEER, kind: "message", status: "review_notice", body: quiet, at: 5 } }]);
   const quietItem = e.reportItems(await store.all("inbox")).find((x) => x.id === "rq".padEnd(32, "0")).report.items[0];
   check(quietItem.actionable === false && !("excerpt" in quietItem), "a report to a device that is no operator there is read-only: no excerpt, not actionable");
+  // a notice from one machine naming another as host is not that host's report (client.NoticeReport)
+  await store.write([{ s: "inbox", k: "rf".padEnd(32, "0"), v: { id: "rf".padEnd(32, "0"), v: 1, from: "third/box", fp: PEER, kind: "message", status: "review_notice", body, at: 6 } }]);
+  const forged = e.reportItems(await store.all("inbox")).find((x) => x.id === "rf".padEnd(32, "0"));
+  check(forged && !forged.report && !forged.excerpt.includes("reported by") && !e.noticeLine({ from: "third/box", body }).includes("reported by"), "a report is believed only from its host: " + JSON.stringify(forged));
   let dec = "";
   try { await e.api("/api/operator/decide", { host: "hub/bot", id: "c".repeat(32), action: "accept" }); } catch (err) { dec = err.message; }
   check(dec.includes("sender's key"), "a decision without the request's key as reported is refused: " + dec);
