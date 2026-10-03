@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"net/http"
+	"slices"
 )
 
 // GuestAction is separate from agent actions; receiving it grants no authority.
@@ -82,7 +84,15 @@ func originalViews(c client.ConversationInfo) []GroupMemberView {
 	return out
 }
 
-func guestView(info client.ParticipationInfo, member bool) GuestView {
+// guestEnd is how a dismissed guest participation ended, from its exact
+// records held here (guestEnds).
+type guestEnd struct {
+	left    bool   // the guest's own device ended it
+	unheard bool   // this device ended an accepted guest whose device has not stored the end yet
+	held    string // then: its copy to the guest's device that the server still holds, if any
+}
+
+func guestView(info client.ParticipationInfo, member bool, end guestEnd) GuestView {
 	v := GuestView{PID: info.PID, State: info.State, StateText: info.State, Host: personView(info.Host), HostHere: info.HostHere, Inviter: personView(info.Inviter), Shared: []string{}, Held: info.Held}
 	for _, ref := range info.Grant {
 		v.Shared = append(v.Shared, ref.LID)
@@ -92,8 +102,15 @@ func guestView(info client.ParticipationInfo, member bool) GuestView {
 	v.CanSend = info.HumanActive() && (member || info.HostHere)
 	v.CanEnd = member && (info.State == client.PartInvited || info.State == client.PartActive || info.State == client.PartConflict)
 	if info.State == client.PartDismissed {
-		v.StateText = "Ended here. Other devices may not have applied this change yet. Previously shared copies remain."
-		v.AudiencePending = true
+		switch {
+		case end.left:
+			v.StateText = "Left this DM. Previously shared copies remain."
+		case end.unheard:
+			v.StateText = "Ended here. Their device has not received the end yet: until it does, a device that has not applied it may still send to them. Previously shared copies remain."
+			v.AudiencePending = true
+		default:
+			v.StateText = "Ended. Previously shared copies remain."
+		}
 	}
 	if info.Held != 0 {
 		v.StateText = "Waiting for verified participation evidence"
@@ -118,15 +135,74 @@ func (l *Live) guestViews(conv string) ([]GuestView, error) {
 	if err != nil {
 		return nil, err
 	}
+	ends, err := l.guestEnds(conv, infos)
+	if err != nil {
+		return nil, err
+	}
 	out := []GuestView{}
 	member := l.guestMember(conv)
 	for _, p := range infos {
 		// A guest sees another guest only once its acceptance is held here.
 		if p.Role == protocol.RoleHuman && (member || p.HostHere || p.Decision != "") {
-			out = append(out, guestView(p, member))
+			out = append(out, guestView(p, member, ends[p.PID]))
 		}
 	}
 	return out, nil
+}
+
+// guestEnds says how each dismissed guest participation among infos ended,
+// from conv's records held here. A guest who left applied that end before
+// anyone else, and an invitation never accepted shared nothing: neither
+// leaves anything pending. When a member ends an accepted guest, only the
+// device that ended it has proof of when the guest's device stored the end
+// (its copy delivered); until then a device that has not applied the end may
+// still send to the guest.
+func (l *Live) guestEnds(conv string, infos []client.ParticipationInfo) (map[string]guestEnd, error) {
+	ends := map[string]guestEnd{}
+	dismissed := map[string]client.ParticipationInfo{}
+	for _, p := range infos {
+		if p.Role == protocol.RoleHuman && p.State == client.PartDismissed {
+			dismissed[p.PID] = p
+		}
+	}
+	if len(dismissed) == 0 {
+		return ends, nil
+	}
+	msgs, err := l.a.ConversationMessages(conv)
+	if err != nil {
+		return nil, err
+	}
+	accepted := map[string]bool{}
+	for _, m := range msgs {
+		p, ok := dismissed[m.PID]
+		if !ok || m.Sub != envelope.SubEvent {
+			continue
+		}
+		ev, err := protocol.ParseParticipationEvent([]byte(m.Body))
+		if err != nil {
+			continue
+		}
+		switch {
+		case ev.Type == protocol.EventAccept && ev.Hash() == p.Decision:
+			accepted[p.PID] = true
+		case ev.Type == protocol.EventDismiss && ev.Hash() == p.Dismissal:
+			end := guestEnd{left: ev.Author.Person == p.Host.Person && ev.Author.Address == p.Host.Address && ev.Author.Fingerprint == p.Host.Fingerprint}
+			if !end.left && m.Dir == "out" && m.Via == "" {
+				end.unheard = !slices.ContainsFunc(m.Copies, func(c client.ConvCopy) bool { return c.To == p.Host.Address && c.State == protocol.StateDelivered })
+				for _, c := range m.Copies {
+					if c.To == p.Host.Address && c.State == protocol.StateCustody {
+						end.held = c.ID
+					}
+				}
+			}
+			ends[p.PID] = end
+		}
+	}
+	for pid, end := range ends {
+		end.unheard = end.unheard && accepted[pid]
+		ends[pid] = end
+	}
+	return ends, nil
 }
 func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error) {
 	ctx, cancel := context.WithTimeout(ctx, l.timeout)
@@ -162,7 +238,18 @@ func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error
 	if err != nil {
 		return GuestView{}, Refuse(sentence(err))
 	}
-	return guestView(info, l.guestMember(info.Conv)), nil
+	ends, err := l.guestEnds(info.Conv, []client.ParticipationInfo{info})
+	if err != nil {
+		return GuestView{}, err
+	}
+	if id := ends[info.PID].held; c.Action == "end" && id != "" {
+		go func() { // as a send does: the guest's device storing the end settles the audience
+			ctx, cancel := context.WithTimeout(context.Background(), receiptWait+l.timeout)
+			defer cancel()
+			l.a.Status(ctx, id, receiptWait)
+		}()
+	}
+	return guestView(info, l.guestMember(info.Conv), ends[info.PID]), nil
 }
 func (s *Server) changeHuman(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

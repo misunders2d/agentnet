@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,66 @@ func inviteGuest(t *testing.T, alice, carol *client.Agent, conv string, eventual
 		return err == nil && got.HumanActive()
 	})
 	return p
+}
+
+// guestOf is pid's guest view in conv on live's DM.
+func guestOf(t *testing.T, live *Live, conv, pid string) (DMThread, GuestView) {
+	t.Helper()
+	d, err := live.DM(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range d.Guests {
+		if g.PID == pid {
+			return d, g
+		}
+	}
+	t.Fatalf("no guest %s in %+v", pid, d.Guests)
+	return d, GuestView{}
+}
+
+// BUG-40a: "audience pending" ends. A guest who left applied that end
+// first, so nothing new can reach them: nobody shows it pending. When a
+// member ends an accepted guest, the device that ended it shows it pending
+// only until the guest's device has stored the end.
+func TestLiveGuestEndSettlesAudience(t *testing.T) {
+	alice, bob, carol, conv, eventually := liveGuestWorld(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	lives := map[string]*Live{"alice": NewLive(alice), "bob": NewLive(bob), "carol": NewLive(carol)}
+	settled := func(what, pid, text string) {
+		t.Helper()
+		for name, live := range lives {
+			eventually(what+" settled for "+name, func() bool {
+				live.Refresh(conv) // as an open DM does: receipts of copies still held
+				d, g := guestOf(t, live, conv, pid)
+				return g.State == client.PartDismissed && !g.AudiencePending && !d.AudiencePending && strings.Contains(g.StateText, text)
+			})
+		}
+	}
+	left := inviteGuest(t, alice, carol, conv, eventually)
+	if _, err := carol.DismissParticipation(ctx, left.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually("bob holds carol's leaving", func() bool {
+		got, err := bob.Participation(left.PID)
+		return err == nil && got.State == client.PartDismissed
+	})
+	settled("carol's leaving", left.PID, "Left")
+
+	removed := inviteGuest(t, alice, carol, conv, eventually)
+	ended, err := lives["alice"].ChangeHuman(ctx, GuestAction{Action: "end", PID: removed.PID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ended.AudiencePending || !strings.Contains(ended.StateText, "not received the end") {
+		t.Fatalf("just ended, before the guest's device has it: %+v", ended)
+	}
+	eventually("carol holds her removal", func() bool {
+		got, err := carol.Participation(removed.PID)
+		return err == nil && got.State == client.PartDismissed
+	})
+	settled("carol's removal", removed.PID, "Ended")
 }
 
 // BUG-18: a guest invited back after leaving can send. The page acts on the
