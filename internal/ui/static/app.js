@@ -77,8 +77,13 @@ const when = (s) => {
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 };
 const size = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? (n / 1024).toFixed(1) + " KB" : (n / (1 << 20)).toFixed(1) + " MB";
+// A person mention in text: [@Name](agentnet:person/ID) or agentnet:guest/PID
+// (see mentionWho). mentionPlain reads each as @Name.
+const mentionRef = /\[@([^\[\]\r\n]{1,80})\]\(agentnet:(person|guest)\/([A-Za-z0-9_-]{1,64})\)/g;
+const mentionName = (s) => String(s || "").replace(/[\[\]\r\n]/g, "").trim().slice(0, 80);
+const mentionPlain = (s) => typeof s === "string" ? s.replace(mentionRef, (_, name) => "@" + name) : s;
 const firstLine = (s, n) => {
-  const l = (s || "").split("\n")[0];
+  const l = mentionPlain(s || "").split("\n")[0]; // a person mention reads as @Name
   return l.length > n ? l.slice(0, n - 1).trimEnd() + "…" : l;
 };
 const announce = (t) => { $("live").textContent = t; };
@@ -2165,10 +2170,16 @@ async function loadDMNames(t) {
     }).catch(() => {}); // exact ID remains visible when a catalog is unavailable
   }
 }
+// inviteRights: whether you may invite assistants and people into t (the
+// participants list and @ both offer only these existing consent paths).
+function inviteRights(t) {
+  const open = !!t && !t.frozen && !dmVisitor(t) && !dmHumanGuest(t);
+  return { assistants: open && !!(state.overview?.agents && state.overview?.person),
+    people: open && (humanGroup(t) ? t.members.some(p => p.person === state.overview?.person?.person && p.admin) : !!state.overview?.person) };
+}
 function renderAgents(t) {
   const box = $("agents");
-  const canInvite = !!(state.overview?.agents && state.overview?.person) && !t.frozen && !dmVisitor(t) && !dmHumanGuest(t);
-  const canInvitePeople = !t.frozen && !dmVisitor(t) && !dmHumanGuest(t) && (humanGroup(t) ? t.members.some(p => p.person === state.overview?.person?.person && p.admin) : !!state.overview?.person);
+  const { assistants: canInvite, people: canInvitePeople } = inviteRights(t);
   const people = humanGroup(t) ? t.members : [...new Map((dmHumanGuest(t) ? guestOriginals(t) : [state.overview?.person, t.peer]).filter(Boolean).map(p => [p.person, p])).values()];
   box.hidden = false;
   fill(box, el("div", { class: "participant-list" },
@@ -2226,11 +2237,12 @@ function guestActionDialog(g, t, action) {
     } });
 }
 
-function inviteHumanDialog(t) {
+function inviteHumanDialog(t, address = "") {
   if (dmVisitor(t) || dmHumanGuest(t) || humanGroup(t)) { announce("Only original private DM members invite a human guest here."); return; }
   const transport = window.agentnet, gen = state.gen, ws = wsNow(), current = () => gen === state.gen && ws === wsNow() && state.dm === t.id;
   const members = [state.overview.person, t.peer], addresses = new Set(members.flatMap(p => [p.address, ...(p.devices || []).map(d => d.address)]));
   const host = el("input", { id: "guest-host", type: "text", placeholder: "person/device, e.g. carol/desk", autocomplete: "off", spellcheck: "false", maxlength: "65" });
+  host.value = address; // chosen from @ (an exact directory entry), still editable here
   const candidates = directory().current ? directory().members.filter(p => !addresses.has(p.address)) : [];
   const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address; } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
   const ref = m => m.lid || m.id;
@@ -2255,14 +2267,139 @@ function inviteHumanDialog(t) {
     } });
 }
 
-// Typing @ offers only added, currently askable participants. Plain typed
-// names confer no authority; selecting a row binds the exact PID and host.
+// A person mention travels inside the signed text as a readable Markdown-style
+// reference to that exact person (or guest participation):
+// [@Name](agentnet:person/ID) or [@Name](agentnet:guest/PID). It is advisory
+// attention only: never routing, a grant or membership. Text that does not
+// parse, or names no one here, stays inert text; nothing is ever a link.
+// (mentionRef, mentionName and mentionPlain are defined with firstLine.)
+// mentionWho is the person a reference names in conversation t, as named here.
+function mentionWho(kind, id, t = state.dmData) {
+  if (!t) return null;
+  const mine = state.overview?.person?.person;
+  if (kind === "guest") {
+    const g = (t.guests || []).find(g => g.pid === id);
+    return g && g.host?.label ? { label: g.host.label, me: !!g.host_here, title: g.host.label + " · Guest" } : null;
+  }
+  const p = [state.overview?.person, t.peer, ...(t.members || []), ...(dmHumanGuest(t) ? guestOriginals(t) : [])].find(p => p && p.person === id && p.label);
+  return p ? { label: p.label, me: p.state === "self" || (!!mine && p.person === mine), title: p.label + " · Person" } : null;
+}
+// mentionNodes renders text with each exact, known mention as a chip.
+function mentionNodes(text, t = state.dmData) {
+  if (typeof text !== "string" || !text.includes("](agentnet:")) return [text];
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(mentionRef)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    const who = mentionWho(m[2], m[3], t);
+    out.push(who ? el("span", { class: "mention-chip" + (who.me ? " mention-me" : ""), title: who.title }, "@" + who.label) : "@" + m[1]);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+// decodeMentions gives text as it is edited (@Name) and its exact mentions.
+function decodeMentions(text) {
+  const s = String(text || ""), spans = [];
+  let plain = "", last = 0;
+  for (const m of s.matchAll(mentionRef)) {
+    plain += s.slice(last, m.index);
+    spans.push({ start: plain.length, name: m[1], ref: { kind: m[2], id: m[3] } });
+    plain += "@" + m[1];
+    last = m.index + m[0].length;
+  }
+  return { text: plain + s.slice(last), spans };
+}
+const mentionAt = (text, s) => text.slice(s.start, s.start + s.name.length + 1) === "@" + s.name;
+const validMentions = (spans, text) => (Array.isArray(spans) ? spans : []).filter(s => s && Number.isInteger(s.start) && typeof s.name === "string" && /^[^\[\]\r\n]{1,80}$/.test(s.name) &&
+  ["person", "guest"].includes(s.ref?.kind) && /^[A-Za-z0-9_-]{1,64}$/.test(s.ref?.id || "") && mentionAt(text, s));
+// encodeMentions writes each exact mention still intact in text as its reference.
+function encodeMentions(text, spans) {
+  let out = text;
+  for (const s of validMentions(spans, text).sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, s.start) + "[@" + s.name + "](agentnet:" + s.ref.kind + "/" + s.ref.id + ")" + out.slice(s.start + s.name.length + 1);
+  }
+  return out;
+}
+// shiftMentions follows one edit from prev to cur: mentions before or after
+// it move with the text; one the edit touched is dropped (it is plain text now).
+function shiftMentions(spans, prev, cur) {
+  const max = Math.min(prev.length, cur.length);
+  let p = 0, s = 0;
+  while (p < max && prev[p] === cur[p]) p++;
+  while (s < max - p && prev[prev.length - 1 - s] === cur[cur.length - 1 - s]) s++;
+  const oldEnd = prev.length - s, delta = cur.length - prev.length, kept = [], dropped = [];
+  for (const m of spans || []) {
+    if (m.start + m.name.length + 1 <= p) kept.push(m);
+    else if (m.start >= oldEnd) kept.push({ ...m, start: m.start + delta });
+    else dropped.push(m);
+  }
+  return { kept: kept.filter(m => mentionAt(cur, m) || !dropped.push(m)), dropped };
+}
+// trackMentions keeps the composer's exact mentions with its text; a mention
+// the person edits becomes plain text, and the page says so.
+function trackMentions() {
+  const cur = $("body").value, prev = state.mentionText ?? cur;
+  if (cur !== prev && (state.mentions || []).length) {
+    const { kept, dropped } = shiftMentions(state.mentions, prev, cur);
+    state.mentions = kept;
+    if (dropped.length) { announce(dropped.map(m => "@" + m.name).join(", ") + (dropped.length > 1 ? " are" : " is") + " no longer an exact mention; the text stays."); renderAgentTarget(); }
+  }
+  state.mentionText = cur;
+}
+
+// Typing @ searches the conversation's people and its added, currently
+// askable assistants by name. Plain typed names confer no authority:
+// selecting an assistant row binds its exact PID and host; selecting a person
+// writes their name with an exact reference to them (above), nothing more.
+// Anyone outside is offered only as an invitation through the existing
+// consent dialogs, which grant nothing until accepted.
 let mentionView = null;
 function closeMentions() {
   mentionView = null;
   const box = $("mentions"); if (box) { box.hidden = true; fill(box); }
   $("body").setAttribute("aria-expanded", "false");
   $("body").removeAttribute("aria-activedescendant");
+}
+// mentionPeople are the people currently here besides you: original members
+// (or group members) and active guests, each once by person or participation.
+function mentionPeople(t) {
+  const me = state.overview?.person?.person, seen = new Map();
+  const originals = humanGroup(t) ? t.members : dmHumanGuest(t) ? guestOriginals(t) : [state.overview?.person, t.peer];
+  const account = (address) => (address || "").split("/")[0];
+  for (const p of (originals || []).filter(Boolean)) {
+    if (p.state === "self" || (me && p.person === me) || !p.person || !mentionName(p.label)) continue;
+    seen.set("person:" + p.person, { kind: "person", name: mentionName(p.label), ref: { kind: "person", id: p.person }, role: humanGroup(t) ? (p.admin ? "Group admin" : "Group member") : "In this conversation", more: "account " + account(p.address), title: p.address || "" });
+  }
+  for (const g of t.guests || []) if (g.state === "active" && !g.host_here && mentionName(g.host?.label)) seen.set("guest:" + g.pid, { kind: "person", name: mentionName(g.host.label), ref: { kind: "guest", id: g.pid }, role: "Guest", more: (g.inviter?.label ? "invited by " + g.inviter.label + " · " : "") + "account " + account(g.host.address), title: g.host.address + " · participation " + g.pid });
+  const people = [...seen.values()], named = {};
+  for (const p of people) named[p.name] = (named[p.name] || 0) + 1;
+  for (const p of people) if (named[p.name] > 1) p.role += " · " + p.more; // the same name twice: say which, readably
+  return people;
+}
+// mentionInvites: invitation actions for anyone not here, by name, when you may invite.
+function mentionInvites(t, query) {
+  const rights = inviteRights(t), out = [];
+  if (rights.people && query) {
+    const inside = new Set([...(humanGroup(t) ? t.members : [state.overview?.person, t.peer]).filter(Boolean).flatMap(p => [p.person, p.address, ...(p.devices || []).map(d => d.address)]),
+      ...(t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => g.host?.address)]);
+    const pool = humanGroup(t) ? (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !inside.has(p.person)).map(p => ({ name: p.label, person: p.person, title: p.address }))
+      : directory().current ? directory().members.filter(p => !inside.has(p.address)).map(p => ({ name: p.label || p.address.split("/")[0], address: p.address, title: p.address })) : [];
+    for (const p of pool.filter(p => p.name && p.name.toLowerCase().includes(query)).slice(0, 5)) out.push({ kind: "invite-person", ...p });
+  }
+  if (rights.people) out.push({ kind: "invite-people" });
+  if (rights.assistants) out.push({ kind: "invite-assistant" });
+  return out;
+}
+function mentionRow(it, i) {
+  const [label, sub] = it.kind === "assistant" ? ["@" + it.name, whoseAgent(it.a) ? whoseAgent(it.a) + " assistant" : "Assistant"]
+    : it.kind === "person" ? ["@" + it.name, it.role]
+    : it.kind === "invite-person" ? ["Invite " + it.name + "…", "Not in this conversation · joins only if they accept"]
+    : it.kind === "invite-people" ? ["Invite a person…", "Choose who joins and what earlier context they see"]
+    : ["Invite an assistant…", "Its owner accepts; it runs only when asked"];
+  const title = it.kind === "assistant" ? (it.a.agent_id || it.a.pid) + " · " + it.a.host.address + " · participation " + it.a.pid : it.title || "";
+  return el("button", { id: "mention-" + i, type: "button", class: "mention-row" + (it.kind.startsWith("invite") ? " mention-invite" : "") + (!i ? " selected" : ""),
+    title, "aria-label": (it.kind.startsWith("invite") ? label : "Mention " + it.name) + ", " + sub, onclick: () => pickMention(i) }, label, el("small", {}, sub));
 }
 function showMentions(force = false) {
   const input = $("body"), t = state.dmData;
@@ -2271,35 +2408,47 @@ function showMentions(force = false) {
   if (!t || !state.dm || state.sending || (!force && !match)) { closeMentions(); return; }
   const query = force ? "" : match[1].toLowerCase();
   const agents = dmHumanGuest(t) && !guestAuthor(t) ? [] : (t.agents || []).filter(a => a.can_ask && agentName(a).toLowerCase().includes(query)); // an accepted guest addresses only active assistants
+  const people = mentionPeople(t).filter(p => p.name.toLowerCase().includes(query));
+  const items = [...agents.map(a => ({ kind: "assistant", a, name: agentName(a) })), ...people], invites = mentionInvites(t, query);
   const gen = state.gen, conv = t.id;
-  mentionView = { agents, index: 0, gen, conv, start: match ? before.lastIndexOf("@") : null, end: input.selectionStart ?? input.value.length };
-  const box = $("mentions"); box.hidden = false;
-  fill(box, el("p", { class: "hint" }, "Address an added assistant · Question or Task stays explicit"),
-    agents.length ? agents.map((a, i) => el("button", { id: "mention-" + i, type: "button", class: "mention-row" + (!i ? " selected" : ""),
-      title: (a.agent_id || a.pid) + " · " + a.host.address + " · participation " + a.pid, "aria-label": "Mention " + agentName(a) + " on " + a.host.address,
-      onclick: () => pickMention(i) }, "@" + agentName(a), el("small", {}, a.host.label + " · " + a.host.address + " · " + a.pid.slice(0, 8)))) : el("p", { class: "hint" }, "No matching active assistant. Add one to this conversation first."));
+  mentionView = { items: [...items, ...invites], index: 0, gen, conv, start: match ? before.lastIndexOf("@") : null, end: input.selectionStart ?? input.value.length };
+  const box = $("mentions"); box.hidden = false; box.setAttribute("aria-label", "People and assistants");
+  fill(box, el("p", { class: "hint" }, "People and assistants"),
+    items.length ? items.map((it, i) => mentionRow(it, i)) : el("p", { class: "hint" }, query ? "No one here matches “" + match[1] + "”." : "No one else is here yet."),
+    invites.length > 0 && el("div", { class: "mention-invites" }, invites.map((it, i) => mentionRow(it, items.length + i))));
   input.setAttribute("aria-expanded", "true");
 }
 function pickMention(i) {
-  const v = mentionView, a = v?.agents[i];
-  if (!a || v.gen !== state.gen || v.conv !== state.dm || !agentOf(a.pid)?.can_ask) { closeMentions(); return; }
-  if (v.start !== null) {
-    const input = $("body"), token = "@" + agentName(a) + " ";
-    input.value = input.value.slice(0, v.start) + token + input.value.slice(v.end);
-    input.setSelectionRange?.(v.start + token.length, v.start + token.length);
+  const v = mentionView, it = v?.items[i], t = state.dmData;
+  if (!it || v.gen !== state.gen || v.conv !== state.dm || !t || it.kind === "assistant" && !agentOf(it.a.pid)?.can_ask) { closeMentions(); return; }
+  if (it.kind.startsWith("invite")) { // the existing consent dialog decides; nothing is granted here
+    closeMentions();
+    if (it.kind === "invite-assistant") inviteDialog(t); else if (humanGroup(t)) inviteGroupDialog(t, it.person); else inviteHumanDialog(t, it.address || "");
+    return;
+  }
+  if (v.start !== null || it.kind === "person") {
+    const input = $("body"), at = v.start ?? v.end, token = "@" + it.name + " ";
+    trackMentions(); // earlier edits first, so positions are this text's
+    input.value = input.value.slice(0, at) + token + input.value.slice(v.end);
+    input.setSelectionRange?.(at + token.length, at + token.length);
+    trackMentions();
+    if (it.kind === "person") state.mentions = [...(state.mentions || []), { start: at, name: it.name, ref: it.ref, role: it.role }];
     grow();
   }
-  setDMAgent(agentOf(a.pid)); keepDraft(); closeMentions(); $("body").focus();
+  if (it.kind === "assistant") setDMAgent(agentOf(it.a.pid));
+  keepDraft(); closeMentions(); renderAgentTarget(); $("body").focus();
 }
 function mentionKey(e) {
   if (!mentionView) return;
+  const n = mentionView.items.length;
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeMentions(); return; }
-  if (["ArrowDown", "ArrowUp"].includes(e.key) && mentionView.agents.length) {
+  if (["ArrowDown", "ArrowUp"].includes(e.key) && n) {
     e.preventDefault();
-    mentionView.index = (mentionView.index + (e.key === "ArrowDown" ? 1 : -1) + mentionView.agents.length) % mentionView.agents.length;
-    for (let i = 0; i < mentionView.agents.length; i++) $("mention-" + i).classList.toggle("selected", i === mentionView.index);
+    mentionView.index = (mentionView.index + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+    for (let i = 0; i < n; i++) $("mention-" + i).classList.toggle("selected", i === mentionView.index);
+    $("mention-" + mentionView.index).scrollIntoView?.({ block: "nearest" });
     $("body").setAttribute("aria-activedescendant", "mention-" + mentionView.index);
-  } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && mentionView.agents.length) { e.preventDefault(); pickMention(mentionView.index); }
+  } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && n) { e.preventDefault(); pickMention(mentionView.index); }
 }
 
 function agentCard(a, t) {
@@ -2487,6 +2636,8 @@ async function sendDM() {
   const t = state.dmData;
   if (state.sending || !t || t.frozen || (dmHumanGuest(t) && !guestAuthor(t)) || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
   const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent, files = state.files.slice(), kind = kindValue() === "task" ? "task" : "question";
+  trackMentions();
+  const signed = encodeMentions(text, state.mentions || []); // each exact person mention as its reference; the rest as typed
   if (askGone()) { kindHint(); return; } // never sent to the person instead
   const elsewhere = boundElsewhere();
   if (elsewhere) { $("compose-error").textContent = elsewhere; return; }
@@ -2502,20 +2653,20 @@ async function sendDM() {
     const receiver = humanAsk ? null : await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
-      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: text, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
-        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: text, reply_to: reply ? reply.id : "", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
+        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     if (wsNow() === ws && state.draftKey === key) {
-      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; }
+      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; state.mentions = []; state.mentionText = ""; }
       if (state.dmReply === reply) setDMReply(null);
       dropFiles(files);
     } else if (draftsOf(ws)[key]) { // that DM's draft keeps only what was not sent
       const d = draftsOf(ws)[key];
       files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
       d.files = (d.files || []).filter((x) => !files.includes(x));
-      if (d.text === text) d.text = "";
+      if (d.text === text) { d.text = ""; d.mentions = []; }
       if (d.reply === reply) d.reply = null;
       if (!d.text && !d.files.length && !d.answering && !d.reply && !d.agent && !d.reply_receiver && !d.reply_receiver_host) delete draftsOf(ws)[key];
     }
@@ -2913,7 +3064,10 @@ const assistantReactorLabel = (b) => {
 const assistantReactorTitle = (b) => assistantReactorLabel(b) + " · " + (b.agent_id ? "agent " + b.agent_id : "default responder") + " on " + b.host + (b.pid ? " · participation " + b.pid : "");
 const reactorLabel = (b) => (typeof b === "string" ? b : b && b.assistant ? assistantReactorLabel(b) : (b && b.label) || (b && b.id) || "someone");
 const reactorNames = (r) => (r.by || []).map(reactorLabel).join(", ");
-const quickEmoji = ["👍", "❤️", "😂", "🎉", "👀", "✅"];
+const quickEmoji = ["👍", "❤️", "😂", "🎉", "👀", "✅",
+  "🙏", "👏", "🔥", "😊", "😍", "🤔",
+  "😮", "😢", "😡", "👎", "💯", "🚀",
+  "🙌", "😅", "🤝", "💪", "👌", "❌"];
 const canDo = (m, what) => !m.excerpt_pid && !(state.dm && (dmVisitor() || dmHumanGuest())) && Array.isArray(m.can) && m.can.includes(what);
 const controlRef = (m, conv) => (conv ? { conv, id: m.id, dir: m.dir } : { id: m.id, dir: m.dir });
 
@@ -2932,7 +3086,7 @@ async function control(what, body, done) {
 }
 
 // reactionsRow: each emoji with its count and who; yours toggles off, the
-// others' add yours. A "+" opens the quick picker (any one emoji typed too).
+// others' add yours. A "+" opens the quick picker.
 function reactionsRow(m, conv) {
   if (m.deleted) return null;
   const can = canDo(m, "react");
@@ -2954,13 +3108,26 @@ function reactionsRow(m, conv) {
   return el("div", { class: "reactions" }, chips, can && reactPicker(m, conv));
 }
 
+// reactPicker: the quick reactions, a bottom sheet on a phone and a popup
+// anchored to "+" on a wide screen: upward when only the timeline above has
+// room, otherwise downward, scrolled fully into view. Close, Escape or a tap
+// outside (phone) dismisses it.
 function reactPicker(m, conv) {
   const d = el("details", { class: "react-pick" });
-  const input = el("input", { type: "text", "aria-label": "Another emoji", placeholder: "…", maxlength: "16", size: "3" });
+  const close = () => { d.open = false; d.querySelector("summary").focus(); };
   const send = (emoji) => { d.open = false; control("react", { ...controlRef(m, conv), emoji }); };
+  d.addEventListener("keydown", (e) => { if (e.key === "Escape" && d.open) { e.preventDefault(); close(); } });
+  d.addEventListener("toggle", () => {
+    const menu = d.querySelector(".react-menu");
+    if (!d.open || getComputedStyle(menu).position === "fixed") return;
+    const box = (d.closest(".timeline") || document.documentElement).getBoundingClientRect(), r = d.getBoundingClientRect(), h = menu.offsetHeight + 8;
+    d.classList.toggle("up", box.bottom - r.bottom < h && r.top - box.top >= h);
+    menu.scrollIntoView({ block: "nearest" });
+  });
   d.append(el("summary", { "aria-label": "Add a reaction", title: "Add a reaction" }, "＋"),
-    el("div", { class: "react-menu" }, quickEmoji.map((e) => el("button", { type: "button", "aria-label": "React " + e, onclick: () => send(e) }, e)),
-      input, el("button", { type: "button", class: "text-btn", onclick: () => { if (input.value.trim()) send(input.value.trim()); } }, "Add")));
+    el("div", { class: "react-menu", role: "group", "aria-label": "Choose a reaction" },
+      el("div", { class: "react-head" }, el("strong", {}, "Choose a reaction"), el("button", { type: "button", class: "react-close", "aria-label": "Close", onclick: close }, "✕")),
+      el("div", { class: "react-grid" }, quickEmoji.map((e) => el("button", { type: "button", "aria-label": "React " + e, onclick: () => send(e) }, e)))));
   return d;
 }
 
@@ -2983,15 +3150,22 @@ function editInPlace(m, conv, bubble) {
   if (!p || bubble.querySelector(".edit-box")) return;
   const box = el("div", { class: "edit-box" });
   const ta = el("textarea", { rows: "3", "aria-label": "New text" });
-  ta.value = shownText(m);
+  const decoded = decodeMentions(shownText(m)); // edited as @Name; each untouched mention keeps its exact reference
+  let spans = decoded.spans, edited = decoded.text;
+  ta.value = decoded.text;
   const err = el("p", { class: "error", role: "alert" });
+  ta.addEventListener("input", () => {
+    const r = shiftMentions(spans, edited, ta.value);
+    spans = r.kept; edited = ta.value;
+    if (r.dropped.length) err.textContent = r.dropped.map(s => "@" + s.name).join(", ") + " is no longer an exact mention; the text stays.";
+  });
   const cancel = () => { box.replaceWith(p); };
   box.append(ta,
     (m.kind === "question" || m.kind === "task") && el("p", { class: "hint" }, "Editing changes the text shown here and on their devices. What their agent already received stays as sent; nothing runs again."),
     el("div", { class: "edit-actions" },
       el("button", { type: "button", class: "btn primary", onclick: () => {
-        const text = ta.value.trim();
-        if (!text) { err.textContent = "Write the new text first."; return; }
+        if (!ta.value.trim()) { err.textContent = "Write the new text first."; return; }
+        const text = encodeMentions(ta.value, spans).trim();
         control("edit", { ...controlRef(m, conv), text }, (e) => { if (e) err.textContent = e.message; });
       } }, "Save"),
       el("button", { type: "button", class: "btn", onclick: cancel }, "Cancel")), err);
@@ -3001,7 +3175,7 @@ function editInPlace(m, conv, bubble) {
 
 function deleteDialog(m, conv) {
   dialog({ title: "Delete this message?", ok: "Delete",
-    body: [el("div", { class: "quote" }, shownText(m) || "(files only)"),
+    body: [el("div", { class: "quote" }, mentionPlain(shownText(m)) || "(files only)"),
       el("p", {}, "It is removed here and on devices that can read deletions. Anyone who already read it, saved its files or gave it to an agent keeps what they have; nothing that is running is stopped."),
       (m.kind === "question" || m.kind === "task") && el("p", { class: "hint" }, "What was sent to their agent stays on record under Details.")],
     run: async () => { await control("delete", controlRef(m, conv)); } });
@@ -3015,7 +3189,7 @@ function reportText(m) {
     const v = JSON.parse(m.body);
     if (v && v.v === 2 && Array.isArray(v.items)) return plural(v.items.length, "request", "requests") + " waiting on " + (v.host || m.from) + " at " + when(v.at) + ". See Activity for what they are" + (v.items.some((x) => x.actionable) ? " and to decide them from here." : ".");
   } catch (e) { /* the older count text */ }
-  return shownText(m);
+  return mentionPlain(shownText(m));
 }
 // lineOf is a message's first line as the page names it: a report by what it says.
 const lineOf = (m, n) => firstLine(isReport(m) ? reportText(m) : m.body || "(files)", n);
@@ -3023,7 +3197,7 @@ const lineOf = (m, n) => firstLine(isReport(m) ? reportText(m) : m.body || "(fil
 function bodyOf(m) {
   if (m.deleted) return el("p", { class: "body tombstone" }, "Message deleted");
   if (isReport(m)) return el("p", { class: "body report-body" }, reportText(m)); // a report from another machine: what it says, never its raw record
-  return el("p", { class: "body" }, shownText(m), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+  return el("p", { class: "body" }, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
 }
 
 // controlDetails are the rows Details adds: the original text of an edited
@@ -3031,8 +3205,8 @@ function bodyOf(m) {
 // never shown in the tombstone).
 function controlDetails(m) {
   const rows = [];
-  if (m.edited && !m.deleted) rows.push(el("dt", {}, "Original text"), el("dd", {}, m.body));
-  if (m.deleted && (m.kind === "question" || m.kind === "task")) rows.push(el("dt", {}, "What was sent to their agent"), el("dd", {}, m.body));
+  if (m.edited && !m.deleted) rows.push(el("dt", {}, "Original text"), el("dd", {}, mentionPlain(m.body)));
+  if (m.deleted && (m.kind === "question" || m.kind === "task")) rows.push(el("dt", {}, "What was sent to their agent"), el("dd", {}, mentionPlain(m.body)));
   if (m.revision) rows.push(el("dt", {}, "Revision"), el("dd", { class: "mono" }, String(m.revision)));
   return rows;
 }
@@ -3248,7 +3422,7 @@ function decide(a, m, t) {
     $("body").focus();
     return;
   }
-  const quote = el("div", { class: "quote" }, m.body);
+  const quote = el("div", { class: "quote" }, mentionPlain(m.body));
   const from = el("dl", {}, el("dt", {}, "From"), el("dd", {}, m.from));
   const runs = m.target && m.target.agent_id
     ? namedAgentOn(m.target.agent_id, m.target.address) + ", using its local configuration on that computer."
@@ -3454,14 +3628,18 @@ function renderAgentTarget() {
   const box = $("agent-target");
   if (!box) return;
   const d = state.dmData, t = state.data;
-  box.hidden = state.dm ? !d || dmHumanGuest(d) && !state.dmAgent || (!(d.agents || []).length && !state.dmAgent) : !t || !!state.answering || kindValue() === "message";
+  const mentioned = state.dm ? validMentions(state.mentions, $("body").value) : []; // the exact people this draft mentions
+  box.hidden = state.dm ? !d || (dmHumanGuest(d) && !state.dmAgent || (!(d.agents || []).length && !state.dmAgent)) && !mentioned.length : !t || !!state.answering || kindValue() === "message";
   if (box.hidden) { fill(box); return; }
   if (state.dm) {
     const a = agentOf(state.dmAgent);
     fill(box, state.dmAgent && el("span", { class: "addressed-assistant", title: (a?.agent_id || state.dmAgent) + " · " + (a?.host.address || "unavailable") + " · participation " + state.dmAgent },
       "@" + (a ? agentName(a) : "Selected assistant unavailable"),
       el("button", { type: "button", class: "text-btn", disabled: state.sending, "aria-label": "Remove addressed assistant", onclick: () => { setDMAgent(null); keepDraft(); } }, "×")),
-      el("button", { type: "button", class: "text-btn", disabled: state.sending, onclick: () => { showMentions(true); $("body").focus(); } }, "@ Mention assistant"));
+      mentioned.map(s => el("span", { class: "addressed-assistant mentioned-person", title: "@" + s.name + (s.role ? " · " + s.role : "") },
+        "@" + s.name,
+        el("button", { type: "button", class: "text-btn", disabled: state.sending, "aria-label": "Make @" + s.name + " plain text", onclick: () => { state.mentions = (state.mentions || []).filter(x => x !== s); keepDraft(); renderAgentTarget(); } }, "×"))),
+      el("button", { type: "button", class: "text-btn", disabled: state.sending, onclick: () => { showMentions(true); $("body").focus(); } }, "@ Mention"));
     return;
   }
   const catalog = state.targetCatalog, selected = state.deviceAgentID || "", agents = catalog && catalog.host === t.peer ? catalog.agents || [] : [];
@@ -3791,7 +3969,7 @@ function keepDraft() {
   if (state.draftKey === null) return;
   const text = $("body").value;
   if (text || state.answering || state.dmReply || state.dmAgent || state.deviceAgentID || state.replyReceiver || state.replyReceiverHost || state.files.length) {
-    state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply, agent: state.dmAgent, agent_id: state.dm ? "" : state.deviceAgentID || "", files: state.files, typedFor: state.typedFor, reply_receiver: state.replyReceiver, ...(state.replyReceiverHost ? { reply_receiver_host: state.replyReceiverHost } : {}) };
+    state.drafts[state.draftKey] = { text, kind: kindValue(), answering: state.answering, reply: state.dmReply, agent: state.dmAgent, agent_id: state.dm ? "" : state.deviceAgentID || "", files: state.files, typedFor: state.typedFor, mentions: validMentions(state.mentions, text), reply_receiver: state.replyReceiver, ...(state.replyReceiverHost ? { reply_receiver_host: state.replyReceiverHost } : {}) };
   }
   else delete state.drafts[state.draftKey];
 }
@@ -3799,6 +3977,9 @@ function keepDraft() {
 function restoreDraft(key, t) {
   const d = state.drafts[key];
   $("body").value = d ? d.text : "";
+  state.mentions = validMentions(d && d.mentions, $("body").value); // exact as kept, or dropped visibly, never matched by name
+  if (d && Array.isArray(d.mentions) && state.mentions.length < d.mentions.length) announce("Some mentions in this draft are no longer exact; their text stays.");
+  state.mentionText = $("body").value;
   state.typedFor = (d && d.typedFor) || null;
   state.replyReceiver = d && d.reply_receiver || null;
   state.replyReceiverHost = d && d.reply_receiver_host || null;
@@ -3824,8 +4005,10 @@ function restoreDraft(key, t) {
 // syncComposer enables what the open conversation allows. A send on its way
 // keeps Send disabled, whatever refreshes meanwhile.
 function syncComposer() {
-  $("mention-button").hidden = !state.dm || dmHumanGuest() && !(guestAuthor() && (state.dmData?.agents || []).some(a => a.can_ask));
+  $("mention-button").hidden = !state.dm || dmHumanGuest() && !guestAuthor(); // a guest mentions only while joined
   $("mention-button").disabled = state.sending;
+  $("mention-button").setAttribute("aria-label", "Mention a person or assistant");
+  $("mention-button").title = "Mention a person or assistant";
   if (state.dm) { // a DM: messages only, to the person
     const d = state.dmData;
     const revoked = !!(state.overview && state.overview.device && state.overview.device.revoked);
@@ -3912,14 +4095,14 @@ async function send(ev) {
     // Clear only what was sent: text typed meanwhile, or in another
     // conversation, stays.
     if (wsNow() === ws && state.draftKey === key) {
-      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; }
+      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; state.mentions = []; state.mentionText = ""; }
       if (state.answering === answering) setAnswering(null);
       dropFiles(files);
     } else if (draftsOf(ws)[key]) { // that conversation's draft keeps only what was not sent
       const d = draftsOf(ws)[key];
       files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
       d.files = (d.files || []).filter((x) => !files.includes(x));
-      if (d.text === text) d.text = "";
+      if (d.text === text) { d.text = ""; d.mentions = []; }
       if (d.answering === answering) d.answering = null;
       if (!d.text && !d.files.length && !d.answering && !d.agent_id && !d.reply_receiver && !d.reply_receiver_host) delete draftsOf(ws)[key];
     }
@@ -4212,7 +4395,7 @@ function keepForReload() {
   keepDraft();
   const drafts = {};
   for (const [k, d] of Object.entries(state.drafts)) {
-    drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? d.answering.id : null, reply: d.reply ? d.reply.id : null, reply_receiver: d.reply_receiver || null, ...(d.reply_receiver_host ? { reply_receiver_host: d.reply_receiver_host } : {}) };
+    drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? d.answering.id : null, reply: d.reply ? d.reply.id : null, mentions: (d.mentions || []).map(({ start, name, ref }) => ({ start, name, ref })), reply_receiver: d.reply_receiver || null, ...(d.reply_receiver_host ? { reply_receiver_host: d.reply_receiver_host } : {}) };
   }
   const fields = {};
   if (state.dialogRestore && $("dialog").open) {
@@ -4240,7 +4423,7 @@ async function restoreAfterReload() {
     try { await switchWorkspace(keep.workspace); } catch (e) { return false; }
   }
   for (const [k, d] of Object.entries(keep.drafts || {})) {
-    state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null, reply: d.reply ? { id: d.reply } : null, reply_receiver: d.reply_receiver || null };
+    state.drafts[k] = { text: d.text, kind: d.kind, answering: d.answering ? { id: d.answering } : null, reply: d.reply ? { id: d.reply } : null, mentions: d.mentions || [], reply_receiver: d.reply_receiver || null };
   }
   if (keep.lens) setLens(keep.lens);
   if (keep.thread) await openThread(keep.thread);
@@ -4628,7 +4811,7 @@ function start() {
   $("composer").addEventListener("submit", send);
   $("body").addEventListener("input", grow);
   $("body").addEventListener("input", noteTyping);
-  $("body").addEventListener("input", () => showMentions());
+  $("body").addEventListener("input", () => { trackMentions(); showMentions(); });
   $("body").addEventListener("keydown", mentionKey);
   $("mention-button").addEventListener("click", () => { showMentions(true); $("body").focus(); });
   $("routing-close").addEventListener("click", () => $("routing-settings").close());

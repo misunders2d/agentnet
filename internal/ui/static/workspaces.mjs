@@ -103,7 +103,7 @@ export class WorkspaceShell {
 // Renderer captures old state before selection, restores only selected state.
 export function mountWorkspaceSwitcher(root,shell,{beforeSwitch=()=>{},afterSwitch=()=>{}}={}) {
  const bar=document.createElement("section");bar.className="workspace-bar";bar.setAttribute("aria-label","Workspace");
- const label=document.createElement("label");label.textContent="Workspace ";
+ const label=document.createElement("label"),labelText=document.createElement("span");labelText.className="workspace-label";labelText.textContent="Workspace ";label.append(labelText);
  const select=document.createElement("select");select.setAttribute("aria-label","Active workspace");
  const detail=document.createElement("span");detail.className="workspace-detail";
  const refresh=()=>{select.replaceChildren(...shell.list().map(b=>{const o=document.createElement("option");o.value=b.id;o.textContent=b.name||"Unnamed workspace";o.title=new URL(b.endpoint).host;return o;}));select.value=shell.active||"";const b=shell.members.get(shell.active)?.binding;detail.textContent=b?"Connected workspace":"No connected workspace";connectionText.textContent=b?new URL(b.endpoint).host+" · "+b.address:"No connection";};
@@ -118,7 +118,10 @@ export function mountWorkspaceSwitcher(root,shell,{beforeSwitch=()=>{},afterSwit
   dialog.showModal();input.focus();
  };
  select.onchange=()=>{const previous=shell.active;beforeSwitch(previous,shell.state(previous));shell.select(select.value);};
- const stop=shell.onChange(e=>{refresh();afterSwitch(e);});label.append(select);bar.append(label,rename,connection);root.prepend(bar);refresh();
+ // On a phone the bar is one compact row: the workspace, and its other actions behind one toggle.
+ const more=document.createElement("button");more.type="button";more.className="workspace-more-toggle";more.textContent="⋯";more.setAttribute("aria-label","Workspace options");more.setAttribute("aria-expanded","false");
+ more.onclick=()=>{const open=!bar.classList.contains("open");bar.classList.toggle("open",open);more.setAttribute("aria-expanded",String(open));};
+ const stop=shell.onChange(e=>{refresh();afterSwitch(e);});label.append(select);bar.append(label,more,rename,connection);root.prepend(bar);refresh();
  return {refresh,unmount(){stop();bar.remove();}};
 }
 

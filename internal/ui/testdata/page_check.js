@@ -2148,6 +2148,55 @@ const ev = { preventDefault() {} };
   run('showMentions(true)'); run('agentOf("named-pid-A").can_ask=false'); run('pickMention(0)');
   check(run('state.dmAgent')==='named-pid-B' && $('mentions').hidden, 'stale mention choice never retargets to unavailable assistant');
   run('agentOf("named-pid-A").can_ask=true'); run('setDMAgent')(dmThreads.d4.agents[0]);
+  // @ also finds people by name among many (same names stay distinct rows, no
+  // addresses in text); a person's name is text only; outsiders only as invitations.
+  {
+    const t = run('state.dmData'), guests = t.guests;
+    t.guests = Array.from({length: 100}, (_, i) => ({ pid: 'guest-pid-' + i, state: 'active', host_here: false, host: { label: i % 2 ? 'Sam' : 'Guest ' + i, address: 'guest' + i + '/desk' }, inviter: alicePerson, shared: [] }));
+    const rows = () => $('mentions').children.flatMap(n => n && n.tagName === 'button' ? [n] : ((n && n.children) || []).filter(c => c && c.tagName === 'button'));
+    calls.length = 0;
+    $('body').value = '@sam'; run('showMentions()');
+    const sams = rows().filter(r => textOf(r).startsWith('@Sam'));
+    check(sams.length === 50 && sams.every(r => !textOf(r).includes('/desk')) && new Set(sams.map(r => r.attrs.title)).size === 50, 'fifty same-named guests stay distinct rows by name, no addresses in text: ' + sams.length);
+    check(sams.every(r => textOf(r).includes('invited by Alice') && /account guest\d+/.test(textOf(r))), 'same-named people say which, readably (inviter, account), on the row itself');
+    run('mentionKey')({key:'ArrowDown',preventDefault(){}}); run('mentionKey')({key:'Enter',preventDefault(){}});
+    check($('body').value === '@Sam ' && run('state.dmAgent') === 'named-pid-A' && !calls.some(c => /send|ask/.test(c.path)) && $('mentions').hidden, 'choosing a person writes their name: assistant target unchanged, nothing sent');
+    check(run('state.mentions').length === 1 && run('state.mentions')[0].ref.kind === 'guest' && run('state.mentions')[0].ref.id === 'guest-pid-3' && textOf($('agent-target')).includes('@Sam'), 'the second Sam is kept by exact participation and shown as selected');
+    // The exact reference: encode/decode round trip; only a known one renders as a chip.
+    const enc = run('encodeMentions')($('body').value, run('state.mentions'));
+    check(enc === '[@Sam](agentnet:guest/guest-pid-3) ', 'the second Sam travels as an exact guest reference: ' + enc);
+    const dec = run('decodeMentions')(enc);
+    check(dec.text === '@Sam ' && dec.spans.length === 1 && dec.spans[0].ref.id === 'guest-pid-3', 'decoding (history, edit) gives back @Sam and the same exact reference');
+    const nodes = run('mentionNodes')(enc + 'x [@Ghost](agentnet:person/nobody) [@Evil](javascript:alert(1)) [@Bad](agentnet:person/bad id)', t);
+    const chips = nodes.filter(n => n && n.tagName), flat = nodes.map(n => typeof n === 'string' ? n : textOf(n)).join('');
+    check(chips.length === 1 && chips[0].className.includes('mention-chip') && textOf(chips[0]) === '@Sam' && !flat.includes('agentnet:guest') && flat.includes('@Ghost') && !flat.includes('agentnet:person/nobody') &&
+      flat.includes('[@Evil](javascript:alert(1))') && flat.includes('[@Bad](agentnet:person/bad id)') && !nodes.some(n => n && n.tagName === 'a'), 'only an exact known mention is a chip; unknown reads @Name; malformed stays inert text, never a link: ' + flat);
+    check(run('firstLine')(enc + 'hi', 40) === '@Sam hi', 'previews read @Name, never the reference');
+    // Drafts keep it exactly; edits around it move it; an edit inside it drops it visibly.
+    run('keepDraft()'); const key = run('state.draftKey');
+    check(run('state.drafts')[key].mentions.length === 1, 'the draft keeps the exact mention');
+    $('body').value = 'Hi @Sam '; run('trackMentions()');
+    check(run('state.mentions').length === 1 && run('state.mentions')[0].start === 3, 'text typed before a mention moves it');
+    $('body').value = 'Hi @Sxm '; run('trackMentions()');
+    check(run('state.mentions').length === 0 && $('live').textContent.includes('no longer an exact mention'), 'an edit inside a mention drops it visibly, never re-matched by name');
+    run('state.drafts')[key] = { ...run('state.drafts')[key], text: '@Sa ', mentions: [{ start: 0, name: 'Sam', ref: { kind: 'guest', id: 'guest-pid-3' } }] };
+    run('restoreDraft')(key, t);
+    check(run('state.mentions').length === 0 && $('live').textContent.includes('no longer exact'), 'a kept mention whose text no longer matches is dropped on restore, visibly');
+    // Two people mentioned, no assistant chosen: an ordinary message with both exact references; nothing runs.
+    run('setDMAgent')(null); $('body').value = ''; run('state.mentions=[]'); run('trackMentions()');
+    $('body').value = '@sam'; run('trackMentions()'); run('showMentions()'); run('mentionKey')({key:'Enter',preventDefault(){}});
+    $('body').value += '@gue'; run('trackMentions()'); run('showMentions()'); run('mentionKey')({key:'Enter',preventDefault(){}});
+    calls.length = 0; await run('send')({ preventDefault() {} });
+    const sent = calls.filter(c => c.path === '/api/dm/send');
+    check(sent.length === 1 && sent[0].body.body === '[@Sam](agentnet:guest/guest-pid-1) [@Guest 0](agentnet:guest/guest-pid-0) ' && !calls.some(c => c.path === '/api/dm/agent/ask') && !run('state.mentions').length,
+      'two exact person mentions go as an ordinary message; no assistant is asked: ' + JSON.stringify(sent.map(c => c.body.body)));
+    run('setDMAgent')(dmThreads.d4.agents[0]);
+    $('body').value = '@builder'; run('showMentions()');
+    check(textOf(rows()[0]).startsWith('@Builder') && rows().some(r => textOf(r).startsWith('Invite a person')) && rows().some(r => textOf(r).startsWith('Invite an assistant')) === !!run('inviteRights(state.dmData).assistants'), 'assistants first; invitations offered to an original member as the participants list allows: ' + rows().map(textOf).join(' | '));
+    $('body').value = '@zz-nobody'; run('showMentions()');
+    check(textOf($('mentions')).includes('No one here matches') && rows().length > 0 && rows().every(r => textOf(r).startsWith('Invite')), 'no match: only actionable invitations');
+    run('closeMentions()'); t.guests = guests; $('body').value = '';
+  }
   $('body').value='';run('state.typedFor=null');
   run('setKind("task")');await run('loadDM()');
   check(!$('kind').disabled&&run('kindValue()')==='task','DM question/task controls enabled after device switch and same-agent refresh keeps task');

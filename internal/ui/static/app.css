@@ -828,7 +828,6 @@ button.reaction { cursor: pointer; }
 .react-menu { position: absolute; z-index: 5; left: 0; top: 30px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
 .react-menu button { border: 0; background: transparent; font-size: 20px; padding: 4px 6px; border-radius: 8px; cursor: pointer; }
 .react-menu button:hover { background: var(--hover); }
-.react-menu input { width: 3.5em; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); font-size: 16px; }
 .msg-menu { position: relative; display: inline-block; }
 .msg-menu > summary { list-style: none; cursor: pointer; padding: 0 8px; border-radius: 8px; color: var(--muted); font-size: 16px; line-height: 1.2; }
 .msg-menu > summary::-webkit-details-marker { display: none; }
@@ -958,6 +957,10 @@ button.reaction { cursor: pointer; }
 .mention-row { display: grid; gap: 2px; text-align: left; width: 100%; padding: 8px; border: 0; border-radius: 8px; background: transparent; overflow-wrap: anywhere; }
 .mention-row small { color: var(--muted); }
 .mention-row.selected, .mention-row:hover { background: var(--accent-soft); }
+/* A known person or assistant named in a message; you, more strongly. */
+.mention-chip { padding: 0 4px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-text); font-weight: 600; white-space: normal; overflow-wrap: anywhere; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.mention-me { background: var(--accent); color: var(--accent-ink); }
+.msg.out .bubble .mention-chip { background: rgb(255 255 255 / .22); color: inherit; }
 .typing-dots { display: inline-flex; gap: 3px; padding-left: 8px; align-items: center; }
 .typing-dots i { display: block; width: 4px; height: 4px; border-radius: 50%; background: var(--muted); animation: typing-pulse 1.2s infinite; }
 .typing-dots i:nth-child(2) { animation-delay: .15s; }
@@ -980,4 +983,64 @@ button.reaction { cursor: pointer; }
   .compose-bar { gap: 4px; flex-wrap: wrap; }
   #send { min-width: 40px; max-width: 55%; }
   .send span { overflow-wrap: anywhere; }
+}
+
+/* Phone (M1/M2): chats first, technical IDs in details; a compact
+   conversation header with full-size touch targets; a draft that never
+   pushes Send out of a keyboard-sized viewport. */
+@media (max-width: 760px) {
+  .contact-item .kind-tag[title^="Person ID"], .contact-item .conv-sub:not(.agent-link) { display: none; } /* still in the person's details */
+  .conv-head { gap: 8px; min-height: 52px; padding: 6px 8px; }
+  .conv-head .avatar { display: none; }
+  .conv-title { flex: 1; }
+  .conv-head .presence { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv-head .hub-back { display: none; } /* Back already goes up to that person's conversations (backOneLevel) */
+  .back, #conversation-details { min-width: 44px; min-height: 44px; }
+  #conversation-details { margin-left: auto; }
+  .compose-box textarea { max-height: min(30vh, 160px); overflow-y: auto; }
+  .compose-bar .icon-btn { min-width: 40px; min-height: 40px; }
+  fieldset.kind span { padding: 6px 9px; font-size: 12px; }
+}
+/* E1: the reaction picker is 24 common emoji in a 6-column grid of touch
+   targets under a title and Close (it sat in a 26px box and collapsed to
+   one emoji per line). On a wide screen a popup anchored to "+": toward
+   the left for your own messages, upward when the timeline has no room
+   below (reactPicker sets .up). */
+.react-menu { display: grid; gap: 6px; width: max-content; padding: 8px; }
+.react-pick.up .react-menu { top: auto; bottom: 30px; }
+.msg.out .react-menu { left: auto; right: 0; }
+.react-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 4px; font-size: 13px; }
+.react-menu .react-close { min-width: 32px; min-height: 32px; padding: 0; font-size: 14px; color: var(--muted); }
+.react-grid { display: grid; grid-template-columns: repeat(6, 40px); gap: 4px; }
+.react-grid button { display: grid; place-items: center; min-width: 40px; min-height: 40px; padding: 0; line-height: 1; }
+@media (max-width: 760px) {
+  /* On a phone the open picker is a bottom sheet over a dimmed page (a tap
+     outside closes it): never clipped by the timeline, whichever message. */
+  .react-pick > summary { width: 36px; height: 36px; }
+  .react-pick[open] > summary::after { content: ""; position: fixed; inset: 0; z-index: 30; background: rgb(0 0 0 / .45); cursor: default; }
+  .react-pick[open] .react-menu, .msg.out .react-pick[open] .react-menu { position: fixed; z-index: 31; top: auto; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); width: auto; max-width: 480px; margin: 0 auto; padding: 12px 12px 16px; gap: 10px; border-radius: 16px; }
+  .react-head { font-size: 17px; padding-left: 6px; }
+  .react-menu .react-close { min-width: 44px; min-height: 44px; font-size: 18px; }
+  .react-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .react-grid button { min-width: 0; min-height: 48px; font-size: 26px; background: var(--canvas); }
+  /* A message's reactions and its Reply/Details line share one row. */
+  .col { grid-template-columns: auto minmax(0, 1fr); column-gap: 6px; }
+  .col > * { grid-column: 1 / -1; }
+  .col > .reactions { grid-column: 1; margin-top: 0; }
+  .col > .reactions + .foot { grid-column: 2; align-self: center; }
+  /* The title and the Send button already name who it goes to; the
+     explanatory "To … · same conversation" row and the generic hint go.
+     A hint that explains why nothing can be sent stays. */
+  #to-line, .compose-foot { display: none; }
+  .composer:has(#body:disabled) .compose-foot { display: block; }
+}
+/* A short viewport (an on-screen keyboard): keep who it goes to, the draft
+   and Send; participants and the hint stay one tap away (⋯ details). */
+@media (max-width: 760px) and (max-height: 560px) {
+  .conv-head { min-height: 44px; padding: 2px 6px; }
+  .conv-head .presence, .conv-head .hub-back, .conv-head .topic { display: none; }
+  .conv-head #typing-line:not([hidden]) { display: block; } /* who is typing stays, keyboard or not */
+  .agents { display: none; }
+  .composer { padding: 4px 8px 6px; }
+  .compose-box textarea { max-height: min(24vh, 110px); }
 }

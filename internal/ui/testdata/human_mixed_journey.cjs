@@ -272,6 +272,95 @@ async function browserHGP(p, extra = [wire.CapHumanParticipation]) {
   const rootDM = (await readDM(phone, conv));
   assert.equal(rootDM.role, 'member');
 
+  if (process.env.AGENTNET_HUMAN_FOCUS === 'mobile') {
+    // Phone layout over the actual world: the browser phone (workspace shell,
+    // dark) and native Alice, list → chat → reactions → keyboard → back.
+    stage = 'mobile layout';
+    const alicePerson = await alice.evaluate(() => state.overview.person.person);
+    cli('bob', 'dm', 'send', conv, '[@Alice](agentnet:person/' + alicePerson + ') can you confirm the dock?');
+    cli('bob', 'dm', 'send', conv, 'A long message to check wrapping on a phone: ' + 'the order ships Monday, pickup window is 10–12, confirm the dock number and the contact on site. '.repeat(3));
+    await arrives(conv, 'Unselected private native history', { phone });
+    const rect = (p, sel) => p.evaluate((sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(), cs = getComputedStyle(e); return cs.display === 'none' || cs.visibility === 'hidden' || !r.height ? null : { top: r.top, bottom: r.bottom, h: r.height, w: r.width, left: r.left, right: r.right }; }, sel);
+    const fits = async (p, name) => {
+      const o = await p.evaluate(() => ({ vw: innerWidth, vh: innerHeight, overflow: document.documentElement.scrollWidth > innerWidth }));
+      assert(!o.overflow, name + ': horizontal overflow');
+      return o;
+    };
+    const mobileShots = async (p, who) => {
+      await p.emulateMedia({ colorScheme: 'dark' });
+      for (const [w, h] of [[390, 844], [360, 780]]) {
+        await p.setViewportSize({ width: w, height: h }); await home(p); await idle(300); await fits(p, who + ' list ' + w);
+        const bar = await rect(p, '.workspace-bar');
+        if (bar) assert(bar.h <= 64, who + ' list ' + w + ': workspace control is one compact row (' + bar.h + 'px)');
+        assert.equal(await p.locator('.contact-item .kind-tag[title^="Person ID"]').filter({ visible: true }).count(), 0, who + ': no person IDs in the chat list');
+        await p.screenshot({ path: path.join(evidence, 'mobile-' + who + '-list-' + w + '.png') }); shots.push('mobile-' + who + '-list-' + w);
+        if (bar && w === 390) {
+          await p.locator('.workspace-more-toggle').click();
+          for (const t of ['Rename', 'Join a workspace…', 'Disconnect…']) assert(await p.locator('.workspace-bar').getByRole('button', { name: t, exact: true }).isVisible(), who + ': workspace ' + t + ' reachable');
+          await p.screenshot({ path: path.join(evidence, 'mobile-' + who + '-workspace-open-390.png') }); shots.push('mobile-' + who + '-workspace-open-390');
+          await p.locator('.workspace-more-toggle').click();
+        }
+      }
+      await p.setViewportSize({ width: 390, height: 844 }); await openDM(p, conv); await idle(400); await fits(p, who + ' chat');
+      assert.equal(await rect(p, '.workspace-bar'), null, who + ': no workspace administration inside a conversation');
+      const head = await rect(p, '.conv-head'); assert(head && head.h <= 64, who + ': compact conversation header (' + (head && head.h) + 'px)');
+      const chip = p.locator('#timeline .mention-chip.mention-me').filter({ hasText: '@' });
+      await chip.first().waitFor({ state: 'visible', timeout: 15000 });
+      assert.equal(await p.locator('#timeline').getByText('agentnet:').count(), 0, who + ': an exact mention reads as a name chip, never its reference');
+      // The picker (24 emoji, 6 columns, title and Close) for a near-top, an
+      // outgoing (right-edge) and a near-bottom message, on a phone (bottom
+      // sheet) and a wide screen (popup anchored to "+"): fully visible with
+      // nothing covering any emoji; Close, Escape and a tap outside close it;
+      // a real tap on 🎉 reacts.
+      const rows = (where) => ({ top: p.locator('#timeline li.msg:has(.react-pick)').first(), outgoing: p.locator('#timeline li.msg.out:has(.react-pick)').first(), bottom: p.locator('#timeline li.msg:not(.out):has(.react-pick)').last() })[where];
+      const picker = async (where, w, h) => {
+        const row = rows(where); await row.scrollIntoViewIfNeeded(); await row.locator('.react-pick > summary').click(); await idle(250);
+        const menu = await rect(p, '.react-pick[open] .react-menu'), tl = await rect(p, '#timeline');
+        const grid = await p.evaluate(() => { const b = [...document.querySelectorAll('.react-pick[open] .react-grid button')], r = b.map((x) => x.getBoundingClientRect()); return { n: b.length, cols: r.filter((x) => Math.abs(x.top - r[0].top) < 1).length, min: Math.min(...r.map((x) => Math.min(x.width, x.height))), labels: b.map((x) => x.getAttribute('aria-label')) }; });
+        assert(grid.n === 24 && grid.cols === 6 && grid.min >= (w < 760 ? 44 : 40) && grid.labels.includes('React 🎉'), who + ' ' + where + ' ' + w + ': 24 emoji in 6 columns of touch targets ' + JSON.stringify(grid));
+        assert(menu && menu.left >= 0 && menu.right <= w && menu.top >= 0 && menu.bottom <= h, who + ' ' + where + ' ' + w + ': picker on screen ' + JSON.stringify(menu));
+        if (w >= 760) { // a popup next to its "+", inside the timeline
+          const plus = await row.locator('.react-pick > summary').boundingBox();
+          assert(menu.top >= tl.top && menu.bottom <= tl.bottom && Math.min(Math.abs(menu.top - (plus.y + plus.height)), Math.abs(plus.y - menu.bottom)) <= 12, who + ' ' + where + ': desktop popup anchored to + inside the timeline ' + JSON.stringify({ menu, plus, tl }));
+        } else assert(menu.bottom >= h - 40 && menu.w >= w - 40, who + ' ' + where + ': phone bottom sheet ' + JSON.stringify(menu));
+        const covered = await p.evaluate(() => [...document.querySelectorAll('.react-pick[open] .react-menu button')].filter((b) => { const r = b.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !(hit === b || b.contains(hit)); }).map((b) => b.getAttribute('aria-label')));
+        assert.deepEqual(covered, [], who + ' ' + where + ' ' + w + ': every emoji and Close visible and tappable');
+        await p.screenshot({ path: path.join(evidence, 'picker-' + who + '-' + where + '-' + w + '.png') }); shots.push('picker-' + who + '-' + where + '-' + w);
+        return { row, menu };
+      };
+      const closed = async (how) => { await p.locator('.react-pick[open]').waitFor({ state: 'detached', timeout: 5000 }); assert.equal(await p.locator('.react-pick[open]').count(), 0, who + ': ' + how + ' closes the picker'); };
+      await picker('top', 390, 844); await p.locator('.react-pick[open] .react-close').click(); await closed('Close');
+      await picker('outgoing', 390, 844); await p.mouse.click(195, 60); await closed('a tap outside');
+      const { row: bottom, menu } = await picker('bottom', 390, 844);
+      await p.locator('.react-pick[open] .react-grid').getByRole('button', { name: 'React 🎉', exact: true }).click(); await closed('choosing an emoji');
+      await until(who + ' reaction shown', async () => await bottom.locator('.reaction.mine').filter({ hasText: '🎉' }).count() === 1, 15000);
+      await idle(400); await p.screenshot({ path: path.join(evidence, 'mobile-' + who + '-reacted-390.png') }); shots.push('mobile-' + who + '-reacted-390');
+      await p.setViewportSize({ width: 1280, height: 800 }); await idle(300);
+      const desk = {};
+      for (const where of ['top', 'outgoing', 'bottom']) { desk[where] = (await picker(where, 1280, 800)).menu; await p.keyboard.press('Escape'); await closed('Escape'); }
+      await p.setViewportSize({ width: 390, height: 844 }); await idle(300);
+      await p.locator('#body').click(); await p.locator('#body').fill('A long draft typed on a phone keyboard. '.repeat(6));
+      await p.setViewportSize({ width: 390, height: 460 }); await idle(300); await fits(p, who + ' keyboard');
+      const send = await rect(p, '#send'), box = await rect(p, '#composer');
+      assert(send && box && send.bottom <= 460 && box.bottom <= 461, who + ': draft and Send stay in a keyboard-sized viewport ' + JSON.stringify({ send, box }));
+      await p.screenshot({ path: path.join(evidence, 'mobile-' + who + '-keyboard-390x460.png') }); shots.push('mobile-' + who + '-keyboard-390x460');
+      await p.locator('#body').fill(''); await p.setViewportSize({ width: 390, height: 844 });
+      await p.locator('#conversation-details').click(); await p.locator('#dialog').waitFor({ state: 'visible' });
+      await p.screenshot({ path: path.join(evidence, 'mobile-' + who + '-details-390.png') }); shots.push('mobile-' + who + '-details-390');
+      await p.locator('#dialog-ok, #dialog-cancel').first().click(); await p.locator('#dialog').waitFor({ state: 'hidden' });
+      await p.screenshot({ path: path.join(evidence, 'mobile-' + who + '-chat-390.png') }); shots.push('mobile-' + who + '-chat-390');
+      await p.locator('#back').click(); await idle(300);
+      assert(await p.evaluate(() => !document.body.classList.contains('show-conv') || !!state.hub), who + ': Back leaves the conversation (to the person, then the list)');
+      await home(p); await p.screenshot({ path: path.join(evidence, 'mobile-' + who + '-back-390.png') }); shots.push('mobile-' + who + '-back-390');
+      checks.push({ gate: who + ': compact list/workspace, chat without admin bar, mention chip, picker sheet/popup (top/outgoing/bottom, Close/outside/Escape, tap reacts), keyboard-safe composer, back', header: head, sheet: menu, desktop: desk, send });
+    };
+    await mobileShots(phone, 'browser'); await mobileShots(alice, 'native');
+    await Promise.all(assetReads);
+    assert.deepEqual(errors, []); assert.deepEqual(external, []);
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ pass: true, kind: 'phone layout over the actual mixed world (dark; browser phone with workspace shell and native page)', checks, shots, expectedAssets, served, errors, httpErrors, external, world }, null, 2), { mode: 0o600 });
+    console.log('PASS mobile layout: ' + checks.length + ' gates, ' + shots.length + ' screenshots');
+    return;
+  }
   if (process.env.AGENTNET_HUMAN_FOCUS === 'delete') {
     // Whole-conversation deletion on Alice's own devices: the browser phone
     // deletes (Cancel first), native alice/laptop applies it, Bob keeps his
