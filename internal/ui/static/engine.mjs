@@ -4564,7 +4564,8 @@ export class Engine {
       let pay;
       try { pay = wire.parseControl(c.sub, c.body); } catch (e) { continue; }
       if (pay.decision) continue; // an answer to an operator's decision: it belongs to that report's item, never to exec
-      if (!best || pay.n > best.n || (pay.n === best.n && c.id > best.id)) best = { ...pay, id: c.id };
+      const id = c.lid || c.id; // as controlsOn: the same on every device
+      if (!best || pay.n > best.n || (pay.n === best.n && id > best.id)) best = { ...pay, id };
     }
     if (!best) return null;
     const m = this.members.current ? this.members.list.find((x) => x.address === host) : null;
@@ -4878,10 +4879,12 @@ export class Engine {
 
   // controlsOn resolves what ctls (this device's control rows) did to one
   // message: reactions (per author, per emoji, the highest counter wins;
-  // equal: the later id), the latest revision by its author, and whether
-  // its author retracted it. who names an author for the page; author(c)
-  // is a control's author identity (a key in a device thread, a person in
-  // a conversation), targetAuthor the target's.
+  // equal: the later control id), the latest revision by its author, and
+  // whether its author retracted it. A control's id is its logical id in a
+  // conversation, the same in every device's copy (client controlRow), so
+  // every device breaks a tie alike. who names an author for the page;
+  // author(c) is a control's author identity (a key in a device thread, a
+  // person in a conversation), targetAuthor the target's.
   controlsOn(ctls, targetAuthor, author, who, mineIs, idOf = (a) => a, hostLabel) {
     const byAuthorEmoji = new Map(), assistants = new Map();
     let rev = null, deleted = false;
@@ -4890,12 +4893,13 @@ export class Engine {
       try { pay = wire.parseControl(c.sub, c.body); } catch (e) { continue; }
       const asst = assistantActor(c, hostLabel), a = asst ? asst.id : author(c); // an assistant reacts as itself, never as its host
       if (asst) assistants.set(a, asst);
+      const id = c.lid || c.id;
       if (c.sub === wire.SubReaction) {
         const k = a + "\n" + pay.emoji;
         const cur = byAuthorEmoji.get(k);
-        if (!cur || pay.n > cur.n || (pay.n === cur.n && c.id > cur.id)) byAuthorEmoji.set(k, { n: pay.n, id: c.id, op: pay.op, a, emoji: pay.emoji });
+        if (!cur || pay.n > cur.n || (pay.n === cur.n && id > cur.id)) byAuthorEmoji.set(k, { n: pay.n, id, op: pay.op, a, emoji: pay.emoji });
       } else if (a === targetAuthor) {
-        if (c.sub === wire.SubRevision && (!rev || pay.rev > rev.rev || (pay.rev === rev.rev && c.id > rev.id))) rev = { rev: pay.rev, id: c.id, text: pay.text };
+        if (c.sub === wire.SubRevision && (!rev || pay.rev > rev.rev || (pay.rev === rev.rev && id > rev.id))) rev = { rev: pay.rev, id, text: pay.text };
         if (c.sub === wire.SubRetraction) deleted = true;
       }
     }

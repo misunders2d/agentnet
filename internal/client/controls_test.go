@@ -951,3 +951,60 @@ func TestLateLinkedDeviceGetsNoDeletedText(t *testing.T) {
 		t.Fatalf("the late phone stores deleted text: %q", raw)
 	}
 }
+
+// Two devices of one person edit, or add and take off a reaction, at once
+// with the same counter. Each device holds its own copy of each control,
+// under an id of that copy, so the tie is broken on the control's logical
+// id, the one value every copy shares: every device shows the same text
+// and the same reactions, whichever copy ids it holds.
+func TestConcurrentControlsResolveAlikeOnEveryDevice(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "draft"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the laptop to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	phone := linked(t, w.alice)
+	shown := func(a *Agent) (ConvMessage, bool) {
+		msgs, _ := a.ConversationMessages(conv)
+		for _, m := range msgs {
+			if m.LID == turn.LID {
+				return m, true
+			}
+		}
+		return ConvMessage{}, false
+	}
+	eventually(t, "the phone to hold the turn", func() bool { _, ok := shown(phone); return ok })
+	bobFP := w.bob.Self().Fingerprint()
+	id := func(c string) string { return strings.Repeat(c, 32) }
+	// Logical ids: the second control's is the greater. Copy ids: the
+	// laptop's copy of the first control has the greater id, the phone's
+	// the lesser, so a tie broken on copy ids differs between them.
+	type ctl struct{ copyID, lid, sub, body string }
+	first := []ctl{{id("f"), id("1"), envelope.SubRevision, `{"rev":1,"text":"from the desk"}`}, {id("3"), id("4"), envelope.SubReaction, `{"emoji":"👍","op":"add","n":1}`}}
+	second := []ctl{{id("2"), id("e"), envelope.SubRevision, `{"rev":1,"text":"from the phone"}`}, {id("5"), id("d"), envelope.SubReaction, `{"emoji":"👍","op":"remove","n":1}`}}
+	onPhone := map[string]string{id("f"): id("6"), id("3"): id("c"), id("2"): id("9"), id("5"): id("7")}
+	for _, a := range []*Agent{w.alice, phone} {
+		for _, c := range append(append([]ctl{}, first...), second...) {
+			copyID := c.copyID
+			if a == phone {
+				copyID = onPhone[copyID]
+			}
+			in := envelope.Inner{V: envelope.Version3, ID: copyID, From: w.bob.Address, To: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage,
+				Sub: c.sub, Body: c.body, Conv: conv, LID: c.lid, Ref: &envelope.Ref{ID: turn.LID, Fingerprint: bobFP}}
+			if res, err := a.store.addConvInbox(in, bobFP, "", false, nil); err != nil || res != admitted {
+				t.Fatalf("%s storing %s: %s %v", a.Address, c.sub, res, err)
+			}
+		}
+	}
+	for _, a := range []*Agent{w.alice, phone} {
+		m, _ := shown(a)
+		if !m.Edited || m.Text != "from the phone" || len(m.Reactions) != 0 {
+			t.Errorf("%s shows %q (edited %v), reactions %+v: want the control with the greater logical id", a.Address, m.Text, m.Edited, m.Reactions)
+		}
+	}
+}

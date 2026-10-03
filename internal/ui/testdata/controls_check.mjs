@@ -550,5 +550,21 @@ async function makeWorld() {
   check(why.includes("was deleted"), "editing a deleted message is refused: " + why);
 }
 
+// Equal counters from two devices of one person: the tie is broken on the
+// control's logical id, the same in every copy, never on the id of the copy
+// this device holds (client TestConcurrentControlsResolveAlikeOnEveryDevice).
+// Two devices hold the same four controls under different copy ids.
+{
+  const { e } = await fresh();
+  const T = "7".repeat(32), id = (c) => c.repeat(32);
+  const row = (copy, lid, sub, pay) => ({ id: copy, lid, v: 3, control: true, conv: "c".repeat(64), from: "peer/desk", fp: PEER, person: "P", kind: "message", sub, body: JSON.stringify(pay), ref: { id: T, fingerprint: PEER }, at: 1 });
+  for (const ids of [[id("f"), id("2"), id("5"), id("3")], [id("6"), id("9"), id("c"), id("7")]]) {
+    const rows = [row(ids[0], id("1"), wire.SubRevision, { rev: 1, text: "from the desk" }), row(ids[1], id("e"), wire.SubRevision, { rev: 1, text: "from the phone" }),
+      row(ids[2], id("4"), wire.SubReaction, { emoji: "👍", op: "add", n: 1 }), row(ids[3], id("d"), wire.SubReaction, { emoji: "👍", op: "remove", n: 1 })];
+    const v = e.controlsOn(rows, "P", (x) => x.person || "", () => "", () => false);
+    check(v.edited && v.text === "from the phone" && !(v.reactions || []).length, "equal counters resolve on the logical id, whatever the copy ids " + ids.map((x) => x[0]).join("") + ": " + JSON.stringify(v));
+  }
+}
+
 if (failed) process.exit(1);
 console.log("controls ok");

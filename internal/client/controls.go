@@ -1067,7 +1067,10 @@ func (s *store) retracted(id string) (bool, error) {
 	return n > 0, err
 }
 
-// controlRow is one control as stored.
+// controlRow is one control as stored. Its id breaks ties between controls
+// with equal counters, so it is the same on every device: the logical id
+// in a conversation (each device holds its own copy under its own envelope
+// id), the envelope id in a device thread (one copy each side).
 type controlRow struct {
 	id, sub, author, authorFP, refID, refFP, body string
 	ms                                            int64
@@ -1087,11 +1090,11 @@ func (s *store) legacyControls(peer, self, selfFP string) ([]controlRow, error) 
 }
 
 // convControls loads the controls of conversation conv, once per logical
-// id for copies this device sent.
+// id for copies this device sent, each under its logical id.
 func (s *store) convControls(conv, self, selfFP string) ([]controlRow, error) {
-	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, claimed_fp, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
+	rows, err := s.db.Query(`SELECT coalesce(lid, id), sub, sender, coalesce(verified_by, claimed_fp, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
 		  FROM inbox WHERE conv = ? AND ref_id IS NOT NULL AND local = 0
-		UNION ALL SELECT o.id, o.sub, ?, ?, o.ref_id, o.ref_fp, o.body, coalesce(o.created_ms, o.created_at * 1000), coalesce(o.pid, ''), coalesce(o.agent_id, ''), coalesce(o.origin, '')
+		UNION ALL SELECT coalesce(o.lid, o.id), o.sub, ?, ?, o.ref_id, o.ref_fp, o.body, coalesce(o.created_ms, o.created_at * 1000), coalesce(o.pid, ''), coalesce(o.agent_id, ''), coalesce(o.origin, '')
 		  FROM outbox o WHERE o.conv = ? AND o.ref_id IS NOT NULL AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid)`,
 		conv, self, selfFP, conv)
 	if err != nil {
