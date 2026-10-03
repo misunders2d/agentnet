@@ -602,6 +602,9 @@ func (a *Agent) SetService() error {
 	} else if ok {
 		return errors.New("this installation already speaks for a person")
 	}
+	if a.LinkState().State == LinkPending {
+		return ErrLinkWaiting
+	}
 	return a.store.done(a.store.setConfig(map[string]string{"role": "service"}))
 }
 
@@ -621,6 +624,9 @@ func (a *Agent) CreatePerson(ctx context.Context, label string) (PersonInfo, err
 		return PersonInfo{}, err
 	} else if ok {
 		return me.info, fmt.Errorf("this installation already speaks for %q (%s); a second person is not created", me.info.Label, me.info.Person)
+	}
+	if a.LinkState().State == LinkPending { // its person comes with the approval
+		return PersonInfo{}, ErrLinkWaiting
 	}
 	if role, _ := a.store.config("role"); role == "service" {
 		return PersonInfo{}, ErrService

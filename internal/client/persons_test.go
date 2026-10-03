@@ -238,6 +238,39 @@ func TestServiceStaysStandalone(t *testing.T) {
 	}
 }
 
+// A device waiting for its link approval is set up by that approval only:
+// it creates no second person (its daemon then froze on the approval, for
+// good) and does not become a service; approved, it is its person's device.
+func TestPendingDeviceCreatesNoPersonOrService(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	persons(t, w.alice)
+	watch, awaited, _ := linkPhone(t, w.alice, "watch")
+	if _, err := watch.CreatePerson(tctx(t), "Watch"); !errors.Is(err, ErrLinkWaiting) {
+		t.Fatalf("a pending device created a person: %v", err)
+	}
+	if err := watch.SetService(); !errors.Is(err, ErrLinkWaiting) {
+		t.Fatalf("a pending device became a service: %v", err)
+	}
+	if _, ok, err := watch.Person(); err != nil || ok {
+		t.Fatalf("pending device's person: %v %v", ok, err)
+	}
+	if role, err := watch.Role(); err != nil || role != "" {
+		t.Fatalf("pending device's role %q %v", role, err)
+	}
+	req := pendingLink(t, w.alice)
+	if err := w.alice.DecideLink(tctx(t), req.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-awaited; out.err != nil || out.s.State != LinkLinked {
+		t.Fatalf("link %+v %v", out.s, out.err)
+	}
+	mine, _, _ := w.alice.Person()
+	if p, ok, err := watch.Person(); err != nil || !ok || p.Person != mine.Person {
+		t.Fatalf("linked device's person %+v %v %v", p, ok, err)
+	}
+}
+
 // A DM the new device starts, with someone its person's other device never
 // met, reaches that other device as the person's own conversation.
 func TestLinkedDeviceStartsDM(t *testing.T) {

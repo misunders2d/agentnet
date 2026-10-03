@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -85,6 +87,45 @@ func TestJoinAcceptsDeviceLinks(t *testing.T) {
 				t.Fatalf("pending device already has a person: %v", err)
 			}
 		})
+	}
+}
+
+// A device waiting for its link approval is told so, not to create a
+// person; person create and person service are refused there.
+func TestPendingDevicePersonHint(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	hub := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, hub, "127.0.0.1:0", "")
+	laptop, err := client.Join(ctx, t.TempDir(), testhub.BootstrapCode(t, hub), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer laptop.Close()
+	if _, err := laptop.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	offer, err := laptop.NewDeviceLink(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watch, err := client.JoinAndLink(ctx, t.TempDir(), offer.Code, "watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watch.Close()
+	var out bytes.Buffer
+	err = runPerson(ctx, watch, nil, &out)
+	if err == nil || strings.Contains(err.Error(), "person create") || !strings.Contains(err.Error(), "waits for approval on "+laptop.Address) {
+		t.Fatalf("pending device's person hint: %v", err)
+	}
+	for _, args := range [][]string{{"create", "Watch"}, {"service"}} {
+		if err := runPerson(ctx, watch, args, &out); !errors.Is(err, client.ErrLinkWaiting) {
+			t.Fatalf("person %s on a pending device: %v", strings.Join(args, " "), err)
+		}
+	}
+	if _, ok, err := watch.Person(); err != nil || ok {
+		t.Fatalf("pending device's person: %v %v", ok, err)
 	}
 }
 

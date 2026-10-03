@@ -27,6 +27,9 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 				fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
 				return nil
 			}
+			if link := a.LinkState(); link.State == client.LinkPending {
+				return fmt.Errorf("no person on this installation yet: it waits for approval on %s (keep agentnet daemon running here, and approve it there with person links / person approve ID)", link.Approver)
+			}
 			return errors.New("no person on this installation (agentnet person create NAME, or link this device from your other one)")
 		}
 		fmt.Fprintf(stdout, "%s  %q  roster %d\n", p.Person, p.Label, p.Seq)
