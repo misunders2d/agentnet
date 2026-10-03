@@ -370,7 +370,7 @@ func runJoin(ctx context.Context, home string, args []string) error {
 	}
 	if link := a.LinkState(); link.State == client.LinkPending {
 		fmt.Printf("%s is waiting for approval on %s\nfingerprint %s\n", a.Address, link.Approver, a.Self().Fingerprint())
-		fmt.Fprintln(os.Stderr, "next: start agentnet daemon on this device, then approve the request on your existing device (page or agentnet person links / person approve ID)")
+		fmt.Fprintln(os.Stderr, "next: start agentnet daemon on this device, then approve the request on your existing device (page, or agentnet person links / person approve ID; person approve --native ID, for a computer like this one, also lets its invites of your own agents there need no accept)")
 		return nil
 	}
 	fmt.Printf("enrolled %s\nfingerprint %s\n", a.Address, a.Self().Fingerprint())

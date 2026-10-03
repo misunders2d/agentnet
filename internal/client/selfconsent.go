@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"time"
 )
 
 // Self-invite consent (owner decision D3, docs/plans/ROOM_V1.md §5): an
@@ -15,26 +17,31 @@ import (
 //
 // The trust set is this host device plus the own devices the person added,
 // each by its exact key, under the config key self_consent. Only the local
-// person changes it; nothing received does. A device is added:
+// person changes it; nothing received does. A browser device must never be
+// in it: its code comes from the relay, and a browser key in the trust set
+// would turn that code into execution here (review X4). Nothing in a link
+// request tells a browser from a computer running agentnet, so a device is
+// added only when the person says it is the latter, while approving its
+// pending link request here with agentnet person approve --native ID
+// (ApproveNativeLink). Nothing else adds one (not person approve ID, not
+// an approval on the page or on another device, not a request approved
+// already), and nothing is meant to trust a browser: --native said of one
+// is the mistake the command's output and help warn against. person
+// untrust ADDRESS removes a device. A key that changes is no longer trusted.
 //
-//   - by approving its link here with agentnet person approve ID
-//     (ApproveNativeLink): that command's flow links a native device, one
-//     that joined with agentnet join;
-//   - by agentnet person trust ADDRESS, for a current own device.
+// D3 holds for invites stored here from the first time a build with it
+// opened this home (selfConsentSinceKey): earlier ones were made when
+// nothing ran before the click, and still wait for it.
 //
-// person approve --browser ID, an approval on the page and an approval on
-// another device add nothing: rosters do not mark browser devices, and a
-// browser key must not turn relay-served code into execution here.
-// person untrust ADDRESS removes a device. A key that changes is no longer
-// trusted until added again.
-//
-// Each accept leaves a local notice (agentnet inbox --review) until the
-// person dismisses it (agentnet resolve PID).
+// Each accept leaves a local notice (agentnet inbox --review, and the
+// page's review items with reason "self_consented") until the person
+// dismisses it (agentnet resolve PID, or resolve on the page).
 
 const (
 	selfConsentKey        = "self_consent"
 	selfConsentNoticesKey = "self_consent_notices"
-	maxSelfConsentNotices = 64 // the oldest notice goes first
+	selfConsentSinceKey   = "self_consent_since" // unix seconds: set once, when Open first runs a build with D3
+	maxSelfConsentNotices = 64                   // the oldest notice goes first
 )
 
 // TrustedDevice is one own device whose invites of this person's agents
@@ -64,27 +71,6 @@ func (a *Agent) SelfConsentTrust() ([]TrustedDevice, error) {
 	return append([]TrustedDevice{{Address: a.Address, Fingerprint: a.Self().Fingerprint()}}, added...), nil
 }
 
-// TrustOwnDevice adds the current own device at address, with the key its
-// person's roster names now, to the trust set. Only for a device running
-// AgentNet itself, never a browser.
-func (a *Agent) TrustOwnDevice(address string) error {
-	me, ok, err := a.store.selfPerson(a.Address)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return errors.New("this installation does not speak for a person")
-	}
-	d, ok := me.device(address)
-	if !ok {
-		return fmt.Errorf("%s is not a current device of your person", address)
-	}
-	if address == a.Address {
-		return nil // this device is always trusted
-	}
-	return a.setSelfConsentTrust(func(tx *sql.Tx) error { return addSelfConsentTrustIn(tx, d.Address, d.Fingerprint()) })
-}
-
 // UntrustOwnDevice removes the device at address from the trust set; this
 // device itself always stays in it.
 func (a *Agent) UntrustOwnDevice(address string) error {
@@ -102,6 +88,33 @@ func (a *Agent) UntrustOwnDevice(address string) error {
 		}
 		return putConfigJSON(tx, selfConsentKey, slices.Delete(added, i, i+1))
 	})
+}
+
+// markSelfConsentSince records, once, when this home first ran a build
+// with D3 (Open calls it): invites stored here before then are not
+// accepted without a click.
+func (s *store) markSelfConsentSince() error {
+	if _, err := s.config(selfConsentSinceKey); !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO config(k, v) VALUES(?, ?)`, selfConsentSinceKey, strconv.FormatInt(time.Now().Unix(), 10))
+	return err
+}
+
+// invitedSinceSelfConsent reports whether the invite event hash was stored
+// here since D3 began here; without that record, it was not.
+func (s *store) invitedSinceSelfConsent(hash string) (bool, error) {
+	var received int64
+	var since sql.NullString
+	err := s.db.QueryRow(`SELECT received_at, (SELECT v FROM config WHERE k = ?) FROM participation_events WHERE hash = ?`, selfConsentSinceKey, hash).Scan(&received, &since)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	began, perr := strconv.ParseInt(since.String, 10, 64)
+	return since.Valid && perr == nil && received >= began, nil
 }
 
 func (a *Agent) setSelfConsentTrust(change func(*sql.Tx) error) error {

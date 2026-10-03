@@ -125,7 +125,9 @@ Use that code or its full URL with the same join command. No new admin
 invitation is needed. This device waits for your approval on the existing
 device; it cannot send or receive messages yet. Start agentnet daemon here
 to wait for approval, and keep AgentNet running on the existing device.
-Approve there on its page, or with person links and person approve ID.
+Approve there on its page, or with person links and person approve ID;
+person approve --native ID (only for a computer like this, never a browser)
+also lets this device's invites of your own agents there need no accept.
 Do not create a second person on the new device.
 
 If the Hub says the address is taken (another device already has it, or had
@@ -330,9 +332,9 @@ with ADDRESS#SESSION.`,
        agentnet person service
        agentnet person link
        agentnet person links
-       agentnet person approve [--browser] ID
+       agentnet person approve [--native] ID
        agentnet person refuse ID
-       agentnet person trust|untrust ADDRESS
+       agentnet person untrust ADDRESS
        agentnet person remove ADDRESS
 
 One person can use up to eight devices, each with its own keys. person shows
@@ -356,13 +358,17 @@ rejects it. Approval makes it you and grants access to your chats. Never
 approve a device you did not just ask to link. Private keys are not copied.
 
 Invites of your own agents need no accept when a trusted device of yours
-sends them (see agentnet help dm). This device trusts itself and the
-devices you add: approve ID adds the device it approves, which joined with
-the join command (a computer running AgentNet). For a browser, approve
-with --browser, or on the page: a browser device is never trusted, since
-its code comes from the server. trust ADDRESS adds a current device of
-yours later; untrust ADDRESS removes one. person marks trusted devices.
-A device whose key changes is no longer trusted until added again.
+sends them (see agentnet help dm). This device trusts itself, and a device
+you approve with approve --native ID: say --native only for a computer that
+joined with the join command (running AgentNet), never for a browser. A
+browser's code comes from the server, so a browser must never be trusted;
+nothing in a link request tells the two apart, so only your --native says
+so. approve ID without --native, approving on the page or on another
+device, and a request approved already add nothing, and no command trusts
+a browser. untrust ADDRESS removes a device; to trust it again, link it
+again. person marks trusted devices. A device whose key changes is no
+longer trusted. Invites stored before this version first ran here still
+wait for your accept.
 
 remove ADDRESS removes a device from your person. A device admitted through
 linking is also revoked from the Hub; one admitted separately by an admin
@@ -414,8 +420,9 @@ Your own agent joins without dm accept-agent when you invite it from its
 own device or from a device of yours it trusts (agentnet help person), for
 an agent that runs there (the selected responder or an enabled named
 agent), with --tasks naming only trusted keys of yours. Everything else,
-and anyone else's agent, waits for its owner's accept. Each such join is
-listed in agentnet inbox --review until agentnet resolve PID dismisses it.
+and anyone else's agent, waits for its owner's accept. Each such join
+leaves a notice, listed by agentnet inbox --review and given to the page,
+until agentnet resolve PID (or resolve on the page) dismisses it.
 
 dm ask-agent sends the agent a question or task; both people see it. The
 host installation's daemon runs it with its own responder and setup (agentnet

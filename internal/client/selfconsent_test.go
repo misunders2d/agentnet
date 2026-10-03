@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
@@ -308,11 +311,13 @@ func TestSelfConsentConditions(t *testing.T) {
 	}
 }
 
-// The trust set: a device approved with person approve (ApproveNativeLink)
-// is trusted, one approved as a browser is not, and neither is a task key
-// of an untrusted device of one's own. A trusted device's invite is
-// accepted once on admission, also while the host's daemon was stopped;
-// the start sweep accepts one the person trusted later; untrust ends it.
+// The trust set: a device approved with person approve --native
+// (ApproveNativeLink) is trusted; one approved as the page and person
+// approve ID approve it (DecideLink) is not, not even when that request is
+// approved again with --native, and neither is a task key of an untrusted
+// device of one's own. A trusted device's invite is accepted once on
+// admission, also while the host's daemon was stopped; the start sweep
+// accepts one whose agent came to run later; untrust ends it.
 func TestSelfConsentLinkedDevices(t *testing.T) {
 	w, conv, stopAlice := selfConsentWorld(t)
 	if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "a DM linked devices get as history"}); err != nil {
@@ -325,6 +330,28 @@ func TestSelfConsentLinkedDevices(t *testing.T) {
 	deskDev := TrustedDevice{Address: desk.Address, Fingerprint: desk.Self().Fingerprint()}
 	if err != nil || !slices.Equal(trust, []TrustedDevice{{Address: w.alice.Address, Fingerprint: w.alice.Self().Fingerprint()}, deskDev}) {
 		t.Fatalf("trust set: %+v %v", trust, err)
+	}
+	// Approving the phone's request again with --native, as if its roster
+	// step were still unpublished, trusts nothing: it may be a browser the
+	// page approved.
+	var phoneLink string
+	links, err := w.alice.PendingLinks()
+	for _, l := range links {
+		if l.Address == phone.Address {
+			phoneLink = l.ID
+		}
+	}
+	if err != nil || phoneLink == "" {
+		t.Fatalf("the phone's request: %v", err)
+	}
+	if _, err := w.alice.store.db.Exec(`UPDATE device_links SET state = ? WHERE offer = ?`, LinkApproved, phoneLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.alice.ApproveNativeLink(tctx(t), phoneLink); err == nil {
+		t.Fatal("an approved request approved again with --native")
+	}
+	if again, err := w.alice.SelfConsentTrust(); err != nil || !slices.Equal(again, trust) {
+		t.Fatalf("trust set after a second approval: %+v %v", again, err)
 	}
 	for _, d := range []*Agent{desk, phone} {
 		eventually(t, d.Address+" to hold the DM", func() bool { _, _, found, _ := d.store.conversation(conv); return found })
@@ -387,17 +414,21 @@ func TestSelfConsentLinkedDevices(t *testing.T) {
 	joins(whileStopped)
 	joins(fromDesk)
 
-	// Trusted later, the phone's waiting invite is accepted by the sweep at
-	// the next start; the desk, untrusted, invites for the click again.
-	if err := host.TrustOwnDevice(phone.Address); err != nil {
+	// The desk invites while no default agent runs here: it waits; once one
+	// runs, the sweep at the next start accepts it. The phone's invite still
+	// waits, and the desk, untrusted, invites for the click again.
+	if err := host.SetResponder(nil); err != nil {
 		t.Fatal(err)
 	}
-	if s := stateAt(t, host, fromPhone); s.State != PartInvited {
-		t.Fatalf("trusting decided by itself: %+v", s)
+	noAgent := invite(desk)
+	waits(noAgent)
+	if err := host.SetResponder(&Responder{Harness: "claude", Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
 	}
 	restart()
 	start()
-	joins(fromPhone)
+	joins(noAgent)
+	waits(fromPhone)
 	if err := host.UntrustOwnDevice(desk.Address); err != nil {
 		t.Fatal(err)
 	}
@@ -405,8 +436,8 @@ func TestSelfConsentLinkedDevices(t *testing.T) {
 	if err := host.UntrustOwnDevice(host.Address); err == nil {
 		t.Fatal("the host untrusted itself")
 	}
-	if err := host.TrustOwnDevice(w.bob.Address); err == nil {
-		t.Fatal("trusted another person's device")
+	if err := host.UntrustOwnDevice(phone.Address); err == nil {
+		t.Fatal("untrusted a device that was never trusted")
 	}
 }
 
@@ -461,5 +492,194 @@ func TestSelfConsentGroup(t *testing.T) {
 	eventually(t, "bob's invite at alice", func() bool { return stateAt(t, w.alice, q.PID).State == PartInvited })
 	if ok, err := w.alice.selfConsent(tctx(t), q.PID); ok || err != nil {
 		t.Fatalf("another member's invite accepted without a click (%v)", err)
+	}
+}
+
+// Review finding 2: the group admission hook. A trusted linked device of
+// alice's invites her own agent in a group; alice's daemon accepts it on
+// admission, once, with no restart, and the other members see it active.
+func TestSelfConsentGroupLinkedDevice(t *testing.T) {
+	w, carol, packet, _ := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	named, err := w.alice.CreateLocalAgent("Own builder", Responder{Harness: "claude", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.alice.PublishAgentCatalog(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	desk := linkedVia(t, w.alice, "desk", w.alice.ApproveNativeLink)
+	eventually(t, "desk to hold the group", func() bool { _, _, found, _ := desk.store.conversation(conv); return found })
+	var p ParticipationInfo
+	eventually(t, "desk to invite", func() bool {
+		p, err = desk.InviteNamedAgent(tctx(t), conv, w.alice.Address, named.ID, nil, nil, "")
+		return err == nil
+	})
+	eventually(t, "alice to accept it without a click", func() bool { return stateAt(t, w.alice, p.PID).State == PartActive })
+	if n := decisionsBy(t, w.alice, conv, p.PID, w.alice.Self().Fingerprint()); n != 1 {
+		t.Fatalf("%d decisions signed", n)
+	}
+	if notices, err := w.alice.SelfConsentNotices(); err != nil || len(notices) != 1 || notices[0].PID != p.PID || notices[0].Inviter != desk.Address {
+		t.Fatalf("notice: %+v %v", notices, err)
+	}
+	// Once its copies are queued (in one step), the start sweep sends
+	// nothing again.
+	copies := func() int {
+		t.Helper()
+		var n int
+		if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE pid = ? AND sub = ?`, p.PID, envelope.SubEvent).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	eventually(t, "the accept's copies to be queued", func() bool { return copies() > 0 })
+	sent := copies()
+	w.alice.sweepSelfConsent(tctx(t))
+	if n := copies(); n != sent {
+		t.Fatalf("the group accept's copies: %d, then %d after the sweep", sent, n)
+	}
+	for _, a := range []*Agent{w.bob, carol} {
+		eventually(t, a.Address+" to see it active", func() bool { return stateAt(t, a, p.PID).State == PartActive })
+	}
+}
+
+// Review finding 4: D3 holds from the first start of a build that has it.
+// An own invite stored before then, when nothing ran before the click,
+// still waits for the click, also through the start sweep; one stored
+// after is accepted.
+func TestSelfConsentNotRetroactive(t *testing.T) {
+	w, conv, _ := selfConsentWorld(t)
+	before := storedInvite(t, w.alice, w.alice, conv, nil)
+	if _, err := w.alice.store.db.Exec(`UPDATE participation_events SET received_at = received_at - 86400 WHERE pid = ?`, before); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := w.alice.selfConsent(tctx(t), before); ok || err != nil {
+		t.Fatalf("an invite stored before D3 accepted without a click (%v)", err)
+	}
+	w.alice.sweepSelfConsent(tctx(t))
+	if s := stateAt(t, w.alice, before); s.State != PartInvited {
+		t.Fatalf("the sweep accepted an invite stored before D3: %+v", s)
+	}
+	if ok, err := w.alice.selfConsent(tctx(t), storedInvite(t, w.alice, w.alice, conv, nil)); !ok || err != nil {
+		t.Fatalf("an invite stored now not accepted (%v)", err)
+	}
+	if p, err := w.alice.AcceptParticipation(tctx(t), before); err != nil || p.State != PartActive {
+		t.Fatalf("the click on the earlier invite: %+v %v", p, err)
+	}
+}
+
+// Review finding 5: an accept stored without a click whose sending failed
+// before any copy was queued is logged as accepted (never as waiting for
+// the click), and the start sweep sends it, so bob does not stay at
+// invited.
+func TestSelfConsentUnsentAcceptResent(t *testing.T) {
+	w, conv, stopAlice := selfConsentWorld(t)
+	stopAlice() // nothing else of alice's logs or sends meanwhile
+	var mu sync.Mutex
+	var logs []string
+	w.alice.Logf = func(format string, args ...any) {
+		mu.Lock()
+		logs = append(logs, fmt.Sprintf(format, args...))
+		mu.Unlock()
+	}
+	bobPerson, _, err := w.bob.store.selfPerson(w.bob.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze := func(state string) {
+		t.Helper()
+		if _, err := w.alice.store.db.Exec(`UPDATE persons SET state = ? WHERE person = ?`, state, bobPerson.info.Person); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pid := storedInvite(t, w.alice, w.alice, conv, nil)
+	freeze(personConflict) // SendConv now fails before it queues a copy
+	w.alice.trySelfConsent(tctx(t), pid)
+	freeze(personPinned)
+	if n := decisionsBy(t, w.alice, conv, pid, w.alice.Self().Fingerprint()); n != 1 {
+		t.Fatalf("%d decisions stored", n)
+	}
+	accept, err := w.alice.ownEvent(conv, pid, protocol.EventAccept, protocol.EventAccept)
+	if err != nil || accept == nil {
+		t.Fatalf("the accept: %v", err)
+	}
+	raw, _ := json.Marshal(*accept)
+	copies := func() int {
+		t.Helper()
+		var n int
+		if err := w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE pid = ? AND sub = ? AND body = ?`, pid, envelope.SubEvent, string(raw)).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := copies(); n != 0 {
+		t.Fatalf("%d copies queued although sending failed", n)
+	}
+	mu.Lock()
+	said := strings.Join(logs, "\n")
+	mu.Unlock()
+	if strings.Contains(said, "not accepted") || !strings.Contains(said, pid+": accepted without a click; sending") {
+		t.Fatalf("the log does not say it was accepted and not sent:\n%s", said)
+	}
+
+	// Bob gets the invite; the next start's sweep sends the stored accept,
+	// once, and bob resolves the participation active.
+	events, err := w.alice.store.participationEvents(conv, pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range events {
+		if ev.Type == protocol.EventInvite {
+			if err := w.alice.resend(tctx(t), ev); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	w.alice.sweepSelfConsent(tctx(t))
+	if n := copies(); n == 0 {
+		t.Fatal("the sweep did not send the stored accept")
+	}
+	eventually(t, "bob to see it active", func() bool { return stateAt(t, w.bob, pid).State == PartActive })
+	sent := copies()
+	w.alice.sweepSelfConsent(tctx(t))
+	if n := copies(); n != sent {
+		t.Fatalf("a sent accept sent again: %d copies, then %d", sent, n)
+	}
+}
+
+// Review finding 7: a click that finds a decision of this device's key it
+// cannot take as its own (one naming another address) ends with an error,
+// at once, instead of retrying without end.
+func TestDecideStopsOnUnmatchedDecision(t *testing.T) {
+	w, conv, _ := selfConsentWorld(t)
+	pid := storedInvite(t, w.alice, w.alice, conv, nil)
+	info := stateAt(t, w.alice, pid)
+	me, _, err := w.alice.store.selfPerson(w.alice.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	odd := protocol.ParticipationEvent{V: 1, Conv: conv, PID: pid, Type: protocol.EventAccept, Prev: info.Invite, TS: time.Now().Unix(),
+		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: w.bob.Address, Fingerprint: me.info.Fingerprint}}
+	odd.Sign(w.alice.id.Sign)
+	raw, _ := json.Marshal(odd)
+	if err := w.alice.store.addParticipationEvent(odd, raw); err != nil {
+		t.Fatal(err)
+	}
+	if s := stateAt(t, w.alice, pid); s.State != PartInvited {
+		t.Fatalf("the unmatched decision decided: %+v", s)
+	}
+	ctx := tctx(t)
+	done := make(chan error, 1)
+	go func() { _, err := w.alice.AcceptParticipation(ctx, pid); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("accepted over a decision of this key")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the click retried without end")
+	}
+	if n := decisionsBy(t, w.alice, conv, pid, me.info.Fingerprint); n != 1 {
+		t.Fatalf("%d decisions stored", n)
 	}
 }

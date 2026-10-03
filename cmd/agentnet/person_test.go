@@ -13,10 +13,12 @@ import (
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
-// person approve ID trusts the device it links (a native one) for invites
-// of the person's own agents; approve --browser links without trusting;
-// trust and untrust change it later, and person marks trusted devices.
-func TestPersonApproveTrustsNativeDevicesOnly(t *testing.T) {
+// Fail closed (review finding 1): person approve ID, the flow a browser
+// is linked with too, trusts nothing; only person approve --native ID,
+// which says it is never for a browser, adds the device to the self-consent
+// trust set. Nothing else adds one (there is no person trust); untrust
+// removes one, and person marks trusted devices.
+func TestPersonApproveTrustsOnlyNative(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off") // its daemon shows nothing on this desktop
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -34,7 +36,7 @@ func TestPersonApproveTrustsNativeDevicesOnly(t *testing.T) {
 	done := make(chan struct{})
 	go func() { a.Run(runCtx, client.RunOptions{}); close(done) }()
 	defer func() { stop(); <-done }()
-	link := func(name string, approve ...string) client.TrustedDevice {
+	link := func(name string, approve ...string) (client.TrustedDevice, string) {
 		t.Helper()
 		o, err := a.NewDeviceLink(ctx)
 		if err != nil {
@@ -61,7 +63,7 @@ func TestPersonApproveTrustsNativeDevicesOnly(t *testing.T) {
 		if err := runPerson(ctx, a, append(append([]string{"approve"}, approve...), id), &out); err != nil {
 			t.Fatalf("approve %v: %v", approve, err)
 		}
-		return client.TrustedDevice{Address: dev.Address, Fingerprint: dev.Self().Fingerprint()}
+		return client.TrustedDevice{Address: dev.Address, Fingerprint: dev.Self().Fingerprint()}, out.String()
 	}
 	trusted := func(d client.TrustedDevice) bool {
 		t.Helper()
@@ -71,10 +73,13 @@ func TestPersonApproveTrustsNativeDevicesOnly(t *testing.T) {
 		}
 		return slices.Contains(set, d)
 	}
-	desk := link("desk")
-	phone := link("phone", "--browser")
-	if !trusted(desk) || trusted(phone) {
-		t.Fatalf("after approve: desk trusted %v, browser phone trusted %v", trusted(desk), trusted(phone))
+	phone, said := link("phone")
+	if trusted(phone) || strings.Contains(said, "need no accept") {
+		t.Fatalf("person approve ID trusted the device (it may be a browser): %q", said)
+	}
+	desk, said := link("desk", "--native")
+	if !trusted(desk) || !strings.Contains(said, "never") || !strings.Contains(said, "browser") {
+		t.Fatalf("approve --native: trusted %v, said %q", trusted(desk), said)
 	}
 	var out bytes.Buffer
 	if err := runPerson(ctx, a, nil, &out); err != nil {
@@ -85,15 +90,15 @@ func TestPersonApproveTrustsNativeDevicesOnly(t *testing.T) {
 			t.Fatalf("person marks the wrong devices: %s", &out)
 		}
 	}
-	if err := runPerson(ctx, a, []string{"trust", phone.Address}, &out); err != nil || !trusted(phone) {
-		t.Fatalf("trust: %v", err)
-	}
-	if err := runPerson(ctx, a, []string{"untrust", phone.Address}, &out); err != nil || trusted(phone) {
-		t.Fatalf("untrust: %v", err)
-	}
-	for _, bad := range [][]string{{"untrust", a.Address}, {"trust", "admin/nobody"}, {"approve", "--native", "x"}} {
+	for _, bad := range [][]string{{"trust", phone.Address}, {"untrust", a.Address}, {"approve", "--browser", "x"}, {"approve", "--native"}} {
 		if err := runPerson(ctx, a, bad, &out); err == nil {
 			t.Fatalf("person %v accepted", bad)
 		}
+	}
+	if trusted(phone) {
+		t.Fatal("the phone became trusted")
+	}
+	if err := runPerson(ctx, a, []string{"untrust", desk.Address}, &out); err != nil || trusted(desk) {
+		t.Fatalf("untrust: %v", err)
 	}
 }

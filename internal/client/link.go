@@ -234,10 +234,15 @@ func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
 	return a.decideLink(ctx, id, accept, false)
 }
 
-// ApproveNativeLink approves link request id as DecideLink does, for a
-// native device (one that joined with agentnet join, never a browser): with
-// the approval, its exact key joins this device's self-consent trust set
-// (selfconsent.go). The page's approval never does, since it cannot tell.
+// ApproveNativeLink approves the pending link request id as DecideLink
+// does and, with the approval, adds the device's exact key to this
+// device's self-consent trust set (selfconsent.go): its invites of this
+// person's own agents here are then accepted without a click. The person
+// asks for it (agentnet person approve --native ID) only for a computer
+// running agentnet, never a browser. Nothing in a request tells the two
+// apart, so nothing else trusts a device: not DecideLink (the page, person
+// approve ID), and not this call for a request that is no longer pending
+// (approved already, perhaps on the page).
 func (a *Agent) ApproveNativeLink(ctx context.Context, id string) error {
 	return a.decideLink(ctx, id, true, true)
 }
@@ -254,12 +259,9 @@ func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) 
 		return err
 	}
 	switch {
+	case native && state != LinkPending:
+		return fmt.Errorf("that request is %s already: only a pending request is approved with --native, so its device is not trusted", state)
 	case state == LinkApproved && accept:
-		if native {
-			if err := a.trustLinked(pub); err != nil {
-				return err
-			}
-		}
 		return a.publishLink(ctx, id)
 	case state != LinkPending:
 		return fmt.Errorf("that request is %s already", state)
@@ -322,15 +324,6 @@ func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) 
 		return err
 	}
 	return a.publishLink(ctx, id)
-}
-
-// trustLinked adds the device of an approved link, pub, to the trust set.
-func (a *Agent) trustLinked(pub string) error {
-	var dev identity.Public
-	if err := json.Unmarshal([]byte(pub), &dev); err != nil {
-		return err
-	}
-	return a.setSelfConsentTrust(func(tx *sql.Tx) error { return addSelfConsentTrustIn(tx, dev.Address, dev.Fingerprint()) })
 }
 
 func (a *Agent) setLink(id, state, detail string) {
