@@ -316,6 +316,7 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 		msgs[i].Human = h
 	}
 	msgs = a.showExcerpts(msgs)
+	a.verifyAgents(conv, msgs)
 	for i := range msgs {
 		// A turn sent from this device opens from its kept copy; one sent
 		// from another device of this person (Via) is a received copy.
@@ -926,7 +927,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	case envelope.SubDriveSpace: // the conversation's Drive space record (drivespace_wire.go): applied under the sender's person, stored quietly
 		return a.admitDriveControl(ctx, env, in, sender, fromQuarantine)
 	}
-	if reason, err := a.checkConversationAgent(in, sender); err != nil {
+	if reason, err := a.checkConversationAgent(in, sender, false); err != nil {
 		if reason != "" {
 			return hold(reason, err.Error())
 		}

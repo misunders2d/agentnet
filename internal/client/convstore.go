@@ -568,6 +568,16 @@ type ConvMessage struct {
 	Detail     string              `json:"detail,omitempty"`
 	At         int64               `json:"at"` // received or created here, unix seconds (listed in that order, to the millisecond)
 
+	// An agent's turn (agentTurn) sent by its participation's exact host
+	// key, as admission checks it (checkConversationAgent): for history,
+	// the original key its own device vouched for. Never inferred from
+	// Origin or AgentID; a claimed excerpt is never one. It speaks for the
+	// turn as sent (Body): an edit, which any device of the host's person
+	// may make, shows in Controls and is not the host key's. status is the
+	// turn's own (an agent's progress is a message).
+	VerifiedAgent bool `json:"verified_agent"`
+	status        string
+
 	// A request this device's agent runs (received, or asked here by this
 	// device's own person): the job's state and detail here (agentjob.go).
 	Job       string `json:"job,omitempty"`
@@ -605,13 +615,13 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
-		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END
+		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, '')
 		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN ('drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal')
 		   AND NOT `+erasedIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, '')
+		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, '')
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+`
 		ORDER BY ms, 1`, conv, self, selfFP, conv, selfFP)
@@ -626,7 +636,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		var target, to string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status); err != nil {
 			return nil, err
 		}
 		if target != "" {

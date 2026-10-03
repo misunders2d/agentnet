@@ -336,15 +336,22 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 	if _, err := pa.Act(Action{Do: DoAccept, ID: sent.ID}); err != nil {
 		t.Fatal(err)
 	}
+	var result DMMessage
 	eventually("the agent's result at bob", func() bool {
 		d, _ := pb.DM(conv)
 		for _, m := range d.Messages {
 			if m.Dir == "in" && m.PID == inv.PID && strings.HasPrefix(m.Origin, "agent:") && strings.Contains(m.Body, "rotated") {
+				result = m
 				return true
 			}
 		}
 		return false
 	})
+	// Marked as the agent's from its host's key, never from its origin: the
+	// person's request beside it is not.
+	if !result.VerifiedAgent || task.VerifiedAgent {
+		t.Fatalf("verified agent: result %+v, task %+v", result, task)
+	}
 	if data, _ := os.ReadFile(log); strings.Count(string(data), "run") != 1 {
 		t.Fatalf("the agent ran %q", data)
 	}
