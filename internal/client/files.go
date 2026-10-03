@@ -520,7 +520,12 @@ func (a *Agent) OpenAttachment(ctx context.Context, msgID string, index int) (io
 	}
 	f := files[index]
 	if strings.HasPrefix(f.BlobID, historyBlob) {
-		return nil, f, errors.New("this file came with the conversation's history: ask your other device for it first (RequestFile)")
+		from := "the device that shared that history"
+		var via string
+		if a.store.db.QueryRow(`SELECT coalesce(via, '') FROM inbox WHERE id = ?`, msgID).Scan(&via) == nil && via != "" {
+			from = via
+		}
+		return nil, f, fmt.Errorf("this file came with the conversation's history: request it from %s first", from)
 	}
 	if retracted, err := a.store.retracted(msgID); err != nil {
 		return nil, f, err

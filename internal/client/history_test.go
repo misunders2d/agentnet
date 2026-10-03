@@ -259,6 +259,8 @@ func TestHistoryFilesOnRequest(t *testing.T) {
 	})
 	if _, _, err := phone.OpenAttachment(tctx(t), msgs[1].ID, 0); err == nil {
 		t.Fatal("a history file opened before it was asked for")
+	} else if !strings.Contains(err.Error(), "request it from "+w.alice.Address+" first") || strings.Contains(err.Error(), "RequestFile") {
+		t.Fatalf("the refusal does not say where to ask, in plain words: %v", err)
 	}
 	for _, i := range []int{1, 2, 3} {
 		if err := phone.RequestFile(tctx(t), msgs[i].ID, 0); err != nil {
