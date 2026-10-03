@@ -181,8 +181,16 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if err != nil {
 		return ConvSent{}, err
 	}
+	// Fresh rosters decide the devices. With the Hub out of reach the copies
+	// go to the devices pinned here and wait, as a DM's do: each is released
+	// only once its recipient's current record shows it may read it, and the
+	// current group state is checked again when it is sent.
+	waiting := ""
 	for _, member := range packet.State.Members {
-		if _, err = a.refreshPerson(ctx, member.Person, false); err != nil {
+		if _, err = a.refreshPerson(ctx, member.Person, false); hubUnreachable(err) {
+			waiting = "cannot reach the Hub: " + err.Error()
+			break
+		} else if err != nil {
 			return ConvSent{}, err
 		}
 	}
@@ -261,6 +269,9 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			}
 			in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: lid, From: a.Address, To: device.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: raw, Body: m.Body, ReplyTo: reply, Origin: m.Origin, Emotion: m.Emotion, Replica: person.roster.Person == me.roster.Person, Fan: fan}
 			copies = append(copies, outCopy{in: in, state: stateQueued, required: protocol.CapGroup, recipientFP: key.Fingerprint(), groupAdmission: admission.Hash()})
+			if waiting != "" {
+				copies[len(copies)-1].state, copies[len(copies)-1].why = stateConvWaiting, waiting
+			}
 			copy := &copies[len(copies)-1]
 			for _, file := range m.Files {
 				att, e := a.spoolNamed(file, recipient)
@@ -323,12 +334,14 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	defer notifyDaemon(a.home)
 	sent := ConvSent{ID: copies[0].env.ID, LID: lid, State: protocol.StateDelivered}
 	for _, copy := range copies {
-		cp := ConvCopy{ID: copy.env.ID, To: copy.env.To, State: copy.state}
-		r, e := a.deliver(ctx, copy.env, nil)
-		if e != nil {
-			cp.Detail = e.Error()
-		} else {
-			cp.State, cp.Detail = r.State, r.Detail
+		cp := ConvCopy{ID: copy.env.ID, To: copy.env.To, State: copy.state, Detail: copy.why}
+		if copy.state != stateConvWaiting { // released by releaseConv, never sent from here
+			r, e := a.deliver(ctx, copy.env, nil)
+			if e != nil {
+				cp.Detail = e.Error()
+			} else {
+				cp.State, cp.Detail = r.State, r.Detail
+			}
 		}
 		sent.Copies = append(sent.Copies, cp)
 		if rank(cp.State) < rank(sent.State) {
