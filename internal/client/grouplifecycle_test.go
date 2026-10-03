@@ -708,3 +708,88 @@ func TestGroupLifecycleOfflineExplicitConsentReconnect(t *testing.T) {
 	}
 	eventually(t, "offline explicit consent joins on reconnect", func() bool { got, e := w.bob.GroupContext(p.Root.ID()); return e == nil && got.State.Seq == 1 })
 }
+
+// BUG-13: several invitations at one head. The first acceptance moves the
+// group on; a later one was signed for the old head and is never rebased.
+// The inviter re-issues it at the new head with the same target and history,
+// the invitee's earlier consent shows as stale, and a fresh acceptance joins.
+func TestGroupLifecycleConcurrentInvitationsReissuedForFreshConsent(t *testing.T) {
+	w, p := groupLifecycleFixture(t, true)
+	carol := proofReader(t, w, "carol")
+	runAgent(t, carol)
+	publishGroupFixtureCaps(t, carol, true)
+	carolSelf, _, err := carol.store.selfPerson(carol.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv := p.Root.ID()
+	bobInv := groupLifecycleInvite(t, w, p, nil)
+	carolInv, err := w.alice.InviteGroup(tctx(t), conv, carolSelf.roster.Person, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitGroupInvitation(t, w.bob, bobInv.ID, "pending")
+	awaitGroupInvitation(t, carol, carolInv.ID, "pending")
+	if err = w.bob.DecideGroupInvitation(tctx(t), bobInv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the first acceptance published", func() bool {
+		r, e := groupInvitationIn(w.alice.store.db, bobInv.ID, "out")
+		return e == nil && r.State == "published"
+	})
+	if err = carol.DecideGroupInvitation(tctx(t), carolInv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	var fresh GroupInvitationInfo
+	eventually(t, "a fresh invitation for carol at the new head", func() bool {
+		list, e := carol.GroupInvitations()
+		if e != nil {
+			return false
+		}
+		for _, i := range list {
+			if i.Direction == "in" && i.ID != carolInv.ID && i.State == "pending" && i.Proposal.Target == carolSelf.roster.Person && i.Proposal.Seq == 2 {
+				fresh = i
+				return true
+			}
+		}
+		return false
+	})
+	if !slices.Equal(fresh.Proposal.History, carolInv.Proposal.History) {
+		t.Fatal("re-issued invitation changed the selected history")
+	}
+	eventually(t, "carol's earlier consent shown as stale", func() bool {
+		r, e := groupInvitationIn(carol.store.db, carolInv.ID, "in")
+		return e == nil && r.State == "stale"
+	})
+	if r, e := groupInvitationIn(w.alice.store.db, carolInv.ID, "out"); e != nil || r.State != "stale" {
+		t.Fatalf("inviter's old invitation %s %v", r.State, e)
+	}
+	if r, e := groupInvitationIn(w.alice.store.db, fresh.ID, "out"); e != nil || r.State != "pending" {
+		t.Fatalf("inviter's re-issued invitation %s %v", r.State, e)
+	}
+	if err = carol.DecideGroupInvitation(tctx(t), carolInv.ID, true); err == nil || !strings.Contains(err.Error(), "newer invitation") {
+		t.Fatalf("accepting the stale invitation again: %v", err)
+	}
+	if err = carol.DecideGroupInvitation(tctx(t), fresh.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*Agent{w.alice, w.bob, carol} {
+		eventually(t, "every invitee joined at "+a.Address, func() bool {
+			got, e := a.GroupContext(conv)
+			return e == nil && got.State.Seq == 2 && len(got.State.Members) == 3
+		})
+	}
+	var n int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM group_publications WHERE conv=?`, conv).Scan(&n)
+	if n != 3 {
+		t.Fatalf("publications %d, want create and two admissions", n)
+	}
+	// Re-issuing happens once: recovery finds the successor and adds nothing.
+	if err = w.alice.RecoverGroupInvitations(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM group_invitations WHERE direction='out' AND conv=?`, conv).Scan(&n)
+	if n != 3 {
+		t.Fatalf("outgoing invitations %d, want bob's, carol's stale one and its re-issue", n)
+	}
+}

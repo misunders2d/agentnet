@@ -28,6 +28,10 @@ CREATE TABLE group_invitation_copies(id TEXT PRIMARY KEY, invitation TEXT NOT NU
 var ErrGroupInvitationStale = errors.New("group: invitation changed or stale; send a fresh proposal and obtain fresh consent")
 var errGroupDecisionRecorded = errors.New("group: exact decision already recorded")
 
+// errGroupInvitationOutdated is the invitee's side of a stale invitation: a
+// newer one for the same group superseded it (see staleOlderGroupInvitations).
+var errGroupInvitationOutdated = errors.New("group: this invitation is out of date because the group changed; accept the newer invitation for this group, or ask the inviter for one")
+
 type GroupInvitationInfo struct {
 	ID        string                   `json:"id"`
 	Direction string                   `json:"direction"`
@@ -407,6 +411,9 @@ func (a *Agent) DecideGroupInvitation(ctx context.Context, id string, accept boo
 	if r.State == decision {
 		return nil
 	}
+	if r.State == "stale" {
+		return errGroupInvitationOutdated
+	}
 	if r.State != "pending" {
 		return errors.New("group: invitation already decided")
 	}
@@ -618,5 +625,117 @@ func (a *Agent) RecoverGroupInvitations(ctx context.Context) error {
 			failures = append(failures, e)
 		}
 	}
+	if e := a.reissueGroupInvitations(ctx); e != nil {
+		failures = append(failures, e)
+	}
 	return errors.Join(failures...)
+}
+
+// reissueGroupInvitations re-issues this device's stale invitations whose
+// group moved on before they were published: another admission (or any other
+// change) came first. A consent binds the head it was signed for, so nothing
+// is rebased: the same target gets a fresh proposal at the current head, with
+// the same selected history, and must accept it again. Each is re-issued once
+// (the newer invitation for that target is its successor). One that no longer
+// fits stays stale for its person to review. Only a transient failure is
+// returned, so recovery retries it; nothing polls.
+func (a *Agent) reissueGroupInvitations(ctx context.Context) error {
+	rows, err := a.store.db.Query(`SELECT id FROM group_invitations WHERE direction='out' AND state='stale' ORDER BY rowid`)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			break
+		}
+		ids = append(ids, id)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, id := range ids {
+		r, err := groupInvitationIn(a.store.db, id, "out")
+		if err == nil && a.groupInvitationReissuable(r) {
+			var fresh GroupInvitationInfo
+			if fresh, err = a.InviteGroup(ctx, r.Proposal.Root.ID(), r.Proposal.Target, r.Proposal.History); err == nil {
+				a.Logf("group invitation %s was out of date (the group changed first); sent a fresh invitation %s at the current state: it needs a fresh acceptance", id, fresh.ID)
+			}
+		}
+		if groupLifecycleTransient(err) {
+			failures = append(failures, err)
+		} else if err != nil {
+			a.Logf("group invitation %s stays stale: %v", id, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// groupInvitationReissuable says whether stale invitation r of this device
+// only fell behind its group: the group moved past the state it names, this
+// device's person is still an effective administrator, the target is not a
+// member, no newer invitation for the target exists and the selected history
+// is still available. Local evidence only; InviteGroup verifies it afresh.
+func (a *Agent) groupInvitationReissuable(r groupInvitationRow) bool {
+	if a.groupInvitationOwner(r) != nil {
+		return false
+	}
+	p := r.Proposal
+	current, err := a.GroupContext(p.Root.ID())
+	if err != nil || current.State.Seq <= p.State.Seq {
+		return false
+	}
+	admin, ok := current.State.Member(r.peerPerson)
+	if !ok || !admin.Admin || current.State.Withdrawn(admin, current.Withdrawals) {
+		return false
+	}
+	if m, member := current.State.Member(p.Target); member && !current.State.Withdrawn(m, current.Withdrawals) {
+		return false
+	}
+	if _, err = a.groupHistorySelectionIn(a.store.db, p.Root.ID(), p.History); err != nil {
+		return false
+	}
+	newer, err := groupInvitationsBy(a.store.db, "out", p, func(o protocol.GroupInvitation) bool { return o.State.Seq > p.State.Seq })
+	return err == nil && len(newer) == 0
+}
+
+// groupInvitationsBy are the ids of direction's invitations for p's group
+// and target, other than p, for which keep holds.
+func groupInvitationsBy(q dbq, direction string, p protocol.GroupInvitation, keep func(protocol.GroupInvitation) bool) ([]string, error) {
+	rows, err := q.Query(`SELECT id FROM group_invitations WHERE direction=? AND conv=? AND id!=? ORDER BY rowid`, direction, p.Root.ID(), p.ID())
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			break
+		}
+		ids = append(ids, id)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, id := range ids {
+		o, err := groupInvitationIn(q, id, direction)
+		if err != nil {
+			return nil, err
+		}
+		if o.Proposal.Target == p.Target && keep(o.Proposal) {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }

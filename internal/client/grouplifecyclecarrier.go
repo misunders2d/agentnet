@@ -209,6 +209,8 @@ func (a *Agent) mayDeliverGroupLifecycle(env envelope.Envelope) (bool, bool, err
 	if err != nil {
 		if direction == "out" && errors.Is(err, ErrGroupInvitationStale) {
 			a.store.db.Exec(`UPDATE group_invitations SET state='stale' WHERE id=? AND direction='out' AND state IN ('pending','accepted')`, id)
+			a.groupWork.recover.Store(true) // re-issued at the current state if only the group moved on (reissueGroupInvitations)
+			a.kickNow()
 		}
 		e := a.store.setOutboxState(env.ID, stateNotDelivered, "group invitation no longer eligible", "")
 		if e == nil {
@@ -296,6 +298,10 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 	if err != nil {
 		if existing.ID != "" && errors.Is(err, ErrGroupInvitationStale) {
 			a.store.db.Exec(`UPDATE group_invitations SET state='stale' WHERE id=? AND direction='out' AND state='pending'`, existing.ID)
+			// A consent signed for a state the group moved past is never
+			// rebased: the invitation is re-issued for a fresh one.
+			a.groupWork.recover.Store(true)
+			a.kickNow()
 		}
 		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, ErrNoPerson) || errors.Is(err, sql.ErrNoRows) {
 			return hold(reasonProof, err.Error())
@@ -323,6 +329,18 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 			}
 			if _, e = tx.Exec(`INSERT INTO group_invitations(id,direction,conv,peer_person,peer_address,peer_fp,payload,state)VALUES(?,'in',?,?,?,?,?,'pending') ON CONFLICT(id,direction)DO NOTHING`, proposal.ID(), in.Conv, person.roster.Person, env.From, sender.Fingerprint(), raw); e != nil {
 				return e
+			}
+			// This one is verified at the group's current state: an earlier
+			// invitation to this person names a state the group moved past,
+			// so it can never be published, even if accepted. Say so.
+			older, e := groupInvitationsBy(tx, "in", proposal, func(o protocol.GroupInvitation) bool { return o.State.Seq < proposal.State.Seq })
+			if e != nil {
+				return e
+			}
+			for _, id := range older {
+				if _, e = tx.Exec(`UPDATE group_invitations SET state='stale' WHERE id=? AND direction='in' AND state IN ('pending','accepted')`, id); e != nil {
+					return e
+				}
 			}
 		} else {
 			old, e := groupInvitationIn(tx, consent.Invitation, "out")
