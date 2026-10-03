@@ -268,8 +268,11 @@ Built: `internal/client/alerts.go`; client schema step 18.
   The daemon page (frontend) offers the controls; turning off drops
   pending alerts.
 - **Queue:** admitting a DM turn that asks for attention (decided from the
-  decrypted message, §1; the outer hint is not needed), from an allowed
-  exact key, in a conversation not muted, with alerts on, writes the alert
+  decrypted message, §1; the outer hint is not needed), from a current
+  device (with its exact key) of a pinned person one of whose current
+  devices' exact keys is allowed (alerts are per person: a device the person
+  adds later alerts too; the page allows and removes all of a person's
+  device keys together), in a conversation not muted, with alerts on, writes the alert
   in the message's own admission transaction (persisted), keyed by
   conversation: the first message sets the deadline (grace 5 s), later ones
   replace `last_id` without moving it.
@@ -278,8 +281,8 @@ Built: `internal/client/alerts.go`; client schema step 18.
   alert whose `last_id` is among the ids; nothing else cancels.
 - **Show:** one loop in the daemon, a timer on the earliest deadline, woken
   by admissions and preference changes; no polling. At the deadline it
-  checks again (on, not muted, the sender still allowed with the key of a
-  pinned, not frozen, person), removes the due alerts in one transaction,
+  checks again (on, not muted, the sender still a current device of a
+  pinned, not frozen, person who is still allowed), removes the due alerts in one transaction,
   and only then asks for one native notification "AgentNet" / "New
   activity" (one conversation: its click; several: the page).
 - **Order and limits, plainly:** removal is committed before the OS call,

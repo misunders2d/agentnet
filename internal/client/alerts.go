@@ -160,6 +160,16 @@ func (a *Agent) AlertPresented(conv string, ids []string) error {
 	return err
 }
 
+// allowedSenderDevice is the SQL condition that the device ?address with key
+// ?fingerprint is a current device of a pinned person (?state) for whom alerts
+// are allowed: the exact key of one of that person's current devices is an
+// allowed sender. Alerts are allowed per person, so a device that person adds
+// later alerts too; a key the person does not hold never does.
+const allowedSenderDevice = `EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person
+		JOIN person_devices o ON o.person = d.person
+		JOIN alert_senders s ON s.address = o.address AND s.fingerprint = o.fingerprint
+		WHERE d.address = ? AND d.fingerprint = ? AND p.state = ?)`
+
 // queueAlert queues (or adds to) the alert for in, a DM message just
 // admitted within tx, verified by the key with fingerprint verifiedBy, if
 // it asks for attention and the person's preferences allow it.
@@ -170,8 +180,8 @@ func queueAlert(tx *sql.Tx, in envelope.Inner, verifiedBy string, now time.Time)
 	var ok bool
 	if err := tx.QueryRow(`SELECT
 		EXISTS (SELECT 1 FROM config WHERE k = 'alerts' AND v = 'on')
-		AND EXISTS (SELECT 1 FROM alert_senders WHERE address = ? AND fingerprint = ?)
-		AND NOT EXISTS (SELECT 1 FROM alert_mutes WHERE conv = ?)`, in.From, verifiedBy, in.Conv).Scan(&ok); err != nil || !ok {
+		AND `+allowedSenderDevice+`
+		AND NOT EXISTS (SELECT 1 FROM alert_mutes WHERE conv = ?)`, in.From, verifiedBy, personPinned, in.Conv).Scan(&ok); err != nil || !ok {
 		return err
 	}
 	_, err := tx.Exec(`INSERT INTO alerts(conv, sender, last_id, count, due_ms) VALUES(?, ?, ?, 1, ?)
@@ -229,8 +239,10 @@ func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 	rows, err := tx.Query(`SELECT l.conv,
 		EXISTS (SELECT 1 FROM config WHERE k = 'alerts' AND v = 'on')
 		AND NOT EXISTS (SELECT 1 FROM alert_mutes m WHERE m.conv = l.conv)
-		AND EXISTS (SELECT 1 FROM alert_senders s JOIN person_devices d ON d.address = s.address AND d.fingerprint = s.fingerprint
-		            JOIN persons p ON p.person = d.person WHERE s.address = l.sender AND p.state = ?)
+		AND EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person
+		            JOIN person_devices o ON o.person = d.person
+		            JOIN alert_senders s ON s.address = o.address AND s.fingerprint = o.fingerprint
+		            WHERE d.address = l.sender AND p.state = ?)
 		FROM alerts l WHERE l.due_ms <= ?`, personPinned, now.UnixMilli())
 	if err != nil {
 		return time.Time{}, err

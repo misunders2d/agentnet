@@ -34,11 +34,28 @@ func (l *Live) decided() ([]protocol.NotifySender, error) {
 	}
 	var out []protocol.NotifySender
 	for _, c := range convs {
-		if c.Creator == l.a.Address && c.Peer.State == PersonPinned && !slices.ContainsFunc(out, func(s protocol.NotifySender) bool { return s.Address == c.Peer.Address }) {
-			out = append(out, protocol.NotifySender{Address: c.Peer.Address, Fingerprint: c.Peer.Fingerprint})
+		if c.Creator == l.a.Address && c.Peer.State == PersonPinned {
+			for _, s := range personSenders(c.Peer) {
+				if !slices.ContainsFunc(out, func(x protocol.NotifySender) bool { return x.Address == s.Address }) {
+					out = append(out, s)
+				}
+			}
 		}
 	}
 	return out, nil
+}
+
+// personSenders are the exact keys of p's current devices. Alerts are
+// allowed per person (client queueAlert): any of these keys covers each of
+// p's devices, so the choice outlasts one device's removal.
+func personSenders(p client.PersonInfo) []protocol.NotifySender {
+	out := []protocol.NotifySender{{Address: p.Address, Fingerprint: p.Fingerprint}}
+	for _, d := range p.Devices {
+		if d.Address != p.Address {
+			out = append(out, protocol.NotifySender{Address: d.Address, Fingerprint: d.Fingerprint})
+		}
+	}
+	return out
 }
 
 func (l *Live) setAlerts(change func(*client.AlertPrefs) error) error {
@@ -100,7 +117,8 @@ func (l *Live) NotifyMute(conv string, muted bool) (string, error) {
 	})
 }
 
-// NotifyAllow implements Alerts: the person's exact current key.
+// NotifyAllow implements Alerts: the exact current keys of the person's
+// devices; turning it off removes every one of them.
 func (l *Live) NotifyAllow(person string, allowed bool) (string, error) {
 	known, err := l.a.KnownPersons()
 	if err != nil {
@@ -115,10 +133,13 @@ func (l *Live) NotifyAllow(person string, allowed bool) (string, error) {
 	if allowed {
 		note = "Alerts from them are on."
 	}
+	keys := personSenders(who)
 	return note, l.setAlerts(func(p *client.AlertPrefs) error {
-		p.Senders = slices.DeleteFunc(p.Senders, func(s protocol.NotifySender) bool { return s.Address == who.Address })
+		p.Senders = slices.DeleteFunc(p.Senders, func(s protocol.NotifySender) bool {
+			return slices.ContainsFunc(keys, func(k protocol.NotifySender) bool { return k.Address == s.Address })
+		})
 		if allowed {
-			p.Senders = append(p.Senders, protocol.NotifySender{Address: who.Address, Fingerprint: who.Fingerprint})
+			p.Senders = append(p.Senders, keys...)
 		}
 		return nil
 	})
