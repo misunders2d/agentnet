@@ -86,6 +86,9 @@ func run(args []string) error {
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
 	}
+	if err := runGuard(cmd, rest); err != nil {
+		return err
+	}
 	if cmd == "daemon" {
 		keepDaemonInstallDirOnPath(os.Args[0])
 	}
@@ -402,6 +405,11 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 			extra = " [--reply-to ID] [--progress]"
 		}
 		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s]%s %s TEXT", name, extra, target)
+	}
+	if !reply {
+		if err := sendGuard(*replyTo); err != nil {
+			return err
+		}
 	}
 	if !reply && *progress && *replyTo == "" {
 		return errors.New("--progress requires --reply-to ID")

@@ -23,6 +23,9 @@ func (f replyReceiverFlags) selected(a *client.Agent) (*client.ReplyReceiver, er
 	if id == "" && *f.receiver == "" && os.Getenv(client.BackgroundEnv) == "1" {
 		id = os.Getenv("AGENTNET_REPLY_BINDING")
 	}
+	if bound := os.Getenv(replyBindingEnv); inRun() && bound != "" && id != bound {
+		return nil, refusedInRun("choosing another reply receiver") // the run guard (runguard.go)
+	}
 	if id != "" {
 		if *f.receiver != "" || *f.instructions != "" || *f.mode != "" || *f.onClose != "" {
 			return nil, errors.New("reply-binding reuses frozen receiver/instructions/mode; cannot redirect or upgrade")
