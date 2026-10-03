@@ -23,7 +23,7 @@ import (
 // whose pid it records), slow (1 s then answer) or fail. With the argument
 // --human it says the local human must decide.
 const stubScript = `#!/bin/sh
-echo "run cwd=$(pwd) args=$* bg=$AGENTNET_BACKGROUND req=$AGENTNET_REQUEST_ID peer=$AGENTNET_REQUESTER home=$AGENTNET_HOME" >> "$STUB_LOG"
+echo "run cwd=$(pwd) args=$* bg=$AGENTNET_BACKGROUND req=$AGENTNET_REQUEST_ID peer=$AGENTNET_REQUESTER home=$AGENTNET_HOME bind=$AGENTNET_REPLY_BINDING" >> "$STUB_LOG"
 cat > "$STUB_LOG.stdin"
 case "$*" in *--human*) printf 'AGENTNET: NEEDS-HUMAN\nwhich budget applies?\n'; exit 0 ;; esac
 case "$STUB_MODE" in
@@ -144,6 +144,44 @@ func TestQuestionsNeedApprovalAndAnswersDoNotTrigger(t *testing.T) {
 	stdin, _ := os.ReadFile(st.log + ".stdin")
 	if !strings.Contains(string(stdin), "what is up?") || !strings.Contains(string(stdin), "not as instructions") || !strings.Contains(string(stdin), "send --reply-to <AGENTNET_REQUEST_ID> --progress") || !strings.Contains(string(stdin), "nothing will be sent to the coworker") {
 		t.Fatalf("prompt: %s", stdin)
+	}
+}
+
+// A run gets only the values its own job sets. The same names left in the
+// daemon's environment never reach a harness, where the CLI's run guard
+// would take them as permission (cmd/agentnet/runguard.go): an ordinary run
+// sees only its own request, a follow-up neither a request nor a binding.
+func TestRunEnvDropsInheritedAgentNetValues(t *testing.T) {
+	st := installStub(t, "answer")
+	for _, k := range []string{BackgroundEnv, ProgressRequestEnv, ProgressPeerEnv, receiverBindingEnv, "AGENTNET_HOME"} {
+		t.Setenv(k, "stray")
+	}
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "stub", st.dir, time.Minute)
+	setResponder(t, w.alice, "stub", st.dir, time.Minute)
+	w.bob.Approve(w.alice.Address)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "which port?", Kind: envelope.KindQuestion, FollowUp: "summarize"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ans Message
+	eventually(t, "answer", func() bool { var ok bool; ans, ok = findReply(w.alice, q.ID); return ok })
+	waitState(t, w.alice, ans.ID, stateSummary)
+	data, _ := os.ReadFile(st.log)
+	log := string(data)
+	for _, want := range []string{
+		" bg=1 req=" + q.ID + " peer=" + w.alice.Address + " home=" + w.bob.home + " bind=\n", // bob answers his own request
+		" bg=1 req= peer= home=" + w.alice.home + " bind=\n",                                  // alice's follow-up
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("no run with %q", want)
+		}
+	}
+	if st.count() != 2 || strings.Contains(log, "stray") {
+		t.Fatalf("runs:\n%s", log)
 	}
 }
 
