@@ -194,6 +194,41 @@ func TestExternalAgentEncryptedLifecycle(t *testing.T) {
 	}
 }
 
+// A question to an outside host's agent whose text shows nothing (only
+// white space and invisible characters) is refused before anything is
+// stored or sent, as any message is: the agent never runs on it.
+func TestExternalAgentAskRefusesInvisibleText(t *testing.T) {
+	w, host, conv, lids, stub, records, _ := externalAgentWorld(t)
+	p, err := w.alice.InviteNamedAgent(tctx(t), conv, host.Address, records[0].ID, lids[:1], nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "external invite at the host", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "active at alice", func() bool { return stateAt(t, w.alice, p.PID).Claimable() })
+	var before, after int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&before)
+	for _, blank := range []string{"\u200b", " \u200d\u2060\ufeff ", "\u200e\u200f\u2066\u2069"} {
+		if _, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, blank); err == nil {
+			t.Errorf("question %q sent", blank)
+		}
+	}
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&after)
+	if after != before {
+		t.Fatalf("%d row(s) stored for a question that shows nothing", after-before)
+	}
+	q, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "visible\u200b")
+	if err != nil {
+		t.Fatalf("visible question with a zero-width space: %v", err)
+	}
+	replyAt(t, w.alice, conv, q.ID)
+	if stub.runs() != 1 {
+		t.Fatalf("the agent ran %d times, want once (the visible question)", stub.runs())
+	}
+}
+
 func TestExternalAgentProofReplayAndQueuedGates(t *testing.T) {
 	w, host, conv, lids, _, records, stopHost := externalAgentWorld(t)
 	p, err := w.alice.InviteNamedAgent(tctx(t), conv, host.Address, records[0].ID, lids[:1], nil, "")
