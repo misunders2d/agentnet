@@ -931,7 +931,29 @@ func runApprovals(a *client.Agent) error {
 	for _, t := range ts {
 		fmt.Printf("tasks      %s  key %s  %s\n", t.Address, t.Fingerprint, t.Status)
 	}
-	if len(qs) == 0 && len(ts) == 0 {
+	// An agent of this device accepted into a conversation runs, without
+	// asking, the tasks of the member keys its invitation named: accepting
+	// it was that grant, which stands until it is dismissed.
+	convs, err := a.Conversations()
+	if err != nil {
+		return err
+	}
+	granted := 0
+	for _, c := range convs {
+		parts, err := a.Participations(c.ID)
+		if err != nil {
+			return err
+		}
+		for _, p := range parts {
+			if !p.HostHere || !p.Claimable() || len(p.TaskKeys) == 0 {
+				continue
+			}
+			granted++
+			fmt.Printf("tasks      from %s  in conversation %s through your agent %s (accepting it granted this; agentnet dm dismiss-agent %s ends it)\n",
+				strings.Join(taskGrantees(a, p), ", "), c.ID, p.PID, p.PID)
+		}
+	}
+	if len(qs) == 0 && len(ts) == 0 && granted == 0 {
 		fmt.Println("none: every question and task waits for you")
 	}
 	return nil

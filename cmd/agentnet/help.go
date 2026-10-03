@@ -371,6 +371,8 @@ migrated. All devices in new DMs need the person2-capable version.`,
        agentnet dm agents ID
        agentnet dm accept-agent|decline-agent|dismiss-agent PID
        agentnet dm ask-agent [--task] PID TEXT
+       agentnet dm invite-guest [--share LID,...] [--note TEXT] ID HOST
+       agentnet dm accept-guest|decline-guest|end-guest PID
 
 A DM is a conversation between two persons (see agentnet help person), with
 its own id: each dm new starts a separate one, even with the same person,
@@ -398,7 +400,17 @@ dm accept-agent / dm decline-agent, all or nothing), the earlier messages it
 may be shown (--grant, logical ids from dm show; nothing else earlier) and
 who may give it follow-up tasks (--tasks). Both people see the invite.
 Either person can end it with dm dismiss-agent; inviting again starts a new
-participation.
+participation. Accepting an invitation that lists --tasks keys lets their
+tasks run on the host without asking while the agent participates: dm
+agents shows those keys before you accept, accept-agent repeats them, and
+approvals lists the grant until the agent is dismissed.
+
+A member can invite a person from outside the DM as a guest with dm
+invite-guest (HOST is that person's device; --share names earlier messages
+they are shown, logical ids from dm show). The guest decides with dm
+accept-guest or dm decline-guest; once accepted, the guest's dm send goes to
+the conversation under that participation. dm end-guest is a member
+removing the guest, or the guest leaving; shared copies remain.
 
 dm ask-agent sends the agent a question or task; both people see it. The
 host installation's daemon runs it with its own responder and setup (agentnet

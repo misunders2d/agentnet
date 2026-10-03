@@ -11,6 +11,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // runPerson shows or sets up this installation's person and its devices
@@ -95,7 +96,7 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 // runDM handles two-person conversations (agentnet help dm).
 func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: dm new ADDRESS | dm list | dm show ID | dm send [--question|--task] ID TEXT | dm invite ID HOST | dm agents ID | dm accept-agent PID | dm decline-agent PID | dm dismiss-agent PID | dm ask-agent [--task] PID TEXT (see agentnet help dm)")
+		return errors.New("usage: dm new ADDRESS | dm list | dm show ID | dm send [--question|--task] ID TEXT | dm invite ID HOST | dm agents ID | dm accept-agent PID | dm decline-agent PID | dm dismiss-agent PID | dm ask-agent [--task] PID TEXT | dm invite-guest ID HOST | dm accept-guest PID | dm decline-guest PID | dm end-guest PID (see agentnet help dm)")
 	}
 	switch args[0] {
 	case "new":
@@ -226,6 +227,14 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		for _, p := range parts {
 			line := fmt.Sprintf("%s  %s  agent on %s (%q's), invited by %q, %d earlier messages shared", p.PID, p.State, p.Host.Address,
 				p.Host.Label, p.Inviter.Label, len(p.Grant))
+			if p.Role == protocol.RoleHuman {
+				line = fmt.Sprintf("%s  %s  guest on %s (%q), invited by %q, %d earlier messages shared", p.PID, p.State, p.Host.Address,
+					p.Host.Label, p.Inviter.Label, len(p.Grant))
+			}
+			if keys := taskGrantees(a, p); len(keys) > 0 {
+				// Accepting the invitation is the standing grant (agentjob.go).
+				line += "; tasks from " + strings.Join(keys, ", ") + " run on the host without asking while it participates"
+			}
 			if p.Conflict != "" {
 				line += "  (" + p.Conflict + ")"
 			}
@@ -244,6 +253,45 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		case "decline-agent":
 			decide = a.DeclineParticipation
 		case "dismiss-agent":
+			decide = a.DismissParticipation
+		}
+		p, err := decide(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s %s\n", p.PID, p.State)
+		if keys := taskGrantees(a, p); args[0] == "accept-agent" && p.HostHere && len(keys) > 0 {
+			fmt.Fprintf(stdout, "tasks from %s now run on this device without asking while this agent participates (agentnet dm dismiss-agent %s ends that)\n", strings.Join(keys, ", "), p.PID)
+		}
+		return nil
+	case "invite-guest":
+		fs := flag.NewFlagSet("dm invite-guest", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		share := fs.String("share", "", "comma-separated logical ids of earlier messages the guest is shown")
+		note := fs.String("note", "", "a note for the guest")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
+			return errors.New("usage: dm invite-guest [--share LID,...] [--note TEXT] ID HOST")
+		}
+		p, err := a.InviteHuman(ctx, fs.Arg(0), fs.Arg(1), splitList(*share), *note)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s %s\n", p.PID, p.State)
+		return nil
+	case "accept-guest", "decline-guest", "end-guest":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: dm %s PID", args[0])
+		}
+		if p, err := a.Participation(args[1]); err != nil {
+			return err
+		} else if p.Role != protocol.RoleHuman {
+			return errors.New("that is an agent's participation: use dm accept-agent, decline-agent or dismiss-agent")
+		}
+		decide := a.AcceptParticipation
+		switch args[0] {
+		case "decline-guest":
+			decide = a.DeclineParticipation
+		case "end-guest":
 			decide = a.DismissParticipation
 		}
 		p, err := decide(ctx, args[1])
@@ -280,6 +328,39 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		return nil
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+// taskGrantees names the member keys whose tasks p's agent runs without
+// asking once its host accepted: by person and device where that key is
+// held here, otherwise by the key alone.
+func taskGrantees(a *client.Agent, p client.ParticipationInfo) []string {
+	if len(p.TaskKeys) == 0 {
+		return nil
+	}
+	var people []client.PersonInfo
+	if me, ok, err := a.Person(); err == nil && ok {
+		people = append(people, me)
+	}
+	if convs, err := a.Conversations(); err == nil {
+		for _, c := range convs {
+			if c.ID == p.Conv {
+				people = append(append(people, c.Peer), c.Members...)
+			}
+		}
+	}
+	var out []string
+	for _, fp := range p.TaskKeys {
+		name := "key " + fp
+		for _, person := range people {
+			for _, d := range person.Devices {
+				if d.Fingerprint == fp {
+					name = fmt.Sprintf("%q (%s, key %s)", person.Label, d.Address, fp)
+				}
+			}
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 func splitList(s string) []string {
