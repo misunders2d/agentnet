@@ -134,8 +134,9 @@ built-in interface takes over.
 
 ### Workspaces
 
-The host draws the workspace switcher (the module's selector, Join and
-Disconnect) above every interface. When the person selects another
+The host draws the workspace switcher (the module's selector, Join,
+Disconnect and, on this computer's program, Reconnect for a disconnected
+membership) above every interface. When the person selects another
 workspace the host mounts the skin again with a host bound to that
 membership: `module.unmount(root)` (optional) is called first, then
 `module.mount(newRoot, newHost)`. Keep drafts in

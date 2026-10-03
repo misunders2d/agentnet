@@ -166,10 +166,12 @@
   };
 
   // workspaceBar is the persistent switcher, owned by the host outside
-  // every interface: the module's selector, Join and Disconnect. Joining
-  // needs the invitation you were given (it names the server); leaving
-  // keeps this device's keys and history for that workspace and revokes
-  // nothing there.
+  // every interface: the module's selector, Join, Disconnect and Reconnect.
+  // Joining needs the invitation you were given (it names the server);
+  // leaving keeps this device's keys and history for that workspace and
+  // revokes nothing there, and Reconnect routes that same membership again
+  // (this computer's program only: a browser enrollment has no program to
+  // ask).
   const workspaceBar = () => {
     if (!shell || !ws) return;
     const root = document.createElement("div");
@@ -181,6 +183,7 @@
     const bar = ws.mountWorkspaceSwitcher(root, shell, { beforeSwitch: (previous, st) => { if (switching) switching(previous, st); }, afterSwitch: () => note("") });
     const tools = document.createElement("span"); tools.className = "workspace-tools";
     const joinBtn = button("Join a workspace…", () => joinForm());
+    const canReconnect = !memberships && typeof shell.reconnect === "function";
     const leaveBtn = button("Disconnect…", async () => {
       const id = shell.active, b = entryOf(id) && entryOf(id).binding;
       if (!b) return;
@@ -190,13 +193,44 @@
         if (switching) switching(id, shell.state(id));
         await workspaces.disconnect(id);
         bar.refresh();
-        note("Disconnected from " + b.name + ". Its keys and history stay here; join again with a new invitation to reconnect.");
+        note("Disconnected from " + b.name + ". Its keys and history stay here" + (canReconnect ? "; Reconnect… connects it again." : "; join again with a new invitation to reconnect."));
       } catch (e) { note(e.message); }
     });
-    tools.append(joinBtn, leaveBtn, status);
+    tools.append(joinBtn, leaveBtn);
+    if (canReconnect) tools.append(button("Reconnect…", () => reconnectForm()));
+    tools.append(status);
+    const reconnectForm = async () => {
+      if (root.querySelector(".workspace-reconnect")) return;
+      note("");
+      let gone;
+      try { gone = await shell.disconnected(); } catch (e) { note(e.message); return; }
+      if (!gone.length) { note("No disconnected workspace here."); return; }
+      if (root.querySelector(".workspace-reconnect")) return; // opened again while listing
+      const f = document.createElement("form"); f.className = "workspace-join workspace-reconnect";
+      const pickL = text("label", "Disconnected workspace"); const pick = document.createElement("select"); pick.setAttribute("aria-label", "Disconnected workspace");
+      for (const w of gone) { const o = text("option", (w.name || "Unnamed workspace") + " · " + new URL(w.endpoint).host + " · " + w.address); o.value = w.id; pick.append(o); }
+      pickL.append(pick);
+      const err = text("p", ""); err.className = "workspace-error"; err.setAttribute("role", "alert");
+      const go = button("Reconnect", async () => {
+        const w = gone.find((x) => x.id === pick.value);
+        if (!w) return;
+        go.disabled = true; err.textContent = "";
+        try {
+          await shell.reconnect(w.id);
+          bar.refresh(); f.remove();
+          note("Reconnected " + (w.name || "the workspace") + " as " + w.address + ", with its keys and history. Choose it above to work there.");
+        } catch (e) { err.textContent = e.message; go.disabled = false; }
+      });
+      go.className = "btn primary";
+      const cancel = button("Cancel", () => f.remove());
+      f.addEventListener("submit", (e) => { e.preventDefault(); go.click(); });
+      f.append(pickL, err, go, cancel);
+      root.append(f);
+      pick.focus();
+    };
     root.querySelector(".workspace-bar").append(tools);
     const joinForm = () => {
-      if (root.querySelector(".workspace-join")) return;
+      if (root.querySelector(".workspace-join:not(.workspace-reconnect)")) return; // the reconnect form shares only its look
       note("");
       const f = document.createElement("form"); f.className = "workspace-join";
       const field = (tag, label, attrs) => { const l = text("label", label); const i = document.createElement(tag); Object.assign(i, attrs); l.append(i); return [l, i]; };

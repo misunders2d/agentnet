@@ -113,7 +113,7 @@ ul, ol { list-style: none; margin: 0; padding: 0; }
 #workspace-shell .workspace-note { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 #workspace-shell .workspace-join { display: grid; gap: 6px; max-width: 34rem; padding: 10px 16px 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
 #workspace-shell .workspace-join label { display: grid; gap: 3px; font-size: 13px; font-weight: 600; }
-#workspace-shell .workspace-join input, #workspace-shell .workspace-join textarea { width: 100%; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-weight: 400; }
+#workspace-shell .workspace-join input, #workspace-shell .workspace-join textarea, #workspace-shell .workspace-join select { width: 100%; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-weight: 400; }
 #workspace-shell .workspace-join textarea { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; resize: vertical; }
 #workspace-shell .workspace-join .btn { justify-self: start; font: inherit; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); cursor: pointer; }
 #workspace-shell .workspace-join .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
