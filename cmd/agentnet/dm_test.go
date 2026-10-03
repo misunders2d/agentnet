@@ -34,3 +34,17 @@ func TestDMShowPrintsEditsAndDeletions(t *testing.T) {
 		}
 	}
 }
+
+// help dm says what happens to an assistant's reply without an emotion
+// line: it is sent, shown neutral (agentjob.go, MEL-434); only a reply the
+// agent marks for a person's decision is held for review.
+func TestDMHelpSaysReplyWithoutEmotionIsNeutral(t *testing.T) {
+	var out bytes.Buffer
+	if err := printHelp(&out, []string{"dm"}); err != nil {
+		t.Fatal(err)
+	}
+	help := strings.Join(strings.Fields(out.String()), " ")
+	if strings.Contains(help, "without one, or when the agent says the person must decide, nothing is sent") || !strings.Contains(help, "shown neutral") {
+		t.Fatalf("help dm misstates replies without an emotion line:\n%s", out.String())
+	}
+}
