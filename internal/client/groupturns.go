@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -253,6 +254,9 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 				return ConvSent{}, err
 			}
 			key, e := a.sendKey(ctx, device.Address)
+			if hubUnreachable(e) { // a key pinned here would have been used: this one never was
+				return ConvSent{}, fmt.Errorf("cannot reach the Hub, and the key of %s is not known here yet: nothing was sent; send again once the Hub is reachable: %w", device.Address, e)
+			}
 			if e != nil {
 				return ConvSent{}, e
 			}

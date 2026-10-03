@@ -433,6 +433,49 @@ func TestGroupTurnKeptOfflineNotSentToRemovedDevice(t *testing.T) {
 	t.Logf("the removed device's copy: %s (%s)", state, why)
 }
 
+// A group turn without the Hub is kept only for devices whose keys are known
+// here. A member's device whose key this installation never fetched (his
+// person linked it meanwhile; the roster pinned here lists it) fails the
+// send with that cause, and nothing is kept: no part of the group gets it.
+func TestGroupTurnOfflineUnknownKeyNamesCause(t *testing.T) {
+	w, _, p, stops := groupTurnsFixture(t)
+	phone, await, _ := linkPhone(t, w.bob, "phone")
+	request := pendingLink(t, w.bob)
+	if err := w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-await; out.err != nil {
+		t.Fatal(out.err)
+	}
+	bob, _, _ := w.bob.Person()
+	if _, err := w.alice.refreshPerson(tctx(t), bob.Person, false); err != nil { // lists the phone; its key is not fetched
+		t.Fatal(err)
+	}
+	stops[w.alice]()
+	home := w.alice.home
+	w.alice.Close()
+	alice, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+	alice.hub.http.Transport = failingHub(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	})
+	outbox := count(t, alice, "outbox")
+	path, _ := writeFile(t, t.TempDir(), "tiny.csv", 2000)
+	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "offline", Files: []OutgoingFile{{Path: path, Name: "tiny.csv"}}})
+	if err == nil || !hubUnreachable(err) || !strings.Contains(err.Error(), "the key of "+phone.Address+" is not known here yet") {
+		t.Fatalf("group send without the Hub or a member device's key: %+v %v", sent, err)
+	}
+	if n := count(t, alice, "outbox"); n != outbox {
+		t.Fatalf("outbox %d -> %d after a refused send", outbox, n)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(alice.home, "spool")); len(entries) != 0 {
+		t.Fatalf("spool after a refused send: %d files", len(entries))
+	}
+}
+
 // removedWhileOffline: alice pins bob's laptop and his linked phone, then
 // is away; bob links a tablet from the phone and removes both from it. The
 // Hub revokes the phone (it joined by a link) but not the laptop (it joined
