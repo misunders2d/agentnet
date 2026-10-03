@@ -7,9 +7,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -39,8 +41,27 @@ fail) if [ -n "$out" ]; then printf 'x\n' > "$out/x.txt"; fi
   echo boom >&2; exit 3 ;;
 human) if [ -n "$out" ]; then printf 'x\n' > "$out/x.txt"; fi
   printf 'AGENTNET: NEEDS-HUMAN\nwhich one?\n' ;;
+linger) if [ -n "$out" ]; then printf 'x\n' > "$out/x.txt"; fi
+  sleep 60 > /dev/null 2>&1 &
+  echo $! > "$RUN_LOG.pid"
+  printf 'done\n' ;;
 *) printf 'answered\nemotion: calm\n' ;;
 esac
+`
+
+// codexRunStubScript is a codex-style fake harness for run folders: it
+// keeps its prompt, logs its arguments, places a file in the outbox its
+// prompt names (if any), and reports as codex exec --json does, in thread
+// $RUN_THREAD.
+const codexRunStubScript = `#!/bin/sh
+cat > "$RUN_LOG.prompt"
+echo "=== run $*" >> "$RUN_LOG"
+out=$(sed -n 's/.*place them directly in "\([^"]*\)".*/\1/p' "$RUN_LOG.prompt")
+if [ -n "$out" ]; then printf 'CODEX_FILE\n' > "$out/x.txt"; fi
+echo "{\"type\":\"thread.started\",\"thread_id\":\"$RUN_THREAD\"}"
+echo '{"type":"turn.started"}'
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"codex did it"}}'
+printf '{"type":"turn.completed","usage":{}}'
 `
 
 type runStub struct{ log, dir, secret string }
@@ -91,11 +112,6 @@ func modeOf(t *testing.T, path string) os.FileMode {
 		t.Fatal(err)
 	}
 	return info.Mode().Perm()
-}
-
-func gone(path string) bool {
-	_, err := os.Lstat(path)
-	return errors.Is(err, os.ErrNotExist)
 }
 
 // A run's received files: copies checked against their manifests, 0400 in
@@ -184,6 +200,21 @@ func TestRunInboundCap(t *testing.T) {
 	r.unstage(6)
 	if _, err := r.stage(fileInfoOf("b", six), bytes.NewReader(six)); err != nil || len(r.in) != 1 {
 		t.Fatalf("after unstaging: %v (%d staged)", err, len(r.in))
+	}
+}
+
+// A manifest's SHA-256 is part of a staged copy's name, so one that is not a
+// digest is refused before anything is made.
+func TestRunInboundRefusesBadDigest(t *testing.T) {
+	r := &runDir{path: filepath.Join(t.TempDir(), "runs", protocol.NewID())}
+	data := []byte("x")
+	f := fileInfoOf("x", data)
+	f.SHA256 = "/../../." + f.SHA256[8:]
+	if _, err := r.stage(f, bytes.NewReader(data)); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("staged with the digest %q: %v", f.SHA256, err)
+	}
+	if !gone(r.path) {
+		t.Fatal("a run folder was made for it")
 	}
 }
 
@@ -323,6 +354,27 @@ func TestOutboxRefusals(t *testing.T) {
 				f.Close()
 			})
 		}},
+		{"out swapped between its check and its open", "no longer the folder", func(t *testing.T, r *runDir) {
+			hookStep(t, "out", func(string) {
+				os.Rename(r.outPath(), r.outPath()+".old")
+				os.Mkdir(r.outPath(), 0o700)
+				os.WriteFile(filepath.Join(r.outPath(), "good.txt"), []byte("EVIL"), 0o600)
+			})
+		}},
+		{"file rewritten during its copy", `"good.txt" changed while it was read`, func(t *testing.T, r *runDir) {
+			hookStep(t, "copy", func(name string) { // same size, same file: only the check after the copy sees it
+				path := filepath.Join(r.outPath(), name)
+				os.WriteFile(path, []byte("EVIL"), 0o600)
+				later := time.Now().Add(time.Hour)
+				os.Chtimes(path, later, later)
+			})
+		}},
+		{"unreadable file", `"good.txt" could not be opened`, func(t *testing.T, r *runDir) {
+			if os.Getuid() == 0 {
+				t.Skip("root reads any file")
+			}
+			os.Chmod(filepath.Join(r.outPath(), "good.txt"), 0)
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := outboxRun(t)
@@ -358,10 +410,42 @@ func acceptedTask(t *testing.T, w *world, body string, files ...string) string {
 	return task.ID
 }
 
-func hook(t *testing.T, f func(name string)) {
-	old := beforeOutboxOpen
-	beforeOutboxOpen = f
-	t.Cleanup(func() { beforeOutboxOpen = old })
+// hook acts between an outbox file's listing and its open.
+func hook(t *testing.T, f func(name string)) { hookStep(t, "open", f) }
+
+// hookStep acts at one step of collecting the outbox (outboxStep). It runs
+// on the collecting goroutine: it must not call t.Fatal.
+func hookStep(t *testing.T, step string, f func(name string)) {
+	old := outboxStep
+	outboxStep = func(s, name string) {
+		if s == step {
+			f(name)
+		}
+	}
+	t.Cleanup(func() { outboxStep = old })
+}
+
+// A run's folders are absolute paths even when the home was given relative
+// (agentnet --home bob): the harness runs in the responder's directory, so
+// a relative path would name another folder there.
+func TestRunPathsAbsolute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cwd, _ := os.Getwd()
+	a := &Agent{home: "bob", Logf: func(string, ...any) {}}
+	r := a.newRun(job{ID: protocol.NewID(), Kind: envelope.KindTask}, true)
+	if r == nil || !filepath.IsAbs(r.path) || !strings.HasPrefix(r.path, cwd+string(filepath.Separator)) || !filepath.IsAbs(r.outPath()) {
+		t.Fatalf("run folder %+v", r)
+	}
+	data := []byte("x")
+	path, err := r.stage(fileInfoOf("x", data), bytes.NewReader(data))
+	if err != nil || !filepath.IsAbs(path) {
+		t.Fatalf("staged at %q (%v)", path, err)
+	}
+	for _, arg := range r.args(Harnesses["claude"]) {
+		if !strings.HasPrefix(arg, "-") && !filepath.IsAbs(arg) {
+			t.Fatalf("harness argument %q is relative", arg)
+		}
+	}
 }
 
 // A run folder an earlier daemon left (it stopped or crashed while a job
@@ -532,4 +616,234 @@ func TestConversationRunFiles(t *testing.T) {
 		t.Fatalf("prompt:\n%s", prompt)
 	}
 	eventually(t, "the run folder removed", func() bool { return gone(run) })
+}
+
+// The request's own files are given to a conversation run before any
+// selected context file: context never takes the run's file limits from
+// them.
+func TestConversationRequestFilesFirst(t *testing.T) {
+	old := maxRunFiles
+	maxRunFiles = 1 // before the daemons start; restored after they stop
+	t.Cleanup(func() { maxRunFiles = old })
+	w, conv, _, stopBob := agentWorld(t)
+	earlier := filepath.Join(t.TempDir(), "context.txt")
+	os.WriteFile(earlier, []byte("CONTEXT_FILE_BYTES\n"), 0o600)
+	turn, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "earlier log", Files: []OutgoingFile{{Path: earlier}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold the earlier file", func() bool { return inboxCount(t, w.bob, `id = ?`, turn.ID) == 1 })
+	pid := participate(t, w, conv, []string{turn.LID}, nil)
+	content := []byte("REQUEST_FILE_BYTES\n")
+	current := filepath.Join(t.TempDir(), "check.txt")
+	os.WriteFile(current, content, 0o600)
+	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "check this", OutgoingFile{Path: current})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold the question", func() bool { return inboxCount(t, w.bob, `id = ? AND state = ?`, q.ID, stateAgentWaiting) == 1 })
+	stopBob()
+	j := claimAt(t, w.bob, q.ID)
+	text, run := sharedFilesOf(t, w.bob, j)
+	staged := filepath.Join(run.path, "in", stagedName(1, "check.txt", content))
+	if !strings.Contains(text, `"check.txt" (19 bytes, SHA256 `) || !strings.Contains(text, `is available read-only at "`+staged+`"`) ||
+		!strings.Contains(text, `"context.txt" (19 bytes, SHA256 `) || !strings.Contains(text, "not given to this run (at most 1 files") {
+		t.Fatalf("selected files:\n%s", text)
+	}
+	if got := mustRead(t, staged); got != string(content) {
+		t.Fatalf("staged %q", got)
+	}
+}
+
+// sharedFilesOf stages job j's selected files at a in a new run folder, as
+// its prompt does, and returns their prompt text and the run.
+func sharedFilesOf(t *testing.T, a *Agent, j job) (string, *runDir) {
+	t.Helper()
+	j.run = a.newRun(j, false)
+	t.Cleanup(func() { j.run.remove() })
+	info, err := a.participation(j.Conv, j.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := a.agentContext(info, j.ID, agentContextBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a.agentSharedFiles(tctx(t), j, info, c), j.run
+}
+
+// A file copied for a conversation run whose agent may no longer run (here:
+// the asker's person frozen meanwhile) is removed again, not given to it.
+func TestConversationRunFileUnstagedWhenStopped(t *testing.T) {
+	w, conv, _, stopBob := agentWorld(t)
+	pid := participate(t, w, conv, nil, nil)
+	current := filepath.Join(t.TempDir(), "check.txt")
+	os.WriteFile(current, []byte("REQUEST_FILE_BYTES\n"), 0o600)
+	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "check this", OutgoingFile{Path: current})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold the question", func() bool { return inboxCount(t, w.bob, `id = ? AND state = ?`, q.ID, stateAgentWaiting) == 1 })
+	stopBob()
+	j := claimAt(t, w.bob, q.ID)
+	var staged []string
+	old := afterRunFileStaged
+	afterRunFileStaged = func(path string) {
+		if staged = append(staged, path); len(staged) == 1 {
+			freezeAlice(t, w)
+		}
+	}
+	t.Cleanup(func() { afterRunFileStaged = old })
+	text, run := sharedFilesOf(t, w.bob, j)
+	entries, _ := os.ReadDir(filepath.Join(run.path, "in"))
+	if len(staged) != 1 || !strings.Contains(text, "Selected files withheld: ") || strings.Contains(text, "available read-only") ||
+		len(entries) != 0 || len(run.in) != 0 || run.bytes != 0 {
+		t.Fatalf("staged %v, in/ %v, run %+v, text:\n%s", staged, entries, run, text)
+	}
+}
+
+// When the result cannot be stored with the outbox's files, it is sent
+// without them and says so; the local reason stays in the job's detail.
+func TestDeviceTaskOutboxResentWithoutFiles(t *testing.T) {
+	st := installRunStub(t, "file")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "runstub", st.dir, time.Minute)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	spool := filepath.Join(w.bob.home, "spool") // no file can be spooled for sending
+	os.RemoveAll(spool)
+	if err := os.WriteFile(spool, []byte("not a folder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task := acceptedTask(t, w, "build the report")
+	var res Message
+	eventually(t, "the result", func() bool { var ok bool; res, ok = findReply(w.alice, task); return ok })
+	if res.Status != envelope.StatusDone || len(res.Attachments) != 0 || !strings.HasSuffix(res.Body, "\n\n(The files in the outbox could not be sent with this result.)") ||
+		strings.Contains(res.Body, "spool") {
+		t.Fatalf("result %+v", res)
+	}
+	waitState(t, w.bob, task, stateAnswered)
+	if row := inboxRow(t, w.bob, task); !strings.HasPrefix(row.Detail, "files in the outbox were not sent: ") {
+		t.Fatalf("bob's task detail: %q", row.Detail)
+	}
+}
+
+// A resumed codex session cannot be given a folder (codex exec resume takes
+// no --add-dir), so its run gets no outbox and its prompt names none; the
+// first, fresh run of that session has one.
+func TestResumedCodexTaskGetsNoOutbox(t *testing.T) {
+	st := installRunStub(t, "")
+	bin := filepath.Join(t.TempDir(), "codex.sh")
+	os.WriteFile(bin, []byte(codexRunStubScript), 0o700)
+	t.Setenv("RUN_THREAD", "thread-7")
+	Harnesses["xrun"] = harness{bin: bin, question: []string{"exec", "--ephemeral", "--sandbox", "read-only", "--color", "never"},
+		task: []string{"exec", "--ephemeral", "--color", "never"}, stdin: true, out: "-o", sessions: codexSessions, addDir: "--add-dir"}
+	t.Cleanup(func() { delete(Harnesses, "xrun") })
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "xrun", st.dir, time.Minute)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+
+	first := acceptedTask(t, w, "first")
+	var res1 Message
+	eventually(t, "the first result", func() bool { var ok bool; res1, ok = findReply(w.alice, first); return ok })
+	out1 := filepath.Join(w.bob.home, "runs", first, "out")
+	if len(res1.Attachments) != 1 || !strings.Contains(mustRead(t, st.log), "--add-dir "+out1) || !strings.Contains(st.prompt(t), `place them directly in "`+out1+`"`) {
+		t.Fatalf("first result %+v\n%s", res1, mustRead(t, st.log))
+	}
+
+	second, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "second", Kind: envelope.KindTask, ReplyTo: res1.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, second.ID, stateAwaiting)
+	if err := w.bob.Accept(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	var res2 Message
+	eventually(t, "the second result", func() bool { var ok bool; res2, ok = findReply(w.alice, second.ID); return ok })
+	runs := strings.Split(strings.TrimSpace(mustRead(t, st.log)), "\n")
+	last, prompt := runs[len(runs)-1], st.prompt(t)
+	if !strings.HasPrefix(last, "=== run exec resume thread-7 ") || strings.Contains(last, "--add-dir") || strings.Contains(prompt, "place them directly in") ||
+		res2.Status != envelope.StatusDone || len(res2.Attachments) != 0 || strings.Contains(res2.Body, "outbox") {
+		t.Fatalf("resumed run %q, result %+v, prompt:\n%s", last, res2, prompt)
+	}
+}
+
+// Whatever a task run left running in its process group is stopped when
+// the run ends, before its outbox is read: nothing it started may change
+// the outbox, or the copies sent from it, afterwards.
+func TestDeviceTaskLeftoversStopped(t *testing.T) {
+	st := installRunStub(t, "linger")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "runstub", st.dir, time.Minute)
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	task := acceptedTask(t, w, "build the report")
+	var res Message
+	eventually(t, "the result", func() bool { var ok bool; res, ok = findReply(w.alice, task); return ok })
+	pid, err := strconv.Atoi(strings.TrimSpace(mustRead(t, st.log+".pid")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	if res.Status != envelope.StatusDone || len(res.Attachments) != 1 {
+		t.Fatalf("result %+v", res)
+	}
+	eventually(t, "the run's background process stopped", func() bool { return processGone(pid) })
+}
+
+// processGone reports whether process pid no longer runs (a zombie waiting
+// to be reaped counts as gone).
+func processGone(pid int) bool {
+	if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+		return true
+	}
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	_, rest, _ := strings.Cut(string(stat), ") ")
+	return strings.HasPrefix(rest, "Z")
+}
+
+// TestLiveClaudeRunFiles runs the real claude harness on a device task with
+// a file (ROOM_V1 §9, opt-in): the run reads the read-only copy given to it
+// in its in/ folder and writes into its outbox, whose file goes with the
+// result. It needs an existing logged-in claude whose settings let a task
+// write files, and runs only with AGENTNET_LIVE=claude.
+func TestLiveClaudeRunFiles(t *testing.T) {
+	if os.Getenv("AGENTNET_LIVE") != "claude" {
+		t.Skip("set AGENTNET_LIVE=claude to run the real harness")
+	}
+	w := newWorld(t, "")
+	dir := t.TempDir()
+	if err := w.bob.SetResponder(&Responder{Harness: "claude", Dir: dir, Timeout: 120 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	src := filepath.Join(t.TempDir(), "codename.txt")
+	os.WriteFile(src, []byte("The synthetic codename is GREEN-OTTER-17.\n"), 0o600)
+	task := acceptedTask(t, w, "Read the attached file codename.txt at the path given below. Write a file named answer.txt that contains exactly its text "+
+		"into the folder this prompt tells you to place files in to send them back. Then reply with the word DONE.", src)
+	var res Message
+	deadline := time.Now().Add(150 * time.Second)
+	for ok := false; !ok && time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		res, ok = findReply(w.alice, task)
+	}
+	t.Logf("task result: status=%s body=%q files=%v", res.Status, res.Body, res.Attachments)
+	if res.Status != envelope.StatusDone || len(res.Attachments) != 1 || res.Attachments[0].Name != "answer.txt" {
+		t.Fatalf("live result = %+v", res)
+	}
+	rc, _, err := w.alice.OpenAttachment(tctx(t), res.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(readAll(t, rc)); !strings.Contains(got, "GREEN-OTTER-17") {
+		t.Fatalf("result file %q", got)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("responder dir changed: %d entries", len(entries))
+	}
 }

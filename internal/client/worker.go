@@ -111,7 +111,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var prompt string
 	var err error
 	var lookup questionLookup // a receiver continuation keeps its delegation; no lookups
-	if j.run = a.newRun(j); j.run != nil {
+	h := Harnesses[r.Harness]
+	// The session is planned first: whether the run gets an outbox, and its
+	// prompt names one, depends on it (runfiles.go). A planning error ends
+	// the job below, after the checks that come first.
+	plan, planErr := a.planSession(j, r, h)
+	if j.run = a.newRun(j, planErr == nil && outboxFor(j, h, plan.resume)); j.run != nil {
 		defer func() {
 			if err := j.run.remove(); err != nil {
 				a.Logf("%s %s: run folder not removed: %v", j.Kind, j.ID, err)
@@ -145,10 +150,8 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		a.endJob(j.ID, stateJobFailed, err.Error())
 		return
 	}
-	h := Harnesses[r.Harness]
-	plan, err := a.planSession(j, r, h)
-	if err != nil {
-		a.endJob(j.ID, stateJobFailed, "background session: "+err.Error())
+	if planErr != nil {
+		a.endJob(j.ID, stateJobFailed, "background session: "+planErr.Error())
 		return
 	}
 	if plan.note != "" {
@@ -162,7 +165,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			return
 		}
 	}
-	args := append(append(plan.args, lookup.args...), j.run.args(h, plan.resume)...)
+	args := append(append(plan.args, lookup.args...), j.run.args(h)...)
 	runCtx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
@@ -258,6 +261,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	ownProcessGroup(cmd)
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
 	runErr := cmd.Run()
+	if j.run.outPath() != "" {
+		// Nothing the run started may change its outbox, or the copies sent
+		// from it, once it has ended: what is left of its process group is
+		// stopped before the outbox is read (finish).
+		stopGroup(cmd)
+	}
 	cancel()
 	<-watchDone
 	if events != nil {

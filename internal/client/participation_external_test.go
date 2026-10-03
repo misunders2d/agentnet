@@ -119,12 +119,11 @@ func TestExternalAgentEncryptedLifecycle(t *testing.T) {
 			t.Fatalf("leaked %q", text)
 		}
 	}
-	entries, _ := os.ReadDir(filepath.Join(host.home, "opened"))
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".agentnet-apx-") {
-			t.Fatal("job retained plaintext")
-		}
+	run := filepath.Join(host.home, "runs", question.ID)
+	if !strings.Contains(stub.last(), `read-only at "`+filepath.Join(run, "in")+string(filepath.Separator)) {
+		t.Fatalf("the files were not given in the job's run folder:\n%s", stub.last())
 	}
+	eventually(t, "the job's run folder, with its file copies, removed", func() bool { return gone(run) })
 	follow, err := w.bob.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "", OutgoingFile{Path: current, Name: "file-only follow-up.txt"})
 	if err != nil {
 		t.Fatal(err)

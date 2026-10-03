@@ -1,16 +1,20 @@
 package client
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
 // The run folders each harness is given, as whole argument slices (ROOM_V1
 // §6): claude reads in/ and writes a task's out/; codex gets only a task's
-// out/, never a sandbox change or bypass, and nothing when it resumes; pi
-// gets none; a run without files gets nothing.
+// out/, never a sandbox change or bypass, and no outbox at all when it
+// resumes; pi gets none; a run without files gets nothing.
 func TestRunArgsGolden(t *testing.T) {
 	path := filepath.Join("home", "runs", "R")
 	in, out := filepath.Join(path, "in"), filepath.Join(path, "out")
@@ -20,7 +24,10 @@ func TestRunArgsGolden(t *testing.T) {
 	none := &runDir{path: path}
 	claude, codex, pi := Harnesses["claude"], Harnesses["codex"], Harnesses["pi"]
 	argv := func(base []string, r *runDir, h harness, resume bool) []string {
-		return append(slices.Clone(base), r.args(h, resume)...) // as runJob composes them (no lookups)
+		if r.out != nil && outboxSupported && !outboxFor(job{ID: "R", Kind: envelope.KindTask}, h, resume) {
+			r = &runDir{path: r.path, in: r.in} // as runJob makes it: no outbox
+		}
+		return append(slices.Clone(base), r.args(h)...) // as runJob composes them (no lookups)
 	}
 	for _, c := range []struct {
 		name      string
@@ -51,14 +58,43 @@ func TestRunArgsGolden(t *testing.T) {
 		}
 	}
 	for _, name := range HarnessNames() {
-		for _, arg := range task.args(Harnesses[name], false) {
+		for _, arg := range task.args(Harnesses[name]) {
 			if strings.Contains(arg, "sandbox") || strings.Contains(arg, "dangerously") || strings.Contains(arg, "bypass") {
 				t.Errorf("%s run arguments change the sandbox: %q", name, arg)
 			}
 		}
 	}
 	var nilRun *runDir
-	if nilRun.args(claude, false) != nil || outboxPrompt(nilRun) != "" || outboxPrompt(question) != "" {
+	if nilRun.args(claude) != nil || outboxPrompt(nilRun) != "" || outboxPrompt(question) != "" {
 		t.Fatal("a job without a run folder or outbox is given one")
+	}
+	device := job{ID: "R", Kind: envelope.KindTask}
+	if outboxFor(device, codex, true) || outboxFor(device, claude, false) != outboxSupported || outboxFor(device, codex, false) != outboxSupported || outboxFor(device, pi, false) != outboxSupported {
+		t.Fatal("outbox given or withheld wrongly")
+	}
+}
+
+func gone(path string) bool {
+	_, err := os.Lstat(path)
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// Each harness's limits text says what its runs are given (ROOM_V1 §6):
+// codex says truthfully that a task run gets one extra writable folder, its
+// outbox, and that a resumed session gets none.
+func TestHarnessLimitsTellRunFolders(t *testing.T) {
+	codex := Harnesses["codex"].limits
+	for _, want := range []string{"one extra writable folder, its outbox, through --add-dir", "never passes --sandbox or a bypass", "a resumed session, where codex cannot add a folder, gets no outbox"} {
+		if !strings.Contains(codex, want) {
+			t.Errorf("codex limits lack %q:\n%s", want, codex)
+		}
+	}
+	if strings.Contains(codex, "never a sandbox change") {
+		t.Errorf("codex limits deny the sandbox change --add-dir makes:\n%s", codex)
+	}
+	for name, want := range map[string]string{"claude": "added with --add-dir", "pi": "no folder is added for Pi"} {
+		if !strings.Contains(Harnesses[name].limits, want) {
+			t.Errorf("%s limits lack %q", name, want)
+		}
 	}
 }

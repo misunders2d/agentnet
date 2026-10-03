@@ -48,8 +48,10 @@ var (
 // errRunFull: a file would take the run past maxRunFiles or maxRunBytes.
 var errRunFull = errors.New("this run already has its limit of files")
 
-// beforeOutboxOpen lets tests act between an outbox file's listing and its open.
-var beforeOutboxOpen = func(name string) {}
+// outboxStep lets tests act at a step of collecting the outbox: "out"
+// between out/'s check and its open, "open" between a file's listing and
+// its open, "copy" between a file's check and its copy.
+var outboxStep = func(step, name string) {}
 
 // runDir is one job's run folder while the job runs.
 type runDir struct {
@@ -68,21 +70,31 @@ type fileKey struct {
 
 func (k fileKey) same(o fileKey) bool { return k.dev == o.dev && k.ino == o.ino }
 
-// outboxFor reports whether job j gets an outbox: a device thread's task,
-// where the file checks can be made.
-func outboxFor(j job) bool {
-	return outboxSupported && j.Kind == envelope.KindTask && j.Conv == "" && j.PID == "" && j.Receiver == nil
+// outboxFor reports whether job j, run by harness h (resuming its session
+// or not), gets an outbox: a device thread's task, where the file checks
+// can be made, run by a harness that can be given the folder. codex exec
+// resume takes no --add-dir, so a resumed codex session gets no outbox and
+// its prompt names none.
+func outboxFor(j job, h harness, resume bool) bool {
+	return outboxSupported && j.Kind == envelope.KindTask && j.Conv == "" && j.PID == "" && j.Receiver == nil &&
+		!(resume && h.sessions == codexSessions)
 }
 
-// newRun prepares job j's run folder; it is made on disk only when the run
-// has files or an outbox. nil: a job without one (a selected local
-// continuation stages its own files).
-func (a *Agent) newRun(j job) *runDir {
+// newRun prepares job j's run folder, with an outbox if outbox; it is made
+// on disk only when the run has files or an outbox. Its paths are absolute:
+// the harness runs in another directory. nil: a job without one (a selected
+// local continuation stages its own files).
+func (a *Agent) newRun(j job, outbox bool) *runDir {
 	if j.Receiver != nil || !protocol.ValidID(j.ID) {
 		return nil
 	}
-	r := &runDir{path: filepath.Join(a.home, "runs", j.ID)}
-	if outboxFor(j) {
+	home, err := filepath.Abs(a.home)
+	if err != nil {
+		a.Logf("%s %s: no run folder: %v", j.Kind, j.ID, err)
+		return nil
+	}
+	r := &runDir{path: filepath.Join(home, "runs", j.ID)}
+	if outbox {
 		if err := r.makeOut(); err != nil {
 			a.Logf("%s %s: no outbox for this run: %v", j.Kind, j.ID, err)
 		}
@@ -148,6 +160,9 @@ func (r *runDir) stage(f FileInfo, src io.Reader) (string, error) {
 	if len(r.in) >= maxRunFiles || r.bytes+f.Size > maxRunBytes {
 		return "", errRunFull
 	}
+	if !protocol.ValidHash(f.SHA256) { // part of the copy's name
+		return "", errors.New("its manifest has no valid SHA-256")
+	}
 	if err := r.make(); err != nil {
 		return "", err
 	}
@@ -155,11 +170,7 @@ func (r *runDir) stage(f FileInfo, src io.Reader) (string, error) {
 	if err := secfile.EnsureDir(dir); err != nil {
 		return "", err
 	}
-	sha := f.SHA256
-	if len(sha) > 8 {
-		sha = sha[:8]
-	}
-	path := filepath.Join(dir, fmt.Sprintf("%02d-%s-%s", len(r.in)+1, sha, SafeName(f.Name)))
+	path := filepath.Join(dir, fmt.Sprintf("%02d-%s-%s", len(r.in)+1, f.SHA256[:8], SafeName(f.Name)))
 	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", err
@@ -210,9 +221,9 @@ func (r *runDir) remove() error {
 
 // args give harness h this run's folders, only those it has (ROOM_V1 §6):
 // in/ to a harness that reads through added folders (claude), out/ to any
-// harness that adds folders. codex exec resume takes no --add-dir, so a
-// resumed codex session gets none; pi gets none.
-func (r *runDir) args(h harness, resume bool) []string {
+// harness that adds folders (a run has one only where outboxFor allows it);
+// pi gets none.
+func (r *runDir) args(h harness) []string {
 	if r == nil || h.addDir == "" {
 		return nil
 	}
@@ -220,7 +231,7 @@ func (r *runDir) args(h harness, resume bool) []string {
 	if h.addIn && len(r.in) > 0 {
 		args = append(args, h.addDir, filepath.Join(r.path, "in"))
 	}
-	if r.out != nil && !(resume && h.sessions == codexSessions) {
+	if r.out != nil {
 		args = append(args, h.addDir, r.outPath())
 	}
 	return args
@@ -307,6 +318,7 @@ func (r *runDir) collectOutbox() (files []OutgoingFile, why []string) {
 	if k, ok := statKey(info); !ok || !k.same(*r.out) {
 		return nil, moved
 	}
+	outboxStep("out", "out")
 	out, err := root.OpenRoot("out")
 	if err != nil {
 		return nil, moved
@@ -387,12 +399,15 @@ func (r *runDir) collectOutbox() (files []OutgoingFile, why []string) {
 // folder: opened without following a link, it must be that very file,
 // unchanged. It returns why it could not ("" when copied).
 func copyOutFile(root, out *os.Root, name string, info os.FileInfo, dst string) string {
-	beforeOutboxOpen(name)
+	outboxStep("open", name)
 	changed := fmt.Sprintf("%q changed while it was read", name)
 	k, _ := statKey(info)
 	src, err := out.OpenFile(name, openOutFlags, 0)
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Sprintf("%q could not be opened", name)
+	}
 	if err != nil {
-		return changed
+		return changed // removed, or a link put in its place, since it was listed
 	}
 	defer src.Close()
 	unchanged := func() bool {
@@ -406,6 +421,7 @@ func copyOutFile(root, out *os.Root, name string, info os.FileInfo, dst string) 
 	if !unchanged() {
 		return changed
 	}
+	outboxStep("copy", name)
 	w, err := root.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "the files could not be copied for sending"

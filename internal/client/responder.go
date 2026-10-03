@@ -81,7 +81,9 @@ var Harnesses = map[string]harness{
 			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have; " +
 			"questions are told the read-only AgentNet lookups of this device, which run inside that sandbox (status shows the local record without network); " +
 			"files a question or task receives are read-only copies it is told the paths of, read as your sandbox allows; " +
-			"a device task's outbox folder is added with --add-dir (never a sandbox change or bypass), except in a resumed session, where codex cannot add one",
+			"a device task run gets one extra writable folder, its outbox, through --add-dir (which codex documents as writable alongside the workspace); " +
+			"that folder is the only change to your sandbox: AgentNet never passes --sandbox or a bypass to a task; " +
+			"a resumed session, where codex cannot add a folder, gets no outbox and is not told of one",
 	},
 	"pi": {
 		bin: "pi",

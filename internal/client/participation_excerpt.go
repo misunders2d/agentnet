@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -55,6 +54,10 @@ func (a *Agent) showExcerpts(rows []ConvMessage) []ConvMessage {
 	return out
 }
 
+// afterRunFileStaged lets tests act between a selected file's copy and the
+// check that follows it.
+var afterRunFileStaged = func(path string) {}
+
 // Selected files are copied read-only into the run's in/ folder, under names
 // AgentNet chooses (runfiles.go). Normal harness permissions still decide
 // whether paths can be read. The run folder is removed after the job, and
@@ -75,7 +78,9 @@ func (a *Agent) agentSharedFiles(ctx context.Context, j job, info ParticipationI
 	}
 	if err == nil && len(current) != 0 {
 		a.markOpenable(current, j.Local)
-		c.Messages = append(slices.Clone(c.Messages), ConvMessage{ID: j.ID, Dir: requestDir, PID: j.PID, Attachments: current})
+		// The request's own files come first: selected context never takes
+		// the run's file limits from them (runfiles.go).
+		c.Messages = append([]ConvMessage{{ID: j.ID, Dir: requestDir, PID: j.PID, Attachments: current}}, c.Messages...)
 	}
 	for _, msg := range c.Messages {
 		for i, f := range msg.Attachments {
@@ -98,6 +103,9 @@ func (a *Agent) agentSharedFiles(ctx context.Context, j job, info ParticipationI
 				continue
 			}
 			path, err := a.stageRunFile(ctx, j.run, msg.Dir, msg.ID, i, f)
+			if err == nil {
+				afterRunFileStaged(path)
+			}
 			if err != nil {
 				line := fmt.Sprintf("\nSelected file %q: bytes unavailable here.\n", f.Name)
 				if errors.Is(err, errRunFull) {
