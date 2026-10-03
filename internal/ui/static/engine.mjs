@@ -206,6 +206,16 @@ const replyKind = (k) => (k === "question" ? "answer" : k === "task" ? "result" 
 // progressOutput is client.isResponderProgress: a nonterminal output under the
 // same authority as an answer or result, never one of them.
 const progressOutput = (n) => n.kind === "message" && n.status === wire.StatusProgress && !!n.reply_to;
+// agentTurn is client.agentTurn: an ordinary turn that says an agent wrote
+// it, a participation's output (answer, result or progress), named or not,
+// or any turn whose origin says so. Only the exact host device of its
+// participation sends one (checkConversationAgent).
+const agentTurn = (n) => !n.sub && (!!n.pid && (n.kind === "answer" || n.kind === "result" || progressOutput(n)) || (n.origin || "").startsWith("agent:"));
+// verifiedAgent is client.verifyAgents for one shown row: an agent's turn
+// that its participation's exact host key sent (from, fp: this device, the
+// key that verified it, or for history the original key its own device
+// vouched for). A claimed excerpt, an origin or a name alone never is.
+const verifiedAgent = (m, info, from, fp) => !m.excerpt_pid && !!m.pid && agentTurn(m) && !!info?.invite && !!info.host && info.state !== "conflict" && info.role !== "human" && from === info.host.address && fp === info.host.fingerprint;
 const rel0 = (ctls) => ctls.some((x) => x.pid && x.sub === wire.SubReaction); // any assistant reaction to label
 // assistantActor is client.assistantWho with its Reactor: an assistant's own
 // reaction row's actor (its participation, or its device thread's named
@@ -1945,7 +1955,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||r.reply_to===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,body:event?"":m.body,event,pid:m.pid||"",...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:m.reply_to||"",at:iso(m.at),origin:m.origin||"",state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?m.copies:undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,body:event?"":m.body,event,pid:m.pid||"",...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:m.reply_to||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===m.pid),here?this.address:m.from,fp),state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?m.copies:undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -3436,7 +3446,7 @@ export class Engine {
       this.externalRole({ ...item, conv: n.conv, replica: item.sub === "excerpt" }, historical ? { ...externalInfo, state: "active", held: 0 } : externalInfo, historyMembers, item.from, item.from_key);
       await this.checkExternalReply({ ...item, conv: n.conv }, externalInfo, historyMembers);
     }
-    if (!assistant) await this.checkConversationAgent({ ...item, conv: n.conv }, item.from, item.from_key, { id: n.conv, root: n.root, peer: root.members.find((m) => m.person !== this.me.person)?.person });
+    if (!assistant) await this.checkConversationAgent({ ...item, conv: n.conv }, item.from, item.from_key, { id: n.conv, root: n.root, peer: root.members.find((m) => m.person !== this.me.person)?.person }, true);
     const key = item.from_key + "/" + item.lid;
     if (item.from_key === this.fp || (await this.store.get("lids", key))) return ops; // sent here, or known: received directly, or as history before
     const mine = owner === this.me;
@@ -5152,7 +5162,8 @@ export class Engine {
     const guestActive = !member && guests.some(g => g.host_here && g.state === "active" && !g.held);
     // A guest or visitor sees both verified original people (client.Conversations Members).
     const originals = member ? [] : [...(await this.dmMembers(c)).values()];
-    const humans = new Map((await this.participationsOf(c)).filter(p => p.role === "human").map(p => [p.pid, p]));
+    const parts = new Map((await this.participationsOf(c)).map(p => [p.pid, p]));
+    const humans = new Map([...parts].filter(([, p]) => p.role === "human"));
     msgs = await this.oneRowPerRecord(msgs, humans);
     return { id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : guests.some(p => p.host_here) ? "human_guest" : "visitor", guests, audience_pending: guests.some(p => p.audience_pending), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",
@@ -5162,7 +5173,8 @@ export class Engine {
         const event = m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
         return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: m.reply_to || "",
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
-          origin: m.origin || "", state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
+          origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
+          state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? m.copies : undefined,
           ...(m.excerpt_pid ? { excerpt_pid: m.excerpt_pid, claimed_key: m.claimed_key } : {}),
           synced_from: m.history ? m.synced_from : "",
@@ -5504,13 +5516,21 @@ export class Engine {
     if (!request || request.v !== 1 || request.to !== address || request.target?.address !== address || request.target?.fingerprint !== fingerprint || request.target?.agent_id !== n.agent_id) throw new Hold("invalid", "named answer does not match the requested agent and host key");
   }
 
-  async checkConversationAgent(n, address, fingerprint, c) {
-    if (!n.agent_id && !n.target?.agent_id) return;
-    if (!wire.validID(n.pid)) throw new Hold("invalid", "named conversation turn has no participation");
+  // Named identities are bound by the signed invitation, and so is every
+  // agent's turn (agentTurn): from the participation's exact host address
+  // and key, while it is active. History uses its original key and may
+  // outlive the participation (client.checkConversationAgent).
+  async checkConversationAgent(n, address, fingerprint, c, historical = false) {
+    const agent = agentTurn(n);
+    if (!n.agent_id && !n.target?.agent_id && !agent) return;
+    if (!wire.validID(n.pid)) throw new Hold("invalid", "an agent's or named conversation turn has no participation");
     if (!c) throw new Hold("proof_pending", "named participation's conversation is not here yet");
     const info = this.resolveAgent(n.pid, await this.convEvents(n.conv), await this.dmMembers(c));
     if (!info.invite || !info.host || info.state === "conflict") throw new Hold("proof_pending", "named participation has no unambiguous verified invitation");
     if (n.target && (n.target.agent_id !== info.agent_id || n.target.address !== info.host.address || n.target.fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "named request differs from its participation host");
+    if (agent && (info.role === "human" || address !== info.host.address || fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "an agent's turn is not from its participation's exact host");
+    if (agent && !historical && (info.state === "declined" || info.state === "dismissed")) throw new Hold("invalid", "an agent's turn after its participation ended");
+    if (agent && !historical && (info.state !== "active" || info.held)) throw new Hold("proof_pending", "an agent's turn waits for its participation to be active");
     if (n.agent_id && (n.agent_id !== info.agent_id || address !== info.host.address || fingerprint !== info.host.fingerprint || !["answer", "result"].includes(n.kind) && !progressOutput(n) || !n.reply_to || n.sub)) throw new Hold("invalid", "named answer differs from its participation host");
   }
 

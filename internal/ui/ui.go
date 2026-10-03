@@ -274,6 +274,12 @@ type DMMessage struct {
 	Replica     bool                      `json:"replica,omitempty"`
 	PID         string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
 	Attachments []FileView                `json:"attachments,omitempty"`
+
+	// VerifiedAgent: an agent wrote it, as its participation's exact host
+	// key proves (client.ConvMessage.VerifiedAgent). An agent's turn is
+	// labeled from this, never from Origin or AgentID.
+	VerifiedAgent bool `json:"verified_agent"`
+
 	// Sent by you: Via is the device of yours it was sent from when that is
 	// not this one; Copies are this device's copies, one per device it went
 	// to (the other person's and your own), with how far each got.

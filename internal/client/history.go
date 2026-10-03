@@ -347,7 +347,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	if err := receiverHistoryRoute(a.store.db, orig, item.FromKey); err != nil {
 		return hold(reasonInvalid, err.Error())
 	}
-	if reason, err := a.checkConversationAgent(orig, key); err != nil {
+	if reason, err := a.checkConversationAgent(orig, key, true); err != nil {
 		if reason != "" {
 			return hold(reason, err.Error())
 		}
@@ -510,7 +510,7 @@ func (a *Agent) startHistory(dev identity.Public) error {
 		dev.Address, dev.Fingerprint(), string(pos), n, now, now); err != nil {
 		return err
 	}
-	a.replayErased(dev)  // conversations deleted here stay deleted there (convclear.go)
+	a.replayErased(dev) // conversations deleted here stay deleted there (convclear.go)
 	a.convWork.due(convHistory)
 	a.kickNow()          // this process's daemon, if it is one (the page approved)
 	notifyDaemon(a.home) // or the daemon running beside this command (agentnet person approve)

@@ -159,15 +159,31 @@ func (a *Agent) checkDeviceAgent(in envelope.Inner, sender identity.Public) erro
 	return nil
 }
 
+// agentTurn reports whether an ordinary conversation turn says an agent
+// wrote it: a participation's output (answer, result or progress), named or
+// not, or any turn whose origin says so. Only the exact host device of its
+// participation sends one (checkConversationAgent).
+func agentTurn(sub, kind, status, replyTo, pid, origin string) bool {
+	if sub != "" {
+		return false
+	}
+	output := kind == envelope.KindAnswer || kind == envelope.KindResult || kind == envelope.KindMessage && status == envelope.StatusProgress && replyTo != ""
+	return pid != "" && output || envelope.AgentOrigin(origin)
+}
+
 // Named conversation identities are bound by the signed invitation, not by
-// an origin label. Historical copies use their sibling-vouched original key.
-// Missing participation evidence stays on the existing proof retry path.
-func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public) (string, error) {
-	if !namedAgentFields(in) || envelope.AssistantReaction(in) { // a reaction is bound by assistantHistoryCheck / admitAssistantReaction
+// an origin label, and so is every agent's turn: it comes from its
+// participation's exact host address and key, while the participation is
+// active. Historical copies use their sibling-vouched original key, and may
+// outlive the participation. Missing participation evidence stays on the
+// existing proof retry path.
+func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public, historical bool) (string, error) {
+	agent := agentTurn(in.Sub, in.Kind, in.Status, in.ReplyTo, in.PID, in.Origin)
+	if !namedAgentFields(in) && !agent || envelope.AssistantReaction(in) { // a reaction is bound by assistantHistoryCheck / admitAssistantReaction
 		return "", nil
 	}
 	if in.PID == "" || !protocol.ValidID(in.PID) {
-		return reasonInvalid, errors.New("named conversation turn has no participation")
+		return reasonInvalid, errors.New("an agent's or named conversation turn has no participation")
 	}
 	p, err := a.participation(in.Conv, in.PID)
 	if errors.Is(err, ErrNoParticipation) {
@@ -182,6 +198,17 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 	if in.Target != nil && (in.Target.AgentID != p.AgentID || in.Target.Address != p.Host.Address || in.Target.Fingerprint != p.Host.Fingerprint) {
 		return reasonInvalid, errors.New("named request differs from its participation host")
 	}
+	if agent && (p.Role == protocol.RoleHuman || sender.Address != p.Host.Address || sender.Fingerprint() != p.Host.Fingerprint) {
+		return reasonInvalid, errors.New("an agent's turn is not from its participation's exact host")
+	}
+	if agent && !historical {
+		switch {
+		case p.State == PartDeclined || p.State == PartDismissed:
+			return reasonInvalid, errors.New("an agent's turn after its participation ended")
+		case p.State != PartActive || p.Held != 0:
+			return reasonProof, errors.New("an agent's turn waits for its participation to be active")
+		}
+	}
 	if in.AgentID != "" && (!protocol.ValidID(in.AgentID) || in.AgentID != p.AgentID || sender.Address != p.Host.Address || sender.Fingerprint() != p.Host.Fingerprint || in.Kind != envelope.KindAnswer && in.Kind != envelope.KindResult && !isResponderProgress(in) || in.ReplyTo == "" || in.Sub != "") {
 		return reasonInvalid, errors.New("named answer differs from its participation host")
 	}
@@ -193,4 +220,30 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 		return externalOutputRequest(a.store.db, in, p, m, a.Address, a.Self().Fingerprint())
 	}
 	return "", nil
+}
+
+// verifyAgents marks the agent's turns among msgs that their participation's
+// exact host key sent (ConvMessage.VerifiedAgent), by the rule admission
+// checks: this device as the host, the key that verified a received copy,
+// or for history the original key its own device vouched for. Without
+// resolved participation evidence nothing is marked.
+func (a *Agent) verifyAgents(conv string, msgs []ConvMessage) {
+	parts := map[string]*ParticipationInfo{}
+	for i, m := range msgs {
+		if m.ExcerptPID != "" || m.PID == "" || !agentTurn(m.Sub, m.Kind, m.status, m.ReplyTo, m.PID, m.Origin) {
+			continue
+		}
+		p, seen := parts[m.PID]
+		if !seen {
+			if info, err := a.participation(conv, m.PID); err == nil {
+				p = &info
+			}
+			parts[m.PID] = p
+		}
+		key := m.Key
+		if m.History {
+			key = m.Claimed
+		}
+		msgs[i].VerifiedAgent = p != nil && p.Invite != "" && p.State != PartConflict && p.Role != protocol.RoleHuman && m.From == p.Host.Address && key == p.Host.Fingerprint
+	}
 }

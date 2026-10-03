@@ -127,9 +127,11 @@ for (const oldAfterReload of [false, true]) {
   const inv = await wire.signEvent(e.keys, { conv: f.conv, pid: futurePID, type: "invite", ts: Math.floor(now / 1000), author: e.author(), host: { person: f.peer.person, address: f.peerAddress, fingerprint: f.peer.fingerprint, agent_id: f.agentA.id }, audience: "conversation" });
   await e.sendConv(f.c, { kind: "message", body: wire.eventJSON(inv), sub: "event", pid: futurePID });
   await e.retryHeld();
-  check((await f.store.get("inbox", held)).agent_id === f.agentA.id && !(await f.store.get("held", held)), "new signed invite releases named proof");
+  check((await f.store.get("held", held)).reason === "proof_pending" && !(await f.store.get("inbox", held)), "a named output waits while its participation is only invited");
   const accept = await wire.signEvent(f.peerKeys, { conv: f.conv, pid: futurePID, type: "accept", prev: await wire.eventHash(inv), ts: Math.floor(now / 1000), author: { person: f.peer.person, roster: f.peer.hash, address: f.peerAddress, fingerprint: f.peer.fingerprint } });
   await f.receive(await f.fromPeer({ v: 2, kind: "message", conv: f.conv, lid: id(), root: f.c.root, sub: "event", pid: futurePID, body: wire.eventJSON(accept) }));
+  await e.retryHeld();
+  check((await f.store.get("inbox", held)).agent_id === f.agentA.id && !(await f.store.get("held", held)), "the host's signed acceptance releases its named output");
   const asked = await e.api("/api/dm/agent/ask", { pid: futurePID, body: "selected ask" });
   const askRow = await f.store.get("outbox", asked.id);
   check(askRow.target.agent_id === f.agentA.id && askRow.required_cap === "agi1", "ask derives ID only from signed participation");
@@ -170,6 +172,72 @@ for (const oldAfterReload of [false, true]) {
   const historyView = await later.dm(f.conv);
   check(historyView.messages.find((m) => m.id === held).agent_id === f.agentA.id, "late-linked view retains agent ID");
   check(invCopy.required_cap === "agi1" && originalCopy.required_cap === "agi1", "named invitation history remains gated");
+  e.stop(); later.stop();
+}
+
+// An agent's turn, named or not, or any agent origin, comes only from its
+// participation's exact host key while it is active, history from its
+// original key; the view marks only those (client
+// TestAgentTurnsComeOnlyFromTheExactHost). The host runs its default agent.
+{
+  const f = await fixture(), { e } = f;
+  const pid = id(), turn = (fields) => ({ v: 2, conv: f.conv, lid: id(), root: f.c.root, pid, origin: "agent:stub", emotion: "plain", ...fields });
+  const inv = await wire.signEvent(e.keys, { conv: f.conv, pid, type: "invite", ts: Math.floor(now / 1000), author: e.author(), host: { person: f.peer.person, address: f.peerAddress, fingerprint: f.peer.fingerprint }, audience: "conversation" });
+  await e.sendConv(f.c, { kind: "message", body: wire.eventJSON(inv), sub: "event", pid });
+  const early = await f.receive(await f.fromPeer(turn({ reply_to: id() })));
+  check((await f.store.get("held", early)).reason === "proof_pending" && !(await f.store.get("inbox", early)), "an unnamed output waits while its participation is only invited");
+  const accept = await wire.signEvent(f.peerKeys, { conv: f.conv, pid, type: "accept", prev: await wire.eventHash(inv), ts: Math.floor(now / 1000), author: { person: f.peer.person, roster: f.peer.hash, address: f.peerAddress, fingerprint: f.peer.fingerprint } });
+  await f.receive(await f.fromPeer({ v: 2, kind: "message", conv: f.conv, lid: id(), root: f.c.root, sub: "event", pid, body: wire.eventJSON(accept) }));
+  await e.retryHeld();
+  check(!!(await f.store.get("inbox", early)) && !(await f.store.get("held", early)), "the host's acceptance releases its unnamed output");
+  const asked = await e.api("/api/dm/agent/ask", { pid, body: "which branch?" });
+  const answer = await f.receive(await f.fromPeer(turn({ reply_to: asked.id })));
+  check(!!(await f.store.get("inbox", answer)), "the exact host's unnamed answer stored");
+  // This browser's own key is a member device, never the host.
+  await f.store.write([{ s: "pins", k: e.address, v: { address: e.address, json: wire.marshalPublic(f.selfPub), fingerprint: e.fp } }]);
+  const fromSelf = (fields) => wire.seal({ id: id(), from: e.address, to: e.address, ts: Math.floor(now / 1000), kind: "answer", body: "forged", ...fields }, e.keys, f.selfPub);
+  for (const [name, fields] of [["unnamed answer", turn({ reply_to: asked.id })], ["unnamed answer as a person", turn({ reply_to: asked.id, origin: "ui", emotion: "" })],
+    ["unnamed progress", turn({ kind: "message", status: wire.StatusProgress, body: "checking", reply_to: asked.id })], ["agent origin alone", turn({ kind: "message", pid: "" })]]) {
+    const forged = await f.receive(await fromSelf(fields));
+    check((await f.store.get("held", forged))?.reason === "invalid" && !(await f.store.get("inbox", forged)), name + " from a member that is not the host refused");
+  }
+  // Rows an older reader admitted: marked only from the host's key.
+  const old = { v: 2, conv: f.conv, sub: "", replica: false, read: true, at: now, state: "", reply_to: "", origin: "agent:claude", emotion: "plain" };
+  const originOnly = { ...old, id: id(), lid: id(), from: f.peerAddress, fp: f.peer.fingerprint, kind: "message", body: "old origin claim", pid: "", own: false };
+  const nonHost = { ...old, id: id(), lid: id(), from: e.address, fp: e.fp, kind: "answer", body: "old forged answer", pid, reply_to: asked.id, own: true };
+  await f.store.write([{ s: "inbox", k: originOnly.id, v: originOnly }, { s: "inbox", k: nonHost.id, v: nonHost }]);
+  const shown = (view, x) => view.messages.find((m) => m.id === x);
+  const view = await e.dm(f.conv);
+  check(shown(view, answer).verified_agent === true && shown(view, early).verified_agent === true, "the host's outputs are marked as the agent's");
+  check(shown(view, asked.id).verified_agent === false, "a person's request is not marked");
+  check(shown(view, originOnly.id).verified_agent === false && shown(view, nonHost.id).verified_agent === false, "an origin-only or non-host claim is not marked");
+  await e.api("/api/dm/agent/dismiss", { pid });
+  const late = await f.receive(await f.fromPeer(turn({ reply_to: asked.id })));
+  check((await f.store.get("held", late))?.reason === "invalid" && !(await f.store.get("inbox", late)), "an output after the participation ended refused");
+
+  // A device linked later: the host's answer is the host's as history,
+  // after the end too; the same shape under this device's own key is held.
+  const siblingKeys = await wire.newKeys(), siblingAddress = "self/later", siblingPub = await wire.publicEntry(siblingKeys, siblingAddress);
+  const join = await wire.joinConsent(siblingKeys, siblingAddress, e.me.person, e.me.seq + 1, e.me.hash);
+  const next = await wire.nextRoster(e.keys, e.address, f.selfRoster, [f.selfPub, siblingPub], join); await wire.verifyNext(next, f.selfRoster);
+  e.me = await e.personRecord([f.selfRoster, next], "self", e.me); await e.pinDevices(e.me);
+  const sibling = e.me.devices.find((d) => d.address === siblingAddress);
+  const laterStore = memoryStore(), later = new Engine({ store: laterStore, now: () => now, base: e.base, fetch: e.fetch });
+  later.keys = siblingKeys; later.address = siblingAddress; later.fp = await wire.fingerprint(siblingPub); later.me = { ...e.me, address: siblingAddress, fingerprint: later.fp };
+  await laterStore.write([{ s: "kv", k: "identity", v: { keys: siblingKeys, address: siblingAddress, fingerprint: later.fp } }, { s: "kv", k: "person", v: later.me },
+    { s: "persons", k: f.peer.person, v: f.peer }, { s: "convs", k: f.conv, v: f.c },
+    ...(await f.store.all("pins")).map((p) => ({ s: "pins", k: p.address, v: p }))]);
+  const events = [...(await f.store.all("outbox")).filter((r) => r.pid === pid && r.sub === "event").map((r) => e.itemOf(r, true)),
+    ...(await f.store.all("inbox")).filter((r) => r.pid === pid && r.sub === "event").map((r) => e.itemOf(r, false))];
+  for (const item of events) await f.receive((await e.historyCopy(sibling, f.c, item)).envelope, later);
+  await f.receive((await e.historyCopy(sibling, f.c, e.itemOf(await f.store.get("inbox", answer), false))).envelope, later);
+  await later.retryHeld();
+  const kept = (await later.dm(f.conv)).messages.find((m) => m.body === "answer" && m.reply_to === asked.id);
+  check(kept?.verified_agent === true && kept.from === f.peerAddress, "the host's answer as history keeps its original key and is marked");
+  const forgedItem = { v: 1, from: e.address, from_key: e.fp, id: id(), lid: id(), ts: Math.floor(now / 1000), kind: "answer", body: "forged in history", reply_to: asked.id, pid, origin: "agent:claude", emotion: "plain", at: now };
+  const forgedCopy = await e.historyCopy(sibling, f.c, forgedItem);
+  await f.receive(forgedCopy.envelope, later);
+  check((await laterStore.get("held", forgedCopy.id))?.reason === "invalid" && !(await laterStore.get("inbox", forgedItem.id)), "history of a non-host's answer is checked against its original key");
   e.stop(); later.stop();
 }
 
