@@ -504,7 +504,7 @@ func runInbox(a *client.Agent, args []string) error {
 		}
 		fmt.Printf("%s %s  %s  %s  %s\n", mark, m.ID, m.From, m.SentAt.Format(time.DateTime), termText(kind, "  "))
 		if m.ReplyTo != "" {
-			fmt.Printf("  (reply to %s)\n", m.ReplyTo)
+			fmt.Printf("  (reply to %s)\n", termText(m.ReplyTo, "")) // a sender's field, never checked as an id
 		}
 		fmt.Printf("  %s\n", termText(m.Body, "  "))
 		if m.Detail != "" {
@@ -637,7 +637,7 @@ func runConversation(a *client.Agent, args []string) error {
 			if m.Deleted {
 				break // its files went with it
 			}
-			fmt.Printf("  [file] %q %d bytes sha256 %s\n", f.Name, f.Size, f.SHA256)
+			fmt.Printf("  [file] %q %d bytes sha256 %s\n", f.Name, f.Size, termText(f.SHA256, "")) // the sender's; only its length is checked
 		}
 	}
 	if last < c.Total {
