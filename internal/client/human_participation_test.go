@@ -58,6 +58,40 @@ func humanBodyCount(t *testing.T, a *Agent, conv, body string) int {
 	}
 	return n
 }
+
+// BUG-40e: an accepted guest sends without naming its participation (as the
+// CLI does): the device's own accepted guest participation is its author
+// scope, exactly as when the page names it. A device that is neither a
+// member nor an accepted guest still sends nothing.
+func TestHumanGuestSendsWithoutNamingItsParticipation(t *testing.T) {
+	w, carol, conv, _, _ := humanWorld(t)
+	if _, err := carol.SendConv(tctx(t), conv, ConvOutgoing{Body: "before any invitation"}); err == nil {
+		t.Fatal("a device outside the DM sent")
+	}
+	p, err := w.alice.InviteHuman(tctx(t), conv, carol.Address, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "human invite", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	if _, err := carol.AcceptParticipation(tctx(t), p.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "inviter observes human acceptance", func() bool { return stateAt(t, w.alice, p.PID).HumanActive() })
+	sent, err := carol.SendConv(tctx(t), conv, ConvOutgoing{Body: "guest without a pid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the guest's turn at both members", func() bool {
+		return humanBodyCount(t, w.alice, conv, "guest without a pid") == 1 && humanBodyCount(t, w.bob, conv, "guest without a pid") == 1
+	})
+	msgs, _ := w.alice.ConversationMessages(conv)
+	for _, m := range msgs {
+		if m.LID == sent.LID && (m.Human == nil || m.Human.AuthorPID != p.PID) {
+			t.Fatalf("the guest's turn is not authored under its participation: %+v", m.Human)
+		}
+	}
+}
+
 func TestHumanGuestNativeConsentMessagesFileAndLeave(t *testing.T) {
 	w, carol, conv, lids, stub := humanWorld(t)
 	rootBefore, rawBefore := rootOf(t, w.alice, conv)
