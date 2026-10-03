@@ -166,9 +166,11 @@ func (a *Agent) RefOf(conv, id, dir string) (ControlRef, error) {
 
 // React adds (or, with remove, removes) emoji on the message ref names. A
 // removal takes off this person's (in a device thread, this device's) own
-// reaction only, so one that is not there is refused, not sent.
+// reaction only, so one that is not there is refused, not sent. Only an
+// added reaction must be OneEmoji: one of this person's own added under
+// the older rule (any ValidEmoji) can still be taken off.
 func (a *Agent) React(ctx context.Context, ref ControlRef, emoji string, remove bool) (ControlSent, error) {
-	if !envelope.OneEmoji(emoji) {
+	if remove && !envelope.ValidEmoji(emoji) || !remove && !envelope.OneEmoji(emoji) {
 		return ControlSent{}, errors.New("a reaction is one emoji")
 	}
 	if a.deleted(ref) {

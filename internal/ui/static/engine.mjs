@@ -4981,7 +4981,7 @@ export class Engine {
     const deleted = await this.isRetracted(rec); // it shows nothing more to react to, edit or delete (client Agent.deleted)
     let sub, payload;
     if (what === "react") {
-      if (!wire.oneEmoji(x.emoji || "")) throw new Error("A reaction is one emoji.");
+      if (!(x.remove ? wire.validEmoji : wire.oneEmoji)(x.emoji || "")) throw new Error("A reaction is one emoji."); // my own added under the older rule can still be taken off
       if (deleted) throw new Error("That message was deleted: it takes no reactions.");
       if (x.remove && !(await this.reactedHere(conv, ref, x.emoji))) throw new Error("There is no " + x.emoji + " reaction of yours on that message to remove.");
       sub = wire.SubReaction;

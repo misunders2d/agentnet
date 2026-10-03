@@ -586,6 +586,30 @@ async function makeWorld() {
   check(wire.validEmoji("$") && wire.validEmoji("👍".repeat(12)), "what peers already sent stays readable");
 }
 
+// My own reaction added under the older rule (any validEmoji) shows as mine,
+// so it can be taken off, though it is no longer composed here (client
+// TestOwnOlderRuleReactionRemovable).
+{
+  const { store, e } = await fresh();
+  const older = ["$", "👍👍"];
+  await store.write([
+    { s: "inbox", k: ID, v: { id: ID, v: 1, from: "peer/desk", fp: PEER, kind: "message", body: "theirs", at: 1 } },
+    ...older.map((emoji, i) => {
+      const id = ("d" + i).padEnd(32, "0");
+      return { s: "outbox", k: id, v: { ...ctl(id, wire.SubReaction, JSON.stringify({ emoji, op: "add", n: 1 }), { id: ID, fingerprint: PEER }, "me/phone"), to: "peer/desk", aside: true, state: "delivered" } };
+    }),
+  ]);
+  for (const emoji of older) {
+    check(await e.reactedHere("", { id: ID, fingerprint: PEER }, emoji), JSON.stringify(emoji) + " shows as mine");
+    let why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji }); } catch (err) { why = err.message; }
+    check(why === "A reaction is one emoji.", JSON.stringify(emoji) + " is not added again: " + why);
+    why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji, remove: true }); } catch (err) { why = err.message; }
+    check(!why.includes("one emoji") && !why.includes("reaction of yours"), "removing my own " + JSON.stringify(emoji) + " goes on to be sent: " + why);
+  }
+}
+
 // Text that shows nothing (white space and default ignorable characters
 // only) is no message and no edit (client TestInvisibleTextRefused).
 {

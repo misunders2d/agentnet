@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1031,6 +1032,54 @@ func TestRemovingAbsentReactionRefused(t *testing.T) {
 	}
 	if _, err := w.alice.React(tctx(t), ref, "👍", true); err == nil {
 		t.Fatal("the same reaction removed twice")
+	}
+}
+
+// A reaction of one's own added under the older rule (any ValidEmoji, as an
+// older version or another device still sends) shows as one's own, so it
+// can be taken off, though such a reaction is no longer composed here.
+func TestOwnOlderRuleReactionRemovable(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "react to me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.alice, ref, "👍", false) // also waits for bob's capabilities
+	older := []string{"$", "👍👍"}
+	for _, emoji := range older { // as the older rule let them be sent
+		n, err := w.alice.store.nextCounter(ref, envelope.SubReaction, emoji)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(envelope.Reaction{Emoji: emoji, Op: "add", N: n})
+		if _, err := w.alice.sendControl(tctx(t), ref, envelope.SubReaction, string(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mine := func(emoji string) bool {
+		return slices.ContainsFunc(convMsgByID(t, w.alice, conv, turn.ID).Reactions, func(v ReactionView) bool { return v.Emoji == emoji && v.Mine })
+	}
+	for _, emoji := range older {
+		if !mine(emoji) {
+			t.Fatalf("%q is not shown as alice's own", emoji)
+		}
+		if _, err := w.alice.React(tctx(t), ref, emoji, false); err == nil {
+			t.Errorf("%q added again under the one-emoji rule", emoji)
+		}
+		if _, err := w.alice.React(tctx(t), ref, emoji, true); err != nil {
+			t.Errorf("removing her own %q: %v", emoji, err)
+		} else if mine(emoji) {
+			t.Errorf("%q still shown after its removal", emoji)
+		}
 	}
 }
 
