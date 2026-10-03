@@ -919,7 +919,9 @@ func (s *store) inboxMessage(id string) (*Message, error) {
 func (s *store) messages(where string, args ...any) ([]Message, error) {
 	q := `SELECT id, sender, kind, body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
 		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, ''), coalesce(agent_id, ''), coalesce(target, '') FROM inbox`
-	rows, err := s.db.Query(q+where+` ORDER BY received_at, id`, args...)
+	// In arrival order: to the millisecond where it is known, then as
+	// stored (an id is random, so it never orders one second's arrivals).
+	rows, err := s.db.Query(q+where+` ORDER BY coalesce(received_ms, received_at * 1000), rowid`, args...)
 	if err != nil {
 		return nil, err
 	}
