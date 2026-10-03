@@ -594,16 +594,21 @@ func (a *Agent) Role() (string, error) {
 	return "", nil
 }
 
+// betweenSetupChecks lets tests finish a device link between the two
+// checks that refuse setting this device up a second way.
+var betweenSetupChecks = func() {}
+
 // SetService records that this installation is a service: it is not asked
 // to set up a person again, and none is created or linked here.
 func (a *Agent) SetService() error {
+	if a.LinkState().State == LinkPending { // read first: a link pins its person before it is linked
+		return ErrLinkWaiting
+	}
+	betweenSetupChecks()
 	if _, ok, err := a.store.selfPerson(a.Address); err != nil {
 		return err
 	} else if ok {
 		return errors.New("this installation already speaks for a person")
-	}
-	if a.LinkState().State == LinkPending {
-		return ErrLinkWaiting
 	}
 	return a.store.done(a.store.setConfig(map[string]string{"role": "service"}))
 }
@@ -620,13 +625,17 @@ func (a *Agent) Person() (PersonInfo, bool, error) {
 // enrollment, address, label or migration. A returned ErrNotPublished means
 // the person exists but the Hub does not hold it yet.
 func (a *Agent) CreatePerson(ctx context.Context, label string) (PersonInfo, error) {
+	// Its person comes with the approval. The link is read first: a link
+	// pins its person before it is marked linked, so a link finished after
+	// this read shows its person below.
+	if a.LinkState().State == LinkPending {
+		return PersonInfo{}, ErrLinkWaiting
+	}
+	betweenSetupChecks()
 	if me, ok, err := a.store.selfPerson(a.Address); err != nil {
 		return PersonInfo{}, err
 	} else if ok {
 		return me.info, fmt.Errorf("this installation already speaks for %q (%s); a second person is not created", me.info.Label, me.info.Person)
-	}
-	if a.LinkState().State == LinkPending { // its person comes with the approval
-		return PersonInfo{}, ErrLinkWaiting
 	}
 	if role, _ := a.store.config("role"); role == "service" {
 		return PersonInfo{}, ErrService
