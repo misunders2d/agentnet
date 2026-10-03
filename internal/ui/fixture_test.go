@@ -154,7 +154,7 @@ func TestFixtureOfflinePeerGetsCustody(t *testing.T) {
 		t.Fatalf("send to offline peer: %+v %v", s, err)
 	}
 	got, _ := f.Thread(s.ID)
-	if m := got.Messages[0]; m.Next != "Waiting on dave/srv" || m.StateText != "Waiting on the server until dave/srv connects" {
+	if m := got.Messages[0]; m.Next != "Waiting on dave/srv" || m.StateText != "On the server; delivery to dave/srv not confirmed yet" {
 		t.Fatalf("new task view %+v", m)
 	}
 }
@@ -237,7 +237,9 @@ func TestStateTextAndNext(t *testing.T) {
 	if got := StateText("out", KindQuestion, "delivered", "bob/desk"); got != "Delivered to bob/desk" {
 		t.Fatalf("delivered: %q", got)
 	}
-	if got := StateText("out", KindMessage, "custody", "bob/desk"); got != "Waiting on the server until bob/desk connects" {
+	// BUG-25: the server holding it says nothing about whether bob is
+	// connected (it may be delivered already, not yet confirmed here).
+	if got := StateText("out", KindMessage, "custody", "bob/desk"); got != "On the server; delivery to bob/desk not confirmed yet" {
 		t.Fatalf("custody: %q", got)
 	}
 	if got := Next("out", KindQuestion, "delivered", "bob/desk", true); got != "" {
