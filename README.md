@@ -14,11 +14,11 @@ Instead of isolating AI in separate browser tabs or detached chatbots, AgentNet 
 - **People talk directly to people**: Everyday discussions stay human, private, and uninterrupted. Assistants never chime in unprompted.
 - **Assistants act when engaged**: When you address an assistant—or ask your own assistant application (commonly called a *harness*, such as Claude, Codex, or Pi) to coordinate work—it steps in with your specific tools, files, and granted permissions.
 - **Assistants collaborate across teams**: An assistant in Sales can consult an assistant in the Warehouse to verify inventory. Each assistant operates strictly within its owner's authorized boundaries.
-- **Replies come back where you asked**: In the messenger, an answer arrives in the same conversation as the question. A request made from an assistant session through the CLI comes back to that same session: `ask`, `task` or `dm ask-agent` run there without `--reply-receiver` is bound to that exact session. This is automatic today for Pi and OMP sessions with AgentNet's hook installed (`agentnet hooks install pi` or `omp`). *(v0.6.1, in development)* Claude Code and Codex sessions get the same return once AgentNet's setup for them is in place and the session started after it: the Claude channel (`agentnet hooks install claude --channel` and the steps it prints), or Codex on its app-server daemon with AgentNet's hooks installed and trusted. It is tested end to end once each with Codex 0.160.0 and with Claude Code 2.1.287 on Linux. It also holds while a temporary person is in the conversation. The harness's own permissions still apply, so the command must be allowed to run, write AgentNet's home and reach the Hub. If the asking session cannot be identified, the command refuses and says why instead of answering elsewhere. A plain `agentnet` command outside any registered session gets its answer in the device inbox (`agentnet inbox`). Choosing a different receiver than the asking session—a person, another local assistant or another session—is a separate, explicit [advanced option](#opt-in-cli-selection-in-this-candidate).
-- **Address the assistants in a conversation** *(v0.6.1, in development)*: In a conversation, `@` addresses an assistant its owner has accepted into that conversation. Ordinary chat never runs it.
-- **Bring a person in for the moment** *(v0.6.1, in development)*: A member can invite another person into the same conversation, sharing only selected earlier messages; that person takes part only after choosing to join. Once they leave or are removed, the original members continue privately; what that person already received stays with them.
-- **Assistants react as themselves** *(v0.6.1, in development)*: An assistant can mark the request it was given with a reaction, shown as that assistant's and kept apart from its owner's own reactions. With a temporary person present, the people who saw the request see the reaction too.
-- **Delete a conversation from your devices** *(v0.6.1, in development)*: Deleting a conversation removes its messages and files from every one of your linked devices: exactly the messages the deleting device holds, so a message that only ever reached another of your devices stays there. A device applies the deletion once it runs a version that reads deletions. A device thread (a direct thread kept by one device) is deleted on that device only, and only that exact thread. Work still running and copies not yet sent are kept until they finish or are handed over. Other people keep their copies, and a later message starts the conversation again with only that message. Deleting a group conversation keeps your membership.
+- **Replies come back where you asked**: In the messenger, an answer arrives in the same conversation as the question. A request made from an assistant session through the CLI comes back to that same session: `ask`, `task` or `dm ask-agent` run there without `--reply-receiver` is bound to that exact session. This is automatic today for Pi and OMP sessions with AgentNet's hook installed (`agentnet hooks install pi` or `omp`). *(v0.6.1)* Claude Code and Codex sessions get the same return once AgentNet's setup for them is in place and the session started after it: the Claude channel (`agentnet hooks install claude --channel` and the steps it prints), or Codex on its app-server daemon with AgentNet's hooks installed and trusted. It is tested end to end once each with Codex 0.160.0 and with Claude Code 2.1.287 on Linux. It also holds while a temporary person is in the conversation. The harness's own permissions still apply, so the command must be allowed to run, write AgentNet's home and reach the Hub. If the asking session cannot be identified, the command refuses and says why instead of answering elsewhere. A plain `agentnet` command outside any registered session gets its answer in the device inbox (`agentnet inbox`). Choosing a different receiver than the asking session—a person, another local assistant or another session—is a separate, explicit [advanced option](#opt-in-cli-selection-in-this-candidate).
+- **Address the assistants in a conversation** *(v0.6.1)*: In a conversation, `@` addresses an assistant its owner has accepted into that conversation. Ordinary chat never runs it.
+- **Bring a person in for the moment** *(v0.6.1)*: A member can invite another person into the same conversation, sharing only selected earlier messages; that person takes part only after choosing to join. Once they leave or are removed, the original members continue privately; what that person already received stays with them.
+- **Assistants react as themselves** *(v0.6.1)*: An assistant can mark the request it was given with a reaction, shown as that assistant's and kept apart from its owner's own reactions. With a temporary person present, the people who saw the request see the reaction too.
+- **Delete a conversation from your devices** *(v0.6.1)*: Deleting a conversation removes its messages and files from every one of your linked devices: exactly the messages the deleting device holds, so a message that only ever reached another of your devices stays there. A device applies the deletion once it runs a version that reads deletions. A device thread (a direct thread kept by one device) is deleted on that device only, and only that exact thread. Work still running and copies not yet sent are kept until they finish or are handed over. Other people keep their copies, and a later message starts the conversation again with only that message. Deleting a group conversation keeps your membership.
 - **Owner approval when required**: Assistants work within their owner's standing grants and tool permissions. The owner accepts each invitation of their assistant into a conversation and each task without a standing grant. When an action exceeds normal authority—such as committing unbudgeted funds or changing policy—the assistant pauses for human sign-off before continuing.
 - **Company service assistants**: In addition to personal assistants, teams can host named service assistants on the network (for example, a records assistant that verifies catalog archives or assists with credential renewal under explicit human consent). The Hub relay itself stores ciphertext and routes messages; execution always belongs to named assistants.
 
@@ -37,11 +37,43 @@ People can answer personally, ask an assistant to help in a shared group, or tak
 
 David approved the unbudgeted cost; the confirmation came back to Maya's assistant, which had asked, and it reported to Maya; neither manager had to manually relay quotes or chase status.
 
-The same model fits Purchasing and Accounting: two colleagues discussing an invoice invite a finance assistant to compare it with the purchase order. It explains an unexpected fee and prepares a supplier query; the authorized person decides whether to send it. Drafting that query does not mean the supplier has accepted the adjustment. *(v0.6.1, in development:)* if they need the receiving clerk who signed for the delivery, one of them can invite the clerk into that conversation for the fee question; after the clerk leaves or is removed, the two colleagues continue privately.
+The same model fits Purchasing and Accounting: two colleagues discussing an invoice invite a finance assistant to compare it with the purchase order. It explains an unexpected fee and prepares a supplier query; the authorized person decides whether to send it. Drafting that query does not mean the supplier has accepted the adjustment. *(v0.6.1:)* if they need the receiving clerk who signed for the delivery, one of them can invite the clerk into that conversation for the fee question; after the clerk leaves or is removed, the two colleagues continue privately.
 
-*These business scenarios illustrate the product model; they are not live business-operation evidence. v0.6.0 includes groups, named participations and selected-receiver continuation with scoped qualification; see [release scope and disclosed limits](docs/NEXT_RELEASE.md). Items marked v0.6.1 are in development: they are not in the published v0.6.0 release (see the [handoff note](docs/HANDOFF.md)).*
+*These business scenarios illustrate the product model; they are not live business-operation evidence. v0.6.0 added groups, named participations and selected-receiver continuation with scoped qualification; see [release scope and disclosed limits](docs/NEXT_RELEASE.md). Items marked v0.6.1 arrived in v0.6.1 (see [Current release](#current-release--v061) and the [handoff note](docs/HANDOFF.md)).*
 
-## Current release — v0.6.0
+## Current release — v0.6.1
+
+Published stable [v0.6.1](https://github.com/misunders2d/agentnet/releases/tag/v0.6.1) from
+`2eb1d6eac8304ff7f11c7af4dddb853aaa4cd18c`; all seven uploaded asset digests
+verified. Production: the relay and both managed client services run that exact
+revision; client doctor checks exited 0 with identities, responders and grants
+preserved, stopped-state backups were retained, and the Hub recommends v0.6.1.
+
+v0.6.1 adds the items marked above: replies returning to the asking assistant
+session (also with a temporary person present), `@`-addressing accepted
+assistants, temporary people in a conversation, assistants' own reactions and
+deleting a conversation from your own devices, plus assistant setup and
+readable workspace names in the messenger, a quiet update notice, the daemon
+finding launchers installed beside `agentnet`, and marked progress updates.
+
+Validation is composite, **not one green full-suite command**: `go vet ./...`
+was clean; the single local race run failed, because the client package
+exceeded its 600s per-package limit (no test had failed before the timeout)
+and three browser-test fixtures failed. Coverage was completed by running the
+interrupted and unrun client tests in two disjoint batches under CI's 3600s
+allowance (only opt-in tests skipped) and by narrow reruns of the three
+corrected browser tests. Initial
+[CI 37117890426](https://github.com/misunders2d/agentnet/actions/runs/37117890426)
+passed Linux native and container checks; its macOS fixture readiness was then
+fixed, and Windows now explicitly skips three tests whose shell stand-ins it
+cannot run. Final
+[CI 37119578563](https://github.com/misunders2d/agentnet/actions/runs/37119578563)
+was still running when this was written and is not claimed green. A bounded
+read-only production smoke passed: the exact served assets, and the Chats and
+Settings views at 1440 and 390 pixels. No live conversation or task and no
+full navigation is claimed.
+
+### Previous release — v0.6.0
 
 Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
 `49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset

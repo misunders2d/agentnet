@@ -1,6 +1,62 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-> **Current release — v0.6.0:** read [NEXT_RELEASE.md](NEXT_RELEASE.md)
+> **Current release — v0.6.1:** published stable
+> [v0.6.1](https://github.com/misunders2d/agentnet/releases/tag/v0.6.1) from
+> `2eb1d6eac8304ff7f11c7af4dddb853aaa4cd18c`; all seven uploaded asset digests
+> verified. Production: the relay and both managed client services run that
+> exact clean revision; client doctor checks exited 0 with identities,
+> responders and grants preserved; stopped-state backups were retained; the Hub
+> recommends v0.6.1.
+>
+> Scope: replies stay in the conversation where they were asked, and a CLI
+> request returns to the assistant session that made it (automatic for Pi/OMP
+> sessions with AgentNet's hook and for Claude Code and Codex sessions
+> registered through AgentNet's setup, also while a temporary person is present;
+> harness permissions still apply); people `@`-address assistants accepted into
+> a conversation; owner-approved temporary participation of another person in
+> the same DM, after which the original members continue privately; choosing a
+> different reply receiver stays an explicit advanced option. Claude/Codex
+> origin return selects the session from the harness's own session environment
+> and registration files, not from the harness process a sandbox hides;
+> delivery keeps every native check, and the sandbox's own file/network rules
+> still decide whether the command can run. Verified end to end once with Codex
+> 0.160.0 in workspace-write mode with only the test's AgentNet home writable
+> and loopback network, and once with Claude Code 2.1.287 on Linux (one model
+> turn; other Claude builds and a Claude sandbox not exercised). Also: a
+> temporary person may address an added assistant only under its owner's
+> permissions (joining grants no question or task permission); questions to
+> named and conversation assistants run with the owner's own question setup (no
+> editing tools; tools the owner already allows keep their effects); assistants
+> react as themselves, and with a temporary person present a reaction reaches
+> the request's captured audience; deleting a conversation erases exactly the
+> messages the deleting device holds, on all of that person's linked devices
+> (each applies it once it reads deletions; running work and unsent copies are
+> kept until they finish or are handed over; group membership is kept), while
+> deleting a legacy device thread erases that exact thread on this device only;
+> assistant setup and readable workspace names in the device's messenger; a
+> quiet update notice; the daemon finds launchers installed beside `agentnet`;
+> marked progress updates do not end a wait. The `hgp1` (temporary people),
+> `agr1` (assistant reactions) and `clr1` (deletions) capabilities are
+> advertised.
+>
+> Validation is composite, not one green full-suite command: `go vet ./...` was
+> clean; the single local race run failed, because the client package exceeded
+> its 600s per-package limit (no test had failed before the timeout) and three
+> browser-test fixtures failed. Coverage was completed by running the
+> interrupted and unrun client tests in two disjoint batches under CI's 3600s
+> allowance (only opt-in tests skipped) and by narrow reruns of the three
+> corrected browser tests. Initial
+> [CI 37117890426](https://github.com/misunders2d/agentnet/actions/runs/37117890426)
+> passed Linux native and container checks; its macOS fixture readiness was then
+> fixed, and Windows explicitly skips three tests whose shell stand-ins it
+> cannot run. Final
+> [CI 37119578563](https://github.com/misunders2d/agentnet/actions/runs/37119578563)
+> was still running when this was written and is not claimed green. A bounded
+> read-only production smoke passed: the exact served assets, and the Chats and
+> Settings views at 1440 and 390 pixels. No live conversation or task and no
+> full navigation is claimed.
+
+> **Previous release — v0.6.0 (historical):** read [NEXT_RELEASE.md](NEXT_RELEASE.md)
 > and [opt-in CLI examples](../README.md#opt-in-cli-selection-in-this-candidate).
 > Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
 > `49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset
@@ -32,41 +88,6 @@
 > production rollout; native CI does not establish those physical/live outcomes.
 > Initial candidate CI had macOS fixture failures; corrected final CI is recorded
 > separately above. Earlier releases below remain historical evidence.
-
-> **In progress — v0.6.1 (unreleased, uncommitted working tree; not published or deployed):**
-> the intended flow keeps replies in the conversation where they were asked and
-> returns a CLI request to the assistant session that made it (automatic for
-> Pi/OMP sessions with AgentNet's hook and, in this candidate, for Claude Code
-> and Codex sessions registered through AgentNet's setup, also while a
-> temporary person is present; harness permissions still apply), lets people
-> `@`-address assistants accepted into a conversation, and adds owner-approved
-> temporary participation of another person in the same DM, after which the
-> original members continue privately; choosing a different reply receiver stays
-> an explicit advanced option. Claude/Codex origin return selects the session from
-> the harness's own session environment and registration files, not from the
-> harness process a sandbox hides; delivery keeps every native check, and the
-> sandbox's own file/network rules still decide whether the command can run.
-> Verified end to end once with Codex 0.160.0 in workspace-write mode with only
-> the test's AgentNet home writable and loopback network, and once with Claude
-> Code 2.1.287 on Linux (one model turn; other Claude builds and a Claude
-> sandbox not exercised).
-> Also in this candidate: a temporary person may address an added assistant
-> only under its owner's permissions (joining grants no question or task
-> permission); questions to named and conversation assistants run with the
-> owner's own question setup (no editing tools; tools the owner already allows
-> keep their effects); assistants react as themselves, and with a temporary
-> person present a reaction reaches the request's captured audience; deleting
-> a conversation erases exactly the messages the deleting device holds, on all
-> of that person's linked devices (each applies it once it reads deletions;
-> running work and unsent copies are kept until they finish or are handed
-> over; group membership is kept), while deleting a legacy device thread
-> erases that exact thread on this device only; assistant setup and readable
-> workspace names in the device's messenger; a quiet update notice; the daemon
-> finds launchers installed beside `agentnet`; marked progress updates do not
-> end a wait. The `hgp1` (temporary people), `agr1` (assistant reactions) and
-> `clr1` (deletions) capabilities are advertised in this candidate. Release
-> acceptance (combined vet/race run, build, publication) is pending.
-> v0.6.0 above remains the current production release and evidence.
 
 > **Target Audience:** Any incoming coding agent (Claude, Codex, Antigravity, Pi) or human engineer starting fresh in this repository without access to prior chat transcripts.
 >

@@ -88,7 +88,7 @@ adds an extension that does the same and also shows a short notice while Pi
 is idle (without starting a model turn). `agentnet conversation ID` shows a
 whole conversation, both directions, at any time.
 
-*(v0.6.1, in development)* The messenger on this device (not a browser device)
+Since v0.6.1, the messenger on this device (not a browser device)
 can do this setup too: it lists the assistant programs installed here, shows
 the hook changes for review before applying them, and can create named
 assistants with their own working folder. Each harness still asks you to
@@ -112,7 +112,7 @@ changed; hooks are an opt-in merge that only adds notification handlers.
 user service was verified live in operations; macOS LaunchAgent and Windows
 logon tasks are documented examples and were not exercised in live verification.
 A responder harness such as `claude` or `codex` must be on the PATH the daemon sees.
-*(v0.6.1, in development)* The daemon also looks in the folder that holds
+Since v0.6.1, the daemon also looks in the folder that holds
 `agentnet` itself, so launchers installed beside it are found even when the
 service's PATH lacks that folder; launchers elsewhere still need the PATH that
 `agentnet help startup` captures.
