@@ -297,3 +297,30 @@ func TestReminderOnlyOnReceivedMessages(t *testing.T) {
 		}
 	}
 }
+
+// A message its sender deleted takes no reminder: there is nothing left
+// to come back to.
+func TestReminderRefusedOnDeletedMessage(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	id := receiveAt(t, w, envelope.KindMessage, "never mind")
+	ref, err := w.alice.RefOf("", id, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the deletion sent", func() bool {
+		_, err := w.alice.Retract(tctx(t), ref, "")
+		return err == nil
+	})
+	eventually(t, "bob to hold the deletion", func() bool {
+		gone, err := w.bob.store.retracted(id)
+		return err == nil && gone
+	})
+	if _, err := w.bob.SetReminder(id, time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "deleted") {
+		t.Fatalf("a reminder on a deleted message: %v", err)
+	}
+	if _, ok, _ := w.bob.Reminder(id); ok {
+		t.Fatal("a refused reminder was stored")
+	}
+}

@@ -57,7 +57,8 @@ const maxReminderAhead = 10 * 365 * 24 * time.Hour
 
 // SetReminder sets the reminder on received message id to due, or moves an
 // existing one (a new revision: its attention is asked for again at the new
-// time). due must be in the future.
+// time). due must be in the future, and the message not one its sender
+// deleted.
 func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 	now := time.Now()
 	if !due.After(now) {
@@ -76,6 +77,11 @@ func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 	}
 	if err != nil {
 		return Reminder{}, err
+	}
+	if retracted, err := a.store.retracted(id); err != nil {
+		return Reminder{}, err
+	} else if retracted {
+		return Reminder{}, errors.New("its sender deleted this message: there is nothing to be reminded of")
 	}
 	_, err = a.store.db.Exec(`INSERT INTO reminders(message, conv, due_at, state, rev, notified_rev, created_at, updated_at)
 		VALUES(?, ?, ?, ?, 1, 0, ?, ?)
