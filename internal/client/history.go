@@ -510,7 +510,7 @@ func (a *Agent) startHistory(dev identity.Public) error {
 		dev.Address, dev.Fingerprint(), string(pos), n, now, now); err != nil {
 		return err
 	}
-	a.replayErased(dev)  // conversations deleted here stay deleted there (convclear.go)
+	a.replayErased(dev) // conversations deleted here stay deleted there (convclear.go)
 	a.convWork.due(convHistory)
 	a.kickNow()          // this process's daemon, if it is one (the page approved)
 	notifyDaemon(a.home) // or the daemon running beside this command (agentnet person approve)
@@ -1075,6 +1075,7 @@ func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
 	}
 	defer rows.Close()
 	var out []HistoryJob
+	var at []string // each job's position, counted once the rows are closed
 	for rows.Next() {
 		var j HistoryJob
 		var pos string
@@ -1084,12 +1085,18 @@ func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
 		_, j.Name, _ = protocol.SplitAddress(j.Device)
 		var p historyPos
 		json.Unmarshal([]byte(pos), &p)
-		if j.State == "done" {
-			j.ConvsDone = j.ConvsTotal
-		} else if p.Conv != "" {
-			a.store.db.QueryRow(`SELECT count(*) FROM conversations WHERE id < ?`, p.Conv).Scan(&j.ConvsDone)
-		}
-		out = append(out, j)
+		out, at = append(out, j), append(at, p.Conv)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close() // the store has one connection: a query while these rows are open waits for it forever
+	for i := range out {
+		if out[i].State == "done" {
+			out[i].ConvsDone = out[i].ConvsTotal
+		} else if at[i] != "" {
+			a.store.db.QueryRow(`SELECT count(*) FROM conversations WHERE id < ?`, at[i]).Scan(&out[i].ConvsDone)
+		}
+	}
+	return out, nil
 }

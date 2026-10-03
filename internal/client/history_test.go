@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -283,3 +284,38 @@ func TestHistoryFilesOnRequest(t *testing.T) {
 }
 
 func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+
+// The page's history progress must not wait on itself: the store has one
+// connection, so counting a job's position while its rows are still being
+// read never gets one. Here a job with a position (a running or ended one).
+func TestHistoryProgressWithOneConnection(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	a := &Agent{Address: "alice/laptop", store: s}
+	for _, id := range []string{"conv-a", "conv-b"} {
+		if _, err := s.db.Exec(`INSERT INTO conversations(id, root, kind, peer, pinned_at) VALUES(?, '', 'dm', '', 0)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pos, _ := json.Marshal(historyPos{Conv: "conv-b"})
+	if _, err := s.db.Exec(`INSERT INTO history_jobs(device, fingerprint, pos, convs_total, state, created_at, updated_at) VALUES('alice/phone', 'fp', ?, 2, 'ended', 1, 1)`, string(pos)); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		jobs []HistoryJob
+		err  error
+	}
+	got := make(chan result, 1)
+	go func() { jobs, err := a.HistoryProgress(); got <- result{jobs, err} }()
+	select {
+	case r := <-got:
+		if r.err != nil || len(r.jobs) != 1 || r.jobs[0].Name != "phone" || r.jobs[0].State != "ended" || r.jobs[0].ConvsDone != 1 || r.jobs[0].ConvsTotal != 2 {
+			t.Fatalf("progress = %+v, %v", r.jobs, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("HistoryProgress waits for a second connection while its own rows hold the only one")
+	}
+}
