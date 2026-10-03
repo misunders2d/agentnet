@@ -6,12 +6,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/hub"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
@@ -37,8 +39,11 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "hub")
-	hub := testhub.Start(t, dir, "127.0.0.1:0", "")
-	base := "https://" + hub.Addr
+	// A short session grace: the tablet's session from before its link (it
+	// published no capabilities) stops counting soon after it reconnects as
+	// a member, as it does after the default 30s, longer than these waits.
+	relay := testhub.StartConfig(t, hub.Config{DataDir: dir, SessionGrace: time.Second}, "127.0.0.1:0")
+	base := "https://" + relay.Addr
 	laptop := personAgent(t, ctx, testhub.BootstrapCode(t, dir), "laptop", "Alice")
 	if err := laptop.SetResponder(&client.Responder{Harness: "claude", Dir: t.TempDir(), Timeout: time.Minute}); err != nil {
 		t.Fatal(err)
@@ -84,6 +89,15 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 		p, _ := w.api("/api/overview", nil)["person"].(map[string]any)
 		return w.ok(map[string]any{"op": "status"})["link"] == "linked" && p != nil && p["label"] == "Alice"
 	})
+	// Before anything is asked: the tablet has the laptop's history, and Bob
+	// and the laptop each reach it directly. Until its session from before
+	// the link ends, a copy for it is kept waiting (not every session of it
+	// reads conversations); the session's end lets it go, and later ones go
+	// directly.
+	w.until("the laptop's history", func() bool { return dmMessage(w, conv, "hello") != nil })
+	for _, from := range []*client.Agent{bob, laptop} {
+		reachBrowser(t, w, from, conv, tablet)
+	}
 	list := func(name string) []any { v, _ := w.api("/api/overview", nil)[name].([]any); return v }
 	item := func(reason string) map[string]any {
 		for _, x := range list("needs_you") {
@@ -165,6 +179,31 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	if len(list("held")) != 1 {
 		t.Fatalf("the held question went with the decisions: %v", list("held"))
 	}
+}
+
+// reachBrowser sends plain messages from a into conv until its copy to the
+// browser device is not kept waiting, then until the browser holds that
+// message: what a sends next goes to it directly.
+func reachBrowser(t *testing.T, w *engineNode, a *client.Agent, conv, browser string) {
+	t.Helper()
+	var body string
+	for i, deadline := 0, time.Now().Add(20*time.Second); ; i++ {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never reached %s directly", a.Address, browser)
+		}
+		body = "reach " + browser + " " + strings.Repeat(".", i)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		sent, err := a.SendConv(ctx, conv, client.ConvOutgoing{Body: body})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i := slices.IndexFunc(sent.Copies, func(c client.ConvCopy) bool { return c.To == browser }); i >= 0 && sent.Copies[i].State != "waiting" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	w.until(browser+" to hold "+body, func() bool { return dmMessage(w, conv, body) != nil })
 }
 
 // An invitation's claimed time never breaks the browser's overview or a
