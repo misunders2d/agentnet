@@ -179,7 +179,7 @@ function outText(state, peer, detail) {
   case "receiver_waiting": return detail || "Waiting for the selected reply receiver to accept this exact request.";
   case "waiting": return "Kept here, not sent yet: " + (detail || peer + " cannot read conversations now");
   case "queued": return "Waiting to send; retries automatically";
-  case "custody": return "Waiting on the server until " + peer + " connects";
+  case "custody": return "On the server; delivery to " + peer + " not confirmed yet";
   case "delivered": return "Delivered to " + peer;
   case "expired": return "Not delivered: that session ended first";
   case "failed": return "Not sent" + (detail ? ": " + detail : "");
