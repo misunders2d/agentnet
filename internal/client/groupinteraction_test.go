@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"os"
 	"path/filepath"
@@ -92,7 +93,18 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "visitor invitation", func() bool { return stateAt(t, host, p.PID).State == PartInvited })
+	eventually(t, "visitor invitation", func() bool {
+		// The invitation can arrive before the group context it needs is
+		// decryptable here: that is pending (agentVerdict waits on it), not failure.
+		info, err := host.Participation(p.PID)
+		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, ErrNoParticipation) {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.State == PartInvited
+	})
 	if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}

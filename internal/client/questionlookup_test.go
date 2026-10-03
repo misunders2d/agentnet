@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,7 +37,7 @@ func lookupProgram(t *testing.T) string {
 // Claude gets exact allow rules bound to the installed program: fixed
 // lookups, and status only for ids this device sent that the request names.
 func TestQuestionLookupClaudeExactRules(t *testing.T) {
-	if runtime := os.Getenv("GOOS"); runtime == "windows" {
+	if runtime.GOOS == "windows" {
 		t.Skip("shell stand-in")
 	}
 	w := newWorld(t, "")

@@ -3,6 +3,7 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -185,6 +186,9 @@ func TestAssistantReactionDeviceThread(t *testing.T) {
 // optional reaction line and an emotion line when asked for one.
 func reactHarness(t *testing.T, name, out string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub")
+	}
 	dir := t.TempDir()
 	bin := filepath.Join(dir, name)
 	os.WriteFile(bin, []byte("#!/bin/sh\necho run >> \"$0.runs\"\ncat > \"$0.prompt\"\nprintf '"+out+"'\n"), 0o700)
