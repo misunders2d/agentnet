@@ -232,16 +232,25 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 // exact host key sent (ConvMessage.VerifiedAgent), by the rule admission
 // checks: this device as the host, the key that verified a received copy,
 // or for history the original key its own device vouched for. Without
-// resolved participation evidence nothing is marked.
+// resolved participation evidence nothing is marked. The members are read
+// once, for every participation the turns name.
 func (a *Agent) verifyAgents(conv string, msgs []ConvMessage) {
 	parts := map[string]*ParticipationInfo{}
+	var members *dmMembers
 	for i, m := range msgs {
 		if m.ExcerptPID != "" || m.PID == "" || !agentTurn(m.Sub, m.Kind, m.status, m.ReplyTo, m.PID, m.Origin) {
 			continue
 		}
 		p, seen := parts[m.PID]
 		if !seen {
-			if info, err := a.participation(conv, m.PID); err == nil {
+			if members == nil {
+				dm, err := a.dmMembers(conv)
+				if err != nil {
+					return // no members resolved here: nothing is marked
+				}
+				members = &dm
+			}
+			if info, err := participationIn(a.store.db, conv, m.PID, *members, a.Address); err == nil {
 				p = &info
 			}
 			parts[m.PID] = p
