@@ -99,6 +99,9 @@ func (l *Live) Overview() (Overview, error) {
 		}
 		o.Review = append(o.Review, item)
 	}
+	if err := l.selfConsentReview(&o); err != nil { // own agents that joined without a click (liveselfconsent.go)
+		return o, err
+	}
 	q, err := l.a.Quarantine()
 	if err != nil {
 		return o, err
