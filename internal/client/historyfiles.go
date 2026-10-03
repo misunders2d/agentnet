@@ -64,7 +64,7 @@ func (a *Agent) keepSent(path string) error {
 	if err := secfile.EnsureDir(dir); err != nil {
 		return err
 	}
-	src, err := os.Open(path)
+	src, _, err := openRegular(path)
 	if err != nil {
 		return err
 	}
