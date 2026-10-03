@@ -223,6 +223,11 @@ func ParsePersonRoster(data []byte) (PersonRoster, error) {
 	return r, r.Validate()
 }
 
+// ValidLabel checks a person label (also a group title or team name)
+// against the rules every record carrying one is checked with, so a
+// refusal can say why before anything is signed or sent.
+func ValidLabel(s string) error { return validLabel(s) }
+
 func validLabel(s string) error {
 	if s == "" || len(s) > MaxPersonLabel || !utf8.ValidString(s) || strings.TrimSpace(s) != s {
 		return fmt.Errorf("person: label must be 1-%d bytes of text without surrounding spaces", MaxPersonLabel)

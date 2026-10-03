@@ -66,3 +66,42 @@ func TestPersonLabelThroughGuardedHandler(t *testing.T) {
 		t.Fatalf("identity/label: %+v", after)
 	}
 }
+
+// A label the rules refuse is refused with the reason, as the CLI gives
+// it, not as an unconfirmed change to retry.
+func TestPersonLabelRefusalSaysWhy(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	a, err := client.Join(ctx, t.TempDir(), testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	before, err := a.CreatePerson(ctx, "Anna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(NewLive(a), "127.0.0.1:8123", testToken).Handler()
+	for label, why := range map[string]string{
+		strings.Repeat("a", 66):            "1-64 bytes",
+		"\u0622\u0646\u0627 \u200f(Sales)": "control character",
+		" Anna":                            "surrounding spaces",
+	} {
+		body, _ := json.Marshal(map[string]string{"label": label})
+		r := httptest.NewRequest("POST", "http://127.0.0.1:8123/api/person/label", strings.NewReader(string(body)))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "http://127.0.0.1:8123")
+		r.Header.Set("Cookie", cookieName+"="+testToken)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 409 || !strings.Contains(w.Body.String(), why) || strings.Contains(w.Body.String(), "not confirmed") {
+			t.Errorf("label %q: %d %s", label, w.Code, w.Body)
+		}
+	}
+	if after, _, _ := a.Person(); after.Roster != before.Roster {
+		t.Fatal("a refused label changed the roster")
+	}
+}
