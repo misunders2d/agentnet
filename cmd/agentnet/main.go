@@ -782,7 +782,7 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	if kind == "task" {
 		msgKind = envelope.KindTask
 	}
-	receiver, err := returnSelection.selected(a)
+	receiver, err := returnSelection.selected(a, true)
 	if err != nil {
 		return err
 	}
