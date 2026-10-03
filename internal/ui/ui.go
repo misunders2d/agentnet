@@ -70,6 +70,12 @@ type Overview struct {
 	Seq              uint64                `json:"seq"`
 	Version          string                `json:"version"` // the program serving the page (an update changes it)
 	Directory        Directory             `json:"directory"`
+	// NeedsYou are the conversation items waiting for the person's decision
+	// (requests to the agent here, invitations for it); Held are the person
+	// turns held in conversations, answered there. Neither is in Review,
+	// which is device history.
+	NeedsYou []ConvItem `json:"needs_you"`
+	Held     []ConvItem `json:"held"`
 	// Human DMs, when the provider holds them (Persons): this installation's
 	// person (nil until the person creates one), the people known or listed,
 	// and the two-person conversations. They are never part of Threads.
@@ -685,6 +691,30 @@ type ReviewItem struct {
 // ReasonSelfConsented is ReviewItem.Reason for an own agent that joined
 // without the person's accept.
 const ReasonSelfConsented = "self_consented"
+
+// ConvItem is a conversation item waiting for the person
+// (client.ConvReview); Reason is one of client.ReviewAwaiting,
+// ReviewNeedsHuman, ReviewInvite or ReviewHeldTurn, and Conv is the
+// conversation the page opens for it. Opening it, or clicking an alert
+// about it, decides nothing. Actions are the decisions available here: on
+// a request (ID) through /api/act, on an invitation (PID only) through
+// /api/dm/agent/decide; a held turn has none, it is answered in the
+// conversation. DecideOn names the host device where it is decided when
+// that is not this one (a browser runs no agent): then it is read-only.
+type ConvItem struct {
+	Reason   string    `json:"reason"`
+	Conv     string    `json:"conv"`
+	PID      string    `json:"pid,omitempty"`
+	ID       string    `json:"id,omitempty"`
+	Peer     string    `json:"peer"`
+	Kind     string    `json:"kind,omitempty"`
+	Why      string    `json:"why"`
+	Excerpt  string    `json:"excerpt"`
+	At       time.Time `json:"at"`
+	Unread   bool      `json:"unread,omitempty"`
+	Actions  []string  `json:"actions,omitempty"`
+	DecideOn string    `json:"decide_on,omitempty"`
+}
 
 // OperatorDecisions is implemented by the daemon provider: deciding a
 // request another machine holds, as one of its granted operators. The

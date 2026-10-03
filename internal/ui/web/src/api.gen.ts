@@ -143,6 +143,21 @@ export interface ControlAction {
   text?: string;
 }
 
+export interface ConvItem {
+  reason: string;
+  conv: string;
+  pid?: string;
+  id?: string;
+  peer: string;
+  kind?: string;
+  why: string;
+  excerpt: string;
+  at: string;
+  unread?: boolean;
+  actions?: string[];
+  decide_on?: string;
+}
+
 export interface CopyView {
   to: string;
   state: string;
@@ -180,6 +195,7 @@ export interface DMMessage {
   replica?: boolean;
   pid?: string;
   attachments?: FileView[];
+  verified_agent: boolean;
   via?: string;
   copies?: CopyView[];
   synced_from?: string;
@@ -527,6 +543,8 @@ export interface Overview {
   seq: number;
   version: string;
   directory: Directory;
+  needs_you: ConvItem[] | null;
+  held: ConvItem[] | null;
   persons: boolean;
   agents: boolean;
   notify?: NotifyView;
@@ -703,6 +721,9 @@ export interface ReviewItem {
   at: string;
   notice?: boolean;
   report?: Report;
+  reason?: string;
+  conv?: string;
+  agent_id?: string;
 }
 
 export interface Sent {

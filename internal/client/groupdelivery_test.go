@@ -641,7 +641,7 @@ func TestGroupCarrierOrdinaryRunDelivery(t *testing.T) {
 	if jobs != 0 || alerts != 0 {
 		t.Fatalf("carrier execution/attention jobs=%d alerts=%d", jobs, alerts)
 	}
-	if review, e := w.bob.PageReview(); e != nil || len(review) != 0 {
+	if review, e := w.bob.PageReview(); e != nil || len(review.Device)+len(review.Conv)+len(review.Held) != 0 {
 		t.Fatalf("carrier review cards %+v %v", review, e)
 	}
 	if more, e := w.bob.historyPageFor(w.bob.Self(), historyPos{}); e != nil || more {

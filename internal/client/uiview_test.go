@@ -161,9 +161,10 @@ func TestThreadsNoticeShapeIsExact(t *testing.T) {
 }
 
 // The page's views are device history: DM messages, sent or received, never
-// become device threads, unread counts or page review items, also with a
-// device thread beside them. agentnet inbox's review keeps them, and viewing
-// marks nothing read.
+// become device threads, unread counts or device review items, also with a
+// device thread beside them; a DM question for the person is listed apart
+// (held), with its conversation, never as a decision. agentnet inbox's
+// review keeps them, and viewing marks nothing read.
 func TestPageViewsLeaveOutConversations(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
@@ -204,8 +205,11 @@ func TestPageViewsLeaveOutConversations(t *testing.T) {
 		t.Errorf("bob's device thread counts DM messages: %+v", bt)
 	}
 	page, err := w.bob.PageReview()
-	if err != nil || len(page) != 1 || page[0].ID != q.ID {
+	if err != nil || len(page.Device) != 1 || page.Device[0].ID != q.ID || len(page.Conv) != 0 {
 		t.Fatalf("page review: %v %+v", err, page)
+	}
+	if len(page.Held) != 1 || page.Held[0].Reason != ReviewHeldTurn || page.Held[0].Conv != c2 || page.Held[0].Body != "dm budget question?" || page.Held[0].From != alice {
+		t.Fatalf("page review's held DM question: %+v", page.Held)
 	}
 	all, err := w.bob.Review()
 	held := 0
