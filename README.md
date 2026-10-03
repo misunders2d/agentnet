@@ -41,7 +41,23 @@ The same model fits Purchasing and Accounting: two colleagues discussing an invo
 
 *These business scenarios illustrate the product model; they are not live business-operation evidence. v0.6.0 added groups, named participations and selected-receiver continuation with scoped qualification; see [release scope and disclosed limits](docs/NEXT_RELEASE.md). Items marked v0.6.1 arrived in v0.6.1 (see [Current release](#current-release--v061) and the [handoff note](docs/HANDOFF.md)).*
 
-## Current release — v0.6.1
+## Current release — v0.6.2
+
+[v0.6.2](https://github.com/misunders2d/agentnet/releases/tag/v0.6.2) is published
+from `5342aa3a1207a95f04c888360b7937b72d8e627d` and deployed to the relay and
+both managed clients. It fixes searchable people/assistant mentions, the phone
+workspace and conversation layout, and the reaction picker (24 choices in a
+phone bottom sheet or desktop popup). Mentions preserve the selected person
+through drafts and edits; they grant no execution or notification permission.
+Older clients and the CLI display the readable reference text.
+
+Uploaded checksums and served assets match. Focused page/workspace checks, UI
+vet, native/browser rendered journeys, and a bounded live UI smoke passed.
+Keyboard testing used a shortened viewport; physical-phone acceptance remains
+pending. Emoji search/categories/recents and responder image inspection are
+not included. The v0.6.1 evidence below is historical.
+
+### Previous release — v0.6.1
 
 Published stable [v0.6.1](https://github.com/misunders2d/agentnet/releases/tag/v0.6.1) from
 `2eb1d6eac8304ff7f11c7af4dddb853aaa4cd18c`; all seven uploaded asset digests

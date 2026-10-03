@@ -1,6 +1,18 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-> **Current release — v0.6.1:** published stable
+> **Current release — v0.6.2:** [published](https://github.com/misunders2d/agentnet/releases/tag/v0.6.2)
+> from `5342aa3a1207a95f04c888360b7937b72d8e627d`. Relay and both managed
+> clients run this clean revision; both client doctor checks passed. All seven
+> uploaded digests and the changed hosted UI assets match. Fixes: searchable
+> people/assistant mentions with exact person references in signed text,
+> compact mobile layout, and a 24-choice reaction grid. No backend/schema or
+> wire-envelope change. Focused tests, UI vet, native/browser rendered checks,
+> and a live Chats/Settings smoke at 1440/390 passed. Keyboard testing was a
+> viewport simulation; owner phone acceptance remains pending. Full emoji
+> search/categories/recents and responder attachment inspection remain outside
+> this correction. Prior release evidence follows unchanged.
+
+> **Previous release — v0.6.1 (historical):** published stable
 > [v0.6.1](https://github.com/misunders2d/agentnet/releases/tag/v0.6.1) from
 > `2eb1d6eac8304ff7f11c7af4dddb853aaa4cd18c`; all seven uploaded asset digests
 > verified. Production: the relay and both managed client services run that
