@@ -169,6 +169,9 @@ func (a *Agent) React(ctx context.Context, ref ControlRef, emoji string, remove 
 	if !envelope.ValidEmoji(emoji) {
 		return ControlSent{}, errors.New("a reaction is one emoji")
 	}
+	if a.deleted(ref) {
+		return ControlSent{}, errors.New("that message was deleted: it takes no reactions")
+	}
 	op := "add"
 	if remove {
 		op = "remove"
@@ -191,6 +194,9 @@ func (a *Agent) Revise(ctx context.Context, ref ControlRef, text string) (Contro
 	if err := a.mayAuthor(ref); err != nil {
 		return ControlSent{}, err
 	}
+	if a.deleted(ref) {
+		return ControlSent{}, errors.New("that message was deleted: it cannot be edited")
+	}
 	rev, err := a.store.nextCounter(ref, envelope.SubRevision, "")
 	if err != nil {
 		return ControlSent{}, err
@@ -209,6 +215,9 @@ func (a *Agent) Retract(ctx context.Context, ref ControlRef, reason string) (Con
 	if err := a.mayAuthor(ref); err != nil {
 		return ControlSent{}, err
 	}
+	if a.deleted(ref) {
+		return ControlSent{}, errors.New("that message was deleted already")
+	}
 	body, _ := json.Marshal(envelope.Retraction{Reason: reason})
 	sent, err := a.sendControl(ctx, ref, envelope.SubRetraction, string(body))
 	if err == nil {
@@ -216,6 +225,13 @@ func (a *Agent) Retract(ctx context.Context, ref ControlRef, reason string) (Con
 		a.redactRetracted(ref) // this device keeps no copy of the deleted text either
 	}
 	return sent, err
+}
+
+// deleted reports whether the message ref names was deleted by its author,
+// as held here: it shows nothing more to react to, edit or delete (its
+// view offers none of these).
+func (a *Agent) deleted(ref ControlRef) bool {
+	return retractedRef(a.store.db, ref.Conv, ref.ID, ref.Fingerprint)
 }
 
 // mayAuthor refuses an edit or deletion of a message this device's person

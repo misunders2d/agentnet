@@ -4966,16 +4966,18 @@ export class Engine {
     const targetFp = kept === "outbox" ? this.fp : rec.fp;
     if (!targetFp) throw new Error("That message's sender key is not recorded here: it cannot be referred to.");
     const ref = { id: conv ? rec.lid : rec.id, fingerprint: targetFp };
+    const deleted = await this.isRetracted(rec); // it shows nothing more to react to, edit or delete (client Agent.deleted)
     let sub, payload;
     if (what === "react") {
       if (!wire.validEmoji(x.emoji || "")) throw new Error("A reaction is one emoji.");
+      if (deleted) throw new Error("That message was deleted: it takes no reactions.");
       sub = wire.SubReaction;
       payload = { emoji: x.emoji, op: x.remove ? "remove" : "add", n: await this.nextCounter(conv, ref, sub, x.emoji) };
     } else if (what === "edit" || what === "delete") {
       const mine = conv ? (await this.personOfFp(targetFp)) === (this.me && this.me.person) : targetFp === this.fp;
       if (!mine) throw new Error(conv ? "Only the sender's person edits or deletes a message." : "Only the sender edits or deletes a message.");
+      if (deleted) throw new Error(what === "edit" ? "That message was deleted; it cannot be edited." : "That message was deleted already.");
       if (what === "edit") {
-        if (await this.isRetracted(rec)) throw new Error("That message was deleted; it cannot be edited.");
         const text = String(x.text || "");
         if (!text.trim() || new TextEncoder().encode(text).length > wire.MaxRevisionBytes) throw new Error("An edit is 1 to " + wire.MaxRevisionBytes + " bytes of text.");
         sub = wire.SubRevision;

@@ -952,6 +952,74 @@ func TestLateLinkedDeviceGetsNoDeletedText(t *testing.T) {
 	}
 }
 
+// A deleted message takes no more controls: its author can neither edit
+// nor delete it again, and no one can react to it. Each is refused before
+// anything is stored or sent, in a conversation and in a device thread.
+func TestControlsRefusedOnDeletedMessage(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	turn, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "wrong chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold the turn", func() bool { return inboxCount(t, w.bob, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the deletion sent", func() bool {
+		_, err := w.alice.Retract(tctx(t), ref, "")
+		return err == nil
+	})
+	eventually(t, "bob to show the deletion", func() bool { return convMsgByID(t, w.bob, conv, turn.ID).Deleted })
+	bobRef, err := w.bob.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello, err := w.bob.Send(tctx(t), w.alice.Address, "device hello", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the device message", func() bool { return inboxCount(t, w.alice, `id = ?`, hello.ID) == 1 })
+	threadRef, err := w.bob.RefOf("", hello.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the device message deleted", func() bool {
+		_, err := w.bob.Retract(tctx(t), threadRef, "")
+		return err == nil
+	})
+	controls := func(a *Agent) int {
+		var n int
+		a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE ref_id IS NOT NULL`).Scan(&n)
+		return n
+	}
+	before := map[*Agent]int{w.alice: controls(w.alice), w.bob: controls(w.bob)}
+	for name, try := range map[string]func() (ControlSent, error){
+		"edit":                func() (ControlSent, error) { return w.alice.Revise(tctx(t), ref, "resurrected") },
+		"delete again":        func() (ControlSent, error) { return w.alice.Retract(tctx(t), ref, "") },
+		"own reaction":        func() (ControlSent, error) { return w.alice.React(tctx(t), ref, "👍", false) },
+		"peer reaction":       func() (ControlSent, error) { return w.bob.React(tctx(t), bobRef, "👍", false) },
+		"thread edit":         func() (ControlSent, error) { return w.bob.Revise(tctx(t), threadRef, "resurrected") },
+		"thread delete again": func() (ControlSent, error) { return w.bob.Retract(tctx(t), threadRef, "") },
+	} {
+		if _, err := try(); err == nil || !strings.Contains(err.Error(), "deleted") {
+			t.Errorf("%s on a deleted message: %v", name, err)
+		}
+	}
+	for a, n := range before {
+		if got := controls(a); got != n {
+			t.Errorf("%s stored %d more control(s) for a deleted message", a.Address, got-n)
+		}
+	}
+	if m := convMsgByID(t, w.alice, conv, turn.ID); m.Edited || m.Text != "" || len(m.Reactions) != 0 {
+		t.Fatalf("the deleted turn at alice: %+v", m.Controls)
+	}
+}
+
 // Two devices of one person edit, or add and take off a reaction, at once
 // with the same counter. Each device holds its own copy of each control,
 // under an id of that copy, so the tie is broken on the control's logical

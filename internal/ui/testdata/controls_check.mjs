@@ -548,6 +548,14 @@ async function makeWorld() {
   let why = "";
   try { await A.e.messageControl("edit", { conv: convId, id: mine.id, dir: "out", text: "revive" }); } catch (err) { why = err.message; }
   check(why.includes("was deleted"), "editing a deleted message is refused: " + why);
+  // nor reacted to or deleted again (client TestControlsRefusedOnDeletedMessage)
+  const queued = (await A.store.all("outbox")).length;
+  for (const [what, extra] of [["react", { emoji: "👍" }], ["delete", {}]]) {
+    why = "";
+    try { await A.e.messageControl(what, { conv: convId, id: mine.id, dir: "out", ...extra }); } catch (err) { why = err.message; }
+    check(why.includes("was deleted"), what + " on a deleted message is refused: " + why);
+  }
+  check((await A.store.all("outbox")).length === queued, "nothing was queued for a deleted message");
 }
 
 // Equal counters from two devices of one person: the tie is broken on the
