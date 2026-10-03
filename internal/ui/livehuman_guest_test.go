@@ -191,3 +191,44 @@ func TestLiveGuestInvitedBackCanSend(t *testing.T) {
 		}
 	}
 }
+
+// BUG-40b: the timeline names an outside host whose person is known here
+// (pinned) instead of calling them "an unknown person" or "someone not in
+// this DM".
+func TestLiveTimelineNamesKnownOutsideHost(t *testing.T) {
+	alice, bob, carol, conv, eventually := liveGuestWorld(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	eventually("bob's DM with carol (carol pinned at bob)", func() bool {
+		_, err := bob.CreateDM(ctx, carol.Address)
+		return err == nil
+	})
+	var p client.ParticipationInfo
+	eventually("alice invites carol's agent", func() bool {
+		var err error
+		p, err = alice.InviteAgent(ctx, conv, carol.Address, nil, nil, "")
+		return err == nil
+	})
+	eventually("the invitation at carol", func() bool {
+		got, err := carol.Participation(p.PID)
+		return err == nil && got.State == client.PartInvited && got.Held == 0
+	})
+	if _, err := carol.AcceptParticipation(ctx, p.PID); err != nil {
+		t.Fatal(err)
+	}
+	live := NewLive(bob)
+	var lines string
+	eventually("bob's timeline shows the acceptance", func() bool {
+		d, err := live.DM(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = eventLines(d.Messages)
+		return strings.Contains(lines, "accepted")
+	})
+	for _, want := range []string{"Alice invited Carol's agent (on " + carol.Address + ") into this DM.", "Carol accepted: the agent joins this DM."} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("timeline %q lacks %q", lines, want)
+		}
+	}
+}

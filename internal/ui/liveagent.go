@@ -23,6 +23,7 @@ type dmPeople struct {
 	group    bool
 	members  []PersonView
 	humans   map[string]client.ParticipationInfo // human participations of the DM, by PID
+	known    map[string]PersonView               // other persons pinned here, by id: names for outside hosts, nothing more
 }
 
 // humanHidden: a guest sees another guest only once that guest's acceptance
@@ -99,6 +100,10 @@ func (p dmPeople) byPerson(id string) (PersonView, bool) {
 		return p.me, true
 	case p.peer.Person:
 		return p.peer, true
+	default:
+		if v, ok := p.known[id]; ok {
+			return v, true
+		}
 	}
 	return PersonView{}, false
 }
@@ -134,7 +139,7 @@ func (p dmPeople) who(id string) string {
 	if v, ok := p.byPerson(id); ok {
 		return v.Label
 	}
-	if p.role == "visitor" {
+	if p.role == "visitor" && len(p.members) < 2 { // an original not held here may be the author
 		return "A DM member"
 	}
 	return "Someone not in this DM"
@@ -171,6 +176,16 @@ func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
 						p.humans = map[string]client.ParticipationInfo{}
 					}
 					p.humans[info.PID] = info
+				}
+			}
+			if len(infos) > 0 { // records may name an outside host or author
+				if known, err := l.a.KnownPersons(); err == nil {
+					p.known = map[string]PersonView{}
+					for _, k := range known {
+						if k.State == PersonPinned {
+							p.known[k.Person] = personView(k)
+						}
+					}
 				}
 			}
 		}
