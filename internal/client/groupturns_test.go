@@ -433,6 +433,122 @@ func TestGroupTurnKeptOfflineNotSentToRemovedDevice(t *testing.T) {
 	t.Logf("the removed device's copy: %s (%s)", state, why)
 }
 
+// removedWhileOffline: alice pins bob's laptop and his linked phone, then
+// is away; bob links a tablet from the phone and removes both from it. The
+// Hub revokes the phone (it joined by a link) but not the laptop (it joined
+// by invitation): the laptop stays a member, with no person. alice comes
+// back as a new command that cannot reach the Hub; online gives it the Hub
+// back and runs its daemon.
+func removedWhileOffline(t *testing.T) (w *world, carol *Agent, p GroupContext, dm string, alice, tablet *Agent, online func()) {
+	t.Helper()
+	w, carol, p, stops := groupTurnsFixture(t)
+	dm = newDM(t, w.alice, w.bob)
+	phone, await, _ := linkPhone(t, w.bob, "phone")
+	request := pendingLink(t, w.bob)
+	if err := w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-await; out.err != nil {
+		t.Fatal(out.err)
+	}
+	runAgent(t, phone)
+	publishGroupFixtureCaps(t, phone, true)
+	bob, _, _ := w.bob.Person()
+	if _, err := w.alice.refreshPerson(tctx(t), bob.Person, false); err != nil { // alice pins the phone
+		t.Fatal(err)
+	}
+	if _, err := w.alice.sendKey(tctx(t), phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	stops[w.alice]() // away before the removals: she never sees them
+	home := w.alice.home
+	w.alice.Close()
+	tablet, await, _ = linkPhone(t, phone, "tablet")
+	request = pendingLink(t, phone)
+	if err := phone.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-await; out.err != nil {
+		t.Fatal(out.err)
+	}
+	for _, removed := range []string{w.bob.Address, phone.Address} {
+		if err := tablet.RemoveDevice(tctx(t), removed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alice, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	base := alice.hub.http.Transport
+	alice.hub.http.Transport = failingHub(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	})
+	online = func() {
+		alice.hub.http.Transport = base
+		runAgent(t, alice)
+		publishGroupFixtureCaps(t, alice, true)
+	}
+	return w, carol, p, dm, alice, tablet, online
+}
+
+// keptCopyTo returns the ID of the copy for address a send kept waiting.
+func keptCopyTo(t *testing.T, sent ConvSent, err error, address string) string {
+	t.Helper()
+	if err != nil || sent.State != stateConvWaiting {
+		t.Fatalf("send without the Hub: %+v %v", sent, err)
+	}
+	for _, c := range sent.Copies {
+		if c.To == address {
+			return c.ID
+		}
+	}
+	t.Fatalf("no copy for %s, a device pinned here: %+v", address, sent.Copies)
+	return ""
+}
+
+// notHandedOver fails unless the copy id is still waiting or not delivered.
+func notHandedOver(t *testing.T, a *Agent, id string) {
+	t.Helper()
+	if err := a.FlushOutbox(tctx(t)); err != nil {
+		t.Logf("flush: %v", err)
+	}
+	var state, why string
+	a.store.db.QueryRow(`SELECT state, coalesce(error, '') FROM outbox WHERE id = ?`, id).Scan(&state, &why)
+	if state != stateConvWaiting && state != stateNotDelivered {
+		t.Fatalf("a removed device's copy was handed over: %s (%s)", state, why)
+	}
+	t.Logf("the removed device's copy: %s (%s)", state, why)
+}
+
+// A group turn kept while the Hub was out of reach goes to a device only if
+// its person's current roster lists it: an invite-joined device removed
+// meanwhile, which the Hub does not revoke, never gets its copy, though the
+// roster pinned when the copy was made listed it.
+func TestGroupTurnKeptOfflineNotSentToUnrevokedRemovedDevice(t *testing.T) {
+	w, carol, p, _, alice, _, online := removedWhileOffline(t)
+	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "after both removals"})
+	laptop := keptCopyTo(t, sent, err, w.bob.Address)
+	online()
+	eventually(t, "carol gets the kept group turn", func() bool { return len(groupTurns(t, carol, p.State.Conv)) == 1 })
+	notHandedOver(t, alice, laptop)
+}
+
+// The same for a DM kept while the Hub was out of reach.
+func TestDMKeptOfflineNotSentToUnrevokedRemovedDevice(t *testing.T) {
+	w, _, _, dm, alice, tablet, online := removedWhileOffline(t)
+	sent, err := alice.SendConv(tctx(t), dm, ConvOutgoing{Body: "after both removals"})
+	laptop := keptCopyTo(t, sent, err, w.bob.Address)
+	bob, _, _ := tablet.Person()
+	online()
+	eventually(t, "alice reads bob's current roster", func() bool {
+		p, ok, err := alice.store.personByID(bob.Person)
+		return err == nil && ok && p.info.Roster == bob.Roster
+	})
+	notHandedOver(t, alice, laptop)
+}
+
 func TestGroupTurnsT4AtomicHeadsRemovalWithdrawalAndExactKey(t *testing.T) {
 	w, carol, p, stops := groupTurnsFixture(t)
 	stops[w.alice]()
