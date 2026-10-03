@@ -2,7 +2,7 @@
 // read the same, and participation records said plainly. Everything here is
 // read from the overview; nothing is fetched.
 import type { T } from "../api";
-import { agentName, chatList, firstLine, niceDevice, personName, when, type ChatItem } from "../model";
+import { agentName, chatList, firstLine, personName, when, type ChatItem } from "../model";
 import { eventKind } from "./Message.model";
 
 /** A chat list row: the shared item, plus what tells it apart from a row
@@ -23,14 +23,10 @@ export function personAt(address: string, o: T.Overview | null): T.PersonView | 
  *  after their agent ("Vitalii’s agent", "on Desk"), records of who came
  *  or left in plain words, and rows that would read the same told apart. */
 export function chatItems(o: T.Overview | null, names: Record<string, string>): ListItem[] {
-  const me = o?.person;
   const dms = new Map((o?.dms || []).map((d) => [d.id, d]));
   const threads = new Map((o?.threads || []).map((t) => [t.id, t]));
   const items: ListItem[] = chatList(o, names).map((i) => {
-    if (i.open.kind === "thread") {
-      const peer = threads.get(i.open.id)?.peer || i.avatarSeed;
-      return { ...i, title: agentName(undefined, names, personAt(peer, o), me), subtitle: "on " + niceDevice(peer) };
-    }
+    if (i.open.kind === "thread") return i; // named in model.chatList: one row per agent, its threads as topics
     const line = eventLine(dms.get(i.open.id)?.last || "", i.open.id, o, names);
     return line ? { ...i, last: line, event: true } : i;
   });

@@ -14,7 +14,7 @@ import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { Confirm } from "./Message.actions";
-import { agentLabel, eventKind, roomTitle, threadAgentName, type Ctx } from "./Message.model";
+import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } from "./Message.model";
 
 // ---- who is helping -------------------------------------------------------------------
 
@@ -120,7 +120,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
     title = threadAgentName(ctx);
     const p = presence([th.peer], overview);
     online = p.online;
-    sub = ["on " + niceDevice(th.peer), p.text.replace(/ · .*$/, "")].filter(Boolean).join(" · ");
+    sub = [hostOf(th.peer, overview) ? "on " + niceDevice(th.peer) : "Agent", p.text.replace(/ · .*$/, "")].filter(Boolean).join(" · ");
     avatar = <AgentAvatar seed={th.peer} size={wide ? 48 : 40} device={deviceKind(th.peer)} mood={online === false ? "asleep" : "neutral"} />;
   }
 

@@ -21,7 +21,11 @@ export interface ChatItem {
   working: boolean;            // an agent is working on something here
   frozen?: string;
   members?: string[];          // group member names, for stacked avatars
+  topics?: Topic[];            // an agent's separate conversations, newest first
 }
+
+/** Topic is one of an agent's separate conversations (a device thread). */
+export interface Topic { id: string; title: string; lastAt: string; unread: number }
 
 /** plain removes mention markup: [@Name](agentnet:...) reads as @Name. */
 export const mentionRef = /\[@([^\[\]\r\n]{1,80})\]\(agentnet:(person|guest|agent)\/([A-Za-z0-9_-]{1,64})\)/g;
@@ -71,21 +75,29 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       members: group ? (d.members || []).map((m) => m.label) : undefined,
     });
   }
+  // One row per agent: its separate conversations are topics inside it.
+  const byPeer = new Map<string, T.ThreadSummary[]>();
   for (const t of o.threads || []) {
     if (t.notice_only) continue; // another computer's reports: shown under OKs, not as a chat
+    byPeer.set(t.peer, [...(byPeer.get(t.peer) || []), t]);
+  }
+  for (const [peer, ts] of byPeer) {
+    ts.sort((a, b) => (b.last_at || "").localeCompare(a.last_at || ""));
+    const latest = ts[0], person = deviceOwner(peer, o);
     items.push({
-      key: "thread:" + t.id,
-      open: { kind: "thread", id: t.id },
+      key: "agent:" + peer,
+      open: { kind: "thread", id: latest.id },
       kind: "agent",
-      title: agentName(undefined, agentNames, deviceOwner(t.peer, o), o.person),
-      subtitle: "on " + niceDevice(t.peer),
-      avatarSeed: t.peer,
-      last: firstLine(t.last),
-      lastAt: t.last_at,
-      unread: t.unread,
-      needsYou: t.review,
+      title: person ? agentName(undefined, agentNames, person, o.person) : niceDevice(peer),
+      subtitle: person ? "on " + niceDevice(peer) : "Agent · no person linked",
+      avatarSeed: peer,
+      last: firstLine(latest.last),
+      lastAt: latest.last_at,
+      unread: ts.reduce((n, t) => n + t.unread, 0),
+      needsYou: ts.reduce((n, t) => n + t.review, 0),
       guests: 0,
-      working: t.running > 0,
+      working: ts.some((t) => t.running > 0),
+      topics: ts.map((t) => ({ id: t.id, title: firstLine(t.title, 60), lastAt: t.last_at, unread: t.unread })),
     });
   }
   return items.sort((a, b) => (b.lastAt || "").localeCompare(a.lastAt || ""));

@@ -17,6 +17,7 @@ export interface Draft {
   replyTo?: string;          // a message id in the open conversation
   agent?: string;            // the addressed assistant's participation id
   doIt?: boolean;            // a task (Do it) rather than a question (Answer)
+  newTopic?: boolean;        // in an agent's conversation: start a separate one with the next send
   files?: StagedFile[];
 }
 
@@ -256,7 +257,7 @@ export class Store {
 
   setDraft(conv: string, d: Draft) {
     const drafts = { ...this.state.drafts };
-    if (!d.text && !d.replyTo && !d.agent && !d.doIt && !(d.files && d.files.length)) delete drafts[conv];
+    if (!d.text && !d.replyTo && !d.agent && !d.doIt && !d.newTopic && !(d.files && d.files.length)) delete drafts[conv];
     else drafts[conv] = d;
     this.set({ drafts });
     this.saveDrafts(drafts);
