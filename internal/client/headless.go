@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -216,8 +217,7 @@ func (a *Agent) noteStatus(id string) {
 	if err != nil || local || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {
 		return
 	}
-	public, detail, ok := statusOf(state)
-	if !ok {
+	if _, _, ok := statusOf(state); !ok {
 		return
 	}
 	ref := ControlRef{ID: id, Fingerprint: key}
@@ -227,6 +227,19 @@ func (a *Agent) noteStatus(id string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		// One status of a request at a time, each with the state as it is
+		// when its turn comes: two quick changes then carry increasing
+		// counters, and the last one told is the latest state.
+		mu, _ := a.statusLocks.LoadOrStore(id, &sync.Mutex{})
+		mu.(*sync.Mutex).Lock()
+		defer mu.(*sync.Mutex).Unlock()
+		if err := a.store.db.QueryRow(`SELECT state FROM inbox WHERE id = ?`, id).Scan(&state); err != nil {
+			return
+		}
+		public, detail, ok := statusOf(state)
+		if !ok {
+			return
+		}
 		n, err := a.store.nextCounter(ref, envelope.SubStatus, "")
 		if err != nil {
 			return

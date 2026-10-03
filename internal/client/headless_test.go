@@ -433,3 +433,49 @@ func TestReviewClickOpensMessengerWhenServed(t *testing.T) {
 		t.Fatalf("a click changed the request: %s", s)
 	}
 }
+
+// Two quick state changes of one request (running, then needs a person)
+// are told to the requester as two statuses with increasing counters, the
+// last one the latest state. Each status used to pick its counter in its
+// own goroutine from what was stored, so both could carry the same counter
+// and the requester could keep "running" for a request that waits for a
+// person.
+func TestQuickStatusesOrdered(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	for i := range 6 {
+		task, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "quick change " + string(rune('a'+i)), Kind: envelope.KindTask})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitState(t, w.bob, task.ID, stateAwaiting)
+		for _, state := range []string{stateRunning, stateNeedHuman} {
+			if _, err := w.bob.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, state, task.ID); err != nil {
+				t.Fatal(err)
+			}
+			w.bob.noteStatus(task.ID)
+		}
+		eventually(t, "alice sees the request needs a person", func() bool {
+			e := execOf(t, w.alice, task.ID)
+			return e != nil && e.State == "needs_human"
+		})
+		rows, err := w.bob.store.db.Query(`SELECT body FROM outbox WHERE sub = ? AND ref_id = ?`, envelope.SubStatus, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[int64]bool{}
+		for rows.Next() {
+			var body string
+			var s envelope.Status
+			if err := rows.Scan(&body); err != nil || json.Unmarshal([]byte(body), &s) != nil {
+				t.Fatalf("status row: %v", err)
+			}
+			if seen[s.N] {
+				t.Fatalf("two statuses of %s carry counter %d", task.ID, s.N)
+			}
+			seen[s.N] = true
+		}
+		rows.Close()
+	}
+}

@@ -45,6 +45,7 @@ type Agent struct {
 	Logf    func(format string, args ...any)
 
 	humanMu        sync.RWMutex // local human end commits serialize with ordinary copy/file delivery
+	statusLocks    sync.Map     // request id → *sync.Mutex: one status of a request at a time (headless.go)
 	home           string
 	id             *identity.Identity
 	store          *store
