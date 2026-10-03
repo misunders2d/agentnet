@@ -582,7 +582,8 @@ async function makeWorld() {
   try { await e.messageControl("react", { id: ID, dir: "in", emoji: "👍", remove: true }); } catch (err) { why = err.message; }
   check(!why.includes("reaction of yours"), "removing my own reaction goes on to be sent: " + why);
   check((await store.all("outbox")).length === 1, "nothing was queued for a refused reaction");
-  for (const [emoji, ok] of [["👍🏽", true], ["🇱🇻", true], ["✓", true], ["$", false], ["👍👍", false], ["𠀀", false]]) check(wire.oneEmoji(emoji) === ok, "oneEmoji(" + emoji + ")");
+  for (const [emoji, ok] of [["👍🏽", true], ["🇱🇻", true], ["✓", true], ["$", false], ["👍👍", false], ["𠀀", false],
+    ["\u25fb\ufe0f", true], ["\u25fe", true], ["\u2934\ufe0f", true], ["\u2935\ufe0f", true], ["\u2800", false], ["\u2a00", false]]) check(wire.oneEmoji(emoji) === ok, "oneEmoji(" + JSON.stringify(emoji) + ")");
   check(wire.validEmoji("$") && wire.validEmoji("👍".repeat(12)), "what peers already sent stays readable");
 }
 

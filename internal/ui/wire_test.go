@@ -582,7 +582,8 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 
 	t.Run("emoji judged as Go judges them", func(t *testing.T) {
 		list := []string{"👍", "❤️", "🇱🇻", "👍🏽", "1️\u20e3", "#️\u20e3", "👨\u200d👩\u200d👧\u200d👦", "✓", "☕", "★", "©️", "↔️", "🫩",
-			"$", "+", "€", "^", "×", "𠀀", "👍👍", strings.Repeat("👍", 12), "🇱🇻🇺🇸", "🇱🇻👍", "11\u20e3", "\u200d👍", "👍\u200d", "a", ""} // invalid UTF-8 cannot travel as JSON: envelope.TestValidEmoji covers it
+			"\u25fb\ufe0f", "\u25fc\ufe0f", "\u25fd", "\u25fe", "\u2934\ufe0f", "\u2935\ufe0f",
+			"$", "+", "€", "^", "×", "𠀀", "👍👍", strings.Repeat("👍", 12), "🇱🇻🇺🇸", "🇱🇻👍", "11\u20e3", "\u200d👍", "👍\u200d", "a", "", "\u2800", "\u2800\ufe0f", "\u2a00", "\u2295"} // invalid UTF-8 cannot travel as JSON: envelope.TestValidEmoji covers it
 		got := w.ok(map[string]any{"op": "emoji", "list": list})
 		valid, one := got["valid"].([]any), got["one"].([]any)
 		for i, s := range list {

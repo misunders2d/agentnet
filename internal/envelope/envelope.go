@@ -374,8 +374,9 @@ func ignorable(r rune) bool {
 // must be: ValidEmoji, and exactly one emoji sequence (a base emoji, or a
 // pair of regional indicators, joined to more only by zero-width joiners,
 // with its selectors, keycap, tags and skin tone), whose base runes are
-// pictographs or other symbols, never currency, math or modifier signs or
-// characters of other planes. A row of emoji is not one. What arrives is
+// pictographs or other symbols, never currency, math (but the emoji among
+// them) or modifier signs or characters of other planes. A row of emoji is
+// not one. What arrives is
 // still judged by ValidEmoji alone, so reactions peers already sent stay
 // readable.
 func OneEmoji(s string) bool {
@@ -413,15 +414,16 @@ func OneEmoji(s string) bool {
 
 // emojiBase reports whether r may be the base of an emoji: any rune of the
 // emoji blocks (U+1F000 to U+1FAFF, also ones assigned after this
-// program), an arrow, or another symbol of the Basic Multilingual Plane
-// (©, ☕, ★, ✓).
+// program), an arrow, the emoji that are math symbols (◻️ ◼️ ◽ ◾ ⤴️ ⤵️), or
+// another symbol of the Basic Multilingual Plane (©, ☕, ★, ✓) but the
+// braille blank, which shows nothing.
 func emojiBase(r rune) bool {
 	switch {
 	case r >= 0x1F000 && r <= 0x1FAFF:
 		return true
-	case r > 0xFFFF:
+	case r > 0xFFFF, r == 0x2800:
 		return false
-	case r >= 0x2190 && r <= 0x21FF:
+	case r >= 0x2190 && r <= 0x21FF, r >= 0x25FB && r <= 0x25FE, r == 0x2934, r == 0x2935:
 		return true
 	}
 	return unicode.Is(unicode.So, r)
