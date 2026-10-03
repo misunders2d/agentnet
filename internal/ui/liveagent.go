@@ -444,7 +444,7 @@ func (l *Live) DismissAgent(pid string) (AgentView, error) {
 // AskAgent implements Participants.
 func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 	body := strings.TrimSpace(d.Body)
-	if body == "" && len(d.Files) == 0 {
+	if envelope.Blank(body) && len(d.Files) == 0 {
 		return Sent{}, Refuse("Write what to ask or attach a file first.")
 	}
 	kind := d.Kind

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -278,7 +279,7 @@ func (l *Live) presence(ctx context.Context, peer string) Presence {
 // Send implements Provider.
 func (l *Live) Send(d Draft) (Sent, error) {
 	body := strings.TrimSpace(d.Body)
-	if body == "" && len(d.Files) == 0 {
+	if envelope.Blank(body) && len(d.Files) == 0 {
 		return Sent{}, Refuse("Write a message or add a file first.")
 	}
 	switch d.Kind {

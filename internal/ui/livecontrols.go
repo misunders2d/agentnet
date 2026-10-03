@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
 // Message controls from the page (MessageControls): the page names a
@@ -53,7 +54,7 @@ func (l *Live) React(x ControlAction) (string, error) {
 
 // EditMessage implements MessageControls.
 func (l *Live) EditMessage(x ControlAction) (string, error) {
-	if strings.TrimSpace(x.Text) == "" {
+	if envelope.Blank(x.Text) {
 		return "", Refuse("Write the new text first.")
 	}
 	ref, err := l.controlRef(x)

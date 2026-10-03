@@ -197,7 +197,7 @@ func (a *Agent) React(ctx context.Context, ref ControlRef, emoji string, remove 
 // The message keeps what it was: a question or task already admitted runs
 // (or ran) with its original text, shown alongside the edit.
 func (a *Agent) Revise(ctx context.Context, ref ControlRef, text string) (ControlSent, error) {
-	if strings.TrimSpace(text) == "" || len(text) > envelope.MaxRevisionBytes {
+	if envelope.Blank(text) || len(text) > envelope.MaxRevisionBytes {
 		return ControlSent{}, fmt.Errorf("an edit is 1 to %d bytes of text", envelope.MaxRevisionBytes)
 	}
 	if err := a.mayAuthor(ref); err != nil {

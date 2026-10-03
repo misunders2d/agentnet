@@ -592,6 +592,20 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 		}
 	})
 
+	t.Run("blank text judged as Go judges it", func(t *testing.T) {
+		var list []string
+		for r := rune(0); r <= 0x3200; r++ { // each rune alone, and visible text around it
+			list = append(list, string(r), "a"+string(r))
+		}
+		list = append(list, "", string([]rune{0xE0041, 0x1BCA0, 0x1D173}), string([]rune{0xE0041, 0x1F44D}))
+		got := w.ok(map[string]any{"op": "blank", "list": list})["blank"].([]any)
+		for i, s := range list {
+			if got[i] != envelope.Blank(s) {
+				t.Errorf("%q: JS blank %v, Go %v", s, got[i], envelope.Blank(s))
+			}
+		}
+	})
+
 	t.Run("keys after a reload", func(t *testing.T) {
 		again := w.ok(map[string]any{"op": "reload"})
 		if again["public"] != setup["public"] || again["extractable"] != false || again["export_refused"] != true {

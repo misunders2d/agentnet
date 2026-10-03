@@ -1318,7 +1318,7 @@ export class Engine {
   // them, never v1.
   async sendDM({ conv, body, reply_to: replyTo, files = [], reply_receiver = null, pid = "" }) {
     body = String(body || "").trim();
-    if (!body && !files.length) throw new Error("Write a message or add a file first.");
+    if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
     checkFiles(files);
     const c = (await this.store.get("convs", conv)) || await this.groupRecord(conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
@@ -1788,7 +1788,7 @@ export class Engine {
     body = String(body || "").trim();
     kind = kind || "message";
     to = String(to || "").trim();
-    if (!body && !files.length) throw new Error("Write a message or add a file first.");
+    if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
     if (!["message", "question", "task"].includes(kind)) throw new Error("Choose message, question or task.");
     if (!wire.validAddress(to)) throw new Error("That is not an AgentNet address.");
     if (to === this.address) throw new Error("That is this browser.");
@@ -4992,7 +4992,7 @@ export class Engine {
       if (deleted) throw new Error(what === "edit" ? "That message was deleted; it cannot be edited." : "That message was deleted already.");
       if (what === "edit") {
         const text = String(x.text || "");
-        if (!text.trim() || new TextEncoder().encode(text).length > wire.MaxRevisionBytes) throw new Error("An edit is 1 to " + wire.MaxRevisionBytes + " bytes of text.");
+        if (wire.blank(text) || new TextEncoder().encode(text).length > wire.MaxRevisionBytes) throw new Error("An edit is 1 to " + wire.MaxRevisionBytes + " bytes of text.");
         sub = wire.SubRevision;
         payload = { rev: await this.nextCounter(conv, ref, sub, ""), text };
       } else { sub = wire.SubRetraction; payload = {}; }
@@ -6120,7 +6120,7 @@ export class Engine {
   // on the other person's computer: its one target.
   async askAgent({ pid, kind = "question", body, files = [], reply_receiver = null }) {
     body = String(body || "").trim();
-    if (!body && !files.length) throw new Error("Write what to ask or add a file first.");
+    if (wire.blank(body) && !files.length) throw new Error("Write what to ask or add a file first.");
     checkFiles(files);
     if (kind !== "question" && kind !== "task") throw new Error("An agent is asked a question or given a task.");
     const { c, info } = await this.agentConv(pid);

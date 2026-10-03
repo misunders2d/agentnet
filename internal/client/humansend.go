@@ -71,7 +71,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 			return ConvSent{}, errors.New("human: addressed turn does not name this exact active assistant")
 		}
 	}
-	if out.Body == "" && len(out.Files) == 0 {
+	if envelope.Blank(out.Body) && len(out.Files) == 0 {
 		return ConvSent{}, errors.New("nothing to send")
 	}
 	if len(out.Files) > envelope.MaxAttachments {

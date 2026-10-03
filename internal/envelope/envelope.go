@@ -344,6 +344,32 @@ func ValidEmoji(s string) bool {
 	return symbol
 }
 
+// Blank reports whether text shows nothing: it holds only white space and
+// default ignorable code points (zero-width spaces and joiners, direction
+// marks and isolates, word joiners, variation selectors, fillers, the byte
+// order mark, tags). Text composed here, a message or an edit, needs more
+// than that unless files go with it; what arrives is not judged by it.
+func Blank(text string) bool {
+	for _, r := range text {
+		if !unicode.IsSpace(r) && !ignorable(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// ignorable is Unicode's Default_Ignorable_Code_Point property.
+func ignorable(r rune) bool {
+	switch {
+	case r == 0x00AD, r == 0x034F, r == 0x061C, r == 0x115F, r == 0x1160, r == 0x17B4, r == 0x17B5, r == 0x3164, r == 0xFEFF, r == 0xFFA0:
+		return true
+	case r >= 0x180B && r <= 0x180F, r >= 0x200B && r <= 0x200F, r >= 0x202A && r <= 0x202E, r >= 0x2060 && r <= 0x206F,
+		r >= 0xFE00 && r <= 0xFE0F, r >= 0xFFF0 && r <= 0xFFF8, r >= 0x1BCA0 && r <= 0x1BCA3, r >= 0x1D173 && r <= 0x1D17A, r >= 0xE0000 && r <= 0xE0FFF:
+		return true
+	}
+	return false
+}
+
 // OneEmoji reports whether s is one emoji as a reaction composed here
 // must be: ValidEmoji, and exactly one emoji sequence (a base emoji, or a
 // pair of regional indicators, joined to more only by zero-width joiners,

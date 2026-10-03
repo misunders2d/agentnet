@@ -99,3 +99,17 @@ func TestManifestMustMatchSignedBlobs(t *testing.T) {
 		t.Fatal("mismatched blob reference accepted")
 	}
 }
+
+// Text that shows nothing is blank; any visible character is not.
+func TestBlank(t *testing.T) {
+	for _, blank := range []string{"", " \t\n", "\u200b", "\u3000\u200b", " \u200c\u200d\u2060\ufeff ", "\u200e\u200f\u202e\u2066\u2069", "\u3164\u115f\ufe0f\u00ad", "\u0085\u00a0\U000e0041"} {
+		if !Blank(blank) {
+			t.Errorf("%q is not blank", blank)
+		}
+	}
+	for _, shown := range []string{"a", ".", "👍", "a\u200bb", "\u2764\ufe0f", "\u06dd", "\u2800x"} {
+		if Blank(shown) {
+			t.Errorf("%q is blank", shown)
+		}
+	}
+}

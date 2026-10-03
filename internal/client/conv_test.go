@@ -403,4 +403,46 @@ func TestConversationWaitsForSupport(t *testing.T) {
 	}
 }
 
+// Text that shows nothing (white space and invisible format characters
+// such as a zero-width space only) is no message and no edit: refused as
+// empty text is, before anything is stored. Visible text keeps its
+// invisible characters.
+func TestInvisibleTextRefused(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	turn, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "visible"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := w.alice.RefOf(conv, turn.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "an edit accepted (bob's capabilities known)", func() bool {
+		_, err := w.alice.Revise(tctx(t), ref, "visible, edited")
+		return err == nil
+	})
+	var before int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&before)
+	for _, blank := range []string{"\u200b", "\u3000\u200b", " \u200d\u2060\ufeff ", "\u200e\u200f\u2066\u2069"} {
+		if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: blank}); err == nil {
+			t.Errorf("message %q sent", blank)
+		}
+		if _, err := w.alice.Revise(tctx(t), ref, blank); err == nil {
+			t.Errorf("edit %q sent", blank)
+		}
+	}
+	var after int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&after)
+	if after != before {
+		t.Fatalf("%d row(s) stored for text that shows nothing", after-before)
+	}
+	if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "a\u200bb"}); err != nil {
+		t.Fatalf("visible text with a zero-width space: %v", err)
+	}
+}
+
 var _ = context.Background
