@@ -143,6 +143,21 @@ export interface ControlAction {
   text?: string;
 }
 
+export interface ConvItem {
+  reason: string;
+  conv: string;
+  pid?: string;
+  id?: string;
+  peer: string;
+  kind?: string;
+  why: string;
+  excerpt: string;
+  at: string;
+  unread?: boolean;
+  actions?: string[];
+  decide_on?: string;
+}
+
 export interface CopyView {
   to: string;
   state: string;
@@ -527,6 +542,8 @@ export interface Overview {
   seq: number;
   version: string;
   directory: Directory;
+  needs_you: ConvItem[] | null;
+  held: ConvItem[] | null;
   persons: boolean;
   agents: boolean;
   notify?: NotifyView;
