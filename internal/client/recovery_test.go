@@ -373,6 +373,38 @@ func TestTrailingSlashHubURL(t *testing.T) {
 // refused with a free name to offer, nothing is enrolled, and the same
 // invite and keys enroll the address the person confirms. The first
 // enrollment is never renamed or replaced.
+// BUG-39c: an invitation the Hub refused (expired or already used) is final:
+// join says to ask for a new one, never to run the same command again.
+func TestJoinRefusedInviteAsksForANewOne(t *testing.T) {
+	w := newWorld(t, "")
+	expired, err := w.alice.Invite(tctx(t), "late", time.Nanosecond, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := w.aliceInvites("once")
+	mustJoin(t, filepath.Join(t.TempDir(), "first"), used, "desk")
+	for name, code := range map[string]string{"expired": expired, "used": used} {
+		_, err := Join(tctx(t), filepath.Join(t.TempDir(), name), code, "laptop")
+		if err == nil || strings.Contains(err.Error(), "same join command again") || !strings.Contains(err.Error(), "new invitation") {
+			t.Fatalf("%s invitation: %v", name, err)
+		}
+	}
+}
+
+// BUG-39d: an invite lifetime the Hub would not keep is refused with the
+// allowed range, instead of silently becoming a week.
+func TestInviteLifetimeOutOfRangeRefused(t *testing.T) {
+	w := newWorld(t, "")
+	for _, ttl := range []time.Duration{0, -5 * time.Minute, 721 * time.Hour, 2000 * time.Hour} {
+		if code, err := w.alice.Invite(tctx(t), "carol", ttl, false); err == nil || code != "" || !strings.Contains(err.Error(), "720h") {
+			t.Fatalf("ttl %s: invite made %v, %v", ttl, code != "", err)
+		}
+	}
+	if _, err := w.alice.Invite(tctx(t), "carol", 720*time.Hour, false); err != nil {
+		t.Fatalf("the longest lifetime: %v", err)
+	}
+}
+
 func TestJoinCollisionKeepsInviteAndKeys(t *testing.T) {
 	w := newWorld(t, "")
 	smithHome := filepath.Join(t.TempDir(), "smith")

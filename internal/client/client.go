@@ -172,6 +172,11 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 				"Hub: %s. Ask the person to confirm that address or choose another NAME, then run: agentnet join --agent NAME CODE",
 				address, ErrAddressTaken, he.Msg)
 		}
+		if errors.As(err, &he) && he.Status == http.StatusForbidden {
+			// A definite refusal: this invitation can never enroll.
+			return nil, fmt.Errorf("the Hub refused this invitation (%w): it is invalid, expired or already used, and nothing was enrolled. "+
+				"Ask for a new invitation, then run: agentnet join --agent NAME NEW_CODE", err)
+		}
 		return nil, fmt.Errorf("enrollment not confirmed: %w (run the same join command again to retry)", err)
 	}
 	if err := st.setConfig(saved); err != nil {
@@ -898,9 +903,21 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 
 // Invite asks the Hub for an invite code for person label (admin only).
 func (a *Agent) Invite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
+	if err := inviteTTL(ttl); err != nil {
+		return "", err
+	}
 	var out struct{ Code string }
 	err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin}, &out)
 	return out.Code, err
+}
+
+// inviteTTL refuses a lifetime the Hub would not keep (it would quietly
+// give the invite a week instead), naming the allowed range.
+func inviteTTL(ttl time.Duration) error {
+	if ttl <= 0 || ttl > protocol.MaxInviteTTL {
+		return fmt.Errorf("invite lifetime %s is out of range: choose more than 0 and at most %gh (30 days); nothing was created", ttl, protocol.MaxInviteTTL.Hours())
+	}
+	return nil
 }
 
 // BrowserInvite creates an invite for a browser invitation link (admin
@@ -909,6 +926,9 @@ func (a *Agent) Invite(ctx context.Context, label string, ttl time.Duration, adm
 // still connect through an older pinned endpoint after that migration;
 // its connection's pin says nothing about the endpoint in the new invite.
 func (a *Agent) BrowserInvite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
+	if err := inviteTTL(ttl); err != nil {
+		return "", err
+	}
 	var out struct{ Code string }
 	if err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin, Browser: true}, &out); err != nil {
 		var he *HubError

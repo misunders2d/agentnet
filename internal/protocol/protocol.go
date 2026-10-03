@@ -147,6 +147,10 @@ func VerifyJoin(j JoinRequest) error {
 	return nil
 }
 
+// MaxInviteTTL is the longest invite lifetime the Hub keeps; it gives an
+// out-of-range TTL its default week instead.
+const MaxInviteTTL = 30 * 24 * time.Hour
+
 // InviteRequest asks the Hub (as admin) to mint an invite.
 type InviteRequest struct {
 	Label string        `json:"label"`

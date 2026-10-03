@@ -706,7 +706,7 @@ Give the whole text to the coding agent on their computer, privately. The
 label is your statement about who they are. revoke immediately cuts ADDRESS
 off.
 
-  --ttl D    how long the invite is valid (max 720h)
+  --ttl D    how long the invite is valid: more than 0, at most 720h (others are refused)
   --admin    the invited agent becomes an admin too
   --raw      print only the invite code (for scripts)
   --link     print only a private, single-use browser invitation link (the
