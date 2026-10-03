@@ -16,6 +16,11 @@ import (
 // and that device's person accepts; either person ends it. Nothing here
 // runs an agent: what is asked of it is held for the host's person.
 
+// maxClaimedUnix bounds a time a sender wrote (unix seconds) that the page
+// shows: 9999-01-01T00:00:00Z, so its year stays within what JSON can
+// carry (0–9999) in any time zone. A later claim is not shown.
+const maxClaimedUnix = 253370764800
+
 // dmPeople names the two members of a DM for the page: you and them.
 type dmPeople struct {
 	me, peer PersonView
@@ -279,7 +284,7 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 	v := AgentView{PID: info.PID, AgentID: info.AgentID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
 		Inviter: personView(info.Inviter), Note: info.Note, Shared: []string{}, TasksFrom: []PersonView{}, Held: info.Held}
 	v.External = info.External
-	if info.Invited != 0 {
+	if info.Invited > 0 && info.Invited < maxClaimedUnix { // the inviter's claim: one no page could show is left out
 		v.Invited = time.Unix(info.Invited, 0)
 	}
 	for _, g := range info.Grant {

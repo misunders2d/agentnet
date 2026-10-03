@@ -190,3 +190,21 @@ func TestLiveNeedsYou(t *testing.T) {
 		t.Fatalf("resolved: state %q, %d run(s)", m.State, runs())
 	}
 }
+
+// An agent's invitation time in a conversation's view is the inviter's
+// claim: one no page could show (past year 9999, or not after 1970) is left
+// out, so the conversation still encodes; a plausible one is shown.
+func TestAgentViewInvitedClaim(t *testing.T) {
+	for _, c := range []struct {
+		claim int64
+		shown bool
+	}{{1e12, false}, {253402300799, false}, {-5, false}, {0, false}, {1759500000, true}} {
+		v := agentView(client.ParticipationInfo{PID: "p", State: client.PartInvited, Invited: c.claim}, dmPeople{}, nil, false)
+		if _, err := json.Marshal(v); err != nil {
+			t.Fatalf("claim %d: the view no longer encodes: %v", c.claim, err)
+		}
+		if shown := !v.Invited.IsZero(); shown != c.shown || shown && v.Invited.Unix() != c.claim {
+			t.Fatalf("claim %d: invited %v", c.claim, v.Invited)
+		}
+	}
+}

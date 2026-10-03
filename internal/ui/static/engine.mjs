@@ -189,6 +189,10 @@ function outText(state, peer, detail) {
 }
 
 const iso = (ms) => new Date(ms).toISOString();
+// isoClaim is a time a sender wrote (unix seconds) as the page shows it, or
+// "" when no page could show it (not after 1970, or from year 9999 on, as
+// ui.maxClaimedUnix): a record's claim never breaks a view.
+const isoClaim = (sec) => (Number.isSafeInteger(sec) && sec > 0 && sec < 253370764800 ? iso(sec * 1000) : "");
 
 // checkFiles refuses files beyond what this browser sends.
 function checkFiles(files) {
@@ -6001,8 +6005,11 @@ export class Engine {
     const mine = (h) => !!h && !!this.me && h.person === this.me.person && h.address !== this.address;
     for (const info of infos) {
       if (info.role === "human" || info.state !== "invited" || !mine(info.host)) continue;
+      // Listed when its first record reached this browser (msgs are oldest
+      // first); the inviter's own time is only its claim.
+      const first = msgs.find((m) => m.sub === "event" && m.pid === info.pid);
       needsYou.push({ reason: "agent_invite", conv, pid: info.pid, peer: info.inviter ? info.inviter.address : "", why: (info.inviter ? info.inviter.label : "Someone") + " invited your agent on " + info.host.address + ". Decide there: this browser runs no agent.",
-        excerpt: firstLine(info.note), at: iso(info.invited * 1000), decide_on: info.host.address });
+        excerpt: firstLine(info.note), at: first ? iso(first.at) : isoClaim(info.invited) || iso(this.now()), decide_on: info.host.address });
     }
     for (const m of msgs) {
       if (m.state === "conv_held") {
@@ -6038,7 +6045,7 @@ export class Engine {
         const p = people.find((x) => x.devices.some((d) => d.fingerprint === fp));
         return p && this.personView({ ...p, fingerprint: fp, address: p.devices.find((d) => d.fingerprint === fp).address });
       }).filter(Boolean),
-      held: info.held, invited: info.invited ? iso(info.invited * 1000) : "", can_decide: false, can_dismiss: false, can_ask: false, state_text: "" };
+      held: info.held, invited: isoClaim(info.invited), can_decide: false, can_dismiss: false, can_ask: false, state_text: "" };
     switch (info.state) {
     case "pending": v.state_text = "Its invitation is not here yet: nothing counts until it is."; break;
     case "invited":

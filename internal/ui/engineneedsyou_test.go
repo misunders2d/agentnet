@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -164,4 +165,18 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	if len(list("held")) != 1 {
 		t.Fatalf("the held question went with the decisions: %v", list("held"))
 	}
+}
+
+// An invitation's claimed time never breaks the browser's overview or a
+// conversation's agents (testdata/needsyou_engine_check.mjs).
+func TestBrowserNeedsYouClaimedTimes(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	out, err := exec.Command(node, "testdata/needsyou_engine_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
 }

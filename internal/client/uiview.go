@@ -277,7 +277,9 @@ type ReviewPage struct {
 
 // PageReview is Review for the page. An invitation is listed while it waits
 // for this person's decision; one this device consented to itself never
-// waits, so it is never listed.
+// waits, so it is never listed. A participation that cannot be resolved
+// here now is left out (and logged): one conversation's trouble never takes
+// the page with it.
 func (a *Agent) PageReview() (ReviewPage, error) {
 	var p ReviewPage
 	var err error
@@ -286,18 +288,58 @@ func (a *Agent) PageReview() (ReviewPage, error) {
 	}
 	// A request to this device's agent, as Accept and Resolve take it. One
 	// whose turn is erased here still waits: it is kept until its work ends.
-	if p.Conv, err = a.store.convReview(`i.pid IS NOT NULL AND i.replica = 0 AND i.kind IN (?, ?) AND i.state IN (?, ?)`,
-		envelope.KindQuestion, envelope.KindTask, stateAwaiting, stateNeedHuman); err != nil {
+	requests, err := a.store.convReview(`i.pid IS NOT NULL AND i.replica = 0 AND i.kind IN (?, ?) AND i.state IN (?, ?)`,
+		envelope.KindQuestion, envelope.KindTask, stateAwaiting, stateNeedHuman)
+	if err != nil {
 		return p, err
 	}
+	p.Conv = a.stillDecidable(requests)
 	invites, err := a.hostInvites()
 	if err != nil {
 		return p, err
 	}
 	p.Conv = append(p.Conv, invites...)
-	// A held turn erased here is gone with its conversation: nothing waits on it.
-	p.Held, err = a.store.convReview(`i.state = ? AND NOT `+erasedIn, stateConvHeld)
-	return p, err
+	// A held turn erased here is gone with its conversation: nothing waits on
+	// it. One this person sent from another of their devices is theirs ("out"
+	// in the conversation), not held for them.
+	held, err := a.store.convReview(`i.state = ? AND NOT `+erasedIn, stateConvHeld)
+	if err != nil {
+		return p, err
+	}
+	own := a.ownDevices()
+	for _, r := range held {
+		if !own[r.From] {
+			p.Held = append(p.Held, r)
+		}
+	}
+	return p, nil
+}
+
+// stillDecidable leaves out the requests whose participation ended here
+// (dismissed, declined or in conflict): the worker only closes those
+// (agentVerdict), so accepting one decides nothing. A request whose
+// participation cannot be resolved now stays listed.
+func (a *Agent) stillDecidable(requests []ConvReview) []ConvReview {
+	ended := map[string]bool{}
+	seen := map[string]bool{}
+	var out []ConvReview
+	for _, r := range requests {
+		key := r.Conv + "/" + r.PID
+		if !seen[key] {
+			seen[key] = true
+			info, err := a.participation(r.Conv, r.PID)
+			switch {
+			case err == nil:
+				ended[key] = info.State == PartDismissed || info.State == PartDeclined || info.State == PartConflict
+			case !errors.Is(err, ErrNoParticipation) && !errors.Is(err, ErrGroupContextPending):
+				a.Logf("needs-you: participation %s of %s: %v", r.PID, r.Conv, err)
+			}
+		}
+		if !ended[key] {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // convReview lists the received conversation rows (alias i) matching where,
@@ -333,40 +375,48 @@ func (s *store) convReview(where string, args ...any) ([]ConvReview, error) {
 
 // hostInvites lists the invitations for this device's agent that wait for
 // its person's decision, as they resolve here now. A participation whose
-// evidence is not here yet cannot be decided either, so it is not listed.
+// evidence is not here yet cannot be decided either, so it is not listed;
+// one that fails to resolve is left out and logged. Each is listed at the
+// time its first record naming this host reached this device: the time an
+// inviter writes into it (ParticipationInfo.Invited) is only its claim.
 func (a *Agent) hostInvites() ([]ConvReview, error) {
-	rows, err := a.store.db.Query(`SELECT conv, pid FROM participation_events WHERE type IN (?, ?) AND json_extract(event, '$.host.address') = ?
+	rows, err := a.store.db.Query(`SELECT conv, pid, min(received_at) FROM participation_events WHERE type IN (?, ?) AND json_extract(event, '$.host.address') = ?
 		GROUP BY conv, pid ORDER BY min(received_at), conv, pid`, protocol.EventInvite, protocol.EventScope, a.Address)
 	if err != nil {
 		return nil, err
 	}
-	var named [][2]string
+	type named struct {
+		conv, pid string
+		at        int64
+	}
+	var all []named
 	for rows.Next() {
-		var conv, pid string
-		if err := rows.Scan(&conv, &pid); err != nil {
+		var n named
+		if err := rows.Scan(&n.conv, &n.pid, &n.at); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		named = append(named, [2]string{conv, pid})
+		all = append(all, n)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	var out []ConvReview
-	for _, n := range named {
-		info, err := a.participation(n[0], n[1])
+	for _, n := range all {
+		info, err := a.participation(n.conv, n.pid)
 		if errors.Is(err, ErrNoParticipation) || errors.Is(err, ErrGroupContextPending) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			a.Logf("needs-you: invitation %s of %s left out: %v", n.pid, n.conv, err)
+			continue
 		}
 		if !info.HostHere || info.State != PartInvited || info.Role == protocol.RoleHuman {
 			continue
 		}
 		out = append(out, ConvReview{Reason: ReviewInvite, Conv: info.Conv, PID: info.PID, From: info.Inviter.Address,
-			Body: info.Note, Detail: info.Inviter.Label + " invited your agent. Nothing runs unless you accept.", At: time.Unix(info.Invited, 0)})
+			Body: info.Note, Detail: info.Inviter.Label + " invited your agent. Nothing runs unless you accept.", At: time.Unix(n.at, 0)})
 	}
 	return out, nil
 }
