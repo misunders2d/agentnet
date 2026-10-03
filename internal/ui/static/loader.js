@@ -235,6 +235,10 @@
     const offered = await r.json();
     let localSkins = null;
     try { localSkins = await import("/assets/local-skins.mjs"); } catch (_) { /* older program: hosted packages still work */ }
+    // The interface package importer, for an interface that draws its own
+    // settings (the built-in messenger): the same manager the previous
+    // interface mounted, with the same consent and storage rules.
+    if (localSkins) common.manageLocalSkins = (root) => localSkins.manager(root, { changed: refreshSkins });
     const refreshSkins = async () => {
       const local = localSkins ? await localSkins.catalog().catch(() => []) : [];
       // Every immutable workspace host keeps this SAME array reference.
@@ -246,10 +250,10 @@
     try { saved = localStorage.getItem("agentnet.skin") || saved; } catch (_) { /* local preference */ }
     const requested = new URL(location.href).searchParams.get("skin") || saved;
     const selected = common.skins.find((s) => s.id === requested && s.api === 1) || common.skins[0];
-    workspaceBar();
-    if (selected.id === "default") {
+    if (selected.id !== "default") workspaceBar(); // the default interface draws its own workspace switcher
+    if (selected.id === "classic") {
       const r = await fetch("/assets/default.html");
-      if (!r.ok) throw new Error("Could not load the default interface");
+      if (!r.ok) throw new Error("Could not load the previous interface");
       // Trusted bundled markup, never message text or a remotely supplied template.
       const doc = new DOMParser().parseFromString(await r.text(), "text/html");
       mount.replaceChildren(...doc.body.childNodes);
@@ -258,8 +262,9 @@
       const manager = document.getElementById("local-interfaces");
       if (manager && localSkins) localSkins.manager(manager, { changed: refreshSkins });
     } else {
-      let consent = false;
-      try { consent = localStorage.getItem("agentnet.skin.trusted." + selected.id) === selected.digest; } catch (_) { /* ask */ }
+      const builtin = selected.id === "default";
+      let consent = builtin;
+      if (!consent) try { consent = localStorage.getItem("agentnet.skin.trusted." + selected.id) === selected.digest; } catch (_) { /* ask */ }
       if (!consent) await new Promise((resolve) => {
         const card = text("section", ""); card.className = "join-card";
         card.append(text("h1", "Use “" + selected.name + "”?"), text("p", "This installed UI can read your chats and act as you, including sending messages and approving work. Use it only if you trust its author."), text("p", "Digest: " + selected.digest),
@@ -270,16 +275,27 @@
       if (selected.local) await localSkins.activate();
       const packagePath = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
       mount.replaceChildren();
-      // The skin gets a root of its own inside a shadow tree: its stylesheet
+      // The built-in interface renders into the page itself. An installed
+      // one gets a root of its own inside a shadow tree: its stylesheet
       // applies there and nowhere else. Colors such as --surface still
       // inherit from the page.
-      const shadow = mount.attachShadow({ mode: "open" });
-      style("/assets/core.css", shadow); // semantic colors and the root's own box; the skin's sheet comes after it
-      if (selected.style) style(packagePath + selected.style, shadow);
-      const module = await import(packagePath + selected.entry);
+      let parent = mount;
+      if (builtin) {
+        // The built-in messenger brings its whole stylesheet; the host's
+        // core.css (for the enrollment page, skins and the host bar) would
+        // otherwise override it, being unlayered.
+        for (const l of document.querySelectorAll('link[rel="stylesheet"][href="/assets/core.css"]')) l.remove();
+        style("/assets/messenger.css");
+        mount.classList.add("messenger-root");
+      } else {
+        parent = mount.attachShadow({ mode: "open" });
+        style("/assets/core.css", parent); // semantic colors and the root's own box; the skin's sheet comes after it
+        if (selected.style) style(packagePath + selected.style, parent);
+      }
+      const module = await import(builtin ? "/assets/messenger.mjs" : packagePath + selected.entry);
       if (typeof module.mount !== "function") throw new Error("The skin has no mount function");
-      // mountSkin gives the skin a fresh root over one membership's host.
-      // On a workspace switch the skin is mounted again over the new one:
+      // mountSkin gives the interface a fresh root over one membership's
+      // host. On a workspace switch it is mounted again over the new one:
       // what it held for the old membership goes out with its root, and
       // operations it started keep the host they started with.
       let root = null, mounting = Promise.resolve();
@@ -287,17 +303,18 @@
         openHandler = undefined;
         if (root) { if (typeof module.unmount === "function") { try { await module.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
         root = document.createElement("div");
-        root.id = "skin";
+        root.id = builtin ? "messenger" : "skin";
         root.className = "skin-root";
-        shadow.append(root);
+        parent.append(root);
         await module.mount(root, window.agentnet);
         if (!openHandler) throw new Error("This UI must register notification handling with host.onOpen");
       };
       await mountSkin();
       if (window.agentnetWorkspace) window.agentnetWorkspace.hook({ switched: () => { mounting = mountSkin().catch((e) => { root.replaceChildren(text("p", e.message)); }); } });
-      // Notification fallback belongs to the host, outside the skin. Its
-      // explicit action preserves the exact fragment and workspace on reload.
-      document.body.append(hostBar(selected));
+      // Notification fallback belongs to the host, outside an installed
+      // skin. Its explicit action preserves the exact fragment and workspace
+      // on reload.
+      if (!builtin) document.body.append(hostBar(selected));
       // A notification's #conv=<hash>[&workspace=<id>]: the workspace named
       // must be one registered here; an unknown one opens nothing (never the
       // current workspace instead).
@@ -312,6 +329,7 @@
             notificationHint("Notification workspace unavailable here");
             return;
           }
+          if (builtin) { history.replaceState(null, "", location.pathname + location.search); openHandler(review ? "" : q.get("msg"), review ? "review" : "message"); return; }
           notificationHint(review ? "Open review in AgentNet" : "Open message in AgentNet", true);
           return; // never consume this destination until the person opens it
         }
@@ -331,6 +349,7 @@
     }
     try { localStorage.setItem("agentnet.skin", selected.id); } catch (_) {}
   } catch (e) {
-    mount.replaceChildren(text("h1", "Could not open this UI"), text("p", e.message || "UI loading failed"), button("Use AgentNet", () => { const u = new URL(location.href); u.searchParams.set("skin", "default"); location.assign(u); }));
+    const use = (id) => () => { const u = new URL(location.href); u.searchParams.set("skin", id); location.assign(u); };
+    mount.replaceChildren(text("h1", "Could not open this UI"), text("p", e.message || "UI loading failed"), button("Use AgentNet", use("default")), button("Use the previous interface", use("classic")));
   }
 })();

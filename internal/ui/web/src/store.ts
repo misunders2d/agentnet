@@ -1,0 +1,295 @@
+// The messenger's state: what the server says (overview and the open
+// conversation), how the connection stands, and the person's unsent drafts.
+// The server decides everything; this only loads, remembers and asks.
+//
+// One store serves one membership's host: the UI host mounts the interface
+// again with a new host when the person switches workspace, so nothing here
+// can act on another workspace by accident.
+import { useSyncExternalStore } from "react";
+import { api, errorText, type Api, type T } from "./api";
+import type { Host, HostEvent } from "./host";
+
+export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
+export type Open = null | { kind: "dm"; id: string; focus?: string } | { kind: "thread"; id: string; focus?: string };
+
+export interface Draft {
+  text: string;
+  replyTo?: string;          // a message id in the open conversation
+  agent?: string;            // the addressed assistant's participation id
+  doIt?: boolean;            // a task (Do it) rather than a question (Answer)
+  files?: StagedFile[];
+}
+
+export interface StagedFile {
+  key: string;               // local identity in the composer
+  name: string;
+  size: number;
+  type: string;
+  url?: string;              // object URL for an image preview (revoked when dropped)
+  staged?: unknown;          // what host.stage returned (an id on a daemon, a file handle in a browser)
+  file: File;
+}
+
+export interface Toast { id: number; text: string; tone?: "ok" | "error" }
+
+export type Tab = "chats" | "agents" | "oks" | "settings";
+
+export interface State {
+  tab: Tab;
+  overview: T.Overview | null;
+  open: Open;
+  dm: T.DMThread | null;
+  thread: T.Thread | null;
+  typing: T.TypingView | null;
+  invitations: T.GroupInvitationView[];
+  conn: Conn;
+  version: string;           // the program serving this page when it loaded
+  newVersion: string;        // a newer program now serves it (reload to use)
+  drafts: Record<string, Draft>;
+  toasts: Toast[];
+  loadError: string;
+  invite: null | { conv: string; selected?: string[]; who?: string; label?: string };  // the "Bring someone in" sheet
+  section: string;                                        // the open settings section, when chosen from elsewhere
+  agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
+  panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
+}
+
+const draftsKey = (ws: string) => "agentnet.messenger.drafts." + ws;
+const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export class Store {
+  readonly api: Api;
+  private state: State;
+  private subs = new Set<() => void>();
+  private stopListen: (() => void) | null = null;
+  private loading = false;
+  private again = false;
+  private recovering = false;
+  private refreshed = new Set<string>(); // conversations already asked about this open
+  private toastSeq = 0;
+  private alive = true;
+
+  constructor(readonly host: Host) {
+    this.api = api(host);
+    this.state = {
+      tab: "chats", overview: null, open: null, dm: null, thread: null, typing: null, invitations: [],
+      conn: "loading", version: "", newVersion: "", drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, panel: false, section: "", agentNames: {},
+    };
+  }
+
+  // ---- subscription
+  get = () => this.state;
+  subscribe = (fn: () => void) => { this.subs.add(fn); return () => this.subs.delete(fn); };
+  private set(patch: Partial<State>) {
+    if (!this.alive) return;
+    this.state = { ...this.state, ...patch };
+    for (const fn of this.subs) fn();
+  }
+
+  // ---- lifecycle
+  async start() {
+    await this.reload(true).catch((e) => this.set({ loadError: errorText(e), conn: "lost" }));
+    this.listen();
+  }
+
+  stop() {
+    this.alive = false;
+    this.stopListen?.();
+    this.stopListen = null;
+  }
+
+  private listen() {
+    this.stopListen?.();
+    this.stopListen = this.host.listen((e: HostEvent) => {
+      if (!this.alive) return;
+      if (e.type === "change") void this.refetch();
+      else if (e.type === "restart") { this.set({ conn: "updating" }); void this.recover(recovery.update); }
+      else { this.set({ conn: "lost" }); void this.recover(recovery.missed); }
+    });
+  }
+
+  // refetch loads what is shown once per burst of changes: changes that
+  // arrive while it loads cause one more load, not one each.
+  async refetch() {
+    if (this.loading) { this.again = true; return; }
+    this.loading = true;
+    try {
+      do { this.again = false; await this.reload(false); } while (this.again && this.alive);
+    } catch { /* the next change, or the person, tries again */ }
+    this.loading = false;
+  }
+
+  private async reload(first: boolean) {
+    const o = await this.api.overview();
+    const patch: Partial<State> = { overview: o, loadError: "", conn: "live" };
+    if (first || !this.state.version) patch.version = o.version;
+    else if (o.version && o.version !== this.state.version) patch.newVersion = o.version;
+    this.set(patch);
+    if (o.groups) this.api.groupInvitations().then((inv) => this.set({ invitations: inv || [] })).catch(() => {});
+    void this.loadAgentNames();
+    await this.loadOpen();
+  }
+
+  private async recover(schedule: number[]) {
+    if (this.recovering) return;
+    this.recovering = true;
+    try {
+      for (const wait of schedule) {
+        await pause(wait);
+        if (!this.alive) return;
+        try {
+          await this.reload(false);
+          this.listen();
+          return;
+        } catch (e) {
+          // The daemon was replaced under a workspace of this computer: the
+          // host can bind the same membership again (loader.js).
+          const w = (window as unknown as { agentnetWorkspace?: { recoverNative?: (h: Host, me: unknown) => Promise<Host> } }).agentnetWorkspace;
+          if (errorText(e) === "stale or disconnected workspace" && w?.recoverNative) {
+            try { await w.recoverNative(this.host, this.state.overview?.me); } catch { /* next attempt */ }
+          }
+        }
+      }
+      this.set({ conn: this.state.conn === "updating" ? "gone" : "lost" });
+    } finally {
+      this.recovering = false;
+    }
+  }
+
+  retryNow() { void this.recover([0]); }
+
+  // ---- the open conversation
+  async open(o: Open) {
+    const same = JSON.stringify(o) === JSON.stringify(this.state.open);
+    this.set({ open: o, ...(same ? {} : { dm: null, thread: null, typing: null }) });
+    if (!o) return;
+    await this.loadOpen();
+    if (!this.refreshed.has(o.id)) { // once per open: receipts the server still holds
+      this.refreshed.add(o.id);
+      this.api.refresh(o.id).catch(() => {});
+    }
+  }
+
+  showTab(tab: Tab, section = "") { this.set({ tab, section }); }
+  openInvite(conv: string, selected?: string[], preset?: { who: string; label?: string }) { this.set({ invite: { conv, selected, ...preset } }); }
+  closeInvite() { this.set({ invite: null }); }
+  setPanel(panel: boolean) { this.set({ panel }); }
+
+  // openMessage opens the conversation a notification's message belongs to.
+  // A device conversation is addressed by any of its messages.
+  async openMessage(id: string) {
+    const o = this.state.overview;
+    const dm = (o?.dms || []).find((d) => d.id === id);
+    await this.open(dm ? { kind: "dm", id } : { kind: "thread", id, focus: id });
+  }
+
+  close() {
+    if (this.state.open) this.refreshed.delete(this.state.open.id);
+    this.set({ open: null, dm: null, thread: null, typing: null });
+  }
+
+  private async loadOpen() {
+    const o = this.state.open;
+    if (!o) return;
+    try {
+      if (o.kind === "dm") {
+        const t = await this.api.dm(o.id);
+        if (this.state.open !== o) return; // another conversation was opened meanwhile
+        const newHost = (t.agents || []).some((a) => !(this.state.dm?.agents || []).some((b) => b.host.address === a.host.address));
+        this.set({ dm: t });
+        if (newHost) void this.loadAgentNames();
+        const unread = (t.messages || []).filter((m) => m.unread).map((m) => m.id);
+        if (unread.length) this.api.markRead(unread).catch(() => {});
+        this.api.typing({ conv: o.id }).then((v) => { if (this.state.open === o) this.set({ typing: v }); }).catch(() => {});
+      } else {
+        const t = await this.api.thread(o.id);
+        if (this.state.open !== o) return;
+        this.set({ thread: t });
+        const unread = (t.messages || []).filter((m) => m.unread).map((m) => m.id);
+        if (unread.length) this.api.markRead(unread).catch(() => {});
+      }
+    } catch (e) {
+      if (this.state.open === o) this.toast(errorText(e), "error");
+    }
+  }
+
+  // loadAgentNames reads the agent catalogs once per change: this
+  // installation's own, and the hosts of agents in the open conversation.
+  private namesLoading = false;
+  private async loadAgentNames() {
+    if (this.namesLoading) return;
+    this.namesLoading = true;
+    try {
+      const hosts = new Set<string>([""]);
+      for (const a of this.state.dm?.agents || []) hosts.add(a.host.address);
+      const next: Record<string, string> = { ...this.state.agentNames };
+      for (const h of hosts) {
+        try {
+          const c = await this.api.agents(h || undefined);
+          for (const a of c.agents || []) next[a.record.id] = a.record.label;
+        } catch { /* names stay as words from addresses */ }
+      }
+      this.set({ agentNames: next });
+    } finally { this.namesLoading = false; }
+  }
+
+  // ---- drafts, kept per workspace and conversation (text only survives a reload)
+  private loadDrafts(): Record<string, Draft> {
+    try {
+      const raw = JSON.parse(localStorage.getItem(draftsKey(this.host.workspace.id)) || "{}");
+      const out: Record<string, Draft> = {};
+      for (const [k, v] of Object.entries(raw as Record<string, Draft>)) if (v && typeof v.text === "string") out[k] = { text: v.text, replyTo: v.replyTo, agent: v.agent, doIt: v.doIt };
+      return out;
+    } catch { return {}; }
+  }
+
+  private saveDrafts(drafts: Record<string, Draft>) {
+    try {
+      const keep: Record<string, Draft> = {};
+      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, doIt: d.doIt };
+      localStorage.setItem(draftsKey(this.host.workspace.id), JSON.stringify(keep));
+    } catch { /* a convenience only */ }
+  }
+
+  draft(conv: string): Draft { return this.state.drafts[conv] || { text: "" }; }
+
+  setDraft(conv: string, d: Draft) {
+    const drafts = { ...this.state.drafts };
+    if (!d.text && !d.replyTo && !d.agent && !d.doIt && !(d.files && d.files.length)) delete drafts[conv];
+    else drafts[conv] = d;
+    this.set({ drafts });
+    this.saveDrafts(drafts);
+  }
+
+  hasUnsent(): boolean {
+    return Object.values(this.state.drafts).some((d) => d.text || (d.files && d.files.length));
+  }
+
+  // ---- feedback
+  toast(text: string, tone?: Toast["tone"]) {
+    const id = ++this.toastSeq;
+    this.set({ toasts: [...this.state.toasts, { id, text, tone }] });
+    setTimeout(() => this.set({ toasts: this.state.toasts.filter((t) => t.id !== id) }), tone === "error" ? 7000 : 3500);
+  }
+
+  // run performs one action and reports its failure in words; the change
+  // stream then brings what it changed.
+  async run<R>(fn: (a: Api) => Promise<R>, ok?: string): Promise<R | undefined> {
+    try {
+      const r = await fn(this.api);
+      if (ok) this.toast(ok, "ok");
+      void this.refetch();
+      return r;
+    } catch (e) {
+      // A workspace being left or replaced answers its old view this way:
+      // the host remounts the interface, so there is nothing to tell.
+      if (errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
+      return undefined;
+    }
+  }
+}
+
+export function useStore<S>(store: Store, select: (s: State) => S): S {
+  return useSyncExternalStore(store.subscribe, () => select(store.get()));
+}

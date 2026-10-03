@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html default.html loader.js core.css app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
+//go:embed index.html default.html loader.js core.css app.js lenses.js app.css messenger.mjs messenger.css m device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -41,6 +41,8 @@ var relayFiles = map[string]string{
 	"/assets/app.css":              "app.css",
 	"/assets/app.js":               "app.js",
 	"/assets/lenses.js":            "lenses.js",
+	"/assets/messenger.mjs":        "messenger.mjs", // the default interface (web/build.sh)
+	"/assets/messenger.css":        "messenger.css",
 	"/assets/device.mjs":           "device.mjs",
 	"/assets/engine.mjs":           "engine.mjs",
 	"/assets/wire.mjs":             "wire.mjs",
@@ -222,6 +224,16 @@ var relayContent = sync.OnceValue(func() map[string][2]string {
 		}
 		out[p] = [2]string{string(data), contentType(name)}
 	}
+	// The default interface's fonts and emoji data (web/build.sh), each
+	// under its own path.
+	fs.WalkDir(files, "m", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, _ := fs.ReadFile(files, name)
+		out["/assets/"+name] = [2]string{string(data), contentType(name)}
+		return nil
+	})
 	for p, size := range relayIcons {
 		out[p] = [2]string{string(AppIcon(size)), "image/png"}
 	}
@@ -230,7 +242,7 @@ var relayContent = sync.OnceValue(func() map[string][2]string {
 
 // relayCSP lets the page run only its own origin's files and talk only to
 // its own origin.
-const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
+const relayCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // Relay serves the browser page and its files on a relay's origin, for GET
@@ -283,6 +295,9 @@ func Relay(skinsDirectory ...string) http.Handler {
 	})
 }
 
+// ContentType is the type a bundle file is served with.
+func ContentType(name string) string { return contentType(name) }
+
 func contentType(name string) string {
 	switch {
 	case name == "" || strings.HasSuffix(name, ".html"):
@@ -291,6 +306,10 @@ func contentType(name string) string {
 		return "text/css; charset=utf-8"
 	case strings.HasSuffix(name, ".webmanifest"):
 		return "application/manifest+json"
+	case strings.HasSuffix(name, ".woff2"):
+		return "font/woff2"
+	case strings.HasSuffix(name, ".json"):
+		return "application/json"
 	}
 	return "text/javascript; charset=utf-8"
 }

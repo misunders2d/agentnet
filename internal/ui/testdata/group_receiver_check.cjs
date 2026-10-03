@@ -20,7 +20,7 @@ function fixture() {
     $:n => elements[n] ||= elem(), typingUI:null,
     wsNow:()=>workspace, humanGroup:()=>true, dmVisitor:d=>d.role==='visitor', agentOf:pid=>state.dmData.agents.find(a=>a.pid===pid),
     askGone:()=>!!state.dmAgent&&!state.dmData.agents.find(a=>a.pid===state.dmAgent)?.can_ask,
-    boundElsewhere:()=>'', overLimit:()=>'', kindValue:()=> 'task', keepDraft(){}, syncComposer(){}, kindHint(){}, grow(){}, announce(){}, updated(){}, sentElsewhere:ws=>cleaned.push(ws), draftsOf:()=>state.drafts,
+    trackMentions(){}, encodeMentions:t=>t, validMentions:()=>[], boundElsewhere:()=>'', overLimit:()=>'', kindValue:()=> 'task', keepDraft(){}, syncComposer(){}, kindHint(){}, grow(){}, announce(){}, updated(){}, sentElsewhere:ws=>cleaned.push(ws), draftsOf:()=>state.drafts,
     setDMReply:r=>state.dmReply=r, dropFiles:files=>{state.files=state.files.filter(f=>!files.includes(f));}, renderReceiverStatus(){}, loadReceiverCatalog(){throw Error('unexpected catalog load');},
     api:async (url,body,transport) => {
       calls.push({url,body:plain(body ?? null),transport});

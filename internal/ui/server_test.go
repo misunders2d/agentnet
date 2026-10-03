@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -185,18 +187,50 @@ func TestNativeManifestRequiresSession(t *testing.T) {
 
 // Peer text reaches the page only as JSON strings and is inserted as text:
 // the page has no HTML sinks and no inline script or style.
+//
+// The default interface (messenger.mjs) bundles React DOM, whose
+// dangerouslySetInnerHTML support names innerHTML; React writes it only for
+// that prop, which the interface's own source never uses (checked below on
+// web/src). The bundle may name innerHTML exactly as often as React DOM
+// does, so a newly bundled library that writes HTML fails here.
 func TestPageInsertsTextOnly(t *testing.T) {
 	sinks := regexp.MustCompile(`innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function`)
+	const reactDOMInnerHTML = 5
 	err := fs.WalkDir(static.Files, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 		data, _ := fs.ReadFile(static.Files, path)
+		if path == "messenger.mjs" {
+			if n := strings.Count(string(data), "innerHTML"); n != reactDOMInnerHTML {
+				t.Errorf("messenger.mjs names innerHTML %d times, React DOM alone %d: review what writes HTML", n, reactDOMInnerHTML)
+			}
+			data = []byte(strings.ReplaceAll(string(data), "innerHTML", ""))
+		}
 		if loc := sinks.FindIndex(data); loc != nil {
 			t.Errorf("%s uses %q", path, data[loc[0]:loc[1]])
 		}
 		if strings.HasSuffix(path, ".html") && (strings.Contains(string(data), "<script>") || strings.Contains(string(data), "style=")) {
 			t.Errorf("%s has inline script or style (blocked by CSP)", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The default interface's own source: no HTML sinks, no raw HTML through
+	// React, and no style attribute in markup (the CSP blocks those).
+	srcSinks := regexp.MustCompile(`dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function|setAttribute\(\s*["']style["']`)
+	err = filepath.WalkDir(filepath.Join("web", "src"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if loc := srcSinks.FindIndex(data); loc != nil {
+			t.Errorf("%s uses %q", path, data[loc[0]:loc[1]])
 		}
 		return nil
 	})

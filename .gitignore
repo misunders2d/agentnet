@@ -13,3 +13,6 @@
 .worktrees/
 .superpowers/
 .pi/
+
+# The messenger source's dependencies (web/dev.sh links a cache here)
+/internal/ui/web/node_modules

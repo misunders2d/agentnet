@@ -4762,7 +4762,7 @@ function renderInstalledInterfaces() {
       } else change();
     };
     for (const s of window.agentnet.skins) {
-      if (s.id === "default") continue;
+      if (s.id === "classic") continue; // this interface itself; "default" is the new messenger
       $("lens").append(el("button", { type: "button", "data-skin": s.id, "aria-pressed": "false", onclick: () => switchTo(s.id) }, s.name));
     }
   }

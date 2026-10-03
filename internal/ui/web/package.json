@@ -1,0 +1,30 @@
+{
+  "private": true,
+  "name": "agentnet-messenger",
+  "version": "0.0.0",
+  "description": "Source of the default messenger interface: static/messenger.mjs and static/messenger.css; see build.sh. Never installed at run time.",
+  "type": "module",
+  "dependencies": {
+    "@base-ui/react": "1.8.0",
+    "@fontsource-variable/onest": "5.3.1",
+    "@fontsource-variable/rubik": "5.3.0",
+    "@github/file-attachment-element": "3.2.0",
+    "@github/text-expander-element": "2.9.4",
+    "@tabler/icons-react": "3.48.0",
+    "@tanstack/react-virtual": "3.14.13",
+    "emojibase-data": "17.0.0",
+    "frimousse": "0.4.0",
+    "marked": "18.0.14",
+    "qr": "0.7.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2"
+  }
+}

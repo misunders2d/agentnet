@@ -43,7 +43,9 @@ var skinTypes = map[string]string{
 // or unsafe packages are omitted; the built-in UI always remains available.
 // The caller must put this handler behind its normal origin/authentication gate.
 func Skins(directory string) http.Handler {
-	catalog := []Skin{{API: 1, ID: "default", Name: "AgentNet"}}
+	// The built-in interfaces: the messenger, and the previous one with its
+	// Classic, Comic and Zoom views.
+	catalog := []Skin{{API: 1, ID: "default", Name: "AgentNet"}, {API: 1, ID: "classic", Name: "Previous interface"}}
 	assets := map[string]skinAsset{}
 	totalBytes := 0
 	if directory != "" {
@@ -54,10 +56,10 @@ func Skins(directory string) http.Handler {
 			if e == nil && skinOwned(info) {
 				entries, _ := fs.ReadDir(root.FS(), ".")
 				for _, entry := range entries {
-					if len(catalog) >= 33 {
+					if len(catalog) >= 34 { // the built-in interfaces and at most 32 packages
 						break
 					}
-					if !entry.IsDir() || entry.Name() == "default" || !skinID.MatchString(entry.Name()) {
+					if !entry.IsDir() || entry.Name() == "default" || entry.Name() == "classic" || !skinID.MatchString(entry.Name()) {
 						continue
 					}
 					dir, err := root.OpenRoot(entry.Name())

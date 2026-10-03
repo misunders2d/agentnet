@@ -17,7 +17,7 @@ function fixture() {
  const host={stage:async file=>{staged.push(file);return 'exact-staged';}};
  const context=vm.createContext({state,window:{agentnet:host},document:{activeElement:null,createElement:elem,createTextNode:v=>v},URL:{revokeObjectURL(){}},typingUI:null,$:n=>elements[n]||=elem(),
  wsNow:()=>workspace,humanGroup:()=>state.dmData?.kind==='group',dmVisitor:d=>d.role==='visitor',agentOf:pid=>state.dmData.agents.find(a=>a.pid===pid),askGone:()=>!!state.dmAgent&&!state.dmData.agents.find(a=>a.pid===state.dmAgent)?.can_ask,
- boundElsewhere:()=>'',overLimit:()=>'',kindValue:()=> 'task',syncComposer(){},kindHint(){},grow(){},announce:v=>announced.push(v),updated(){},sentElsewhere:ws=>cleaned.push(ws),draftsOf:()=>state.drafts,
+ trackMentions(){}, encodeMentions:t=>t, validMentions:()=>[], boundElsewhere:()=>'',overLimit:()=>'',kindValue:()=> 'task',syncComposer(){},kindHint(){},grow(){},announce:v=>announced.push(v),updated(){},sentElsewhere:ws=>cleaned.push(ws),draftsOf:()=>state.drafts,
  setDMReply:r=>state.dmReply=r,setDMAgent:a=>state.dmAgent=a?.pid||null,setAnswering:a=>state.answering=a,setKind(){},renderPending(){},deviceAgentMissing:()=>false,
  dropFiles:files=>state.files=state.files.filter(f=>!files.includes(f)),firstLine:v=>v,el:(tag,attrs,...children)=>({...elem(),tag,attrs,children}),fill:(e,...v)=>e.replaceChildren(...v),
  api:async(url,body,transport)=>{calls.push({url,body:plain(body??null),transport});
