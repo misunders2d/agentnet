@@ -179,6 +179,13 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() < 1 || fs.NArg() > 2 || (fs.NArg() == 1 && len(files) == 0) || (*question && *task) {
 			return errors.New("usage: dm send [--question|--task] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
 		}
+		beyond := ""
+		if !*question && !*task {
+			beyond = "without --question or --task"
+		}
+		if err := receiverGuard(a, "dm send", beyond, *replyTo); err != nil {
+			return err
+		}
 		receiver, err := returnSelection.selected(a, *question || *task)
 		if err != nil {
 			return err

@@ -332,6 +332,76 @@ func TestManagedReceiverFollowupRollbackAndUncertainRestart(t *testing.T) {
 	}
 }
 
+// A follow-up under an existing device binding goes only to a device the
+// original request went to: reusing the binding never sends the local user's
+// delegated work to someone else.
+func TestReplyBindingFollowUpOnlyToOriginalRecipient(t *testing.T) {
+	st := installAgentStub(t)
+	w := newWorld(t, "")
+	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
+	local, e := w.alice.CreateLocalAgent("selected", Responder{Harness: "agentstub", Dir: st.dir})
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := &ReplyReceiver{Kind: "managed_agent", AgentID: local.ID, Instructions: "only original local work", Mode: envelope.KindTask}
+	sent, e := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "request", ReplyReceiver: r})
+	if e != nil {
+		t.Fatal(e)
+	}
+	b := receiverBindings(t, w.alice)[0]
+	input := receiverDirect(t, w.bob, w.alice, envelope.Inner{Kind: envelope.KindQuestion, ReplyTo: sent.ID, Body: "clarification data"})
+	if e = w.alice.verifyAndStore(tctx(t), input); e != nil {
+		t.Fatal(e)
+	}
+	before := count(t, w.alice, "outbox")
+	for _, kind := range []string{envelope.KindTask, envelope.KindQuestion, envelope.KindMessage} {
+		selected, e := w.alice.ReplyReceiverForBinding(b.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = w.alice.SendMessage(tctx(t), Outgoing{To: carol.Address, Kind: kind, Body: "someone else", ReplyReceiver: selected}); e == nil || !strings.Contains(e.Error(), "original request's recipient") {
+			t.Errorf("%s to carol: %v", kind, e)
+		}
+	}
+	if n := count(t, w.alice, "outbox"); n != before {
+		t.Fatalf("refused follow-ups left %d outbox rows", n-before)
+	}
+	selected, e := w.alice.ReplyReceiverForBinding(b.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "bound follow-up", ReplyTo: input.ID, ReplyReceiver: selected}); e != nil {
+		t.Fatal(e)
+	}
+	var bound, elsewhere int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE reply_receiver=? AND recipient=?`, b.ID, w.bob.Address).Scan(&bound)
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=?`, carol.Address).Scan(&elsewhere)
+	if bound != 2 || elsewhere != 0 {
+		t.Fatalf("bound to bob %d, to carol %d", bound, elsewhere)
+	}
+}
+
+// An imported delegation holds no sent copy on this device: a follow-up
+// under it may go to the device its carried request went to, and nowhere
+// else; any other device binding with no sent copy allows nobody.
+func TestReplyBindingImportedFollowUpRecipient(t *testing.T) {
+	w := newWorld(t, "")
+	old := ReplyReceiverBinding{ID: protocol.NewID(), remote: &receiverRemoteState{Role: "imported", Request: envelope.ReceiverRequest{To: w.bob.Address}}}
+	to := func(address string) []outCopy { return []outCopy{{env: envelope.Envelope{To: address}}} }
+	for _, ok := range []string{w.bob.Address, w.bob.Address + "#" + protocol.NewID()} {
+		if err := originalRecipients(w.alice.store.db, old, to(ok)); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	if err := originalRecipients(w.alice.store.db, old, to("carol/desk")); err == nil {
+		t.Error("imported follow-up went to carol")
+	}
+	old.remote.Role = "origin"
+	if err := originalRecipients(w.alice.store.db, old, to(w.bob.Address)); err == nil {
+		t.Error("a binding with no sent copy allowed bob")
+	}
+}
+
 // This fixture executes the real installed-harness command shape on a private
 // PATH. It never invokes a vendor/model and never writes a real harness home.
 const managedReceiverScript = `#!/usr/bin/env python3

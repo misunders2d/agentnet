@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -224,7 +225,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if err != nil {
 		home = a.home
 	}
-	cmd.Env = append(cmd.Environ(), BackgroundEnv+"=1", "AGENTNET_HOME="+home)
+	// Only this job sets AgentNet's run values: the same names inherited
+	// from the daemon's environment are dropped, since the CLI's run guard
+	// takes them as permission (a request to update, a binding to use).
+	cmd.Env = slices.DeleteFunc(cmd.Environ(), func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		return slices.ContainsFunc(runEnvNames, func(n string) bool { return strings.EqualFold(n, name) }) // Windows names ignore case
+	})
+	cmd.Env = append(cmd.Env, BackgroundEnv+"=1", "AGENTNET_HOME="+home)
 	if j.Receiver != nil {
 		cmd.Env = append(cmd.Env, receiverBindingEnv+"="+j.Receiver.ID)
 	} else if j.progressEligible() {
@@ -372,6 +380,9 @@ const (
 	ProgressRequestEnv = "AGENTNET_REQUEST_ID"
 	ProgressPeerEnv    = "AGENTNET_REQUESTER"
 )
+
+// runEnvNames are the values a run gets only from its own job.
+var runEnvNames = []string{BackgroundEnv, "AGENTNET_HOME", ProgressRequestEnv, ProgressPeerEnv, receiverBindingEnv}
 
 // progressEligible reports whether j's worker may send progress: a version 1
 // request (default responder or named executor) or a conversation
