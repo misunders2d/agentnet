@@ -85,7 +85,9 @@ export function whoWrote(m: AnyMsg, ctx: Ctx): Who {
     };
   }
   const t = ctx.dm;
-  const agentMsg = !!m.agent_id || (m.origin || "").startsWith("agent:");
+  // An agent's turn only when the server proved it came from that agent's
+  // exact host (verified_agent); a claimed origin or agent id proves nothing.
+  const agentMsg = m.verified_agent;
   if (agentMsg) {
     const a = agentOf(ctx, m.pid);
     if (a) {

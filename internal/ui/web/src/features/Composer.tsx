@@ -477,7 +477,7 @@ function messageOf(id: string, w: Words, dm?: T.DMThread, thread?: T.Thread): { 
     const me = w.overview?.person;
     // An agent wrote it only when the message says so (m.pid alone is also
     // the agent a person asked); otherwise the person whose device sent it.
-    const agentWrote = !!m.agent_id || (m.origin || "").startsWith("agent:");
+    const agentWrote = m.verified_agent; // a DM turn is an agent's only when proven
     const agent = agentWrote && m.pid ? (dm.agents || []).find((a) => a.pid === m.pid) : undefined;
     const sentFrom = (p?: T.PersonView | null) => !!p && (p.address === m.from || (p.devices || []).some((d) => d.address === m.from));
     const guest = (dm.guests || []).find((g) => sentFrom(g.host));
