@@ -205,12 +205,24 @@ for (const oldAfterReload of [false, true]) {
   const old = { v: 2, conv: f.conv, sub: "", replica: false, read: true, at: now, state: "", reply_to: "", origin: "agent:claude", emotion: "plain" };
   const originOnly = { ...old, id: id(), lid: id(), from: f.peerAddress, fp: f.peer.fingerprint, kind: "message", body: "old origin claim", pid: "", own: false };
   const nonHost = { ...old, id: id(), lid: id(), from: e.address, fp: e.fp, kind: "answer", body: "old forged answer", pid, reply_to: asked.id, own: true };
-  await f.store.write([{ s: "inbox", k: originOnly.id, v: originOnly }, { s: "inbox", k: nonHost.id, v: nonHost }]);
+  // The key half: the host's address under any other key (a re-keyed
+  // device, or a key that only claims the address) is not the host, live or
+  // as history, and the view marks only the exact key.
+  const otherFp = await wire.fingerprint(await wire.publicEntry(await wire.newKeys(), f.peerAddress));
+  const rekeyedTurn = turn({ reply_to: asked.id });
+  for (const historical of [false, true]) {
+    await refuses(() => e.checkConversationAgent(rekeyedTurn, f.peerAddress, otherFp, f.c, historical), (err) => err.reason === "invalid");
+    check((await e.checkConversationAgent(rekeyedTurn, f.peerAddress, f.peer.fingerprint, f.c, historical)) === undefined, "the host's exact key passes (history " + historical + ")");
+  }
+  const rekeyed = { ...old, id: id(), lid: id(), from: f.peerAddress, fp: otherFp, kind: "answer", body: "re-keyed answer", pid, reply_to: asked.id, own: false };
+  const rekeyedHistory = { ...rekeyed, id: id(), lid: id(), body: "re-keyed history", replica: true, history: true, synced_from: "self/other" };
+  await f.store.write([{ s: "inbox", k: originOnly.id, v: originOnly }, { s: "inbox", k: nonHost.id, v: nonHost }, { s: "inbox", k: rekeyed.id, v: rekeyed }, { s: "inbox", k: rekeyedHistory.id, v: rekeyedHistory }]);
   const shown = (view, x) => view.messages.find((m) => m.id === x);
   const view = await e.dm(f.conv);
   check(shown(view, answer).verified_agent === true && shown(view, early).verified_agent === true, "the host's outputs are marked as the agent's");
   check(shown(view, asked.id).verified_agent === false, "a person's request is not marked");
   check(shown(view, originOnly.id).verified_agent === false && shown(view, nonHost.id).verified_agent === false, "an origin-only or non-host claim is not marked");
+  check(shown(view, rekeyed.id).verified_agent === false && shown(view, rekeyedHistory.id).verified_agent === false, "the host's address under another key is not marked, received or as history");
   await e.api("/api/dm/agent/dismiss", { pid });
   const late = await f.receive(await f.fromPeer(turn({ reply_to: asked.id })));
   check((await f.store.get("held", late))?.reason === "invalid" && !(await f.store.get("inbox", late)), "an output after the participation ended refused");
@@ -239,6 +251,55 @@ for (const oldAfterReload of [false, true]) {
   await f.receive(forgedCopy.envelope, later);
   check((await laterStore.get("held", forgedCopy.id))?.reason === "invalid" && !(await laterStore.get("inbox", forgedItem.id)), "history of a non-host's answer is checked against its original key");
   e.stop(); later.stop();
+}
+
+// The rest of the rule (client TestAgentTurnsComeOnlyFromTheExactHost and
+// TestAgentTurnUnderAHumanParticipationIsRefused): an output after its host
+// declined is refused; while a record of an active participation is held
+// here, its output waits; under a human participation an agent's turn is
+// refused even from its exact host, and never marked.
+{
+  const f = await fixture(), { e } = f, ts = Math.floor(now / 1000);
+  const host = { person: f.peer.person, address: f.peerAddress, fingerprint: f.peer.fingerprint }, peerAuthor = { ...host, roster: f.peer.hash };
+  const invite = async (pid, extra = {}) => {
+    const inv = await wire.signEvent(e.keys, { conv: f.conv, pid, type: "invite", ts, author: e.author(), host, audience: "conversation", ...extra });
+    await e.sendConv(f.c, { kind: "message", body: wire.eventJSON(inv), sub: "event", pid });
+    return inv;
+  };
+  const decide = async (pid, inv, type) => {
+    const ev = await wire.signEvent(f.peerKeys, { conv: f.conv, pid, type, prev: await wire.eventHash(inv), ts, author: peerAuthor });
+    await f.receive(await f.fromPeer({ v: 2, kind: "message", conv: f.conv, lid: id(), root: f.c.root, sub: "event", pid, body: wire.eventJSON(ev) }));
+  };
+  const resolved = async (pid) => e.resolveAgent(pid, await e.convEvents(f.conv), await e.dmMembers(f.c));
+  const output = async (pid) => f.receive(await f.fromPeer({ v: 2, conv: f.conv, lid: id(), root: f.c.root, pid, reply_to: id(), origin: "agent:stub", emotion: "plain" }));
+
+  const declined = id();
+  await decide(declined, await invite(declined), "decline");
+  check((await resolved(declined)).state === "declined", "the host declined");
+  const afterDecline = await output(declined);
+  check((await f.store.get("held", afterDecline))?.reason === "invalid" && !(await f.store.get("inbox", afterDecline)), "an output after its host declined refused");
+
+  const heldPID = id(), heldInv = await invite(heldPID);
+  await decide(heldPID, heldInv, "accept");
+  // Only the host decides: an accept its inviter signed does not count, and is held here.
+  const stray = await wire.signEvent(e.keys, { conv: f.conv, pid: heldPID, type: "accept", prev: await wire.eventHash(heldInv), ts, author: e.author() });
+  await e.sendConv(f.c, { kind: "message", body: wire.eventJSON(stray), sub: "event", pid: heldPID });
+  const heldInfo = await resolved(heldPID);
+  check(heldInfo.state === "active" && heldInfo.held === 1, "an active participation with a record held");
+  const whileHeld = await output(heldPID);
+  check((await f.store.get("held", whileHeld))?.reason === "proof_pending" && !(await f.store.get("inbox", whileHeld)), "an output while a record of its participation is held waits");
+
+  const human = id();
+  await decide(human, await invite(human, { role: "human" }), "accept");
+  const humanInfo = await resolved(human);
+  check(humanInfo.role === "human" && humanInfo.state === "active" && !humanInfo.held, "a human participation, active");
+  const asAgent = await output(human);
+  check((await f.store.get("held", asAgent))?.reason === "invalid" && !(await f.store.get("inbox", asAgent)), "an agent's turn under a human participation refused, even from its exact host");
+  await refuses(() => e.checkConversationAgent({ v: 2, conv: f.conv, lid: id(), kind: "answer", body: "as an agent", pid: human, reply_to: id(), origin: "agent:stub" }, f.peerAddress, f.peer.fingerprint, f.c, true), (err) => err.reason === "invalid");
+  const row = { v: 2, conv: f.conv, sub: "", replica: false, read: true, at: now, state: "", origin: "agent:claude", emotion: "plain", id: id(), lid: id(), from: f.peerAddress, fp: f.peer.fingerprint, kind: "answer", body: "old human as agent", pid: human, reply_to: id(), own: false };
+  await f.store.write([{ s: "inbox", k: row.id, v: row }]);
+  check((await e.dm(f.conv)).messages.find((m) => m.id === row.id)?.verified_agent === false, "a turn under a human participation is never marked as an agent's");
+  e.stop();
 }
 
 // Recipient-encrypted named history waits for signed capability, unchanged over reload/retry.

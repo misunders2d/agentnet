@@ -1,10 +1,13 @@
 package client
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -32,6 +35,37 @@ func TestAgentTurnsComeOnlyFromTheExactHost(t *testing.T) {
 	}
 	if req, _ := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.ID == q.ID }); req.VerifiedAgent {
 		t.Fatalf("a person's request marked as an agent's: %+v", req)
+	}
+
+	// The key half: the host's address under any other key (a re-keyed
+	// device, or a key that only claims the address) is not the host, live
+	// or as history, and the view marks only the exact key, as received or
+	// as the original key of history.
+	rekey, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rekeyed, hostFP := rekey.Public(w.bob.Address), w.bob.Self().Fingerprint()
+	unnamed := envelope.Inner{Conv: conv, Kind: envelope.KindAnswer, Body: "re-keyed", ReplyTo: q.ID, PID: pid, Origin: envelope.OriginAgentPrefix + "agentstub", Emotion: "calm"}
+	for _, historical := range []bool{false, true} {
+		if r, err := w.alice.checkConversationAgent(unnamed, rekeyed, historical); r != reasonInvalid || err == nil {
+			t.Fatalf("the host's address under another key (history %v): held %q, %v", historical, r, err)
+		}
+		if r, err := w.alice.checkConversationAgent(unnamed, w.bob.Self(), historical); r != "" || err != nil {
+			t.Fatalf("the host's exact key (history %v): held %q, %v", historical, r, err)
+		}
+	}
+	rows := []ConvMessage{
+		{Dir: "in", From: w.bob.Address, Key: rekeyed.Fingerprint(), Kind: envelope.KindAnswer, ReplyTo: q.ID, PID: pid},
+		{Dir: "in", From: w.bob.Address, History: true, Claimed: rekeyed.Fingerprint(), Kind: envelope.KindAnswer, ReplyTo: q.ID, PID: pid},
+		{Dir: "in", From: w.bob.Address, Key: hostFP, Kind: envelope.KindAnswer, ReplyTo: q.ID, PID: pid},
+		{Dir: "in", From: w.bob.Address, History: true, Claimed: hostFP, Kind: envelope.KindAnswer, ReplyTo: q.ID, PID: pid},
+	}
+	w.alice.verifyAgents(conv, rows)
+	for i, want := range []bool{false, false, true, true} {
+		if rows[i].VerifiedAgent != want {
+			t.Fatalf("view row %d (key %q, history key %q): verified %v", i, rows[i].Key, rows[i].Claimed, rows[i].VerifiedAgent)
+		}
 	}
 
 	// Alice's device is a member but not the host: none of these is the
@@ -89,6 +123,43 @@ func TestAgentTurnsComeOnlyFromTheExactHost(t *testing.T) {
 		t.Fatalf("an output after the participation ended: held %q", r)
 	}
 
+	// Ended by its host's decline: refused as well.
+	p3, err := w.alice.InviteAgent(tctx(t), conv, w.bob.Address, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the third invite at bob", func() bool { return stateAt(t, w.bob, p3.PID).State == PartInvited })
+	if _, err := w.bob.DeclineParticipation(tctx(t), p3.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to see the decline", func() bool { return stateAt(t, w.alice, p3.PID).State == PartDeclined })
+	declined := craft(t, w.bob, w.alice, turn(envelope.Inner{Kind: envelope.KindAnswer, Body: "declined", ReplyTo: q.ID, PID: p3.PID, Origin: envelope.OriginAgentPrefix + "agentstub", Emotion: "calm"}))
+	if err := w.alice.accept(tctx(t), declined); err != nil {
+		t.Fatal(err)
+	}
+	if r := heldReason(t, w.alice, declined.ID); r != reasonInvalid || inboxCount(t, w.alice, `id = ?`, declined.ID) != 0 {
+		t.Fatalf("an output after its host declined: held %q", r)
+	}
+
+	// Active, but with a record held here that does not count (one that
+	// may yet end or change it): its output waits.
+	stray := protocol.ParticipationEvent{V: 1, Conv: conv, PID: p2.PID, Type: protocol.EventDismiss, Prev: strings.Repeat("ab", 32), TS: time.Now().Unix(), Author: stateAuthor(t, w.alice)}
+	stray.Sign(w.alice.id.Sign)
+	strayRaw, _ := json.Marshal(stray)
+	if err := w.alice.store.addParticipationEvent(stray, strayRaw); err != nil {
+		t.Fatal(err)
+	}
+	if p := stateAt(t, w.alice, p2.PID); p.State != PartActive || p.Held != 1 {
+		t.Fatalf("an active participation with a record held: %s held %d", p.State, p.Held)
+	}
+	waiting := craft(t, w.bob, w.alice, turn(envelope.Inner{Kind: envelope.KindAnswer, Body: "while held", ReplyTo: q.ID, PID: p2.PID, Origin: envelope.OriginAgentPrefix + "agentstub", Emotion: "calm"}))
+	if err := w.alice.accept(tctx(t), waiting); err != nil {
+		t.Fatal(err)
+	}
+	if r := heldReason(t, w.alice, waiting.ID); r != reasonProof || inboxCount(t, w.alice, `id = ?`, waiting.ID) != 0 {
+		t.Fatalf("an output while a record of its participation is held: held %q", r)
+	}
+
 	// Rows an older reader admitted are not marked from their origin or
 	// shape: only the host's key marks them.
 	legacy := []envelope.Inner{
@@ -137,5 +208,38 @@ func TestAgentTurnsComeOnlyFromTheExactHost(t *testing.T) {
 	}
 	if st.runs() != 1 {
 		t.Fatalf("runs %d", st.runs())
+	}
+}
+
+// A human guest's participation has no agent: a turn shaped as an agent's
+// under it is refused even from its exact host, live or as history, and the
+// view never marks one.
+func TestAgentTurnUnderAHumanParticipationIsRefused(t *testing.T) {
+	w, carol, conv, _, _ := humanWorld(t)
+	p, err := w.alice.InviteHuman(tctx(t), conv, carol.Address, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "carol to see the invite", func() bool { return stateAt(t, carol, p.PID).State == PartInvited })
+	if _, err := carol.AcceptParticipation(tctx(t), p.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to see carol active", func() bool { return stateAt(t, w.alice, p.PID).HumanActive() })
+	in := envelope.Inner{Conv: conv, Kind: envelope.KindAnswer, Body: "as an agent", ReplyTo: protocol.NewID(), PID: p.PID, Origin: envelope.OriginAgentPrefix + "claude", Emotion: "calm"}
+	for _, historical := range []bool{false, true} {
+		if r, err := w.alice.checkConversationAgent(in, carol.Self(), historical); r != reasonInvalid || err == nil {
+			t.Fatalf("an agent's turn under a human participation, from its host (history %v): held %q, %v", historical, r, err)
+		}
+	}
+	fp := carol.Self().Fingerprint()
+	rows := []ConvMessage{
+		{Dir: "in", From: carol.Address, Key: fp, Kind: envelope.KindAnswer, ReplyTo: in.ReplyTo, PID: p.PID, Origin: in.Origin},
+		{Dir: "in", From: carol.Address, History: true, Claimed: fp, Kind: envelope.KindAnswer, ReplyTo: in.ReplyTo, PID: p.PID, Origin: in.Origin},
+	}
+	w.alice.verifyAgents(conv, rows)
+	for i, m := range rows {
+		if m.VerifiedAgent {
+			t.Fatalf("view row %d under a human participation marked as an agent's", i)
+		}
 	}
 }
