@@ -231,6 +231,23 @@ func (a *Agent) PendingLinks() ([]LinkRequest, error) {
 // publishes it; if the Hub cannot be reached, it stays approved and is
 // published when it can (never as a second, competing step).
 func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
+	return a.decideLink(ctx, id, accept, false)
+}
+
+// ApproveNativeLink approves the pending link request id as DecideLink
+// does and, with the approval, adds the device's exact key to this
+// device's self-consent trust set (selfconsent.go): its invites of this
+// person's own agents here are then accepted without a click. The person
+// asks for it (agentnet person approve --native ID) only for a computer
+// running agentnet, never a browser. Nothing in a request tells the two
+// apart, so nothing else trusts a device: not DecideLink (the page, person
+// approve ID), and not this call for a request that is no longer pending
+// (approved already, perhaps on the page).
+func (a *Agent) ApproveNativeLink(ctx context.Context, id string) error {
+	return a.decideLink(ctx, id, true, true)
+}
+
+func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) error {
 	var address, pub, state string
 	var join []byte
 	var expires int64
@@ -242,6 +259,8 @@ func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
 		return err
 	}
 	switch {
+	case native && state != LinkPending:
+		return fmt.Errorf("that request is %s already: only a pending request is approved with --native, so its device is not trusted", state)
 	case state == LinkApproved && accept:
 		return a.publishLink(ctx, id)
 	case state != LinkPending:
@@ -284,12 +303,25 @@ func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
 		return err
 	}
 	raw, _ := json.Marshal(r)
-	res, err := a.store.db.Exec(`UPDATE device_links SET state = ?, roster = ?, updated_at = ? WHERE offer = ? AND state = ?`, LinkApproved, string(raw), time.Now().Unix(), id, LinkPending)
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE device_links SET state = ?, roster = ?, updated_at = ? WHERE offer = ? AND state = ?`, LinkApproved, string(raw), time.Now().Unix(), id, LinkPending)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errors.New("that request was decided meanwhile")
+	}
+	if native { // trusted with its approval, before its step is published
+		if err := addSelfConsentTrustIn(tx, dev.Address, dev.Fingerprint()); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	return a.publishLink(ctx, id)
 }

@@ -997,6 +997,7 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		if in.Sub == envelope.SubEvent {
 			a.convWork.due(convRetry)
 			a.kickNow()
+			a.trySelfConsent(ctx, in.PID) // an invite of this person's own agent, hosted here
 		}
 		a.wakeWorker() // a request, or an event that may let one run or stop
 		a.wakeAlerts()

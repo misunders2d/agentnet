@@ -207,6 +207,10 @@ func Open(home string) (*Agent, error) {
 		return nil, fmt.Errorf("enrollment in %s is incomplete; run `agentnet join` again with the same invitation "+
 			"(with another NAME if the Hub said the address was taken)", home)
 	}
+	if err := st.markSelfConsentSince(); err != nil { // D3 holds from here on (selfconsent.go)
+		st.db.Close()
+		return nil, err
+	}
 	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify,
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bump

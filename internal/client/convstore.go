@@ -745,11 +745,22 @@ var errTooManyEvents = errors.New("too many participation events")
 // addParticipationEvent stores a verified event (the author's device key
 // verified it), once.
 func (s *store) addParticipationEvent(ev protocol.ParticipationEvent, raw []byte) error {
+	return s.addParticipationEventWith(ev, raw, nil)
+}
+
+// addParticipationEventWith stores ev as addParticipationEvent does, in one
+// transaction with also, which runs first: its error stores nothing.
+func (s *store) addParticipationEventWith(ev protocol.ParticipationEvent, raw []byte, also func(*sql.Tx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if also != nil {
+		if err := also(tx); err != nil {
+			return err
+		}
+	}
 	if err := insertParticipationEvent(tx, ev, raw); err != nil {
 		return err
 	}

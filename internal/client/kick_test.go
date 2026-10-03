@@ -57,3 +57,28 @@ func TestAcceptWakesDaemonWithLongHome(t *testing.T) {
 		t.Fatalf("worker woke after %s: the local wake-up did not work", d)
 	}
 }
+
+// Stopping the wake-up listener waits for a wake it is running, so what
+// the stopper changes next (the daemon's stop replaces wakeWorker, which a
+// wake reads) is ordered after that wake: no data race under -race, and no
+// wake reads what stop's caller set afterwards.
+func TestListenKicksStopWaitsForWake(t *testing.T) {
+	home := t.TempDir()
+	entered, release := make(chan struct{}), make(chan struct{})
+	target := func() {}
+	stop, err := listenKicks(home, func() {
+		entered <- struct{}{}
+		<-release
+		time.Sleep(50 * time.Millisecond) // still running when stop is called
+		target()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifyDaemon(home)
+	<-entered
+	close(release)
+	stop()
+	target = func() { t.Error("a wake read what was set after stop") }
+	time.Sleep(200 * time.Millisecond) // a wake stop did not wait for runs meanwhile
+}

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -388,7 +389,8 @@ func (a *Agent) Participations(conv string) ([]ParticipationInfo, error) {
 // each is recorded exactly (with its sender's key) and must be one message:
 // nothing else earlier is given. taskKeys names the member keys
 // (fingerprints) that may ask it for follow-up tasks within this
-// participation. The host's person decides; nothing runs before that.
+// participation. The host's person decides; nothing runs before that (their
+// own agent's invite from a device they trust is their decision: selfConsent).
 func (a *Agent) InviteAgent(ctx context.Context, conv, hostAddress string, grant, taskKeys []string, note string) (ParticipationInfo, error) {
 	return a.inviteAgent(ctx, conv, hostAddress, "", grant, taskKeys, note)
 }
@@ -534,6 +536,7 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 			return ParticipationInfo{}, err
 		}
 	}
+	a.trySelfConsent(ctx, ev.PID) // this person's own agent, hosted here
 	return a.participation(conv, ev.PID)
 }
 
@@ -582,7 +585,8 @@ func (a *Agent) participationScope(ctx context.Context, info ParticipationInfo) 
 
 // AcceptParticipation accepts an invite for the agent on this installation,
 // exactly as invited; DeclineParticipation declines it. Only the host's
-// own person does this, here; receiving an invite never accepts it.
+// own person does this, here; receiving an invite never accepts it, except
+// one of that person's own agent from a device they trust (selfConsent).
 func (a *Agent) AcceptParticipation(ctx context.Context, pid string) (ParticipationInfo, error) {
 	return a.decide(ctx, pid, protocol.EventAccept)
 }
@@ -601,18 +605,234 @@ func (a *Agent) decide(ctx context.Context, pid, typ string) (ParticipationInfo,
 		return info, errors.New("only the host installation's person accepts or declines an invite for its agent")
 	}
 	if own, err := a.ownEvent(info.Conv, pid, typ, protocol.EventAccept, protocol.EventDecline); err != nil || own != nil {
-		if err == nil {
-			err = a.resend(ctx, *own) // a retry sends the same signed event again, never a new one
-		}
-		if err != nil {
-			return info, err
-		}
-		return a.Participation(pid)
+		return a.resendOwn(ctx, info, own, err)
 	}
 	if info.State != PartInvited {
 		return info, fmt.Errorf("the invite is %s, not waiting for a decision", info.State)
 	}
-	return a.sign(ctx, info, typ, info.Invite)
+	decided, err := a.signWith(ctx, info, typ, info.Invite, undecidedHere(info.Conv, pid, a.Self().Fingerprint()))
+	if errors.Is(err, errDecidedHere) { // decided meanwhile, without a click or by another process: as a retry, once
+		own, e := a.ownEvent(info.Conv, pid, typ, protocol.EventAccept, protocol.EventDecline)
+		if e == nil && own == nil { // a decision of this key that is not this installation's own event
+			e = errors.New("this device's key decided that invite already, as another address: not decided again")
+		}
+		return a.resendOwn(ctx, info, own, e)
+	}
+	return decided, err
+}
+
+// resendOwn retries this installation's own stored decision own: a retry
+// sends the same signed event again, never a new one. err, from finding
+// it, is returned as is.
+func (a *Agent) resendOwn(ctx context.Context, info ParticipationInfo, own *protocol.ParticipationEvent, err error) (ParticipationInfo, error) {
+	if err == nil {
+		err = a.resend(ctx, *own)
+	}
+	if err != nil {
+		return info, err
+	}
+	return a.Participation(info.PID)
+}
+
+// errDecidedHere stops a decision when one of this device's key is stored
+// already (signed meanwhile without a click, or by another process).
+var errDecidedHere = errors.New("participation: decided here already")
+
+// undecidedHere refuses, within the transaction that stores a decision of
+// pid, when a decision of the key fp is stored already: a host decides once.
+func undecidedHere(conv, pid, fp string) func(*sql.Tx) error {
+	return func(tx *sql.Tx) error {
+		var n int
+		if err := tx.QueryRow(`SELECT count(*) FROM participation_events WHERE conv = ? AND pid = ? AND author = ? AND type IN (?, ?)`,
+			conv, pid, fp, protocol.EventAccept, protocol.EventDecline).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return errDecidedHere
+		}
+		return nil
+	}
+}
+
+// selfConsent accepts an invite of this person's own agent here without the
+// person's click (owner decision D3; selfconsent.go) when all of these hold,
+// and otherwise leaves it to the click as before:
+//
+//   - it was stored here since D3 began here (selfConsentSinceKey);
+//   - it is invited, no event of it is held, and this installation hosts it;
+//   - it invites an agent (no role: never a human guest), and this device
+//     has decided nothing of it;
+//   - its author, its host and this installation speak for one person,
+//     this one, as pinned here (never frozen);
+//   - the author device is a current device of that person's pinned chain
+//     and in the trust set, and so is every task key the invite names;
+//   - its agent is the default responder, selected, or an enabled agent of
+//     this host's catalog;
+//   - in a group, its invite epoch holds.
+//
+// The accept is the ordinary signed one, so old peers resolve it as the
+// person's. It is stored with its local notice in one transaction that
+// first checks that no decision of this device's key is stored. It reports
+// whether it accepted now, also when the accept is stored and only sending
+// it failed (the error is then an unsentError).
+func (a *Agent) selfConsent(ctx context.Context, pid string) (bool, error) {
+	info, err := a.Participation(pid)
+	if errors.Is(err, ErrNoParticipation) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.State != PartInvited || info.Held != 0 || !info.HostHere || info.Role != "" {
+		return false, nil
+	}
+	me, ok, err := a.store.selfPerson(a.Address)
+	if err != nil || !ok || me.info.State != personSelf || info.Host.Person != me.info.Person || info.Inviter.Person != me.info.Person {
+		return false, err
+	}
+	m, err := a.dmMembers(info.Conv)
+	if err != nil {
+		return false, err
+	}
+	events, err := a.store.participationEvents(info.Conv, pid)
+	if err != nil {
+		return false, err
+	}
+	if err := m.loadHosts(a.store.db, events); err != nil {
+		return false, err
+	}
+	self := a.Self().Fingerprint()
+	var inv protocol.ParticipationEvent
+	for _, ev := range events {
+		if ev.Author.Fingerprint == self && (ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline) {
+			return false, nil // decided here already: a retry is the person's
+		}
+		if ev.Type == protocol.EventInvite && ev.Hash() == info.Invite {
+			inv = ev
+		}
+	}
+	if inv.Type == "" || !m.inviteEpoch(inv) {
+		return false, nil // the invite itself, never a scope standing for it
+	}
+	if since, err := a.store.invitedSinceSelfConsent(info.Invite); err != nil || !since {
+		return false, err // stored before D3 here: made when nothing ran before the click
+	}
+	if author, ok := m.author(inv.Author); !ok || author.info.Person != me.info.Person {
+		return false, nil
+	}
+	trusted, err := a.selfConsentTrusted(inv.Author.Address, inv.Author.Fingerprint)
+	for _, fp := range inv.TaskKeys {
+		if trusted && err == nil {
+			trusted, err = a.selfConsentTrusted("", fp)
+		}
+	}
+	if err != nil || !trusted {
+		return false, err
+	}
+	if ok, err := a.agentEnabled(info.AgentID); err != nil || !ok {
+		return false, err
+	}
+	notice := SelfConsentNotice{PID: pid, Conv: info.Conv, AgentID: info.AgentID, Inviter: inv.Author.Address, At: time.Now().Unix()}
+	_, err = a.signWith(ctx, info, protocol.EventAccept, info.Invite, func(tx *sql.Tx) error {
+		if err := undecidedHere(info.Conv, pid, self)(tx); err != nil {
+			return err
+		}
+		return addSelfConsentNoticeIn(tx, notice)
+	})
+	if errors.Is(err, errDecidedHere) {
+		return false, nil
+	}
+	var unsent unsentError
+	return err == nil || errors.As(err, &unsent), err // accepted, though maybe not sent yet
+}
+
+// agentEnabled reports whether agentID names an agent this host runs: the
+// default responder ("") once one is selected, or a catalog agent with a
+// responder (a disabled one has none).
+func (a *Agent) agentEnabled(agentID string) (bool, error) {
+	if agentID == "" {
+		r, err := a.Responder()
+		return r != nil, err
+	}
+	entries, err := a.LocalAgents()
+	return slices.ContainsFunc(entries, func(e LocalAgentInfo) bool { return e.Record.ID == agentID && e.Responder != nil }), err
+}
+
+// trySelfConsent runs selfConsent where its failure must not undo what came
+// before it (an invite sent, an event admitted): the failure is logged as
+// what it is. An invite not accepted waits for the click or the next
+// daemon start; an accept stored whose sending failed is sent again by
+// the next daemon start's sweep, or now by dm accept-agent PID.
+func (a *Agent) trySelfConsent(ctx context.Context, pid string) {
+	accepted, err := a.selfConsent(ctx, pid)
+	switch {
+	case err == nil:
+	case accepted:
+		a.Logf("participation %s: accepted without a click; sending the accept failed (the next daemon start sends it again, agentnet dm accept-agent %s now): %v", pid, pid, err)
+	default:
+		a.Logf("participation %s: not accepted without a click: %v", pid, err)
+	}
+}
+
+// sweepSelfConsent tries selfConsent for every agent invite hosted here
+// that this device has not decided: one whose evidence, trust or agent came
+// after it was admitted, or whose accept a stopped process never signed.
+// It first sends again each accept of this installation's stored with no
+// copy queued (sending failed before any was, or the process stopped in
+// between), so the other members do not see the invite waiting for good.
+// The daemon runs it at start.
+func (a *Agent) sweepSelfConsent(ctx context.Context) {
+	self := a.Self().Fingerprint()
+	a.resendUnsentAccepts(ctx, self)
+	rows, err := a.store.db.Query(`SELECT DISTINCT pid FROM participation_events i WHERE type = ?
+		AND json_extract(event, '$.host.address') = ? AND json_extract(event, '$.host.fingerprint') = ? AND coalesce(json_extract(event, '$.role'), '') = ''
+		AND NOT EXISTS (SELECT 1 FROM participation_events d WHERE d.conv = i.conv AND d.pid = i.pid AND d.author = ? AND d.type IN (?, ?))`,
+		protocol.EventInvite, a.Address, self, self, protocol.EventAccept, protocol.EventDecline)
+	if err != nil {
+		a.Logf("participations: %v", err)
+		return
+	}
+	var pids []string
+	for rows.Next() {
+		var pid string
+		if rows.Scan(&pid) == nil {
+			pids = append(pids, pid)
+		}
+	}
+	rows.Close()
+	for _, pid := range pids {
+		a.trySelfConsent(ctx, pid)
+	}
+}
+
+// resendUnsentAccepts sends again, byte for byte, this installation's own
+// stored accepts (key self) of which no copy was ever queued.
+func (a *Agent) resendUnsentAccepts(ctx context.Context, self string) {
+	rows, err := a.store.db.Query(`SELECT event FROM participation_events d WHERE d.author = ? AND d.type = ?
+		AND json_extract(d.event, '$.author.address') = ?
+		AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = d.conv)
+		AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.conv = d.conv AND o.pid = d.pid AND o.sub = ? AND o.body = d.event)`,
+		self, protocol.EventAccept, a.Address, envelope.SubEvent)
+	if err != nil {
+		a.Logf("participations: %v", err)
+		return
+	}
+	var unsent []protocol.ParticipationEvent
+	for rows.Next() {
+		var raw string
+		if rows.Scan(&raw) != nil {
+			continue
+		}
+		if ev, err := protocol.ParseParticipationEvent([]byte(raw)); err == nil {
+			unsent = append(unsent, ev)
+		}
+	}
+	rows.Close()
+	for _, ev := range unsent {
+		if err := a.resend(ctx, ev); err != nil {
+			a.Logf("participation %s: sending this device's stored accept again failed (the next daemon start tries again, agentnet dm accept-agent %s now): %v", ev.PID, ev.PID, err)
+		}
+	}
 }
 
 // DismissParticipation ends a participation of a DM this installation's
@@ -660,6 +880,12 @@ func (a *Agent) DismissParticipation(ctx context.Context, pid string) (Participa
 // sign makes this installation's event of typ following prev, stores it and
 // sends it.
 func (a *Agent) sign(ctx context.Context, info ParticipationInfo, typ, prev string) (ParticipationInfo, error) {
+	return a.signWith(ctx, info, typ, prev, nil)
+}
+
+// signWith is sign storing the event in one transaction with also
+// (recordAndSendWith).
+func (a *Agent) signWith(ctx context.Context, info ParticipationInfo, typ, prev string, also func(*sql.Tx) error) (ParticipationInfo, error) {
 	me, _, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return info, err
@@ -673,7 +899,7 @@ func (a *Agent) sign(ctx context.Context, info ParticipationInfo, typ, prev stri
 			ev.Author.GroupAdmission = mem.Admission.Hash()
 		}
 	}
-	if err := a.recordAndSend(ctx, ev); err != nil {
+	if err := a.recordAndSendWith(ctx, ev, also); err != nil {
 		return info, err
 	}
 	return a.Participation(info.PID)
@@ -751,6 +977,12 @@ func (a *Agent) resend(ctx context.Context, ev protocol.ParticipationEvent) erro
 // recordAndSend signs ev, stores it and sends it to the DM's other member
 // (kept as waiting if that device cannot read it now).
 func (a *Agent) recordAndSend(ctx context.Context, ev protocol.ParticipationEvent) error {
+	return a.recordAndSendWith(ctx, ev, nil)
+}
+
+// recordAndSendWith is recordAndSend storing ev in one transaction with also
+// (addParticipationEventWith): an error from also stores and sends nothing.
+func (a *Agent) recordAndSendWith(ctx context.Context, ev protocol.ParticipationEvent, also func(*sql.Tx) error) error {
 	if err := ev.Validate(); err != nil {
 		return err
 	}
@@ -769,7 +1001,7 @@ func (a *Agent) recordAndSend(ctx context.Context, ev protocol.ParticipationEven
 	if humanEnd {
 		a.humanMu.Lock()
 	}
-	err := a.store.addParticipationEvent(ev, raw)
+	err := a.store.addParticipationEventWith(ev, raw, also)
 	if humanEnd {
 		a.humanMu.Unlock()
 	}
@@ -777,8 +1009,19 @@ func (a *Agent) recordAndSend(ctx context.Context, ev protocol.ParticipationEven
 		return err
 	}
 	a.convWork.due(convRetry) // accepted guests learn this record's public scope without waiting for other traffic
-	return a.resend(ctx, ev)
+	if err := a.resend(ctx, ev); err != nil {
+		return unsentError{err}
+	}
+	return nil
 }
+
+// unsentError is the error of sending an event recordAndSendWith stored:
+// the event stays stored, and a retry sends it again. It reads as the
+// error it wraps.
+type unsentError struct{ err error }
+
+func (e unsentError) Error() string { return e.err.Error() }
+func (e unsentError) Unwrap() error { return e.err }
 
 // AskAgent sends a question (or task) to a participation's agent: it names
 // the host device as its one execution target, whose worker decides when

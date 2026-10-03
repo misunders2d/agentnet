@@ -373,7 +373,7 @@ func runJoin(ctx context.Context, home string, args []string) error {
 	}
 	if link := a.LinkState(); link.State == client.LinkPending {
 		fmt.Printf("%s is waiting for approval on %s\nfingerprint %s\n", a.Address, link.Approver, a.Self().Fingerprint())
-		fmt.Fprintln(os.Stderr, "next: start agentnet daemon on this device, then approve the request on your existing device (page or agentnet person links / person approve ID)")
+		fmt.Fprintln(os.Stderr, "next: start agentnet daemon on this device, then approve the request on your existing device (page, or agentnet person links / person approve ID; person approve --native ID, for a computer like this one, also lets its invites of your own agents there need no accept)")
 		return nil
 	}
 	fmt.Printf("enrolled %s\nfingerprint %s\n", a.Address, a.Self().Fingerprint())
@@ -549,6 +549,22 @@ func runInbox(a *client.Agent, args []string) error {
 				fmt.Println("reports from other machines (requests wait for a decision THERE, not here; agentnet resolve ID closes a report here):")
 			}
 			fmt.Printf("  %s  %s  %s\n", n.ID, n.From, n.SentAt.Format(time.DateTime))
+		}
+		// Own agents accepted without a click: nothing to decide, only
+		// read and dismissed.
+		joined, err := a.SelfConsentNotices()
+		if err != nil {
+			return err
+		}
+		for i, n := range joined {
+			if i == 0 {
+				fmt.Println("your agents here that joined without your accept (your own trusted device invited them; agentnet resolve PID dismisses a notice, dm dismiss-agent PID ends one):")
+			}
+			agent := "default agent"
+			if n.AgentID != "" {
+				agent = "agent " + n.AgentID
+			}
+			fmt.Printf("  %s  %s in %s, invited from %s  %s\n", n.PID, agent, n.Conv, n.Inviter, time.Unix(n.At, 0).Format(time.DateTime))
 		}
 	}
 	return nil

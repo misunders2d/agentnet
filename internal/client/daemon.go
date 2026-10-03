@@ -125,6 +125,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		}
 		a.Logf("this device is linked to its person")
 	}
+	a.sweepSelfConsent(ctx) // invites of this person's own agents still waiting here (participation.go)
 	for {
 		healthy, err := a.streamOnce(ctx)
 		if ctx.Err() != nil {

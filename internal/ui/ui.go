@@ -654,7 +654,8 @@ type DirMember struct {
 
 // ReviewItem is a received item waiting for the person. Notice marks a
 // review notice: another machine reported that requests wait for a person
-// there. It is not a decision here and carries no request.
+// there (or, with Reason, a notice of this machine's own). It is not a
+// decision here and carries no request.
 type ReviewItem struct {
 	ID      string    `json:"id"`
 	Peer    string    `json:"peer"`
@@ -670,7 +671,20 @@ type ReviewItem struct {
 	// the host's answer to this device's last decision. A count-only
 	// notice has no Report and offers nothing but reading and dismissing.
 	Report *client.Report `json:"report,omitempty"`
+	// Reason ReasonSelfConsented (owner decision D3): a notice, not a
+	// received item, that this person's own agent AgentID ("" the default
+	// one) joined conversation Conv without their accept, invited from
+	// their own trusted device Peer; ID is the participation's id. It is
+	// only read and dismissed: DoResolve with ID removes the notice, and
+	// the agent stays.
+	Reason  string `json:"reason,omitempty"`
+	Conv    string `json:"conv,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
 }
+
+// ReasonSelfConsented is ReviewItem.Reason for an own agent that joined
+// without the person's accept.
+const ReasonSelfConsented = "self_consented"
 
 // OperatorDecisions is implemented by the daemon provider: deciding a
 // request another machine holds, as one of its granted operators. The
