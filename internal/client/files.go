@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"filippo.io/age"
@@ -468,11 +469,14 @@ var windowsReserved = map[string]bool{"CON": true, "PRN": true, "AUX": true, "NU
 	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true}
 
 // SafeName turns a sender-chosen name into a plain file name: no directory
-// parts, control characters, or characters Windows forbids, and never
-// empty, "." or "..".
+// parts, control characters, characters Windows forbids, or invisible
+// format characters (bidirectional overrides would show "rtl<RLO>gpj.exe"
+// as "rtlexe.jpg"; the joiners emoji and some scripts need stay), never
+// empty, "." or "..", and at most 200 bytes, shortened before its
+// extension.
 func SafeName(name string) string {
 	name = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f || strings.ContainsRune(`/\:*?"<>|`, r) {
+		if unicode.IsControl(r) || (unicode.Is(unicode.Cf, r) && r != zwnj && r != zwj) || strings.ContainsRune(`/\:*?"<>|`, r) {
 			return '_'
 		}
 		return r
@@ -484,12 +488,21 @@ func SafeName(name string) string {
 	if windowsReserved[strings.ToUpper(strings.SplitN(name, ".", 2)[0])] {
 		name = "_" + name
 	}
-	for len(name) > 200 {
-		_, size := utf8.DecodeLastRuneInString(name)
-		name = name[:len(name)-size]
+	const maxName, maxExt = 200, 32
+	stem, ext := name, ""
+	if i := strings.LastIndexByte(name, '.'); i > 0 && len(name)-i <= maxExt {
+		stem, ext = name[:i], name[i:]
 	}
-	return name
+	for len(stem)+len(ext) > maxName {
+		_, size := utf8.DecodeLastRuneInString(stem)
+		stem = stem[:len(stem)-size]
+	}
+	return stem + ext
 }
+
+// The zero-width non-joiner and joiner: format characters that shape
+// visible text (emoji sequences, Persian and Indic words), kept in names.
+const zwnj, zwj = 0x200c, 0x200d
 
 // OpenAttachment opens attachment index of received message msgID for
 // reading, without saving it anywhere chosen: the ciphertext is fetched

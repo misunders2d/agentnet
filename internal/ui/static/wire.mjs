@@ -1833,15 +1833,22 @@ export async function decryptFile(ct, att, keys) {
 const windowsReserved = new Set(["CON", "PRN", "AUX", "NUL", ...[1, 2, 3, 4, 5, 6, 7, 8, 9].flatMap((n) => ["COM" + n, "LPT" + n])]);
 
 // safeName is client.SafeName: a sender-chosen name as a plain file name,
-// with no directory parts, control characters or characters Windows
-// forbids, never empty, "." or "..", at most 200 bytes.
+// with no directory parts, control characters, characters Windows forbids
+// or invisible format characters (a bidirectional override disguises the
+// extension; the joiners emoji and some scripts need stay), never empty,
+// "." or "..", at most 200 bytes, shortened before its extension.
+const unsafeNameChar = /[\p{Cc}\p{Cf}]/u;
 export function safeName(name) {
-  let s = [...String(name)].map((c) => { const cp = c.codePointAt(0); return cp < 0x20 || cp === 0x7f || '/\\:*?"<>|'.includes(c) ? "_" : c; }).join("");
+  let s = [...String(name)].map((c) => { const cp = c.codePointAt(0); return (unsafeNameChar.test(c) && cp !== 0x200c && cp !== 0x200d) || '/\\:*?"<>|'.includes(c) ? "_" : c; }).join("");
   s = s.replace(/^[ .]+|[ .]+$/g, "");
   if (!s) return "attachment";
   if (windowsReserved.has(s.split(".")[0].toUpperCase())) s = "_" + s;
-  while (utf8.encode(s).length > 200) s = [...s].slice(0, -1).join("");
-  return s;
+  const dot = s.lastIndexOf(".");
+  let stem = s, ext = "";
+  if (dot > 0 && utf8.encode(s.slice(dot)).length <= 32) [stem, ext] = [s.slice(0, dot), s.slice(dot)];
+  const extBytes = utf8.encode(ext).length;
+  while (utf8.encode(stem).length + extBytes > 200) stem = [...stem].slice(0, -1).join("");
+  return stem + ext;
 }
 
 // sniffImage names a raster image type from the bytes themselves (never a
