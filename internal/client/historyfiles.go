@@ -533,15 +533,21 @@ var ErrAmbiguousMessage = errors.New("that id names both a received and a sent m
 
 // OpenFileFrom opens attachment index of message msgID: dir "in" a message
 // received (OpenAttachment), "out" one sent by this device
-// (OpenSentAttachment). With dir "" the direction is the one table the id
-// is in; an id in both fails closed (ErrAmbiguousMessage) rather than
-// serve the other direction's file. The one file API the messenger page
-// uses for both directions.
+// (OpenSentAttachment) or, as views show it, by another device of this
+// person (sentElsewhere: stored here as received). With dir "" the
+// direction is the one table the id is in; an id in both fails closed
+// (ErrAmbiguousMessage) rather than serve the other direction's file. The
+// one file API the messenger page uses for both directions.
 func (a *Agent) OpenFileFrom(ctx context.Context, dir, msgID string, index int) (io.ReadCloser, FileInfo, error) {
 	switch dir {
 	case "in":
 		return a.OpenAttachment(ctx, msgID, index)
 	case "out":
+		if via, err := a.sentElsewhere(msgID); err != nil {
+			return nil, FileInfo{}, err
+		} else if via {
+			return a.OpenAttachment(ctx, msgID, index)
+		}
 		return a.OpenSentAttachment(ctx, msgID, index)
 	case "":
 	default:

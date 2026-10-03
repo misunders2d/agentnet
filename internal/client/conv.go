@@ -1081,6 +1081,20 @@ func (a *Agent) verifyRoot(ctx context.Context, root protocol.ConvRoot, sender p
 // errRootInvalid means a conversation root does not verify.
 var errRootInvalid = errors.New("conversation root invalid")
 
+// sentElsewhere reports whether id names no message sent from this device
+// but a conversation message received here from another device of this
+// person: views show it as sent (Dir "out", Via), and it is stored here as
+// received.
+func (a *Agent) sentElsewhere(id string) (bool, error) {
+	var sent int
+	var sender string
+	if err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM outbox WHERE id = ?),
+		coalesce((SELECT sender FROM inbox WHERE id = ? AND local = 0 AND conv IS NOT NULL), '')`, id, id).Scan(&sent, &sender); err != nil {
+		return false, err
+	}
+	return sent == 0 && sender != "" && a.ownDevices()[sender], nil
+}
+
 // ownDevices names every device of this installation's person, in any
 // step of its pinned chain.
 func (a *Agent) ownDevices() map[string]bool {
