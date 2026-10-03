@@ -277,7 +277,10 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 			kind += " pid " + m.PID
 		}
 		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
-		fmt.Fprintf(stdout, "%s\n  %s\n", termText(header, "  "), termText(m.Body, "  "))
+		fmt.Fprintf(stdout, "%s\n  %s\n", termText(header, "  "), termText(shownText(m.Body, m.Controls), "  "))
+		if m.Deleted {
+			continue // its files went with it
+		}
 		for _, f := range m.Attachments {
 			line := fmt.Sprintf("  [file] %q %d bytes", f.Name, f.Size)
 			if f.SavedPath != "" {
@@ -286,6 +289,18 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 			fmt.Fprintln(stdout, line)
 		}
 	}
+}
+
+// shownText is a message's text as people see it now: its latest edit,
+// marked as edited, or a mark that its sender deleted it.
+func shownText(body string, c client.Controls) string {
+	switch {
+	case c.Deleted:
+		return "(deleted)"
+	case c.Edited:
+		return c.Shown(body) + " (edited)"
+	}
+	return body
 }
 
 func splitList(s string) []string {

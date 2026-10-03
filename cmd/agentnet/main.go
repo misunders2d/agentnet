@@ -626,7 +626,7 @@ func runConversation(a *client.Agent, args []string) error {
 			kind += " [" + m.State + "]"
 		}
 		fmt.Printf("%s %s  %s  %s  %s\n", arrow, m.ID, m.From, m.At.Format(time.DateTime), termText(kind, "  "))
-		fmt.Printf("  %s\n", termText(m.Body, "  "))
+		fmt.Printf("  %s\n", termText(shownText(m.Body, m.Controls), "  "))
 		if m.Summary != "" {
 			fmt.Printf("  [follow-up summary] %s\n", termText(m.Summary, "  "))
 		}
@@ -634,6 +634,9 @@ func runConversation(a *client.Agent, args []string) error {
 			fmt.Printf("  [note] %s\n", termText(m.Detail, "  "))
 		}
 		for _, f := range m.Attachments {
+			if m.Deleted {
+				break // its files went with it
+			}
 			fmt.Printf("  [file] %q %d bytes sha256 %s\n", f.Name, f.Size, f.SHA256)
 		}
 	}
