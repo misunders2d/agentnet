@@ -638,11 +638,17 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		}
 		switch {
 		case m.Dir == "out":
-			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail}
+			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to]}
 			if i, ok := sent[m.LID]; ok {
 				out[i].Copies = append(out[i].Copies, c)
 				if rank(c.State) < rank(out[i].State) {
 					out[i].State, out[i].Detail = c.State, c.Detail
+				}
+				// Its id is a copy to someone else when there is one, so a
+				// status of the id shown is about them, never about one of
+				// this person's own devices.
+				if !c.Own && out[i].Copies[0].Own && out[i].ID == out[i].Copies[0].ID {
+					out[i].ID = c.ID
 				}
 				continue
 			}

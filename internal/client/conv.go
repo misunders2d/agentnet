@@ -359,6 +359,28 @@ type ConvCopy struct {
 	To     string `json:"to"`
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
+	Own    bool   `json:"own,omitempty"` // in a conversation's view: to another device of this person
+}
+
+// SentCopies lists the copies this device sent of the conversation message
+// with logical id lid, as stored (none: no such message sent here).
+func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
+	own := a.ownDevices() // before the rows: the store has one connection
+	rows, err := a.store.db.Query(`SELECT id, recipient, state, coalesce(error, '') FROM outbox WHERE lid = ? AND conv IS NOT NULL ORDER BY rowid`, lid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConvCopy
+	for rows.Next() {
+		var c ConvCopy
+		if err := rows.Scan(&c.ID, &c.To, &c.State, &c.Detail); err != nil {
+			return nil, err
+		}
+		c.Own = own[c.To]
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // outCopy is one device's copy being stored.
