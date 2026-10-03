@@ -1,7 +1,10 @@
 package client
 
 import (
+	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -111,5 +114,60 @@ func TestCreateDMRefusesFreshConflict(t *testing.T) {
 	}
 	if convs, _ := w.alice.Conversations(); len(convs) != 1 {
 		t.Fatalf("%d conversations", len(convs))
+	}
+}
+
+// Cleanup keeps the files of a conversation message kept as waiting (here
+// the recipient's device cannot read conversations yet; the Hub being out
+// of reach waits the same way): the spool holds their only encrypted copy,
+// uploaded once the message is released. Removing it failed the send for
+// good with "attachment is not a completed upload".
+func TestCleanupKeepsWaitingConversationFiles(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	label, name, _ := protocol.SplitAddress(w.bob.Address)
+	var prof protocol.Profile
+	if err := w.alice.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil || len(prof.Sessions) != 1 {
+		t.Fatalf("profile: %+v %v", prof, err)
+	}
+	publish := func(ts int64, caps ...string) {
+		rec := protocol.CapsRecord{Address: w.bob.Address, Session: prof.Sessions[0], Caps: caps, TS: ts}
+		rec.Sign(w.bob.id.Sign)
+		if err := w.bob.hub.do(tctx(t), "PUT", "/v1/caps", rec, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish(time.Now().Unix() + 100)
+	path, data := writeFile(t, t.TempDir(), "payroll.csv", 5000)
+	sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "Payroll", Files: []OutgoingFile{{Path: path}}})
+	if err != nil || sent.State != stateConvWaiting {
+		t.Fatalf("setup: %+v %v", sent, err)
+	}
+	r, err := w.alice.Cleanup(false)
+	if err != nil || r.SpoolFiles != 0 {
+		t.Fatalf("cleanup = %+v, %v", r, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.alice.home, "spool")); len(entries) != 1 {
+		t.Fatalf("the waiting message's spool: %d files", len(entries))
+	}
+	if n := count(t, w.alice, "uploads"); n != 1 {
+		t.Fatalf("the waiting message's uploads: %d rows", n)
+	}
+
+	publish(time.Now().Unix()+200, protocol.CapEnv2, protocol.CapPerson)
+	feats, err := w.alice.relayFeatures(tctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.alice.releaseConv(tctx(t), feats)
+	if err := w.alice.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, sent.ID) == 1 })
+	got, f, err := w.bob.OpenAttachment(tctx(t), sent.ID, 0)
+	if err != nil || f.Name != "payroll.csv" || !bytes.Equal(readAll(t, got), data) {
+		t.Fatalf("open: %+v %v", f, err)
 	}
 }
