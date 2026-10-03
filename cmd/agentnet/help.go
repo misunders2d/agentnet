@@ -399,8 +399,9 @@ on (a member's own installation, whose person accepts or declines with
 dm accept-agent / dm decline-agent, all or nothing), the earlier messages it
 may be shown (--grant, logical ids from dm show; nothing else earlier) and
 who may give it follow-up tasks (--tasks). Both people see the invite.
-Either person can end it with dm dismiss-agent; inviting again starts a new
-participation. Accepting an invitation that lists --tasks keys lets their
+Either person can end it with dm dismiss-agent (a host outside the DM
+cannot end its own agent's participation; only a member can); inviting
+again starts a new participation. Accepting an invitation that lists --tasks keys lets their
 tasks run on the host without asking while the agent participates: dm
 agents shows those keys before you accept, accept-agent repeats them, and
 approvals lists the grant until the agent is dismissed.

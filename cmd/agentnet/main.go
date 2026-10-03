@@ -960,8 +960,8 @@ func runApprovals(a *client.Agent) error {
 				continue
 			}
 			granted++
-			fmt.Printf("tasks      from %s  in conversation %s through your agent %s (accepting it granted this; agentnet dm dismiss-agent %s ends it)\n",
-				strings.Join(taskGrantees(a, p), ", "), c.ID, p.PID, p.PID)
+			fmt.Printf("tasks      from %s  in conversation %s through your agent %s (accepting it granted this; %s)\n",
+				strings.Join(taskGrantees(a, p), ", "), c.ID, p.PID, grantEnd(p))
 		}
 	}
 	if len(qs) == 0 && len(ts) == 0 && granted == 0 {

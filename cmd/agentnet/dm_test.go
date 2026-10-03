@@ -64,9 +64,11 @@ func dmWorld(t *testing.T) (alice, bob, carol *client.Agent, conv string, eventu
 
 // BUG-20: accepting an agent's invitation is the standing task grant for the
 // member keys it names. The CLI shows those keys before and on accepting,
-// and approvals lists the grant while it stands.
+// and approvals lists the grant while it stands. It names how the grant ends
+// only where that works: a host outside the DM cannot dismiss its agent's
+// participation (only a member can), so its device is told exactly that.
 func TestDMAgentTaskGrantShown(t *testing.T) {
-	alice, bob, _, conv, eventually := dmWorld(t)
+	alice, bob, carol, conv, eventually := dmWorld(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	fp := alice.Self().Fingerprint()
@@ -112,6 +114,53 @@ func TestDMAgentTaskGrantShown(t *testing.T) {
 	}
 	if listed, _ = diagnosticOutput(t, func() error { return runApprovals(bob) }); strings.Contains(listed, p.PID) {
 		t.Fatalf("approvals still lists a dismissed agent's grant:\n%s", listed)
+	}
+
+	// carol, outside the DM, hosts the agent.
+	var ext client.ParticipationInfo
+	eventually("alice invites carol's agent with tasks from her key", func() bool {
+		var err error
+		ext, err = alice.InviteAgent(ctx, conv, carol.Address, nil, []string{fp}, "")
+		return err == nil
+	})
+	eventually("the invitation at carol", func() bool {
+		got, err := carol.Participation(ext.PID)
+		return err == nil && got.State == client.PartInvited && got.Held == 0 && got.External
+	})
+	out.Reset()
+	if err := runDM(ctx, carol, []string{"accept-agent", ext.PID}, &out); err != nil {
+		t.Fatal(err)
+	}
+	theirs := "only a DM member can end it: they run agentnet dm dismiss-agent " + ext.PID + "; this device cannot"
+	for _, want := range []string{ext.PID + " active", "without asking", fp, theirs} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("accept-agent at an outside host lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "dismiss-agent "+ext.PID+" ends") {
+		t.Fatalf("accept-agent tells an outside host it can end the grant:\n%s", out.String())
+	}
+	listed, err = diagnosticOutput(t, func() error { return runApprovals(carol) })
+	if err != nil || !strings.Contains(listed, ext.PID) || !strings.Contains(listed, theirs) || strings.Contains(listed, "dismiss-agent "+ext.PID+" ends") {
+		t.Fatalf("approvals at an outside host: %v\n%s", err, listed)
+	}
+	if _, err := carol.DismissParticipation(ctx, ext.PID); err == nil {
+		t.Fatal("an outside host dismissed its agent: the text above is wrong")
+	}
+	out.Reset()
+	eventually("alice holds carol's acceptance", func() bool {
+		got, err := alice.Participation(ext.PID)
+		return err == nil && got.State == client.PartActive
+	})
+	if err := runDM(ctx, alice, []string{"dismiss-agent", ext.PID}, &out); err != nil {
+		t.Fatalf("a member ends the outside host's agent: %v", err)
+	}
+	eventually("carol holds the dismissal", func() bool {
+		got, err := carol.Participation(ext.PID)
+		return err == nil && got.State == client.PartDismissed
+	})
+	if listed, _ = diagnosticOutput(t, func() error { return runApprovals(carol) }); strings.Contains(listed, ext.PID) {
+		t.Fatalf("approvals at an outside host still lists a dismissed agent's grant:\n%s", listed)
 	}
 }
 

@@ -265,7 +265,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		}
 		fmt.Fprintf(stdout, "%s %s\n", p.PID, p.State)
 		if keys := taskGrantees(a, p); args[0] == "accept-agent" && p.HostHere && len(keys) > 0 {
-			fmt.Fprintf(stdout, "tasks from %s now run on this device without asking while this agent participates (agentnet dm dismiss-agent %s ends that)\n", strings.Join(keys, ", "), p.PID)
+			fmt.Fprintf(stdout, "tasks from %s now run on this device without asking while this agent participates (%s)\n", strings.Join(keys, ", "), grantEnd(p))
 		}
 		return nil
 	case "invite-guest":
@@ -332,6 +332,16 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		return nil
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+// grantEnd says how the standing task grant of p, an agent hosted on this
+// device, ends. Dismissing it ends it, but only a DM member may dismiss: a
+// host outside the DM cannot dismiss its own agent's participation.
+func grantEnd(p client.ParticipationInfo) string {
+	if p.External {
+		return "only a DM member can end it: they run agentnet dm dismiss-agent " + p.PID + "; this device cannot"
+	}
+	return "agentnet dm dismiss-agent " + p.PID + " ends it"
 }
 
 // taskGrantees names the member keys whose tasks p's agent runs without
