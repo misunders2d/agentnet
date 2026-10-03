@@ -140,14 +140,18 @@ func (a *Agent) Accept(id string) error {
 }
 
 // Resolve records that the local human dealt with an item the responder
-// marked as needing their decision. It sends nothing; to answer the sender,
-// use Reply or Decline instead.
+// marked as needing their decision, or dismisses the notice of an agent
+// participation accepted without a click (id: its PID; selfconsent.go). It
+// sends nothing; to answer the sender, use Reply or Decline instead.
 func (a *Agent) Resolve(id string) error {
 	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND state = ?`, stateResolved, id, stateNeedHuman)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
+		if dismissed, err := a.dismissSelfConsentNotice(id); err != nil || dismissed {
+			return err
+		}
 		return errors.New("nothing to resolve: not marked needs_human")
 	}
 	notifyDaemon(a.home)

@@ -531,6 +531,22 @@ func runInbox(a *client.Agent, args []string) error {
 			}
 			fmt.Printf("  %s  %s  %s\n", n.ID, n.From, n.SentAt.Format(time.DateTime))
 		}
+		// Own agents accepted without a click: nothing to decide, only
+		// read and dismissed.
+		joined, err := a.SelfConsentNotices()
+		if err != nil {
+			return err
+		}
+		for i, n := range joined {
+			if i == 0 {
+				fmt.Println("your agents here that joined without your accept (your own trusted device invited them; agentnet resolve PID dismisses a notice, dm dismiss-agent PID ends one):")
+			}
+			agent := "default agent"
+			if n.AgentID != "" {
+				agent = "agent " + n.AgentID
+			}
+			fmt.Printf("  %s  %s in %s, invited from %s  %s\n", n.PID, agent, n.Conv, n.Inviter, time.Unix(n.At, 0).Format(time.DateTime))
+		}
 	}
 	return nil
 }

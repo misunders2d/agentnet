@@ -231,6 +231,18 @@ func (a *Agent) PendingLinks() ([]LinkRequest, error) {
 // publishes it; if the Hub cannot be reached, it stays approved and is
 // published when it can (never as a second, competing step).
 func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
+	return a.decideLink(ctx, id, accept, false)
+}
+
+// ApproveNativeLink approves link request id as DecideLink does, for a
+// native device (one that joined with agentnet join, never a browser): with
+// the approval, its exact key joins this device's self-consent trust set
+// (selfconsent.go). The page's approval never does, since it cannot tell.
+func (a *Agent) ApproveNativeLink(ctx context.Context, id string) error {
+	return a.decideLink(ctx, id, true, true)
+}
+
+func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) error {
 	var address, pub, state string
 	var join []byte
 	var expires int64
@@ -243,6 +255,11 @@ func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
 	}
 	switch {
 	case state == LinkApproved && accept:
+		if native {
+			if err := a.trustLinked(pub); err != nil {
+				return err
+			}
+		}
 		return a.publishLink(ctx, id)
 	case state != LinkPending:
 		return fmt.Errorf("that request is %s already", state)
@@ -284,14 +301,36 @@ func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
 		return err
 	}
 	raw, _ := json.Marshal(r)
-	res, err := a.store.db.Exec(`UPDATE device_links SET state = ?, roster = ?, updated_at = ? WHERE offer = ? AND state = ?`, LinkApproved, string(raw), time.Now().Unix(), id, LinkPending)
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE device_links SET state = ?, roster = ?, updated_at = ? WHERE offer = ? AND state = ?`, LinkApproved, string(raw), time.Now().Unix(), id, LinkPending)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errors.New("that request was decided meanwhile")
 	}
+	if native { // trusted with its approval, before its step is published
+		if err := addSelfConsentTrustIn(tx, dev.Address, dev.Fingerprint()); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	return a.publishLink(ctx, id)
+}
+
+// trustLinked adds the device of an approved link, pub, to the trust set.
+func (a *Agent) trustLinked(pub string) error {
+	var dev identity.Public
+	if err := json.Unmarshal([]byte(pub), &dev); err != nil {
+		return err
+	}
+	return a.setSelfConsentTrust(func(tx *sql.Tx) error { return addSelfConsentTrustIn(tx, dev.Address, dev.Fingerprint()) })
 }
 
 func (a *Agent) setLink(id, state, detail string) {

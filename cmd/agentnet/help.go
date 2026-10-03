@@ -330,8 +330,9 @@ with ADDRESS#SESSION.`,
        agentnet person service
        agentnet person link
        agentnet person links
-       agentnet person approve ID
+       agentnet person approve [--browser] ID
        agentnet person refuse ID
+       agentnet person trust|untrust ADDRESS
        agentnet person remove ADDRESS
 
 One person can use up to eight devices, each with its own keys. person shows
@@ -353,6 +354,15 @@ AgentNet running on both devices. person links lists requests; approve ID
 adds the requested device only after your confirmation, and refuse ID
 rejects it. Approval makes it you and grants access to your chats. Never
 approve a device you did not just ask to link. Private keys are not copied.
+
+Invites of your own agents need no accept when a trusted device of yours
+sends them (see agentnet help dm). This device trusts itself and the
+devices you add: approve ID adds the device it approves, which joined with
+the join command (a computer running AgentNet). For a browser, approve
+with --browser, or on the page: a browser device is never trusted, since
+its code comes from the server. trust ADDRESS adds a current device of
+yours later; untrust ADDRESS removes one. person marks trusted devices.
+A device whose key changes is no longer trusted until added again.
 
 remove ADDRESS removes a device from your person. A device admitted through
 linking is also revoked from the Hub; one admitted separately by an admin
@@ -399,6 +409,13 @@ may be shown (--grant, logical ids from dm show; nothing else earlier) and
 who may give it follow-up tasks (--tasks). Both people see the invite.
 Either person can end it with dm dismiss-agent; inviting again starts a new
 participation.
+
+Your own agent joins without dm accept-agent when you invite it from its
+own device or from a device of yours it trusts (agentnet help person), for
+an agent that runs there (the selected responder or an enabled named
+agent), with --tasks naming only trusted keys of yours. Everything else,
+and anyone else's agent, waits for its owner's accept. Each such join is
+listed in agentnet inbox --review until agentnet resolve PID dismisses it.
 
 dm ask-agent sends the agent a question or task; both people see it. The
 host installation's daemon runs it with its own responder and setup (agentnet
@@ -501,7 +518,9 @@ record.`,
 	"resolve": `Usage: agentnet resolve ID
 
 Close an item your responder marked needs_human after you have dealt with it.
-It sends nothing; to answer the sender, use reply or decline instead.`,
+It sends nothing; to answer the sender, use reply or decline instead. With
+the PID of your agent that joined without your accept (inbox --review), it
+dismisses that notice; the agent stays (dm dismiss-agent PID ends it).`,
 
 	"review-to": `Usage: agentnet review-to               (show)
        agentnet review-to ADDRESS

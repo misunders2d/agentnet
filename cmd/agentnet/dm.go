@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 // runPerson shows or sets up this installation's person and its devices
 // (agentnet help person).
 func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
-	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve ID | person refuse ID | person remove ADDRESS (see agentnet help person)")
+	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve [--browser] ID | person refuse ID | person trust|untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
 	if len(args) == 0 {
 		p, ok, err := a.Person()
 		if err != nil {
@@ -29,11 +30,18 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 			}
 			return errors.New("no person on this installation (agentnet person create NAME, or link this device from your other one)")
 		}
+		trusted, err := a.SelfConsentTrust()
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(stdout, "%s  %q  roster %d\n", p.Person, p.Label, p.Seq)
 		for _, d := range p.Devices {
 			this := ""
 			if d.This {
 				this = "  (this device)"
+			}
+			if !d.This && slices.Contains(trusted, client.TrustedDevice{Address: d.Address, Fingerprint: d.Fingerprint}) {
+				this = "  (trusted: its invites of your agents here need no accept)"
 			}
 			fmt.Fprintf(stdout, "  %s  %s%s\n", d.Address, d.Fingerprint, this)
 		}
@@ -76,11 +84,27 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 			fmt.Fprintf(stdout, "%s  %s  %s  key %s  asked %s\n", l.ID, l.State, l.Address, l.Fingerprint, time.Unix(l.RequestedAt, 0).Format("2006-01-02 15:04"))
 		}
 		return nil
-	case (args[0] == "approve" || args[0] == "refuse") && len(args) == 2:
-		if err := a.DecideLink(ctx, args[1], args[0] == "approve"); err != nil {
+	case args[0] == "approve" && len(args) == 2 && !strings.HasPrefix(args[1], "-"):
+		if err := a.ApproveNativeLink(ctx, args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "approved; its invites of your own agents here need no accept (agentnet person untrust ADDRESS stops that)")
+		return nil
+	case args[0] == "approve" && len(args) == 3 && args[1] == "--browser", args[0] == "refuse" && len(args) == 2:
+		if err := a.DecideLink(ctx, args[len(args)-1], args[0] == "approve"); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "%sd\n", args[0])
+		return nil
+	case (args[0] == "trust" || args[0] == "untrust") && len(args) == 2:
+		trust := a.TrustOwnDevice
+		if args[0] == "untrust" {
+			trust = a.UntrustOwnDevice
+		}
+		if err := trust(args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%sed %s\n", args[0], args[1])
 		return nil
 	case args[0] == "remove" && len(args) == 2:
 		if err := a.RemoveDevice(ctx, args[1]); err != nil {
