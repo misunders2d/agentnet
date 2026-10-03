@@ -81,7 +81,10 @@ async function handle(req) {
   case "joinLink":
     return { body: await wire.joinRequest(keys, address, req.secret, { offer: req.offer, join: wire.unb64(req.join, "join"), mac: wire.unb64(req.mac, "mac") }) };
   case "validLabel":
-    return { ok: req.labels.map((l) => { try { wire.validLabel(l); return true; } catch (e) { return false; } }) };
+    return {
+      ok: req.labels.map((l) => { try { wire.validLabel(l); return true; } catch (e) { return false; } }),
+      why: req.labels.map((l) => { try { wire.validLabel(l); return ""; } catch (e) { return e.message; } }),
+    };
   case "root": {
     const c = await wire.newRoot(keys, req.me, req.other);
     return { json: wire.rootJSON(c), id: await wire.rootID(c) };

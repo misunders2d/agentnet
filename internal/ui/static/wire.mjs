@@ -817,6 +817,10 @@ const fingerprintPattern = /^[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}$/;
 // the ASCII space. (Both follow their own Unicode version; a character
 // assigned in one and not the other can be judged differently.)
 const printable = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u;
+// Go's unicode.IsSpace at either end (strings.TrimSpace): String.trim also
+// trims \ufeff and keeps \u0085; both are refused anyway, but the refusal
+// then names the rule Go names.
+const goSpaceAtEnds = /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]|[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/u;
 
 export const validHash = (s) => typeof s === "string" && sha256Pattern.test(s);
 export const validFingerprint = (s) => typeof s === "string" && fingerprintPattern.test(s);
@@ -831,10 +835,10 @@ const sigJSON = (r, withSig) => (withSig && r.sig && r.sig.length ? ',"sig":' + 
 // validLabel is person.go's validLabel: 1–64 bytes of printable text
 // without surrounding spaces.
 export function validLabel(s) {
-  if (typeof s !== "string" || s === "" || !wellFormed(s) || utf8.encode(s).length > MaxPersonLabel || s.trim() !== s) {
+  if (typeof s !== "string" || s === "" || !wellFormed(s) || utf8.encode(s).length > MaxPersonLabel || goSpaceAtEnds.test(s)) {
     throw new Error("person: label must be 1-" + MaxPersonLabel + " bytes of text without surrounding spaces");
   }
-  if (!printable.test(s)) throw new Error("person: label has a control character");
+  if (!printable.test(s)) throw new Error("person: label may hold only letters, marks, numbers, punctuation, symbols and plain spaces");
   return s;
 }
 

@@ -87,7 +87,10 @@ func TestPersonLabelRefusalSaysWhy(t *testing.T) {
 	h := New(NewLive(a), "127.0.0.1:8123", testToken).Handler()
 	for label, why := range map[string]string{
 		strings.Repeat("a", 66):            "1-64 bytes",
-		"\u0622\u0646\u0627 \u200f(Sales)": "control character",
+		"\u0622\u0646\u0627 \u200f(Sales)": "may hold only letters, marks, numbers, punctuation, symbols and plain spaces",
+		"Anna\u200dMaria":                  "may hold only letters, marks, numbers, punctuation, symbols and plain spaces",
+		"Anna\u00a0Maria":                  "may hold only letters, marks, numbers, punctuation, symbols and plain spaces",
+		"Anna\u3000Maria":                  "may hold only letters, marks, numbers, punctuation, symbols and plain spaces",
 		" Anna":                            "surrounding spaces",
 	} {
 		body, _ := json.Marshal(map[string]string{"label": label})

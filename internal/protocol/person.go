@@ -234,7 +234,7 @@ func validLabel(s string) error {
 	}
 	for _, c := range s {
 		if !unicode.IsPrint(c) {
-			return errors.New("person: label has a control character")
+			return errors.New("person: label may hold only letters, marks, numbers, punctuation, symbols and plain spaces")
 		}
 	}
 	return nil

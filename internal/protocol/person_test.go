@@ -336,3 +336,21 @@ func TestMembersWithPersonsFitOneEvent(t *testing.T) {
 		t.Fatal("a malformed person reference passed")
 	}
 }
+
+// A label is refused with the rule it breaks: a joiner, a non-breaking or
+// ideographic space and a bidirectional mark are no control characters,
+// and the refusal says what a label may hold instead.
+func TestValidLabelSaysWhatItMayHold(t *testing.T) {
+	const rule = "label may hold only letters, marks, numbers, punctuation, symbols and plain spaces"
+	for _, l := range []string{"Anna\u200dMaria", "Anna\u200cMaria", "Anna\u00a0Maria", "Anna\u3000Maria", "Anna \u200f(Sales)", "Bo\x01b", "tab\tx", "line\u2028sep", "private\ue000use"} {
+		err := ValidLabel(l)
+		if err == nil || !strings.Contains(err.Error(), rule) {
+			t.Errorf("label %q: %v", l, err)
+		}
+	}
+	for _, l := range []string{"Anna Maria", "Сергей", "李雷", "e\u0301", "😀"} {
+		if err := ValidLabel(l); err != nil {
+			t.Errorf("label %q refused: %v", l, err)
+		}
+	}
+}
