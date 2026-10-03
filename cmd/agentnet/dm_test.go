@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // dm show prints what people see now: an edited message's latest text,
@@ -31,6 +35,44 @@ func TestDMShowPrintsEditsAndDeletions(t *testing.T) {
 	for _, stale := range []string{"400 boxes", "salaries", "unchanged (edited)"} {
 		if strings.Contains(got, stale) {
 			t.Fatalf("dm show still prints %q:\n%s", stale, got)
+		}
+	}
+}
+
+// dm list names a group by its title and members, and a DM this person
+// only hosts (not a member) by both of its people, never as an empty
+// "with" or as a DM with one of them.
+func TestDMListNamesGroupsAndHostedDMs(t *testing.T) {
+	at := time.Date(2026, 10, 3, 12, 0, 0, 0, time.Local).Unix()
+	for _, tc := range []struct {
+		c         client.ConversationInfo
+		want, not string
+	}{
+		{client.ConversationInfo{ID: "g1", Kind: protocol.ConvKindGroup, Title: "Freight desk", Created: at,
+			Members: []client.PersonInfo{{Label: "Anna"}, {Label: "Sergey"}, {Label: "Vitalii"}}},
+			`g1  group "Freight desk" with "Anna", "Sergey", "Vitalii"  since 2026-10-03`, `with "" (, )`},
+		{client.ConversationInfo{ID: "d1", Kind: protocol.ConvKindDM, Role: "visitor", Created: at,
+			Peer:    client.PersonInfo{Label: "Vitalii", Address: "vitalii/desk", State: "pinned"},
+			Members: []client.PersonInfo{{Label: "Sergey"}, {Label: "Vitalii"}}},
+			`d1  between "Sergey" and "Vitalii" (you are not in it)  since 2026-10-03`, `with "Vitalii"`},
+		{client.ConversationInfo{ID: "d2", Kind: protocol.ConvKindDM, Created: at,
+			Peer: client.PersonInfo{Label: "Vitalii", Address: "vitalii/desk", State: "pinned"}},
+			`d2  with "Vitalii" (vitalii/desk, pinned)  since 2026-10-03`, "between"},
+	} {
+		if got := convLine(tc.c); got != tc.want || strings.Contains(got, tc.not) {
+			t.Errorf("dm list line: %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// dm show of a conversation not held here is an error, not an empty
+// success.
+func TestDMShowUnknownConversationFails(t *testing.T) {
+	a, _ := diagnosticAgent(t)
+	for _, id := range []string{strings.Repeat("0", 64), "nonsense"} {
+		var out bytes.Buffer
+		if err := runDM(context.Background(), a, []string{"show", id}, &out); !errors.Is(err, client.ErrNoConversation) {
+			t.Errorf("dm show %s: %v, printed %q", id, err, out.String())
 		}
 	}
 }

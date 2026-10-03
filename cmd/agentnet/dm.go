@@ -6,11 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // runPerson shows or sets up this installation's person and its devices
@@ -117,8 +119,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			if c.Deleted {
 				continue
 			}
-			fmt.Fprintf(stdout, "%s  with %q (%s, %s)  since %s\n", c.ID, c.Peer.Label, c.Peer.Address, c.Peer.State,
-				time.Unix(c.Created, 0).Format("2006-01-02"))
+			fmt.Fprintln(stdout, convLine(c))
 		}
 		return nil
 	case "show":
@@ -128,6 +129,15 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		msgs, err := a.ConversationMessages(args[1])
 		if err != nil {
 			return err
+		}
+		if len(msgs) == 0 {
+			convs, err := a.Conversations()
+			if err != nil {
+				return err
+			}
+			if !slices.ContainsFunc(convs, func(c client.ConversationInfo) bool { return c.ID == args[1] }) {
+				return client.ErrNoConversation
+			}
 		}
 		printConvMessages(stdout, msgs)
 		return nil
@@ -244,6 +254,24 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		return nil
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+// convLine is one conversation in dm list: a group by its title and
+// members, a DM this person only hosts (not a member) by both its
+// people, any other DM by the other person.
+func convLine(c client.ConversationInfo) string {
+	since := time.Unix(c.Created, 0).Format("2006-01-02")
+	labels := make([]string, len(c.Members))
+	for i, m := range c.Members {
+		labels[i] = fmt.Sprintf("%q", m.Label)
+	}
+	switch {
+	case c.Kind == protocol.ConvKindGroup:
+		return fmt.Sprintf("%s  group %q with %s  since %s", c.ID, c.Title, strings.Join(labels, ", "), since)
+	case c.Role == "visitor" && len(labels) > 0:
+		return fmt.Sprintf("%s  between %s (you are not in it)  since %s", c.ID, strings.Join(labels, " and "), since)
+	}
+	return fmt.Sprintf("%s  with %q (%s, %s)  since %s", c.ID, c.Peer.Label, c.Peer.Address, c.Peer.State, since)
 }
 
 // printConvMessages prints a conversation's messages (dm show), oldest
