@@ -188,6 +188,43 @@ func TestDMFileDamagedRefused(t *testing.T) {
 	assertOnlyFiles(t, out)
 }
 
+// A turn its sender deleted gives up its files here: saving them is refused
+// as opening them is, and nothing is fetched again or saved.
+func TestDownloadRefusesDeletedTurn(t *testing.T) {
+	w, conv, _ := dmFiles(t)
+	path, _ := writeFile(t, t.TempDir(), "salaries.csv", 70000)
+	sent, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "oops, wrong chat", Files: []OutgoingFile{{Path: path}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, sent.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, sent.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the deletion sent", func() bool {
+		_, err := w.alice.Retract(tctx(t), ref, "")
+		return err == nil
+	})
+	eventually(t, "bob to hold the deletion", func() bool {
+		gone, err := w.bob.store.retracted(sent.ID)
+		return err == nil && gone
+	})
+	if _, _, err := w.bob.OpenAttachment(tctx(t), sent.ID, 0); err == nil || !strings.Contains(err.Error(), "deleted") {
+		t.Fatalf("a deleted turn's file opened: %v", err)
+	}
+	out := t.TempDir()
+	saved, err := w.bob.Download(tctx(t), sent.ID, out, false)
+	if err == nil || !strings.Contains(err.Error(), "deleted") || len(saved) != 0 {
+		t.Fatalf("a deleted turn's file was saved: %v %v", saved, err)
+	}
+	assertOnlyFiles(t, out)
+	blobID := convMsgByID(t, w.bob, conv, sent.ID).Attachments[0].BlobID
+	if _, err := os.Stat(w.bob.downloadPath(blobID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a deleted turn's file was fetched again: %v", err)
+	}
+}
+
 // A turn with files survives a failed upload and a restart as one message:
 // it stays queued with the reason, then goes out once, files and all.
 func TestDMFilesQueuedAcrossRestart(t *testing.T) {
