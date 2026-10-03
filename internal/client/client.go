@@ -824,7 +824,8 @@ func hubUnreachable(err error) bool {
 	return err != nil && !errors.As(err, &he) && errors.As(err, &op) && op.Op == "dial"
 }
 
-// Inbox lists received messages, optionally marking the listed ones read.
+// Inbox lists received messages, optionally marking the listed ones read,
+// and with them the records between devices it never lists.
 func (a *Agent) Inbox(unreadOnly, markRead bool) ([]Message, error) {
 	msgs, err := a.store.inbox(unreadOnly)
 	if err != nil || !markRead {
@@ -835,6 +836,9 @@ func (a *Agent) Inbox(unreadOnly, markRead bool) ([]Message, error) {
 		ids[i] = m.ID
 	}
 	if err := a.store.markRead(ids); err != nil {
+		return msgs, err
+	}
+	if err := a.store.markRecordsRead(); err != nil {
 		return msgs, err
 	}
 	notifyDaemon(a.home)

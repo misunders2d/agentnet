@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/gdrive"
 )
 
 // BUG-29: messages that arrive within one second are listed as they
@@ -93,5 +94,56 @@ func TestInboxOrdersSameSecondAcrossFormats(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "conv-first legacy-second" {
 		t.Fatalf("inbox order %v", got)
+	}
+}
+
+// BUG-28 follow-up: `inbox` leaves records between devices out, yet still
+// marks them read with what it lists, as it did when it listed them: a
+// Drive space record stored unread never leaves the attention overview
+// at one unread.
+func TestInboxMarkReadClearsRecords(t *testing.T) {
+	w := newWorld(t, "")
+	for i, sub := range []string{"", envelope.SubDriveSpace} {
+		id := strings.Repeat(string(rune('a'+i)), 32)
+		if _, err := w.bob.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, state, conv, sub) VALUES(?, ?, 1, 'message', ?, 1, '', ?, nullif(?, ''))`,
+			id, w.alice.Address, "body "+sub, strings.Repeat("c", 64), sub); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.bob.Inbox(false, true); err != nil {
+		t.Fatal(err)
+	}
+	var unread int
+	if err := w.bob.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE read_at IS NULL`).Scan(&unread); err != nil {
+		t.Fatal(err)
+	}
+	if ov, err := w.bob.overview(); err != nil || unread != 0 || !strings.Contains(ov, " 0 unread") {
+		t.Fatalf("%d unread after inbox; overview %q %v", unread, ov, err)
+	}
+}
+
+// BUG-28 follow-up: a Drive space record is stored read when it arrives,
+// as group records are: it is never a message to read.
+func TestDriveSpaceRecordArrivesRead(t *testing.T) {
+	w, conv, _ := dmWithHistory(t)
+	me, _, err := w.alice.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := gdrive.Space{Conv: conv, Folder: "read-folder", Name: "Read project", Owner: me.Person, Revision: 1}
+	if err := w.alice.PublishDriveSpace(tctx(t), sp); err != nil {
+		t.Fatal(err)
+	}
+	stored := func() (n, unread int) {
+		w.bob.store.db.QueryRow(`SELECT count(*), coalesce(sum(read_at IS NULL), 0) FROM inbox WHERE sub = ?`, envelope.SubDriveSpace).Scan(&n, &unread)
+		return
+	}
+	eventually(t, "the Drive space record at bob", func() bool { n, _ := stored(); return n == 1 })
+	if _, unread := stored(); unread != 0 {
+		t.Fatal("the Drive space record arrived unread")
+	}
+	unread, err := w.bob.ConvUnread()
+	if err != nil || len(unread[conv]) != 3 {
+		t.Fatalf("unread in the DM %v %v, want its 3 messages only", unread[conv], err)
 	}
 }

@@ -998,6 +998,14 @@ func (s *store) markRead(ids []string) error {
 	return s.done(nil)
 }
 
+// markRecordsRead marks read the records between devices that the inbox
+// leaves out (recordSubs): none is a message to read, and listing the
+// inbox cleared them when it still listed them.
+func (s *store) markRecordsRead() error {
+	_, err := s.db.Exec(`UPDATE inbox SET read_at = ? WHERE read_at IS NULL AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') IN `+recordSubs, time.Now().Unix())
+	return s.done(err)
+}
+
 func (s *store) inboxKind(id string) (sender, kind string, err error) {
 	var conv bool
 	err = s.db.QueryRow(`SELECT sender, kind, conv IS NOT NULL FROM inbox WHERE id = ?`, id).Scan(&sender, &kind, &conv)
