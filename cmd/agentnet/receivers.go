@@ -18,7 +18,10 @@ type replyReceiverFlags struct{ receiver, instructions, mode, binding, onClose *
 func receiverFlags(fs *flag.FlagSet) replyReceiverFlags {
 	return replyReceiverFlags{fs.String("reply-receiver", "", "local return receiver: human, managed AgentID, or session:HANDLE"), fs.String("continue", "", "original local continuation instructions (managed or explicit on-close)"), fs.String("continue-mode", "", "explicit local question or task mode"), fs.String("reply-binding", "", "reuse exact existing local receiver/instructions/context"), fs.String("on-close-agent", "", "explicit managed AgentID to continue an exact native receiver after normal shutdown")}
 }
-func (f replyReceiverFlags) selected(a *client.Agent) (*client.ReplyReceiver, error) {
+
+// selected is the local return receiver of a send; request is true for a
+// question or task.
+func (f replyReceiverFlags) selected(a *client.Agent, request bool) (*client.ReplyReceiver, error) {
 	id := *f.binding
 	if id == "" && *f.receiver == "" && os.Getenv(client.BackgroundEnv) == "1" {
 		id = os.Getenv("AGENTNET_REPLY_BINDING")
@@ -33,7 +36,12 @@ func (f replyReceiverFlags) selected(a *client.Agent) (*client.ReplyReceiver, er
 		if *f.onClose == "" && (*f.instructions != "" || *f.mode != "") {
 			return nil, errors.New("continuation requires an explicit managed reply receiver")
 		}
-		if os.Getenv(client.BackgroundEnv) != "1" && os.Getenv("AGENTNET_REPLY_SESSION") != "" {
+		// Origin return brings an answer back to the session that asked. A
+		// plain message expects none, so the session it is sent from never
+		// blocks it, unless --on-close-agent asks for that session's
+		// continuation.
+		origin := os.Getenv(client.BackgroundEnv) != "1" && (request || *f.onClose != "")
+		if origin && os.Getenv("AGENTNET_REPLY_SESSION") != "" {
 			generation, e := strconv.ParseInt(os.Getenv("AGENTNET_REPLY_SESSION_GENERATION"), 10, 64)
 			if e != nil {
 				return nil, e
@@ -44,7 +52,7 @@ func (f replyReceiverFlags) selected(a *client.Agent) (*client.ReplyReceiver, er
 			}
 			return f.closedSelection(r)
 		}
-		if os.Getenv(client.BackgroundEnv) != "1" {
+		if origin {
 			// Asked from a Claude Code or Codex session: the answer returns to
 			// that exact registered session, or nothing is sent.
 			r, e := a.NativeOriginReceiver(os.Getenv(client.ClaudeSessionEnv), os.Getenv(client.CodexThreadEnv))
