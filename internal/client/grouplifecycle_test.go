@@ -793,3 +793,46 @@ func TestGroupLifecycleConcurrentInvitationsReissuedForFreshConsent(t *testing.T
 		t.Fatalf("outgoing invitations %d, want bob's, carol's stale one and its re-issue", n)
 	}
 }
+
+// A decline that arrives after the group moved on is never answered with
+// another invitation: only an acceptance is re-issued.
+func TestGroupLifecycleStaleDeclineNotReissued(t *testing.T) {
+	w, p := groupLifecycleFixture(t, true)
+	carol := proofReader(t, w, "carol")
+	runAgent(t, carol)
+	publishGroupFixtureCaps(t, carol, true)
+	carolSelf, _, err := carol.store.selfPerson(carol.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv := p.Root.ID()
+	bobInv := groupLifecycleInvite(t, w, p, nil)
+	carolInv, err := w.alice.InviteGroup(tctx(t), conv, carolSelf.roster.Person, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitGroupInvitation(t, w.bob, bobInv.ID, "pending")
+	awaitGroupInvitation(t, carol, carolInv.ID, "pending")
+	if err = w.bob.DecideGroupInvitation(tctx(t), bobInv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the first acceptance published", func() bool {
+		r, e := groupInvitationIn(w.alice.store.db, bobInv.ID, "out")
+		return e == nil && r.State == "published"
+	})
+	if err = carol.DecideGroupInvitation(tctx(t), carolInv.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the late decline at alice", func() bool {
+		r, e := groupInvitationIn(w.alice.store.db, carolInv.ID, "out")
+		return e == nil && r.State == "stale"
+	})
+	if err = w.alice.RecoverGroupInvitations(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM group_invitations WHERE direction='out' AND conv=?`, conv).Scan(&n)
+	if n != 2 {
+		t.Fatalf("a decline was answered with another invitation: %d outgoing", n)
+	}
+}

@@ -212,9 +212,7 @@ func (a *Agent) mayDeliverGroupLifecycle(env envelope.Envelope) (bool, bool, err
 	}
 	if err != nil {
 		if direction == "out" && errors.Is(err, ErrGroupInvitationStale) {
-			a.store.db.Exec(`UPDATE group_invitations SET state='stale' WHERE id=? AND direction='out' AND state IN ('pending','accepted')`, id)
-			a.groupWork.recover.Store(true) // re-issued at the current state if only the group moved on (reissueGroupInvitations)
-			a.kickNow()
+			a.staleGroupInvitation(r, "'pending','accepted'")
 		}
 		e := a.store.setOutboxState(env.ID, stateNotDelivered, "group invitation no longer eligible", "")
 		if e == nil {
@@ -301,11 +299,13 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 	}
 	if err != nil {
 		if existing.ID != "" && errors.Is(err, ErrGroupInvitationStale) {
-			a.store.db.Exec(`UPDATE group_invitations SET state='stale' WHERE id=? AND direction='out' AND state='pending'`, existing.ID)
-			// A consent signed for a state the group moved past is never
-			// rebased: the invitation is re-issued for a fresh one.
-			a.groupWork.recover.Store(true)
-			a.kickNow()
+			if consent.Decision == "accepted" {
+				// Signed for a state the group moved past: never rebased,
+				// re-issued for a fresh acceptance instead.
+				a.staleGroupInvitation(existing, "'pending'")
+			} else { // a decline is never answered with another invitation
+				a.store.db.Exec(`UPDATE group_invitations SET state='stale' WHERE id=? AND direction='out' AND state='pending'`, existing.ID)
+			}
 		}
 		if errors.Is(err, ErrGroupContextPending) || errors.Is(err, ErrNoPerson) || errors.Is(err, sql.ErrNoRows) {
 			return hold(reasonProof, err.Error())
