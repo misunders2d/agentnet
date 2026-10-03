@@ -589,8 +589,8 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id)
-	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''))`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id, received_ms)
+	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?)`
 
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
@@ -634,8 +634,12 @@ var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
 
 const inAlertReview = `state IN (?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
+// inboxArgs are insertInbox's arguments. The arrival is kept to the
+// millisecond too, as a conversation message's is, so that the inbox lists
+// both kinds in the order they arrived.
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID}
+	now := time.Now()
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID, now.UnixMilli()}
 }
 
 // initialState decides whether a new message waits for anything.

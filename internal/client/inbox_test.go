@@ -64,3 +64,34 @@ func TestInboxLeavesOutProtocolRecords(t *testing.T) {
 		t.Fatalf("inbox lists %q", got)
 	}
 }
+
+// BUG-29, across formats: an older-format message stored after a
+// conversation message within the same second is listed after it, so an
+// older-format row carries its arrival to the millisecond too.
+func TestInboxOrdersSameSecondAcrossFormats(t *testing.T) {
+	w := newWorld(t, "")
+	// Start well inside a second, so both arrive within it.
+	for ms := time.Now().Nanosecond() / 1e6; ms < 100 || ms > 700; ms = time.Now().Nanosecond() / 1e6 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	now := time.Now()
+	if _, err := w.bob.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, received_ms, state, conv) VALUES(?, ?, ?, 'message', 'conv-first', ?, ?, '', ?)`,
+		strings.Repeat("f", 32), w.alice.Address, now.Unix(), now.Unix(), now.UnixMilli(), strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	in := envelope.Inner{ID: strings.Repeat("e", 32), From: w.alice.Address, To: w.bob.Address, TS: now.Unix(), Kind: envelope.KindMessage, Body: "legacy-second"}
+	if err := w.bob.store.addInbox(in, w.alice.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := w.bob.Inbox(false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range msgs {
+		got = append(got, m.Body)
+	}
+	if strings.Join(got, " ") != "conv-first legacy-second" {
+		t.Fatalf("inbox order %v", got)
+	}
+}
