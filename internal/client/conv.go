@@ -562,13 +562,25 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}()
 		m.stored = func() { stored = true; release() } // idempotent release, before delivery
 	}
+	// A turn is for the other member: it fails, as a device send does, when
+	// a key changed (until trusted) or none of their devices can get a copy.
+	// Records go to the devices that can take them.
+	turn := m.sub == "" && !m.selfJob
+	var peerErr error // why a device of the other member got no copy
 	for _, dev := range devices {
 		key, err := a.sendKey(ctx, dev.Address)
+		var changed *KeyChangedError
+		if turn && errors.As(err, &changed) {
+			return ConvSent{}, err
+		}
 		if err == nil && key.Fingerprint() != dev.Fingerprint() {
 			err = fmt.Errorf("%s's key is not the one its person's roster names", dev.Address)
 		}
 		if err != nil {
 			a.Logf("conversation copy for %s not sent: %v", dev.Address, err)
+			if !own[dev.Address] && peerErr == nil {
+				peerErr = fmt.Errorf("%s: %w", dev.Address, err)
+			}
 			continue
 		}
 		recipient, err := key.Recipient()
@@ -615,6 +627,12 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if !supported {
 			c.state, c.why = stateConvWaiting, why
 		}
+	}
+	if turn && !slices.ContainsFunc(copies, func(c outCopy) bool { return !own[c.in.To] }) {
+		if peerErr == nil {
+			peerErr = errors.New("the other member has no current device")
+		}
+		return ConvSent{}, fmt.Errorf("not sent: no device of the other member can get a copy: %w", peerErr)
 	}
 	if len(copies) == 0 && !m.selfJob {
 		return ConvSent{}, errors.New("no device of the conversation can be sent a copy now")
