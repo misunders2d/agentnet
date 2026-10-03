@@ -616,8 +616,8 @@ async function makeWorld() {
 {
   const { store, e } = await fresh();
   await store.write([{ s: "outbox", k: ID, v: { id: ID, v: 1, to: "peer/desk", kind: "message", body: "mine", at: 2, state: "delivered" } }]);
-  for (const text of ["ZWSP", "IDEOGRAPHIC_ZWSP", "JOINERS"]) {
-    const s = { ZWSP: String.fromCodePoint(0x200b), IDEOGRAPHIC_ZWSP: String.fromCodePoint(0x3000, 0x200b), JOINERS: " " + String.fromCodePoint(0x200d, 0x2060, 0xfeff) }[text];
+  for (const text of ["ZWSP", "IDEOGRAPHIC_ZWSP", "JOINERS", "BRAILLE_BLANK"]) {
+    const s = { ZWSP: String.fromCodePoint(0x200b), IDEOGRAPHIC_ZWSP: String.fromCodePoint(0x3000, 0x200b), JOINERS: " " + String.fromCodePoint(0x200d, 0x2060, 0xfeff), BRAILLE_BLANK: String.fromCodePoint(0x2800) }[text];
     let why = "";
     try { await e.sendDM({ conv: "c".repeat(64), body: s }); } catch (err) { why = err.message; }
     check(why === "Write a message or add a file first.", text + " is no message: " + why);
@@ -628,7 +628,7 @@ async function makeWorld() {
     try { await e.messageControl("edit", { id: ID, dir: "out", text: s }); } catch (err) { why = err.message; }
     check(why.startsWith("An edit is 1 to"), text + " is no edit: " + why);
   }
-  check(!wire.blank("a" + String.fromCodePoint(0x200b) + "b") && wire.blank(""), "visible text with a zero-width space is not blank");
+  check(!wire.blank("a" + String.fromCodePoint(0x200b) + "b") && !wire.blank(String.fromCodePoint(0x2800) + "x") && wire.blank(""), "visible text with a zero-width space or a braille blank is not blank");
 }
 
 // Equal counters from two devices of one person: the tie is broken on the

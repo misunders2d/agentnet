@@ -102,7 +102,7 @@ func TestManifestMustMatchSignedBlobs(t *testing.T) {
 
 // Text that shows nothing is blank; any visible character is not.
 func TestBlank(t *testing.T) {
-	for _, blank := range []string{"", " \t\n", "\u200b", "\u3000\u200b", " \u200c\u200d\u2060\ufeff ", "\u200e\u200f\u202e\u2066\u2069", "\u3164\u115f\ufe0f\u00ad", "\u0085\u00a0\U000e0041"} {
+	for _, blank := range []string{"", " \t\n", "\u200b", "\u3000\u200b", " \u200c\u200d\u2060\ufeff ", "\u200e\u200f\u202e\u2066\u2069", "\u3164\u115f\ufe0f\u00ad", "\u0085\u00a0\U000e0041", "\u2800", " \u2800\u200b"} {
 		if !Blank(blank) {
 			t.Errorf("%q is not blank", blank)
 		}

@@ -344,14 +344,15 @@ func ValidEmoji(s string) bool {
 	return symbol
 }
 
-// Blank reports whether text shows nothing: it holds only white space and
+// Blank reports whether text shows nothing: it holds only white space,
 // default ignorable code points (zero-width spaces and joiners, direction
 // marks and isolates, word joiners, variation selectors, fillers, the byte
-// order mark, tags). Text composed here, a message or an edit, needs more
-// than that unless files go with it; what arrives is not judged by it.
+// order mark, tags) and the braille blank (U+2800, a symbol that draws no
+// dot). Text composed here, a message or an edit, needs more than that
+// unless files go with it; what arrives is not judged by it.
 func Blank(text string) bool {
 	for _, r := range text {
-		if !unicode.IsSpace(r) && !ignorable(r) {
+		if !unicode.IsSpace(r) && !ignorable(r) && r != 0x2800 {
 			return false
 		}
 	}

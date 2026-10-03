@@ -415,9 +415,10 @@ export function validEmoji(s) {
   return symbol;
 }
 
-// blank is envelope.Blank: text that shows nothing, only white space and
-// default ignorable code points. Composed text needs more (or a file).
-export const blank = (s) => /^[\p{White_Space}\p{Default_Ignorable_Code_Point}]*$/u.test(s);
+// blank is envelope.Blank: text that shows nothing, only white space,
+// default ignorable code points and the braille blank (U+2800). Composed
+// text needs more (or a file).
+export const blank = (s) => /^[\p{White_Space}\p{Default_Ignorable_Code_Point}\u2800]*$/u.test(s);
 
 // oneEmoji is envelope.OneEmoji: a reaction composed here is validEmoji and
 // exactly one emoji sequence (a base, or a pair of regional indicators,

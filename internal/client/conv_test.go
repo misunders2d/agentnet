@@ -427,7 +427,7 @@ func TestInvisibleTextRefused(t *testing.T) {
 	})
 	var before int
 	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&before)
-	for _, blank := range []string{"\u200b", "\u3000\u200b", " \u200d\u2060\ufeff ", "\u200e\u200f\u2066\u2069"} {
+	for _, blank := range []string{"\u200b", "\u3000\u200b", " \u200d\u2060\ufeff ", "\u200e\u200f\u2066\u2069", "\u2800"} {
 		if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: blank}); err == nil {
 			t.Errorf("message %q sent", blank)
 		}
