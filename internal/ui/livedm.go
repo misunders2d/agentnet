@@ -371,9 +371,9 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	return Sent{ID: res.ID, State: res.State, Detail: res.Detail}, nil
 }
 
-// refreshDM is Refresh for a DM (ok false when id is not one): once per
-// open, ask the Hub about messages it still holds for the person's device,
-// and about that device.
+// refreshDM is Refresh for a DM or group (ok false when id is not one): once
+// per open, ask the Hub about copies it still holds, and, for a DM, about the
+// person's device.
 func (l *Live) refreshDM(id string) (Presence, bool, error) {
 	convs, err := l.a.Conversations()
 	if err != nil {
@@ -383,21 +383,32 @@ func (l *Live) refreshDM(id string) (Presence, bool, error) {
 		if c.ID != id {
 			continue
 		}
-		if c.Kind == protocol.ConvKindGroup {
-			return Presence{}, true, nil
-		}
 		msgs, err := l.a.ConversationMessages(id)
 		if err != nil {
 			return Presence{}, true, err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 		defer cancel()
+		// A message shows its least advanced copy's state, so every copy
+		// still held is asked about, not only the first one (often the other
+		// person's, long delivered, while a copy to one of this person's own
+		// devices stays shown as held forever).
 		const maxReceipts = 20
-		for i, asked := len(msgs)-1, 0; i >= 0 && asked < maxReceipts; i-- {
-			if m := msgs[i]; m.Dir == "out" && m.State == protocol.StateCustody {
-				asked++
-				l.a.Status(ctx, m.ID, 0) // stores a changed state; the change is pushed to the page
+		asked := 0
+		for i := len(msgs) - 1; i >= 0 && asked < maxReceipts; i-- {
+			m := msgs[i]
+			if m.Dir != "out" || m.State != protocol.StateCustody {
+				continue
 			}
+			for _, copy := range m.Copies { // none: sent from another device of this person
+				if copy.State == protocol.StateCustody && asked < maxReceipts {
+					asked++
+					l.a.Status(ctx, copy.ID, 0) // stores a changed state; the change is pushed to the page
+				}
+			}
+		}
+		if c.Kind == protocol.ConvKindGroup {
+			return Presence{}, true, nil
 		}
 		return l.presence(ctx, c.Peer.Address), true, nil
 	}
