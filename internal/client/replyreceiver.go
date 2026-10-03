@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -298,6 +299,11 @@ func bindReplyReceiver(tx *sql.Tx, b *replyBinding, copies []outCopy) error {
 		if old.State == "canceled" || old.Conv != first.Conv || old.Receiver.Kind != b.receiver.Kind || old.Receiver.AgentID != b.receiver.AgentID || old.Receiver.SessionHandle != b.receiver.SessionHandle || old.Receiver.Instructions != b.receiver.Instructions || old.Receiver.Mode != b.receiver.Mode || !sameOnClose(old.Receiver.OnClose, b.receiver.OnClose) {
 			return errors.New("reply binding is canceled or differs from the selected local context")
 		}
+		if old.Conv == "" {
+			if e = originalRecipients(tx, old, copies); e != nil {
+				return e
+			}
+		}
 	} else {
 		id = protocol.NewID()
 		preset, mode := b.receiver.Preset, b.receiver.Mode
@@ -351,6 +357,54 @@ func bindReplyReceiver(tx *sql.Tx, b *replyBinding, copies []outCopy) error {
 		return errors.New("reply receiver has no eligible original recipient copy")
 	}
 	return nil
+}
+
+// originalRecipients keeps a follow-up under an existing device binding
+// (one outside a conversation, which would otherwise hold it to its members)
+// with the devices the original request went to: the binding's own sent
+// copies, or for an imported delegation the request it carries. Reusing a
+// binding never sends the local user's delegated work to anyone else.
+func originalRecipients(q dbq, old ReplyReceiverBinding, copies []outCopy) error {
+	allowed := map[string]bool{}
+	rows, err := q.Query(`SELECT DISTINCT recipient FROM outbox WHERE reply_receiver=?`, old.ID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var to string
+		if err = rows.Scan(&to); err != nil {
+			rows.Close()
+			return err
+		}
+		allowed[targetAddress(to)] = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if r := old.remote; r != nil && r.Role == "imported" {
+		if r.Request.To != "" {
+			allowed[targetAddress(r.Request.To)] = true
+		}
+		if r.Request.Target != nil {
+			allowed[r.Request.Target.Address] = true
+		}
+	}
+	for _, c := range copies {
+		if !allowed[targetAddress(c.env.To)] {
+			return fmt.Errorf("reply binding %s continues only with its original request's recipient, not %s", old.ID, c.env.To)
+		}
+	}
+	return nil
+}
+
+// targetAddress is the agent address of ADDRESS or ADDRESS#SESSION.
+func targetAddress(to string) string {
+	if addr, _, err := protocol.SplitTarget(to); err == nil {
+		return addr
+	}
+	return to
 }
 
 // bindReplyReceiverInput runs only after the existing verified direct/DM
