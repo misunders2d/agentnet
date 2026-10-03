@@ -1026,6 +1026,8 @@ type job struct {
 	Conv, PID, Key string // Key: the fingerprint that verified it
 	Target         *envelope.Target
 	Local          bool // asked here, by this device's own person
+
+	run *runDir // its run folder while it runs (runfiles.go)
 }
 
 // followUp reports whether j processes a reply to one of our requests,
