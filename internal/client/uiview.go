@@ -1,11 +1,13 @@
 package client
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Read-only views for the local messenger page. Threads are derived from
@@ -14,7 +16,8 @@ import (
 //
 // These views are one installation's device history (version 1). Messages
 // of a conversation (a DM, version 2) are never part of them: they are shown
-// through the conversation APIs (agentnet dm), not as device threads.
+// through the conversation APIs (agentnet dm), not as device threads; only
+// PageReview names the conversation items waiting for the person.
 
 // ThreadSummary is one reply-linked conversation with one peer.
 type ThreadSummary struct {
@@ -234,11 +237,138 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	return out, rows.Err()
 }
 
-// PageReview is Review for the page: what waits for the person's decision in
-// device history. Conversation items are left out, since the page does not
-// show conversations yet; agentnet inbox and agentnet dm still list them.
-func (a *Agent) PageReview() ([]Message, error) {
-	return a.store.messages(` WHERE conv IS NULL AND `+inReview, reviewStates...)
+// Why a conversation item waits for the person here (ConvReview.Reason).
+const (
+	ReviewAwaiting   = "agent_awaiting"    // a request to this device's agent waits for a one-time accept (Accept)
+	ReviewNeedsHuman = "agent_needs_human" // this device's agent said the person must decide (Accept reruns it, Resolve closes it)
+	ReviewInvite     = "agent_invite"      // an invitation for this device's agent waits for its person (AcceptParticipation, DeclineParticipation)
+	ReviewHeldTurn   = "person_turn"       // a question or task for the person, held in its conversation: answered there, never run
+)
+
+// ConvReview is a conversation item waiting for the person here, with the
+// conversation it belongs to, so the page opens exactly that one. Listing
+// or opening it decides nothing: a request is decided by its ID (Accept,
+// Resolve), an invitation by its PID (AcceptParticipation,
+// DeclineParticipation), as anywhere else.
+type ConvReview struct {
+	Reason string    `json:"reason"`
+	Conv   string    `json:"conv"`
+	PID    string    `json:"pid,omitempty"`
+	ID     string    `json:"id,omitempty"` // the request or turn; an invitation has none (its PID names it)
+	From   string    `json:"from"`         // the asking or inviting device
+	Kind   string    `json:"kind,omitempty"`
+	State  string    `json:"state,omitempty"`
+	Body   string    `json:"body"`             // the request or turn, or the invitation's note
+	Detail string    `json:"detail,omitempty"` // why it waits, as recorded here
+	At     time.Time `json:"at"`
+	Unread bool      `json:"unread,omitempty"`
+}
+
+// ReviewPage is what waits for the person, as the page lists it: device
+// history items (Device), conversation items decided here (Conv: requests
+// to this device's agent and invitations for it) and person turns held in
+// conversations (Held), listed apart: they are answered in the
+// conversation, never accepted or run.
+type ReviewPage struct {
+	Device []Message
+	Conv   []ConvReview
+	Held   []ConvReview
+}
+
+// PageReview is Review for the page. An invitation is listed while it waits
+// for this person's decision; one this device consented to itself never
+// waits, so it is never listed.
+func (a *Agent) PageReview() (ReviewPage, error) {
+	var p ReviewPage
+	var err error
+	if p.Device, err = a.store.messages(` WHERE conv IS NULL AND `+inReview, reviewStates...); err != nil {
+		return p, err
+	}
+	// A request to this device's agent, as Accept and Resolve take it. One
+	// whose turn is erased here still waits: it is kept until its work ends.
+	if p.Conv, err = a.store.convReview(`i.pid IS NOT NULL AND i.replica = 0 AND i.kind IN (?, ?) AND i.state IN (?, ?)`,
+		envelope.KindQuestion, envelope.KindTask, stateAwaiting, stateNeedHuman); err != nil {
+		return p, err
+	}
+	invites, err := a.hostInvites()
+	if err != nil {
+		return p, err
+	}
+	p.Conv = append(p.Conv, invites...)
+	// A held turn erased here is gone with its conversation: nothing waits on it.
+	p.Held, err = a.store.convReview(`i.state = ? AND NOT `+erasedIn, stateConvHeld)
+	return p, err
+}
+
+// convReview lists the received conversation rows (alias i) matching where,
+// oldest first; selected local receiver input is never among them.
+func (s *store) convReview(where string, args ...any) ([]ConvReview, error) {
+	rows, err := s.db.Query(`SELECT i.id, i.conv, coalesce(i.pid, ''), i.sender, i.kind, i.state, i.body, coalesce(i.detail, ''), i.received_at, i.read_at IS NULL
+		FROM inbox i WHERE i.conv IS NOT NULL AND `+where+` AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id = i.id)
+		ORDER BY i.received_at, i.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConvReview
+	for rows.Next() {
+		var r ConvReview
+		var at int64
+		if err := rows.Scan(&r.ID, &r.Conv, &r.PID, &r.From, &r.Kind, &r.State, &r.Body, &r.Detail, &at, &r.Unread); err != nil {
+			return nil, err
+		}
+		r.At = time.Unix(at, 0)
+		switch r.State {
+		case stateAwaiting:
+			r.Reason = ReviewAwaiting
+		case stateNeedHuman:
+			r.Reason = ReviewNeedsHuman
+		default:
+			r.Reason = ReviewHeldTurn
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// hostInvites lists the invitations for this device's agent that wait for
+// its person's decision, as they resolve here now. A participation whose
+// evidence is not here yet cannot be decided either, so it is not listed.
+func (a *Agent) hostInvites() ([]ConvReview, error) {
+	rows, err := a.store.db.Query(`SELECT conv, pid FROM participation_events WHERE type IN (?, ?) AND json_extract(event, '$.host.address') = ?
+		GROUP BY conv, pid ORDER BY min(received_at), conv, pid`, protocol.EventInvite, protocol.EventScope, a.Address)
+	if err != nil {
+		return nil, err
+	}
+	var named [][2]string
+	for rows.Next() {
+		var conv, pid string
+		if err := rows.Scan(&conv, &pid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		named = append(named, [2]string{conv, pid})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []ConvReview
+	for _, n := range named {
+		info, err := a.participation(n[0], n[1])
+		if errors.Is(err, ErrNoParticipation) || errors.Is(err, ErrGroupContextPending) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.HostHere || info.State != PartInvited || info.Role == protocol.RoleHuman {
+			continue
+		}
+		out = append(out, ConvReview{Reason: ReviewInvite, Conv: info.Conv, PID: info.PID, From: info.Inviter.Address,
+			Body: info.Note, Detail: info.Inviter.Label + " invited your agent. Nothing runs unless you accept.", At: time.Unix(info.Invited, 0)})
+	}
+	return out, nil
 }
 
 func firstLine(s string) string {

@@ -5056,6 +5056,7 @@ export class Engine {
     const inbox = await this.store.all("inbox");
     const outbox = await this.store.all("outbox");
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
+    const needsYou = [], heldTurns = []; // what waits for this person (client.PageReview), by conversation
     for (const c of await this.store.all("convs")) {
       const peer = persons.find((p) => p.person === c.peer);
       let msgs = this.convMessages(c.id, inbox, outbox);
@@ -5063,6 +5064,7 @@ export class Engine {
       const originals = member ? [] : [...(await this.dmMembers(c)).values()];
       if (!member) msgs = msgs.filter(m => m.sub !== "event" || participations.some(p => p.pid === m.pid && (p.role !== "human" || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))));
       msgs = await this.oneRowPerRecord(msgs, new Map(participations.filter(p => p.role === "human").map(p => [p.pid, p])));
+      this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns);
       if (this.erasedConv(c.id) && !msgs.some((m) => !m.sub)) continue; // deleted here, and no later turn: not listed until one comes
       for (const info of participations.filter(p => p.role !== "human")) {
         if (!info.host) continue;
@@ -5085,6 +5087,7 @@ export class Engine {
     for(const g of (await this.store.all("kv")).filter(v=>v?.root&&v?.context&&Array.isArray(v.records))) {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=this.convMessages(conv,inbox,outbox);
       const view=await this.groupThread(conv), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
+      this.needsYouOf(conv,await this.agentsOf({id:conv,kind:"group",root:g.root}).catch(()=>[]),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:visible.length?firstLine(visible.at(-1).body):"",last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length});
     }
@@ -5100,7 +5103,7 @@ export class Engine {
       demo: false, seq: this.seq, version: this.version, release: "",
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true },
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
-      threads, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), quarantine: held.map((h) => ({ id: h.id, peer: h.from, reason: holdText(h.reason, h.from), at: iso(h.at) })),
+      threads, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), needs_you: needsYou, held: heldTurns, quarantine: held.map((h) => ({ id: h.id, peer: h.from, reason: holdText(h.reason, h.from), at: iso(h.at) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
@@ -5986,6 +5989,36 @@ export class Engine {
     return [...new Set(evs.map((x) => x.e.pid))].map((pid) => this.resolveAgent(pid, evs, m));
   }
   async agentsOf(c) { return (await this.participationsOf(c)).filter(p => p.role !== "human"); }
+
+  // needsYouOf adds what waits for this person in conversation conv
+  // (ui.ConvItem; reasons as client.Review*): an invitation for, or a
+  // request to, an agent on another device of this person, as its
+  // participation resolves here and its host last said (a status reaches
+  // only a request this browser sent). This browser runs no agent, so each
+  // is read-only: decided on decide_on, never here or by opening it. Person
+  // turns held for the person go to held: they are answered here.
+  needsYouOf(conv, infos, msgs, ctls, needsYou, held) {
+    const mine = (h) => !!h && !!this.me && h.person === this.me.person && h.address !== this.address;
+    for (const info of infos) {
+      if (info.role === "human" || info.state !== "invited" || !mine(info.host)) continue;
+      needsYou.push({ reason: "agent_invite", conv, pid: info.pid, peer: info.inviter ? info.inviter.address : "", why: (info.inviter ? info.inviter.label : "Someone") + " invited your agent on " + info.host.address + ". Decide there: this browser runs no agent.",
+        excerpt: firstLine(info.note), at: iso(info.invited * 1000), decide_on: info.host.address });
+    }
+    for (const m of msgs) {
+      if (m.state === "conv_held") {
+        held.push({ reason: "person_turn", conv, ...(m.pid ? { pid: m.pid } : {}), id: m.id, peer: m.from, kind: m.kind, why: "Held for you: nothing runs it. Answer here if you want to.", excerpt: firstLine(m.body), at: iso(m.at), ...(m.read ? {} : { unread: true }) });
+        continue;
+      }
+      const info = m.pid && m.target && ["question", "task"].includes(m.kind) ? infos.find((p) => p.pid === m.pid) : null;
+      if (!info || !mine(info.host) || m.target.address !== info.host.address) continue;
+      const here = !m.fp && !m.excerpt_pid, fp = here ? this.fp : m.fp;
+      const answered = msgs.some((r) => r.fp && r.reply_to === m.id && (r.kind === "answer" || r.kind === "result"));
+      const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
+      if (!e || !["awaiting", "needs_human"].includes(e.state)) continue;
+      needsYou.push({ reason: e.state === "awaiting" ? "agent_awaiting" : "agent_needs_human", conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
+        why: "Decide on " + e.host + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
+    }
+  }
 
   // agentView is a participation as the page shows it (ui.AgentView).
   agentView(info, msgs, peer, groupPeople=null, role="") {

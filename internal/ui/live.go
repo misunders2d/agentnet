@@ -49,7 +49,7 @@ func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
 func (l *Live) Overview() (Overview, error) {
 	seq, _ := l.a.Changed()
 	o := Overview{Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
-		Threads: []ThreadSummary{}, Review: []ReviewItem{}, Quarantine: []QuarantineItem{}}
+		Threads: []ThreadSummary{}, Review: []ReviewItem{}, NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: []QuarantineItem{}}
 	if r, err := l.a.Responder(); err == nil && r != nil {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir
 	}
@@ -85,11 +85,17 @@ func (l *Live) Overview() (Overview, error) {
 			Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: changedKeys[t.Peer],
 			Notices: t.Notices, NoticeOnly: t.NoticeOnly})
 	}
-	review, err := l.a.PageReview() // device history: conversation items are not shown here yet
+	review, err := l.a.PageReview()
 	if err != nil {
 		return o, err
 	}
-	for _, m := range review {
+	for _, c := range review.Conv {
+		o.NeedsYou = append(o.NeedsYou, convItem(c))
+	}
+	for _, c := range review.Held {
+		o.Held = append(o.Held, convItem(c))
+	}
+	for _, m := range review.Device {
 		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail),
 			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))}
 		if item.Notice {
@@ -107,6 +113,21 @@ func (l *Live) Overview() (Overview, error) {
 		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
 	}
 	return o, nil
+}
+
+// convItem is a conversation item waiting for the person, as the page
+// lists it, with the decisions this installation takes on it.
+func convItem(c client.ConvReview) ConvItem {
+	v := ConvItem{Reason: c.Reason, Conv: c.Conv, PID: c.PID, ID: c.ID, Peer: c.From, Kind: c.Kind, Excerpt: excerpt(c.Body), At: c.At, Unread: c.Unread}
+	switch c.Reason {
+	case client.ReviewInvite:
+		v.Why, v.Actions = c.Detail, []string{DoAccept, DoDecline}
+	case client.ReviewHeldTurn:
+		v.Why = DMStateText("in", c.Kind, c.State, c.From, c.Detail)
+	default:
+		v.Why, v.Actions = ReviewWhy(c.Kind, c.State, c.From, c.Detail), AgentActions(c.Kind, c.State)
+	}
+	return v
 }
 
 // directoryOf turns the daemon's member view into the page's directory:
