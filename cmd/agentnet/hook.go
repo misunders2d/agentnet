@@ -424,7 +424,8 @@ func runHooks(home string, args []string) error {
 			fmt.Println("AgentNet Claude channel files installed; native channel is NOT enabled by this install.")
 			fmt.Println("local MCP config fragment:", string(channelConfig))
 			fmt.Println("next: pass this fragment with --mcp-config, explicitly admit server:agentnet with --dangerously-load-development-channels server:agentnet, and complete native channel consent; keep original tools, skills, settings and permissions")
-			fmt.Println("qualified: Claude2.1.286 on Linux, official SDK1.31.0, Node26.10.0; other versions unqualified")
+			fmt.Println("requires: Linux and a Claude Code that marks the processes it starts (CLAUDECODE=1) and gives them its session ID (CLAUDE_CODE_SESSION_ID, documented from 2.1.224); a reply counts only on its exact channel record in that session's transcript; each session is bound to its exact running claude executable and registers again after Claude is updated")
+			fmt.Println("tested natively so far: Claude 2.1.286 on Linux, official SDK 1.31.0, Node 26.10.0; other versions are not yet tested end to end")
 		} else {
 			fmt.Println("owned Claude channel files removed (or absent); running native sessions are not closed or reassigned")
 		}

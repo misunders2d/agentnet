@@ -20,8 +20,10 @@ import (
 // Opt-in actual installed Codex, private default daemon, loopback-only provider.
 // Normal tests never launch a harness, use an account or install a runtime.
 func TestCodexActualSelectedReceiver(t *testing.T) {
+	// AGENTNET_CODEX_BINARY is the agentnet under test; AGENTNET_CODEX_NATIVE
+	// the installed Codex executable to drive (any version, no release pin).
 	bin, root := os.Getenv("AGENTNET_CODEX_BINARY"), os.Getenv("AGENTNET_CODEX_RUNTIME")
-	if bin == "" || root == "" {
+	if bin == "" || root == "" || os.Getenv("AGENTNET_CODEX_NATIVE") == "" {
 		t.Skip("opt-in isolated native Codex journey")
 	}
 	interfaces, e := net.Interfaces()
@@ -128,9 +130,27 @@ func TestCodexActualSelectedReceiver(t *testing.T) {
 		return n
 	}
 	wait("other initial native main request", func() bool { return mainCalls(otherRecord.SessionID) == 1 })
-	send := exec.Command(bin, "--home", w.alice.home, "ask", "--wait", "0", "--reply-receiver", "session:"+selected.Handle, w.bob.Address, "Original LOCAL Codex goal1003y")
-	if out, e := send.CombinedOutput(); e != nil {
-		t.Fatalf("originating CLI %v %s", e, out)
+	origin := os.Getenv("AGENTNET_CODEX_GATE") == "origin"
+	if origin {
+		// The selected thread asks for itself: its own native tool runs one fixed
+		// ask naming no receiver; the answer must return to this exact thread.
+		fmt.Fprintf(input, "{\"gate\":\"origin\",\"thread\":%q,\"to\":%q}\n", record.SessionID, w.bob.Address)
+		wait("origin gate armed", func() bool {
+			raw, _ := os.ReadFile(filepath.Join(root, "evidence", "gate-ready.json"))
+			var v struct{ Gate, Thread string }
+			return json.Unmarshal(raw, &v) == nil && v.Gate == "origin" && v.Thread == record.SessionID
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, e = codexCommand(ctx, *record.Codex, "queue", "--remote", record.Codex.Endpoint, "--thread", record.SessionID, "--message", "Synthetic locally authored origin tool gate")
+		cancel()
+		if e != nil {
+			t.Fatal(e)
+		}
+	} else {
+		send := exec.Command(bin, "--home", w.alice.home, "ask", "--wait", "0", "--reply-receiver", "session:"+selected.Handle, w.bob.Address, "Original LOCAL Codex goal1003y")
+		if out, e := send.CombinedOutput(); e != nil {
+			t.Fatalf("originating CLI %v %s", e, out)
+		}
 	}
 	var binding ReplyReceiverBinding
 	wait("local CLI binding", func() bool {
@@ -184,10 +204,18 @@ func TestCodexActualSelectedReceiver(t *testing.T) {
 				n++
 			}
 		}
+		if origin {
+			return n == 3 // initial, the asking tool turn, the returned answer
+		}
 		return n == 2
 	})
 	if n := mainCalls(otherRecord.SessionID); n != 1 {
 		t.Fatalf("selected reply woke other native session: main requests %d, expected original1", n)
+	}
+	if origin {
+		if _, ok, e := w.alice.store.claimJob("stub"); e != nil || ok {
+			t.Fatalf("origin answer escaped default fence: %v %v", ok, e)
+		}
 	}
 	// Stop/start the enrolled daemon, preserving the accepted relation and token.
 	stopAlice()
@@ -376,7 +404,7 @@ func TestCodexActualSelectedReceiver(t *testing.T) {
 	if os.Getenv("AGENTNET_CODEX_GATE") == "close" {
 		stopAgain = codexActualCloseGate(t, again, w.bob, record, otherRecord, input, root, stopAgain)
 	}
-	result, _ := json.MarshalIndent(map[string]any{"selected": selected, "other": other, "binding": binding.ID, "input": sent.ID, "accepted_not_completed": true, "single_native_receipt": true, "other_main_requests": mainCalls(otherRecord.SessionID), "selected_main_requests": mainCalls(record.SessionID), "origin_cli_exited": true, "daemon_restart": true, "remaining": remaining}, "", "  ")
+	result, _ := json.MarshalIndent(map[string]any{"selected": selected, "other": other, "binding": binding.ID, "input": sent.ID, "accepted_not_completed": true, "single_native_receipt": true, "other_main_requests": mainCalls(otherRecord.SessionID), "selected_main_requests": mainCalls(record.SessionID), "origin_cli_exited": true, "origin_native_tool": origin, "daemon_restart": true, "remaining": remaining}, "", "  ")
 	os.WriteFile(filepath.Join(root, "evidence", "result.json"), result, 0600)
 	stopAgain()
 	fmt.Fprintln(input, `{"finish":true}`)

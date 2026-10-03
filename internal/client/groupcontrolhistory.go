@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
@@ -40,28 +41,43 @@ func (a *Agent) groupControlSourceAdmission(q dbq, packet GroupContext, item His
 	if err != nil {
 		return "", err
 	}
-	author, present, err := scanPersonIn(q, "person IN (SELECT person FROM person_devices WHERE address=?)", item.From)
-	if err != nil {
-		return "", err
-	}
-	if !present {
-		return "", ErrGroupContextPending
-	}
-	if author.info.State == personConflict {
-		return "", errPersonConflict
-	}
-	member, memberPresent := packet.State.Member(author.info.Person)
-	var withdrawn int
-	if memberPresent {
-		if err = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, packet.State.Conv, member.Person, member.Admission.Hash()).Scan(&withdrawn); err != nil {
+	if orig := item.inner(packet.State.Conv); envelope.AssistantReaction(orig) && (item.From != a.Address || item.FromKey != a.Self().Fingerprint()) {
+		// An assistant's host need not be a member: its participation binds
+		// it, as when it arrived. Only a proven mismatch leaves it out; a
+		// missing proof waits, as the page does for any other context.
+		switch reason, e := assistantHistoryCheck(q, orig, item.From, item.FromKey, a.Address, a.Self().Fingerprint()); {
+		case e == nil:
+		case reason == reasonInvalid:
+			return "", errGroupControlHistoryEpoch
+		case reason == reasonProof:
+			return "", fmt.Errorf("%w: %v", ErrGroupContextPending, e)
+		default:
+			return "", e
+		}
+	} else {
+		author, present, err := scanPersonIn(q, "person IN (SELECT person FROM person_devices WHERE address=?)", item.From)
+		if err != nil {
 			return "", err
 		}
-	}
-	if !memberPresent || withdrawn != 0 || packet.State.Withdrawn(member, packet.Withdrawals) || !author.has(item.From, item.FromKey) {
-		return "", errGroupControlHistoryEpoch // definite current-author exclusion, never a transient failure
-	}
-	if err = groupTurnCheck(q, packet, item.From, item.FromKey); err != nil {
-		return "", err
+		if !present {
+			return "", ErrGroupContextPending
+		}
+		if author.info.State == personConflict {
+			return "", errPersonConflict
+		}
+		member, memberPresent := packet.State.Member(author.info.Person)
+		var withdrawn int
+		if memberPresent {
+			if err = q.QueryRow(`SELECT count(*) FROM group_withdrawals WHERE conv=? AND person=? AND admission=?`, packet.State.Conv, member.Person, member.Admission.Hash()).Scan(&withdrawn); err != nil {
+				return "", err
+			}
+		}
+		if !memberPresent || withdrawn != 0 || packet.State.Withdrawn(member, packet.Withdrawals) || !author.has(item.From, item.FromKey) {
+			return "", errGroupControlHistoryEpoch // definite current-author exclusion, never a transient failure
+		}
+		if err = groupTurnCheck(q, packet, item.From, item.FromKey); err != nil {
+			return "", err
+		}
 	}
 	if proof != nil {
 		if proof.admission != own.Hash() || !sameControlItem(item, itemOf(proof.in, proof.key, item.At)) {
@@ -134,6 +150,16 @@ func (a *Agent) groupControlHistoryCheck(q dbq, root protocol.ConvRoot, forwarde
 	original := item.inner(root.ID())
 	if err = envelope.ValidateControl(original); err != nil {
 		return err
+	}
+	if envelope.AssistantReaction(original) { // its host need not be a member: bound to its participation instead
+		reason, e := assistantHistoryCheck(q, original, item.From, item.FromKey, a.Address, a.Self().Fingerprint())
+		if reason == reasonProof {
+			return fmt.Errorf("%w: %v", ErrGroupContextPending, e)
+		}
+		if e != nil {
+			return e
+		}
+		return a.groupControlTarget(q, original)
 	}
 	if err = groupTurnCheck(q, packet, item.From, item.FromKey); err != nil {
 		return err

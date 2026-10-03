@@ -132,6 +132,9 @@ func (a *Agent) requireGroupControlCapability(ctx context.Context, key identity.
 }
 
 func (a *Agent) mayDeliverGroupControl(env envelope.Envelope) (bool, bool, error) {
+	if handled, allowed, err := a.mayDeliverAssistantReaction(env); handled {
+		return true, allowed, err
+	}
 	var conv, sub, state, fp, fence, required string
 	err := a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(sub,''),state,coalesce(recipient_fp,''),coalesce(group_admission,''),coalesce(required_cap,'') FROM outbox WHERE id=?`, env.ID).Scan(&conv, &sub, &state, &fp, &fence, &required)
 	if errors.Is(err, sql.ErrNoRows) {

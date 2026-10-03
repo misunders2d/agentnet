@@ -79,7 +79,8 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
  s WHERE (?='' OR lid=?) AND (?='' OR author=?) AND ms>=?
  AND NOT EXISTS(SELECT 1 FROM inbox c WHERE c.conv=? AND c.sub='retraction' AND c.ref_id=s.lid AND c.ref_fp=s.author)
  AND NOT EXISTS(SELECT 1 FROM outbox c WHERE c.conv=? AND c.sub='retraction' AND c.ref_id=s.lid AND c.ref_fp=s.author)
- ORDER BY ms DESC,id DESC LIMIT ?`, conv, a.Address, a.Self().Fingerprint(), conv, lid, lid, author, author, since, conv, conv, limit)
+ AND NOT EXISTS(SELECT 1 FROM conv_erased e WHERE e.conv=? AND e.lid=s.lid AND e.key=s.author)
+ ORDER BY ms DESC,id DESC LIMIT ?`, conv, a.Address, a.Self().Fingerprint(), conv, lid, lid, author, author, since, conv, conv, conv, limit)
 	if err != nil {
 		return nil, err
 	}

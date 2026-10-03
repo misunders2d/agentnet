@@ -72,8 +72,14 @@ type ReactionView struct {
 // the device address in a device thread) and the label to show. Two
 // reactors with one label stay two.
 type Reactor struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Assistant bool   `json:"assistant,omitempty"` // an assistant's own reaction, never its host person's
+	// An assistant's exact identity, for a label from its host's catalog:
+	// its host device, its agent (named) and its participation, if any.
+	Host    string `json:"host,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	PID     string `json:"pid,omitempty"`
 }
 
 // Shown is the text to show for m: its current revision, or its body.
@@ -654,9 +660,9 @@ func (s *store) addControlInbox(in envelope.Inner, verifiedBy string, fromQuaran
 func addControlInboxIn(tx *sql.Tx, in envelope.Inner, verifiedBy string, fromQuarantine bool) error {
 	in = tombstoned(tx, in, verifiedBy) // an edit of a deleted message keeps no text
 	now := time.Now()
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, received_at, state, verified_by, sub, received_ms, ref_id, ref_fp, read_at)
-		VALUES(?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
-		in.ID, in.From, in.TS, in.Kind, in.Body, now.Unix(), verifiedBy, in.Sub, now.UnixMilli(), in.Ref.ID, in.Ref.Fingerprint, now.Unix()); err != nil {
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, received_at, state, verified_by, sub, received_ms, ref_id, ref_fp, read_at, agent_id, origin)
+		VALUES(?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''))`,
+		in.ID, in.From, in.TS, in.Kind, in.Body, now.Unix(), verifiedBy, in.Sub, now.UnixMilli(), in.Ref.ID, in.Ref.Fingerprint, now.Unix(), in.AgentID, in.Origin); err != nil {
 		return err
 	}
 	if fromQuarantine {
@@ -676,6 +682,12 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 	hold := func(reason, why string) error {
 		a.Logf("control %s from %s held (%s): %s", env.ID, env.From, reason, why)
 		return a.store.holdAs(env, reason)
+	}
+	if envelope.AssistantReaction(in) { // the assistant's, decided as its reply would be
+		return a.admitAssistantReaction(ctx, env, in, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubClear { // this person's own deletion: no conversation act (convclear.go)
+		return a.admitClear(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Conv != "" {
 		if root, _, found, e := a.store.conversation(in.Conv); e != nil {
@@ -1059,13 +1071,14 @@ func (s *store) retracted(id string) (bool, error) {
 type controlRow struct {
 	id, sub, author, authorFP, refID, refFP, body string
 	ms                                            int64
+	pid, agentID, origin                          string // an assistant reaction's reactor (assistantreaction.go)
 }
 
 // legacyControls loads the controls of the device thread with peer.
 func (s *store) legacyControls(peer, self, selfFP string) ([]controlRow, error) {
-	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000)
+	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
 		  FROM inbox WHERE conv IS NULL AND ref_id IS NOT NULL AND sender = ?
-		UNION ALL SELECT id, sub, ?, ?, ref_id, ref_fp, body, coalesce(created_ms, created_at * 1000)
+		UNION ALL SELECT id, sub, ?, ?, ref_id, ref_fp, body, coalesce(created_ms, created_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
 		  FROM outbox WHERE conv IS NULL AND ref_id IS NOT NULL AND recipient = ?`, peer, self, selfFP, peer)
 	if err != nil {
 		return nil, err
@@ -1076,9 +1089,9 @@ func (s *store) legacyControls(peer, self, selfFP string) ([]controlRow, error) 
 // convControls loads the controls of conversation conv, once per logical
 // id for copies this device sent.
 func (s *store) convControls(conv, self, selfFP string) ([]controlRow, error) {
-	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, claimed_fp, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000)
+	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, claimed_fp, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
 		  FROM inbox WHERE conv = ? AND ref_id IS NOT NULL AND local = 0
-		UNION ALL SELECT o.id, o.sub, ?, ?, o.ref_id, o.ref_fp, o.body, coalesce(o.created_ms, o.created_at * 1000)
+		UNION ALL SELECT o.id, o.sub, ?, ?, o.ref_id, o.ref_fp, o.body, coalesce(o.created_ms, o.created_at * 1000), coalesce(o.pid, ''), coalesce(o.agent_id, ''), coalesce(o.origin, '')
 		  FROM outbox o WHERE o.conv = ? AND o.ref_id IS NOT NULL AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid)`,
 		conv, self, selfFP, conv)
 	if err != nil {
@@ -1092,7 +1105,7 @@ func scanControls(rows *sql.Rows) ([]controlRow, error) {
 	var out []controlRow
 	for rows.Next() {
 		var r controlRow
-		if err := rows.Scan(&r.id, &r.sub, &r.author, &r.authorFP, &r.refID, &r.refFP, &r.body, &r.ms); err != nil {
+		if err := rows.Scan(&r.id, &r.sub, &r.author, &r.authorFP, &r.refID, &r.refFP, &r.body, &r.ms, &r.pid, &r.agentID, &r.origin); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -1116,6 +1129,7 @@ func resolveControls(rows []controlRow, auth authority) map[ControlRef]Controls 
 	type target struct {
 		reactions map[string]map[string]mark // emoji -> who -> newest
 		labels    map[string]string          // who -> label
+		actors    map[string]Reactor         // who -> an assistant's identity
 		mine      map[string]bool
 		rev       int64
 		revID     string
@@ -1128,7 +1142,7 @@ func resolveControls(rows []controlRow, auth authority) map[ControlRef]Controls 
 		who, label, mine, mayReact, mayAuthor := auth(c, ref)
 		t := targets[ref]
 		if t == nil {
-			t = &target{reactions: map[string]map[string]mark{}, labels: map[string]string{}, mine: map[string]bool{}}
+			t = &target{reactions: map[string]map[string]mark{}, labels: map[string]string{}, mine: map[string]bool{}, actors: map[string]Reactor{}}
 			targets[ref] = t
 		}
 		switch c.sub {
@@ -1146,6 +1160,9 @@ func resolveControls(rows []controlRow, auth authority) map[ControlRef]Controls 
 				byWho[who] = mark{r.Op, r.N, c.id}
 			}
 			t.labels[who], t.mine[who] = label, mine
+			if _, ok := assistantWho(c); ok {
+				t.actors[who] = Reactor{Assistant: true, Host: c.author, AgentID: c.agentID, PID: c.pid}
+			}
 		case envelope.SubRevision:
 			var r envelope.Revision
 			if !mayAuthor || json.Unmarshal([]byte(c.body), &r) != nil {
@@ -1178,7 +1195,9 @@ func resolveControls(rows []controlRow, auth authority) map[ControlRef]Controls 
 			}
 			slices.Sort(whos)
 			for _, who := range whos {
-				v.By = append(v.By, Reactor{ID: who, Label: t.labels[who]})
+				r := t.actors[who]
+				r.ID, r.Label = who, t.labels[who]
+				v.By = append(v.By, r)
 				v.Mine = v.Mine || t.mine[who]
 			}
 			if len(v.By) > 0 {
@@ -1220,6 +1239,9 @@ func (s *store) legacyDisplay(id, peer string) display {
 func legacyAuthority(peer, self, selfFP string) authority {
 	return func(c controlRow, target ControlRef) (who, label string, mine, mayReact, mayAuthor bool) {
 		mine = c.author == self && self != ""
+		if who, ok := assistantWho(c); ok { // never its host device's own mark
+			return who, assistantLabel(c.author, c.agentID), false, c.author == peer || mine, false
+		}
 		return c.author, c.author, mine, c.author == peer || mine, c.authorFP == target.Fingerprint && c.authorFP != ""
 	}
 }
@@ -1233,6 +1255,7 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 		return err
 	}
 	resolved := resolveControls(rows, legacyAuthority(peer, self, selfFP))
+	a.labelOwnAssistants(resolved)
 	execs := execViews(rows)
 	for i := range msgs {
 		m := &msgs[i]
@@ -1344,6 +1367,13 @@ func (a *Agent) decorateConv(conv string, msgs []ConvMessage) error {
 		return p
 	}
 	auth := func(c controlRow, target ControlRef) (who, label string, mine, mayReact, mayAuthor bool) {
+		if who, ok := assistantWho(c); ok { // admitted as the participation's own: never a person's mark
+			host := c.author
+			if p, e := a.participation(conv, c.pid); e == nil && p.Host.Label != "" {
+				host = p.Host.Label
+			}
+			return who, assistantLabel(host, c.agentID), false, true, false
+		}
 		who = person(c.authorFP)
 		if who == "" {
 			return "", "", false, false, false // no member's key: nothing
@@ -1354,6 +1384,7 @@ func (a *Agent) decorateConv(conv string, msgs []ConvMessage) error {
 		return who, label, mine, true, owner != "" && owner == who
 	}
 	resolved := resolveControls(rows, auth)
+	a.labelOwnAssistants(resolved)
 	execs := execViews(rows)
 	for i := range msgs {
 		msg := &msgs[i]

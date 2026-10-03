@@ -87,6 +87,8 @@ func (a *Agent) convSync(ctx context.Context) {
 		a.checkPersons(ctx, a.MemberView().Members)
 	}
 	if work&(convRetry|convRetryMore) != 0 {
+		a.recoverHumanExcerpts(ctx)
+		a.discloseHumanAudience(ctx)
 		if work&convRetry != 0 {
 			a.convWork.mu.Lock()
 			a.convWork.pos = heldPos{}
@@ -131,7 +133,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // relay takes a device to support only what ALL its live sessions do, so a
 // session that said less (link.go's waiting one) would keep senders
 // holding controls, Drive records and statuses for it.
-var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapExternalParticipation, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapNotify, protocol.CapPerson, protocol.CapReplyReceiver, protocol.CapTyping}
+var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapReplyReceiver, protocol.CapTyping}
 
 // publishOwn publishes this run's capability record and, once per roster,
 // this installation's person.
@@ -270,9 +272,30 @@ func (a *Agent) Conversations() ([]ConversationInfo, error) {
 		rows[i].Role = "visitor"
 		if _, member := root.Member(me.info.Person); ok && member {
 			rows[i].Role = "member"
+			continue
+		}
+		// A guest or visitor host sees both original people, as pinned and
+		// verified against the unchanged root (dmMembers), never a guess
+		// from the stored peer or an inviter. Display only: no authority.
+		m, err := a.dmMembers(rows[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, mem := range root.Members {
+			if p, ok := m.persons[mem.Person]; ok {
+				rows[i].Members = append(rows[i].Members, p.info)
+			}
 		}
 	}
-	return a.projectGroupConversations(rows)
+	out, err := a.projectGroupConversations(rows)
+	if err != nil {
+		return nil, err
+	}
+	selfFP := a.Self().Fingerprint()
+	for i := range out {
+		out[i].Deleted = a.store.convDeleted(out[i].ID, selfFP)
+	}
+	return out, nil
 }
 
 // ConversationMessages lists a conversation's messages here, oldest first.
@@ -280,6 +303,17 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 	msgs, err := a.store.convMessages(conv, a.Address, a.id.Public(a.Address).Fingerprint(), a.ownDevices())
 	if err != nil {
 		return nil, err
+	}
+	for i := range msgs {
+		dir := msgs[i].Dir
+		if dir == "out" && msgs[i].Via != "" {
+			dir = "in"
+		}
+		h, e := storedHuman(a.store.db, dir, msgs[i].ID)
+		if e != nil {
+			return nil, e
+		}
+		msgs[i].Human = h
 	}
 	msgs = a.showExcerpts(msgs)
 	for i := range msgs {
@@ -358,6 +392,43 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	}
 	if !found {
 		return ConvSent{}, fmt.Errorf("no conversation %s here", conv)
+	}
+	if root.Kind == protocol.ConvKindDM && m.sub == "" && (m.Kind == "" || m.Kind == envelope.KindMessage) && m.Target == nil {
+		humanAuthor := m.PID == ""
+		if m.PID != "" {
+			p, e := a.Participation(m.PID)
+			humanAuthor = e == nil && p.Role == protocol.RoleHuman
+		}
+		if humanAuthor {
+			h, e := a.humanPlan(ctx, conv, m.PID)
+			if e != nil {
+				return ConvSent{}, e
+			}
+			if h != nil {
+				return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+			}
+		}
+	}
+	if root.Kind == protocol.ConvKindDM && m.sub == "" && m.PID != "" { // with guests present, the room sees addressed work too
+		if x, e := a.participation(conv, m.PID); e == nil && x.Role != protocol.RoleHuman && x.Invite != "" {
+			request := m.Target != nil && (m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask)
+			output := m.Target == nil && (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult || m.Kind == envelope.KindMessage && m.status == envelope.StatusProgress)
+			if request || output {
+				authorPID := ""
+				if request {
+					if authorPID, e = a.ownHumanPID(conv); e != nil {
+						return ConvSent{}, e
+					}
+				}
+				h, e := a.humanPlan(ctx, conv, authorPID)
+				if e != nil {
+					return ConvSent{}, e
+				}
+				if h != nil {
+					return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+				}
+			}
+		}
 	}
 	if root.Kind == protocol.ConvKindGroup {
 		if m.PID != "" {
@@ -642,11 +713,27 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 	checked := map[string]bool{}
 	for id, w := range waiting {
 		to := w.to
-		cacheKey := to + "\x00" + w.sub + "\x00" + w.required
+		progress := w.status == envelope.StatusProgress
+		item, assistant := historyAssistant(w.body, w.conv) // as delivery decides it: agr1 besides the copy's own requirement
+		cacheKey := to + "\x00" + w.sub + "\x00" + w.required + "\x00" + w.status + "\x00" + w.agentID + "\x00" + w.conv + "\x00" + w.pid + "\x00" + item.PID + "\x00" + item.AgentID
+		if w.human {
+			cacheKey += "\x00human"
+		}
 		ok, seen := checked[cacheKey]
 		if !seen {
 			key, _, found, err := a.store.peer(to)
-			if err == nil && found {
+			switch {
+			case err != nil || !found:
+			case w.required == protocol.CapAgentReaction && w.conv == "":
+				// A device thread's assistant reaction: no person gate either.
+				ok = a.requireParticipationCaps(ctx, key, w.required) == nil && a.assistantReactionCaps(ctx, key, "", "", w.agentID) == nil
+			case w.required == protocol.CapProgress:
+				// Version 1 progress: delivery has no person gate, only the
+				// signed capability that marks it as an update (and a named
+				// executor's identity capability).
+				ok = a.requireParticipationCaps(ctx, key, w.required) == nil &&
+					(w.agentID == "" || a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity) == nil)
+			default:
 				ok, _, _ = a.convSupport(ctx, to, key, feats)
 				if ok && w.sub == envelope.SubDriveSpace {
 					ok, _ = a.capSupport(ctx, to, key, feats, protocol.CapDriveSpace)
@@ -654,10 +741,23 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 				if ok && w.required != "" {
 					ok = a.requireParticipationCaps(ctx, key, w.required) == nil
 				}
+				if ok && progress {
+					ok = a.requireParticipationCaps(ctx, key, protocol.CapProgress) == nil
+				}
+				if ok && w.required == protocol.CapAgentReaction {
+					ok = a.assistantReactionCaps(ctx, key, w.conv, w.pid, w.agentID) == nil
+				}
+				if ok && w.required == protocol.CapAgentReaction && w.human { // to a captured audience: as a human-audience turn
+					ok = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation) == nil
+				}
+				if ok && w.sub == envelope.SubHistory && assistant {
+					ok = (w.required == protocol.CapAgentReaction || a.requireParticipationCaps(ctx, key, protocol.CapAgentReaction) == nil) &&
+						a.assistantReactionCaps(ctx, key, w.conv, item.PID, item.AgentID) == nil
+				}
+				// Support alone is not enough: the profile just read may have
+				// frozen the person, and a frozen person gets nothing.
+				ok = ok && a.personSendable(to, "")
 			}
-			// Support alone is not enough: the profile just read may have
-			// frozen the person, and a frozen person gets nothing.
-			ok = ok && a.personSendable(to, "")
 			checked[cacheKey] = ok
 		}
 		if ok {
@@ -767,6 +867,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if root.Kind == protocol.ConvKindGroup {
 		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
 	}
+	if in.Human != nil {
+		return a.admitHumanTurn(ctx, env, in, root, sp, sender, fromQuarantine, hold)
+	}
 	if handled, err := a.admitExternalParticipation(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
 		return err
 	}
@@ -844,6 +947,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if in.Sub == envelope.SubEvent { // a participation record, stored with its message or not at all
 		ev, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
 		if err != nil {
+			return hold(reasonInvalid, err.Error())
+		}
+		if err := a.scopeMatchesInvite(ev); err != nil {
 			return hold(reasonInvalid, err.Error())
 		}
 		raw := []byte(in.Body)

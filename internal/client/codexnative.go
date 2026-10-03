@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,9 +21,17 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// Only the observed Linux default-daemon lifecycle is qualified. This is local
-// process provenance, not a signature or a permission grant.
-const codexNativeVersion = "0.159.3"
+// Supported contract, not a release pin: the Codex Linux default daemon that
+// reports itself in typed form (running, pid backend, its socket, its managed
+// executable, managed and CLI versions agreeing), with vscode-source rollouts
+// whose header names the exact thread. Each registration is bound to the exact
+// daemon process and executable digest and fails when either changes; an
+// updated Codex registers anew through its own hook. Input counts only on its
+// exact native rollout receipt. This is local process provenance, not a
+// signature or a permission grant.
+
+// nativeVersion is a version as harnesses write it (2.1.287, 0.160.0-beta.1).
+var nativeVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]{1,64})?$`)
 
 type codexNativeRoute struct {
 	Home     string `json:"home"`
@@ -134,9 +143,17 @@ func (r codexNativeRoute) verify(ctx context.Context, ancestry bool) error {
 	if e != nil {
 		return errors.New("native Codex daemon observation failed")
 	}
+	return codexDaemonVersion(raw, r)
+}
+
+// codexDaemonVersion checks the daemon's own typed report against route.
+func codexDaemonVersion(raw []byte, r codexNativeRoute) error {
 	var v struct{ Status, Backend, SocketPath, ManagedCodexPath, ManagedCodexVersion, CLIVersion string }
-	if json.Unmarshal(raw, &v) != nil || v.Status != "running" || v.Backend != "pid" || v.ManagedCodexVersion != codexNativeVersion || v.CLIVersion != codexNativeVersion || "unix://"+v.SocketPath != r.Endpoint {
-		return errors.New("native Codex daemon endpoint/version changed")
+	if json.Unmarshal(raw, &v) != nil || v.Status != "running" || v.Backend != "pid" || "unix://"+v.SocketPath != r.Endpoint {
+		return errors.New("native Codex daemon endpoint changed or report not understood")
+	}
+	if !nativeVersion.MatchString(v.CLIVersion) || v.ManagedCodexVersion != v.CLIVersion {
+		return errors.New("native Codex daemon version report inconsistent")
 	}
 	real, e := filepath.EvalSymlinks(v.ManagedCodexPath)
 	if e != nil || real != r.Binary {
@@ -153,29 +170,13 @@ func captureCodexRoute(ctx context.Context) (codexNativeRoute, error) {
 	if runtime.GOOS != "linux" {
 		return r, errors.New("native Codex receiving session is qualified on Linux only")
 	}
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		user, e := os.UserHomeDir()
-		if e != nil {
-			return r, e
-		}
-		home = filepath.Join(user, ".codex")
-	}
 	var e error
-	r.Home, e = filepath.EvalSymlinks(home)
+	r.Home, e = codexHomeDir()
 	if e != nil {
 		return r, e
 	}
-	r.Home, e = filepath.Abs(r.Home)
+	p, e := codexDaemonRecordIn(r.Home)
 	if e != nil {
-		return r, e
-	}
-	raw, e := os.ReadFile(filepath.Join(r.Home, "app-server-daemon", "daemon.pid"))
-	if e != nil {
-		return r, e
-	}
-	var p codexDaemonRecord
-	if e = json.Unmarshal(raw, &p); e != nil {
 		return r, e
 	}
 	r.PID, r.Boot, r.Ticks = p.PID, p.Identity.Boot, p.Identity.Ticks
@@ -187,8 +188,42 @@ func captureCodexRoute(ctx context.Context) (codexNativeRoute, error) {
 	if e != nil {
 		return r, e
 	}
-	r.Endpoint = "unix://" + filepath.Join(r.Home, "app-server-control", "app-server-control.sock")
+	r.Endpoint = codexEndpoint(r.Home)
 	return r, r.verify(ctx, true)
+}
+
+// codexHomeDir is the caller's canonical Codex home: CODEX_HOME, or the
+// normal default ~/.codex.
+func codexHomeDir() (string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		user, e := os.UserHomeDir()
+		if e != nil {
+			return "", e
+		}
+		home = filepath.Join(user, ".codex")
+	}
+	home, e := filepath.EvalSymlinks(home)
+	if e != nil {
+		return "", e
+	}
+	return filepath.Abs(home)
+}
+
+// codexDaemonRecordIn is the default daemon's own record in a Codex home.
+func codexDaemonRecordIn(home string) (codexDaemonRecord, error) {
+	var p codexDaemonRecord
+	raw, e := os.ReadFile(filepath.Join(home, "app-server-daemon", "daemon.pid"))
+	if e != nil {
+		return p, e
+	}
+	e = json.Unmarshal(raw, &p)
+	return p, e
+}
+
+// codexEndpoint is the default daemon's control socket in a Codex home.
+func codexEndpoint(home string) string {
+	return "unix://" + filepath.Join(home, "app-server-control", "app-server-control.sock")
 }
 
 // codexNativeEntries bounds the vendor's linear rollout. A duplicate header,
@@ -223,7 +258,8 @@ func codexNativeEntries(file, sid string) ([]json.RawMessage, error) {
 			return nil, errors.New("native Codex rollout is invalid")
 		}
 		if len(entries) == 0 {
-			if row.Type != "session_meta" || row.Payload.ID != sid || row.Payload.Version != codexNativeVersion || row.Payload.Source != "vscode" {
+			// A resumed thread keeps the header its creating version wrote.
+			if row.Type != "session_meta" || row.Payload.ID != sid || !nativeVersion.MatchString(row.Payload.Version) || row.Payload.Source != "vscode" {
 				return nil, errors.New("native Codex exact daemon session header absent")
 			}
 		} else if row.Type == "session_meta" || row.Ordinal <= ordinal {
@@ -287,13 +323,28 @@ func (a *Agent) CodexReplySessionHook(event, sid, file string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	file, e = canonicalNativeFile(file)
+	return a.registerCodexReplySession(event, sid, file, route)
+}
+
+// codexRolloutIn is file, canonical, when it lies in route's exact Codex home.
+func codexRolloutIn(route codexNativeRoute, file string) (string, error) {
+	file, e := canonicalNativeFile(file)
 	if e != nil {
 		return "", e
 	}
 	rel, e := filepath.Rel(filepath.Join(route.Home, "sessions"), file)
 	if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", errors.New("native rollout outside exact Codex home")
+	}
+	return file, nil
+}
+
+// registerCodexReplySession is CodexReplySessionHook after its native route
+// capture (tests model that route with their own process).
+func (a *Agent) registerCodexReplySession(event, sid, file string, route codexNativeRoute) (string, error) {
+	file, e := codexRolloutIn(route, file)
+	if e != nil {
+		return "", e
 	}
 	if _, e = codexNativeEntries(file, sid); e != nil {
 		return "", e

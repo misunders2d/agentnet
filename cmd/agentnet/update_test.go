@@ -30,6 +30,10 @@ import (
 // "version" prints the version in <its file>.fakeversion if present, else
 // AGENTNET_FAKE_VERSION, and "sleep" waits.
 func TestMain(m *testing.M) {
+	// Tests do not run inside the developer's assistant session: a request
+	// made here must not try to return to it.
+	os.Unsetenv("CLAUDE_CODE_SESSION_ID")
+	os.Unsetenv("CODEX_THREAD_ID")
 	if os.Getenv("AGENTNET_FAKE_BINARY") != "" && len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version":

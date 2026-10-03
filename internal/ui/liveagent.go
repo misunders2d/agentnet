@@ -22,10 +22,71 @@ type dmPeople struct {
 	role     string
 	group    bool
 	members  []PersonView
+	humans   map[string]client.ParticipationInfo // human participations of the DM, by PID
+}
+
+// humanHidden: a guest sees another guest only once that guest's acceptance
+// is held here; a lone shared invitation is inert proof, never shown.
+func (p dmPeople) humanHidden(info client.ParticipationInfo) bool {
+	return p.role != "member" && !info.HostHere && info.Decision == ""
+}
+
+// guestActive: this device is an accepted guest here now, who may address
+// the conversation's active assistants under their owners' permissions.
+func (p dmPeople) guestActive() bool {
+	for _, info := range p.humans {
+		if info.HostHere && info.HumanActive() {
+			return true
+		}
+	}
+	return false
+}
+
+// humanName names a human participation's exact host for the timeline.
+func (p dmPeople) humanName(info client.ParticipationInfo, subject bool) string {
+	if info.Host.Person != "" && info.Host.Person == p.me.Person {
+		if subject {
+			return "You"
+		}
+		return "you"
+	}
+	if info.Host.Label != "" {
+		return info.Host.Label
+	}
+	return info.Host.Address
+}
+
+// eventShown says whether a participation record gets its own timeline row.
+// For people: hidden while inert for a guest, one row per signed event, and
+// an original's copy of another person's event shared onward is not a new row.
+func (p dmPeople) eventShown(m client.ConvMessage, seen map[string]bool) bool {
+	ev, err := protocol.ParseParticipationEvent([]byte(m.Body))
+	if err != nil {
+		return true
+	}
+	if ev.Type == protocol.EventScope && seen["invite/"+ev.PID] {
+		return false // the invitation itself is shown
+	}
+	info, human := p.humans[ev.PID]
+	if !human { // one row per exact signed record: each original's shared copy is no new row
+		if seen[ev.Hash()] {
+			return false
+		}
+		seen[ev.Hash()] = true
+		return true
+	}
+	if p.humanHidden(info) || m.Dir == "out" && ev.Author.Person != p.me.Person {
+		return false
+	}
+	if seen[ev.Hash()] {
+		return false
+	}
+	seen[ev.Hash()] = true
+	return true
 }
 
 func (p dmPeople) byPerson(id string) (PersonView, bool) {
-	if p.group && id != "" {
+	if id != "" {
 		for _, m := range p.members {
 			if m.Person == id {
 				return m, true
@@ -102,10 +163,20 @@ func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
 	p := l.people(c.Peer)
 	p.role = c.Role
 	p.group = c.Kind == protocol.ConvKindGroup
-	if p.group {
-		for _, m := range c.Members {
-			p.members = append(p.members, personView(m))
+	if !p.group {
+		if infos, err := l.a.Participations(c.ID); err == nil {
+			for _, info := range infos {
+				if info.Role == protocol.RoleHuman {
+					if p.humans == nil {
+						p.humans = map[string]client.ParticipationInfo{}
+					}
+					p.humans[info.PID] = info
+				}
+			}
 		}
+	}
+	for _, m := range c.Members { // group persons, or a visitor's two verified originals
+		p.members = append(p.members, personView(m))
 	}
 	return p
 }
@@ -117,6 +188,9 @@ func eventText(body string, p dmPeople) string {
 		return "A record about an agent that cannot be read here."
 	}
 	who := p.who(ev.Author.Person)
+	if info, human := p.humans[ev.PID]; human || (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) && ev.Role == protocol.RoleHuman {
+		return humanEventText(ev, info, human, who, p)
+	}
 	room := "this DM"
 	if p.group {
 		room = "this group"
@@ -125,7 +199,7 @@ func eventText(body string, p dmPeople) string {
 		}
 	}
 	switch ev.Type {
-	case protocol.EventInvite:
+	case protocol.EventInvite, protocol.EventScope: // a scope is the invitation's public part
 		host := "an agent"
 		if ev.Host != nil {
 			host = p.whose(ev.Host.Person) + " agent (on " + ev.Host.Address + ")"
@@ -150,6 +224,34 @@ func eventText(body string, p dmPeople) string {
 	return "A record about an agent (" + ev.Type + ")."
 }
 
+// humanEventText says what a person's participation record does: people are
+// invited, join, decline, leave or are removed; nothing about an agent.
+func humanEventText(ev protocol.ParticipationEvent, info client.ParticipationInfo, known bool, who string, p dmPeople) string {
+	if known && p.humanHidden(info) {
+		return "A participation record not shared here yet."
+	}
+	guest, Guest := "a person", "A person"
+	if known {
+		guest, Guest = p.humanName(info, false), p.humanName(info, true)
+	} else if ev.Host != nil {
+		guest, Guest = ev.Host.Address, ev.Host.Address
+	}
+	switch ev.Type {
+	case protocol.EventInvite, protocol.EventScope:
+		return who + " invited " + guest + " into this DM."
+	case protocol.EventAccept:
+		return Guest + " joined this DM."
+	case protocol.EventDecline:
+		return Guest + " declined the invitation."
+	case protocol.EventDismiss:
+		if known && ev.Author.Person == info.Host.Person && ev.Author.Address == info.Host.Address {
+			return Guest + " left this DM."
+		}
+		return who + " removed " + guest + " from this DM."
+	}
+	return "A participation record (" + ev.Type + ")."
+}
+
 // agentViews are conv's participations as the page shows them.
 func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([]AgentView, error) {
 	infos, err := l.a.Participations(conv)
@@ -158,6 +260,9 @@ func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([
 	}
 	out := make([]AgentView, 0, len(infos))
 	for _, info := range infos {
+		if info.Role == protocol.RoleHuman {
+			continue
+		}
 		out = append(out, agentView(info, p, msgs, l.namedAgentReady(info)))
 	}
 	return out, nil
@@ -238,9 +343,12 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 		v.StateText += " Some of its records do not count here yet."
 	}
 	if p.role == "visitor" {
-		v.CanAsk, v.CanDismiss = false, false
+		v.CanAsk, v.CanDismiss = p.guestActive() && info.Claimable() && !info.HostHere, false
 		if info.State == client.PartActive {
 			v.StateText = "Invited agent context for this DM's two members. Only selected snapshots and requests addressed to this agent are supplied."
+			if p.guestActive() && !info.HostHere {
+				v.StateText = "In this conversation, on " + info.Host.Address + ". Ask it with @mention; its owner's permissions decide whether it runs."
+			}
 		}
 	}
 	if p.group {
@@ -312,6 +420,9 @@ func (l *Live) InviteAgent(d AgentInvite) (AgentView, error) {
 
 // DecideAgent implements Participants.
 func (l *Live) DecideAgent(pid string, accept bool) (AgentView, error) {
+	if p, err := l.a.Participation(pid); err == nil && p.Role == protocol.RoleHuman {
+		return AgentView{}, Refuse("Use the human participation consent action, not an agent action.")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
 	if accept {
@@ -322,6 +433,9 @@ func (l *Live) DecideAgent(pid string, accept bool) (AgentView, error) {
 
 // DismissAgent implements Participants.
 func (l *Live) DismissAgent(pid string) (AgentView, error) {
+	if p, err := l.a.Participation(pid); err == nil && p.Role == protocol.RoleHuman {
+		return AgentView{}, Refuse("Use the human participation end action, not an agent action.")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
 	return l.agentResult(l.a.DismissParticipation(ctx, pid))

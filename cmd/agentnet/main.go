@@ -86,6 +86,9 @@ func run(args []string) error {
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
 	}
+	if cmd == "daemon" {
+		keepDaemonInstallDirOnPath(os.Args[0])
+	}
 	a, err := client.Open(*home)
 	if err != nil {
 		return err
@@ -223,6 +226,11 @@ func run(args []string) error {
 			return errors.New("usage: status [--wait D] ID")
 		}
 		r, err := a.Status(ctx, fs.Arg(0), *wait)
+		var local *client.LocalStatus
+		if errors.As(err, &local) { // this device's own record, marked as such
+			fmt.Printf("%s %s %s (local record; Hub not reachable)\n", r.ID, r.State, r.Path)
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -379,18 +387,38 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 	fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, p); return nil })
 	fallback := fs.Bool("fallback", false, "if ADDRESS#SESSION has ended, deliver to the agent's inbox instead")
 	wait := fs.Duration("wait", defaultWait, "wait up to this long for the recipient's receipt (0: return at once)")
+	var replyTo *string
+	var progress *bool
+	if !reply {
+		replyTo = fs.String("reply-to", "", "continue the conversation containing this message ID")
+		progress = fs.Bool("progress", false, "mark this correlated message as a nonterminal responder update")
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] %s TEXT", name, target)
+		extra := ""
+		if !reply {
+			extra = " [--reply-to ID] [--progress]"
+		}
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s]%s %s TEXT", name, extra, target)
+	}
+	if !reply && *progress && *replyTo == "" {
+		return errors.New("--progress requires --reply-to ID")
+	}
+	if !reply && *replyTo != "" && !*progress { // progress binds its own exact stored request
+		if err := a.CheckReplyTo(*replyTo, fs.Arg(0)); err != nil {
+			return err
+		}
 	}
 	var r client.SendResult
 	var err error
 	if reply {
 		r, err = a.ReplyWait(ctx, fs.Arg(0), fs.Arg(1), *wait, files...)
+	} else if *progress {
+		r, err = a.SendProgress(ctx, fs.Arg(0), *replyTo, fs.Arg(1), *wait, *fallback, files...)
 	} else {
-		r, err = a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), Files: files, Fallback: *fallback, Wait: *wait})
+		r, err = a.SendMessage(ctx, client.Outgoing{To: fs.Arg(0), Body: fs.Arg(1), ReplyTo: *replyTo, Files: files, Fallback: *fallback, Wait: *wait})
 	}
 	if err != nil {
 		return err

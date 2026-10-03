@@ -33,6 +33,41 @@
 > Initial candidate CI had macOS fixture failures; corrected final CI is recorded
 > separately above. Earlier releases below remain historical evidence.
 
+> **In progress — v0.6.1 (unreleased, uncommitted working tree; not published or deployed):**
+> the intended flow keeps replies in the conversation where they were asked and
+> returns a CLI request to the assistant session that made it (automatic for
+> Pi/OMP sessions with AgentNet's hook and, in this candidate, for Claude Code
+> and Codex sessions registered through AgentNet's setup, also while a
+> temporary person is present; harness permissions still apply), lets people
+> `@`-address assistants accepted into a conversation, and adds owner-approved
+> temporary participation of another person in the same DM, after which the
+> original members continue privately; choosing a different reply receiver stays
+> an explicit advanced option. Claude/Codex origin return selects the session from
+> the harness's own session environment and registration files, not from the
+> harness process a sandbox hides; delivery keeps every native check, and the
+> sandbox's own file/network rules still decide whether the command can run.
+> Verified end to end once with Codex 0.160.0 in workspace-write mode with only
+> the test's AgentNet home writable and loopback network, and once with Claude
+> Code 2.1.287 on Linux (one model turn; other Claude builds and a Claude
+> sandbox not exercised).
+> Also in this candidate: a temporary person may address an added assistant
+> only under its owner's permissions (joining grants no question or task
+> permission); questions to named and conversation assistants run with the
+> owner's own question setup (no editing tools; tools the owner already allows
+> keep their effects); assistants react as themselves, and with a temporary
+> person present a reaction reaches the request's captured audience; deleting
+> a conversation erases exactly the messages the deleting device holds, on all
+> of that person's linked devices (each applies it once it reads deletions;
+> running work and unsent copies are kept until they finish or are handed
+> over; group membership is kept), while deleting a legacy device thread
+> erases that exact thread on this device only; assistant setup and readable
+> workspace names in the device's messenger; a quiet update notice; the daemon
+> finds launchers installed beside `agentnet`; marked progress updates do not
+> end a wait. The `hgp1` (temporary people), `agr1` (assistant reactions) and
+> `clr1` (deletions) capabilities are advertised in this candidate. Release
+> acceptance (combined vet/race run, build, publication) is pending.
+> v0.6.0 above remains the current production release and evidence.
+
 > **Target Audience:** Any incoming coding agent (Claude, Codex, Antigravity, Pi) or human engineer starting fresh in this repository without access to prior chat transcripts.
 >
 > **Historical published preview — 2026-09-30:** [v0.5.0](https://github.com/misunders2d/agentnet/releases/tag/v0.5.0) is published from `d30c087`. [Final CI 36698046881](https://github.com/misunders2d/agentnet/actions/runs/36698046881) passed native Linux, macOS and Windows, Linux race and real IndexedDB checks, and the container journey. Seven uploaded asset digests match the final archive build. Stable/latest remains v0.2.1; other clients install this preview explicitly with `agentnet update v0.5.0`. No schema or wire-version change from v0.4.0.

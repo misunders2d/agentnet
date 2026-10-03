@@ -95,6 +95,14 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    check(!!answer&&answer.pid===pv[role+'-pid']&&answer.reply_to===pv[role+'-question'].inner.lid,'native '+role+' output exact PID AgentID shared request LID');
    check(!shown.messages.find(m=>m.id===pv[role+'-question'].inner.id)?.exec,'native '+role+' answer supersedes running snapshot status');
    await w.receive(pv[role+'-wrong-agent']);check((await w.st.get('held',pv[role+'-wrong-agent'].inner.id))?.reason==='invalid','native '+role+' wrong named output refused');
+   // The assistant's own reaction: its exact host, PID and agent; stored only
+   // with this device's own exact member admission; shown as the assistant.
+   await w.receive(pv[role+'-assistant-reaction']);
+   const reacted=await w.st.get('inbox',pv[role+'-assistant-reaction'].inner.id),ownStamp=(await w.e.dmMembers(await w.e.groupRecord(conv))).epochs.get(w.e.fp);
+   check(!!ownStamp&&reacted?.group_admission===ownStamp&&reacted.pid===pv[role+'-pid']&&reacted.agent_id===pv[role+'-agent']&&reacted.person==='','native '+role+' assistant reaction stored with exact own member admission');
+   const rq=(await w.e.groupThread(conv)).messages.find(m=>m.id===pv[role+'-question'].inner.id),rg=rq?.reactions?.find(r=>r.emoji==='🎉'),rb=rg?.by||[];
+   check(rb.length===1&&rb[0].id==='assistant:'+pv[role+'-pid']&&rb[0].assistant&&rb[0].pid===pv[role+'-pid']&&rb[0].agent_id===pv[role+'-agent']&&rb[0].host===pv[role+'-assistant-reaction'].inner.from&&!rg.mine,'native '+role+' group reactor is the assistant, never its host');
+   await w.receive(pv[role+'-assistant-wrong-agent']);check((await w.st.get('held',pv[role+'-assistant-wrong-agent'].inner.id))?.reason==='invalid','native '+role+' reaction naming another agent refused');
   }
   await w.receive(pv['ordinary-reaction']);check((await w.st.get('held',pv['ordinary-reaction'].inner.id))?.reason==='proof_pending','group reordered reaction held until exact ordinary original');
   await w.receive(pv.ordinary);await w.e.retryHeld();
@@ -121,7 +129,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   const linkedPerson=await w.e.personRecord([roster,linkedRoster],'self',null);w.e.me=linkedPerson;await w.st.write([{s:'kv',k:'person',v:linkedPerson}]);await w.e.pinDevices(linkedPerson);
   const historyEnvelope=async body=>wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:linkedAddress,to:address,ts:1700000101,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body},linkedKeys,pub);
   for(const role of ['member','visitor']) {
-   for(const suffix of ['invite','accept','question','status','answer']) {
+   for(const suffix of ['invite','accept','question','status','answer','assistant-reaction']) {
     const body=pv['history-'+role+'-'+suffix];check(wire.historyJSON(wire.parseHistory(body))===body,'native '+role+' '+suffix+' linked history exact bytes');
     const env=await historyEnvelope(body);await w.receive({envelope:env});
     check(!await w.st.get('held',wire.parseEnvelope(env).id),'native '+role+' '+suffix+' own linked history admitted');
@@ -130,6 +138,29 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   const linkedView=await w.e.groupThread(conv);
   check(linkedView.agents.filter(a=>a.state==='active').length===2,'late linked browser restores exact two named participations');
   check(linkedView.messages.filter(m=>m.kind==='answer').length===2&&linkedView.messages.every(m=>!m.unread&&!!m.synced_from),'late linked PID outputs retain source attribution and remain quiet');
+  for(const role of ['member','visitor']){const lq=linkedView.messages.find(m=>m.id===pv[role+'-question'].inner.id),lb=lq?.reactions?.find(r=>r.emoji==='🎉')?.by||[];
+   check(lb.length===1&&lb[0].id==='assistant:'+pv[role+'-pid']&&lb[0].assistant,'late linked browser restores the '+role+' assistant reactor from own history');}
+  const otherStamp=JSON.parse(pv['history-member-assistant-reaction']);otherStamp.group_admission='e'.repeat(64);const otherStampEnv=await historyEnvelope(JSON.stringify(otherStamp));await w.receive({envelope:otherStampEnv});
+  check((await w.st.get('held',wire.parseEnvelope(otherStampEnv).id))?.reason==='invalid','assistant reaction history refuses a different own admission');
+  // This browser's own history copy of an assistant reaction for its linked
+  // phone keeps grp1 and waits there for agr1 (client.deliver parity).
+  {
+   const phoneSession=wire.newID(),phoneProfile=async names=>({live:true,sessions:[phoneSession],caps:[JSON.parse(wire.capsJSON(await wire.newCaps(linkedKeys,linkedAddress,phoneSession,names)))]});
+   let profile=await phoneProfile([wire.CapEnv2,wire.CapPerson,wire.CapControl,wire.CapGroup,wire.CapAgentIdentity,wire.CapExternalParticipation]);
+   const posted=[],call=w.e.call.bind(w.e);
+   w.e.profile=async a=>a===linkedAddress?profile:null;w.e.groupSupport=async()=>{};w.e.ctlSupport=async()=>[true,''];
+   w.e.call=async(m,p,b)=>p==='/v1/messages'?(posted.push(b),{state:'custody'}):call(m,p,b);
+   const source=await w.st.get('inbox',pv['member-assistant-reaction'].inner.id),phoneDev=w.e.me.devices.find(d=>d.address===linkedAddress);
+   const copy=await w.e.historyCopy(phoneDev,await w.e.groupRecord(conv),w.e.itemOf(source,false));
+   check(copy.required_cap===wire.CapGroup&&wire.historyAssistantReaction(wire.parseHistory(copy.body)),'own history copy keeps its group requirement');
+   await w.st.write([{s:'outbox',k:copy.id,v:copy}]);await w.e.post(copy);
+   check((await w.st.get('outbox',copy.id)).state==='waiting'&&!posted.length,'an own device without agr1 waits; nothing posted');
+   profile=await phoneProfile([wire.CapEnv2,wire.CapPerson,wire.CapControl,wire.CapGroup,wire.CapAgentIdentity,wire.CapExternalParticipation,wire.CapAgentReaction]);
+   await w.e.post({...(await w.st.get('outbox',copy.id)),state:'queued',detail:''});
+   const after=await w.st.get('outbox',copy.id);
+   check(after.state==='custody'&&posted.length===1&&wire.parseEnvelope(posted[0]).id===copy.id,'agr1 signed releases and posts the exact copy: '+after.state+' '+(after.detail||''));
+   w.e.call=call;
+  }
   const linkedRequest=await w.st.get('inbox',pv['member-question'].inner.id),memberHistory=wire.parseHistory(pv['history-member-question']);
   check(linkedRequest.attachments.map(f=>f.name).join(',')==='z.txt,a.txt','native historical PID manifests retain original unsorted index order');
   const filePacket=(await w.e.groupTurnEvidence(conv)),selfMember=wire.groupMember(filePacket.packet.state,w.e.me.person);
@@ -381,6 +412,24 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    else {check(!!await w.st.get('held',wire.parseEnvelope(current.envelope).id),'stale or invalid recovery refused '+mode);let denied=false;try{await w.e.groupCurrent(conv);}catch(_){denied=true;}check(denied,'partial replay never grants stale state '+mode);}
    await w.reload();if(mode==='fresh')check((await w.e.groupCurrent(conv)).state.seq===3,'fresh self recovery durable real reload');else check(wire.parseGroupContext((await w.st.get('kv','group/'+conv)).context).state.seq===start,'invalid recovery never partially installs '+mode);
    await quiet(w);await w.close();
+  }
+  // Deleting a group conversation (client convclear.go): this device's
+  // copy of its turns is erased by name, membership and admission epoch stay
+  // exactly as they were, and a later group turn reopens it with only itself.
+  {
+   w=await world();await w.receive(c.proof);await w.receive(c.context);await w.receive(pv.ordinary);await w.e.retryHeld();
+   check((await w.e.groupThread(conv)).messages.some(m=>m.id===pv.ordinary.inner.id),'group turn shown before deletion');
+   const groupBefore=JSON.stringify(await w.st.get('kv','group/'+conv)),epochBefore=(await w.e.dmMembers(await w.e.groupRecord(conv))).epochs.get(w.e.fp);
+   const done=await w.e.deleteConversation({conv});
+   check(/No other device of yours was linked/.test(done.note),'group deletion with no other own device says so');
+   check(!(await w.e.groupThread(conv)).messages.some(m=>m.id===pv.ordinary.inner.id)&&!(await w.e.overview()).dms.some(d=>d.id===conv),'group turn hidden and group left out of the list');
+   check((await w.st.all('inbox')).filter(r=>r.conv===conv&&!r.control&&!r.sub).every(r=>r.body===''),'group turn text erased here');
+   check(JSON.stringify(await w.st.get('kv','group/'+conv))===groupBefore&&(await w.e.dmMembers(await w.e.groupRecord(conv))).epochs.get(w.e.fp)===epochBefore,'group membership and own admission epoch unchanged');
+   for(const k of ['member-invite','member-accept','member-question'])await w.receive(pv[k]);
+   const later=await w.e.groupThread(conv);
+   check(later.messages.some(m=>m.id===pv['member-question'].inner.id)&&!later.messages.some(m=>m.id===pv.ordinary.inner.id)&&(await w.e.overview()).dms.some(d=>d.id===conv),'a later group turn reopens it with only itself');
+   await w.reload();check(!(await w.e.groupThread(conv)).messages.some(m=>m.id===pv.ordinary.inner.id),'group deletion survives durable reload');
+   await w.close();
   }
   check(!(await wire.newCaps(keys,address,wire.newID())).caps.includes(wire.CapGroup),'grp1 stays off');
   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};

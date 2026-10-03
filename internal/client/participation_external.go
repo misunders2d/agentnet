@@ -37,7 +37,7 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 		}
 	}
 	for _, ev := range events {
-		if ev.Type != protocol.EventInvite || ev.Host == nil {
+		if ev.Type != protocol.EventInvite && ev.Type != protocol.EventScope || ev.Host == nil {
 			continue
 		}
 		h := ev.Host
@@ -112,7 +112,20 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 		if err != nil {
 			return err
 		}
+		if member && (ev.Author.Address != sender || ev.Author.Fingerprint != fp) {
+			// An original member device forwards another author's exact
+			// counted public record (scope, acceptance, end) of a human or
+			// assistant participation; ingress verified its author.
+			if ev.Type == protocol.EventDecline || ev.Type == protocol.EventInvite || !slices.Contains([]string{info.Scope, info.Decision, info.Dismissal}, ev.Hash()) {
+				return errors.New("forwarded participation event is not counted for its participation")
+			}
+			return nil
+		}
 		switch ev.Type {
+		case protocol.EventScope:
+			if !member || ev.Hash() != info.Scope {
+				return errors.New("scope is not its inviter's exact counted projection")
+			}
 		case protocol.EventInvite:
 			_, author := m.author(ev.Author)
 			if !member || !author || ev.Hash() != info.Invite || ev.Author.Address != sender || ev.Author.Fingerprint != fp {
@@ -128,8 +141,8 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 			}
 		case protocol.EventDismiss:
 			_, author := m.author(ev.Author)
-			if !member || !author {
-				return errors.New("only a current DM member dismisses")
+			if (!member || !author) && !(info.Role == protocol.RoleHuman && host && ev.Hash() == info.Dismissal && info.Decision != "") {
+				return errors.New("only a current DM member or exact accepted human host ends participation")
 			}
 			events := []string{info.Invite, info.Decision, info.Dismissal}
 			if !slices.Contains(events, ev.Prev) {
@@ -137,6 +150,9 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 			}
 		}
 	case envelope.SubExcerpt:
+		if info.Role == protocol.RoleHuman && !info.HumanActive() {
+			return errors.New("human selected context waits for exact acceptance")
+		}
 		if !member || sender != info.Inviter.Address || fp != info.Inviter.Fingerprint || !in.Replica || in.Kind != envelope.KindMessage || info.Held != 0 || info.State != PartInvited && info.State != PartActive {
 			return errors.New("excerpt is not from the inviter for a live granted participation")
 		}
@@ -155,6 +171,11 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 			if !host || in.AgentID != info.AgentID || in.ReplyTo == "" {
 				return errors.New("output does not belong to the exact invited agent")
 			}
+		case envelope.KindMessage:
+			// Nonterminal progress is an output under the same authority.
+			if !isResponderProgress(in) || !host || in.AgentID != info.AgentID {
+				return errors.New("external participation confers no ordinary DM send authority")
+			}
 		default:
 			return errors.New("external participation confers no ordinary DM send authority")
 		}
@@ -169,7 +190,8 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 // shared by its audience copies. Older copies need the exact physical request
 // here; absence remains retryable proof, never an inferred match by PID.
 func externalOutputRequest(q dbq, in envelope.Inner, info ParticipationInfo, m dmMembers, self, selfFP string) (string, error) {
-	if in.Sub != "" || in.Kind != envelope.KindAnswer && in.Kind != envelope.KindResult {
+	progress := isResponderProgress(in)
+	if in.Sub != "" || in.Kind != envelope.KindAnswer && in.Kind != envelope.KindResult && !progress {
 		return "", nil
 	}
 	if info.Decision == "" {
@@ -202,7 +224,7 @@ func externalOutputRequest(q dbq, in envelope.Inner, info ParticipationInfo, m d
 			return "", err
 		}
 		var target envelope.Target
-		if conv != in.Conv || pid != info.PID || sub != "" || kind != envelope.KindQuestion && kind != envelope.KindTask || replyKind(kind) != in.Kind ||
+		if conv != in.Conv || pid != info.PID || sub != "" || kind != envelope.KindQuestion && kind != envelope.KindTask || !progress && replyKind(kind) != in.Kind ||
 			json.Unmarshal([]byte(raw), &target) != nil || target.Address != info.Host.Address || target.Fingerprint != info.Host.Fingerprint || target.AgentID != info.AgentID ||
 			!m.device(from, fp) || !m.requestEpoch(from, fp, &target) || lid == "" || found && (lid != originalLID || fp != originalKey) {
 			return reasonInvalid, errors.New("external output does not match one exact member request and participation host")
@@ -336,6 +358,40 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	for _, d := range devices {
 		seen[d.Address] = true
 	}
+	if humanEndEvent(in, info) {
+		infos, err := a.Participations(info.Conv)
+		if err != nil {
+			return ConvSent{}, err
+		}
+		for _, other := range infos {
+			if !other.HumanActive() || seen[other.Host.Address] || other.Host.Address == a.Address {
+				continue
+			}
+			if _, err := a.refreshPerson(ctx, other.Host.Person, false); err != nil {
+				return ConvSent{}, err
+			}
+			other, err = a.Participation(other.PID)
+			if err != nil {
+				return ConvSent{}, err
+			}
+			if !other.HumanActive() {
+				continue
+			}
+			p, ok, err := a.store.personByID(other.Host.Person)
+			if err != nil {
+				return ConvSent{}, err
+			}
+			if !ok {
+				return ConvSent{}, errors.New("human end recipient proof unavailable")
+			}
+			d, ok := p.device(other.Host.Address)
+			if !ok || d.Fingerprint() != other.Host.Fingerprint {
+				return ConvSent{}, errors.New("human end recipient key changed")
+			}
+			devices = append(devices, d)
+			seen[d.Address] = true
+		}
+	}
 	for _, mem := range members {
 		p, ok := m.persons[mem.Person]
 		if !ok {
@@ -419,6 +475,10 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 			return ConvSent{}, err
 		}
 		c := outCopy{in: copyIn, env: sealed, state: stateQueued, required: protocol.CapExternalParticipation}
+		if info.Role == protocol.RoleHuman || agentRequirement(copyIn) == protocol.CapHumanParticipation { // a scope record: never under apx1 alone
+			c.required = protocol.CapHumanParticipation
+			c.recipientFP = key.Fingerprint()
+		}
 		if m.group != nil {
 			c.required = protocol.CapGroup
 			c.recipientFP = key.Fingerprint()
@@ -484,6 +544,20 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 		}
 		if _, err := externalOutputRequest(tx, in, current, members, a.Address, a.Self().Fingerprint()); err != nil {
 			return &heldBack{err.Error()}
+		}
+		if humanEndEvent(in, current) {
+			for _, copy := range copies {
+				if members.device(copy.env.To, copy.recipientFP) || copy.env.To == current.Host.Address && copy.recipientFP == current.Host.Fingerprint {
+					continue
+				}
+				ok, err := humanEndReader(tx, in.Conv, copy.env.To, copy.recipientFP)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return errors.New("human end captured recipient no longer accepted")
+				}
+			}
 		}
 		if members.group != nil {
 			for _, copy := range copies {
@@ -653,6 +727,9 @@ func (a *Agent) sendGrantedExcerpts(ctx context.Context, invite protocol.Partici
 					return externalTurn(in, current, m, a.Address, a.Self().Fingerprint())
 				}
 				copy := outCopy{in: in, env: sealed, state: stateQueued, required: protocol.CapExternalParticipation}
+				if invite.Role == protocol.RoleHuman {
+					copy.required = protocol.CapHumanParticipation
+				}
 				if m, e := a.dmMembers(invite.Conv); e != nil {
 					spoolErr = e
 				} else {
@@ -706,12 +783,27 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 		senderMember = members.device(sender.Address, sender.Fingerprint())
 	}
 	var ev *protocol.ParticipationEvent
+	disclosed := false // another human participation's lifecycle, shared by an original
 	if in.Sub == envelope.SubEvent {
-		parsed, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
-		if err != nil {
-			return true, hold(reasonInvalid, err.Error())
+		if !group && !recipientMember {
+			parsed, ok, reason, err := a.disclosedHumanEvent(ctx, in, sender)
+			if err != nil {
+				if reason != "" {
+					return true, hold(reason, err.Error())
+				}
+				return true, err
+			}
+			if ok {
+				ev, disclosed = &parsed, true
+			}
 		}
-		ev = &parsed
+		if !disclosed {
+			parsed, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
+			if err != nil {
+				return true, hold(reasonInvalid, err.Error())
+			}
+			ev = &parsed
+		}
 	}
 	needed := group || !recipientMember || !senderMember || in.Sub == envelope.SubExcerpt
 	if ev != nil && ev.Host != nil {
@@ -741,7 +833,7 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 			}
 			return proofErr(err)
 		}
-		if !recipientMember && (ev.Host.Address != a.Address || ev.Host.Fingerprint != a.Self().Fingerprint() || ev.Host.Person != me.info.Person) {
+		if !recipientMember && !disclosed && (ev.Host.Address != a.Address || ev.Host.Fingerprint != a.Self().Fingerprint() || ev.Host.Person != me.info.Person) {
 			return true, hold(reasonInvalid, "invite does not name this outside host")
 		}
 	}
@@ -813,9 +905,26 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 		return true, hold(reasonProof, "external invitation proof is incomplete or conflicting")
 	}
 	if !recipientMember && (info.Host.Address != a.Address || info.Host.Fingerprint != a.Self().Fingerprint() || info.Host.Person != me.info.Person) {
-		return true, hold(reasonInvalid, "outside recipient differs from the exact invited host")
+		allowed := false
+		if humanEndEvent(in, info) {
+			allowed, err = humanEndRecipient(a.store.db, in.Conv, a.Address, a.Self().Fingerprint())
+		} else if disclosed {
+			allowed, err = humanEndReader(a.store.db, in.Conv, a.Address, a.Self().Fingerprint())
+			if err != nil {
+				return true, err
+			}
+		}
+		if !allowed {
+			return true, hold(reasonInvalid, "outside recipient differs from the exact invited host")
+		}
 	}
-	if err := externalTurn(in, info, m, env.From, sender.Fingerprint()); err != nil {
+	turn := externalTurn
+	if disclosed { // another participation's shared public record: counted here, no other authority
+		turn = func(in envelope.Inner, info ParticipationInfo, _ dmMembers, _, _ string) error {
+			return disclosedCounted(in, info)
+		}
+	}
+	if err := turn(in, info, m, env.From, sender.Fingerprint()); err != nil {
 		reason := reasonInvalid
 		if info.State == PartInvited && in.Sub == "" || !group && len(m.persons) != 2 {
 			reason = reasonProof
@@ -859,6 +968,19 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 		if err != nil {
 			return err
 		}
+		if (disclosed || humanEndEvent(in, current)) && !members.device(a.Address, a.Self().Fingerprint()) && (current.Host.Address != a.Address || current.Host.Fingerprint != a.Self().Fingerprint()) {
+			reader := humanEndReader
+			if humanEndEvent(in, current) {
+				reader = humanEndRecipient
+			}
+			ok, err := reader(tx, in.Conv, a.Address, a.Self().Fingerprint())
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("human end recipient no longer accepted")
+			}
+		}
 		if members.group != nil {
 			if !members.device(a.Address, a.Self().Fingerprint()) && !(current.External && current.Host.Address == a.Address && current.Host.Fingerprint == a.Self().Fingerprint()) {
 				return errors.New("group: PID recipient no longer authorized")
@@ -873,7 +995,7 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 				}
 			}
 		}
-		if err := externalTurn(in, current, members, env.From, sender.Fingerprint()); err != nil {
+		if err := turn(in, current, members, env.From, sender.Fingerprint()); err != nil {
 			return err
 		}
 		if _, err := externalOutputRequest(tx, in, current, members, a.Address, a.Self().Fingerprint()); err != nil {
@@ -881,7 +1003,14 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 		}
 		return nil
 	}
+	humanEnd := info.Role == protocol.RoleHuman && ev != nil && ev.Type == protocol.EventDismiss
+	if humanEnd {
+		a.humanMu.Lock()
+	}
 	res, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
+	if humanEnd {
+		a.humanMu.Unlock()
+	}
 	if errors.Is(err, errTooManyEvents) {
 		return true, hold(reasonInvalid, err.Error())
 	}
@@ -907,16 +1036,32 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 func (a *Agent) mayDeliverExternal(env envelope.Envelope) (bool, bool, error) {
 	var required, state string
 	var in envelope.Inner
-	var target string
-	err := a.store.db.QueryRow(`SELECT coalesce(required_cap,''), state, conv, coalesce(pid,''), kind, body, coalesce(sub,''), coalesce(origin,''), coalesce(target,''), coalesce(agent_id,''), coalesce(reply_to,'') FROM outbox WHERE id=?`, env.ID).
-		Scan(&required, &state, &in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &target, &in.AgentID, &in.ReplyTo)
+	var target, humanRaw, capturedFP string
+	err := a.store.db.QueryRow(`SELECT coalesce(required_cap,''), state, conv, coalesce(pid,''), kind, body, coalesce(sub,''), coalesce(origin,''), coalesce(target,''), coalesce(agent_id,''), coalesce(reply_to,''),coalesce(human,''),coalesce(recipient_fp,''),coalesce(status,'') FROM outbox WHERE id=?`, env.ID).
+		Scan(&required, &state, &in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &target, &in.AgentID, &in.ReplyTo, &humanRaw, &capturedFP, &in.Status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
 	if err != nil {
 		return true, false, err
 	}
-	if required != protocol.CapExternalParticipation {
+	if humanRaw != "" {
+		var h envelope.HumanTurn
+		if err := json.Unmarshal([]byte(humanRaw), &h); err != nil {
+			return true, false, err
+		}
+		if required != protocol.CapHumanParticipation {
+			return true, false, errors.New("human scope missing its reader capability")
+		}
+		if target != "" {
+			if err := json.Unmarshal([]byte(target), &in.Target); err != nil {
+				return true, false, err
+			}
+		}
+		in.Human = &h
+		return a.mayDeliverHuman(env, in, state, capturedFP)
+	}
+	if required != protocol.CapExternalParticipation && required != protocol.CapHumanParticipation {
 		return false, false, nil
 	}
 	if state != stateQueued {
@@ -961,14 +1106,42 @@ func (a *Agent) mayDeliverExternal(env envelope.Envelope) (bool, bool, error) {
 		return true, false, err
 	}
 	_, rootMember := m.root.Member(info.Host.Person)
-	allowed := !rootMember && externalDM(m.root) && (m.device(env.To, recipientFP(a.store, env.To)) || env.To == info.Host.Address && a.personSendable(info.Host.Address, ""))
+	// A member-hosted participation's own record to an original member device
+	// is ordinary member traffic: a scope's hgp1 only fences its reader.
+	memberEvent := rootMember && externalDM(m.root) && in.Sub == envelope.SubEvent && m.device(env.To, recipientFP(a.store, env.To))
+	allowed := memberEvent || !rootMember && externalDM(m.root) && (m.device(env.To, recipientFP(a.store, env.To)) || env.To == info.Host.Address && a.personSendable(info.Host.Address, ""))
 	if env.To == info.Host.Address {
 		p, ok, _ := a.store.personByID(info.Host.Person)
 		allowed = allowed && ok && p.has(info.Host.Address, info.Host.Fingerprint)
 	}
+	disclosure := false
+	if humanDisclosureEvent(in, info) && !allowed && capturedFP != "" {
+		ok, e := humanEndReader(a.store.db, in.Conv, env.To, capturedFP)
+		if e != nil {
+			return true, false, e
+		}
+		ev, _ := protocol.ParseParticipationEvent([]byte(in.Body))
+		if !ok && info.Role == protocol.RoleHuman && ev.Type == protocol.EventDismiss { // a human end to an outside assistant host
+			if ok, e = assistantHostReader(a.store.db, in.Conv, env.To, capturedFP); e != nil {
+				return true, false, e
+			}
+		} else if ok && env.To != info.Host.Address { // shared with another guest: never a stale acceptance
+			ok = humanSubjectCurrent(a.store.db, ev, info.PID) == nil
+		}
+		allowed, disclosure = ok, ok
+	}
+	if required == protocol.CapHumanParticipation && capturedFP != "" && recipientFP(a.store, env.To) != capturedFP {
+		allowed = false
+	}
 	why := "external recipient is no longer a pinned participation audience device"
-	if allowed {
-		if roleErr := externalTurn(in, info, m, a.Address, a.Self().Fingerprint()); roleErr != nil {
+	if allowed && !memberEvent {
+		roleErr := error(nil)
+		if disclosure {
+			roleErr = disclosedCounted(in, info)
+		} else {
+			roleErr = externalTurn(in, info, m, a.Address, a.Self().Fingerprint())
+		}
+		if roleErr != nil {
 			allowed, why = false, roleErr.Error()
 		}
 	}

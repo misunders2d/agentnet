@@ -1,16 +1,16 @@
 /* AgentNet messenger. Calm surfaces, one accent for you, amber only for
    what needs you. No external fonts or images: CSP allows only this origin. */
 :root {
-  --canvas: #f4f5f7; --surface: #ffffff; --sunken: #eef0f3; --hover: #f1f2f5; --line: #e3e5e9;
-  --text: #16181d; --muted: #5d6370;
-  --accent: #4b45d6; --accent-ink: #ffffff; --accent-soft: #ecebfc; --accent-text: #3f39c4;
+  --canvas: #fafaf9; --surface: #ffffff; --sunken: #eef0f3; --hover: #f1f2f5; --line: #e3e5e9;
+  --text: #20262d; --muted: #5d6370;
+  --accent: #147d73; --accent-ink: #ffffff; --accent-soft: #e9f4f1; --accent-text: #126a62;
   --theirs: #eceef2;
   --attn: #a14a07; --attn-soft: #fdf1e1; --attn-line: #f0c48a;
   --danger: #b42318; --danger-soft: #fdecea;
   --future: #6d28d9; --future-soft: #f2ecfe;
-  --focus: #4b45d6;
+  --focus: #147d73;
   --shadow: 0 1px 2px rgb(16 24 40 / .06), 0 8px 24px rgb(16 24 40 / .08);
-  --r-bubble: 18px; --r-card: 12px;
+  --r-bubble: 8px; --r-card: 8px;
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   color: var(--text); background: var(--canvas);
   -webkit-font-smoothing: antialiased;
@@ -19,12 +19,12 @@
   :root:not([data-theme="light"]) {
     --canvas: #0f1115; --surface: #161920; --sunken: #1d212a; --hover: #1b1f27; --line: #272b35;
     --text: #e8eaef; --muted: #a2a8b4;
-    --accent: #5a54e0; --accent-ink: #ffffff; --accent-soft: #25234a; --accent-text: #b3b0ff;
+    --accent: #329e92; --accent-ink: #ffffff; --accent-soft: #173831; --accent-text: #8bddca;
     --theirs: #20242d;
     --attn: #f4b35e; --attn-soft: #2e2211; --attn-line: #6b4a1c;
     --danger: #f4978e; --danger-soft: #361a18;
     --future: #c9b8ff; --future-soft: #261f3b;
-    --focus: #a9a5ff;
+    --focus: #8bddca;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 30px rgb(0 0 0 / .45);
   }
 }
@@ -720,12 +720,12 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
 :root[data-theme="dark"] {
     --canvas: #0f1115; --surface: #161920; --sunken: #1d212a; --hover: #1b1f27; --line: #272b35;
     --text: #e8eaef; --muted: #a2a8b4;
-    --accent: #5a54e0; --accent-ink: #ffffff; --accent-soft: #25234a; --accent-text: #b3b0ff;
+    --accent: #329e92; --accent-ink: #ffffff; --accent-soft: #173831; --accent-text: #8bddca;
     --theirs: #20242d;
     --attn: #f4b35e; --attn-soft: #2e2211; --attn-line: #6b4a1c;
     --danger: #f4978e; --danger-soft: #361a18;
     --future: #c9b8ff; --future-soft: #261f3b;
-    --focus: #a9a5ff;
+    --focus: #8bddca;
     --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 10px 30px rgb(0 0 0 / .45);
 }
 
@@ -820,6 +820,8 @@ input[type="datetime-local"] { font: inherit; padding: 6px 10px; border: 1px sol
 .reaction { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
 button.reaction { cursor: pointer; }
 .reaction.mine { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.reaction.assistant-reaction { border-style: dashed; max-width: 100%; min-width: 0; }
+.reaction-agent { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 24em; color: var(--muted, inherit); }
 .react-pick { position: relative; }
 .react-pick > summary { list-style: none; cursor: pointer; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 999px; border: 1px dashed var(--line); color: var(--muted); font-size: 14px; }
 .react-pick > summary::-webkit-details-marker { display: none; }
@@ -926,3 +928,56 @@ button.reaction { cursor: pointer; }
   .composer:has(#compose-error:not(:empty)) .receiver-options-body { max-height: min(10vh, 80px); }
 }
 .receiver-request { display: block; font-weight: 600; color: var(--text); }
+
+/* Long invitation scopes scroll without hiding confirmation or Cancel. */
+#dialog { padding: 0; border-radius: 8px; max-height: calc(100dvh - 32px); overflow: hidden; }
+#dialog-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; max-height: calc(100dvh - 32px); }
+#dialog-title { margin: 0; padding: 18px 24px 12px; }
+#dialog-body { min-height: 0; overflow-y: auto; padding: 0 24px 12px; }
+#dialog-error { margin: 0; padding: 8px 24px; max-height: 24vh; overflow-y: auto; overflow-wrap: anywhere; }
+#dialog-error:empty { display: none; }
+#dialog .dialog-actions { margin: 0; padding: 12px 24px; border-top: 1px solid var(--line); background: var(--surface); }
+
+/* Human-first conversation: compact participants, contextual addressing. */
+.agents { flex: none; padding: 8px 24px; border-bottom: 1px solid var(--line); background: var(--surface); max-height: 96px; overflow: auto; }
+.participant-list { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.participant { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; min-height: 30px; }
+.participant .avatar { width: 24px; height: 24px; font-size: 10px; }
+.assistant-participant { border: 0; border-radius: 8px; background: var(--accent-soft); padding: 4px 8px; color: var(--accent-text); }
+.human-participant { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 4px 8px; color: var(--text); }
+.notice.guest-notice { background: var(--surface); color: var(--muted); border-color: var(--line); padding-block: 6px; }
+.notice.audience-notice { background: var(--attn-soft); color: var(--text); border-color: var(--attn-line); padding-block: 6px; }
+.invite-assistant { margin-left: auto; }
+.conv-head .peer-chips { max-width: 42%; }
+.timeline { background: var(--canvas); }
+.bubble { box-shadow: none; }
+.compose-box { position: relative; border-radius: 8px; }
+.agent-target { font-size: 12px; }
+.addressed-assistant { display: inline-flex; align-items: center; gap: 8px; color: var(--accent-text); background: var(--accent-soft); padding: 3px 8px; border-radius: 8px; }
+.mentions { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 8; max-height: min(260px, 34vh); overflow-y: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); background: var(--surface); }
+.mention-row { display: grid; gap: 2px; text-align: left; width: 100%; padding: 8px; border: 0; border-radius: 8px; background: transparent; overflow-wrap: anywhere; }
+.mention-row small { color: var(--muted); }
+.mention-row.selected, .mention-row:hover { background: var(--accent-soft); }
+.typing-dots { display: inline-flex; gap: 3px; padding-left: 8px; align-items: center; }
+.typing-dots i { display: block; width: 4px; height: 4px; border-radius: 50%; background: var(--muted); animation: typing-pulse 1.2s infinite; }
+.typing-dots i:nth-child(2) { animation-delay: .15s; }
+.typing-dots i:nth-child(3) { animation-delay: .3s; }
+.working-dots { display: inline-block; margin-right: 6px; color: var(--accent-text); animation: working-pulse 1.8s ease-in-out infinite; font-weight: 700; }
+@keyframes typing-pulse { 0%, 70%, 100% { transform: translateY(0); opacity: .4; } 35% { transform: translateY(-3px); opacity: 1; } }
+@keyframes working-pulse { 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) { .typing-dots i, .working-dots { animation: none; } }
+.profile-btn.update-available::after { content: ""; position: absolute; right: 8px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+#routing-settings .receiver-options-body { max-height: none; overflow: visible; }
+#routing-settings .receiver-options { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .agents { padding: 6px 12px; max-height: 72px; }
+  .participant-list { gap: 4px 8px; }
+  .participant { font-size: 11px; }
+  .assistant-participant .avatar, .participant > .tag { display: none; }
+  .target { font-size: 11px; }
+  #to-how { max-height: 32px; overflow-y: auto; }
+  .compose-foot { display: block; font-size: 10px; line-height: 1.3; }
+  .compose-bar { gap: 4px; flex-wrap: wrap; }
+  #send { min-width: 40px; max-width: 55%; }
+  .send span { overflow-wrap: anywhere; }
+}

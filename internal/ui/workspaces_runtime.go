@@ -13,13 +13,14 @@ import (
 // remains the bootstrap caller's responsibility. Run acquires each home lock
 // before NewLive may clean staging or expose any provider.
 type WorkspaceRuntime struct {
-	registry  *client.Workspaces
-	providers *WorkspaceProviders
-	ctx       context.Context
-	mu        sync.Mutex
-	runs      map[string]*workspaceRun
-	closed    bool
-	Options   func(client.Workspace) client.RunOptions
+	registry      *client.Workspaces
+	providers     *WorkspaceProviders
+	ctx           context.Context
+	mu            sync.Mutex
+	runs          map[string]*workspaceRun
+	closed        bool
+	Options       func(client.Workspace) client.RunOptions
+	ConfigureLive func(*Live, *client.Agent, client.Workspace)
 }
 type workspaceRun struct {
 	cancel context.CancelFunc
@@ -39,6 +40,7 @@ func NewWorkspaceRuntime(ctx context.Context, registry *client.Workspaces, provi
 		return w, p, err
 	}
 	providers.Disconnect = m.Disconnect
+	providers.Rename = registry.Rename
 	return m
 }
 func (m *WorkspaceRuntime) StartKnown() error {
@@ -89,6 +91,9 @@ func (m *WorkspaceRuntime) start(w client.Workspace, bind bool) (Provider, error
 			}
 		}
 		p := NewLive(a)
+		if m.ConfigureLive != nil {
+			m.ConfigureLive(p, a, w)
+		}
 		if bind {
 			if _, err := m.providers.Bind(w, p); err != nil {
 				if stop != nil {

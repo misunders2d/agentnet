@@ -242,6 +242,9 @@ func groupParticipationEngineVectors(t *testing.T, root protocol.ConvRoot, state
 		seal(role+"-answer", envelope.Inner{Kind: envelope.KindAnswer, PID: pid, ReplyTo: requestLID, Body: "Exact " + role + " answer", AgentID: agent}, signer, host)
 		seal(role+"-wrong-agent", envelope.Inner{Kind: envelope.KindAnswer, PID: pid, ReplyTo: requestLID, Body: "Forged named output", AgentID: protocol.NewID()}, signer, host)
 		seal(role+"-status", envelope.Inner{V: envelope.Version3, Kind: envelope.KindMessage, Sub: envelope.SubStatus, Body: `{"state":"running","n":1,"at":1700000100,"detail":"Synthetic executor status"}`, Ref: &envelope.Ref{ID: requestLID, Fingerprint: ap.Fingerprint()}}, signer, host)
+		// The assistant's own reaction to that request (envelope.AssistantReaction), and one naming another agent.
+		seal(role+"-assistant-reaction", envelope.Inner{V: envelope.Version3, Kind: envelope.KindMessage, Sub: envelope.SubReaction, Body: `{"emoji":"🎉","op":"add","n":1}`, PID: pid, AgentID: agent, Ref: &envelope.Ref{ID: requestLID, Fingerprint: ap.Fingerprint()}}, signer, host)
+		seal(role+"-assistant-wrong-agent", envelope.Inner{V: envelope.Version3, Kind: envelope.KindMessage, Sub: envelope.SubReaction, Body: `{"emoji":"🎉","op":"add","n":2}`, PID: pid, AgentID: protocol.NewID(), Ref: &envelope.Ref{ID: requestLID, Fingerprint: ap.Fingerprint()}}, signer, host)
 		dismiss := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: pid, Type: protocol.EventDismiss, Prev: decision.Hash(), TS: 1700000100, Author: ev.Author}
 		dismiss.Sign(alice.Sign)
 		seal(role+"-dismiss", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: pid, Body: marshal(t, dismiss)}, alice, ap)

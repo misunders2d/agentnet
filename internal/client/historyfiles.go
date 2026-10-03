@@ -356,6 +356,17 @@ func (a *Agent) serveFile(ctx context.Context, device, conv, lid, sha string) er
 	if !ok || !own {
 		return fmt.Errorf("%w: the asking device is no device of this person", errPermanent)
 	}
+	// A turn deleted here offers no file, unless unfinished work here still
+	// keeps it (convclear.go: retainedIn).
+	var erased int
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM conv_erased e WHERE e.conv = ? AND e.lid = ?
+		AND NOT EXISTS (SELECT 1 FROM inbox i WHERE i.conv = e.conv AND i.lid = e.lid AND `+retainedIn+`)
+		AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.conv = e.conv AND o.lid = e.lid AND `+retainedOut+`)`, conv, lid).Scan(&erased); err != nil {
+		return err
+	}
+	if erased > 0 {
+		return fmt.Errorf("%w: its conversation was deleted here", errPermanent)
+	}
 	plain, name, err := a.fileSource(ctx, conv, lid, sha)
 	if err != nil {
 		return err
@@ -572,7 +583,7 @@ func (a *Agent) markOpenable(files []FileInfo, sent bool) {
 func (a *Agent) prefetchFiles(ctx context.Context) (more bool) {
 	rows, err := a.store.db.Query(`SELECT a.blob_id, a.name, a.size, a.sha256, a.ct_size, a.ct_sha256
 		FROM attachments a JOIN inbox i ON i.id = a.message_id
-		WHERE i.local = 0 AND a.blob_id NOT LIKE ? AND NOT `+retractedClause+`
+		WHERE i.local = 0 AND a.blob_id NOT LIKE ? AND NOT `+retractedClause+` AND NOT (`+erasedIn+` AND NOT `+retainedIn+`)
 		ORDER BY coalesce(i.received_ms, i.received_at * 1000) DESC`, historyBlob+"%")
 	if err != nil {
 		return false

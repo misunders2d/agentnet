@@ -19,6 +19,12 @@ const agentCapabilitySchema = `ALTER TABLE outbox ADD COLUMN required_cap TEXT;`
 var errAgentIdentityUnsupported = fmt.Errorf("%w: named agent capability unavailable", errPermanent)
 
 func agentRequirement(in envelope.Inner) string {
+	if isResponderProgress(in) && in.Conv == "" { // a conversation's progress keeps its own requirement; delivery adds prg1
+		return protocol.CapProgress
+	}
+	if in.Human != nil {
+		return protocol.CapHumanParticipation
+	}
 	if in.ReceiverRoute != nil && in.ReceiverRoute.Op != "request" {
 		return protocol.CapReplyReceiver
 	}
@@ -38,16 +44,27 @@ func agentRequirement(in envelope.Inner) string {
 		}
 		in = h.inner(in.Conv)
 	}
+	if envelope.AssistantReaction(in) { // as history too: never stored by an older reader as its host's mark
+		return protocol.CapAgentReaction
+	}
 	if in.Sub == envelope.SubExcerpt && in.PID != "" {
 		return protocol.CapExternalParticipation
+	}
+	if in.Human != nil {
+		return protocol.CapHumanParticipation
 	}
 	if namedAgentFields(in) {
 		return protocol.CapAgentIdentity
 	}
 	if in.Sub == envelope.SubEvent {
 		var e protocol.ParticipationEvent
-		if json.Unmarshal([]byte(in.Body), &e) == nil && e.Host != nil && e.Host.AgentID != "" {
-			return protocol.CapAgentIdentity
+		if json.Unmarshal([]byte(in.Body), &e) == nil {
+			if e.Role == protocol.RoleHuman || e.Type == protocol.EventScope { // a scope exists only for human audiences
+				return protocol.CapHumanParticipation
+			}
+			if e.Host != nil && e.Host.AgentID != "" {
+				return protocol.CapAgentIdentity
+			}
 		}
 	}
 	return ""
@@ -69,7 +86,7 @@ func copyRequirement(c outCopy) string {
 }
 
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
-	if required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver {
+	if required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)
@@ -81,11 +98,23 @@ func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Publi
 		return err
 	}
 	if !profile.Supports(key.Address, key.SignKey, required) || required == protocol.CapExternalParticipation && !profile.Supports(key.Address, key.SignKey, protocol.CapAgentIdentity) {
+		if required == protocol.CapHumanParticipation {
+			return fmt.Errorf("%w: %s cannot read human participation yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
+		}
 		if required == protocol.CapReplyReceiver {
 			return fmt.Errorf("%w: %s cannot read selected receiver delegation yet", errAgentIdentityUnsupported, key.Address)
 		}
 		if required == protocol.CapGroup {
 			return fmt.Errorf("%w: %s cannot read group context yet", errAgentIdentityUnsupported, key.Address)
+		}
+		if required == protocol.CapAgentReaction {
+			return fmt.Errorf("%w: %s cannot read assistant reactions yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
+		}
+		if required == protocol.CapProgress {
+			return fmt.Errorf("%w: %s cannot read nonterminal responder progress yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
+		}
+		if required == protocol.CapConvClear {
+			return fmt.Errorf("%w: %s cannot apply conversation deletions yet; it deletes it once updated", errAgentIdentityUnsupported, key.Address)
 		}
 		return fmt.Errorf("%w: %s cannot read named agents yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
 	}
@@ -134,7 +163,7 @@ func (a *Agent) checkDeviceAgent(in envelope.Inner, sender identity.Public) erro
 // an origin label. Historical copies use their sibling-vouched original key.
 // Missing participation evidence stays on the existing proof retry path.
 func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public) (string, error) {
-	if !namedAgentFields(in) {
+	if !namedAgentFields(in) || envelope.AssistantReaction(in) { // a reaction is bound by assistantHistoryCheck / admitAssistantReaction
 		return "", nil
 	}
 	if in.PID == "" || !protocol.ValidID(in.PID) {
@@ -153,7 +182,7 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 	if in.Target != nil && (in.Target.AgentID != p.AgentID || in.Target.Address != p.Host.Address || in.Target.Fingerprint != p.Host.Fingerprint) {
 		return reasonInvalid, errors.New("named request differs from its participation host")
 	}
-	if in.AgentID != "" && (!protocol.ValidID(in.AgentID) || in.AgentID != p.AgentID || sender.Address != p.Host.Address || sender.Fingerprint() != p.Host.Fingerprint || in.Kind != envelope.KindAnswer && in.Kind != envelope.KindResult || in.ReplyTo == "" || in.Sub != "") {
+	if in.AgentID != "" && (!protocol.ValidID(in.AgentID) || in.AgentID != p.AgentID || sender.Address != p.Host.Address || sender.Fingerprint() != p.Host.Fingerprint || in.Kind != envelope.KindAnswer && in.Kind != envelope.KindResult && !isResponderProgress(in) || in.ReplyTo == "" || in.Sub != "") {
 		return reasonInvalid, errors.New("named answer differs from its participation host")
 	}
 	if p.External && in.AgentID != "" {

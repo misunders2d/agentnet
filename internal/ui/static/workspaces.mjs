@@ -75,6 +75,16 @@ export class WorkspaceShell {
 
  }
  async join(body){const b=await json(this.fetch,"/api/workspaces/join",body);return this.register(b);}
+ async rename(id,name) {
+  name=String(name).trim();if(!name||[...name].length>120||/[\u0000-\u001f\u007f]/.test(name))throw new Error("Enter a readable name, up to 120 characters");
+  const entry=this.members.get(id);if(!entry?.connected)throw new Error("Disconnected workspace");
+  const old=entry.binding;
+  const next=entry.engine?await this.renameBrowser(id,name):await json(this.fetch,"/api/workspaces/rename",{id,handle:old.handle,name});
+  if(this.members.get(id)!==entry||!entry.connected||!next||next.id!==old.id||next.handle!==old.handle||next.endpoint!==old.endpoint||next.realm!==old.realm||next.address!==old.address||next.state!==old.state)throw new Error("Workspace identity changed; rename refused");
+  // Keep the same entry/transport: a name change never retargets pending work,
+  // reloads a conversation or discards its draft.
+  entry.binding=Object.freeze({...old,name:next.name});return entry.binding;
+ }
  async disconnect(id) {
   const e=this.members.get(id);if(!e?.connected)throw new Error("Disconnected workspace");
   if(e.engine)throw new Error("Browser disconnect requires its enrollment lifecycle adapter");
@@ -96,9 +106,19 @@ export function mountWorkspaceSwitcher(root,shell,{beforeSwitch=()=>{},afterSwit
  const label=document.createElement("label");label.textContent="Workspace ";
  const select=document.createElement("select");select.setAttribute("aria-label","Active workspace");
  const detail=document.createElement("span");detail.className="workspace-detail";
- const refresh=()=>{select.replaceChildren(...shell.list().map(b=>{const o=document.createElement("option");o.value=b.id;o.textContent=b.name+" · "+new URL(b.endpoint).host+" · "+(b.realm||b.id).slice(0,8);return o;}));select.value=shell.active||"";const b=shell.members.get(shell.active)?.binding;detail.textContent=b?b.address+" · "+b.name:"No connected workspace";};
+ const refresh=()=>{select.replaceChildren(...shell.list().map(b=>{const o=document.createElement("option");o.value=b.id;o.textContent=b.name||"Unnamed workspace";o.title=new URL(b.endpoint).host;return o;}));select.value=shell.active||"";const b=shell.members.get(shell.active)?.binding;detail.textContent=b?"Connected workspace":"No connected workspace";connectionText.textContent=b?new URL(b.endpoint).host+" · "+b.address:"No connection";};
+ const connection=document.createElement("details"),summary=document.createElement("summary"),connectionText=document.createElement("span");summary.textContent="Connection details";connection.append(summary,connectionText);connection.className="workspace-detail";
+ const rename=document.createElement("button");rename.type="button";rename.textContent="Rename";rename.className="workspace-rename";
+ rename.onclick=()=>{
+  const selectedID=shell.active,b=shell.members.get(selectedID)?.binding;if(!b)return;
+  const dialog=document.createElement("dialog");dialog.className="workspace-name-dialog";const form=document.createElement("form"),title=document.createElement("h2"),input=document.createElement("input"),hint=document.createElement("p"),error=document.createElement("p"),actions=document.createElement("div"),save=document.createElement("button"),cancel=document.createElement("button");
+  title.textContent="Workspace name";input.value=b.name||"";input.maxLength=120;input.setAttribute("aria-label","Workspace display name");hint.textContent="Your name for this workspace on this installation. Identity, people, permissions and history stay unchanged.";error.setAttribute("role","alert");save.textContent="Save name";save.type="submit";cancel.textContent="Cancel";cancel.type="button";actions.className="workspace-name-actions";actions.append(cancel,save);form.append(title,hint,input,error,actions);dialog.append(form);root.append(dialog);
+  const close=()=>{dialog.close();dialog.remove();rename.focus();};cancel.onclick=close;dialog.addEventListener("cancel",e=>{e.preventDefault();close();});
+  form.onsubmit=async e=>{e.preventDefault();save.disabled=cancel.disabled=true;try{await shell.rename(selectedID,input.value);refresh();close();}catch(err){error.textContent=err.message;save.disabled=cancel.disabled=false;}};
+  dialog.showModal();input.focus();
+ };
  select.onchange=()=>{const previous=shell.active;beforeSwitch(previous,shell.state(previous));shell.select(select.value);};
- const stop=shell.onChange(e=>{refresh();afterSwitch(e);});label.append(select);bar.append(label,detail);root.prepend(bar);refresh();
+ const stop=shell.onChange(e=>{refresh();afterSwitch(e);});label.append(select);bar.append(label,rename,connection);root.prepend(bar);refresh();
  return {refresh,unmount(){stop();bar.remove();}};
 }
 
@@ -152,11 +172,13 @@ export function workspaceRealmFetch(fetcher,base,record,save,blocked){
 export class BrowserMemberships {
  constructor({shell,Engine,openIDB,locks,storage,fetch:fetcher,decodeInvite,newID,allowOrigin,pushFor=()=>null,testLoopback=false}) {
   Object.assign(this,{shell,Engine,openIDB,locks,storage,fetcher,decodeInvite,newID,allowOrigin,pushFor,testLoopback});this.runs=new Map();
+  shell.renameBrowser=(id,name)=>this.rename(id,name);
   const raw=storage.getItem("agentnet.workspaces.v1");this.records=raw?JSON.parse(raw):[];
   if(!Array.isArray(this.records)||this.records.some(r=>!ID.test(r.id)||!HANDLE.test(r.handle)||!["enrolled","joining","disconnected"].includes(r.state)))throw new Error("Invalid browser workspace registry");
   if(new Set(this.records.map(r=>r.id)).size!==this.records.length)throw new Error("Duplicate browser workspace identity");
  }
  save(){this.storage.setItem("agentnet.workspaces.v1",JSON.stringify(this.records));}
+ rename(id,name){const record=this.records.find(r=>r.id===id&&r.state==="enrolled"),entry=this.shell.members.get(id);if(!record||!entry?.engine)throw new Error("Unknown browser workspace");const old=record.name;record.name=name;try{this.save();}catch(e){record.name=old;throw e;}return {...entry.binding,name};}
  async start(record,{invite,agent}={}) {
   if(this.runs.has(record.id))throw new Error("Workspace already running");
   const base=workspaceEndpoint(record.endpoint,{testLoopback:this.testLoopback});

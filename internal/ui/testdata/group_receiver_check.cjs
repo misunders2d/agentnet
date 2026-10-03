@@ -29,7 +29,7 @@ function fixture() {
       return {state:'queued'};
     }
   });
-  vm.runInContext(region('const present =', '// host is') + region('async function preparedFiles(', '// discardStaged') + region('async function localReceiverCatalog(', 'async function loadReceiverCatalog(') + region('function chooseReplyBackup(', 'function renderReceiverStatus(') + region('async function sendDM()', 'let rerenderContacts'), context);
+  vm.runInContext(region('const present =', '// host is') + region('const dmHumanGuest =', "// A guest's audience") + region('async function preparedFiles(', '// discardStaged') + region('async function localReceiverCatalog(', 'async function loadReceiverCatalog(') + region('function chooseReplyBackup(', 'function renderReceiverStatus(') + region('async function sendDM()', 'let rerenderContacts'), context);
   elements.body={...elem(),value:'Exact group text'};
   return {context,state,host,elements,calls,staged,cleaned,setWorkspace:v=>workspace=v,hold:promise=>waitCatalog=promise};
 }

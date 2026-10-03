@@ -77,6 +77,10 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	remindDone := make(chan struct{})
 	go func() { defer close(remindDone); a.remindLoop(remindCtx) }()
 	defer func() { stopRemind(); <-remindDone }()
+	eraseCtx, stopErase := context.WithCancel(ctx)
+	eraseDone := make(chan struct{})
+	go func() { defer close(eraseDone); a.eraseLoop(eraseCtx) }() // convclear.go
+	defer func() { stopErase(); <-eraseDone }()
 	if opts.Owned != nil {
 		stopOwned, err := opts.Owned()
 		if err != nil {
@@ -491,7 +495,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	stopKicks, err := listenKicks(a.home, func() {
 		a.wakeWorker()
 		a.changes.bump()
-		a.convWork.due(convHistory | convServe | convFetch)
+		a.convWork.due(convHistory | convServe | convFetch | convRetry) // convRetry: a local participation record shares its public scope with guests now
 		a.kickNow()
 	})
 	if err != nil {

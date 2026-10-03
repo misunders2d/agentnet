@@ -79,7 +79,7 @@ func (l *Live) dmOverview(o *Overview) error {
 			return err
 		}
 		for _, info := range infos {
-			if info.Host.Person == "" {
+			if info.Host.Person == "" || info.Role == protocol.RoleHuman {
 				continue
 			}
 			ls := links[info.Host.Person]
@@ -98,6 +98,9 @@ func (l *Live) dmOverview(o *Overview) error {
 		o.Person.Agents = links[o.Person.Person]
 	}
 	for _, c := range convs {
+		if c.Deleted { // deleted here, nothing later yet (client convclear.go)
+			continue
+		}
 		msgs, err := l.a.ConversationMessages(c.ID)
 		if err != nil {
 			return err
@@ -105,12 +108,30 @@ func (l *Live) dmOverview(o *Overview) error {
 		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
 			Count: len(msgs), Unread: len(unread[c.ID]), LastAt: time.Unix(c.Created, 0)}
 		s.Kind, s.Frozen = c.Kind, c.Frozen
+		if c.Role == "visitor" && c.Kind == protocol.ConvKindDM {
+			views, e := l.guestViews(c.ID)
+			if e != nil {
+				return e
+			}
+			for _, v := range views {
+				if v.HostHere {
+					s.Role = "human_guest"
+					s.Frozen = guestFrozen(v)
+					if v.CanSend {
+						s.Frozen = ""
+					}
+					break
+				}
+			}
+		}
 		if c.Kind == protocol.ConvKindGroup {
 			s.Title = c.Title
 			s.Peer.Label = c.Title
 			if s.Members, err = l.groupMembers(c); err != nil {
 				return err
 			}
+		} else {
+			s.Members = originalViews(c)
 		}
 		for _, m := range msgs {
 			switch {
@@ -218,6 +239,8 @@ func (l *Live) DM(id string) (DMThread, error) {
 			if t.Members, err = l.groupMembers(c); err != nil {
 				return DMThread{}, err
 			}
+		} else {
+			t.Members = originalViews(c)
 		}
 		var groupRefs []protocol.GroupHistoryRef
 		if c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
@@ -232,10 +255,35 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Frozen = c.Peer.Address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it."
 		}
 		people := l.conversationPeople(c)
+		if t.Guests, err = l.guestViews(id); err != nil {
+			return DMThread{}, err
+		}
+		for _, guest := range t.Guests {
+			t.AudiencePending = t.AudiencePending || guest.AudiencePending
+		}
 		if c.Role == "visitor" && c.Kind != protocol.ConvKindGroup {
 			t.Frozen = "Invited agent context only: this host cannot send ordinary room messages."
+			for _, guest := range t.Guests {
+				if guest.HostHere {
+					t.Role = "human_guest"
+					t.Frozen = guestFrozen(guest)
+					if guest.CanSend {
+						t.Frozen = ""
+					}
+					break
+				}
+			}
+		}
+		shownEvents := map[string]bool{}
+		for _, m := range msgs { // a held invitation stands for its own public scope
+			if ev, err := protocol.ParseParticipationEvent([]byte(m.Body)); m.Sub == envelope.SubEvent && err == nil && ev.Type == protocol.EventInvite {
+				shownEvents["invite/"+ev.PID] = true
+			}
 		}
 		for _, m := range msgs {
+			if m.Sub == envelope.SubEvent && !people.eventShown(m, shownEvents) {
+				continue
+			}
 			dm := DMMessage{ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, laggingCopy(m, c.Peer.Address), m.Detail),
 				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
@@ -298,7 +346,7 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	defer cleanup() // SendConv encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Origin: envelope.OriginUI, Files: files, ReplyReceiver: receiver})
+	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Origin: envelope.OriginUI, Files: files, ReplyReceiver: receiver, PID: d.PID})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}

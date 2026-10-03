@@ -547,13 +547,22 @@ func countPaths(l *requestLog, part string) int {
 // The receipt wait may be longer than the transport's response-header
 // timeout: the Hub sends headers at once.
 func TestReceiptWaitOutlivesHeaderTimeout(t *testing.T) {
-	defer func(d time.Duration) { requestTimeout = d }(requestTimeout)
-	requestTimeout = 300 * time.Millisecond // header timeout of connections made below
+	// Setup keeps the ordinary request budget (slow CI disks, Windows).
 	w := newWorld(t, "")
 	res, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "x"}) // bob offline
 	if err != nil || res.State != protocol.StateCustody {
 		t.Fatalf("send = %+v, %v", res, err)
 	}
+	// Only the measured Status waits at most 300ms for response headers: a
+	// clone of Alice's own Hub transport (the same TLS trust, its own fresh
+	// connections), so the 1s wait must stream its headers before its answer.
+	tr, ok := w.alice.hub.http.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("hub transport %T", w.alice.hub.http.Transport)
+	}
+	measured := tr.Clone()
+	measured.ResponseHeaderTimeout = 300 * time.Millisecond
+	w.alice.hub.http = &http.Client{Transport: measured}
 	start := time.Now()
 	r, err := w.alice.Status(tctx(t), res.ID, time.Second)
 	if err != nil || r.State != protocol.StateCustody || time.Since(start) < time.Second {

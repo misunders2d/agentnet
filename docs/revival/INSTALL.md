@@ -3,13 +3,14 @@
 One program, `agentnet`, is both the laptop client and the Hub. Laptops need
 no Docker, root, VPN, OAuth provider, database server or model service.
 
-**Release binaries**: v0.3.0 is the messenger preview; v0.2.1 remains the
-latest stable release. The
-[GitHub releases](https://github.com/misunders2d/agentnet/releases) have
-`agentnet-OS-ARCH` for Linux, macOS and Windows (amd64 and arm64) plus
-`SHA256SUMS`. Download yours and `SHA256SUMS` into one folder, check the
-file, and only then install it as `agentnet` on your PATH. For example, on
-Linux x86-64:
+**Release binaries**: use the
+[latest release](https://github.com/misunders2d/agentnet/releases/latest);
+its notes say what it covers and what remains limited, and every release is on
+the [releases page](https://github.com/misunders2d/agentnet/releases). Each
+release has `agentnet-OS-ARCH` for Linux, macOS and Windows (amd64 and arm64;
+`.exe` on Windows) plus `SHA256SUMS`. Download yours and `SHA256SUMS` into one
+folder, check the file, and only then install it as `agentnet` on your PATH.
+For example, on Linux x86-64:
 
 ```sh
 grep " agentnet-linux-amd64$" SHA256SUMS | sha256sum -c -        # macOS: shasum -a 256 -c -
@@ -87,6 +88,12 @@ adds an extension that does the same and also shows a short notice while Pi
 is idle (without starting a model turn). `agentnet conversation ID` shows a
 whole conversation, both directions, at any time.
 
+*(v0.6.1, in development)* The messenger on this device (not a browser device)
+can do this setup too: it lists the assistant programs installed here, shows
+the hook changes for review before applying them, and can create named
+assistants with their own working folder. Each harness still asks you to
+trust or enable its hooks, and only sessions started afterwards use them.
+
 `agentnet doctor` checks keys, daemon, Hub reachability and protocol,
 membership and responder. Optional:
 
@@ -105,6 +112,10 @@ changed; hooks are an opt-in merge that only adds notification handlers.
 user service was verified live in operations; macOS LaunchAgent and Windows
 logon tasks are documented examples and were not exercised in live verification.
 A responder harness such as `claude` or `codex` must be on the PATH the daemon sees.
+*(v0.6.1, in development)* The daemon also looks in the folder that holds
+`agentnet` itself, so launchers installed beside it are found even when the
+service's PATH lacks that folder; launchers elsewhere still need the PATH that
+`agentnet help startup` captures.
 
 ## The Hub
 
@@ -231,8 +242,8 @@ be copied the same way: stop the daemon, then copy the home directory.
 
 ## Updating and downgrading
 
-To choose the messenger preview explicitly, run `agentnet update v0.3.0`.
-If your installed version has no `update` command (v0.2.1 and older), use
+To choose a specific release instead of the latest stable one, name it:
+`agentnet update vX.Y.Z` (described below). If your installed version has no `update` command (v0.2.1 and older), use
 the download and checksum steps above, stop the daemon when no job is
 running, replace the binary, and start the daemon again with the same home.
 Keep your home: it contains your keys and message history.

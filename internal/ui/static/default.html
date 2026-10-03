@@ -90,7 +90,7 @@
       <div id="peer-chips" class="peer-chips"></div><button id="conversation-details" class="icon-btn" type="button" aria-label="Conversation details">⋯</button>
     </header>
     <div id="notice" class="notice" role="alert" hidden></div>
-    <section id="agents" class="agents" aria-label="Agents in this DM" hidden></section>
+    <section id="agents" class="agents" aria-label="Conversation participants" hidden></section>
     <section id="drive-panel" class="drive-panel" aria-label="Project space" hidden></section>
     <section id="hub" class="hub" aria-labelledby="conv-name" hidden></section>
     <ol id="timeline" class="timeline" tabindex="-1" aria-label="Messages"></ol>
@@ -100,13 +100,7 @@
       <div id="target" class="target" aria-live="polite">
         <span id="to-line" class="to-line"><span class="to-label">To</span> <span id="to-name" class="to-name"></span> <span id="to-how" class="to-how"></span></span>
         <div id="agent-target" class="agent-target" hidden></div>
-        <details id="receiver-options" class="receiver-options" hidden>
-          <summary id="receiver-summary">Reply receiver · Me (human)</summary>
-          <div class="receiver-options-body">
-            <div id="reply-receiver" class="reply-receiver" hidden></div>
-            <div id="receiver-status" class="receiver-status" hidden></div>
-          </div>
-        </details>
+
       </div>
       <div id="replying" class="replying" hidden>
         <span class="replying-text"><span id="replying-label">Answering</span> <span id="replying-text"></span></span>
@@ -115,11 +109,13 @@
       <div class="compose-box">
         <ul id="attach-list" class="attach-list" aria-label="Files to send" hidden></ul>
         <label class="sr-only" for="body">Your message</label>
-        <textarea id="body" rows="1" placeholder="Write a message"></textarea>
+        <div id="mentions" class="mentions" role="group" aria-label="Added assistants" hidden></div>
+        <textarea id="body" rows="1" placeholder="Write a message" aria-controls="mentions" aria-expanded="false"></textarea>
         <div class="compose-bar">
           <button type="button" id="attach" class="icon-btn attach" aria-label="Attach images or files" title="Attach images or files (or paste an image)">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
+          <button type="button" id="mention-button" class="icon-btn" aria-label="Mention an added assistant" title="Mention an added assistant">@</button>
           <input type="file" id="file-input" multiple hidden>
           <fieldset id="kind" class="kind">
             <legend class="sr-only">Send as</legend>
@@ -148,16 +144,29 @@
 
 <div id="live" class="sr-only" aria-live="polite"></div>
 
+<dialog id="routing-settings" class="settings" aria-labelledby="routing-title">
+  <header class="settings-head"><h2 id="routing-title">Advanced CLI reply routing</h2><button type="button" id="routing-close" class="icon-btn" aria-label="Close reply routing">×</button></header>
+  <section class="settings-panel"><p class="hint">Optional continuation for this draft only. Human replies stay in this conversation by default. CLI-origin bindings stay exact; no assistant or backup is chosen automatically.</p>
+        <details id="receiver-options" class="receiver-options" hidden>
+          <summary id="receiver-summary">Reply receiver · Me (human)</summary>
+          <div class="receiver-options-body">
+            <div id="reply-receiver" class="reply-receiver" hidden></div>
+            <div id="receiver-status" class="receiver-status" hidden></div>
+          </div>
+        </details>
+  </section>
+</dialog>
+
 <dialog id="settings" class="settings" aria-labelledby="settings-title">
   <header class="settings-head"><h2 id="settings-title">Your profile & settings</h2><button id="settings-close" type="button" class="icon-btn" aria-label="Close settings">✕</button></header>
   <nav id="settings-tabs" class="settings-tabs" role="tablist" aria-label="Settings sections">
     <button type="button" role="tab" id="settings-tab-profile" aria-controls="settings-profile" data-settings="profile" aria-pressed="true">Profile</button>
     <button type="button" role="tab" id="settings-tab-appearance" aria-controls="settings-appearance" data-settings="appearance" aria-pressed="false">Appearance</button>
     <button type="button" role="tab" id="settings-tab-notifications" aria-controls="settings-notifications" data-settings="notifications" aria-pressed="false">Notifications</button>
-    <button type="button" role="tab" id="settings-tab-device" aria-controls="settings-device" data-settings="device" aria-pressed="false">Agent</button>
+    <button type="button" role="tab" id="settings-tab-device" aria-controls="settings-device" data-settings="device" aria-pressed="false">Assistants</button>
     <button type="button" role="tab" id="settings-tab-storage" aria-controls="settings-storage" data-settings="storage" aria-pressed="false">Storage</button>
   </nav>
-  <section id="settings-profile" role="tabpanel" aria-labelledby="settings-tab-profile" class="settings-panel"><div id="profile-card"></div><div id="profile-devices"></div></section>
+  <section id="settings-profile" role="tabpanel" aria-labelledby="settings-tab-profile" class="settings-panel"><div id="profile-card"></div><p id="release" class="release" hidden></p><div id="profile-devices"></div></section>
   <section id="settings-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" class="settings-panel" hidden>
     <h3>Interface</h3><p class="hint">Different ways to use the same conversations. Installed interfaces appear here too.</p>
       <div id="lens" class="lens-switch" role="group" aria-label="Interface">
@@ -179,6 +188,7 @@
     <div id="file-storage"></div>
   </section>
   <section id="settings-device" role="tabpanel" aria-labelledby="settings-tab-device" class="settings-panel" hidden>
+    <div id="assistant-setup"></div>
     <h3>Your agent on this computer</h3>
     <p class="hint">Who answers approved questions and runs accepted tasks here. Installed means found on this computer, not logged in or working.</p>
     <div id="responder"></div>
@@ -190,7 +200,6 @@
         <ul id="quarantine-list"></ul>
       </details>
       <p id="notify-line" class="notify-line" hidden></p>
-      <p id="release" class="release" hidden></p>
       <details id="machine-more" class="machine-more">
         <summary id="machine" class="machine"></summary>
         <div id="machine-detail" class="machine-detail"></div>

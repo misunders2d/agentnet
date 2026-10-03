@@ -104,7 +104,8 @@ func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, err
 // earlier run. Only the local user can do this; nothing received can.
 //
 // In a DM, only a request to this device's agent can be accepted (its
-// states arise only there); it still runs only if its participation allows
+// states arise only there; a guest's question awaits like a task); it
+// still runs only if its participation allows
 // it when the worker claims it (agentjob.go). A question or task for the
 // person (stateConvHeld) is answered in the conversation instead.
 func (a *Agent) Accept(id string) error {
@@ -122,10 +123,10 @@ func (a *Agent) Accept(id string) error {
 	}
 	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND (conv IS NULL AND
 		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
-		OR pid IS NOT NULL AND replica = 0 AND ((kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?))))`,
+		OR pid IS NOT NULL AND replica = 0 AND ((kind IN (?, ?) AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?))))`,
 		stateAccepted, id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
 		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman,
-		envelope.KindTask, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman)
+		envelope.KindTask, envelope.KindQuestion, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman)
 	if err != nil {
 		return err
 	}

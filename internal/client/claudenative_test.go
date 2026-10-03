@@ -11,7 +11,7 @@ import (
 
 func claudeReceiptRow(sid, source string, ack ReplyReceiverAck) map[string]any {
 	return map[string]any{"type": "user", "uuid": "native-user-uuid", "parentUuid": nil,
-		"sessionId": sid, "version": claudeNativeVersion, "isMeta": true, "isSidechain": false,
+		"sessionId": sid, "version": "2.1.287", "isMeta": true, "isSidechain": false,
 		"origin": map[string]any{"kind": "channel"}, "message": map[string]any{"role": "user",
 			"content": "<channel source=\"" + source + "\" input_token=\"" + ack.InputToken + "\" session_id=\"" + sid + "\" binding_id=\"" + ack.BindingID + "\" input_id=\"" + ack.InputID + "\" claim_id=\"" + ack.ClaimID + "\">\nRemote data\n</channel>"}}
 }

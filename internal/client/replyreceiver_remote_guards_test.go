@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -123,10 +124,11 @@ func TestReceiverRemoteReadyRollbackDeclineCatalog(t *testing.T) {
 
 func TestReceiverRouteMigrationAndQuietAttention(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
-	if schema[len(schema)-1] != receiverRouteSchema {
-		t.Fatal("route schema must append, never rewrite shipped step")
+	routeStep := slices.Index(schema, receiverRouteSchema)
+	if routeStep < 0 || routeStep+1 >= len(schema) || schema[routeStep+1] != humanScopeSchema || slices.Index(schema, convClearSchema) != routeStep+2 {
+		t.Fatal("route, human scope and later schemas must append, never rewrite shipped steps")
 	}
-	old, e := sqlitedb.Open(path, schema[:len(schema)-1])
+	old, e := sqlitedb.Open(path, schema[:routeStep])
 	if e != nil {
 		t.Fatal(e)
 	}

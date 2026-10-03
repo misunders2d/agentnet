@@ -10,7 +10,7 @@ import (
 func codexRollout(t *testing.T, sid string, rows ...map[string]any) string {
 	t.Helper()
 	file := filepath.Join(t.TempDir(), "rollout.jsonl")
-	data, _ := json.Marshal(map[string]any{"type": "session_meta", "ordinal": 0, "payload": map[string]any{"id": sid, "cli_version": codexNativeVersion, "source": "vscode"}})
+	data, _ := json.Marshal(map[string]any{"type": "session_meta", "ordinal": 0, "payload": map[string]any{"id": sid, "cli_version": "0.160.0", "source": "vscode"}})
 	data = append(data, '\n')
 	for _, r := range rows {
 		v, e := json.Marshal(r)

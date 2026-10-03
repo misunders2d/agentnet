@@ -75,6 +75,7 @@ type ReceiverRequest struct {
 	Attachments    []Attachment       `json:"attachments,omitempty"`
 	GroupAdmission string             `json:"group_admission,omitempty"`
 	GroupReplies   []ReceiverReplyKey `json:"group_replies,omitempty"`
+	Human          *HumanTurn         `json:"human,omitempty"`
 }
 type ReceiverReplyKey struct {
 	Key       string `json:"key"`
@@ -148,7 +149,7 @@ func (r ReceiverRequest) Validate() error {
 	if r.ReplyTo != "" && !protocol.ValidID(r.ReplyTo) {
 		return errors.New("receiver: invalid original reply reference")
 	}
-	in := Inner{V: Version, ID: r.ID, From: r.From, To: r.From, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, LID: r.LID, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID}
+	in := Inner{V: Version, ID: r.ID, From: r.From, To: r.From, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, LID: r.LID, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID, Human: r.Human}
 	group := false
 	if r.Conv != "" {
 		if r.To != "" || r.ToKey != "" {

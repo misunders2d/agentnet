@@ -26,9 +26,12 @@ import (
 // member device key as pinned now (or the asker is this device's own
 // person, a local request), and a task has authority (the host's person
 // accepted it once, the invite's task keys name the asker's key, or a task
-// grant holds for that exact key). A task without authority waits for the
-// host's person (stateAwaiting); a request whose participation ended never
-// runs (stateNotRun); anything else keeps waiting for evidence.
+// grant holds for that exact key). An accepted human guest's request (its
+// captured author scope, active, same key) has no member authority: a
+// question needs this host's approval of that asker or a one-time accept, a
+// task its exact-key grant or a one-time accept. A request without authority
+// waits for the host's person (stateAwaiting); a request whose participation
+// ended never runs (stateNotRun); anything else keeps waiting for evidence.
 //
 // While it runs, any local change (a stored event, a person frozen) makes
 // the worker look again; if the request could no longer run, the run is
@@ -114,7 +117,32 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 		return verdictStop, "requester's original group admission changed", nil
 	}
 	if !r.Local && !v.m.device(r.Sender, r.Key) {
-		return verdictWait, "the asker's key is not a member device key as pinned here now", nil
+		guest, ended, err := humanRequestAuthor(q, r, v.m)
+		if err != nil {
+			return 0, "", err
+		}
+		if ended {
+			return verdictStop, "the asking guest's participation ended", nil
+		}
+		if !guest {
+			return verdictWait, "the asker's key is not a member device key as pinned here now", nil
+		}
+		// A temporary person: no member authority, never TaskKeys; only this
+		// host's own approvals for that exact asker, or a one-time accept.
+		if output || r.State == stateAccepted {
+			return verdictRun, "", nil
+		}
+		if r.Kind == envelope.KindQuestion {
+			var n int
+			if err := q.QueryRow(`SELECT count(*) FROM approvals WHERE address = ?`, r.Sender).Scan(&n); err != nil || n > 0 {
+				return verdictRun, "", err
+			}
+			return verdictAsk, "a question for your agent from a guest you have not approved: accept it to run it once (agentnet accept ID)", nil
+		}
+		if granted, err := taskGranted(q, r.Sender, r.Key); err != nil || granted {
+			return verdictRun, "", err
+		}
+		return verdictAsk, "a task for your agent from a guest without standing permission for tasks: accept it to run it once (agentnet accept ID)", nil
 	}
 	if output || r.Kind == envelope.KindQuestion || r.Local || r.State == stateAccepted || slices.Contains(info.TaskKeys, r.Key) {
 		return verdictRun, "", nil
@@ -124,6 +152,29 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 		return verdictRun, "", err
 	}
 	return verdictAsk, "a task for your agent from a key without standing permission for tasks here: accept it to run it once (agentnet accept ID)", nil
+}
+
+// humanRequestAuthor reports whether request r was captured from an exact
+// accepted human guest (its stored HumanTurn author scope, held active here
+// with r's very sender key), or from one whose participation has ended.
+func humanRequestAuthor(q dbq, r agentReq, m dmMembers) (guest, ended bool, err error) {
+	var author string
+	err = q.QueryRow(`SELECT coalesce(json_extract(human,'$.author_pid'),'') FROM inbox WHERE id=? AND conv=? AND pid=?`, r.ID, r.Conv, r.PID).Scan(&author)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && author == "" {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	g, err := participationIn(q, r.Conv, author, m, "")
+	if errors.Is(err, ErrNoParticipation) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	exact := g.Role == protocol.RoleHuman && g.Host.Address == r.Sender && g.Host.Fingerprint == r.Key
+	return exact && g.HumanActive(), exact && (g.State == PartDismissed || g.State == PartDeclined), nil
 }
 
 // beforeAgentClaim lets tests act between a claim's decision and its write.
@@ -315,7 +366,7 @@ func (a *Agent) agentStop(j job) string {
 // agentPrompt frames a request to this device's agent: who it works for,
 // the conversation shared with it (bounded, omissions stated), the
 // recipient's context files, then the request once.
-func (a *Agent) agentPrompt(j job, r *Responder, contexts ...context.Context) (string, error) {
+func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...context.Context) (string, error) {
 	info, err := a.participation(j.Conv, j.PID)
 	if err != nil {
 		return "", err
@@ -368,7 +419,9 @@ func (a *Agent) agentPrompt(j job, r *Responder, contexts ...context.Context) (s
 		fmt.Fprintf(&b, "%s asks you the question below. Answer in plain text, concisely. Use the conversation shared with you, your own knowledge, and your skills and the tools you are allowed to use to look things up. "+
 			"Do not change files or take any action with effects for this question.\n", asker)
 		fmt.Fprintf(&b, "If you need information from %s to answer, reply with your question for them. They can answer it in this conversation.\n", asker)
+		b.WriteString(lookupText)
 	}
+	b.WriteString(reactionConvPromptText)
 	fmt.Fprintf(&b, "If %s must decide or act before this can go further, or this needs an action you are not allowed to take, make your first line exactly %q and then say what they need to decide; nothing will be sent.\n", host, needsHumanMarker)
 	b.WriteString("End your reply with a last line of exactly the form \"emotion: WORD\", WORD being one lowercase word (letters, digits or hyphens, at most 24) for the feeling your reply is shown with. " +
 		"It is yours to choose; without a readable line your reply is shown neutral.\n")
@@ -445,6 +498,7 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 			return
 		}
 	}
+	text, choice := splitReaction(text) // optional, just before the emotion line
 	selfFP := a.id.Public(a.Address).Fingerprint()
 	claim := func(tx *sql.Tx, replyID string) error {
 		v, why, err := agentVerdict(tx, j.agentReq(stateRunning), a.Address, selfFP, true, map[string]*partView{})
@@ -475,6 +529,7 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 		a.endJob(j.ID, stateNotDelivered, "not sent: "+err.Error()+". The reply:\n"+text)
 	default:
 		a.Logf("%s %s: answered in its conversation (reply %s %s)", j.Kind, j.ID, res.ID, res.State)
+		a.sendAssistantReaction(ctx, j, r.Harness, choice) // after the stored reply; failure changes nothing
 	}
 }
 
@@ -514,10 +569,10 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT o.id, o.conv, o.pid, coalesce(i.id, ''), coalesce(i.sender, ''), coalesce(i.verified_by, ''),
 		coalesce(i.kind, ''), coalesce(i.local, 0), coalesce(i.target, '')
-		FROM outbox o LEFT JOIN inbox i ON i.id = o.reply_to AND EXISTS (
+		FROM outbox o LEFT JOIN inbox i ON i.id = o.reply_to AND (coalesce(o.status,'') = 'progress' OR EXISTS (
 		 SELECT 1 FROM outbox first WHERE first.id = i.result_id AND first.conv = o.conv AND first.pid = o.pid
 		 AND first.lid = o.lid AND first.reply_to = o.reply_to AND first.body = o.body
-		 AND coalesce(first.agent_id,'') = coalesce(o.agent_id,''))
+		 AND coalesce(first.agent_id,'') = coalesce(o.agent_id,'')))
 		WHERE `+outputs, stateQueued, stateConvWaiting, only, only)
 	if err != nil {
 		return 0, err

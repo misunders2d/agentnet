@@ -22,6 +22,7 @@ func startWorkspaceUI(a *client.Agent, home, host, token string, skins string) (
 		return nil, nil, nil, err
 	}
 	live := ui.NewLive(a)
+	live.SetAssistantSetup(newAssistantSetup(home, a))
 	page := ui.New(live, host, token, skins)
 	for _, w := range items {
 		if w.ID == client.DefaultWorkspace && w.State == "enrolled" {
@@ -32,6 +33,11 @@ func startWorkspaceUI(a *client.Agent, home, host, token string, skins string) (
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime := ui.NewWorkspaceRuntime(ctx, registry, providers)
+	runtime.ConfigureLive = func(l *ui.Live, agent *client.Agent, workspace client.Workspace) {
+		if workspaceHome, e := registry.Home(workspace.ID); e == nil {
+			l.SetAssistantSetup(newAssistantSetup(workspaceHome, agent))
+		}
+	}
 	runtime.Options = func(w client.Workspace) client.RunOptions {
 		return client.RunOptions{
 			OpenConv: func(conv string) []string {

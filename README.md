@@ -14,28 +14,32 @@ Instead of isolating AI in separate browser tabs or detached chatbots, AgentNet 
 - **People talk directly to people**: Everyday discussions stay human, private, and uninterrupted. Assistants never chime in unprompted.
 - **Assistants act when engaged**: When you address an assistant—or ask your own assistant application (commonly called a *harness*, such as Claude, Codex, or Pi) to coordinate work—it steps in with your specific tools, files, and granted permissions.
 - **Assistants collaborate across teams**: An assistant in Sales can consult an assistant in the Warehouse to verify inventory. Each assistant operates strictly within its owner's authorized boundaries.
-- **Independent response routing**: When sending a request, the recipient, the remote executor, and the **reply receiver** (yourself or a specific local assistant session) are independent choices. Replies resume the chosen assistant automatically instead of getting swallowed by a generic background default. If a selected assistant is busy or offline, the response stays visibly pending rather than silently rerouting.
-- **Human approval when required**: Assistants work within their owner's standing grants and tool permissions. When an action exceeds normal authority—such as committing unbudgeted funds or changing policy—the assistant pauses for human sign-off before continuing.
+- **Replies come back where you asked**: In the messenger, an answer arrives in the same conversation as the question. A request made from an assistant session through the CLI comes back to that same session: `ask`, `task` or `dm ask-agent` run there without `--reply-receiver` is bound to that exact session. This is automatic today for Pi and OMP sessions with AgentNet's hook installed (`agentnet hooks install pi` or `omp`). *(v0.6.1, in development)* Claude Code and Codex sessions get the same return once AgentNet's setup for them is in place and the session started after it: the Claude channel (`agentnet hooks install claude --channel` and the steps it prints), or Codex on its app-server daemon with AgentNet's hooks installed and trusted. It is tested end to end once each with Codex 0.160.0 and with Claude Code 2.1.287 on Linux. It also holds while a temporary person is in the conversation. The harness's own permissions still apply, so the command must be allowed to run, write AgentNet's home and reach the Hub. If the asking session cannot be identified, the command refuses and says why instead of answering elsewhere. A plain `agentnet` command outside any registered session gets its answer in the device inbox (`agentnet inbox`). Choosing a different receiver than the asking session—a person, another local assistant or another session—is a separate, explicit [advanced option](#opt-in-cli-selection-in-this-candidate).
+- **Address the assistants in a conversation** *(v0.6.1, in development)*: In a conversation, `@` addresses an assistant its owner has accepted into that conversation. Ordinary chat never runs it.
+- **Bring a person in for the moment** *(v0.6.1, in development)*: A member can invite another person into the same conversation, sharing only selected earlier messages; that person takes part only after choosing to join. Once they leave or are removed, the original members continue privately; what that person already received stays with them.
+- **Assistants react as themselves** *(v0.6.1, in development)*: An assistant can mark the request it was given with a reaction, shown as that assistant's and kept apart from its owner's own reactions. With a temporary person present, the people who saw the request see the reaction too.
+- **Delete a conversation from your devices** *(v0.6.1, in development)*: Deleting a conversation removes its messages and files from every one of your linked devices: exactly the messages the deleting device holds, so a message that only ever reached another of your devices stays there. A device applies the deletion once it runs a version that reads deletions. A device thread (a direct thread kept by one device) is deleted on that device only, and only that exact thread. Work still running and copies not yet sent are kept until they finish or are handed over. Other people keep their copies, and a later message starts the conversation again with only that message. Deleting a group conversation keeps your membership.
+- **Owner approval when required**: Assistants work within their owner's standing grants and tool permissions. The owner accepts each invitation of their assistant into a conversation and each task without a standing grant. When an action exceeds normal authority—such as committing unbudgeted funds or changing policy—the assistant pauses for human sign-off before continuing.
 - **Company service assistants**: In addition to personal assistants, teams can host named service assistants on the network (for example, a records assistant that verifies catalog archives or assists with credential renewal under explicit human consent). The Hub relay itself stores ciphertext and routes messages; execution always belongs to named assistants.
 
-People can answer personally, ask an assistant to help in a shared group, or take over and hand work back. The assistant gets the context explicitly shared with it. For example, Maya may use OMP while David uses Codex: she chooses David's warehouse assistant to handle the request and her own OMP session to receive the answer. Her default background responder is a separate setting.
+People can answer personally, ask an assistant to help in a shared group, or take over and hand work back. The assistant gets the context explicitly shared with it. For example, Maya may use OMP while David uses Codex: she brings David's warehouse assistant into their conversation (David accepts) and asks it there, and the answer arrives in that conversation. When she asks from her OMP session through the CLI instead (with AgentNet's OMP hook installed), the answer returns to that OMP session. Her default background responder is a separate setting.
 
 ### How It Works in Practice: Sales & Warehouse
 
 **Maya (Sales Lead)** and **David (Logistics Manager)** coordinate rush orders:
 
 > **Maya** *(to her Sales Assistant)*: "A client needs 400 cases of specialty linens delivered to Savannah by Friday. Can the warehouse fulfill and dispatch in time?"  
-> **Maya's Assistant** *(to David's Logistics Assistant, reply receiver: Maya's Assistant)*: "Requesting stock check and Friday arrival dispatch window for 400 cases of SKU #L-220."  
+> **Maya's Assistant** *(to David's Logistics Assistant)*: "Requesting stock check and Friday arrival dispatch window for 400 cases of SKU #L-220."  
 > **David's Assistant** *(to David)*: "460 cases of L-220 are on hand. Friday arrival requires expedited freight with a $340 carrier surcharge exceeding standard order budget. Approve freight charge?"  
 > **David** *(in messenger thread)*: "Approved, book carrier dispatch."  
 > **David's Assistant** *(to Maya's Assistant)*: "Confirmed. 400 cases reserved on pallet hold; expedited freight booked for Thursday 2 PM pickup; tracking reservation #SV-8841 attached."  
 > **Maya's Assistant** *(to Maya)*: "Order confirmed with Savannah warehouse for Friday delivery. Tracking #SV-8841 logged in client estimate."
 
-David approved the unbudgeted cost; Maya's selected assistant resumed automatically upon receiving the confirmed dispatch; neither manager had to manually relay quotes or chase status.
+David approved the unbudgeted cost; the confirmation came back to Maya's assistant, which had asked, and it reported to Maya; neither manager had to manually relay quotes or chase status.
 
-The same model fits Purchasing and Accounting: two colleagues discussing an invoice invite a finance assistant to compare it with the purchase order. It explains an unexpected fee and prepares a supplier query; the authorized person decides whether to send it. Drafting that query does not mean the supplier has accepted the adjustment.
+The same model fits Purchasing and Accounting: two colleagues discussing an invoice invite a finance assistant to compare it with the purchase order. It explains an unexpected fee and prepares a supplier query; the authorized person decides whether to send it. Drafting that query does not mean the supplier has accepted the adjustment. *(v0.6.1, in development:)* if they need the receiving clerk who signed for the delivery, one of them can invite the clerk into that conversation for the fee question; after the clerk leaves or is removed, the two colleagues continue privately.
 
-*These business scenarios illustrate the product model; they are not live business-operation evidence. v0.6.0 includes groups, named participations and selected-receiver continuation with scoped qualification; see [release scope and disclosed limits](docs/NEXT_RELEASE.md).*
+*These business scenarios illustrate the product model; they are not live business-operation evidence. v0.6.0 includes groups, named participations and selected-receiver continuation with scoped qualification; see [release scope and disclosed limits](docs/NEXT_RELEASE.md). Items marked v0.6.1 are in development: they are not in the published v0.6.0 release (see the [handoff note](docs/HANDOFF.md)).*
 
 ## Current release — v0.6.0
 
@@ -80,9 +84,10 @@ describe these boundaries.
 
 ### Opt-in CLI selection in this candidate
 
-Use IDs from the configured named-agent catalog and registered session list;
-place flags before positional arguments. These examples configure nothing
-unless you run them:
+Advanced and optional: replies normally come back where you asked; these flags
+choose a different reply receiver explicitly. Use IDs from the configured
+named-agent catalog and registered session list; place flags before positional
+arguments. These examples configure nothing unless you run them:
 
 ```bash
 # Inspect registrations/bindings; registered does not mean live or idle.

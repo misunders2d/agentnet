@@ -1,0 +1,95 @@
+// Deterministic native packet parity plus isolated real-key encryption. No network.
+// Native packet is kept outside the checkout: node .../human_wire_check.mjs PATH.
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import * as w from '../static/wire.mjs';
+const packet = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const key = Uint8Array.from(Buffer.from(packet.public_key, 'hex'));
+for (const name of ['invite', 'scope', 'accept']) {
+  const event = w.parseEvent(packet[name]);
+  assert.equal(new TextDecoder().decode(w.eventCanonical(event)), packet[name + '_canonical']);
+  assert.equal(await w.eventHash(event), packet[name + '_hash']);
+  await w.verifyEvent(event, key);
+  const bad = w.parseEvent(packet[name]); bad.sig[0] ^= 1;
+  await assert.rejects(w.verifyEvent(bad, key), /signature invalid/);
+}
+// The public scope is the invite's exact projection, without its private parts.
+const scopeOf = await w.scopeOf(w.parseEvent(packet.invite), packet.scope.ts);
+assert.equal(new TextDecoder().decode(w.eventCanonical(scopeOf)), packet.scope_canonical);
+assert.ok(await w.projects(w.parseEvent(packet.scope), w.parseEvent(packet.invite)));
+for (const leak of [{ note: 'x' }, { grant: packet.invite.grant }, { task_keys: ['01234567-89abcdef-01234567-89abcdef'] }]) assert.throws(() => w.parseEvent({ ...packet.scope, ...leak }));
+assert.ok(!w.eventJSON(w.parseEvent(packet.scope)).includes('"note"') && !w.eventJSON(w.parseEvent(packet.scope)).includes('"grant"'));
+const human = w.parseHumanTurn(packet.human);
+assert.equal(w.humanJSON(human), packet.human_json);
+await w.validateHumanTurn(human, packet.logical.conv);
+assert.equal(await w.groupHistoryContentHash(packet.logical.conv, { ...packet.logical, human }), packet.content_hash);
+assert.equal(await w.groupHistoryContentHash(packet.logical.conv, { ...packet.logical, id: w.newID(), to: 'other@example.test', human }), packet.content_hash);
+const reject = async mutate => {
+  const h = structuredClone(packet.human); mutate(h);
+  await assert.rejects(async () => w.validateHumanTurn(w.parseHumanTurn(h), packet.logical.conv));
+};
+await reject(h => h.audience.push(h.audience[0]));
+await reject(h => h.audience = Array(17).fill(h.audience[0]));
+await reject(h => h.proof = Array(33).fill(h.proof[0]));
+await reject(h => h.proof.pop());
+await reject(h => h.proof.push(h.proof[0]));
+await reject(h => h.author_pid = w.newID());
+await reject(h => h.audience[0].invite = '0'.repeat(64));
+await reject(h => h.proof[1].prev = '0'.repeat(64));
+await reject(h => h.proof[0].conv = '0'.repeat(64));
+await reject(h => h.proof[0].role = 'agent');
+await reject(h => delete h.proof[0].role);
+await reject(h => h.proof[1].role = 'human');
+await reject(h => h.proof[0].sig = Buffer.alloc(63).toString('base64'));
+await reject(h => h.proof[0].task_keys = ['ed25519:' + 'a'.repeat(64)]);
+await reject(h => h.proof[0].host.agent_id = w.newID());
+await reject(h => h.extra = true);
+await reject(h => h.proof[0] = packet.invite); // the private invitation is never human proof
+assert.throws(() => w.parseEvent({ ...packet.invite, role: 'admin' }));
+const legacy = w.parseEvent({ ...packet.invite, role: '' });
+assert.ok(!w.eventJSON(legacy).includes('"role"'));
+assert.equal(w.eventJSON(legacy), w.eventJSON(w.parseEvent(w.eventJSON(legacy))));
+const keys = await w.newKeys(), address = 'fixture/alice', pub = await w.publicEntry(keys, address), fp = await w.fingerprint(pub);
+const a = { person: w.newID(), roster: 'a'.repeat(64), address, fingerprint: fp };
+const root = await w.newRoot(keys, a, { person: w.newID(), roster: 'b'.repeat(64) }), conv = await w.rootID(root);
+const pid = w.newID();
+const invite = await w.signEvent(keys, { conv, pid, type: 'invite', ts: 1, author: a, host: { person: w.newID(), address: 'fixture/carol', fingerprint: fp }, audience: 'conversation', role: 'human' });
+const accept = await w.signEvent(keys, { conv, pid, type: 'accept', ts: 2, author: a, prev: await w.eventHash(invite) });
+const scope = await w.signEvent(keys, await w.scopeOf(invite, 2));
+const captured = { author_pid: pid, audience: [{ pid, invite: await w.eventHash(invite), decision: await w.eventHash(accept) }], proof: [scope, accept] };
+const inner = { v: 2, id: w.newID(), from: address, to: address, ts: 3, kind: 'message', body: 'Human, not an executor', origin: 'ui', root: w.rootJSON(root), conv, lid: w.newID(), pid, human: captured };
+const sealed = await w.seal(inner, keys, pub), opened = await w.open(sealed, keys, address, pub);
+assert.equal(w.humanJSON(opened.human), w.humanJSON(captured));
+assert.equal(opened.pid, pid);
+assert.equal(await w.groupHistoryContentHash(conv, opened), await w.groupHistoryContentHash(conv, inner));
+for (const change of [{ kind: 'question' }, { kind: 'task' }, { sub: 'event' }, { agent_id: w.newID() }, { origin: 'agent:pi', emotion: 'calm' }, { emotion: 'calm' }, { status: 'running' }, { pid: '' }, { v: 1 }, { v: 3 }, { target: { address, fingerprint: fp } }]) await assert.rejects(w.seal({ ...inner, ...change }, keys, pub));
+// The guest's request addressed to an assistant participation, and that assistant's output, carry the captured audience.
+const assistant = w.newID();
+const request = { ...inner, id: w.newID(), kind: 'question', pid: assistant, target: { address, fingerprint: fp, agent_id: w.newID() } };
+assert.equal((await w.open(await w.seal(request, keys, pub), keys, address, pub)).target.address, address);
+const output = { ...inner, id: w.newID(), kind: 'answer', pid: assistant, reply_to: request.lid, origin: 'agent:pi', emotion: 'calm', human: { ...captured, author_pid: '' } };
+await w.open(await w.seal(output, keys, pub), keys, address, pub);
+await w.open(await w.seal({ ...output, id: w.newID(), kind: 'message', status: 'progress', emotion: 'neutral' }, keys, pub), keys, address, pub);
+for (const change of [{ pid }, { target: null }, { agent_id: w.newID() }, { status: 'progress' }]) await assert.rejects(w.seal({ ...request, ...change }, keys, pub));
+for (const change of [{ human: captured }, { target: { address, fingerprint: fp } }, { pid: '' }]) await assert.rejects(w.seal({ ...output, ...change }, keys, pub));
+const member = { ...inner, id: w.newID(), pid: '', human: { ...captured, author_pid: '' } };
+assert.equal((await w.open(await w.seal(member, keys, pub), keys, address, pub)).pid, '');
+const plain = { ...member }; delete plain.human;
+assert.notEqual(await w.groupHistoryContentHash(conv, member), await w.groupHistoryContentHash(conv, plain));
+const history = { v: 1, from: inner.from, from_key: fp, id: inner.id, lid: inner.lid, ts: inner.ts, at: 3000, kind: 'message', body: inner.body, origin: 'ui', pid, human: captured, attachments: [] };
+const historical = w.parseHistory(w.historyJSON(history));
+assert.equal(w.humanJSON(historical.human), w.humanJSON(captured));
+assert.ok(w.historyJSON(historical).endsWith(',"human":' + w.humanJSON(captured) + '}'));
+assert.equal(await w.groupHistoryContentHash(conv, historical), await w.groupHistoryContentHash(conv, inner));
+assert.throws(() => w.parseHistory(w.historyJSON({ ...history, pid: '' })), /human/);
+const receiverReq = await w.parseReceiverRequest({ id: member.id, lid: member.lid, from: address, from_key: fp, ts: member.ts, conv, root: member.root, kind: 'message', body: member.body, origin: 'ui', human: member.human, attachments: [] });
+assert.ok(w.receiverRequestJSON(receiverReq).endsWith(',"human":' + w.humanJSON(member.human) + '}'));
+const decoded = await w.parseReceiverRequest(w.receiverRequestJSON(receiverReq));
+assert.equal(w.humanJSON(decoded.human), w.humanJSON(member.human));
+const route = { op: 'request', host: address, host_key: fp, request_ref: member.lid, request_digest: '0'.repeat(64), delegation_id: w.newID() };
+const withoutHuman = { ...receiverReq }; delete withoutHuman.human;
+assert.notEqual(await w.receiverDigest(route, receiverReq, { kind: 'human' }), await w.receiverDigest(route, withoutHuman, { kind: 'human' }));
+const guestRequest = await w.parseReceiverRequest({ ...receiverReq, pid, human: captured });
+assert.equal(w.humanJSON(guestRequest.human), w.humanJSON(captured));
+await assert.rejects(w.parseReceiverRequest({ ...guestRequest, pid: '' }), /human/);
+console.log('human wire: native JSON/canonical/signature/content-hash parity incl. public scope projection; private invite refused as proof; addressed request/output shapes; bounds/refusals; real-key ordinary member/guest roundtrips; unchanged history/receiver descriptor and digest commitment ok (shape only, not authority)');

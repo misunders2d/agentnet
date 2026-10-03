@@ -114,6 +114,9 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			return err
 		}
 		for _, c := range convs {
+			if c.Deleted {
+				continue
+			}
 			fmt.Fprintf(stdout, "%s  with %q (%s, %s)  since %s\n", c.ID, c.Peer.Label, c.Peer.Address, c.Peer.State,
 				time.Unix(c.Created, 0).Format("2006-01-02"))
 		}

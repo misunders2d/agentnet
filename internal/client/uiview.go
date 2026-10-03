@@ -70,52 +70,13 @@ func (a *Agent) Threads() ([]ThreadSummary, error) {
 }
 
 func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
-	all, err := a.store.peerLinks(peer)
-	if err != nil {
+	groups, rows, err := a.peerThreadGroups(peer)
+	if err != nil || len(groups) == 0 {
 		return nil, err
-	}
-	rows, err := a.store.threadRows(peer)
-	if err != nil {
-		return nil, err
-	}
-	var links []link // device history only: rows has no conversation messages
-	for _, l := range all {
-		if _, ok := rows[l.id]; ok {
-			links = append(links, l)
-		}
-	}
-	if len(links) == 0 {
-		return nil, nil
-	}
-	// Union reply-linked messages into threads.
-	parent := map[string]string{}
-	var find func(string) string
-	find = func(x string) string {
-		for parent[x] != x {
-			parent[x] = parent[parent[x]]
-			x = parent[x]
-		}
-		return x
-	}
-	for _, l := range links {
-		parent[l.id] = l.id
-	}
-	for _, l := range links {
-		if _, ok := parent[l.replyTo]; ok && l.replyTo != "" {
-			parent[find(l.id)] = find(l.replyTo)
-		}
-	}
-	byID := map[string]link{}
-	groups := map[string][]string{}
-	for _, l := range links {
-		byID[l.id] = l
-		r := find(l.id)
-		groups[r] = append(groups[r], l.id)
 	}
 	var out []ThreadSummary
 	for _, g := range groups {
-		sortThread(g, byID)
-		first, last := byID[g[0]], byID[g[len(g)-1]]
+		first, last := rows[g[0]], rows[g[len(g)-1]]
 		t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true}
 		for _, id := range g {
 			r := rows[id]
@@ -148,6 +109,66 @@ func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
 	return out, nil
 }
 
+// peerThreadGroups unions the device-history messages with peer into
+// reply-linked threads, each oldest first (its first id is the thread's
+// ThreadSummary.ID), with each message's row (link filled in). A deleted
+// thread's messages are not in rows, so they join no thread.
+func (a *Agent) peerThreadGroups(peer string) ([][]string, map[string]threadRow, error) {
+	all, err := a.store.peerLinks(peer)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := a.store.threadRows(peer, a.Self().Fingerprint())
+	if err != nil {
+		return nil, nil, err
+	}
+	var links []link // device history only: rows has no conversation messages
+	for _, l := range all {
+		if _, ok := rows[l.id]; ok {
+			links = append(links, l)
+		}
+	}
+	if len(links) == 0 {
+		return nil, rows, nil
+	}
+	// Union reply-linked messages into threads.
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(x string) string {
+		for parent[x] != x {
+			parent[x] = parent[parent[x]]
+			x = parent[x]
+		}
+		return x
+	}
+	for _, l := range links {
+		parent[l.id] = l.id
+	}
+	for _, l := range links {
+		if _, ok := parent[l.replyTo]; ok && l.replyTo != "" {
+			parent[find(l.id)] = find(l.replyTo)
+		}
+	}
+	byID := map[string]link{}
+	grouped := map[string][]string{}
+	for _, l := range links {
+		byID[l.id] = l
+		r := find(l.id)
+		grouped[r] = append(grouped[r], l.id)
+	}
+	var groups [][]string
+	for _, g := range grouped {
+		sortThread(g, byID)
+		for _, id := range g {
+			r := rows[id]
+			r.link = byID[id]
+			rows[id] = r
+		}
+		groups = append(groups, g)
+	}
+	return groups, rows, nil
+}
+
 // conversationPeers lists every address this installation has exchanged
 // device-history messages with (conversation messages left out).
 func (s *store) conversationPeers() ([]string, error) {
@@ -170,11 +191,11 @@ func (s *store) conversationPeers() ([]string, error) {
 // threadRows reads direction, kind, state and read state for every
 // device-history message exchanged with peer, and which sent questions or
 // tasks have a reply.
-func (s *store) threadRows(peer string) (map[string]threadRow, error) {
+func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
-	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL`,
+	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedInFor("inbox"),
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
@@ -182,13 +203,14 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	replies := map[string]bool{}
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &r.notice, &r.selected); err != nil {
+		var status string
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		r.in = true
 		out[r.id] = r
-		if r.replyTo != "" {
+		if r.replyTo != "" && status != envelope.StatusProgress {
 			replies[r.replyTo] = true
 		}
 	}
@@ -196,7 +218,7 @@ func (s *store) threadRows(peer string) (map[string]threadRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL`, peer)
+	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
 	}
@@ -287,7 +309,7 @@ func (a *Agent) MarkRead(ids []string) error {
 
 // ConvUnread lists, per conversation, the received messages not yet read.
 func (a *Agent) ConvUnread() (map[string][]string, error) {
-	rows, err := a.store.db.Query(`SELECT conv, id FROM inbox WHERE conv IS NOT NULL AND read_at IS NULL AND ref_id IS NULL`)
+	rows, err := a.store.db.Query(`SELECT conv, id FROM inbox i WHERE conv IS NOT NULL AND read_at IS NULL AND ref_id IS NULL AND NOT ` + erasedIn)
 	if err != nil {
 		return nil, err
 	}

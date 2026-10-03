@@ -15,7 +15,8 @@ import (
 // goes through the client's existing operation for it, with the same rules
 // as the CLI: nothing here grants, approves or runs anything on its own.
 type Live struct {
-	a *client.Agent
+	a              *client.Agent
+	assistantSetup AssistantSetupFunc
 	// timeout bounds each network request an action makes.
 	timeout time.Duration
 	staged  staged // files the page handed over, not sent yet

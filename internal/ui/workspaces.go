@@ -20,6 +20,7 @@ type WorkspaceProviders struct {
 	entries    map[string]workspaceProvider
 	Join       func(*http.Request, WorkspaceJoin) (client.Workspace, Provider, error)
 	Disconnect func(string) error
+	Rename     func(string, string) (client.Workspace, error)
 }
 type WorkspaceJoin struct {
 	ID     string `json:"id,omitempty"`
@@ -146,6 +147,41 @@ func (s *Server) WorkspaceHandler(set *WorkspaceProviders) http.Handler {
 				return
 			}
 			writeJSON(w, b)
+		case r.URL.Path == "/api/workspaces/rename" && r.Method == "POST":
+			var body struct {
+				ID     string `json:"id"`
+				Handle string `json:"handle"`
+				Name   string `json:"name"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&body) != nil {
+				http.Error(w, "invalid workspace name", 400)
+				return
+			}
+			set.mu.Lock()
+			defer set.mu.Unlock()
+			entry, ok := set.entries[body.ID]
+			if !ok || entry.Handle != body.Handle {
+				http.Error(w, "stale workspace", 409)
+				return
+			}
+			if set.Rename == nil {
+				http.Error(w, "workspace naming unavailable", 501)
+				return
+			}
+			renamed, err := set.Rename(body.ID, body.Name)
+			if err != nil {
+				writeErr(w, Refuse("Enter a readable workspace name, up to 120 characters. Nothing changed."))
+				return
+			}
+			if renamed.ID != entry.ID || renamed.Endpoint != entry.Endpoint || renamed.Address != entry.Address || renamed.Realm != entry.Realm || renamed.State != entry.State {
+				http.Error(w, "workspace identity changed", 409)
+				return
+			}
+			entry.Name = renamed.Name
+			set.entries[body.ID] = entry
+			writeJSON(w, entry.WorkspaceBinding)
 		case r.URL.Path == "/api/workspaces/disconnect" && r.Method == "POST":
 			var body struct {
 				ID     string `json:"id"`

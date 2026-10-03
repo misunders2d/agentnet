@@ -54,7 +54,9 @@ var Harnesses = map[string]harness{
 		sessions: claudeSessions,
 		limits: "claude questions use your Claude settings, skills, plugins and MCP servers; only tools your settings already allow run " +
 			"(permission mode dontAsk: anything else is refused, never asked) and Edit, Write and NotebookEdit are off, " +
-			"but Bash commands and MCP tools your settings allow keep whatever effects they have",
+			"but Bash commands and MCP tools your settings allow keep whatever effects they have; " +
+			"questions may also run fixed read-only AgentNet lookups of this device (version, whoami, inbox without marking read, approvals, status of a message this device sent) " +
+			"through the exact installed agentnet program, as exact allow rules your own deny and ask rules still override (none when the program's path would need shell quoting)",
 	},
 	"codex": {
 		bin: "codex",
@@ -69,7 +71,8 @@ var Harnesses = map[string]harness{
 		tested:   "tasks and a skill-backed question tested live",
 		sessions: codexSessions,
 		limits: "codex questions use your Codex config, skills and MCP servers; shell commands run in a read-only sandbox and anything that would need an approval is refused, " +
-			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have",
+			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have; " +
+			"questions are told the read-only AgentNet lookups of this device, which run inside that sandbox (status shows the local record without network)",
 	},
 	"pi": {
 		bin: "pi",
@@ -82,7 +85,8 @@ var Harnesses = map[string]harness{
 		question: []string{"-p", "--no-session", "--exclude-tools", "bash,edit,write,powershell"},
 		task:     []string{"-p", "--no-session"},
 		limits: "pi questions use your Pi settings, skills and extensions with their tools; only bash, edit, write and powershell are off " +
-			"(Pi cannot run its shell read-only or ask), and extension tools keep whatever effects your setup gives them",
+			"(Pi cannot run its shell read-only or ask), and extension tools keep whatever effects your setup gives them; " +
+			"an AgentNet lookup tool runs only the installed agentnet program's fixed read-only lookups (version, whoami, inbox without marking read, approvals, status of a message this device sent)",
 	},
 }
 

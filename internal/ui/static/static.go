@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html default.html loader.js core.css app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
+//go:embed index.html default.html loader.js core.css app.js lenses.js app.css device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -51,6 +51,8 @@ var relayFiles = map[string]string{
 	"/assets/drivespace.mjs":       "drivespace.mjs",
 	"/assets/drivespace.css":       "drivespace.css",
 	"/assets/drivespace-setup.mjs": "drivespace-setup.mjs",
+	"/assets/assistant-setup.mjs":  "assistant-setup.mjs",
+	"/assets/assistant-setup.css":  "assistant-setup.css",
 	"/assets/local-skins.mjs":      "local-skins.mjs",
 	"/assets/typing.mjs":           "typing.mjs",
 	"/assets/teams.mjs":            "teams.mjs",

@@ -26,7 +26,7 @@ function fixture() {
  if(url==='/api/overview')return fresh;
  return {state:'receiver_waiting'};
  }});
- vm.runInContext(region('const present =','// host is')+region('async function preparedFiles(','// discardStaged')+region('async function readAgentCatalog(','const catalogLabel')+region('async function localReceiverCatalog(','// renderTarget says')+region('function keepDraft()','// syncComposer enables')+region('async function sendDM()','let rerenderContacts')+region('async function send(ev)','function kindHint()'),context);
+ vm.runInContext(region('const present =','// host is')+region('const dmHumanGuest =',"// A guest's audience")+region('async function preparedFiles(','// discardStaged')+region('async function readAgentCatalog(','const isMe =')+region('async function localReceiverCatalog(','// renderTarget says')+region('function keepDraft()','// syncComposer enables')+region('async function sendDM()','let rerenderContacts')+region('async function send(ev)','function kindHint()'),context);
  elements.body={...elem(),value:'Exact captured text'};
  return {context,state,host,calls,staged,elements,announced,cleaned,snapshot:v=>snapshot=v,fresh:v=>fresh=v,record:v=>publicRecord=v,workspace:v=>workspace=v,hold:v=>hold=v};
 }

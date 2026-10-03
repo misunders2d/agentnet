@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -43,6 +44,7 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
+	humanMu        sync.RWMutex // local human end commits serialize with ordinary copy/file delivery
 	home           string
 	id             *identity.Identity
 	store          *store
@@ -403,7 +405,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		if m.Target != nil && (m.Target.Address != to || m.Target.Fingerprint != peer.Fingerprint()) {
 			return SendResult{}, errors.New("selected agent does not belong to the verified recipient key")
 		}
-		if err := a.requireAgentIdentity(ctx, peer); err != nil && !retryable(err) {
+		if err := a.requireAgentIdentity(ctx, peer); err != nil && !retryable(err) && !isResponderProgress(in) { // progress waits instead
 			return SendResult{}, err
 		}
 	}
@@ -549,9 +551,17 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		state, _, _, _ := a.store.outboxState(env.ID)
 		return SendResult{ID: env.ID, State: state}, err
 	}
-	var required, conv, sub, body, pid string
-	if err := a.store.db.QueryRow(`SELECT coalesce(required_cap, ''), coalesce(conv, ''),coalesce(sub,''),body,coalesce(pid,'') FROM outbox WHERE id=?`, env.ID).Scan(&required, &conv, &sub, &body, &pid); err != nil {
+	var required, conv, sub, body, pid, humanRaw, rowStatus, agentID, capturedFP string
+	if err := a.store.db.QueryRow(`SELECT coalesce(required_cap, ''), coalesce(conv, ''),coalesce(sub,''),body,coalesce(pid,''),coalesce(human,''),coalesce(status,''),coalesce(agent_id,''),coalesce(recipient_fp,'') FROM outbox WHERE id=?`, env.ID).Scan(&required, &conv, &sub, &body, &pid, &humanRaw, &rowStatus, &agentID, &capturedFP); err != nil {
 		return SendResult{}, err
+	}
+	progress := rowStatus == envelope.StatusProgress
+	if progress && required == "" {
+		required = protocol.CapProgress
+	}
+	if humanRaw != "" || required == protocol.CapHumanParticipation && sub == envelope.SubExcerpt {
+		a.humanMu.RLock()
+		defer a.humanMu.RUnlock()
 	}
 	receiverCap, err := receiverCopyNeedsCapability(a.store.db, env.ID, sub, body)
 	if err != nil {
@@ -562,10 +572,29 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
+		if err == nil && required == protocol.CapAgentReaction && capturedFP != "" && key.Fingerprint() != capturedFP {
+			// Sealed for the reader key captured at enqueue: never for its replacement.
+			a.store.setOutboxState(env.ID, stateNotDelivered, "not sent: the reader's key changed", "")
+			return SendResult{ID: env.ID, State: stateNotDelivered}, nil
+		}
 		if err == nil {
 			err = a.requireParticipationCaps(ctx, key, required)
 			if err == nil && receiverCap && required != protocol.CapReplyReceiver {
 				err = a.requireParticipationCaps(ctx, key, protocol.CapReplyReceiver)
+			}
+			// Progress needs prg1 and, besides, whatever its author's
+			// identity or participation already needs: never one without the other.
+			if err == nil && progress && required != protocol.CapProgress {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapProgress)
+			}
+			if err == nil && progress && required == protocol.CapProgress && agentID != "" {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapAgentIdentity)
+			}
+			if err == nil && required == protocol.CapAgentReaction { // and what the assistant's own reply needs there
+				err = a.assistantReactionCaps(ctx, key, conv, pid, agentID)
+			}
+			if err == nil && required == protocol.CapAgentReaction && humanRaw != "" { // to a captured audience: as a human-audience turn
+				err = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation)
 			}
 			control := env.V == envelope.Version3 && groupControlSub(sub)
 			status := sub == envelope.SubStatus
@@ -597,9 +626,22 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 				}
 				err = a.requireParticipationCaps(ctx, key, cap)
 			}
+			// An assistant's reaction as history needs agr1 and what that
+			// assistant's own output needs there, besides the copy's own
+			// participation or group requirement: never to an older reader.
+			if item, assistant := historyAssistant(body, conv); err == nil && sub == envelope.SubHistory && assistant {
+				if required != protocol.CapAgentReaction {
+					err = a.requireParticipationCaps(ctx, key, protocol.CapAgentReaction)
+				}
+				if err == nil {
+					err = a.assistantReactionCaps(ctx, key, conv, item.PID, item.AgentID)
+				}
+			}
 		}
 		if err != nil {
-			if conv != "" && errors.Is(err, errAgentIdentityUnsupported) {
+			// Waiting copies release when the recipient's signed capabilities
+			// change; progress is never sent unmarked to an older session.
+			if (conv != "" || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, err.Error(), "")
 			}
 			if retryable(err) {
@@ -718,6 +760,9 @@ func (a *Agent) Status(ctx context.Context, id string, wait time.Duration) (prot
 	if wait <= 0 {
 		err = a.hub.do(ctx, "GET", "/v1/messages/"+url.PathEscape(id), nil, &r)
 	}
+	if found && hubUnreachable(err) {
+		return protocol.Receipt{ID: id, State: state, Path: path}, &LocalStatus{Cause: err}
+	}
 	if found {
 		r.Path = protocol.PathRelay
 		if err == nil && r.State != protocol.StateCustody && r.State != state {
@@ -725,6 +770,25 @@ func (a *Agent) Status(ctx context.Context, id string, wait time.Duration) (prot
 		}
 	}
 	return r, err
+}
+
+// LocalStatus says the Hub could not be reached at all, so the receipt
+// beside it is only this device's own stored record of a message it sent:
+// possibly stale, never evidence of current delivery.
+type LocalStatus struct{ Cause error }
+
+func (e *LocalStatus) Error() string {
+	return "Hub not reachable; local record only: " + e.Cause.Error()
+}
+func (e *LocalStatus) Unwrap() error { return e.Cause }
+
+// hubUnreachable reports a request that never reached the Hub: its
+// connection could not even be dialed. Answers, TLS and key failures are
+// never this.
+func hubUnreachable(err error) bool {
+	var op *net.OpError
+	var he *HubError
+	return err != nil && !errors.As(err, &he) && errors.As(err, &op) && op.Op == "dial"
 }
 
 // Inbox lists received messages, optionally marking the listed ones read.

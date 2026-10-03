@@ -65,12 +65,13 @@ type HistoryItem struct {
 	AgentID        string                  `json:"agent_id,omitempty"`
 	GroupAdmission string                  `json:"group_admission,omitempty"` // only direct live admission, vouched for by an own linked device
 	ReceiverRoute  *envelope.ReceiverRoute `json:"receiver_route,omitempty"`  // provenance only; history never installs a delegation
+	Human          *envelope.HumanTurn     `json:"human,omitempty"`           // unchanged captured audience; never recomputed
 }
 
 // inner is the item as the message it records.
 func (h HistoryItem) inner(conv string) envelope.Inner {
 	in := envelope.Inner{V: envelope.Version2, ID: h.ID, From: h.From, TS: h.TS, Kind: h.Kind, Body: h.Body, ReplyTo: h.ReplyTo,
-		Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true, AgentID: h.AgentID, ReceiverRoute: h.ReceiverRoute}
+		Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true, AgentID: h.AgentID, ReceiverRoute: h.ReceiverRoute, Human: h.Human}
 	if envelope.IsControl(h.Sub) { // a control travels as history with its target reference
 		in.V, in.Ref = envelope.Version3, h.Ref
 	}
@@ -82,7 +83,7 @@ func (h HistoryItem) inner(conv string) envelope.Inner {
 
 func itemOf(in envelope.Inner, key string, at int64) HistoryItem {
 	h := HistoryItem{V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo,
-		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at, Ref: in.Ref, AgentID: in.AgentID, ReceiverRoute: in.ReceiverRoute}
+		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at, Ref: in.Ref, AgentID: in.AgentID, ReceiverRoute: in.ReceiverRoute, Human: in.Human}
 	for _, a := range in.Attachments {
 		h.Attachments = append(h.Attachments, envelope.Attachment{Name: a.Name, Size: a.Size, SHA256: a.SHA256})
 	}
@@ -205,7 +206,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			if err := json.Unmarshal([]byte(c.in.Body), &item); err != nil {
 				return err
 			}
-			if item.ReceiverRoute != nil {
+			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); item.ReceiverRoute != nil || assistant { // delivery reads the item's own requirement
 				body = c.in.Body
 			}
 		}
@@ -290,19 +291,34 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 			}
 		}
 	}
+	if item.Human != nil {
+		if err := a.verifyHumanProof(ctx, root, item.Human); err != nil {
+			return hold(reasonProof, err.Error())
+		}
+		if owner == "" {
+			for _, e := range item.Human.Proof {
+				if e.Type == protocol.EventScope && e.PID == item.Human.AuthorPID && e.Host.Address == item.From && e.Host.Fingerprint == item.FromKey {
+					if k, ok := a.store.deviceKey(e.Host.Person, item.From, item.FromKey); ok {
+						owner, key = e.Host.Person, k
+					}
+				}
+			}
+		}
+	}
 	// A linked human member may retain its invited agent's outputs and signed
 	// acceptance/decline. The original host's pinned roster proof supplies
 	// authorship only, never
 	// room membership; an outside host's linked devices still fail the
 	// caller's recipient membership check.
-	output := item.AgentID != "" && item.Sub == "" && (item.Kind == envelope.KindAnswer || item.Kind == envelope.KindResult)
+	output := item.AgentID != "" && item.Sub == "" && (item.Kind == envelope.KindAnswer || item.Kind == envelope.KindResult || item.Kind == envelope.KindMessage && item.Status == envelope.StatusProgress)
 	decision := false
 	if item.Sub == envelope.SubEvent {
 		if ev, err := protocol.ParseParticipationEvent([]byte(item.Body)); err == nil {
 			decision = ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline
 		}
 	}
-	if owner == "" && item.PID != "" && (output || decision) {
+	assistantReaction := envelope.AssistantReaction(item.inner(in.Conv))
+	if owner == "" && item.PID != "" && (output || decision || assistantReaction) {
 		p, err := a.participation(in.Conv, item.PID)
 		if errors.Is(err, ErrNoParticipation) {
 			return hold(reasonProof, err.Error())
@@ -313,7 +329,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		if p.Invite == "" || p.State == PartConflict {
 			return hold(reasonProof, "external output history has no unambiguous invitation")
 		}
-		if p.External && (!output || item.AgentID == p.AgentID) && item.From == p.Host.Address && item.FromKey == p.Host.Fingerprint {
+		if p.External && (!output && !assistantReaction || item.AgentID == p.AgentID) && item.From == p.Host.Address && item.FromKey == p.Host.Fingerprint {
 			if k, ok := a.store.deviceKey(p.Host.Person, item.From, item.FromKey); ok {
 				owner, key, external = p.Host.Person, k, true
 			}
@@ -356,6 +372,14 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		}
 		if reason, why := a.controlAuthorized(m, orig, owner); reason != "" {
 			return hold(reason, why)
+		}
+		if envelope.AssistantReaction(orig) { // the assistant's, bound as its direct copy is
+			if reason, err := assistantHistoryCheck(a.store.db, orig, key.Address, key.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
+				if reason == "" {
+					return err
+				}
+				return hold(reason, err.Error())
+			}
 		}
 	}
 	var also func(*sql.Tx) error
@@ -412,7 +436,11 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 			if !p.External || p.Invite == "" || p.State == PartConflict || p.Host.Address != key.Address || p.Host.Fingerprint != key.Fingerprint() {
 				return errors.New("external history host proof changed before admission")
 			}
-			if output {
+			if assistantReaction {
+				if _, err := assistantHistoryCheck(tx, orig, key.Address, key.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
+					return err
+				}
+			} else if output {
 				if orig.AgentID != p.AgentID {
 					return errors.New("external history agent changed before admission")
 				}
@@ -424,6 +452,21 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 			}
 			if event != nil {
 				return event(tx)
+			}
+			return nil
+		}
+	}
+	if item.Human != nil {
+		prior := also
+		also = func(tx *sql.Tx) error {
+			if err := insertHumanProof(tx, item.Human); err != nil {
+				return err
+			}
+			if err := humanTurnAuthorization(tx, orig, item.From, item.FromKey, a.Address, a.Self().Fingerprint(), true); err != nil {
+				return err
+			}
+			if prior != nil {
+				return prior(tx)
 			}
 			return nil
 		}
@@ -467,6 +510,7 @@ func (a *Agent) startHistory(dev identity.Public) error {
 		dev.Address, dev.Fingerprint(), string(pos), n, now, now); err != nil {
 		return err
 	}
+	a.replayErased(dev)  // conversations deleted here stay deleted there (convclear.go)
 	a.convWork.due(convHistory)
 	a.kickNow()          // this process's daemon, if it is one (the page approved)
 	notifyDaemon(a.home) // or the daemon running beside this command (agentnet person approve)
@@ -725,13 +769,14 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 		       coalesce(origin, ''), coalesce(emotion, ''), coalesce(target, ''), coalesce(pid, ''), lid, coalesce(ref_id, ''), coalesce(ref_fp, ''), coalesce(agent_id, '') FROM (
 		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
 		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id
-		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('history', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
+		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('history', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
+		     AND NOT `+erasedInFor("inbox")+`
 		  UNION ALL
 		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN (coalesce(o.pid,'') <> '' OR o.sub='status') AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id
-		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('history', 'file', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
-		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid))
+		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
+		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND NOT `+erasedOut+`)
 		WHERE (conv, ms, id) > (?, ?, ?) AND conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context)
-		ORDER BY conv, ms, id LIMIT ?`, a.Address, self, pos.Conv, pos.Ms, pos.ID, historyPage)
+		ORDER BY conv, ms, id LIMIT ?`, a.Address, self, self, pos.Conv, pos.Ms, pos.ID, historyPage)
 		if err != nil {
 			return false, err
 		}
@@ -790,6 +835,10 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 			}
 		}
 		it.in.ReceiverRoute, err = receiverStoredRoute(a.store.db, it.dir, it.in.ID)
+		if err != nil {
+			return false, err
+		}
+		it.in.Human, err = storedHuman(a.store.db, it.dir, it.in.ID)
 		if err != nil {
 			return false, err
 		}

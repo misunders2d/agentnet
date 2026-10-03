@@ -119,6 +119,19 @@ async function world() {
   const task = await c.store.get('inbox', request.id);
   check(task.state === 'conv_held', 'browser host never executes');
   const output = { kind: 'result', body: 'completed report', pid: invite.pid, reply_to: request.id, agent_id: w.agent.id, origin: 'agent:stub', emotion: 'plain' };
+  // Nonterminal progress: the exact host's output authority, never an answer.
+  const progress = { kind: 'message', status: wire.StatusProgress, body: 'checking now', pid: invite.pid, reply_to: request.id, agent_id: w.agent.id, origin: 'agent:stub', emotion: 'neutral' };
+  for (const e of [a, b]) {
+    const row = await e.store.get('inbox', await w.receive(await w.from(c, e, progress), e));
+    check(row?.status === wire.StatusProgress && row.kind === 'message' && row.agent_id === w.agent.id, 'participation progress admitted under the exact host output authority');
+    check(!(await e.dm(w.conv)).messages.some(m => m.pid === invite.pid && ['answer', 'result'].includes(m.kind)), 'progress is never an answer or result');
+  }
+  for (const extra of [{ agent_id: id() }, { reply_to: selected.id }]) {
+    const bad = await w.receive(await w.from(c, a, { ...progress, ...extra }), a);
+    check(!!await a.store.get('held', bad) && !await a.store.get('inbox', bad), 'progress for another agent or a non-request parent refused');
+  }
+  const foreignProgress = await w.receive(await w.from(w.users[3], a, progress), a);
+  check((await a.store.get('held', foreignProgress))?.reason === 'invalid', 'only the exact host sends participation progress');
   for (const e of [a, b]) {
     const result = await w.receive(await w.from(c, e, output), e);
     check((await e.store.get('inbox', result)).agent_id === w.agent.id, 'output exact binding on both human copies');

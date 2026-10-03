@@ -236,17 +236,19 @@ type DMSummary struct {
 
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
-	Kind     string            `json:"kind,omitempty"`
-	Title    string            `json:"title,omitempty"`
-	Members  []GroupMemberView `json:"members,omitempty"`
-	Role     string            `json:"role,omitempty"` // visitor context confers no ordinary room actions
-	ID       string            `json:"id"`
-	Peer     PersonView        `json:"peer"`
-	Created  time.Time         `json:"created"`
-	Mine     bool              `json:"mine"`
-	Frozen   string            `json:"frozen,omitempty"` // why nothing can be sent in it
-	Messages []DMMessage       `json:"messages"`
-	Agents   []AgentView       `json:"agents"` // agents invited into it, oldest first
+	Kind            string            `json:"kind,omitempty"`
+	Title           string            `json:"title,omitempty"`
+	Members         []GroupMemberView `json:"members,omitempty"`
+	Role            string            `json:"role,omitempty"` // visitor context confers no ordinary room actions
+	ID              string            `json:"id"`
+	Peer            PersonView        `json:"peer"`
+	Created         time.Time         `json:"created"`
+	Mine            bool              `json:"mine"`
+	Frozen          string            `json:"frozen,omitempty"` // why nothing can be sent in it
+	Messages        []DMMessage       `json:"messages"`
+	Agents          []AgentView       `json:"agents"` // agents invited into it, oldest first
+	Guests          []GuestView       `json:"guests,omitempty"`
+	AudiencePending bool              `json:"audience_pending,omitempty"`
 }
 
 // DMMessage is one message of a DM.
@@ -296,8 +298,8 @@ type DMMessage struct {
 // run one again), stop a run, or close what the agent handed back.
 func AgentActions(kind, state string) []string {
 	switch state {
-	case "awaiting":
-		if kind == KindTask {
+	case "awaiting": // a task, or a guest's question, waiting for this host's one-time acceptance
+		if kind == KindTask || kind == KindQuestion {
 			return []string{DoAccept}
 		}
 	case "running":
@@ -547,6 +549,7 @@ type AgentView struct {
 // only: a DM's question or task would run nowhere yet. Files are the ids of
 // files the page handed over (Files.StageFile).
 type DMDraft struct {
+	PID           string                  `json:"pid,omitempty"` // exact human author participation; not a receiver/executor
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	Conv          string                  `json:"conv"`
 	Body          string                  `json:"body"`
@@ -571,6 +574,9 @@ func DMStateText(dir, kind, state, peer, detail string) string {
 	case "part_waiting": // a request to this device's agent, not claimed yet
 		return "For your agent. It has not run yet: it runs here only with a responder chosen on this computer, while the invitation allows it."
 	case "not_run":
+		if strings.Contains(detail, "asking guest's participation ended") { // agentjob.go: the guest's end, not the assistant's
+			return "Not run: the guest who asked left or was removed first."
+		}
 		return "Not run: the agent's part in this DM ended first."
 	case "not_delivered":
 		return "Your agent's reply was kept here: the invitation no longer allowed sending it."
@@ -884,6 +890,9 @@ func StateText(dir, kind, state, peer string) string {
 	case "held":
 		return "Needs you: " + peer + " is not approved for automatic answers"
 	case "awaiting":
+		if kind == KindQuestion { // only a conversation guest's question waits so (agentjob.go)
+			return "Needs you: a guest's question runs only if you accept it or approve them"
+		}
 		return "Needs you: tasks run only if you accept them"
 	case "running":
 		return "Your responder is working on this"

@@ -239,7 +239,7 @@ func TestAgentActions(t *testing.T) {
 		want        string
 	}{
 		{"task", "awaiting", "accept"},
-		{"question", "awaiting", ""},
+		{"question", "awaiting", "accept"}, // a conversation guest's question: one-time acceptance
 		{"task", "running", "cancel"},
 		{"question", "needs_human", "accept,resolve"},
 		{"task", "failed", "accept"},

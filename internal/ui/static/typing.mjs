@@ -12,7 +12,13 @@ export function mountTyping({ api, input, line, settings }) {
     const now = Date.now();
     entries = entries.filter(e => Number.isFinite(Date.parse(e.expires)) && Date.parse(e.expires) > now);
     const names = [...new Set(entries.map(e => e.label || e.address).filter(Boolean))];
-    line.textContent = names.length ? names.join(", ") + (names.length === 1 ? " is typing…" : " are typing…") : "";
+    line.replaceChildren();
+    if (names.length) {
+      const text = document.createElement("span"); text.textContent = names.join(", ") + (names.length === 1 ? " is typing…" : " are typing…");
+      const dots = document.createElement("span"); dots.className = "typing-dots"; dots.setAttribute("aria-hidden", "true");
+      for (let i = 0; i < 3; i++) dots.append(document.createElement("i"));
+      line.append(text, dots);
+    }
     line.hidden = !names.length;
     if (entries.length) expiry = setTimeout(draw, Math.min(...entries.map(e => Date.parse(e.expires))) - now + 1);
   };

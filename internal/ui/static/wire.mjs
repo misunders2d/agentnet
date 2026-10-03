@@ -20,6 +20,8 @@ export const SubReaction = "reaction", SubRevision = "revision", SubRetraction =
 export const SubStatus = "status", SubDecision = "decision"; // headless: a host's per-request state; an operator's decision to a host (hdl1)
 export const CapHeadless = "hdl1";        // protocol cap: reads status controls and version 2 reports, sends decisions
 export const CapExternalParticipation = "apx1"; // selected DM excerpts and exact outside-host participation
+export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
+export const MaxHumanAudience = 16, MaxHumanProof = 32;
 export const SubGroupProof = "group-proof", SubGroupContext = "group-context"; // bounded quiet carriers; no capability advertisement
 export const SubGroupInvite = "group-invite", SubGroupConsent = "group-consent", SubGroupWithdrawal = "group-withdrawal";
 export const CapGroup = "grp1"; // protocol constant only; absent from advertised defaults until Engine parity
@@ -28,6 +30,9 @@ export const CapDrive = "drv1";           // protocol.CapDriveSpace: this device
 export const CapTyping = "typing1", SignalTTL = 5000, TypingThrottle = 3000;
 export const MaxSignalCiphertext = 2048, MaxSignalBody = 4096;
 export const isControl = (sub) => sub === SubReaction || sub === SubRevision || sub === SubRetraction || sub === SubStatus || sub === SubDecision;
+// A person's deletion of their copy of one conversation, to their own devices
+// only (envelope.SubClear, version 3). Never history (protocol.CapConvClear).
+export const SubClear = "clear", CapConvClear = "clr1", MaxClearParts = 1024, MaxClearTurns = 2000;
 export const ExecStates = ["queued", "awaiting", "running", "needs_human", "resolved", "stopped", "not_run", "declined", "failed", "cancelled", "interrupted", "answered"]; // envelope.statusStates
 export const DecisionActions = ["accept", "decline", "resolve", "reply", "cancel"];
 export const MaxDetailBytes = 400;
@@ -39,6 +44,21 @@ export const validStateToken = (s) => typeof s === "string" && /^[a-z_]{1,32}$/.
 export const MaxCiphertext = 256 << 10;  // envelope.MaxCiphertext
 export const MaxAttachments = 8;         // envelope.MaxAttachments
 export const CapReplyReceiver = "rcv1"; // additive selected return route; not advertised
+// envelope.StatusProgress: a version 1 plain-text nonterminal update replying
+// to one exact request (never an answer); protocol.CapProgress reads it.
+export const StatusProgress = "progress", CapProgress = "prg1";
+// protocol.CapAgentReaction: this device reads an assistant's own reactions
+// (envelope.AssistantReaction).
+export const CapAgentReaction = "agr1";
+// assistantReaction is envelope.AssistantReaction: a version 3 reaction that
+// names an assistant: a device thread's named executor (agent_id), a
+// conversation participation (pid, maybe agent_id), or a device thread's
+// default responder (defaultAssistantReaction: no ids, origin "agent:TOKEN").
+export const assistantReaction = (n) => n.v === Version3 && n.sub === SubReaction && (!!n.agent_id || !!n.pid || defaultAssistantReaction(n));
+export const defaultAssistantReaction = (n) => n.v === Version3 && n.sub === SubReaction && !n.conv && !n.agent_id && !n.pid && agentOrigin(n.origin);
+// historyAssistantReaction is AssistantReaction of a history item's inner
+// (client.HistoryItem.inner makes a control version 3): conversation only.
+export const historyAssistantReaction = (h) => h.sub === SubReaction && !!h.ref && (!!h.agent_id || !!h.pid);
 export const MaxBody = 1 << 20;          // protocol.MaxBody
 const kinds = new Set(["message", "question", "answer", "task", "result"]);
 const invitePrefix = "agentnet-invite-v1:";
@@ -356,6 +376,7 @@ function marshalInner(n) {
   if (n.ref) s += ',"ref":{"id":' + goString(n.ref.id) + ',"fingerprint":' + goString(n.ref.fingerprint) + "}";
   if (n.agent_id) s += ',"agent_id":' + goString(n.agent_id);
   if (n.receiver_route) s += ',"receiver_route":' + receiverRouteJSON(n.receiver_route);
+  if (n.human) s += ',"human":' + humanJSON(n.human);
   return s + "}";
 }
 
@@ -430,17 +451,33 @@ export function parseControl(sub, body) {
       (r.report && !validID(r.report)) || ((r.action === "reply" || r.action === "decline") && !(r.text || "").trim())) throw new Error("malformed decision");
     return { action: r.action, expect: r.expect, attempt: r.attempt, text: r.text || "", report: r.report || "" };
   }
+  if (sub === SubClear) { // envelope.Clear: exact names only (no cut, anchors or other fields)
+    const r = strict(v, "conversation deletion", { deletion: "string", part: "int", parts: "int", turns: "array" });
+    const turns = (r.turns || []).map(t => { const x = strict(t, "deleted turn", { id: "string", fingerprint: "string" }); return { id: x.id || "", fingerprint: x.fingerprint || "" }; });
+    if (!validID(r.deletion || "") || !(r.part >= 1) || r.part > r.parts || r.parts > MaxClearParts || turns.length > MaxClearTurns || turns.some(t => !validID(t.id) || !validFingerprint(t.fingerprint))) throw new Error("malformed conversation deletion");
+    return { deletion: r.deletion, part: r.part, parts: r.parts, turns };
+  }
   throw new Error("unknown control " + sub);
 }
+// clearJSON is the Go encoding of envelope.Clear (turns omitted when empty).
+export const clearJSON = (c) => '{"deletion":' + goString(c.deletion) + ',"part":' + goInt(c.part, "part") + ',"parts":' + goInt(c.parts, "parts") +
+  (c.turns?.length ? ',"turns":[' + c.turns.map(t => '{"id":' + goString(t.id) + ',"fingerprint":' + goString(t.fingerprint) + "}").join(",") + "]" : "") + "}";
 
 // checkV3 is envelope.checkVersion3: a control is a plain message about
 // one exact earlier message and carries nothing of a turn.
 function checkV3(n) {
   if (n.kind !== "message" || !n.ref || !validID(n.ref.id) || !validFingerprint(n.ref.fingerprint)) throw new Error("a control is a message about one exact earlier message (ref: id and sender key)");
-  if (n.receiver_route || n.root || n.target || n.pid || n.attachments.length || n.reply_to || n.origin || n.emotion || n.status || n.session || n.fallback) {
+  if (n.receiver_route || n.root || n.target || n.pid && !assistantReaction(n) || n.attachments.length || n.reply_to || n.origin && !defaultAssistantReaction(n) || n.emotion || n.status || n.session || n.fallback) {
     throw new Error("a control carries nothing but its ref and payload");
   }
+  // An assistant's reaction names the assistant: a device thread's named
+  // executor or default responder, or a conversation participation.
+  if (assistantReaction(n) && (n.agent_id && !validID(n.agent_id) || n.pid && !validID(n.pid) || !n.conv && n.pid || n.conv && !n.pid ||
+    n.origin && (n.conv || n.agent_id || !validToken(n.origin.slice(6), 32)))) {
+    throw new Error("an assistant reaction names its executor or default responder (device thread) or its participation (conversation)");
+  }
   if (n.sub === SubDecision && n.conv) throw new Error("a decision is device-scoped: it goes to the host that holds the request");
+  if (n.sub === SubClear && !n.conv) throw new Error("malformed conversation deletion"); // a device thread is never deleted on the wire
   if (!n.conv) {
     if (n.lid || n.replica || (n.fan && n.fan.length)) throw new Error("a device-thread control has no logical id, no fan and is no replica");
   } else {
@@ -457,17 +494,39 @@ function checkV3(n) {
   parseControl(n.sub, n.body);
 }
 const agentOrigin = (o) => typeof o === "string" && o.startsWith("agent:");
+// goBlank is strings.TrimSpace(s) == "": only Unicode White_Space (not JS
+// trim's U+FEFF; U+0085 included).
+const goBlank = (s) => /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/.test(s || "");
 
 // checkV2 is envelope.checkVersion2: the conversation fields, only in
 // version 2, and their shapes. (The pid rules follow the core as it is now;
 // participation is still in review there.)
 async function checkV2(n) {
+  // Progress replies to one request in plain text: in version 1 (a named
+  // executor's progress names it), or as a participation's nonterminal output.
+  if (n.status === StatusProgress && (n.v !== Version && (n.v !== Version2 || !n.pid) || n.kind !== "message" || !n.reply_to || goBlank(n.body) || n.attachments.length || n.target || n.receiver_route || (n.human && n.v !== Version2) || n.sub)) throw new Error("progress is a plain-text update replying to one request, in version 1 or as a participation's output");
+  if (n.human && n.v === Version3) {
+    // An assistant's reaction to an addressed request, to that request's
+    // captured audience (envelope/human.go): its host is the author and a
+    // control carries no root. No other control carries an audience.
+    if (!assistantReaction(n) || !n.conv || !n.pid || n.human.author_pid || n.root || n.kind !== "message") throw new Error("human: on a control, only an assistant's reaction to its captured audience");
+    await validateHumanTurn(n.human, n.conv);
+  } else if (n.human) {
+    const root = parseRoot(n.root);
+    if (await rootID(root) !== n.conv || root.kind !== "dm" || root.members.length !== 2 || n.v !== Version2 || n.sub) throw new Error("human: ordinary non-executing DM turn only");
+    const h = n.human, author = h.author_pid || "";
+    const ordinary = n.kind === "message" && !n.status && !n.target && !n.agent_id && !agentOrigin(n.origin) && !n.emotion && n.pid === author;
+    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && !agentOrigin(n.origin) && !n.status && !n.receiver_route;
+    const output = (["answer", "result"].includes(n.kind) || n.kind === "message" && n.status === StatusProgress) && !n.target && n.pid && !author && !n.receiver_route;
+    if (!ordinary && !request && !output) throw new Error("human: ordinary turn, addressed request or assistant output only");
+    await validateHumanTurn(n.human, n.conv);
+  }
   await validateReceiverRoute(n);
   if (n.target?.group_admission) {
     const root = parseGroupRoot(n.root);
     if (root.kind !== "group" || !n.pid || !validHash(n.target.group_admission) || !["question", "task"].includes(n.kind)) throw new Error("group: requester admission is only for a PID-addressed group request");
   }
-  if (n.agent_id && (!validID(n.agent_id) || !["answer", "result"].includes(n.kind) || !n.reply_to || n.sub || n.v === Version3)) throw new Error("a named agent author belongs on a reply answer or result");
+  if (n.agent_id && !assistantReaction(n) && (!validID(n.agent_id) || !["answer", "result"].includes(n.kind) && n.status !== StatusProgress || !n.reply_to || n.sub || n.v === Version3)) throw new Error("a named agent author belongs on a reply answer, result or progress");
   if (n.target?.agent_id && !validID(n.target.agent_id)) throw new Error("invalid named agent target");
   if (n.v === Version3) { checkV3(n); return; }
   if (n.ref) throw new Error("a control ref belongs to a version 3 message");
@@ -510,10 +569,12 @@ async function checkV2(n) {
   if (n.pid) {
     if (!validID(n.pid)) throw new Error("invalid participation id");
     const request = n.sub === "" && (n.kind === "question" || n.kind === "task") && n.target;
-    const output = n.sub === "" && (n.kind === "answer" || n.kind === "result");
-    if (n.sub !== "event" && n.sub !== "excerpt" && ![SubGroupProof, SubGroupContext].includes(n.sub) && !request && !output) throw new Error("a participation id is not allowed on this message");
+    const output = n.sub === "" && (n.kind === "answer" || n.kind === "result" || n.kind === "message" && n.status === StatusProgress);
+    if (n.sub !== "event" && n.sub !== "excerpt" && ![SubGroupProof, SubGroupContext].includes(n.sub) && !request && !output && !(n.human && !n.sub && n.kind === "message")) throw new Error("a participation id is not allowed on this message");
   }
 }
+
+export const checkVersion2 = checkV2; // envelope.checkVersion2, for the shared Go shape vectors
 
 function checkBlob(b) {
   if (!validID(b.id) || !Number.isSafeInteger(b.size) || b.size <= 0 || typeof b.sha256 !== "string" || b.sha256.length !== 64) {
@@ -548,7 +609,7 @@ export async function seal(m, keys, recipient) {
     reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status"),
     conv: m.conv || "", lid: m.lid || "", root: m.root || "", sub: m.sub || "", replica: !!m.replica,
     origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "",
-    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null };
+    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null };
   await checkV2(inner);
   if (v === Version2 && agentOrigin(inner.origin) && inner.sub === "" && !inner.emotion) throw new Error("an agent's turn must carry an emotion");
   const e = new Encrypter();
@@ -621,7 +682,7 @@ export async function open(json, keys, selfAddress, sender) {
   const f = strict(v, "inner", { v: "int", id: "string", from: "string", to: "string", ts: "int", kind: "string", body: "string",
     reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string",
     conv: "string", lid: "string", root: "object", sub: "string", replica: "boolean", origin: "string", emotion: "string",
-    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object" });
+    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object" });
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
   const ref = f.ref ? strict(f.ref, "ref", { id: "string", fingerprint: "string" }) : null;
   const fan = f.fan ? f.fan.map((x) => { const y = strict(x, "fan", { person: "string", roster: "string" }); return { person: y.person || "", roster: y.roster || "" }; }) : null;
@@ -632,6 +693,7 @@ export async function open(json, keys, selfAddress, sender) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.receiver_route ? { receiver_route: parseReceiverRoute(f.receiver_route) } : {}),
+    ...(f.human ? { human: parseHumanTurn(f.human) } : {}),
     ref: ref ? { id: ref.id || "", fingerprint: ref.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => {
       const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
@@ -1003,22 +1065,33 @@ export function historyJSON(h) {
   }
   s += ',"at":' + goInt(h.at, "time");
   if (h.ref) s += ',"ref":{"id":' + goString(h.ref.id) + ',"fingerprint":' + goString(h.ref.fingerprint) + "}";
-  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + "}";
+  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + "}";
 }
 
 // parseHistory reads a history item strictly (as the core's decodeStrict).
 export function parseHistory(json) {
   const f = strict(JSON.parse(json), "history item", { v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
     kind: "string", body: "string", reply_to: "string", status: "string", sub: "string", origin: "string", emotion: "string",
-    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object" });
+    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object" });
   if (f.group_admission && !validHash(f.group_admission)) throw Error("a malformed group admission stamp");
   if (f.v !== 1 || !validID(f.id) || !validID(f.lid) || !validAddress(f.from || "") || !validFingerprint(f.from_key || "")) throw new Error("a malformed history item");
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
-  if (f.agent_id && (!validID(f.agent_id) || !["answer", "result"].includes(f.kind) || !f.reply_to || f.sub) || target?.agent_id && !validID(target.agent_id)) throw new Error("a malformed named history item");
+  const assistant = historyAssistantReaction(f); // a conversation assistant's own reaction: its participation, maybe its agent
+  if (assistant && (!validID(f.pid || "") || f.agent_id && !validID(f.agent_id) || f.origin || target)) throw new Error("a malformed assistant reaction history item");
+  if (!assistant && f.agent_id && (!validID(f.agent_id) || !["answer", "result"].includes(f.kind) || !f.reply_to || f.sub) || target?.agent_id && !validID(target.agent_id)) throw new Error("a malformed named history item");
   const ref = f.ref ? strict(f.ref, "ref", { id: "string", fingerprint: "string" }) : null;
   if (ref && (!validID(ref.id || "") || !validFingerprint(ref.fingerprint || ""))) throw new Error("a malformed history item");
   if (ref && !isControl(f.sub || "")) throw new Error("a malformed history item");
   const receiver = f.receiver_route ? parseReceiverRoute(f.receiver_route) : null;
+  const human = f.human ? parseHumanTurn(f.human) : null;
+  if (human) { // the same three shapes as a live human turn (envelope/human.go)
+    const pid = f.pid || "", author = human.author_pid || "";
+    const ordinary = f.kind === "message" && !target && !f.agent_id && !agentOrigin(f.origin) && !f.emotion && !f.status && pid === author;
+    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && !agentOrigin(f.origin) && !f.status && !receiver;
+    const output = (["answer", "result"].includes(f.kind) || f.kind === "message" && f.status === StatusProgress) && !target && pid && !author && !receiver;
+    const reaction = f.sub === SubReaction && historyAssistantReaction(f) && f.kind === "message" && pid && !author && !target && !receiver; // an assistant's reaction to its captured audience
+    if (!reaction && (f.sub || !ordinary && !request && !output)) throw new Error("human: malformed history turn");
+  }
   if (receiver && (receiver.op !== "request" || receiver.request_ref !== f.lid || f.sub || f.agent_id || ref || !["message", "question", "task"].includes(f.kind))) throw Error("receiver: history retains only original inert request routes");
   return { v: f.v, from: f.from, from_key: f.from_key, id: f.id, lid: f.lid, ts: f.ts || 0, at: f.at || 0, kind: f.kind || "", body: f.body || "",
     ref: ref ? { id: ref.id, fingerprint: ref.fingerprint } : null,
@@ -1026,7 +1099,7 @@ export function parseHistory(json) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.group_admission ? { group_admission: f.group_admission } : {}),
-    ...(receiver ? { receiver_route: receiver } : {}),
+    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}),
     attachments: (f.attachments || []).map((a) => { const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
       return { name: text(x.name || "", "attachment name"), size: x.size || 0, sha256: x.sha256 || "" }; }) };
 }
@@ -1368,6 +1441,7 @@ export function groupHistoryContentHash(conv,n) {
   json+=',"Attachments":'+((n.attachments || []).length ? '['+n.attachments.map(a=>'{"Name":'+goString(a.name)+',"Size":'+goInt(a.size,"size")+',"SHA256":'+goString(a.sha256)+'}').join(',')+']' : 'null');
   if(n.pid)json+=',"PID":'+goString(n.pid);if(n.agent_id)json+=',"AgentID":'+goString(n.agent_id);
   if(n.receiver_route)json+=',"ReceiverRoute":'+receiverRouteJSON(n.receiver_route);
+  if(n.human)json+=',"Human":'+humanJSON(n.human);
   return hashOf(utf8.encode(json+'}'));
 }
 export function parseGroupInvitation(json) {
@@ -1436,9 +1510,15 @@ export function agentRequirement(n) {
   try {
     if (n.sub === "excerpt" && n.pid) return CapExternalParticipation;
     if (n.sub === "history") n = parseHistory(n.body);
+    if (assistantReaction(n) || historyAssistantReaction(n)) return CapAgentReaction; // as history too: never stored by an older reader as its host's mark
     if (n.sub === "excerpt" && n.pid) return CapExternalParticipation;
+    if (n.human) return CapHumanParticipation;
     if (n.agent_id || n.target?.agent_id) return CapAgentIdentity;
-    if (n.sub === "event" && parseEvent(n.body).host?.agent_id) return CapAgentIdentity;
+    if (n.sub === "event") {
+      const e = parseEvent(n.body);
+      if (e.role === "human" || e.type === "scope") return CapHumanParticipation; // a scope exists only for human audiences
+      if (e.host?.agent_id) return CapAgentIdentity;
+    }
   } catch (e) { /* malformed bodies are rejected by their existing admission path */ }
   return "";
 }
@@ -1514,7 +1594,7 @@ export const MaxTaskKeys = 16;
 export const MaxInviteNote = 1024;
 export const MaxParticipationEvent = 8192;
 const participationDomain = "agentnet-participation-v1\n";
-const eventTypes = new Set(["invite", "accept", "decline", "dismiss"]);
+const eventTypes = new Set(["invite", "accept", "decline", "dismiss", "scope"]);
 // Go's unicode.IsPrint, plus a newline (an invite's note).
 const noteText = /^[\p{L}\p{M}\p{N}\p{P}\p{S} \n]*$/u;
 
@@ -1529,10 +1609,11 @@ function marshalEvent(e, withSig) {
   if (e.task_keys && e.task_keys.length) s += ',"task_keys":' + goStrings(e.task_keys);
   if (e.note) s += ',"note":' + goString(e.note);
   if (e.group) s += ',"group":{"seq":' + goInt(e.group.seq,"group sequence") + ',"hash":' + goString(e.group.hash) + ',"host_role":' + goString(e.group.host_role) + (e.group.host_admission ? ',"host_admission":' + goString(e.group.host_admission) : "") + (e.group.task_admissions?.length ? ',"task_admissions":' + goStrings(e.group.task_admissions) : "") + "}";
+  if (e.role) s += ',"role":' + goString(e.role);
   return s + sigJSON(e, withSig) + "}";
 }
 export const eventJSON = (e) => marshalEvent(e, true);
-const eventCanonical = (e) => utf8.encode(participationDomain + marshalEvent(e, false));
+export const eventCanonical = (e) => utf8.encode(participationDomain + marshalEvent(e, false));
 export const eventHash = (e) => hashOf(eventCanonical(e));
 
 // ---- notifications (docs/revival/NOTIFY.md §2) -------------------------------------------
@@ -1579,6 +1660,8 @@ export function validateEvent(e) {
   if (!validAddress(a.address)) throw new Error("participation: invalid address " + a.address);
   if (!eventTypes.has(e.type)) throw new Error("participation: unknown event type " + e.type);
   if (e.type === "invite") {
+    if (e.role && e.role !== "human") throw new Error("participation: unknown role");
+    if (e.role === "human" && (e.host?.agent_id || e.task_keys?.length || e.group || a.group_admission)) throw new Error("participation: human invite carries no agent or group authority");
     if (e.prev !== "" || !e.host || e.audience !== "conversation") {
       throw new Error("participation: an invite has no prev, and names a host and the conversation audience");
     }
@@ -1596,7 +1679,14 @@ export function validateEvent(e) {
     if (!noteText.test(e.note)) throw new Error("participation: note has a control character");
     return;
   }
-  if (!validHash(e.prev) || e.host || e.grant !== null || e.audience !== "" || e.task_keys !== null || e.note !== "" || e.group) {
+  if (e.type === "scope") { // the invite's public projection: never its grant, task keys or note
+    if (!validHash(e.prev) || !e.host || e.audience !== "conversation" || e.grant !== null || e.task_keys !== null || e.note !== "" || e.group || a.group_admission ||
+      (e.role && e.role !== "human") || (e.role === "human" && e.host.agent_id)) throw new Error("participation: a scope names its invite, host, agent and role only");
+    if (!validID(e.host.person) || !validFingerprint(e.host.fingerprint) || e.host.agent_id && !validID(e.host.agent_id)) throw new Error("participation: invalid host");
+    if (!validAddress(e.host.address)) throw new Error("participation: host: invalid address " + e.host.address);
+    return;
+  }
+  if (!validHash(e.prev) || e.host || e.grant !== null || e.audience !== "" || e.task_keys !== null || e.note !== "" || e.group || e.role) {
     throw new Error("participation: an accept, decline or dismiss names only the event it follows");
   }
 }
@@ -1613,7 +1703,7 @@ export async function signEvent(keys, fields) {
 
 export function parseEvent(json) {
   const f = strictRecord(json, MaxParticipationEvent, "participation", { v: "int", conv: "string", pid: "string", type: "string", prev: "string",
-    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", sig: "string" });
+    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", sig: "string" });
   const a = strict(f.author || {}, "participation author", { person: "string", roster: "string", address: "string", fingerprint: "string", group_admission: "string" });
   const h = f.host ? strict(f.host, "participation host", { person: "string", address: "string", fingerprint: "string", agent_id: "string" }) : null;
   const group = f.group ? strict(f.group,"participation group",{seq:"int",hash:"string",host_role:"string",host_admission:"string",task_admissions:"array"}) : null;
@@ -1624,15 +1714,64 @@ export function parseEvent(json) {
     host: h ? { person: h.person || "", address: h.address || "", fingerprint: h.fingerprint || "", ...(h.agent_id ? { agent_id: h.agent_id } : {}) } : null,
     grant: f.grant ? f.grant.map((g) => { const x = strict(g, "participation grant", { lid: "string", fingerprint: "string" });
       return { lid: x.lid || "", fingerprint: x.fingerprint || "" }; }) : null,
-    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
+    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
   validateEvent(e);
   fitsRecord(eventJSON(e), MaxParticipationEvent, "participation");
   return e;
 }
 
+// scopeOf is protocol.ScopeOf: the unsigned public projection of DM invite
+// inv, for its author to sign. projects is ParticipationEvent.Projects.
+export async function scopeOf(inv, ts) {
+  return { v: 1, conv: inv.conv, pid: inv.pid, type: "scope", prev: await eventHash(inv), author: { ...inv.author }, ts, host: { ...inv.host },
+    grant: null, audience: "conversation", task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}) };
+}
+export async function projects(s, inv) {
+  const same = (x, y) => x.person === y.person && x.address === y.address && x.fingerprint === y.fingerprint && (x.agent_id || "") === (y.agent_id || "");
+  return s.type === "scope" && inv.type === "invite" && !!inv.host && !!s.host && s.conv === inv.conv && s.pid === inv.pid && s.prev === await eventHash(inv) &&
+    same(s.author, inv.author) && roster(s.author) === roster(inv.author) && same(s.host, inv.host) && (s.role || "") === (inv.role || "") && !inv.group;
+}
+const roster = (a) => a.roster + "/" + (a.group_admission || "");
+
 export async function verifyEvent(e, authorKey) {
   validateEvent(e);
   if (!(await verifyBytes(authorKey, eventCanonical(e), e.sig))) throw new Error("participation: signature invalid");
+}
+
+// ---- scoped ordinary human turns (envelope/human.go) -----------------------------------------
+// Shape/hash validation only. Admission must also verify every signature against
+// the pinned current roster and the sender/recipient's exact accepted scope.
+export function humanJSON(h) {
+  return "{" + (h.author_pid ? '"author_pid":' + goString(h.author_pid) + "," : "") +
+    '"audience":' + (h.audience ? "[" + h.audience.map(s => '{"pid":' + goString(s.pid) + ',"invite":' + goString(s.invite) + ',"decision":' + goString(s.decision) + "}").join(",") + "]" : "null") +
+    ',"proof":' + (h.proof ? "[" + h.proof.map(eventJSON).join(",") + "]" : "null") + "}";
+}
+export function parseHumanTurn(value) {
+  const f = strict(typeof value === "string" ? JSON.parse(value) : value, "human", { author_pid: "string", audience: "array", proof: "array" });
+  if (!f.audience?.length || f.audience.length > MaxHumanAudience || (f.proof?.length || 0) > MaxHumanProof) throw new Error("human: invalid audience or proof bound");
+  return { ...(f.author_pid ? { author_pid: f.author_pid } : {}), audience: f.audience.map(s => {
+    const x = strict(s, "human scope", { pid: "string", invite: "string", decision: "string" });
+    return { pid: x.pid || "", invite: x.invite || "", decision: x.decision || "" };
+  }), proof: (f.proof || []).map(e => parseEvent(e.sig instanceof Uint8Array ? { ...e, sig: b64(e.sig) } : e)) };
+}
+export async function validateHumanTurn(h, conv) {
+  if ((h.author_pid && !validID(h.author_pid)) || !h.audience?.length || h.audience.length > MaxHumanAudience || (h.proof?.length || 0) > MaxHumanProof) throw new Error("human: invalid author or audience bound");
+  const scopes = new Map(), events = new Set();
+  for (const s of h.audience) {
+    if (!validID(s.pid) || !validHash(s.invite) || !validHash(s.decision) || scopes.has(s.pid)) throw new Error("human: invalid or duplicate scope");
+    scopes.set(s.pid, s);
+  }
+  if (h.author_pid && !scopes.has(h.author_pid)) throw new Error("human: author outside captured audience");
+  for (const e of h.proof || []) {
+    validateEvent(e);
+    const scope = scopes.get(e.pid);
+    if (!scope || e.sig?.length !== 64 || utf8.encode(eventJSON(e)).length > MaxParticipationEvent || e.conv !== conv || !["scope", "accept"].includes(e.type) || (e.type === "scope" && e.role !== "human")) throw new Error("human: proof outside audience");
+    const hash = await eventHash(e);
+    if (events.has(hash) || e.prev !== scope.invite || (e.type === "accept" && hash !== scope.decision)) throw new Error("human: duplicate or unrelated proof");
+    events.add(hash);
+    if (e.type === "scope") events.add("scope/" + e.pid);
+  }
+  for (const s of h.audience) if (!events.has("scope/" + s.pid) || !events.has(s.decision)) throw new Error("human: missing scope or acceptance proof");
 }
 
 // ---- attachments (envelope.Attachment; client files.go) ---------------------------------------
@@ -1766,13 +1905,13 @@ function receiverRawRoot(json) {
 }
 export async function parseReceiverRequest(value) {
  const raw=typeof value==='string', source=raw?JSON.parse(value):value;
- const f=strict(source,'receiver request',{id:'string',lid:'string',from:'string',from_key:'string',to:'string',to_key:'string',ts:'int',conv:'string',root:raw?'object':typeof source?.root==='string'?'string':'object',kind:'string',body:'string',reply_to:'string',origin:'string',emotion:'string',target:'object',pid:'string',attachments:'array',group_admission:'string',group_replies:'array'});
- const r={id:f.id||'',lid:f.lid||'',from:f.from||'',from_key:f.from_key||'',to:f.to||'',to_key:f.to_key||'',ts:f.ts||0,conv:f.conv||'',root:raw?receiverRawRoot(value)||'':f.root?(typeof f.root==='string'?f.root:rootJSON(parseConvRoot(f.root))):'',kind:f.kind||'',body:f.body||'',reply_to:f.reply_to||'',origin:f.origin||'',emotion:f.emotion||'',target:f.target?strict(f.target,'receiver target',{address:'string',fingerprint:'string',agent_id:'string',group_admission:'string'}):null,pid:f.pid||'',attachments:(f.attachments||[]).map(a=>{const x=strict(a,'receiver attachment',{blob:'object',name:'string',size:'int',sha256:'string'});return {blob:x.blob?strict(x.blob,'receiver blob',{id:'string',size:'int',sha256:'string'}):{id:'',size:0,sha256:''},name:x.name||'',size:x.size||0,sha256:x.sha256||''};}),group_admission:f.group_admission||'',group_replies:(f.group_replies||[]).map(k=>strict(k,'receiver reply key',{key:'string',admission:'string'}))};
+ const f=strict(source,'receiver request',{id:'string',lid:'string',from:'string',from_key:'string',to:'string',to_key:'string',ts:'int',conv:'string',root:raw?'object':typeof source?.root==='string'?'string':'object',kind:'string',body:'string',reply_to:'string',origin:'string',emotion:'string',target:'object',pid:'string',attachments:'array',group_admission:'string',group_replies:'array',human:'object'});
+ const r={id:f.id||'',lid:f.lid||'',from:f.from||'',from_key:f.from_key||'',to:f.to||'',to_key:f.to_key||'',ts:f.ts||0,conv:f.conv||'',root:raw?receiverRawRoot(value)||'':f.root?(typeof f.root==='string'?f.root:rootJSON(parseConvRoot(f.root))):'',kind:f.kind||'',body:f.body||'',reply_to:f.reply_to||'',origin:f.origin||'',emotion:f.emotion||'',target:f.target?strict(f.target,'receiver target',{address:'string',fingerprint:'string',agent_id:'string',group_admission:'string'}):null,pid:f.pid||'',attachments:(f.attachments||[]).map(a=>{const x=strict(a,'receiver attachment',{blob:'object',name:'string',size:'int',sha256:'string'});return {blob:x.blob?strict(x.blob,'receiver blob',{id:'string',size:'int',sha256:'string'}):{id:'',size:0,sha256:''},name:x.name||'',size:x.size||0,sha256:x.sha256||''};}),group_admission:f.group_admission||'',group_replies:(f.group_replies||[]).map(k=>strict(k,'receiver reply key',{key:'string',admission:'string'})),...(f.human?{human:parseHumanTurn(f.human)}:{})};
  if(!validID(r.id)||!validAddress(r.from)||!validFingerprint(r.from_key)||!(r.ts>0)||!['message','question','task'].includes(r.kind)||!wellFormed(r.body)||r.reply_to&&!validID(r.reply_to))throw Error('receiver: invalid original request');
  let group=false;
  if(r.conv){if(r.to||r.to_key)throw Error('receiver: conversation recipient derives from verified root and target');const root=parseConvRoot(r.root);if(rootJSON(root)!==r.root||await rootID(root)!==r.conv)throw Error('receiver: original root must use exact typed signed encoding');group=root.kind==='group';if(r.target&&r.id!==r.lid)throw Error('receiver: targeted conversation copy must use its committed logical ID');}
  else if(!validAddress(r.to)||!validFingerprint(r.to_key)||r.target&&(r.target.address!==r.to||r.target.fingerprint!==r.to_key))throw Error('receiver: direct original requires exact recipient address and key');
- const n={v:r.conv?Version2:Version,id:r.id,from:r.from,to:r.conv?r.from:r.to,ts:r.ts,kind:r.kind,body:r.body,reply_to:r.reply_to,conv:r.conv,lid:r.lid,root:r.root,origin:r.origin,emotion:r.emotion,target:r.target,pid:r.pid,attachments:[],fan:null,sub:'',replica:false,status:'',agent_id:'',session:'',fallback:false,ref:null};
+ const n={v:r.conv?Version2:Version,id:r.id,from:r.from,to:r.conv?r.from:r.to,ts:r.ts,kind:r.kind,body:r.body,reply_to:r.reply_to,conv:r.conv,lid:r.lid,root:r.root,origin:r.origin,emotion:r.emotion,target:r.target,pid:r.pid,human:r.human,attachments:[],fan:null,sub:'',replica:false,status:'',agent_id:'',session:'',fallback:false,ref:null};
  await checkV2(n);if(n.v===Version2&&agentOrigin(r.origin)&&!r.emotion)throw Error('receiver: agent request requires emotion');
  if(r.attachments.length>MaxAttachments)throw Error('receiver: too many original files');
  for(const a of r.attachments){if(a.blob.id||a.blob.size||a.blob.sha256||!a.name||!wellFormed(a.name)||a.size<0||!validHash(a.sha256))throw Error('receiver: original files require plaintext-only manifests');}
@@ -1784,7 +1923,7 @@ export function receiverRequestJSON(r) {
  let s='{"id":'+goString(r.id)+(r.lid?',"lid":'+goString(r.lid):'')+',"from":'+goString(r.from)+',"from_key":'+goString(r.from_key)+(r.to?',"to":'+goString(r.to):'')+(r.to_key?',"to_key":'+goString(r.to_key):'')+',"ts":'+goInt(r.ts,'time')+(r.conv?',"conv":'+goString(r.conv):'')+(r.root?',"root":'+r.root:'')+',"kind":'+goString(r.kind)+',"body":'+goString(r.body);
  for(const k of ['reply_to','origin','emotion'])if(r[k])s+=',"'+k+'":'+goString(r[k]);
  if(r.target)s+=',"target":'+receiverTargetJSON(r.target);if(r.pid)s+=',"pid":'+goString(r.pid);if(r.attachments?.length)s+=',"attachments":['+r.attachments.map(receiverAttachmentJSON).join(',')+']';
- if(r.group_admission)s+=',"group_admission":'+goString(r.group_admission);if(r.group_replies?.length)s+=',"group_replies":['+r.group_replies.map(k=>'{"key":'+goString(k.key)+(k.admission?',"admission":'+goString(k.admission):'')+'}').join(',')+']';return s+'}';
+ if(r.group_admission)s+=',"group_admission":'+goString(r.group_admission);if(r.group_replies?.length)s+=',"group_replies":['+r.group_replies.map(k=>'{"key":'+goString(k.key)+(k.admission?',"admission":'+goString(k.admission):'')+'}').join(',')+']';if(r.human)s+=',"human":'+humanJSON(r.human);return s+'}';
 }
 export async function receiverDigest(route,request,receiver) {
  if(!['request','delegate','ready'].includes(route.op)||route.request_digest&&!validHash(route.request_digest))throw Error('receiver: invalid commitment operation or digest');

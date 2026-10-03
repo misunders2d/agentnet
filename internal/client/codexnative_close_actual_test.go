@@ -214,7 +214,14 @@ func codexActualCloseGate(t *testing.T, a, b *Agent, selected, other replySessio
 	if st.runs() != 1 {
 		t.Fatal("timeout replayed backup")
 	}
-	result := map[string]any{"native_end_and_tui_exit": true, "second_native_alive_at_first_close": true, "codex_daemon_alive_at_first_close": true, "before_finish_signal_cleanup": true, "original_backup_runs": 1, "default_runs": 0, "other_backup_runs": 0, "accepted_held": true, "claimed_missing_receipt_uncertain_held": true, "restart_duplicate_zero": true, "hook_timeout_group_absent": true, "hook_timeout_no_late_shutdown": true, "native_version": codexNativeVersion, "selected_pid": pids[0], "other_pid": pids[1], "timeout_pid": delay.PID, "timeout_child_pid": delay.ChildPID, "timeout_pgid": delay.PGID, "source": "genuine native lifecycle; no received reason authority"}
+	observedVersion := "" // the daemon's own report, not a release pin
+	if raw, e := codexCommand(context.Background(), *selected.Codex, "app-server", "daemon", "version"); e == nil {
+		var v struct{ CLIVersion string }
+		if json.Unmarshal(raw, &v) == nil {
+			observedVersion = v.CLIVersion
+		}
+	}
+	result := map[string]any{"native_end_and_tui_exit": true, "second_native_alive_at_first_close": true, "codex_daemon_alive_at_first_close": true, "before_finish_signal_cleanup": true, "original_backup_runs": 1, "default_runs": 0, "other_backup_runs": 0, "accepted_held": true, "claimed_missing_receipt_uncertain_held": true, "restart_duplicate_zero": true, "hook_timeout_group_absent": true, "hook_timeout_no_late_shutdown": true, "native_version": observedVersion, "selected_pid": pids[0], "other_pid": pids[1], "timeout_pid": delay.PID, "timeout_child_pid": delay.ChildPID, "timeout_pgid": delay.PGID, "source": "genuine native lifecycle; no received reason authority"}
 	out, _ := json.MarshalIndent(result, "", "  ")
 	os.WriteFile(filepath.Join(evidence, "close-result.json"), out, 0600)
 	return nextStop

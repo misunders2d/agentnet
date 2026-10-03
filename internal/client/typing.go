@@ -193,7 +193,39 @@ func (a *Agent) typingScopeAllows(scope protocol.TypingScope, address string, p 
 		self = self || m.Person == me.info.Person
 		peer = peer || m.Person == p.info.Person
 	}
+	if !self || !peer { // an accepted human guest shares the DM's typing as its turns
+		dev, ok := p.device(address)
+		self = self || a.typingGuest(scope.Conv, a.Address, a.Self().Fingerprint())
+		peer = peer || ok && a.typingGuest(scope.Conv, address, dev.Fingerprint())
+	}
 	return self && peer
+}
+
+// typingGuest reports whether address with key fp is the exact host of a
+// human participation of DM conv that is accepted now: never a pending,
+// declined or ended one, another device of that person, or a changed key.
+func (a *Agent) typingGuest(conv, address, fp string) bool {
+	ok, err := humanEndReader(a.store.db, conv, address, fp)
+	return err == nil && ok
+}
+
+// typingGuestHosts are the exact accepted human guest devices of DM conv.
+func (a *Agent) typingGuestHosts(conv string) []protocol.ParticipationHost {
+	m, err := a.dmMembers(conv)
+	if err != nil || !externalDM(m.root) {
+		return nil
+	}
+	infos, err := a.Participations(conv)
+	if err != nil {
+		return nil
+	}
+	var out []protocol.ParticipationHost
+	for _, p := range infos {
+		if p.HumanActive() {
+			out = append(out, protocol.ParticipationHost{Person: p.Host.Person, Address: p.Host.Address, Fingerprint: p.Host.Fingerprint})
+		}
+	}
+	return out
 }
 func (a *Agent) typingTargets(scope protocol.TypingScope) ([]identity.Public, error) {
 	if err := scope.Validate(); err != nil {
@@ -221,7 +253,7 @@ func (a *Agent) typingTargets(scope protocol.TypingScope) ([]identity.Public, er
 	for _, m := range members {
 		self = self || m.Person == me.info.Person
 	}
-	if !self {
+	if !self && !a.typingGuest(scope.Conv, a.Address, a.Self().Fingerprint()) {
 		return nil, ErrTypingScope
 	}
 	var out []identity.Public
@@ -243,6 +275,16 @@ func (a *Agent) typingTargets(scope protocol.TypingScope) ([]identity.Public, er
 				out = append(out, key)
 				seen[key.Address] = true
 			}
+		}
+	}
+	for _, g := range a.typingGuestHosts(scope.Conv) {
+		if g.Address == a.Address || seen[g.Address] {
+			continue
+		}
+		key, person, ok := a.typingKey(g.Address)
+		if ok && key.Fingerprint() == g.Fingerprint && a.typingScopeAllows(scope, g.Address, person) {
+			out = append(out, key)
+			seen[g.Address] = true
 		}
 	}
 	return out, nil

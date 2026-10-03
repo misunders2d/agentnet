@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -469,9 +469,13 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up, status, target, agent_id, required_cap)
-		VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
-		env.ID, env.To, in.Body, string(data), stateQueued, time.Now().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in)); err != nil {
+	recipientKey := "" // the exact key this was sealed to, when the sender knows it (SendMessage)
+	if len(selected) > 0 {
+		recipientKey = selected[0].fingerprint
+	}
+	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up, status, target, agent_id, required_cap, recipient_fp)
+		VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
+		env.ID, env.To, in.Body, string(data), stateQueued, time.Now().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in), recipientKey); err != nil {
 		return err
 	}
 	if len(selected) > 0 && selected[0].binding != nil {
@@ -679,7 +683,7 @@ func isReviewNotice(in envelope.Inner) bool {
 // first: the outbox row records which reply it went to, so further replies
 // (or the same reply under another id) start nothing.
 func bindFollowUp(tx *sql.Tx, in envelope.Inner) error {
-	if in.ReplyTo == "" || in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
+	if in.ReplyTo == "" || in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask || isResponderProgress(in) {
 		return nil
 	}
 	res, err := tx.Exec(`UPDATE outbox SET followed_by = ? WHERE id = ? AND recipient = ? AND follow_up IS NOT NULL AND followed_by IS NULL`,
@@ -1237,12 +1241,13 @@ func (s *store) sent(id string) (sentRow, error) {
 	return r, err
 }
 
-// replyTo returns the first answer, result or message from peer that replies
-// to id. Replies naming id from anyone else are ignored.
+// replyTo returns the first terminal answer/result or ordinary message from
+// peer that replies to id. Nonterminal responder progress and replies from
+// anyone else are ignored.
 func (s *store) replyTo(id, peer string) (string, error) {
 	var reply string
-	err := s.db.QueryRow(`SELECT id FROM inbox WHERE reply_to = ? AND sender = ? AND kind IN (?, ?, ?) ORDER BY received_at, id LIMIT 1`,
-		id, peer, envelope.KindAnswer, envelope.KindResult, envelope.KindMessage).Scan(&reply)
+	err := s.db.QueryRow(`SELECT id FROM inbox WHERE reply_to = ? AND sender = ? AND kind IN (?, ?, ?) AND coalesce(status, '') != ? ORDER BY received_at, id LIMIT 1`,
+		id, peer, envelope.KindAnswer, envelope.KindResult, envelope.KindMessage, envelope.StatusProgress).Scan(&reply)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

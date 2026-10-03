@@ -68,6 +68,9 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 	if err != nil {
 		return Conversation{}, err
 	}
+	if links, err = a.store.withoutErased(peer, a.Self().Fingerprint(), links); err != nil { // a deleted thread is gone (convclear.go)
+		return Conversation{}, err
+	}
 	byID := map[string]link{}
 	children := map[string][]string{}
 	for _, l := range links {
@@ -75,6 +78,9 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		if l.replyTo != "" {
 			children[l.replyTo] = append(children[l.replyTo], l.id)
 		}
+	}
+	if _, ok := byID[id]; !ok {
+		return Conversation{}, ErrNoMessage
 	}
 	// Walk links both ways from id; the visited set ends cycles.
 	seen := map[string]bool{id: true}

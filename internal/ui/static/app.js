@@ -119,7 +119,9 @@ async function loadOverview() {
   $("new-btn").hidden = !!(o.link && o.link.state === "pending"); // a device waiting for approval sends nothing
   renderOffline(o);
   $("release").hidden = !o.release;
-  $("release").textContent = o.release ? "Update recommended: " + o.release + " (see agentnet help update)" : "";
+  fill($("release"), o.release && ["Update available · " + o.release + ". ", el("a", {href: "https://github.com/misunders2d/agentnet/releases", target: "_blank", rel: "noopener noreferrer"}, "Release notes"), el("span", {}, " · In a terminal: agentnet help update. Updates are not installed here.")]);
+  $("profile-btn").classList.toggle("update-available", !!o.release);
+  $("profile-btn").title = o.release ? "Your profile and settings · Update available" : "Your profile and settings";
   renderNotify(o.notify);
   renderProfile(o);
   renderReview(o.review);
@@ -147,6 +149,14 @@ async function loadOverview() {
 const rasterTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const fileLimits = () => (state.overview && state.overview.files) || null; // {max_file, max_message, max_count}
 const dmVisitor = (d = state.dmData) => !!d && d.role === "visitor";
+const dmHumanGuest = (d = state.dmData) => d?.role === "human_guest";
+const guestAuthor = (d = state.dmData) => { const active = (d?.guests || []).filter(g => g.host_here && g.can_send); return active.length === 1 ? active[0] : null; };
+// A guest's audience: both verified original people (members; older views:
+// peer and inviters) and every other accepted guest it knows.
+const guestOriginals = (d = state.dmData) => d?.members?.length ? d.members : [d?.peer, ...(d?.guests || []).map(g => g.inviter)];
+const guestAudience = (d = state.dmData) => [...new Map([...guestOriginals(d), ...(d?.guests || []).filter(g => g.state === "active" && !g.host_here).map(g => g.host)].filter(p => p && p.person !== state.overview?.person?.person).map(p => [p.person, p])).values()];
+const guestAudienceNames = (d = state.dmData) => guestAudience(d).map(p => p.label || p.address);
+const joinedNames = names => names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : names[0] || "conversation participants";
 const humanGroup = (d = state.dmData) => d?.kind === "group";
 let fileSeq = 0;
 
@@ -154,7 +164,7 @@ let fileSeq = 0;
 // or a device conversation open, sendable, not answering (an
 // answer goes without files).
 const filesAllowed = () => !!(fileLimits() && (state.dm ? state.dmData && !state.dmData.frozen &&
-  (!dmVisitor() || !!state.dmAgent) && !askGone()
+  (!dmVisitor() || !!state.dmAgent) && (!dmHumanGuest() || !!guestAuthor()) && !askGone()
   : state.thread && state.data && !state.data.key.pending && !state.answering));
 // noFilesWhy says why the open conversation takes no files now.
 const noFilesWhy = () => (state.answering ? "An answer goes without files: send them in a message of their own."
@@ -591,6 +601,7 @@ function reportSeen() {
 // showList shows the conversation list, in every lens (a summary alert,
 // or one whose conversation is not here).
 function showList(why) {
+  closeMentions();
   clearTyping();
   if (state.lens === "zoom" && state.overview) Zoom.go(0, {});
   document.body.classList.remove("show-conv");
@@ -1172,8 +1183,8 @@ function inviteGroupDialog(t, initialPerson) {
 
 function groupMemberCount(t) { return plural(t.members.length, t.frozen ? "last verified member" : "current member", t.frozen ? "last verified members" : "current members"); }
 
-function renderGroupMembers(t) {
-  const box = $("agents"), me = state.overview?.person?.person;
+function renderGroupMembers(t, box = $("agents")) {
+  const me = state.overview?.person?.person;
   const admin = !t.frozen && !dmVisitor(t) && t.members.some(m => m.person === me && m.admin);
   box.hidden = false;
   fill(box, el("details", {}, el("summary", {}, groupMemberCount(t)),
@@ -1183,6 +1194,25 @@ function renderGroupMembers(t) {
     admin && el("button", {type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"rename")},"Rename group…"),
     admin && el("button", { type: "button", class: "text-btn", onclick: () => inviteGroupDialog(t) }, "Invite a person…"),
     !t.frozen && !dmVisitor(t) && el("button",{type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"leave")},"Leave group…"));
+}
+
+// deleteConversationDialog: this person's copy of the open conversation from
+// all of their devices (client convclear.go); a device thread is stored on
+// this device only, and the dialog says so.
+function deleteConversationDialog(t) {
+  const host = window.agentnet, gen = state.gen, ws = wsNow(), thread = !state.dmData, threadID = state.thread, peer = thread ? t.peer : t.id;
+  const body = thread
+    ? [el("p", {}, "This thread is stored on this device only: it is deleted here and nowhere else. " + t.peer + " keeps its copy.")]
+    : [el("p", {}, "This removes the messages held on this device, and their copies on your other linked devices. Each of your other devices removes them once it is connected and updated; until then it still shows them."),
+      el("p", {}, "Others in this conversation keep their copies. Anything already running keeps running and is removed when it finishes. Messages this device never received are not removed."),
+      el("p", { class: "hint" }, "Members, guests and assistants stay as they are. A new message brings the conversation back with only that message.")];
+  dialog({ title: thread ? "Delete this thread from this device?" : "Delete the messages in this conversation from your devices?", body, ok: "Delete",
+    run: async () => {
+      if (gen !== state.gen || wsNow() !== ws || (thread ? state.thread !== threadID : state.dm !== peer)) throw Error("Conversation changed; review this action again.");
+      const r = await api("/api/conversation/delete", thread ? { peer: t.peer, thread: threadID } : { conv: t.id }, host);
+      if (gen !== state.gen || wsNow() !== ws) return;
+      showList(r.note); await loadOverview();
+    } });
 }
 
 function groupChangeDialog(t,action,person) {
@@ -1505,7 +1535,13 @@ function dmAuthor(m, d) {
   if (m.excerpt_pid) return "Claimed " + (m.agent_id ? namedAuthor(m) : m.from || "author") + " · forwarded context";
   if (m.agent_id) return namedAuthor(m);
   if (m.dir === "out") return m.via ? "You, on your " + myDeviceName(m.via) : "You";
-  if ((m.origin || "").startsWith("agent:")) return "An agent on " + m.from + ", as their AgentNet says";
+  if ((m.origin || "").startsWith("agent:")) { // its verified participant label; exact host stays in Details
+    const a = m.pid && (d.agents || []).find(x => x.pid === m.pid && x.host?.address === m.from);
+    return a ? agentName(a) : "An agent on " + m.from + ", as their AgentNet says";
+  }
+  const guest = (d.guests || []).find(g => g.host.address === m.from);
+  if (guest) return guest.host.label + " · guest";
+  if (dmHumanGuest(d)) return [...guestOriginals(d), ...(d.guests || []).map(g => g.host)].find(p => p && (p.address === m.from || (p.devices || []).some(x => x.address === m.from)))?.label || m.from || "Sender not supplied";
   if (dmVisitor(d)) return m.from || "Sender not supplied";
   if (humanGroup(d)) return (d.members || []).find(p => p.devices?.some(v => v.address === m.from) || p.address === m.from)?.label || m.from || "Sender not supplied";
   return d.peer.label;
@@ -1798,6 +1834,8 @@ function beginDM(id) {
     state.thread = null;
     state.data = null;
     state.dmData = null;
+    state.dmNames = {};
+    closeMentions();
     state.draftKey = null;
     state.replyReceiver = null;
     state.replyReceiverHost = null;
@@ -1900,22 +1938,29 @@ async function loadDM(scrollToEnd) {
   t.messages = t.messages.map((m) => (m.excerpt_pid ? Object.assign({}, m, { actions: [], can: [] })
     : m.event ? Object.assign({}, m, { body: m.event }) : m));
   t.agents = t.agents || [];
+  t.guests = t.guests || [];
   state.dmData = t;
   fill($("conv-name"), humanGroup(t) ? t.title : t.peer.label);
   $("conv-topic").textContent = humanGroup(t) ? dmVisitor(t) ? "Invited agent context · visitor to this group" : "Group conversation · " + groupMemberCount(t) : dmVisitor(t) ? "Invited agent context · you are not a member of this DM"
-    : "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
+    : dmHumanGuest(t) ? "Temporary human participation · same private conversation" : "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
   $("conv-avatar").replaceWith(Object.assign(avatar(humanGroup(t) ? t.title : t.peer.label || t.peer.address), { id: "conv-avatar" }));
   const online = presenceOf(t.peer.address); // the server's pushed view, only while current
-  $("conv-presence").textContent = humanGroup(t) ? (t.frozen ? "Last verified audience · current group access unavailable" : dmVisitor(t) ? "Selected agent context only · ordinary room access is not granted" : "Current signed audience · ordinary messages do not run agents") : "The name they give · via " + t.peer.address + " · " + (personStateText[t.peer.state] || t.peer.state) +
-    (online ? " · their computer is " + online : "");
+  $("conv-presence").textContent = humanGroup(t) ? (t.frozen ? "Last verified audience · access unavailable" : dmVisitor(t) ? "Selected assistant context only" : groupMemberCount(t))
+    : (dmVisitor(t) ? "Selected assistant context only" : online ? "Computer " + online : "Conversation with " + t.peer.label);
+
   fill($("peer-chips"), ...dmNotifyChips(t));
   const n = $("notice");
-  n.hidden = !t.frozen && !dmVisitor(t);
-  fill(n, (t.frozen || dmVisitor(t)) && el("p", {}, t.frozen || "Only selected context and requests addressed to this agent are supplied. You cannot send ordinary room messages or change membership."));
+  n.hidden = !t.frozen && !dmVisitor(t) && !dmHumanGuest(t) && !t.audience_pending;
+  fill(n, t.frozen ? el("p", {}, t.frozen) : dmVisitor(t) ? el("p", {}, "Only selected context and requests addressed to this agent are supplied. You cannot send ordinary room messages or change membership.") : [
+    dmHumanGuest(t) && el("p", {}, guestAuthor(t) ? "You joined this conversation." : t.guests.some(g => g.host_here && g.state === "invited") ? "You’re invited. Join from your participant details." : t.guests.some(g => g.host_here && !["dismissed", "declined"].includes(g.state)) ? "Sending is unavailable here." : "You’re no longer in this conversation. Messages already received remain."),
+    t.audience_pending && el("p", {}, "Audience updated here. Other devices may still be updating.")]);
+  n.classList.toggle("guest-notice", dmHumanGuest(t));
+  n.classList.toggle("audience-notice", !t.frozen && !!t.audience_pending);
   showPane("conv");
   $("composer").hidden = dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask);
   setHubBack();
-  if (humanGroup(t)) { renderGroupMembers(t); renderAgents(t, true); } else renderAgents(t);
+  renderAgents(t);
+  loadDMNames(t);
   renderDrive(t);
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
@@ -1949,7 +1994,12 @@ function renderDMBody(scrollToEnd) {
 function dmReplyParent(m, t) {
   if (!m.reply_to) return null;
   if (humanGroup(t)) { const found = t.messages.filter(x => x.id === m.reply_to || x.lid === m.reply_to); return found.length === 1 ? found[0] : null; }
-  if (!(m.pid && m.agent_id && (m.kind === "answer" || m.kind === "result"))) return t.messages.find(x => x.id === m.reply_to) || null;
+  if (!(m.pid && m.agent_id && (m.kind === "answer" || m.kind === "result"))) {
+    const exact = t.messages.find(x => x.id === m.reply_to); // a device's own copy id, as before
+    if (exact) return exact;
+    const logical = t.messages.filter(x => x.lid === m.reply_to); // a human-audience reply names the parent's LID
+    return logical.length === 1 ? logical[0] : null;
+  }
   const candidates = t.messages.filter(x => (x.id === m.reply_to || x.lid === m.reply_to) &&
     x.pid === m.pid && !x.event && !x.excerpt_pid && (x.kind === "question" || x.kind === "task") &&
     x.target && x.target.address === m.from && x.target.agent_id === m.agent_id);
@@ -1965,9 +2015,9 @@ function dmMsg(m, t, prev) {
   const mine = m.dir === "out";
   const agent = !!m.agent_id || (m.origin || "").startsWith("agent:");
   const author = dmAuthor(m, t);
-  const to = m.target && m.target.agent_id ? namedAgentLabel(m.target.agent_id, m.target.address) + " on " + m.target.address : m.to && (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "an agent on " + m.to);
+  const to = m.target && m.target.agent_id ? namedAgentOn(m.target.agent_id, m.target.address, whoseAgent(m.pid && agentOf(m.pid))) : m.to && (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "an agent on " + m.to);
   const sharedWith = t.agents.filter((a) => (a.state === "invited" || a.state === "active") && a.shared.includes(m.id));
-  const cont = prev && !prev.event && prev.dir === m.dir && prev.origin === m.origin && prev.agent_id === m.agent_id && !kindTag[m.kind] && !kindTag[prev.kind] &&
+  const cont = prev && !prev.event && prev.dir === m.dir && prev.from === m.from && prev.origin === m.origin && prev.agent_id === m.agent_id && !kindTag[m.kind] && !kindTag[prev.kind] &&
     !to && !prev.to && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
   const held = m.state === "conv_held";
   const acts = m.actions || []; // a request to your agent: yours to decide on
@@ -1980,7 +2030,7 @@ function dmMsg(m, t, prev) {
   const parent = dmReplyParent(m, t);
   const bubble = el("div", { class: "bubble", tabindex: "-1" });
   return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (held || acts.length ? " needs" : "") },
-    !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(humanGroup(t) ? author : t.peer.label || m.from, "sm")),
+    !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(humanGroup(t) || (dmHumanGuest(t) && !m.excerpt_pid) || (t.guests || []).some(g => g.host.address === m.from) ? author : t.peer.label || m.from, "sm")),
     el("div", { class: "col" }, meta,
       fill(bubble,
         m.reply_to && (parent ? el("span", { class: "replyref" }, "Reply to: " + (parent.deleted ? "(deleted message)" : firstLine(shownText(parent), 90) || "(files only: " + (parent.attachments || []).map(f => f.name).join(", ") + ")"))
@@ -2039,7 +2089,7 @@ const copyWord = { delivered: "delivered", custody: "on your server", queued: "q
 // in DMs here. The link is the invitation's host: that person and device.
 function agentLinkText(a, p) {
   const active = a.dms.filter((d) => d.state === "active").length;
-  return (a.agent_id ? namedAgentLabel(a.agent_id, a.address) : isMe(p) ? "Your agent" : "Their agent") + " on " + a.address + " · " + plural(a.dms.length, "DM", "DMs") +
+  return (a.agent_id ? namedAgentOn(a.agent_id, a.address, isMe(p) ? "Your" : p && p.label ? p.label + "'s" : "") : (isMe(p) ? "Your agent" : "Their agent") + " on " + a.address) + " · " + plural(a.dms.length, "DM", "DMs") +
     (active ? " (" + active + " active)" : "");
 }
 
@@ -2052,16 +2102,34 @@ const agentOf = (pid) => state.dmData && (state.dmData.agents || []).find((a) =>
 const askGone = () => !!state.dmAgent && !(agentOf(state.dmAgent) || {}).can_ask;
 // agentName names an agent by the person whose installation runs it.
 // Labels come only from records already read for this exact host and ID.
-const catalogRecords = host => state.targetCatalog && state.targetCatalog.host === host ? state.targetCatalog.agents || [] : [];
-function namedAgentLabel(id, host, records = catalogRecords(host)) {
-  const sameHost = records.filter(a => a.host === host), record = sameHost.find(a => a.id === id);
-  let length = 8;
-  while (length < id.length && sameHost.some(a => a.id !== id && a.id.slice(0, length) === id.slice(0, length))) length++;
-  const short = id.slice(0, length);
-  return record && record.label ? record.label + (sameHost.some(a => a.id !== id && a.label === record.label) ? " · " + short : "") : "Agent " + short;
+const catalogRecords = host => state.dm && state.dmNames?.[host] || (state.targetCatalog && state.targetCatalog.host === host ? state.targetCatalog.agents || [] : []);
+// A named agent's own name is only its verified catalog record's, read here
+// for that exact host and ID; without it, the text says whose assistant it
+// is and that its name is unavailable. IDs stay in titles and details, never
+// in the text people read; two agents with one name stay two (by their keys).
+const catalogName = (id, host, records = catalogRecords(host)) => (records.find(a => a.host === host && a.id === id && a.label) || {}).label || "";
+const unnamedAgent = (whose, host) => (whose ? whose + " assistant" : "Assistant on " + host) + " · name unavailable";
+function namedAgentLabel(id, host, records = catalogRecords(host), whose = "") {
+  return catalogName(id, host, records) || unnamedAgent(whose, host);
 }
-const agentName = (a) => a.agent_id ? namedAgentLabel(a.agent_id, a.host.address) : (a.host_here ? "Your agent" : a.host.label + "'s agent");
-const namedAuthor = (m) => namedAgentLabel(m.agent_id, m.from) + " on " + m.from;
+// namedAgentOn is namedAgentLabel with its host device, said once.
+const namedAgentOn = (id, host, whose = "") => {
+  const name = catalogName(id, host);
+  return name ? name + " on " + host : (whose ? whose + " assistant on " : "Assistant on ") + host + " · name unavailable";
+};
+// whoseAgent: a participation's host as the owner of its agent ("Your", "Bob's").
+const whoseAgent = (a) => !a ? "" : a.host_here ? "Your" : a.host && a.host.label ? a.host.label + "'s" : "";
+const agentName = (a) => a.agent_id ? namedAgentLabel(a.agent_id, a.host.address, undefined, whoseAgent(a)) : (a.host_here ? "Your agent" : a.host.label + "'s agent");
+const namedAuthor = (m) => namedAgentOn(m.agent_id, m.from, whoseAgent(m.pid && agentOf(m.pid)));
+// catalogLabel names a record in a picker: the same catalog name, plus a short
+// ID only where one host offers two agents of one name (to choose between).
+function catalogLabel(a, records) {
+  const sameHost = records.filter(x => x.host === a.host);
+  if (!a.label || !sameHost.some(x => x.id !== a.id && x.label === a.label)) return (a.label || unnamedAgent("", a.host)) + " · " + a.host;
+  let length = 8;
+  while (length < a.id.length && sameHost.some(x => x.id !== a.id && x.id.slice(0, length) === a.id.slice(0, length))) length++;
+  return a.label + " · " + a.id.slice(0, length) + " · " + a.host;
+}
 const namedProvenance = (m) => "Agent " + m.agent_id + " on " + m.from + " (host assertion)";
 function namedDetails(m) {
   return [m.agent_id && [el("dt", {}, "Agent author"), el("dd", {}, namedProvenance(m))],
@@ -2074,7 +2142,6 @@ async function readAgentCatalog(address, host) {
   if (view.host !== address || !Array.isArray(view.agents) || view.agents.some(a => !a.record || a.record.host !== address || !/^[0-9a-f]{32}$/.test(a.record.id))) throw new Error("Agent list does not match the selected computer.");
   return view.agents.filter(a => a.enabled !== false).map(a => a.record);
 }
-const catalogLabel = (a, records) => namedAgentLabel(a.id, a.host, records) + " · " + a.host;
 const isMe = (p) => !!p && p.state === "self";
 // taskFree says whether your tasks run without its owner accepting each one
 // (the invitation names your key). Anyone in the DM may still give it a
@@ -2083,18 +2150,156 @@ const taskFree = (a) => a.host_here || a.tasks_from.some(isMe);
 
 // renderAgents shows the agents invited into the open DM: whose each is,
 // what it may be shown, who may give it tasks, and what you can do now.
-function renderAgents(t, append = false) {
+// Catalog names are display only; mentions always retain the participation ID.
+async function loadDMNames(t) {
+  state.dmNames ||= {};
+  const gen = state.gen, host = window.agentnet, conv = t.id;
+  for (const address of new Set(t.agents.map(a => a.host.address))) {
+    if (state.dmNames[address]) continue;
+    state.dmNames[address] = [];
+    readAgentCatalog(address, host).then(records => {
+      if (gen !== state.gen || host !== window.agentnet || conv !== state.dm) return;
+      state.dmNames[address] = records;
+      renderAgents(state.dmData); renderTarget();
+      if (state.dmData.messages.some((m) => (m.reactions || []).some((r) => (r.by || []).some((b) => b.assistant && b.host === address)))) renderDMBody(false); // assistant reactions take the catalog's names
+    }).catch(() => {}); // exact ID remains visible when a catalog is unavailable
+  }
+}
+function renderAgents(t) {
   const box = $("agents");
-  box.classList.toggle("group-agents", humanGroup(t));
-  const canInvite = !!(state.overview && state.overview.agents && state.overview.person) && !t.frozen && !dmVisitor(t);
-  if (!append) box.hidden = !t.agents.length && !canInvite;
-  const ended = (a) => a.state === "dismissed" || a.state === "declined";
-  const past = t.agents.filter(ended);
-  const content = [t.agents.filter((a) => !ended(a)).map((a) => agentCard(a, t)),
-    past.length > 0 && el("details", { class: "agents-past" }, el("summary", {}, plural(past.length, "earlier agent", "earlier agents")),
-      past.map((a) => agentCard(a, t))),
-    canInvite && el("button", { type: "button", class: "text-btn", onclick: () => inviteDialog(t) }, "Invite an agent…")];
-  if (append) box.append(...content.flat().filter(Boolean)); else fill(box, ...content);
+  const canInvite = !!(state.overview?.agents && state.overview?.person) && !t.frozen && !dmVisitor(t) && !dmHumanGuest(t);
+  const canInvitePeople = !t.frozen && !dmVisitor(t) && !dmHumanGuest(t) && (humanGroup(t) ? t.members.some(p => p.person === state.overview?.person?.person && p.admin) : !!state.overview?.person);
+  const people = humanGroup(t) ? t.members : [...new Map((dmHumanGuest(t) ? guestOriginals(t) : [state.overview?.person, t.peer]).filter(Boolean).map(p => [p.person, p])).values()];
+  box.hidden = false;
+  fill(box, el("div", { class: "participant-list" },
+    humanGroup(t) && t.frozen && el("span", {class: "hint"}, groupMemberCount(t)),
+    people.map(p => el("span", { class: "participant" }, avatar(p.label || p.address, "sm"), p.state === "self" ? "You" : p.label)),
+    (t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => el("button", { type: "button", class: "participant human-participant", title: g.host.address + " · participation " + g.pid, onclick: () => dialog({ title: g.host.label + " · human participation", body: [guestCard(g, t)], ok: "Close", run: async () => {} }) }, avatar(g.host.label || g.host.address, "sm"), g.host_here ? "You" : g.host.label, el("span", { class: "tag" }, g.state === "active" ? "Guest" : g.state === "dismissed" ? "Ended here" : g.state))),
+    t.agents.filter(a => !["dismissed", "declined"].includes(a.state)).map(a => el("button", {
+      type: "button", class: "participant assistant-participant", title: (a.agent_id || a.pid) + " · " + a.host.address + " · participation " + a.pid,
+      onclick: () => dialog({title: agentName(a), body: [agentCard(a, t)], ok: "Close", run: async () => {}})
+    }, avatar(agentName(a), "sm"), agentName(a), el("span", { class: "tag" }, a.state === "active" ? "Assistant" : a.state_text || a.state))),
+    (canInvite || canInvitePeople) && el("button", { type: "button", class: "text-btn invite-assistant", onclick: () => participantsDialog(t) }, "+ Add participants")));
+}
+
+// Human guests reuse explicit signed invitation/acceptance in this exact DM.
+// Groups keep their existing consent paths. Neither path recalls shared copies.
+function participantsDialog(t) {
+  const gen = state.gen, ws = wsNow();
+  const current = () => gen === state.gen && ws === wsNow() && state.dm === t.id;
+  const admin = humanGroup(t) && t.members.some(p => p.person === state.overview?.person?.person && p.admin);
+  dialog({title: "Add participants", body: [
+    el("p", {}, "People and assistants join this conversation only through their existing invitation and consent rules."),
+    humanGroup(t) ? el("button", {type: "button", class: "btn", disabled: !admin, onclick: () => { if (current()) inviteGroupDialog(t); }}, "Invite a person…")
+      : el("button", {type: "button", class: "btn", onclick: () => { if (current()) inviteHumanDialog(t); }}, "Invite a person…"),
+    humanGroup(t) && el("p", {class: "hint"}, admin ? "Choose earlier context explicitly. People can leave; an administrator can remove them in Conversation details. Shared copies remain. There is no automatic expiry." : "Only a current administrator can invite or remove people. You can leave in Conversation details."),
+    state.overview?.agents && el("button", {type: "button", class: "btn", onclick: () => { if (current()) inviteDialog(t); }}, "Invite an assistant…"),
+    el("p", {class: "hint"}, "An assistant gets only selected history; its owner accepts the invitation. Address it with @mention. Ordinary chat never runs it.")], ok: "Close", run: async () => {}});
+}
+
+function guestCard(g, t) {
+  return el("div", { class: "agent-card " + g.state },
+    el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Guest"), el("strong", {}, g.host.label || g.host.address)),
+    el("p", {}, g.state === "active" ? "Joined this conversation." : g.state === "dismissed" ? "No longer in the active audience here. Other devices may still be updating." : g.state === "invited" ? "Invitation waiting for a response." : g.state_text),
+    el("p", { class: "hint" }, "Invited by " + g.inviter.label),
+    el("details", { class: "tech" }, el("summary", {}, "Details"), el("p", {}, "Device: " + g.host.address), el("p", { class: "mono" }, "Participation: " + g.pid)),
+    el("p", { class: "hint" }, g.shared.length ? plural(g.shared.length, "selected earlier message", "selected earlier messages") + ". Available attached files are included only after acceptance." : "No earlier messages or files selected."),
+    el("details", {class:"tech"}, el("summary", {}, "Sharing and leaving"), el("p", {}, "Only selected earlier context and new conversation messages are shared while present. No assistant runs automatically. Leaving or removing ends future local access, not previously received copies. Other devices may still be updating. No automatic expiry.")),
+    el("div", { class: "agent-actions" },
+      g.can_decide && el("button", { type: "button", class: "btn primary", onclick: () => guestActionDialog(g, t, "accept") }, "Join conversation…"),
+      g.can_decide && el("button", { type: "button", class: "btn", onclick: () => guestActionDialog(g, t, "decline") }, "Decline invitation…"),
+      g.can_leave && el("button", { type: "button", class: "btn", onclick: () => guestActionDialog(g, t, "leave") }, "Leave conversation…"),
+      g.can_end && el("button", { type: "button", class: "text-btn", onclick: () => guestActionDialog(g, t, "end") }, "Remove " + g.host.label + "…")));
+}
+
+function guestActionDialog(g, t, action) {
+  const transport = window.agentnet, gen = state.gen, ws = wsNow(), accepting = action === "accept", deciding = accepting || action === "decline";
+  dialog({ title: accepting ? "Join conversation?" : deciding ? "Decline invitation?" : action === "leave" ? "Leave conversation?" : "Remove " + g.host.label + "?",
+    body: [el("p", {}, accepting ? "Join " + joinedNames(guestAudienceNames(t)) + " in this conversation. You’ll receive the selected earlier messages and files, plus new messages while you’re here." : deciding ? "The selected earlier messages and files won’t be shared with you." : action === "leave" ? "You’ll stop receiving new messages here. Messages and files already received remain." : g.host.label + " will no longer receive new messages here. Messages and files already received remain."),
+      !deciding && el("p", {class:"hint"}, "Other devices may still be updating."),
+      accepting && el("p", { class: "hint" }, g.shared.length ? plural(g.shared.length, "earlier message", "earlier messages") + " selected, with available attached files." : "No earlier messages or files selected.")],
+    ok: accepting ? "Join conversation" : deciding ? "Decline" : action === "leave" ? "Leave conversation" : "Remove " + g.host.label,
+    run: async () => {
+      if (gen !== state.gen || ws !== wsNow() || state.dm !== t.id) throw new Error("Conversation or workspace changed. Reopen this action there.");
+      await api(deciding ? "/api/dm/guest/decide" : "/api/dm/guest/end", { pid: g.pid, ...(deciding ? { accept: accepting } : {}) }, transport);
+      if (gen === state.gen && ws === wsNow() && state.dm === t.id) { announce(accepting ? "You joined this conversation." : deciding ? "Invitation declined." : action === "leave" ? "You left this conversation here. Received copies remain." : g.host.label + " removed here. Other devices may still be updating."); await loadDM(); }
+    } });
+}
+
+function inviteHumanDialog(t) {
+  if (dmVisitor(t) || dmHumanGuest(t) || humanGroup(t)) { announce("Only original private DM members invite a human guest here."); return; }
+  const transport = window.agentnet, gen = state.gen, ws = wsNow(), current = () => gen === state.gen && ws === wsNow() && state.dm === t.id;
+  const members = [state.overview.person, t.peer], addresses = new Set(members.flatMap(p => [p.address, ...(p.devices || []).map(d => d.address)]));
+  const host = el("input", { id: "guest-host", type: "text", placeholder: "person/device, e.g. carol/desk", autocomplete: "off", spellcheck: "false", maxlength: "65" });
+  const candidates = directory().current ? directory().members.filter(p => !addresses.has(p.address)) : [];
+  const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address; } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
+  const ref = m => m.lid || m.id;
+  const share = t.messages.filter(m => !m.event && !m.excerpt_pid && !m.deleted).slice(-30).map(m => choice("checkbox", "guest-share", ref(m), el("span", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 70) || "(files only)"), (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size))))));
+  const fileConsent = choice("checkbox", "guest-file-consent", "yes", "Share files attached to the earlier messages I select with this person after acceptance.");
+  share.forEach(c => c.input.addEventListener("change", () => { fileConsent.input.checked = false; }));
+  const note = el("input", { id: "guest-note", type: "text", maxlength: "200", autocomplete: "off" });
+  fileConsent.input.addEventListener("change", () => { if (fileConsent.input.checked && $("dialog-error").textContent === "Selected context includes files. Confirm file sharing, or deselect those messages.") $("dialog-error").textContent = ""; });
+  dialog({ title: "Invite person", body: [
+    el("p", {}, "Selected earlier messages and files are shared after they join. They’ll also receive new messages while they’re here."),
+    el("label", { for: "guest-host", class: "field-label" }, "Person’s address"), host, el("div", { class: "agent-actions" }, picks),
+    el("fieldset", { class: "choices" }, el("legend", {}, "Earlier context to share after acceptance"), share.length ? share.map(c => c.row) : el("p", { class: "hint" }, "No earlier messages."), el("p", { class: "hint" }, "None unless selected. Unselected earlier text and files remain private.")), fileConsent.row,
+    el("label", { for: "guest-note", class: "field-label" }, "Optional note"), note,
+    el("p", {class:"hint"}, "Either original person can remove them; they can leave. Already shared copies remain.")], ok: "Invite person",
+    run: async () => {
+      if (!current()) throw new Error("Conversation or workspace changed. Reopen the invitation there.");
+      const address = host.value.trim(), selected = share.filter(c => c.input.checked).map(c => c.input.value);
+      if (!address || addresses.has(address)) throw new Error("Choose the exact address of someone outside this private DM.");
+      if (t.messages.some(m => selected.includes(ref(m)) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected context includes files. Confirm file sharing, or deselect those messages.");
+      await api("/api/dm/guest/invite", { conv: t.id, host: address, share: selected, note: note.value }, transport);
+      if (current()) { announce("Human invited. No earlier context or files leave before acceptance."); await loadDM(); }
+    } });
+}
+
+// Typing @ offers only added, currently askable participants. Plain typed
+// names confer no authority; selecting a row binds the exact PID and host.
+let mentionView = null;
+function closeMentions() {
+  mentionView = null;
+  const box = $("mentions"); if (box) { box.hidden = true; fill(box); }
+  $("body").setAttribute("aria-expanded", "false");
+  $("body").removeAttribute("aria-activedescendant");
+}
+function showMentions(force = false) {
+  const input = $("body"), t = state.dmData;
+  const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+  const match = before.match(/(?:^|\s)@([^@\s]*)$/);
+  if (!t || !state.dm || state.sending || (!force && !match)) { closeMentions(); return; }
+  const query = force ? "" : match[1].toLowerCase();
+  const agents = dmHumanGuest(t) && !guestAuthor(t) ? [] : (t.agents || []).filter(a => a.can_ask && agentName(a).toLowerCase().includes(query)); // an accepted guest addresses only active assistants
+  const gen = state.gen, conv = t.id;
+  mentionView = { agents, index: 0, gen, conv, start: match ? before.lastIndexOf("@") : null, end: input.selectionStart ?? input.value.length };
+  const box = $("mentions"); box.hidden = false;
+  fill(box, el("p", { class: "hint" }, "Address an added assistant · Question or Task stays explicit"),
+    agents.length ? agents.map((a, i) => el("button", { id: "mention-" + i, type: "button", class: "mention-row" + (!i ? " selected" : ""),
+      title: (a.agent_id || a.pid) + " · " + a.host.address + " · participation " + a.pid, "aria-label": "Mention " + agentName(a) + " on " + a.host.address,
+      onclick: () => pickMention(i) }, "@" + agentName(a), el("small", {}, a.host.label + " · " + a.host.address + " · " + a.pid.slice(0, 8)))) : el("p", { class: "hint" }, "No matching active assistant. Add one to this conversation first."));
+  input.setAttribute("aria-expanded", "true");
+}
+function pickMention(i) {
+  const v = mentionView, a = v?.agents[i];
+  if (!a || v.gen !== state.gen || v.conv !== state.dm || !agentOf(a.pid)?.can_ask) { closeMentions(); return; }
+  if (v.start !== null) {
+    const input = $("body"), token = "@" + agentName(a) + " ";
+    input.value = input.value.slice(0, v.start) + token + input.value.slice(v.end);
+    input.setSelectionRange?.(v.start + token.length, v.start + token.length);
+    grow();
+  }
+  setDMAgent(agentOf(a.pid)); keepDraft(); closeMentions(); $("body").focus();
+}
+function mentionKey(e) {
+  if (!mentionView) return;
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeMentions(); return; }
+  if (["ArrowDown", "ArrowUp"].includes(e.key) && mentionView.agents.length) {
+    e.preventDefault();
+    mentionView.index = (mentionView.index + (e.key === "ArrowDown" ? 1 : -1) + mentionView.agents.length) % mentionView.agents.length;
+    for (let i = 0; i < mentionView.agents.length; i++) $("mention-" + i).classList.toggle("selected", i === mentionView.index);
+    $("body").setAttribute("aria-activedescendant", "mention-" + mentionView.index);
+  } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && mentionView.agents.length) { e.preventDefault(); pickMention(mentionView.index); }
 }
 
 function agentCard(a, t) {
@@ -2129,7 +2334,7 @@ function choice(type, name, value, label) {
 // chosen for the person: whose agent, what it may be shown and who may
 // give it tasks are all picked here, and both people see them.
 function inviteDialog(t) {
-  if (dmVisitor(t)) { announce("Only DM members can invite an agent."); return; }
+  if (dmVisitor(t) || dmHumanGuest(t)) { announce("Only original DM members can invite an agent."); return; }
   const me = state.overview.person;
   const transport = window.agentnet, gen = state.gen, ws = wsNow();
   let catalogHost = "", catalog = [], catalogError = "", catalogSeq = 0;
@@ -2164,19 +2369,22 @@ function inviteDialog(t) {
   const share = t.messages.filter((m) => !m.event && !m.excerpt_pid).slice(-30)
     .map((m) => choice("checkbox", "agent-share", m.id, el("span", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 70) || "(files only)"),
       (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size))))));
+  const fileConsent = choice("checkbox", "agent-file-consent", "yes", "Let this assistant read files attached to the messages I select.");
+  share.forEach(c => c.input.addEventListener("change", () => { fileConsent.input.checked = false; }));
   const tasks = humanGroup(t) ? [...new Map(devices.filter(d=>d.fingerprint).map(d=>[d.fingerprint,choice("checkbox","agent-tasks",d.fingerprint,(d.person===me.person?"You":d.label)+" on "+d.address)])).values()] : [[me, "You"], [t.peer, t.peer.label]].filter(([p]) => p.fingerprint)
     .map(([p, label]) => choice("checkbox", "agent-tasks", p.fingerprint, label));
   const note = el("input", { id: "agent-note", type: "text", maxlength: "200", autocomplete: "off" });
   const picked = (cs) => cs.filter((c) => c.input.checked).map((c) => c.input.value);
   dialog({
-    title: "Invite an agent into " + (humanGroup(t) ? "this group" : "this DM"),
+    title: "Add an assistant to " + (humanGroup(t) ? "this group" : "this DM"),
     body: [el("p", {}, humanGroup(t) ? "It joins only if its owner accepts, on their computer. Current members see the invitation, what it may be shown and who may give it tasks." : "It joins only if its owner accepts, on their computer. You both see the invitation, what it may be shown and who may give it tasks."),
       el("fieldset", { class: "choices" }, el("legend", {}, "Whose agent"), hosts.map((c) => c.row)),
       el("p", { class: "hint" }, "External hosts are listed by this workspace's server, not verified real-world owners. Choose an exact named agent; its host must prove support and its owner must accept."),
-      el("label", { for: "invite-agent", class: "field-label" }, "Agent on that host"), named, catalogStatus,
+      el("label", { for: "invite-agent", class: "field-label" }, "Assistant on that host"), named, catalogStatus,
       el("fieldset", { class: "choices" }, el("legend", {}, "Earlier messages it may be shown"),
         share.length ? share.map((c) => c.row) : el("p", { class: "hint" }, "No messages yet."),
         el("p", { class: "hint" }, "None unless you choose. Only selected messages and their available attached files become visible to this agent. Unselected history and files are excluded; unavailable bytes are reported as missing. No private agent session is copied.")),
+      fileConsent.row,
       el("fieldset", { class: "choices" }, el("legend", {}, "Tasks without asking its owner each time"), tasks.map((c) => c.row),
         el("p", { class: "hint" }, humanGroup(t) ? "Current members can ask questions or give tasks. A task from an exact key not chosen here waits for its owner to accept it." : "Either of you can ask it questions or give it tasks. A task from someone not chosen here waits for its owner to accept it.")),
       el("label", { for: "agent-note", class: "field-label" }, "A note for its owner (optional)"), note],
@@ -2196,6 +2404,7 @@ function inviteDialog(t) {
         if (!current()) throw new Error("Workspace changed. Reopen this invitation in its workspace.");
         if (!fresh.some(a => a.id === agentID)) throw new Error("That agent is no longer available on this computer. Nothing was invited.");
       }
+      if (t.messages.some(m => picked(share).includes(m.id) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected messages include files. Confirm file access, or deselect those messages.");
       await api("/api/dm/agent/invite", { conv: t.id, host, ...(agentID ? { agent_id: agentID } : {}), share: picked(share), tasks_from: picked(tasks), note: note.value }, transport);
       if (!current()) return;
       announce("Invited. Its owner accepts or declines it on their computer.");
@@ -2276,7 +2485,7 @@ function setDMAgent(a) {
 
 async function sendDM() {
   const t = state.dmData;
-  if (state.sending || !t || t.frozen || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
+  if (state.sending || !t || t.frozen || (dmHumanGuest(t) && !guestAuthor(t)) || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
   const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent, files = state.files.slice(), kind = kindValue() === "task" ? "task" : "question";
   if (askGone()) { kindHint(); return; } // never sent to the person instead
   const elsewhere = boundElsewhere();
@@ -2289,11 +2498,12 @@ async function sendDM() {
   $("compose-error").textContent = "";
   try {
     let r;
-    const receiver = await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
+    const humanAsk = !!agent && (dmHumanGuest(t) || (t.guests || []).some(g => g.state === "active")); // a request with guests present names its assistant only
+    const receiver = humanAsk ? null : await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
       r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: text, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
-        : await api("/api/dm/send", { conv: t.id, body: text, reply_to: reply ? reply.id : "", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: text, reply_to: reply ? reply.id : "", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
@@ -2511,6 +2721,7 @@ function renderQuarantine(items) {
 // nothing can be sent until the new one has loaded. It reports whether the
 // conversation changed.
 function beginThread(id) {
+  closeMentions();
   const changed = !!state.dm || !state.data || !state.data.messages.some((m) => m.id === id);
   if (changed) {
     clearTyping();
@@ -2689,11 +2900,21 @@ const decisionActions = ["accept", "accept_always", "decline", "approve", "resol
 
 const shownText = (m) => (m.deleted ? "" : m.edited && typeof m.text === "string" ? m.text : m.body);
 // A reactor is {id, label} (a person, or a device address): two people with
-// one label stay two entries; the label alone is never an identity.
-const reactorLabel = (b) => (typeof b === "string" ? b : (b && b.label) || (b && b.id) || "someone");
+// one label stay two entries; the label alone is never an identity. An
+// assistant's own reaction (assistant: true, with host, agent_id, pid) is
+// named as its participant is (agentName), or in a device thread by its
+// verified catalog name, else plainly (namedAgentLabel). Its exact identity is
+// in the title, never in the text.
+const assistantReactorLabel = (b) => {
+  const a = b.pid && agentOf(b.pid);
+  if (a) return agentName(a); // exactly as the participant is named here
+  return b.agent_id ? namedAgentLabel(b.agent_id, b.host) : "Assistant on " + b.host;
+};
+const assistantReactorTitle = (b) => assistantReactorLabel(b) + " · " + (b.agent_id ? "agent " + b.agent_id : "default responder") + " on " + b.host + (b.pid ? " · participation " + b.pid : "");
+const reactorLabel = (b) => (typeof b === "string" ? b : b && b.assistant ? assistantReactorLabel(b) : (b && b.label) || (b && b.id) || "someone");
 const reactorNames = (r) => (r.by || []).map(reactorLabel).join(", ");
 const quickEmoji = ["👍", "❤️", "😂", "🎉", "👀", "✅"];
-const canDo = (m, what) => !m.excerpt_pid && !(state.dm && dmVisitor()) && Array.isArray(m.can) && m.can.includes(what);
+const canDo = (m, what) => !m.excerpt_pid && !(state.dm && (dmVisitor() || dmHumanGuest())) && Array.isArray(m.can) && m.can.includes(what);
 const controlRef = (m, conv) => (conv ? { conv, id: m.id, dir: m.dir } : { id: m.id, dir: m.dir });
 
 async function control(what, body, done) {
@@ -2715,12 +2936,19 @@ async function control(what, body, done) {
 function reactionsRow(m, conv) {
   if (m.deleted) return null;
   const can = canDo(m, "react");
-  const chips = (m.reactions || []).map((r) => {
-    const label = r.emoji + " " + (r.by || []).length;
-    const title = reactorNames(r);
-    return can ? el("button", { type: "button", class: "reaction" + (r.mine ? " mine" : ""), title, "aria-label": r.emoji + " by " + title + (r.mine ? " (you); press to remove yours" : "; press to add yours"),
+  const chips = (m.reactions || []).flatMap((r) => {
+    // People's marks toggle as one chip; each assistant's own mark is its
+    // own chip, named, so it never reads as a person's (or its host's).
+    const people = { ...r, by: (r.by || []).filter((b) => !b.assistant) }, agents = (r.by || []).filter((b) => b.assistant);
+    const label = r.emoji + " " + people.by.length;
+    const title = reactorNames(people);
+    const own = !people.by.length ? [] : [can ? el("button", { type: "button", class: "reaction" + (r.mine ? " mine" : ""), title, "aria-label": r.emoji + " by " + title + (r.mine ? " (you); press to remove yours" : "; press to add yours"),
       onclick: () => control("react", { ...controlRef(m, conv), emoji: r.emoji, remove: !!r.mine }) }, label)
-      : el("span", { class: "reaction" + (r.mine ? " mine" : ""), title }, label);
+      : el("span", { class: "reaction" + (r.mine ? " mine" : ""), title }, label)];
+    return own.concat(agents.map((b) => {
+      const name = assistantReactorLabel(b);
+      return el("span", { class: "reaction assistant-reaction", title: assistantReactorTitle(b), "aria-label": r.emoji + " by " + name + ", an assistant (" + assistantReactorTitle(b) + ")" }, r.emoji, el("span", { class: "reaction-agent" }, name));
+    }));
   });
   if (!chips.length && !can) return null;
   return el("div", { class: "reactions" }, chips, can && reactPicker(m, conv));
@@ -2831,11 +3059,11 @@ function execLine(m, t) {
   // The terminal answer or result in this thread supersedes the host's last
   // word on the request: once it is answered, nothing is "running" for it.
   if (t && (t.messages || []).some((x) => x.reply_to === m.id && (x.kind === "answer" || x.kind === "result"))) return null;
-  const word = execWord[e.state] || e.state;
+  const word = e.state === "running" ? "Working" : execWord[e.state] || e.state;
   const detail = e.detail && (blockerWord[e.detail] || e.detail); // a blocker category, or the host's bounded plain reason
   const text = word + " on " + e.host + (e.state === "running" && e.at ? " since " + when(e.at) : "") + (detail ? ": " + detail : "");
   return el("span", { class: "exec " + e.state + (e.stale ? " stale" : ""), title: "Asserted by " + e.host + (e.at ? " at " + new Date(e.at).toLocaleString() : "") },
-    text, e.stale && el("span", { class: "exec-stale" }, " · last known " + (e.at ? ago(e.at) : "earlier") + ", not confirmed now"),
+    e.state === "running" && !e.stale && el("span", {class: "working-dots", "aria-hidden": "true"}, "···"), text, e.stale && el("span", { class: "exec-stale" }, " · last known " + (e.at ? ago(e.at) : "earlier") + ", not confirmed now"),
     e.refused && el("span", { class: "exec-refused" }, " · refused: " + e.refused));
 }
 
@@ -2939,7 +3167,7 @@ function renderMsg(m, byId, prev, t) {
   const meta = !cont && el("div", { class: "meta" },
     m.agent_id ? el("span", { class: "who", title: namedProvenance(m) }, namedAuthor(m)) : m.dir === "in" ? who(m.from) : el("span", { class: "who" }, m.author.label),
     m.agent_id && el("span", { class: "tag" }, "Agent"),
-    m.target && m.target.agent_id && el("span", { class: "tag named-agent-id", title: m.target.agent_id + " · " + m.target.address }, "To " + namedAgentLabel(m.target.agent_id, m.target.address) + " on " + m.target.address),
+    m.target && m.target.agent_id && el("span", { class: "tag named-agent-id", title: m.target.agent_id + " · " + m.target.address }, "To " + namedAgentOn(m.target.agent_id, m.target.address)),
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.status && m.status !== "done" && el("span", { class: "tag" }, statusWord[m.status] || m.status),
     m.unread && el("span", { class: "tag unread" }, "New"),
@@ -3023,7 +3251,7 @@ function decide(a, m, t) {
   const quote = el("div", { class: "quote" }, m.body);
   const from = el("dl", {}, el("dt", {}, "From"), el("dd", {}, m.from));
   const runs = m.target && m.target.agent_id
-    ? namedAgentLabel(m.target.agent_id, m.target.address) + " on " + m.target.address + ", using its local configuration on that computer."
+    ? namedAgentOn(m.target.agent_id, m.target.address) + ", using its local configuration on that computer."
     : state.overview && state.overview.me.responder
     ? "Your responder (" + state.overview.me.responder + ") in " + state.overview.me.responder_dir
     : "Nothing yet: no responder is set. It stays accepted until you choose one (agentnet responder set).";
@@ -3033,7 +3261,7 @@ function decide(a, m, t) {
     return dialog({
       title: m.kind === "task" ? "Run this task on your computer?" : "Let your responder answer this?",
       body: [from, quote,
-        el("dl", {}, el("dt", {}, "Runs"), el("dd", {}, runs),
+        el("dl", {}, el("dt", {}, "Runs"), el("dd", m.target && m.target.agent_id ? { title: "agent " + m.target.agent_id + " · " + m.target.address } : {}, runs),
           el("dt", {}, "Permissions"), el("dd", {}, m.kind === "task"
             ? "Its normal permissions. It is not sandboxed and can change files."
             : "Question mode: your harness's own setup without editing tools or anything needing a new approval. Tools you already allow keep their effects."),
@@ -3168,6 +3396,7 @@ let typingUI = null, typingLoading = null;
 function typingScope() {
   if ($("composer").hidden) return null;
   if (humanGroup() && (dmVisitor() || state.dmData.frozen || state.dmAgent)) return null;
+  if (dmHumanGuest() && !guestAuthor()) return null; // only an accepted guest types here (client.typingGuest)
   if (state.dm && state.dmData && !state.dmData.frozen) return { conv: state.dm };
   if (state.thread && state.data && !state.data.key.pending) return { peer: state.data.peer, thread: state.data.messages[0].id };
   return null;
@@ -3225,27 +3454,28 @@ function renderAgentTarget() {
   const box = $("agent-target");
   if (!box) return;
   const d = state.dmData, t = state.data;
-  box.hidden = state.dm ? !d || (!(d.agents || []).length && !state.dmAgent) : !t || !!state.answering || kindValue() === "message";
+  box.hidden = state.dm ? !d || dmHumanGuest(d) && !state.dmAgent || (!(d.agents || []).length && !state.dmAgent) : !t || !!state.answering || kindValue() === "message";
   if (box.hidden) { fill(box); return; }
   if (state.dm) {
-    const agents = d.agents || [], selected = state.dmAgent || "";
-    const label=humanGroup(d)?"Group recipient":"DM recipient";
-    const picker = el("select", { id: "dm-agent-target", "aria-label": label, disabled: state.sending,
-      onchange: e => { const id = e.currentTarget.value; setDMAgent(id ? agents.find(a => a.pid === id) || { pid: id } : null); keepDraft(); } },
-      el("option", { value: "", selected: !selected }, humanGroup(d)?"Current group members · "+d.title:"Person · " + d.peer.label),
-      agents.map(a => el("option", { value: a.pid, selected: selected === a.pid, title: (a.agent_id || a.pid) + " · " + a.host.address }, agentName(a) + " · " + a.host.address + (a.can_ask ? "" : " · unavailable"))),
-      selected && !agents.some(a => a.pid === selected) && el("option", { value: selected, selected: true, title: selected }, "Selected agent unavailable · " + selected.slice(0, 8)));
-    fill(box, el("label", { for: "dm-agent-target" }, label), picker); return;
+    const a = agentOf(state.dmAgent);
+    fill(box, state.dmAgent && el("span", { class: "addressed-assistant", title: (a?.agent_id || state.dmAgent) + " · " + (a?.host.address || "unavailable") + " · participation " + state.dmAgent },
+      "@" + (a ? agentName(a) : "Selected assistant unavailable"),
+      el("button", { type: "button", class: "text-btn", disabled: state.sending, "aria-label": "Remove addressed assistant", onclick: () => { setDMAgent(null); keepDraft(); } }, "×")),
+      el("button", { type: "button", class: "text-btn", disabled: state.sending, onclick: () => { showMentions(true); $("body").focus(); } }, "@ Mention assistant"));
+    return;
   }
   const catalog = state.targetCatalog, selected = state.deviceAgentID || "", agents = catalog && catalog.host === t.peer ? catalog.agents || [] : [];
-  const picker = el("select", { id: "device-agent-target", "aria-label": "Question/task agent", disabled: state.sending,
-    onchange: e => chooseDeviceAgent(e.currentTarget.value) },
-    el("option", { value: "", selected: !selected }, "Device default responder"),
-    agents.map(a => el("option", { value: a.id, selected: a.id === selected, title: a.id + " · " + a.host }, catalogLabel(a, agents))),
-    selected && !agents.some(a => a.id === selected) && el("option", { value: selected, selected: true, title: selected }, "Selected agent unavailable · " + namedAgentLabel(selected, t.peer)));
-  fill(box, el("label", { for: "device-agent-target" }, "Question/task agent"), picker,
-    el("button", { type: "button", class: "text-btn", disabled: state.sending || catalog && catalog.loading, onclick: loadTargetCatalog }, "Refresh agents"),
-    catalog && catalog.error && el("p", { class: "error", role: "alert" }, catalog.error));
+  fill(box, el("button", {type: "button", class: "text-btn", disabled: state.sending,
+    title: selected || "Device default responder", onclick: () => {
+      const gen = state.gen, key = state.draftKey;
+      const choose = id => { if (gen !== state.gen || key !== state.draftKey) return; chooseDeviceAgent(id); $("dialog").close(); $("body").focus(); };
+      dialog({title: "Address an assistant on " + t.peer, body: [
+        el("button", {type: "button", class: "btn", onclick: () => choose("")}, "Device default responder"),
+        agents.map(a => el("button", {type: "button", class: "btn", title: a.id + " · " + a.host, onclick: () => choose(a.id)}, catalogLabel(a, agents))),
+        el("button", {type: "button", class: "text-btn", disabled: catalog?.loading, onclick: async () => { await loadTargetCatalog(); $("dialog").close(); }}, "Refresh agents"),
+        catalog?.error && el("p", {class: "error"}, catalog.error)], ok: "Close", run: async () => {}});
+    }}, selected ? "@" + namedAgentLabel(selected, t.peer) + (deviceAgentMissing() && catalogName(selected, t.peer) ? " · unavailable" : "") : "Address assistant…"), catalog?.error && el("p", {class: "error", role: "alert"}, catalog.error));
+
 }
 
 // Reply destination is explicitly selected, independent of the addressed executor.
@@ -3385,7 +3615,7 @@ async function prepareReplyReceiverSelection(selected, host, workspace, supporte
 }
 function renderReplyReceiver() {
   const box = $("reply-receiver"); if (!box) return;
-  box.hidden = !state.dmData && !state.data || !!state.answering;
+  box.hidden = !state.dmData && !state.data || !!state.answering || !!state.dmAgent && (dmHumanGuest() || (state.dmData?.guests || []).some(g => g.state === "active")); // a request with guests present names its assistant only
   $("receiver-options").hidden = box.hidden;
   if (box.hidden) { fill(box); renderReceiverStatus(); return; }
   const selected = state.replyReceiver, catalog = state.receiverCatalog, choice = state.replyReceiverHost, supported = !!state.overview?.reply_receivers || !!choice;
@@ -3495,7 +3725,9 @@ function renderTarget() {
         (task ? "Give task to " : "Ask ") + who);
       return;
     }
-    set(d.peer.label, state.dmReply ? "· replying to “" + firstLine(state.dmReply.body, 40) + "”" : "· this DM", "Send to " + d.peer.label);
+    const guestNames = dmHumanGuest(d) ? (d.guests || []).filter(g => g.state === "active" && !g.host_here).map(g => g.host.label) : (d.guests || []).filter(g => g.can_send && !g.host_here).map(g => g.host.label);
+    const audience = joinedNames(dmHumanGuest(d) ? guestAudienceNames(d) : [d.peer.label, ...guestNames]);
+    set(audience, (state.dmReply ? "· replying to “" + firstLine(state.dmReply.body, 40) + "”" : "· same conversation") + (guestNames.length ? " · includes accepted guests" : dmHumanGuest(d) ? " · conversation message" : d.audience_pending ? " · private here; other devices may still be updating" : " · private between original people"), guestNames.length || dmHumanGuest(d) ? "Send" : "Send to " + d.peer.label);
     return;
   }
   const t = state.data;
@@ -3504,7 +3736,7 @@ function renderTarget() {
   const last = t.messages[t.messages.length - 1], k = kindValue();
   if (state.deviceAgentID && k !== "message") {
     const id = state.deviceAgentID, agent = state.targetCatalog && (state.targetCatalog.agents || []).find(a => a.id === id);
-    const name = namedAgentLabel(id, t.peer) + " on " + t.peer;
+    const name = namedAgentOn(id, t.peer);
     set(name, deviceAgentMissing() ? "· unavailable; draft kept" : k === "task" ? "· task permission still required" : "· a question for this agent",
       (k === "task" ? "Give task to " : "Ask ") + (agent ? agent.label : "selected agent")); return;
   }
@@ -3592,10 +3824,12 @@ function restoreDraft(key, t) {
 // syncComposer enables what the open conversation allows. A send on its way
 // keeps Send disabled, whatever refreshes meanwhile.
 function syncComposer() {
+  $("mention-button").hidden = !state.dm || dmHumanGuest() && !(guestAuthor() && (state.dmData?.agents || []).some(a => a.can_ask));
+  $("mention-button").disabled = state.sending;
   if (state.dm) { // a DM: messages only, to the person
     const d = state.dmData;
     const revoked = !!(state.overview && state.overview.device && state.overview.device.revoked);
-    const blocked = !d || !!d.frozen || revoked || (dmVisitor(d) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask));
+    const blocked = !d || !!d.frozen || revoked || (dmHumanGuest(d) && !guestAuthor(d)) || (dmVisitor(d) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask));
     $("composer").hidden = dmVisitor(d) && blocked;
     $("body").disabled = blocked;
     $("send").disabled = blocked || state.sending || askGone();
@@ -3610,7 +3844,7 @@ function syncComposer() {
     if (a && kindValue() === "message") setKind("question");
     $("attach").hidden = !filesAllowed();
     $("body").placeholder = !d ? "" : revoked ? "This device was removed from its server" : d.frozen ? "Nothing more can be sent in this conversation"
-      : askGone() ? "This agent cannot be asked now" : a ? "Ask " + agentName(a).replace(/^Your/, "your") : "Write to " + (humanGroup(d) ? d.title : d.peer.label);
+      : askGone() ? "This agent cannot be asked now" : a ? "Ask " + agentName(a).replace(/^Your/, "your") : dmHumanGuest(d) ? "Message " + joinedNames(guestAudienceNames(d)) : "Write to " + (humanGroup(d) ? d.title : d.peer.label);
     kindHint();
     renderTarget();
     return;
@@ -3706,10 +3940,14 @@ function kindHint() {
         ". Your text stays here. To send it to " + (state.dmData ? state.dmData.peer.label : "the person") + " instead, remove the agent (×) first.";
       return;
     }
+    if (!a && dmHumanGuest()) { $("compose-hint").textContent = guestAuthor() ? "Chat and files. Ctrl+Enter sends." : (state.dmData.guests || []).some(g => g.host_here && g.state === "invited") ? "Join before sending. Your draft stays here." : "Sending is unavailable here. Your draft stays here."; return; }
     $("compose-hint").textContent = humanGroup() && !a ? (state.dmData.frozen ? "Current group audience unavailable. Saved messages remain; nothing can be sent here now." : "Messages go to the current group members; nothing runs them. Ctrl+Enter sends.") : !a ? "A DM message is for the person; nothing runs it. Ctrl+Enter sends."
       : kindValue() === "task" ? (taskFree(a) ? "It runs on " + a.host.address + " without asking " + (a.host_here ? "you" : a.host.label) + " first."
         : a.host.label + " accepts it first, unless they already allow tasks from your key.") + " Ctrl+Enter sends."
-        : (humanGroup() ? "Current group members see what you ask and what it answers. It runs on " : "Both of you see what you ask and what it answers. It runs on ") + a.host.address + ". Ctrl+Enter sends.";
+        : (humanGroup() ? "Current group members see what you ask and what it answers. It runs on "
+          : dmHumanGuest() ? "Everyone in this conversation sees what you ask and what it answers. " + a.host.label + "'s permissions decide whether it runs, on "
+          : (state.dmData.guests || []).some(g => g.state === "active") ? "Everyone in this conversation sees what you ask and what it answers. It runs on "
+          : "Both of you see what you ask and what it answers. It runs on ") + a.host.address + ". Ctrl+Enter sends.";
     return;
   }
   if (state.deviceAgentID && !state.answering && kindValue() !== "message") {
@@ -3774,7 +4012,9 @@ async function workspaceSwitched(e) {
   const s = (e.state && e.state.view) || {};
   releaseOpened();
   closeDrivePanel();
-  fill($("named-agents")); fill($("responder"));
+  fill($("named-agents")); fill($("responder")); fill($("assistant-setup")); closeMentions();
+  if ($("routing-settings").open) $("routing-settings").close();
+  state.dmNames = {};
   Object.assign(state, { thread: null, dm: null, data: null, dmData: null, draftKey: null, deviceAgentID: "", targetCatalog: null, targetCatalogSeq: (state.targetCatalogSeq || 0) + 1, replyReceiver: null, replyReceiverHost: null, receiverCatalog: null, receiverCatalogSeq: (state.receiverCatalogSeq || 0) + 1, receiverBindings: [], files: [], overview: null, seq: -1, hub: null, hubUp: null, pendingOpen: null, typedFor: null, teams: null, driveOpen: false,
     drafts: {}, lastSeen: {}, presence: {}, seenReported: {}, singlesOpen: {}, sending: false, version: "", newVersion: "", contactView: "recent", contactLimit: 20 });
   for (const k of viewKeys) if (s[k] !== undefined) state[k] = s[k];
@@ -4286,9 +4526,23 @@ async function renderStorage() {
     el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn", onclick: renderStorage }, "Read again")));
 }
 
+async function renderAssistantSetup() {
+  const root = $("assistant-setup"), host = window.agentnet, gen = state.gen, ws = wsNow();
+  if (!root) return;
+  const current = () => gen === state.gen && ws === wsNow() && host === window.agentnet;
+  try {
+    const m = await moduleOf("assistant-setup");
+    if (!current()) return;
+    await m.mountAssistantSetup({root, api: (path, body) => api(path, body, host), isCurrent: current, isBrowser: host?.platform === "browser" || !!state.overview?.me?.browser, onChanged: async () => {
+      if (!current()) return;
+      try { await loadOverview(); if (!current()) return; state.dmNames = {}; if (state.dm) await loadDM(); }
+      catch (e) { if (current()) announce("Setup saved; the participant list could not be refreshed: " + e.message); }
+    }});
+  } catch (e) { if (current()) fill(root, el("p", {class: "hint"}, "Assistant setup unavailable: " + e.message)); }
+}
 function settingsTab(name) {
   if (name === "notifications") ensureTyping().then(ui => { if (ui) ui.showSettings(); });
-  if (name === "device") renderResponder();
+  if (name === "device") { renderResponder(); renderAssistantSetup(); }
   if (name === "storage") { renderStorage(); renderFileStorage(); }
   for (const key of ["profile", "appearance", "notifications", "device", "storage"]) $("settings-" + key).hidden = key !== name;
   for (const b of document.querySelectorAll("[data-settings]")) {
@@ -4339,11 +4593,17 @@ function start() {
   $("conversation-details").addEventListener("click", () => {
     const t = state.dmData || state.data;
     if (!t) return;
-    const peer = state.dmData ? state.dmData.peer.label : state.data.peer;
+    const peer = state.dmData ? humanGroup(t) ? t.title : t.peer.label : state.data.peer;
+    const members = humanGroup(t) ? el("section", {class: "conversation-members"}) : null;
+    if (members) renderGroupMembers(t, members);
+    const past = state.dmData ? t.agents.filter(a => ["dismissed", "declined"].includes(a.state)).map(a => agentCard(a, t)) : [];
+    const routing = el("button", {type: "button", class: "btn", onclick: () => { $("dialog").close(); $("routing-settings").showModal(); }}, "Advanced CLI reply routing…");
     const actions = state.data ? el("div", { class: "detail-actions" },
       el("button", { type: "button", class: "btn", onclick: () => approvalDialog(state.data) }, "Question permissions"),
       state.data.task_grant && el("button", { type: "button", class: "btn", onclick: () => revokeDialog(state.data) }, "Task permissions")) : null;
-    dialog({ title: peer, body: [state.dmData ? deviceDisclosure(state.dmData.peer) : el("p", { class: "mono" }, state.data.key?.pinned || "Key not checked yet"), actions], ok: "Close", run: async () => {} });
+    const guests = state.dmData ? (t.guests || []).map(g => guestCard(g, t)) : [];
+    const remove = el("button", { type: "button", class: "btn", onclick: () => { $("dialog").close(); deleteConversationDialog(t); } }, state.dmData ? "Delete conversation…" : "Delete this thread…");
+    dialog({ title: peer, body: [state.dmData ? deviceDisclosure(t.peer) : el("p", { class: "mono" }, state.data.key?.pinned || "Key not checked yet"), members, guests, past, actions, routing, remove], ok: "Close", run: async () => {} });
   });
   $("nav-chats").addEventListener("click", () => selectSection("chats"));
   $("nav-people").addEventListener("click", () => selectSection("people"));
@@ -4368,6 +4628,11 @@ function start() {
   $("composer").addEventListener("submit", send);
   $("body").addEventListener("input", grow);
   $("body").addEventListener("input", noteTyping);
+  $("body").addEventListener("input", () => showMentions());
+  $("body").addEventListener("keydown", mentionKey);
+  $("mention-button").addEventListener("click", () => { showMentions(true); $("body").focus(); });
+  $("routing-close").addEventListener("click", () => $("routing-settings").close());
+  document.addEventListener("pointerdown", e => { if (mentionView && !$("mentions").contains(e.target) && e.target !== $("body") && e.target !== $("mention-button")) closeMentions(); });
   $("body").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $("composer").requestSubmit(); }
   });
@@ -4397,13 +4662,13 @@ function start() {
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("review").hidden) { toggleReview(false); $("review-btn").focus(); return; }
-    if (e.key === "/" && !$("settings").open && !$("dialog").open && !e.target.closest("input, textarea, select") && state.lens !== "zoom") {
+    if (e.key === "/" && !$("settings").open && !$("dialog").open && !$("routing-settings").open && !e.target.closest("input, textarea, select") && state.lens !== "zoom") {
       e.preventDefault();
       $("search").focus();
       return;
     }
     // Page turning and zooming keys, unless typing or a dialog is open.
-    if ($("settings").open || $("dialog").open || e.target.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if ($("settings").open || $("dialog").open || $("routing-settings").open || e.target.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
     const handled = state.lens === "zoom" ? Zoom.onKey(e)
       : state.lens === "comic" && (state.data || state.dmData) && !$("comic").hidden ? Comic.onKey(e) : false;
     if (handled) e.preventDefault();

@@ -513,7 +513,7 @@ func TestBrowserEngineJourney(t *testing.T) {
 		return nil
 	}
 	w.until("eve's own agent accepted", func() bool { a := agentByPID(evePID); return a != nil && a["state"] != "invited" })
-	w.until("all three copies stored", func() bool { return len(w.api("/api/dm?id="+root.ID(), nil)["messages"].([]any)) == 9 })
+	w.until("all three copies stored, one row per exact record", func() bool { return len(w.api("/api/dm?id="+root.ID(), nil)["messages"].([]any)) == 7 })
 	if a := agentByPID(evePID); a["state"] != "active" || a["held"] != float64(0) {
 		t.Fatalf("one accept sent twice: %v", a)
 	}

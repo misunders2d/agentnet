@@ -77,6 +77,10 @@ async function fixture() {
   const r = await e.api("/api/send", { to: f.peerAddress, kind: "question", body: "q", agent_id: f.agentA.id });
   const out = await f.store.get("outbox", r.id), opened = await wire.open(out.envelope, f.peerKeys, f.peerAddress, f.selfPub);
   check(opened.target.agent_id === f.agentA.id && opened.target.address === f.peerAddress && opened.target.fingerprint === f.peer.fingerprint && out.required_cap === wire.CapAgentIdentity, "device exact host/ID and durable capability");
+  const progress = await f.receive(await f.fromPeer({ kind: "message", status: wire.StatusProgress, body: "checking", reply_to: r.id, agent_id: f.agentA.id }));
+  check((await f.store.get("inbox", progress))?.status === wire.StatusProgress && (await e.threadSummaries()).find((t) => t.peer === f.peerAddress)?.waiting === true, "named executor progress stored; the request still waits");
+  const wrongProgress = await f.receive(await f.fromPeer({ kind: "message", status: wire.StatusProgress, body: "checking", reply_to: r.id, agent_id: f.agentB.id }));
+  check((await f.store.get("held", wrongProgress))?.reason === "invalid", "progress for another named agent refused");
   const answer = await f.receive(await f.fromPeer({ reply_to: r.id, agent_id: f.agentA.id }));
   check((await f.store.get("inbox", answer)).agent_id === f.agentA.id, "matching named answer stored");
   for (const fields of [{ reply_to: r.id, agent_id: f.agentB.id }, { reply_to: id(), agent_id: f.agentA.id }]) {

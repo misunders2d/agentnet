@@ -160,7 +160,8 @@ func TestReminderEndsOnlyWithAReply(t *testing.T) {
 	stateOf := func(id string) string { return reminderOf(t, w.bob, id).State }
 
 	byHand, declined, other := receiveAt(t, w, envelope.KindQuestion, "by hand"), receiveAt(t, w, envelope.KindTask, "declined"), receiveAt(t, w, envelope.KindMessage, "other")
-	for _, id := range []string{byHand, declined, other} {
+	progressTarget := receiveAt(t, w, envelope.KindQuestion, "progress")
+	for _, id := range []string{byHand, declined, other, progressTarget} {
 		set(id)
 	}
 	w.bob.Inbox(false, true) // reading
@@ -173,8 +174,11 @@ func TestReminderEndsOnlyWithAReply(t *testing.T) {
 	if _, err := w.bob.Decline(tctx(t), declined, "no"); err != nil {
 		t.Fatal(err)
 	}
-	if stateOf(byHand) != ReminderReplied || stateOf(declined) != ReminderReplied || stateOf(other) != ReminderPending {
-		t.Fatalf("by hand %s, declined %s, other %s", stateOf(byHand), stateOf(declined), stateOf(other))
+	if err := w.bob.store.addInbox(envelope.Inner{ID: "progress-reply", From: w.alice.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: "still working", ReplyTo: progressTarget, Status: envelope.StatusProgress}, w.alice.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if stateOf(byHand) != ReminderReplied || stateOf(declined) != ReminderReplied || stateOf(other) != ReminderPending || stateOf(progressTarget) != ReminderPending {
+		t.Fatalf("by hand %s, declined %s, other %s, progress %s", stateOf(byHand), stateOf(declined), stateOf(other), stateOf(progressTarget))
 	}
 
 	// The worker: its answer ends it; its failure report does not. Each is

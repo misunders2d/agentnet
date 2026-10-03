@@ -40,6 +40,7 @@ const (
 
 // ParticipationInfo is one participation as this installation resolves it.
 type ParticipationInfo struct {
+	Role        string              `json:"role,omitempty"`
 	PID         string              `json:"pid"`
 	Conv        string              `json:"conv"`
 	State       string              `json:"state"`
@@ -52,6 +53,7 @@ type ParticipationInfo struct {
 	TaskKeys    []string            `json:"task_keys,omitempty"` // member keys allowed follow-up tasks here
 	Note        string              `json:"note,omitempty"`
 	Invite      string              `json:"invite,omitempty"`    // the invite's hash
+	Scope       string              `json:"scope,omitempty"`     // its counted public projection (protocol.EventScope), if held
 	Decision    string              `json:"decision,omitempty"`  // the accept or decline that decided it
 	Dismissal   string              `json:"dismissal,omitempty"` // the dismiss that ended it
 	Conflict    string              `json:"conflict,omitempty"`  // why a conflict (or a declined fork) was resolved so
@@ -189,12 +191,22 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		}
 	}
 	invites := map[string]protocol.ParticipationEvent{}
-	var decisions, dismisses []protocol.ParticipationEvent
+	var decisions, dismisses, scopes []protocol.ParticipationEvent
 	for _, ev := range events {
 		_, author := m.author(ev.Author)
 		if ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline {
 			p, ok := m.hosts[ev.Author.Person]
 			author = author || ok && m.chains[ev.Author.Person][ev.Author.Roster] && p.has(ev.Author.Address, ev.Author.Fingerprint) && ev.Author.GroupAdmission == ""
+		}
+		if ev.Type == protocol.EventDismiss && !author {
+			for _, invite := range events {
+				if invite.Type != protocol.EventInvite && invite.Type != protocol.EventScope || invite.Role != protocol.RoleHuman || invite.Host == nil {
+					continue
+				}
+				_, inviter := m.author(invite.Author)
+				_, host := m.host(invite.Host)
+				author = author || inviter && host && ev.Author.Person == invite.Host.Person && ev.Author.Address == invite.Host.Address && ev.Author.Fingerprint == invite.Host.Fingerprint && m.chains[ev.Author.Person][ev.Author.Roster]
+			}
 		}
 		if !author {
 			hold(ev)
@@ -213,8 +225,36 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 			invites[ev.Hash()] = ev
 		case protocol.EventDismiss:
 			dismisses = append(dismisses, ev)
+		case protocol.EventScope:
+			if m.group == nil { // a DM invite's public projection, by its own author
+				scopes = append(scopes, ev)
+			}
 		default:
 			decisions = append(decisions, ev)
+		}
+	}
+	// Without the invite itself (another guest, an outside assistant host), its
+	// author's scope stands for it: host, agent and role, never grant, task
+	// keys or note. Holding the invite, only its exact projection counts.
+	if len(invites) == 0 && len(scopes) > 0 {
+		var s protocol.ParticipationEvent
+		for _, x := range scopes {
+			if s.Type == "" || x.Hash() < s.Hash() {
+				s = x
+			}
+		}
+		agree := true
+		for _, x := range scopes {
+			agree = agree && x.Prev == s.Prev && x.Author == s.Author && *x.Host == *s.Host && x.Role == s.Role
+		}
+		if _, ok := m.host(s.Host); ok && agree {
+			invites[s.Prev] = protocol.ParticipationEvent{V: 1, Conv: s.Conv, PID: s.PID, Type: protocol.EventInvite, Author: s.Author, TS: s.TS, Host: s.Host, Audience: s.Audience, Role: s.Role}
+			info.Scope = s.Hash()
+		} else if !agree {
+			info.State, info.Conflict = PartConflict, "different invitation scopes share this participation id"
+			return info
+		} else {
+			hold(s)
 		}
 	}
 	known := map[string]bool{}
@@ -227,10 +267,17 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 	case 1:
 		for info.Invite, inv = range invites {
 		}
+		if info.Scope == "" {
+			for _, s := range scopes {
+				if s.Projects(inv) && (info.Scope == "" || s.Hash() < info.Scope) {
+					info.Scope = s.Hash()
+				}
+			}
+		}
 		host, _ := m.host(inv.Host)
 		inviter, _ := m.author(inv.Author)
 		info.Host, info.Inviter = host.info, inviter.info
-		info.AgentID = inv.Host.AgentID
+		info.AgentID, info.Role = inv.Host.AgentID, inv.Role
 		_, member := m.persons[inv.Host.Person]
 		info.External = !member
 		info.Grant, info.TaskKeys, info.Note, info.Invited = inv.Grant, inv.TaskKeys, inv.Note, inv.TS
@@ -258,6 +305,11 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		info.State, info.Decision, info.Conflict = PartConflict, decided[0].Hash(), "the host decided more than once"
 	}
 	for _, ev := range dismisses {
+		_, memberAuthor := m.author(ev.Author)
+		if !memberAuthor && !(inv.Role == protocol.RoleHuman && len(decided) == 1 && decided[0].Type == protocol.EventAccept && ev.Author.Person == inv.Host.Person && ev.Author.Address == inv.Host.Address && ev.Author.Fingerprint == inv.Host.Fingerprint) {
+			hold(ev)
+			continue
+		}
 		if !known[ev.Prev] {
 			hold(ev) // follows an event not held here (yet)
 			continue
@@ -272,7 +324,12 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 
 // Claimable reports whether the participation could have work run now: it
 // is active and no event of it is held (a held one may end or change it).
-func (p ParticipationInfo) Claimable() bool { return p.State == PartActive && p.Held == 0 }
+func (p ParticipationInfo) Claimable() bool {
+	return p.Role != protocol.RoleHuman && p.State == PartActive && p.Held == 0
+}
+func (p ParticipationInfo) HumanActive() bool {
+	return p.Role == protocol.RoleHuman && p.State == PartActive && p.Held == 0
+}
 
 // Participation resolves one participation.
 func (a *Agent) Participation(pid string) (ParticipationInfo, error) {
@@ -355,6 +412,12 @@ func (a *Agent) InviteNamedAgent(ctx context.Context, conv, hostAddress, agentID
 }
 
 func (a *Agent) inviteAgent(ctx context.Context, conv, hostAddress, agentID string, grant, taskKeys []string, note string) (ParticipationInfo, error) {
+	return a.inviteParticipation(ctx, conv, hostAddress, agentID, grant, taskKeys, note, "")
+}
+func (a *Agent) InviteHuman(ctx context.Context, conv, hostAddress string, grant []string, note string) (ParticipationInfo, error) {
+	return a.inviteParticipation(ctx, conv, hostAddress, "", grant, nil, note, protocol.RoleHuman)
+}
+func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agentID string, grant, taskKeys []string, note, role string) (ParticipationInfo, error) {
 	m, err := a.dmMembers(conv)
 	if err != nil {
 		return ParticipationInfo{}, err
@@ -389,6 +452,47 @@ func (a *Agent) inviteAgent(ctx context.Context, conv, hostAddress, agentID stri
 		}
 		host = &protocol.ParticipationHost{Person: p.info.Person, Address: hostAddress, Fingerprint: key.Fingerprint(), AgentID: agentID}
 	}
+	if role == protocol.RoleHuman {
+		if !externalDM(m.root) {
+			return ParticipationInfo{}, errors.New("human guests require an unchanged two-person DM")
+		}
+		if _, original := m.persons[host.Person]; original {
+			return ParticipationInfo{}, errors.New("that person already belongs to this DM")
+		}
+		key, err := a.sendKey(ctx, host.Address)
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
+		if key.Fingerprint() != host.Fingerprint {
+			return ParticipationInfo{}, errors.New("human host key changed")
+		}
+		if err := a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation); err != nil {
+			return ParticipationInfo{}, err
+		}
+		for _, person := range m.persons {
+			for _, device := range person.roster.Devices {
+				if err := a.requireParticipationCaps(ctx, device, protocol.CapHumanParticipation); err != nil {
+					return ParticipationInfo{}, err
+				}
+			}
+		}
+		infos, err := a.Participations(conv)
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
+		count := 0
+		for _, existing := range infos {
+			if existing.Role == protocol.RoleHuman && (existing.State == PartActive || existing.State == PartInvited) {
+				count++
+				if existing.Host.Address == host.Address {
+					return ParticipationInfo{}, errors.New("this human already has a pending or active invitation; end it before inviting again")
+				}
+			}
+		}
+		if count >= envelope.MaxHumanAudience {
+			return ParticipationInfo{}, errors.New("human audience limit reached")
+		}
+	}
 	var refs []protocol.GrantRef
 	for _, lid := range grant {
 		keys, err := a.store.convLIDKeys(conv, lid, me.info.Fingerprint)
@@ -411,7 +515,7 @@ func (a *Agent) inviteAgent(ctx context.Context, conv, hostAddress, agentID stri
 	}
 	ev := protocol.ParticipationEvent{V: 1, Conv: conv, PID: protocol.NewID(), Type: protocol.EventInvite, TS: time.Now().Unix(),
 		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: me.info.Fingerprint},
-		Host:   host, Grant: refs, Audience: protocol.AudienceConversation, TaskKeys: taskKeys, Note: note}
+		Host:   host, Grant: refs, Audience: protocol.AudienceConversation, TaskKeys: taskKeys, Note: note, Role: role}
 	if m.group != nil {
 		if err := m.bindGroupInvite(&ev); err != nil {
 			return ParticipationInfo{}, err
@@ -420,12 +524,60 @@ func (a *Agent) inviteAgent(ctx context.Context, conv, hostAddress, agentID stri
 	if err := a.recordAndSend(ctx, ev); err != nil {
 		return ParticipationInfo{}, err
 	}
-	if _, member := m.persons[host.Person]; !member {
+	if m.group == nil && role == protocol.RoleHuman { // its public projection, for participants who never hold the invite (an assistant's is signed once guests need it)
+		if err := a.recordAndSend(ctx, protocol.ScopeOf(ev, time.Now().Unix())); err != nil {
+			return ParticipationInfo{}, err
+		}
+	}
+	if _, member := m.persons[host.Person]; !member && role != protocol.RoleHuman {
 		if err := a.sendGrantedExcerpts(ctx, ev); err != nil {
 			return ParticipationInfo{}, err
 		}
 	}
 	return a.participation(conv, ev.PID)
+}
+
+// scopeMatchesInvite refuses a scope that is not the exact projection of the
+// invite it names, when that invite is held here.
+func (a *Agent) scopeMatchesInvite(ev protocol.ParticipationEvent) error {
+	if ev.Type != protocol.EventScope {
+		return nil
+	}
+	events, err := a.store.participationEvents(ev.Conv, ev.PID)
+	if err != nil {
+		return err
+	}
+	for _, e := range events {
+		if e.Type == protocol.EventInvite && e.Hash() == ev.Prev && !ev.Projects(e) {
+			return errors.New("participation: scope differs from the invitation it names")
+		}
+		if e.Type == protocol.EventInvite && e.Hash() != ev.Prev {
+			return errors.New("participation: scope names another invitation")
+		}
+	}
+	return nil
+}
+
+// participationScope is info's counted public projection (protocol.ScopeOf),
+// signed now by this device when it authored the invite and none is held.
+func (a *Agent) participationScope(ctx context.Context, info ParticipationInfo) (protocol.ParticipationEvent, error) {
+	events, err := a.store.participationEvents(info.Conv, info.PID)
+	if err != nil {
+		return protocol.ParticipationEvent{}, err
+	}
+	for _, e := range events {
+		if info.Scope != "" && e.Hash() == info.Scope {
+			return e, nil
+		}
+	}
+	for _, e := range events {
+		if e.Type == protocol.EventInvite && e.Hash() == info.Invite && e.Group == nil && e.Author.Address == a.Address && e.Author.Fingerprint == a.Self().Fingerprint() {
+			s := protocol.ScopeOf(e, time.Now().Unix())
+			s.Sign(a.id.Sign)
+			return s, a.recordAndSend(ctx, s)
+		}
+	}
+	return protocol.ParticipationEvent{}, errors.New("participation: its public scope is not held here yet")
 }
 
 // AcceptParticipation accepts an invite for the agent on this installation,
@@ -488,8 +640,8 @@ func (a *Agent) DismissParticipation(ctx context.Context, pid string) (Participa
 	if err != nil {
 		return info, err
 	}
-	if _, member := m.persons[me.info.Person]; !ok || !member {
-		return info, errors.New("this installation does not speak for a member of that conversation")
+	if _, member := m.persons[me.info.Person]; !ok || !member && !(info.HumanActive() && info.HostHere) {
+		return info, errors.New("only an original member or exact accepted human guest ends this participation")
 	}
 	prev := info.Decision
 	switch info.State {
@@ -551,6 +703,47 @@ func (a *Agent) ownEvent(conv, pid, want string, types ...string) (*protocol.Par
 // resend sends a stored event again, byte for byte.
 func (a *Agent) resend(ctx context.Context, ev protocol.ParticipationEvent) error {
 	raw, _ := json.Marshal(ev)
+	// Once a human end has encrypted recipient copies, retry those copies,
+	// never reconstruct a wider control audience after another guest joins.
+	if ev.Type == protocol.EventDismiss {
+		if p, e := a.Participation(ev.PID); e == nil && p.Role == protocol.RoleHuman {
+			rows, e := a.store.db.Query(`SELECT envelope,state FROM outbox WHERE conv=? AND pid=? AND sub=? AND body=? ORDER BY created_ms,id`, ev.Conv, ev.PID, envelope.SubEvent, string(raw))
+			if e != nil {
+				return e
+			}
+			var pending []envelope.Envelope
+			found := false
+			for rows.Next() {
+				var data, state string
+				if e := rows.Scan(&data, &state); e != nil {
+					rows.Close()
+					return e
+				}
+				found = true
+				if state == stateQueued {
+					var env envelope.Envelope
+					if e := json.Unmarshal([]byte(data), &env); e != nil {
+						rows.Close()
+						return e
+					}
+					pending = append(pending, env)
+				}
+			}
+			e = rows.Err()
+			rows.Close()
+			if e != nil {
+				return e
+			}
+			if found {
+				for _, env := range pending {
+					if _, e := a.deliver(ctx, env, nil); e != nil {
+						return e
+					}
+				}
+				return nil
+			}
+		}
+	}
 	_, err := a.SendConv(ctx, ev.Conv, ConvOutgoing{Kind: envelope.KindMessage, Body: string(raw), PID: ev.PID, sub: envelope.SubEvent})
 	return err
 }
@@ -567,9 +760,23 @@ func (a *Agent) recordAndSend(ctx context.Context, ev protocol.ParticipationEven
 		return errors.New("participation: event too large")
 	}
 	// Stored first: if sending fails, a retry resends these very bytes.
-	if err := a.store.addParticipationEvent(ev, raw); err != nil {
+	humanEnd := false
+	if ev.Type == protocol.EventDismiss {
+		if p, e := a.Participation(ev.PID); e == nil {
+			humanEnd = p.Role == protocol.RoleHuman
+		}
+	}
+	if humanEnd {
+		a.humanMu.Lock()
+	}
+	err := a.store.addParticipationEvent(ev, raw)
+	if humanEnd {
+		a.humanMu.Unlock()
+	}
+	if err != nil {
 		return err
 	}
+	a.convWork.due(convRetry) // accepted guests learn this record's public scope without waiting for other traffic
 	return a.resend(ctx, ev)
 }
 

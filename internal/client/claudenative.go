@@ -13,10 +13,13 @@ import (
 	"strings"
 )
 
-// Qualification is deliberately limited to the observed native Linux binary.
+// Supported contract, not a release pin: Claude Code on Linux that marks the
+// processes it starts (CLAUDECODE=1) and exports their session's own ID
+// (CLAUDE_CODE_SESSION_ID, Claude Code 2.1.224 or later) to hooks, tools and
+// stdio MCP servers. Each registration is bound to the exact running claude
+// executable (process, start time, path and digest) and fails when any of
+// them changes; an updated Claude registers anew through its own hook.
 // Local process provenance is not a signature, remote grant or model authority.
-const claudeNativeVersion = "2.1.286"
-const claudeNativeSHA256 = "fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f"
 const claudeChannelSource = "agentnet"
 
 type claudeNativeRoute struct {
@@ -75,10 +78,14 @@ func captureClaudeRoute(sid string) (claudeNativeRoute, error) {
 	if runtime.GOOS != "linux" || sid == "" {
 		return r, errors.New("native Claude route is qualified on Linux only")
 	}
-	// The SDK process receives this native value. It is checked again against
+	// Claude Code exports both to every hook, tool and stdio MCP server it
+	// starts. They are checked again against the running claude process and
 	// the registered physical file; inherited text alone cannot create a claim.
-	if fromNative := os.Getenv("CLAUDE_CODE_SESSION_ID"); fromNative != "" && fromNative != sid {
-		return r, errors.New("native Claude session metadata changed")
+	if os.Getenv("CLAUDECODE") != "1" {
+		return r, errors.New("not started by Claude Code (CLAUDECODE is not 1)")
+	}
+	if fromNative := os.Getenv("CLAUDE_CODE_SESSION_ID"); fromNative != sid {
+		return r, errors.New("native Claude session identity absent or changed (Claude Code 2.1.224 or later exports CLAUDE_CODE_SESSION_ID)")
 	}
 	pid := os.Getpid()
 	for range 32 {
@@ -87,9 +94,9 @@ func captureClaudeRoute(sid string) (claudeNativeRoute, error) {
 			return r, errors.New("native Claude ancestry unavailable")
 		}
 		if filepath.Base(binary) == "claude" {
-			digest, e := codexBinaryDigest(binary)
-			if e != nil || digest != claudeNativeSHA256 {
-				return r, errors.New("native Claude binary is not qualified")
+			digest, e := codexBinaryDigest(binary) // this registration's exact executable
+			if e != nil {
+				return r, errors.New("native Claude executable unreadable")
 			}
 			r.PID, r.Ticks, r.Binary, r.SHA256 = pid, ticks, binary, digest
 			break
@@ -111,25 +118,31 @@ func captureClaudeRoute(sid string) (claudeNativeRoute, error) {
 	if e != nil {
 		return r, e
 	}
-	config := os.Getenv("CLAUDE_CONFIG_DIR")
-	if config == "" {
-		home, e := os.UserHomeDir()
-		if e != nil {
-			return r, e
-		}
-		config = filepath.Join(home, ".claude")
-	}
-	// Do not set CLAUDE_CONFIG_DIR: its absence changes global config lookup.
-	config, e = filepath.EvalSymlinks(config)
-	if e != nil {
-		return r, e
-	}
-	r.Projects, e = filepath.Abs(filepath.Join(config, "projects"))
+	r.Projects, e = claudeProjectsDir()
 	if e != nil {
 		return r, e
 	}
 	r.Source = claudeChannelSource
 	return r, r.verify(true)
+}
+
+// claudeProjectsDir is the projects directory of the caller's canonical
+// Claude profile: CLAUDE_CONFIG_DIR, or the normal default ~/.claude.
+func claudeProjectsDir() (string, error) {
+	config := os.Getenv("CLAUDE_CONFIG_DIR")
+	if config == "" {
+		home, e := os.UserHomeDir()
+		if e != nil {
+			return "", e
+		}
+		config = filepath.Join(home, ".claude")
+	}
+	// Do not set CLAUDE_CONFIG_DIR: its absence changes global config lookup.
+	config, e := filepath.EvalSymlinks(config)
+	if e != nil {
+		return "", e
+	}
+	return filepath.Abs(filepath.Join(config, "projects"))
 }
 
 func (r claudeNativeRoute) checkFile(file, sid string) error {
@@ -287,8 +300,10 @@ func claudeNativeScan(file, sid string, missingOK bool, match func(json.RawMessa
 		if row.SessionID != "" && row.SessionID != sid {
 			return false, errors.New("native Claude transcript contains another session")
 		}
-		if row.Version != "" && row.Version != claudeNativeVersion {
-			return false, errors.New("native Claude transcript version changed")
+		// A resumed session keeps the records earlier Claude versions wrote:
+		// a version is typed, never required to be one release.
+		if row.Version != "" && !nativeVersion.MatchString(row.Version) {
+			return false, errors.New("native Claude transcript version is malformed")
 		}
 		if match != nil && match(json.RawMessage(line)) {
 			if found {

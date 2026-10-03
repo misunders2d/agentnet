@@ -105,16 +105,20 @@ func runNativeHooks(home, harness, action string, rest []string) error {
 	if exists && !bytes.HasPrefix(old, piMarker) {
 		return fmt.Errorf("%s exists and was not written by AgentNet; nothing changed", file)
 	}
+	label := "Pi"
+	if harness == "omp" {
+		label = "OMP"
+	}
 	if action == "remove" {
 		if !exists {
-			fmt.Printf("%s: no AgentNet Pi extension\n", file)
+			fmt.Printf("%s: no AgentNet %s extension\n", file, label)
 			return nil
 		}
 		if err := os.Remove(file); err != nil {
 			return err
 		}
 		fmt.Printf("removed %s\n", file)
-		fmt.Println("next: restart Pi; running sessions keep the extension until then")
+		fmt.Printf("next: restart %s; running sessions keep the extension until then\n", label)
 		return nil
 	}
 	if exists && bytes.Equal(old, ext) {
@@ -127,7 +131,7 @@ func runNativeHooks(home, harness, action string, rest []string) error {
 	if err := writeFileAtomic(file, ext); err != nil {
 		return err
 	}
-	fmt.Printf("wrote %s: AgentNet notices for Pi (session start, prompt, end of run, and while idle)\n", file)
-	fmt.Println("next: start a new Pi session; it is loaded only when Pi starts, and background AgentNet runs stay silent")
+	fmt.Printf("wrote %s: AgentNet notices for %s (session start, prompt, end of run, and while idle)\n", file, label)
+	fmt.Printf("next: start a new %s session; it is loaded only when %s starts, and background AgentNet runs stay silent\n", label, label)
 	return nil
 }

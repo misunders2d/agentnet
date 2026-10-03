@@ -115,7 +115,7 @@ func (a *Agent) endReminder(id, state string) error {
 // that the work failed, timed out or was cancelled (status) is not an
 // answer: the reminder stays.
 func replyEndsReminder(tx *sql.Tx, replyTo, status string) error {
-	if replyTo == "" || status == envelope.StatusFailed || status == envelope.StatusTimeout || status == envelope.StatusCancelled {
+	if replyTo == "" || status == envelope.StatusProgress || status == envelope.StatusFailed || status == envelope.StatusTimeout || status == envelope.StatusCancelled {
 		return nil
 	}
 	_, err := tx.Exec(`UPDATE reminders SET state = ?, updated_at = ? WHERE message = ? AND state = ?`,

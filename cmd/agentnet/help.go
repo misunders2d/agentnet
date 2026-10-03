@@ -143,7 +143,7 @@ coworkers who want to confirm they trust the right key. Also ask the Hub
 for this device's admin/member role; show unknown if unavailable or an older
 Hub does not report it. Address labels (including admin/) grant no role.`,
 
-	"send": `Usage: agentnet send [--file PATH]... [--fallback] [--wait 5s] ADDRESS[#SESSION] TEXT
+	"send": `Usage: agentnet send [--file PATH]... [--fallback] [--wait 5s] [--reply-to ID] [--progress] ADDRESS[#SESSION] TEXT
 
 Send an end-to-end encrypted message. It goes straight to the recipient when
 they advertise a reachable address, otherwise through the Hub, which keeps it
@@ -159,9 +159,19 @@ arrive later in your inbox.
   --file PATH   attach a file (repeatable, up to 8, 100 MiB each by default)
   --fallback    for ADDRESS#SESSION: if that session has ended, deliver to
                 the agent's inbox instead of failing
+  --reply-to ID continue ID's existing conversation. ID must be stored here
+                with this same recipient. An ordinary correlated message can
+                carry a clarification and remains eligible for an explicitly
+                selected reply receiver.
+  --progress    with --reply-to, mark a progress or blocker update as
+                nonterminal. It does not finish, accept, cancel, take over or
+                feed a selected receiver; the terminal result still arrives
+                separately.
 
 Examples:
   agentnet send bob/desk "build is green"
+  agentnet send --reply-to 3f9c... bob/desk "Which region should I check?"
+  agentnet send --reply-to 3f9c... --progress bob/desk "accepted; checking the deploy"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
 	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT

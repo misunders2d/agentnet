@@ -357,7 +357,7 @@ func bindReplyReceiver(tx *sql.Tx, b *replyBinding, copies []outCopy) error {
 // admission. It retains inbox content, attachments and independent Q/T grants;
 // correlated clarification is data, not acceptance of a new remote task.
 func bindReplyReceiverInput(tx *sql.Tx, in envelope.Inner, fp string) error {
-	if in.ReplyTo == "" || in.Sub != "" || in.Replica || !protocol.ValidFingerprint(fp) {
+	if in.ReplyTo == "" || in.Sub != "" || in.Replica || isResponderProgress(in) || !protocol.ValidFingerprint(fp) {
 		return nil
 	}
 	rows, err := tx.Query(`SELECT o.reply_receiver,o.recipient,coalesce(o.recipient_fp,''),coalesce(o.pid,''),coalesce(o.target,''),coalesce(r.return_person,''),r.canceled_at FROM outbox o JOIN reply_receivers r ON r.id=o.reply_receiver WHERE (o.id=? OR o.lid=?) AND coalesce(o.conv,'')=?`, in.ReplyTo, in.ReplyTo, in.Conv)

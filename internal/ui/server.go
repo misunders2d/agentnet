@@ -80,12 +80,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/agent/decide", s.decideAgent)
 	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
 	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
+	mux.HandleFunc("POST /api/dm/guest/invite", s.changeHuman("invite"))
+	mux.HandleFunc("POST /api/dm/guest/decide", s.changeHuman("decide"))
+	mux.HandleFunc("POST /api/dm/guest/end", s.changeHuman("end"))
 	mux.HandleFunc("POST /api/notify/{what}", s.notify)
 	mux.HandleFunc("POST /api/upload", s.upload)
 	mux.HandleFunc("POST /api/upload/discard", s.discard)
 	mux.HandleFunc("GET /api/files/{id}/{i}", s.file)
 	mux.HandleFunc("POST /api/file/request", s.requestFile)
 	mux.HandleFunc("POST /api/message/{what}", s.control)
+	mux.HandleFunc("POST /api/conversation/delete", s.deleteConversation) // livedelete.go
 	mux.HandleFunc("POST /api/operator/decide", s.decide)
 	mux.HandleFunc("GET /api/drive", s.drive) // drivespace.go: a conversation's shared Drive space
 	mux.HandleFunc("POST /api/drive", s.drive)
@@ -104,6 +108,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/typing/preferences", s.typingPreferences)
 	mux.HandleFunc("GET /api/storage", s.storage) // livestorage.go: where this device's files live and how much, read-only
 	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) { r.SetPathValue("name", "sw.js"); s.asset(w, r) })
+	mux.HandleFunc("GET /api/assistant-setup", s.setupAssistants)
+	mux.HandleFunc("POST /api/assistant-setup", s.setupAssistants)
 	mux.HandleFunc("GET /api/responder", s.responder)
 	mux.HandleFunc("POST /api/responder", s.setResponder)
 	mux.HandleFunc("GET /api/reply-receivers", s.replyReceivers)
@@ -209,6 +215,8 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8", "default.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
 		"manifest.webmanifest": "application/manifest+json",
 		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
+		"assistant-setup.mjs":  "text/javascript; charset=utf-8",
+		"assistant-setup.css":  "text/css; charset=utf-8",
 		"drivespace.mjs":       "text/javascript; charset=utf-8", "drivespace.css": "text/css; charset=utf-8", "workspaces.mjs": "text/javascript; charset=utf-8", "workspaces.css": "text/css; charset=utf-8", "teams.mjs": "text/javascript; charset=utf-8", "typing.mjs": "text/javascript; charset=utf-8", "local-skins.mjs": "text/javascript; charset=utf-8", "sw.js": "text/javascript; charset=utf-8"}
 	ct, ok := types[name]
 	if !ok {

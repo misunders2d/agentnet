@@ -80,7 +80,7 @@ func (e *ExecView) settle(connected bool, answerStatus string, answerAt int64, n
 func legacyAnswer(msgs []ConversationMessage, id string) (status string, at int64) {
 	for i := range msgs {
 		m := &msgs[i]
-		if m.Dir == "in" && m.ReplyTo == id && m.Status != "" {
+		if m.Dir == "in" && m.ReplyTo == id && execTerminal(m.Status) {
 			at = m.SentAt.Unix()
 			if m.SentAt.IsZero() {
 				at = m.At.Unix()

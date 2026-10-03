@@ -43,6 +43,9 @@ func (a *Agent) verifyReceiverOriginal(ctx context.Context, r envelope.ReceiverR
 	if err := r.Validate(); err != nil {
 		return err
 	}
+	if r.Human != nil && r.Human.AuthorPID != "" {
+		return errors.New("device-bound human guest participation grants no receiver delegation or execution authority")
+	}
 	if _, err := replyReceiverHostIn(a.store.db, ReplyReceiverHost{Address: r.From, Fingerprint: r.FromKey}); err != nil {
 		return err
 	}
@@ -117,14 +120,34 @@ func (a *Agent) verifyReceiverOriginal(ctx context.Context, r envelope.ReceiverR
 	} else if exists && string(raw) != string(r.Root) {
 		return errors.New("delegated conversation root conflicts with pinned original")
 	}
-	return a.store.addConversation(root, r.Root, peer)
+	if err := a.store.addConversation(root, r.Root, peer); err != nil {
+		return err
+	}
+	if r.Human != nil {
+		if err := a.verifyHumanProof(ctx, root, r.Human); err != nil {
+			return err
+		}
+		tx, err := a.store.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := insertHumanProof(tx, r.Human); err != nil {
+			return err
+		}
+		if err := humanAuthorization(tx, r.Conv, r.Human, r.From, r.FromKey, a.Address, a.Self().Fingerprint()); err != nil {
+			return err
+		}
+		return a.store.done(tx.Commit())
+	}
+	return nil
 }
 func receiverRequestInner(r envelope.ReceiverRequest) envelope.Inner {
 	v := envelope.Version
 	if r.Conv != "" {
 		v = envelope.Version2
 	}
-	return envelope.Inner{V: v, ID: r.ID, LID: r.LID, From: r.From, To: r.To, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID, Attachments: r.Attachments}
+	return envelope.Inner{V: v, ID: r.ID, LID: r.LID, From: r.From, To: r.To, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID, Attachments: r.Attachments, Human: r.Human}
 }
 func (a *Agent) acceptReceiverDelegation(ctx context.Context, in envelope.Inner, fp string) error {
 	if err := a.receiverSetupSender(a.store.db, in, fp); err != nil {

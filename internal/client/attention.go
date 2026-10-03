@@ -273,21 +273,25 @@ func (s *store) arrivalsAfter(pos int64, limit int) ([]arrivalItem, error) {
 // must not turn its arrival into another session's work. Explicit reads remain.
 const outsideSelectedReceiver = ` NOT EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=i.id) AND (i.receiver_route IS NULL OR json_extract(i.receiver_route,'$.op')='request')`
 
+// notDeleted leaves out arrivals of turns deleted here whose work has ended
+// (convclear.go); unfinished work stays visible until it ends.
+var notDeleted = ` NOT (` + erasedIn + ` AND NOT ` + retainedIn + `)`
+
 func (s *store) arrivalsAfterReceiver(pos int64, limit int, _ string) ([]arrivalItem, error) {
-	return s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` ORDER BY i.arrival LIMIT ?`, pos, limit))
+	return s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted+` ORDER BY i.arrival LIMIT ?`, pos, limit))
 }
 func (s *store) countArrivalsAfter(pos int64) (int, error) {
 	return s.countArrivalsAfterReceiver(pos, "")
 }
 func (s *store) countArrivalsAfterReceiver(pos int64, _ string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT count(*) FROM inbox i WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver, pos).Scan(&n)
+	err := s.db.QueryRow(`SELECT count(*) FROM inbox i WHERE i.ref_id IS NULL AND i.arrival>? AND `+outsideSelectedReceiver+` AND `+notDeleted, pos).Scan(&n)
 	return n, err
 }
 
 // recentArrivals returns the last n arrivals, oldest first.
 func (s *store) recentArrivals(n int) ([]arrivalItem, error) {
-	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL ORDER BY i.arrival DESC LIMIT ?`, n))
+	items, err := s.scanArrivals(s.db.Query(arrivalSelect+` WHERE i.ref_id IS NULL AND `+notDeleted+` ORDER BY i.arrival DESC LIMIT ?`, n))
 	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
 		items[i], items[j] = items[j], items[i]
 	}

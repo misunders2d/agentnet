@@ -156,7 +156,7 @@ func (a *Agent) prepareRemoteCopies(ctx context.Context, b *replyBinding, copies
 		return errors.New("cross-device receiver has no original request")
 	}
 	original := copies[first].in
-	request := envelope.ReceiverRequest{ID: original.ID, LID: original.LID, From: original.From, FromKey: a.Self().Fingerprint(), TS: original.TS, Conv: original.Conv, Root: original.Root, Kind: original.Kind, Body: original.Body, ReplyTo: original.ReplyTo, Origin: original.Origin, Emotion: original.Emotion, Target: original.Target, PID: original.PID}
+	request := envelope.ReceiverRequest{ID: original.ID, LID: original.LID, From: original.From, FromKey: a.Self().Fingerprint(), TS: original.TS, Conv: original.Conv, Root: original.Root, Kind: original.Kind, Body: original.Body, ReplyTo: original.ReplyTo, Origin: original.Origin, Emotion: original.Emotion, Target: original.Target, PID: original.PID, Human: original.Human}
 	if original.Conv == "" {
 		request.To, request.ToKey = original.To, copies[first].recipientFP
 	}
@@ -228,6 +228,9 @@ func (a *Agent) prepareRemoteCopies(ctx context.Context, b *replyBinding, copies
 	setupRoute.Op = "delegate"
 	in := envelope.Inner{V: envelope.Version, ID: route.DelegationID, From: a.Address, To: route.Host, TS: time.Now().Unix(), Kind: envelope.KindTask, Body: string(body), ReceiverRoute: &setupRoute}
 	setup := &outCopy{in: in, state: stateQueued, required: protocol.CapReplyReceiver, recipientFP: route.HostKey}
+	if request.Human != nil {
+		setup.required = protocol.CapHumanParticipation
+	}
 	b.setup = setup // caller releases any partial encrypted spool on failure
 	for _, file := range files {
 		att, e := a.spoolNamed(file, recipient)

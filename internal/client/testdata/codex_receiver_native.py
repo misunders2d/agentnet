@@ -17,7 +17,42 @@ def download_tool(gate, data, binary, home, work):
  out=work/'downloaded';out.mkdir(mode=0o700,exist_ok=True)
  argv=[binary,'--home',str(home),'download','--dir',str(out),refs[0]]
  return {'cmd':shlex.join(argv),'yield_time_ms':10000},{'emitted':'download','thread':data['prompt_cache_key'],'request_ref':gate['request_ref'],'input_id':refs[0],'original_present':True,'reply_present':True,'local_reference_matches':True}
-ROOT=Path(__file__).resolve().parent;R=Path(os.environ['AGENTNET_CODEX_RUNTIME']);R.mkdir(mode=0o700);[ (R/x).mkdir(mode=0o700) for x in ['home','codex','tmp','work','evidence'] ];B='/home/misunderstood/.local/share/mise/installs/codex/0.159.3/bin/codex'
+ORIGIN_BODY='Original LOCAL Codex goal1003y'
+def origin_tool(to, data, binary, home):
+ # The selected thread asks for itself: one fixed AgentNet ask naming no
+ # receiver, run by the native tool under the profile's normal sandbox.
+ argv=[binary,'--home',str(home),'ask','--wait','0',to,ORIGIN_BODY]
+ return {'cmd':shlex.join(argv),'yield_time_ms':10000},{'emitted':'origin','thread':data['prompt_cache_key'],'argv':argv}
+def owned_processes(root):
+ # Processes still running an executable from this fixture's own private
+ # runtime, each with its identity: pid, start ticks and executable.
+ found=[]
+ for d in os.listdir('/proc'):
+  if not d.isdigit():continue
+  try:exe=os.readlink('/proc/'+d+'/exe');ticks=Path('/proc/'+d+'/stat').read_text().rsplit(')',1)[1].split()[19]
+  except (OSError,IndexError):continue
+  if exe.startswith(str(root)+'/'):found.append({'pid':int(d),'ticks':ticks,'exe':exe})
+ return found
+def still(p):
+ try:return os.readlink('/proc/%d/exe'%p['pid'])==p['exe'] and Path('/proc/%d/stat'%p['pid']).read_text().rsplit(')',1)[1].split()[19]==p['ticks']
+ except (OSError,IndexError):return False
+def end_owned(root):
+ # Codex's daemon may leave helpers (pid-update-loop) after daemon stop; end
+ # only those whose identity is still the captured owned one, then verify.
+ seen=[]
+ for _ in range(3):
+  found=owned_processes(root)
+  if not found:break
+  seen+=found
+  for p in found:
+   if still(p):os.kill(p['pid'],signal.SIGTERM)
+  end=time.time()+4
+  while time.time()<end and any(still(p) for p in found):time.sleep(.1)
+  for p in found:
+   if still(p):os.kill(p['pid'],signal.SIGKILL)
+  time.sleep(.3)
+ return seen,owned_processes(root)
+ROOT=Path(__file__).resolve().parent;R=Path(os.environ['AGENTNET_CODEX_RUNTIME']);R.mkdir(mode=0o700);[ (R/x).mkdir(mode=0o700) for x in ['home','codex','tmp','work','evidence'] ];B=os.environ['AGENTNET_CODEX_NATIVE']
 requests=[];events=[];commands=[];children=[];turngate=threading.Event();gates={}
 class Provider(BaseHTTPRequestHandler):
  def log_message(self,*a):pass
@@ -29,7 +64,9 @@ class Provider(BaseHTTPRequestHandler):
   item={'id':mid,'type':'message','role':'assistant','content':[{'type':'output_text','text':'Synthetic native completion.','annotations':[]}],'status':'completed'}
   gate=gates.pop(d.get('prompt_cache_key'),None) if 'Generate a concise, single-line task title' not in serialized else None
   if gate:
-   if isinstance(gate,dict):
+   if isinstance(gate,dict) and 'origin' in gate:
+    tool,metadata=origin_tool(gate['origin'],d,os.environ['AGENTNET_CODEX_BINARY'],Path(os.environ['AGENTNET_CODEX_HOME']))
+   elif isinstance(gate,dict):
     tool,metadata=download_tool(gate,d,os.environ['AGENTNET_CODEX_BINARY'],Path(os.environ['AGENTNET_CODEX_HOME']),R/'work')
    else:
     tool={'cmd':'/usr/bin/sleep 8','yield_time_ms':10000} if gate=='busy' else {'cmd':'/usr/bin/touch '+str(R/'work'/'must-not-exist'),'sandbox_permissions':'require_escalated','justification':'Synthetic private fixture: require explicit native approval; never approve automatically.'}
@@ -110,6 +147,9 @@ try:
     if a['gate']=='download':
      if not download_enabled or not re.fullmatch('[0-9a-f]{32}',a.get('request_ref','')) or not all(isinstance(a.get(k),str) and a[k] for k in ['body','reply_body']):raise ValueError('invalid fixed download fixture gate')
      gates[a['thread']]={k:a[k] for k in ['request_ref','body','reply_body']}
+    elif a['gate']=='origin':
+     if not download_enabled or not re.fullmatch('[a-z][a-z0-9-]{0,31}/[a-z][a-z0-9-]{0,31}',a.get('to','')):raise ValueError('invalid fixed origin fixture gate')
+     gates[a['thread']]={'origin':a['to']}
     else:gates[a['thread']]=a['gate']
     (R/'evidence'/'gate-ready.json').write_text(json.dumps(a))
    if a.get('reject')is not None:os.write(masters[a['reject']],b'\x1b') # explicit private fixture rejection only
@@ -132,7 +172,9 @@ finally:
    try:os.killpg(p.pid,signal.SIGTERM);p.wait(timeout=4)
    except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);p.wait(timeout=4)
  stop=subprocess.run([B,'app-server','daemon','stop'],cwd=R/'work',env=env,capture_output=True,timeout=20);(R/'evidence/daemon-stop.json').write_text(json.dumps({'code':stop.returncode,'stdout':stop.stdout.decode(),'stderr':stop.stderr.decode()}))
+ ended,remaining=end_owned(R/'codex'/'packages')
  provider.shutdown()
  for f in terminals:f.close()
  for m in masters:os.close(m)
- (R/'evidence/cleanup.json').write_text(json.dumps({'child_pids':[p.pid for p in tuis],'all_exited':all(p.poll()is not None for p in tuis)}))
+ (R/'evidence/cleanup.json').write_text(json.dumps({'child_pids':[p.pid for p in tuis],'all_exited':all(p.poll()is not None for p in tuis),'owned_survivors_ended':ended,'owned_survivors_remaining':remaining}))
+ if remaining:raise RuntimeError('owned native processes remain')

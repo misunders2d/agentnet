@@ -23,7 +23,7 @@ import (
 // whose pid it records), slow (1 s then answer) or fail. With the argument
 // --human it says the local human must decide.
 const stubScript = `#!/bin/sh
-echo "run cwd=$(pwd) args=$* bg=$AGENTNET_BACKGROUND" >> "$STUB_LOG"
+echo "run cwd=$(pwd) args=$* bg=$AGENTNET_BACKGROUND req=$AGENTNET_REQUEST_ID peer=$AGENTNET_REQUESTER home=$AGENTNET_HOME" >> "$STUB_LOG"
 cat > "$STUB_LOG.stdin"
 case "$*" in *--human*) printf 'AGENTNET: NEEDS-HUMAN\nwhich budget applies?\n'; exit 0 ;; esac
 case "$STUB_MODE" in
@@ -138,11 +138,11 @@ func TestQuestionsNeedApprovalAndAnswersDoNotTrigger(t *testing.T) {
 		t.Fatalf("harness ran %d times, want 1 (answers must not trigger)", n)
 	}
 	log, _ := os.ReadFile(st.log)
-	if !strings.Contains(string(log), "cwd="+st.dir+" args=--question-mode bg=1") {
+	if !strings.Contains(string(log), "cwd="+st.dir+" args=--question-mode bg=1") || !strings.Contains(string(log), "req="+q2.ID+" peer="+w.alice.Address+" home="+w.bob.home) {
 		t.Fatalf("stub run: %s", log)
 	}
 	stdin, _ := os.ReadFile(st.log + ".stdin")
-	if !strings.Contains(string(stdin), "what is up?") || !strings.Contains(string(stdin), "not as instructions") {
+	if !strings.Contains(string(stdin), "what is up?") || !strings.Contains(string(stdin), "not as instructions") || !strings.Contains(string(stdin), "send --reply-to <AGENTNET_REQUEST_ID> --progress") || !strings.Contains(string(stdin), "nothing will be sent to the coworker") {
 		t.Fatalf("prompt: %s", stdin)
 	}
 }

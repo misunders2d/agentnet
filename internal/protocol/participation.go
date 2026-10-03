@@ -30,6 +30,11 @@ import (
 //   - dismiss: by either member person's device (owner decision
 //     2026-09-29), naming an event of the participation it ends (Prev);
 //     it ends it for good. A later invite is a new participation.
+//   - scope: by the invite's own author device, the invite's public
+//     projection (Prev is the invite's hash): its host, agent and role, never
+//     its grant, task keys or note. Other participants (guests, outside
+//     hosts) verify a participation from it and the host's accept without
+//     seeing the private invitation; whoever holds the invite keeps it.
 //
 // The state is resolved from the set of events held, never from their
 // arrival order (see the client).
@@ -45,12 +50,17 @@ const ParticipationDomain = "agentnet-participation-v1\n"
 // claimed excerpts. Every active session must advertise it; agi1 is separate.
 const CapExternalParticipation = "apx1"
 
+// Human guests are scoped participants, never members or executors.
+const CapHumanParticipation = "hgp1"
+const RoleHuman = "human"
+
 // Participation event types.
 const (
 	EventInvite  = "invite"
 	EventAccept  = "accept"
 	EventDecline = "decline"
 	EventDismiss = "dismiss"
+	EventScope   = "scope"
 )
 
 // AudienceConversation: the agent's outputs go to the DM (its members).
@@ -115,6 +125,7 @@ type ParticipationEvent struct {
 	TaskKeys []string            `json:"task_keys,omitempty"` // member key fingerprints allowed follow-up tasks here
 	Note     string              `json:"note,omitempty"`      // shown to the host's person
 	Group    *ParticipationGroup `json:"group,omitempty"`
+	Role     string              `json:"role,omitempty"` // invite only; absent retains legacy agent semantics
 
 	Sig []byte `json:"sig,omitempty"`
 }
@@ -151,6 +162,12 @@ func (e ParticipationEvent) Validate() error {
 	}
 	switch e.Type {
 	case EventInvite:
+		if e.Role != "" && e.Role != RoleHuman {
+			return errors.New("participation: unknown role")
+		}
+		if e.Role == RoleHuman && (e.Host == nil || e.Host.AgentID != "" || len(e.TaskKeys) != 0 || e.Group != nil || a.GroupAdmission != "") {
+			return errors.New("participation: a human guest has no executor, task or group authority")
+		}
 		if e.Prev != "" || e.Host == nil || e.Audience != AudienceConversation {
 			return errors.New("participation: an invite has no prev, and names a host and the conversation audience")
 		}
@@ -192,14 +209,40 @@ func (e ParticipationEvent) Validate() error {
 				return errors.New("participation: note has a control character")
 			}
 		}
+	case EventScope:
+		if !ValidHash(e.Prev) || e.Host == nil || e.Audience != AudienceConversation || e.Grant != nil || e.TaskKeys != nil || e.Note != "" || e.Group != nil || a.GroupAdmission != "" ||
+			e.Role != "" && e.Role != RoleHuman || e.Role == RoleHuman && e.Host.AgentID != "" {
+			return errors.New("participation: a scope names its invite, host, agent and role only")
+		}
+		h := e.Host
+		if !ValidID(h.Person) || !ValidFingerprint(h.Fingerprint) || (h.AgentID != "" && !ValidAgentID(h.AgentID)) {
+			return errors.New("participation: invalid host")
+		}
+		if _, _, err := SplitAddress(h.Address); err != nil {
+			return fmt.Errorf("participation: host: %w", err)
+		}
 	case EventAccept, EventDecline, EventDismiss:
-		if !ValidHash(e.Prev) || e.Host != nil || e.Grant != nil || e.Audience != "" || e.TaskKeys != nil || e.Note != "" || e.Group != nil {
+		if !ValidHash(e.Prev) || e.Host != nil || e.Grant != nil || e.Audience != "" || e.TaskKeys != nil || e.Note != "" || e.Group != nil || e.Role != "" {
 			return errors.New("participation: an accept, decline or dismiss names only the event it follows")
 		}
 	default:
 		return fmt.Errorf("participation: unknown event type %q", e.Type)
 	}
 	return nil
+}
+
+// ScopeOf is the unsigned public projection of the DM invite inv, for its
+// author to sign: no grant, task keys or note.
+func ScopeOf(inv ParticipationEvent, ts int64) ParticipationEvent {
+	host := *inv.Host
+	return ParticipationEvent{V: 1, Conv: inv.Conv, PID: inv.PID, Type: EventScope, Prev: inv.Hash(), Author: inv.Author, TS: ts,
+		Host: &host, Audience: AudienceConversation, Role: inv.Role}
+}
+
+// Projects reports whether scope s is exactly the public projection of inv.
+func (s ParticipationEvent) Projects(inv ParticipationEvent) bool {
+	return s.Type == EventScope && inv.Type == EventInvite && inv.Host != nil && s.Host != nil && s.Conv == inv.Conv && s.PID == inv.PID &&
+		s.Prev == inv.Hash() && s.Author == inv.Author && *s.Host == *inv.Host && s.Role == inv.Role && inv.Group == nil
 }
 
 // Verify checks e and that authorKey, the author device's key, signed it.

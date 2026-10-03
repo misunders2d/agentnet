@@ -127,6 +127,7 @@ type Inner struct {
 	AgentID string `json:"agent_id,omitempty"`
 	// ReceiverRoute commits a selected own-device return route, never execution authority.
 	ReceiverRoute *ReceiverRoute `json:"receiver_route,omitempty"`
+	Human         *HumanTurn     `json:"human,omitempty"`
 }
 
 // Ref names one earlier message exactly: its id (a device message's
@@ -174,6 +175,11 @@ const (
 	StatusDeclined    = "declined"
 	StatusInterrupted = "interrupted"
 
+	// StatusProgress marks a version 1 plain-text message replying to one
+	// exact request as a nonterminal update. It never settles that request,
+	// feeds a selected receiver or counts as an answer.
+	StatusProgress = "progress"
+
 	// StatusReviewNotice on a plain message with no reply_to and no files
 	// says only that items wait for a person on the sender's machine. It is
 	// content-free and grants nothing: the recipient files it for its own
@@ -205,6 +211,7 @@ const (
 	SubRetraction = "retraction" // Retraction: the target is shown as deleted here; nothing is cancelled or recalled
 	SubStatus     = "status"     // Status: the executing host's word on one request's state (never a job or alert)
 	SubDecision   = "decision"   // Decision: an operator's signed decision on one request held by a host
+	SubClear      = "clear"      // Clear: its person's copy of a conversation erased on that person's own devices only
 	OriginUI      = "ui"         // typed by a person, as the sending device asserts
 	// OriginAgentPrefix starts "agent:<harness>", written by an agent.
 	OriginAgentPrefix = "agent:"
@@ -272,6 +279,36 @@ type Decision struct {
 // Decision actions.
 var decisionActions = map[string]bool{"accept": true, "decline": true, "resolve": true, "reply": true, "cancel": true}
 
+// Clear erases its sender person's copy of one conversation on that
+// person's own devices; it is sent to no one else. Ref and Turns are the
+// exact turns erased (logical id and sender key), and nothing else is:
+// a turn not named stays. Parts split the turns of one deletion; each part
+// stands alone.
+type Clear struct {
+	Deletion string `json:"deletion"`
+	Part     int    `json:"part"`
+	Parts    int    `json:"parts"`
+	Turns    []Ref  `json:"turns,omitempty"`
+}
+
+// Bounds of a Clear.
+const (
+	MaxClearParts = 1024
+	MaxClearTurns = 2000
+)
+
+func (c Clear) valid() bool {
+	if !validID(c.Deletion) || c.Part < 1 || c.Part > c.Parts || c.Parts > MaxClearParts || len(c.Turns) > MaxClearTurns {
+		return false
+	}
+	for _, r := range c.Turns {
+		if !validID(r.ID) || !protocol.ValidFingerprint(r.Fingerprint) {
+			return false
+		}
+	}
+	return true
+}
+
 // Bounds of control payloads.
 const (
 	MaxEmojiBytes    = 64
@@ -326,9 +363,18 @@ func checkVersion3(in Inner) error {
 	if in.Kind != KindMessage || in.Ref == nil || !validID(in.Ref.ID) || !protocol.ValidFingerprint(in.Ref.Fingerprint) {
 		return errors.New("a control is a message about one exact earlier message (ref: id and sender key)")
 	}
-	if in.ReceiverRoute != nil || len(in.Root) != 0 || in.Target != nil || in.PID != "" || len(in.Attachments) != 0 || in.ReplyTo != "" ||
-		in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Session != "" || in.Fallback {
+	if in.ReceiverRoute != nil || len(in.Root) != 0 || in.Target != nil || in.PID != "" && !AssistantReaction(in) || len(in.Attachments) != 0 || in.ReplyTo != "" ||
+		in.Origin != "" && !defaultAssistantReaction(in) || in.Emotion != "" || in.Status != "" || in.Session != "" || in.Fallback {
 		return errors.New("a control carries nothing but its ref and payload")
+	}
+	if AssistantReaction(in) {
+		// An assistant's reaction names the assistant: a device thread's
+		// named executor, or a conversation participation (and its agent).
+		if in.AgentID != "" && !validID(in.AgentID) || in.PID != "" && !validID(in.PID) ||
+			in.Conv == "" && in.PID != "" || in.Conv != "" && in.PID == "" ||
+			in.Origin != "" && (in.Conv != "" || in.AgentID != "" || !validToken(strings.TrimPrefix(in.Origin, OriginAgentPrefix), 32)) {
+			return errors.New("an assistant reaction names its executor or default responder (device thread) or its participation (conversation)")
+		}
 	}
 	if in.Conv == "" {
 		if in.LID != "" || in.Replica || in.Fan != nil {
@@ -371,6 +417,11 @@ func checkVersion3(in Inner) error {
 			((r.Action == "reply" || r.Action == "decline") && strings.TrimSpace(r.Text) == "") {
 			return errors.New("malformed decision")
 		}
+	case SubClear:
+		var r Clear
+		if in.Conv == "" || dec.Decode(&r) != nil || !r.valid() {
+			return errors.New("malformed conversation deletion")
+		}
 	default:
 		return fmt.Errorf("unknown control %q", in.Sub)
 	}
@@ -407,6 +458,19 @@ func validStateToken(s string) bool {
 	return true
 }
 
+// AssistantReaction reports whether in is a reaction by an assistant: a
+// version 3 reaction naming an agent or a participation, or a device
+// thread's default responder (agent origin). Only reactions may.
+func AssistantReaction(in Inner) bool {
+	return in.V == Version3 && in.Sub == SubReaction && (in.AgentID != "" || in.PID != "" || defaultAssistantReaction(in))
+}
+
+// defaultAssistantReaction is a device thread's default responder reacting:
+// no agent or participation, only its harness as an agent origin.
+func defaultAssistantReaction(in Inner) bool {
+	return in.V == Version3 && in.Sub == SubReaction && in.Conv == "" && in.AgentID == "" && in.PID == "" && AgentOrigin(in.Origin)
+}
+
 // IsControl reports whether sub names a version 3 control.
 func IsControl(sub string) bool {
 	return sub == SubReaction || sub == SubRevision || sub == SubRetraction || sub == SubStatus || sub == SubDecision
@@ -433,6 +497,16 @@ func AgentOrigin(origin string) bool { return strings.HasPrefix(origin, OriginAg
 // checkVersion2 validates the version 2 fields of in (or their absence in
 // version 1).
 func checkVersion2(in Inner) error {
+	// Progress replies to one request in plain text: in version 1 (a named
+	// executor's progress names it), or as a conversation participation's
+	// nonterminal output with its PID (and its agent, when named).
+	if in.Status == StatusProgress && (in.V != Version && (in.V != Version2 || in.PID == "") || in.Kind != KindMessage || in.ReplyTo == "" || strings.TrimSpace(in.Body) == "" ||
+		len(in.Attachments) != 0 || in.Target != nil || in.ReceiverRoute != nil || in.Human != nil && in.V != Version2 || in.Sub != "") { // a participation's progress may carry its captured human audience (human.go)
+		return errors.New("progress is a plain-text update replying to one request, in version 1 or as a participation's output")
+	}
+	if err := validateHumanInner(in); err != nil {
+		return err
+	}
 	if err := ValidateReceiverRoute(in); err != nil {
 		return err
 	}
@@ -442,8 +516,8 @@ func checkVersion2(in Inner) error {
 			return errors.New("group: requester admission is only for a PID-addressed group request")
 		}
 	}
-	if in.AgentID != "" && (!validID(in.AgentID) || (in.Kind != KindAnswer && in.Kind != KindResult) || in.ReplyTo == "" || in.Sub != "" || in.V == Version3) {
-		return errors.New("a named agent author belongs on a reply answer or result")
+	if in.AgentID != "" && !AssistantReaction(in) && (!validID(in.AgentID) || (in.Kind != KindAnswer && in.Kind != KindResult && in.Status != StatusProgress) || in.ReplyTo == "" || in.Sub != "" || in.V == Version3) {
+		return errors.New("a named agent author belongs on a reply answer, result or progress")
 	}
 	if in.Target != nil && in.Target.AgentID != "" && !validID(in.Target.AgentID) {
 		return errors.New("invalid named agent target")
@@ -537,9 +611,11 @@ func checkVersion2(in Inner) error {
 		case in.Sub == SubGroupProof || in.Sub == SubGroupContext:
 			// The carrier branch above validates the bounded PID discriminator.
 		case in.Sub == SubEvent:
+		case in.Human != nil && in.Sub == "" && in.Kind == KindMessage:
 		case in.Sub == SubExcerpt && in.Kind == KindMessage && in.Replica && in.Target == nil && in.ReplyTo == "":
 		case in.Sub == "" && (in.Kind == KindQuestion || in.Kind == KindTask) && in.Target != nil:
 		case in.Sub == "" && (in.Kind == KindAnswer || in.Kind == KindResult):
+		case in.Sub == "" && in.Kind == KindMessage && in.Status == StatusProgress:
 		default:
 			return errors.New("a participation id belongs on an event, a request to the agent (with its target) or the agent's answer or result")
 		}

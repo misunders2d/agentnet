@@ -44,6 +44,17 @@ func (f replyReceiverFlags) selected(a *client.Agent) (*client.ReplyReceiver, er
 			}
 			return f.closedSelection(r)
 		}
+		if os.Getenv(client.BackgroundEnv) != "1" {
+			// Asked from a Claude Code or Codex session: the answer returns to
+			// that exact registered session, or nothing is sent.
+			r, e := a.NativeOriginReceiver(os.Getenv(client.ClaudeSessionEnv), os.Getenv(client.CodexThreadEnv))
+			if e != nil {
+				return nil, e
+			}
+			if r != nil {
+				return f.closedSelection(r)
+			}
+		}
 		if *f.onClose != "" {
 			return nil, errors.New("on-close-agent requires an exact registered native reply receiver")
 		}

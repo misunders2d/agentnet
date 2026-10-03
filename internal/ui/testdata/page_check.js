@@ -22,6 +22,7 @@ class Elem {
     if (k === "id") { this.id = String(v); byId[this.id] = this; }
   }
   getAttribute(k) { return this.attrs[k] ?? null; }
+  removeAttribute(k) { delete this.attrs[k]; }
   // Listeners are kept, so a check can click an element as a person would.
   addEventListener(ev, f) { ((this.listeners ||= {})[ev] ||= []).push(f); }
   removeEventListener() {}
@@ -777,7 +778,9 @@ const ev = { preventDefault() {} };
   await run("loadOverview()");
   calls.length = 0;
   await run('openDM("d4")');
-  let ag = JSON.stringify($("agents").children.map(textOf));
+  $("agents").querySelector(".assistant-participant").click();
+  let ag = JSON.stringify($("dialog-body").children.map(textOf));
+  $("dialog").close();
   check(!$("agents").hidden && ag.includes("Your agent") && ag.includes("Accept") && ag.includes("Decline") && ag.includes("invited by Alice") &&
     ag.includes("shown 1 earlier message") && ag.includes("tasks wait for you to accept them") && ag.includes("help with deploy"),
     "an invitation to your agent says who invited it, what it may see, and offers accept and decline: " + ag);
@@ -826,7 +829,9 @@ const ev = { preventDefault() {} };
   // Asking an active agent from the composer; the target is part of that DM's draft.
   dmThreads.d4.agents = [agentV("pid2", { state: "active", host: alice, host_here: false, inviter: me, tasks_from: [me], can_ask: true, can_dismiss: true })];
   await run('openDM("d4")');
-  ag = JSON.stringify($("agents").children.map(textOf));
+  $("agents").querySelector(".assistant-participant").click();
+  ag = JSON.stringify($("dialog-body").children.map(textOf));
+  $("dialog").close();
   check(ag.includes("Alice's agent") && ag.includes("Ask") && ag.includes("Dismiss") && !ag.includes("Accept") && ag.includes("tasks without asking from you"),
     "someone else's agent offers ask and dismiss, never accept: " + ag);
   run("setDMAgent")(dmThreads.d4.agents[0]);
@@ -887,12 +892,15 @@ const ev = { preventDefault() {} };
   check(zp.includes("Agent") && zp.includes("Their agent on alice/desk") && zp.includes("active"), "Zoom joins the person to their agent: " + zp);
   overview.people = [alicePerson];
 
-  // Where agents cannot be invited (the browser device), nothing offers it.
+  // Human invitation is independent from assistant availability.
   overview.agents = false;
   dmThreads.d4.agents = [];
   await run("loadOverview()");
   await run('openDM("d4")');
-  check($("agents").hidden, "no agent controls where agents cannot be invited");
+  check(textOf($("agents")).includes("Add participants"), "original people can invite humans independently of assistant availability");
+  run("participantsDialog")(run("state.dmData"));
+  check(textOf($("dialog-body")).includes("Invite a person") && !textOf($("dialog-body")).includes("Invite an assistant"), "human invitation available; unsupported assistant invitation not offered");
+  $("dialog").close();
   delete overview.agents;
 
   // Notifications (browser device): off until the person turns them on; the
@@ -1189,7 +1197,7 @@ const ev = { preventDefault() {} };
     overview.threads.push({ id: "h1", peer: "carol/ci", last_at: T, title: "ready when you are", count: 2, review: 0, unread: 0, running: 0 });
     await run('openThread("h1")');
     let tl = JSON.stringify($("timeline").children.map(textOf));
-    check(tl.includes("Running on carol/ci since") && tl.includes("Delivered to carol/ci") && !tl.includes("not confirmed"), "a running request shows the host's word beside delivery: " + tl.slice(-300));
+    check(tl.includes("Working on carol/ci since") && tl.includes("Delivered to carol/ci") && !tl.includes("not confirmed"), "a running request shows the host's word beside delivery: " + tl.slice(-300));
     threads.h1.messages.at(-1).exec = { state: "needs_human", at: new Date(Date.now() - 3 * 3600e3).toISOString(), host: "carol/ci", stale: true, detail: "awaiting approval of a shell command" };
     await run("loadThread(false)");
     tl = JSON.stringify($("timeline").children.map(textOf));
@@ -2085,7 +2093,7 @@ const ev = { preventDefault() {} };
   run('setKind("question")');$('body').value='keep removed target';run('noteTyping()');
   agentCatalogs['alice/desk']=[namedRecord(namedB)];calls.length=0;await run('send')(ev);
   check(!calls.some(c=>c.path==='/api/send')&&run('state.deviceAgentID')===namedA&&$('body').value==='keep removed target'&&$('compose-error').textContent.includes('no default'),'removed ID refuses without fallback and preserves draft');
-  check($('send').disabled&&$('to-name').textContent.includes(namedA.slice(0,8))&&run('state.deviceAgentID')===namedA&&byId['device-agent-target'].children.some(n=>n.attrs.value===namedA&&n.attrs.title===namedA),'missing selection shows short ID while retaining full ID/title');
+  check($('send').disabled&&$('to-name').textContent.includes('name unavailable')&&!$('to-name').textContent.includes(namedA.slice(0,8))&&run('state.deviceAgentID')===namedA&&$('agent-target').children.some(n=>n.attrs.title===namedA),'missing selection is named plainly (no ID in its text) while retaining full ID/title: '+$('to-name').textContent);
   agentCatalogs['alice/desk']=[namedRecord(namedA),namedRecord(namedB)];await run('loadTargetCatalog()');
   run('chooseDeviceAgent')(namedB);calls.length=0;await run('send')(ev);
   check(!calls.some(c=>c.path==='/api/send')&&$('compose-error').textContent.includes('someone else'),'retargeted text requires explicit second send');
@@ -2128,7 +2136,19 @@ const ev = { preventDefault() {} };
   dmThreads.d4.peer={...alicePerson,fingerprint:'fp-alice'};
   dmThreads.d4.agents=[agentV('named-pid-A',{agent_id:namedA,host:dmThreads.d4.peer,state:'active',can_ask:true}),agentV('named-pid-B',{agent_id:namedB,host:dmThreads.d4.peer,state:'active',can_ask:true})];
   await run('openDM("d4")');run('setDMAgent')(dmThreads.d4.agents[0]);run('setDMAgent')(dmThreads.d4.agents[1]);run('setDMAgent')(dmThreads.d4.agents[0]);
-  check(run('state.dmAgent')==='named-pid-A'&&textOf($('agent-target')).includes(namedA.slice(0,8))&&byId['dm-agent-target'].children.some(n=>n.attrs.value==='named-pid-A'&&n.attrs.title.includes(namedA)),'accepted DM participations retain exact values/full titles with short display IDs');
+  check(run('state.dmAgent')==='named-pid-A'&&textOf($('agent-target')).includes('@Builder')&&!textOf($('agent-target')).includes(namedA.slice(0,8))&&$('agent-target').children.some(n=>n.attrs.title?.includes(namedA)),'accepted DM participations retain exact values/full titles; their text is the catalog name without IDs: '+textOf($('agent-target')));
+  // @ UI does not parse authority from plain text; row selection owns exact PID.
+  run('setDMAgent')(null); $('body').value='@'; run('showMentions()');
+  check(run('state.dmAgent')===null && !$('mentions').hidden, 'typing @ only opens participants; it never addresses an assistant');
+  run('mentionKey')({key:'ArrowDown',preventDefault(){}});
+  run('mentionKey')({key:'Enter',preventDefault(){}});
+  check(run('state.dmAgent')==='named-pid-B' && run('kindValue()')==='question' && $('body').value.startsWith('@'), 'keyboard mention selects exact second participation and explicit Question');
+  run('showMentions(true)'); run('mentionKey')({key:'Escape',preventDefault(){},stopPropagation(){}});
+  check($('mentions').hidden && run('state.dmAgent')==='named-pid-B', 'Escape closes mention list without changing target');
+  run('showMentions(true)'); run('agentOf("named-pid-A").can_ask=false'); run('pickMention(0)');
+  check(run('state.dmAgent')==='named-pid-B' && $('mentions').hidden, 'stale mention choice never retargets to unavailable assistant');
+  run('agentOf("named-pid-A").can_ask=true'); run('setDMAgent')(dmThreads.d4.agents[0]);
+  $('body').value='';run('state.typedFor=null');
   run('setKind("task")');await run('loadDM()');
   check(!$('kind').disabled&&run('kindValue()')==='task','DM question/task controls enabled after device switch and same-agent refresh keeps task');
   run('inviteDialog')(run('state.dmData'));
@@ -2144,15 +2164,21 @@ const ev = { preventDefault() {} };
   check(!calls.some(c=>c.path==='/api/dm/agent/dismiss')&&$('dialog-error').textContent.includes('Workspace or DM changed'),'stale dismissal refuses workspace retarget');$('dialog').close();
   const namedMessage={...msg('named','alice/desk','answer'),kind:'answer',agent_id:namedB};
   run('state.targetCatalog=null');
-  check(run('dmAuthor')(namedMessage,dmThreads.d4)==='Agent '+namedB.slice(0,8)+' on alice/desk','unknown author displays short ID and exact host');
+  const unknownAuthor=run('dmAuthor')(namedMessage,dmThreads.d4);
+  check(unknownAuthor.includes('alice/desk')&&unknownAuthor.endsWith('name unavailable')&&!unknownAuthor.includes(namedB.slice(0,8)),'unknown author: exact host, name unavailable, no ID in its text: '+unknownAuthor);
   const records=[namedRecord(namedA),namedRecord(namedB)];
   run('(records)=>{state.targetCatalog={host:"alice/desk",agents:records}}')(records);
-  check(run('dmAuthor')(namedMessage,dmThreads.d4)==='Builder · '+namedB.slice(0,8)+' on alice/desk'&&run('namedAgentLabel')(namedA,'alice/desk')==='Builder · '+namedA.slice(0,8),'catalog labels disambiguate identical names by short IDs');
-  check(run('namedAgentLabel')(namedA,'other/host')==='Agent '+namedA.slice(0,8),'catalog labels never transfer to another execution host');
+  check(run('dmAuthor')(namedMessage,dmThreads.d4)==='Builder on alice/desk'&&run('namedAgentLabel')(namedA,'alice/desk')==='Builder'&&run('namedAgentLabel')(namedB,'alice/desk')==='Builder','identical catalog names read as the name, without IDs in chat text');
+  check(run('catalogLabel')(records[0],records)==='Builder · '+namedA.slice(0,8)+' · alice/desk'&&run('catalogLabel')(records[1],records)==='Builder · '+namedB.slice(0,8)+' · alice/desk','pickers still tell two agents of one name apart');
+  check(run('namedAgentLabel')(namedA,'other/host')==='Assistant on other/host · name unavailable','catalog labels never transfer to another execution host');
+  check(run('agentName')({agent_id:namedA,host:{address:'dana/desk',label:'Dana'},host_here:false})==="Dana's assistant · name unavailable"&&run('agentName')({agent_id:namedA,host:{address:'me/desk',label:'Me'},host_here:true})==='Your assistant · name unavailable','participant without a catalog: whose assistant, name unavailable');
   const namedRendered=run('renderMsg')(namedMessage,{},null,threads.a1);
   const namedWho=find(namedRendered,n=>n.className==='who');
-  check(textOf(namedWho)==='Builder · '+namedB.slice(0,8)+' on alice/desk'&&namedWho.attrs.title.includes(namedB)&&namedWho.attrs.title.includes('host assertion')&&textOf(run('dmDetails')(namedMessage)).includes(namedB)&&textOf(run('dmDetails')(namedMessage)).includes('host assertion'),'everyday author is readable; full ID and provenance remain in title and Details');
-  check(run('agentLinkText')({agent_id:namedA,address:'alice/desk',dms:[]},alicePerson).includes('Builder · '+namedA.slice(0,8)+' on alice/desk'),'overview uses catalog label, short disambiguator and host');
+  check(textOf(namedWho)==='Builder on alice/desk'&&namedWho.attrs.title.includes(namedB)&&namedWho.attrs.title.includes('host assertion')&&textOf(run('dmDetails')(namedMessage)).includes(namedB)&&textOf(run('dmDetails')(namedMessage)).includes('host assertion'),'everyday author is readable; full ID and provenance remain in title and Details');
+  const namedWhoA=find(run('renderMsg')({...namedMessage,id:'named-a-msg',agent_id:namedA},{},null,threads.a1),n=>n.className==='who');
+  check(textOf(namedWhoA)===textOf(namedWho)&&namedWhoA.attrs.title.includes(namedA)&&!namedWhoA.attrs.title.includes(namedB),'two agents of one name stay two: same text, each exact identity in its title');
+  const linkText=run('agentLinkText')({agent_id:namedA,address:'alice/desk',dms:[]},alicePerson);
+  check(linkText.includes('Builder on alice/desk')&&!linkText.includes(namedA.slice(0,8)),'overview uses the catalog name and host, no ID: '+linkText);
 
   // External invitations use a current-workspace address and exact catalog ID.
   await select('A'); await run('openDM("d4")');
@@ -2170,6 +2196,9 @@ const ev = { preventDefault() {} };
   check(!calls.some(c => c.path === '/api/dm/agent/invite') && $('dialog-error').textContent.includes('exact named agent'), 'external host refuses ambiguous default');
   byId['invite-agent'].value = namedC; byId['agent-share:' + externalShared.id].checked = true;
   calls.length = 0; await $('dialog-ok').onclick();
+  check(!calls.some(c => c.path === '/api/dm/agent/invite') && $('dialog-error').textContent.includes('Confirm file access'), 'file history needs separate explicit acknowledgement');
+  byId['agent-file-consent:yes'].checked = true;
+  await $('dialog-ok').onclick();
   check(calls.some(c => c.path === '/api/dm/agent/invite' && c.body.host === 'outside/host' && c.body.agent_id === namedC && JSON.stringify(c.body.share) === JSON.stringify([externalShared.id])), 'external invite shares only exact selected context and named host: ' + $('dialog-error').textContent + ' ' + JSON.stringify(calls));
   overview.directory.current = false; await run('loadOverview()'); run('inviteDialog')(run('state.dmData'));
   check(!textOf($('dialog-body')).includes('External host · outside/host'), 'stale directory exposes no external selection'); $('dialog').close();
@@ -2182,8 +2211,10 @@ const ev = { preventDefault() {} };
   dmThreads.d4.agents = [agentV('external-pid', { state: 'invited', external: true, can_decide: true })];
   await run('openDM("d4")'); run('setDMAgent')(null);
   check($('composer').hidden && $('body').disabled && $('send').disabled && $('attach').hidden, 'visitor ordinary composer disabled and hidden');
-  const visitorAgents = textOf($('agents')), visitorTimeline = textOf($('timeline'));
-  check(visitorAgents.includes('External host') && visitorAgents.includes('Accept') && !visitorAgents.includes('Invite an agent'), 'visitor retains provider acceptance only and labels external context');
+  $('agents').querySelector('.assistant-participant').click();
+  const visitorAgents = textOf($('dialog-body')), visitorTimeline = textOf($('timeline'));
+  $('dialog').close();
+  check(visitorAgents.includes('External host') && visitorAgents.includes('Accept') && !textOf($('agents')).includes('Add participants'), 'visitor retains provider acceptance only and labels external context');
   for (const sender of ['alice/desk', 'bob/host']) check(run('dmAuthor')(dmsg('human-' + sender, 'in', 'addressed question', { from: sender, kind: 'question', origin: 'ui' }), { ...run('state.dmData'), peer: { label: 'Different room member' } }) === sender, 'visitor names each actual human sender address independently of peer label: ' + sender);
   check(visitorTimeline.includes('Claimed original/author') && visitorTimeline.includes('authorship is not verified') && visitorTimeline.includes('This snapshot never runs') && visitorTimeline.includes('claimed-key'), 'excerpt claims and grant are honest in author and Details');
   check(!run('canDo')(run('state.dmData').messages[0], 'react') && run('state.dmData').messages[0].actions.length === 0 && run('state.dmData').messages[1].actions[0] === 'accept', 'snapshot cannot mutate or execute; addressed request keeps provider action');
@@ -2221,7 +2252,7 @@ const ev = { preventDefault() {} };
   const savedDefaultResponder = overview.me.responder;
   overview.me.responder = ''; await run('loadOverview()');
   run('decide')('accept', { ...audienceRequest, kind: 'task', from: 'alice/phone' }, audienceThread);
-  check(textOf($('dialog-body')).includes('outside/host, using its local configuration') && textOf($('dialog-body')).includes(namedC.slice(0, 8)) && !textOf($('dialog-body')).includes('no responder is set') && $('dialog-ok').disabled, 'named task decision shows exact local executor without default fallback and keeps acceptance gate');
+  check(textOf($('dialog-body')).includes('outside/host') && textOf($('dialog-body')).includes(', using its local configuration') && !textOf($('dialog-body')).includes(namedC.slice(0, 8)) && !!find($('dialog-body'), n => (n.attrs?.title || '').includes(namedC)) && !textOf($('dialog-body')).includes('no responder is set') && $('dialog-ok').disabled, 'named task decision names its exact local executor (ID in the title) without default fallback and keeps acceptance gate: ' + textOf($('dialog-body')));
   $('dialog').close(); overview.me.responder = savedDefaultResponder; await run('loadOverview()');
 
   // Native receiver delegation stays distinct from addressed executor and workspace.
