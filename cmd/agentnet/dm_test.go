@@ -40,8 +40,9 @@ func TestDMShowPrintsEditsAndDeletions(t *testing.T) {
 }
 
 // dm list names a group by its title and members, and a DM this person
-// only hosts (not a member) by both of its people, never as an empty
-// "with" or as a DM with one of them.
+// is not a member of (an assistant it hosts there, or a guest there, who
+// can read and send) by both of its people, never as an empty "with", as
+// a DM with one of them or as one it is "not in".
 func TestDMListNamesGroupsAndHostedDMs(t *testing.T) {
 	at := time.Date(2026, 10, 3, 12, 0, 0, 0, time.Local).Unix()
 	for _, tc := range []struct {
@@ -54,7 +55,7 @@ func TestDMListNamesGroupsAndHostedDMs(t *testing.T) {
 		{client.ConversationInfo{ID: "d1", Kind: protocol.ConvKindDM, Role: "visitor", Created: at,
 			Peer:    client.PersonInfo{Label: "Vitalii", Address: "vitalii/desk", State: "pinned"},
 			Members: []client.PersonInfo{{Label: "Sergey"}, {Label: "Vitalii"}}},
-			`d1  between "Sergey" and "Vitalii" (you are not in it)  since 2026-10-03`, `with "Vitalii"`},
+			`d1  between "Sergey" and "Vitalii" (you are not a member)  since 2026-10-03`, `with "Vitalii"`},
 		{client.ConversationInfo{ID: "d2", Kind: protocol.ConvKindDM, Created: at,
 			Peer: client.PersonInfo{Label: "Vitalii", Address: "vitalii/desk", State: "pinned"}},
 			`d2  with "Vitalii" (vitalii/desk, pinned)  since 2026-10-03`, "between"},

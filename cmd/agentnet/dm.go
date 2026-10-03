@@ -257,8 +257,9 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 }
 
 // convLine is one conversation in dm list: a group by its title and
-// members, a DM this person only hosts (not a member) by both its
-// people, any other DM by the other person.
+// members, a DM this person is not a member of (it hosts an assistant
+// there, or is a guest there who can read and send) by both its people,
+// any other DM by the other person.
 func convLine(c client.ConversationInfo) string {
 	since := time.Unix(c.Created, 0).Format("2006-01-02")
 	labels := make([]string, len(c.Members))
@@ -269,7 +270,7 @@ func convLine(c client.ConversationInfo) string {
 	case c.Kind == protocol.ConvKindGroup:
 		return fmt.Sprintf("%s  group %q with %s  since %s", c.ID, c.Title, strings.Join(labels, ", "), since)
 	case c.Role == "visitor" && len(labels) > 0:
-		return fmt.Sprintf("%s  between %s (you are not in it)  since %s", c.ID, strings.Join(labels, " and "), since)
+		return fmt.Sprintf("%s  between %s (you are not a member)  since %s", c.ID, strings.Join(labels, " and "), since)
 	}
 	return fmt.Sprintf("%s  with %q (%s, %s)  since %s", c.ID, c.Peer.Label, c.Peer.Address, c.Peer.State, since)
 }
