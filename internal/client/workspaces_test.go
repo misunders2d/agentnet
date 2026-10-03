@@ -6,6 +6,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/testhub"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -115,6 +116,37 @@ func TestWorkspacesFailedInviteRetainsRetryID(t *testing.T) {
 	enrolled, err := registry.Join(tctx(t), pending.ID, "Other", code, "laptop")
 	if err != nil || enrolled.ID != pending.ID {
 		t.Fatalf("retry replaced identity: %#v %v", enrolled, err)
+	}
+}
+
+// BUG-40c: a workspace or device name that can never enroll is refused with
+// a clear error before any joining record (or home) is made for it.
+func TestWorkspacesJoinRefusesBadNamesBeforeRecording(t *testing.T) {
+	w := newWorld(t, "")
+	registry, err := OpenWorkspaces(w.bobHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := w.alice.Invite(tctx(t), "carol", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, agent string }{
+		{"\u0007" + strings.Repeat("N", 400) + "\n<b>x</b>", "laptop"},
+		{"   ", "laptop"},
+		{"Other", "Laptop!"},
+		{"Other", ""},
+	} {
+		item, err := registry.Join(tctx(t), "", c.name, code, c.agent)
+		if err == nil || item.ID != "" || !strings.Contains(err.Error(), "name") {
+			t.Fatalf("join %q as %q: %+v %v", c.name, c.agent, item, err)
+		}
+	}
+	if items, err := registry.List(); err != nil || len(items) != 1 {
+		t.Fatalf("refused joins left records: %+v %v", items, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(w.bobHome, "workspaces")); len(entries) != 0 {
+		t.Fatalf("refused joins left homes: %d", len(entries))
 	}
 }
 

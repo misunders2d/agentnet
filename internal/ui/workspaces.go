@@ -21,6 +21,8 @@ type WorkspaceProviders struct {
 	Join       func(*http.Request, WorkspaceJoin) (client.Workspace, Provider, error)
 	Disconnect func(string) error
 	Rename     func(string, string) (client.Workspace, error)
+	Reconnect  func(string) error                 // routes a disconnected membership again (binds it)
+	Known      func() ([]client.Workspace, error) // every membership of the registry, in any state
 }
 type WorkspaceJoin struct {
 	ID     string `json:"id,omitempty"`
@@ -99,6 +101,58 @@ func (s *Server) WorkspaceHandler(set *WorkspaceProviders) http.Handler {
 		switch {
 		case r.URL.Path == "/api/workspaces" && r.Method == "GET":
 			writeJSON(w, set.List())
+		case r.URL.Path == "/api/workspaces/all" && r.Method == "GET":
+			// Every membership with its state; only a connected one has a
+			// handle. A disconnected one keeps its keys and history here.
+			if set.Known == nil {
+				http.Error(w, "workspace list unavailable", http.StatusNotImplemented)
+				return
+			}
+			known, err := set.Known()
+			if err != nil {
+				writeErr(w, err)
+				return
+			}
+			set.mu.RLock()
+			out := []WorkspaceBinding{}
+			for _, k := range known {
+				b := WorkspaceBinding{Workspace: k}
+				if e, ok := set.entries[k.ID]; ok {
+					b = e.WorkspaceBinding
+				}
+				out = append(out, b)
+			}
+			set.mu.RUnlock()
+			writeJSON(w, out)
+		case r.URL.Path == "/api/workspaces/reconnect" && r.Method == "POST":
+			var body struct {
+				ID string `json:"id"`
+			}
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&body) != nil || !workspaceID(body.ID) {
+				http.Error(w, "invalid workspace", 400)
+				return
+			}
+			if set.Reconnect == nil {
+				http.Error(w, "reconnect unavailable", http.StatusNotImplemented)
+				return
+			}
+			if err := set.Reconnect(body.ID); errors.Is(err, client.ErrWorkspaceUnknown) {
+				writeErr(w, NotFound("No disconnected workspace with that ID here."))
+				return
+			} else if err != nil {
+				writeErr(w, Refuse("Cannot reconnect this workspace now: "+sentence(err)))
+				return
+			}
+			set.mu.RLock()
+			entry, ok := set.entries[body.ID]
+			set.mu.RUnlock()
+			if !ok {
+				http.Error(w, "stale workspace", 409)
+				return
+			}
+			writeJSON(w, entry.WorkspaceBinding)
 		case r.URL.Path == "/api/workspaces/join" && r.Method == "POST":
 			if set.Join == nil {
 				http.Error(w, "joining unavailable", http.StatusNotImplemented)
@@ -114,7 +168,13 @@ func (s *Server) WorkspaceHandler(set *WorkspaceProviders) http.Handler {
 			membership, p, err := set.Join(r, body)
 			if err != nil {
 				status, note := http.StatusServiceUnavailable, "Cannot connect to this workspace. Retry with its saved joining ID."
-				if _, decodeErr := protocol.DecodeInvite(body.Invite); decodeErr != nil {
+				if errors.Is(err, client.ErrDeviceName) {
+					status, note = http.StatusBadRequest, "Use lowercase letters, numbers and dashes for the device name, like laptop or work-phone. Nothing was joined."
+				} else if errors.Is(err, client.ErrWorkspaceName) {
+					status, note = http.StatusBadRequest, "Enter a readable workspace name, up to 120 characters. Nothing was joined."
+				} else if errors.Is(err, client.ErrWorkspaceExists) {
+					status, note = http.StatusConflict, "This workspace is already on this computer. Reconnect it if it is disconnected; nothing was joined."
+				} else if _, decodeErr := protocol.DecodeInvite(body.Invite); decodeErr != nil {
 					status, note = http.StatusBadRequest, "That invitation is damaged or incomplete. Copy the complete invitation again."
 				} else if errors.Is(err, client.ErrAddressTaken) {
 					status, note = http.StatusConflict, "That device name is already enrolled. Choose another device name and retry."

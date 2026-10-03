@@ -41,7 +41,33 @@ func NewWorkspaceRuntime(ctx context.Context, registry *client.Workspaces, provi
 	}
 	providers.Disconnect = m.Disconnect
 	providers.Rename = registry.Rename
+	providers.Reconnect = m.Reconnect
+	providers.Known = registry.List
 	return m
+}
+
+// Reconnect routes a disconnected membership again: its home, keys and
+// history were kept. One that cannot start here stays disconnected.
+func (m *WorkspaceRuntime) Reconnect(id string) error {
+	if err := m.registry.Reconnect(id); err != nil {
+		return err
+	}
+	items, err := m.registry.List()
+	if err == nil {
+		err = client.ErrWorkspaceUnknown
+		for _, w := range items {
+			if w.ID == id && w.State == "enrolled" {
+				_, err = m.start(w, true)
+				break
+			}
+		}
+	}
+	if err != nil {
+		if e := m.registry.Disconnect(id); e != nil {
+			err = errors.Join(err, e)
+		}
+	}
+	return err
 }
 func (m *WorkspaceRuntime) StartKnown() error {
 	items, err := m.registry.List()
