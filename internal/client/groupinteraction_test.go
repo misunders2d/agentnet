@@ -633,8 +633,12 @@ func TestGroupInteractionTypingActualAudience(t *testing.T) {
 		eventually(t, "human group typing stops", func() bool { return typingCount(t, a, scope) == 0 })
 	}
 	// Delayed signed arrival exercises the real TTL using the native ingress.
-	applyTyping(w.alice, typingWire(t, carol, w.alice, scope, true, time.Now().Add(-4500*time.Millisecond).UnixMilli()))
-	if typingCount(t, w.alice, scope) != 1 {
+	// "Present before expiry" is checked only while the clock is before it:
+	// a loaded runner may pass the remaining 0.5s before the look.
+	signed := time.Now().Add(-4500 * time.Millisecond)
+	expires := time.UnixMilli(signed.UnixMilli()).Add(protocol.SignalTTL)
+	applyTyping(w.alice, typingWire(t, carol, w.alice, scope, true, signed.UnixMilli()))
+	if typingCount(t, w.alice, scope) != 1 && time.Now().Before(expires) {
 		t.Fatal("delayed signed group typing absent before expiry")
 	}
 	eventually(t, "group typing signed TTL expires", func() bool { return typingCount(t, w.alice, scope) == 0 })

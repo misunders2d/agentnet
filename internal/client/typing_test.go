@@ -114,15 +114,25 @@ func TestTypingLegacyStopWinsReorderingReplayAndZeroRows(t *testing.T) {
 }
 func TestTypingExpiryDisconnectSessionRealmAndPrivacy(t *testing.T) {
 	w, scope := typingFixture(t)
-	applyTyping(w.bob, typingWire(t, w.alice, w.bob, scope, true, time.Now().Add(-4500*time.Millisecond).UnixMilli()))
-	if typingCount(t, w.bob, scope) != 1 {
+	// Signed 4.5s ago, it expires 0.5s from now. "Still shown" is checked
+	// only while the clock is before that expiry: a loaded runner may pass
+	// it before the first look, and then its absence is correct.
+	signed := time.Now().Add(-4500 * time.Millisecond)
+	expires := time.UnixMilli(signed.UnixMilli()).Add(protocol.SignalTTL)
+	applyTyping(w.bob, typingWire(t, w.alice, w.bob, scope, true, signed.UnixMilli()))
+	_, changed := w.bob.Changed() // the next change after the signal's own
+	shown := typingCount(t, w.bob, scope)
+	if shown != 1 && time.Now().Before(expires) {
 		t.Fatal("fresh delayed signal missing")
 	}
-	_, changed := w.bob.Changed()
-	select {
-	case <-changed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expiry timer did not refresh UI")
+	if shown == 1 { // the expiry timer, not a look, removes it
+		select {
+		case <-changed:
+		case <-time.After(2 * time.Second):
+			t.Fatal("expiry timer did not refresh UI")
+		}
+	} else {
+		t.Logf("the signal expired before the first look (%v past its expiry); the timer's refresh is not observable this run", time.Since(expires))
 	}
 	if typingCount(t, w.bob, scope) != 0 {
 		t.Fatal("typing outlived signed TTL")
@@ -272,12 +282,16 @@ func TestTypingComposerThrottleOldPeerAndPreferences(t *testing.T) {
 	scope.Peer = w.bob.Address
 	r := &typingTransport{base: w.alice.hub.http.Transport, who: w.bob}
 	w.alice.hub.http.Transport = r
+	first := time.Now() // the first send's throttle runs from no earlier than this
 	res, err := w.alice.SendTyping(tctx(t), scope, true)
 	if err != nil || res.Submitted != 1 {
 		t.Fatalf("send: %+v %v", res, err)
 	}
 	res, err = w.alice.SendTyping(tctx(t), scope, true)
-	if err != nil || !res.Throttled || res.Submitted != 0 {
+	// Throttled only while the clock is inside the throttle window: a
+	// loaded runner may pass it during the first send, and then a second
+	// submission is correct.
+	if err != nil || time.Since(first) < protocol.TypingThrottle && (!res.Throttled || res.Submitted != 0) {
 		t.Fatalf("composer throttle: %+v %v", res, err)
 	}
 	res, err = w.alice.SendTyping(tctx(t), scope, false)

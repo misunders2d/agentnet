@@ -34,6 +34,7 @@ func TestSignalsHubLiveOnlyAuthenticationReplayAndNoRows(t *testing.T) {
 	}
 	sub := &subscriber{}
 	ch := h.signals.subscribe(b.addr, sub)
+	signedAt := time.Now() // s is signed (in whole ms) no earlier: its replay entry lasts until at least signedAt-1ms+SignalTTL
 	s := hubSignal(t, a, b)
 	if w := postSignal(t, h, a, s); w.Code != 202 {
 		t.Fatalf("signal: %d %s", w.Code, w.Body)
@@ -46,7 +47,7 @@ func TestSignalsHubLiveOnlyAuthenticationReplayAndNoRows(t *testing.T) {
 	default:
 		t.Fatal("not live forwarded")
 	}
-	if w := postSignal(t, h, a, s); w.Code != 429 {
+	if w := postSignal(t, h, a, s); w.Code != 429 && time.Since(signedAt) < protocol.SignalTTL-time.Millisecond {
 		t.Fatalf("replay: %d %s", w.Code, w.Body)
 	}
 	if w := postSignal(t, h, b, hubSignal(t, a, b)); w.Code != 400 {
@@ -79,12 +80,16 @@ func TestSignalsHubLiveOnlyAuthenticationReplayAndNoRows(t *testing.T) {
 func TestSignalsHubRateSizeAndCurrentEnrollment(t *testing.T) {
 	h, _, _ := testHub(t)
 	a, b := enroll(t, h, "alice"), enroll(t, h, "bob")
+	// The pair bucket (burst 8) gets a token back 1/8s after the first post:
+	// "capped" holds only while the clock is inside that, which a loaded
+	// runner may pass during the burst.
+	burst := time.Now()
 	for i := 0; i < 8; i++ {
 		if w := postSignal(t, h, a, hubSignal(t, a, b)); w.Code != 202 {
 			t.Fatalf("burst: %d %s", w.Code, w.Body)
 		}
 	}
-	if w := postSignal(t, h, a, hubSignal(t, a, b)); w.Code != 429 {
+	if w := postSignal(t, h, a, hubSignal(t, a, b)); w.Code != 429 && time.Since(burst) < time.Second/8 {
 		t.Fatalf("rate cap: %d %s", w.Code, w.Body)
 	}
 	bad := hubSignal(t, a, b)

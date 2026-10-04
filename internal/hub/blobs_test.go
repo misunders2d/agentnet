@@ -343,8 +343,11 @@ func TestPresenceKeepsNewerConnection(t *testing.T) {
 	if !p.live("bob/x", sid) || p.list("bob/x")[0].Ad.Endpoint != "https://new.example" {
 		t.Fatal("old connection's exit removed the newer registration")
 	}
+	// "Not yet ended" holds only while the clock is inside the grace: a
+	// loaded runner may reach its end before the look, legitimately.
+	disconnected := time.Now()
 	p.disconnect("bob/x", sid)
-	if !p.live("bob/x", sid) {
+	if live := p.live("bob/x", sid); !live && time.Since(disconnected) < p.grace {
 		t.Fatal("session ended before its grace period")
 	}
 	select {
@@ -355,12 +358,19 @@ func TestPresenceKeepsNewerConnection(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("session never ended")
 	}
-	// Reconnecting within grace keeps the session.
+	// Reconnecting within grace keeps the session. Whether the reconnect
+	// came within it is read from the clock: a loaded runner may take the
+	// whole grace between the two calls, and then the end is legitimate.
 	p.connect("bob/x", protocol.SessionAd{Session: sid})
+	disconnected = time.Now()
 	p.disconnect("bob/x", sid)
 	p.connect("bob/x", protocol.SessionAd{Session: sid})
+	withinGrace := time.Since(disconnected) < p.grace
 	time.Sleep(100 * time.Millisecond)
-	if !p.live("bob/x", sid) || len(ended) != 0 {
+	if !p.live("bob/x", sid) {
+		t.Fatal("a reconnected session is not live")
+	}
+	if withinGrace && len(ended) != 0 {
 		t.Fatal("reconnect within grace ended the session")
 	}
 }
