@@ -7,8 +7,12 @@ export async function mount(root, host) {
   const doc = new DOMParser().parseFromString(markup, 'text/html');
   root.replaceChildren(...doc.body.childNodes);
   root.classList.add('classic-root');
+  root.style.visibility = 'hidden';
   root.lang = navigator.language || 'en';
-  mounted.set(root, createClassic(root, host));
+  const stop = createClassic(root, host);
+  mounted.set(root, stop);
+  await stop.ready;
+  if (mounted.get(root) === stop) root.style.removeProperty('visibility');
 }
 export async function unmount(root) { const stop = mounted.get(root); if (stop) { mounted.delete(root); stop(); } }
 function createClassic(root, host) {
@@ -310,7 +314,7 @@ function fileChips(m, files) {
   return el("div", { class: "files" }, files.map((f, i) => {
     const idx = f.index === undefined ? i : f.index;
     const slot = el("span", { class: "file-open" });
-    const open = el("button", { type: "button", class: "text-btn", onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot, m.dir) }, "Open");
+    const open = el("button", { type: "button", class: "text-btn", "data-file-open": m.id + ":" + idx, onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot, m.dir) }, "Open");
     // A file sent from here opens only when the backend says a kept copy
     // is openable; without that word it is with the recipient only. A
     // received one opens unless the backend says it is not openable.
@@ -358,7 +362,8 @@ async function fetchFile(id, i, dir, host = currentHost) {
 // under its safe name; its object URL lives until the conversation changes.
 async function openFile(id, i, name, button, slot, dir) {
   button.disabled = true;
-  button.textContent = "Opening…";
+  button.setAttribute("aria-busy", "true");
+  announce("Opening " + name + "…");
   const host = currentHost, gen = state.gen; // the membership this file is in
   try {
     const { bytes, image } = await fetchFile(id, i, dir, host);
@@ -366,8 +371,21 @@ async function openFile(id, i, name, button, slot, dir) {
     const url = URL.createObjectURL(new Blob([bytes], { type: image || "application/octet-stream" }));
     state.opened.push(url);
     if (image) {
-      fill(slot, el("img", { src: url, alt: name, class: "file-preview" }), el("a", { href: url, download: name, class: "text-btn" }, "Save"));
-      button.hidden = true;
+      const picture = el("img", { src: url, alt: name, class: "file-preview" });
+      await picture.decode();
+      if (!alive || gen !== state.gen) return;
+      const viewer = el("dialog", { class: "file-viewer", "aria-label": name },
+        picture,
+        el("div", { class: "file-viewer-actions" },
+          el("a", { href: url, download: name, class: "text-btn" }, "Save " + name),
+          el("button", { type: "button", class: "btn", onclick: () => viewer.close() }, "Close preview")));
+      root.append(viewer);
+      viewer.addEventListener("close", () => {
+        viewer.remove();
+        const opener = button.isConnected ? button : [...root.querySelectorAll("[data-file-open]")].find(b => b.dataset.fileOpen === id + ":" + i);
+        if (alive && opener) opener.focus({preventScroll: true});
+      }, {once: true});
+      viewer.showModal();
     } else {
       // Not a picture: a link the person clicks to save it, where their
       // browser puts downloads. Nothing is claimed about where it went.
@@ -380,12 +398,14 @@ async function openFile(id, i, name, button, slot, dir) {
     button.textContent = "Open";
     announce("Could not open " + name + ": " + e.message);
   } finally {
+    button.removeAttribute("aria-busy");
     button.disabled = false;
   }
 }
 
 // releaseOpened frees the pictures and files opened in the conversation left.
 function releaseOpened() {
+  for (const viewer of root.querySelectorAll(".file-viewer")) { viewer.close(); viewer.remove(); }
   state.opened.forEach((u) => URL.revokeObjectURL(u));
   state.opened = [];
 }
@@ -1398,7 +1418,21 @@ function hubOf(h) {
 
 // openHub shows a person's or device's conversations, leaving the open
 // one (its draft stays with it).
+const backPath = [];
+let returning = false;
+function rememberEntry() {
+  if (returning) return;
+  backPath.push(root.classList.contains("show-conv")
+    ? state.dm ? {dm: state.dm} : state.thread ? {thread: state.thread} : {hub: state.hub}
+    : {list: true, activity: !$("review").hidden});
+}
+function commitConversation() {
+  // Called after the pane's data and DOM are ready, in the same paint.
+  toggleReview(false);
+  root.classList.add("show-conv");
+}
 function openHub(h) {
+  rememberEntry();
   if (state.dm) beginDM(null);
   else if (state.data || state.thread) beginThread(null);
   state.hub = h;
@@ -1474,12 +1508,16 @@ function renderHub() {
   fill($("hub"), contactBody(c, (id) => openThread(id)));
 }
 
-// backOneLevel goes from a conversation to its person or device, and from
-// there to the list.
-function backOneLevel() {
-  if ((state.dm || state.data) && state.hub) openHub(state.hub);
-  else if (!$("hub").hidden && !$("hub-back").hidden && state.hubUp) openHub(state.hubUp); // a person's device, back to them
-  else showList();
+// Back returns to the view actually entered from, including Activity.
+async function backOneLevel() {
+  const previous = backPath.pop();
+  returning = true;
+  try {
+    if (previous?.dm) await openDM(previous.dm);
+    else if (previous?.thread) await openThread(previous.thread);
+    else if (previous?.hub) openHub(previous.hub);
+    else { showList(); toggleReview(!!previous?.activity); }
+  } finally { returning = false; }
 }
 
 // setHubBack links the open conversation back to its person or device.
@@ -1875,8 +1913,8 @@ function saveToDrive(m, idx, name) {
 }
 
 async function openDM(id) {
+  rememberEntry();
   const changed = beginDM(id), gen = state.gen;
-  root.classList.add("show-conv");
   await loadDM(true);
   if (gen !== state.gen) return;
   await loadOverview();
@@ -1929,6 +1967,7 @@ async function loadDM(scrollToEnd) {
   if (state.dmAgent && agentOf(state.dmAgent)) setDMAgent(agentOf(state.dmAgent)); // its state now; a dismissed one stays the target
   state.draftKey = key;
   syncComposer();
+  if (scrollToEnd) { commitConversation(); $("timeline").scrollTop = $("timeline").scrollHeight; }
   const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
   if (unread.length) api("/api/act", { do: "read", ids: unread }).catch(() => {});
   await refreshTyping();
@@ -2653,7 +2692,7 @@ function renderReview(items) {
   btn.setAttribute("aria-label", (n === 1 ? "1 item needs your decision" : n + " items need your decision") +
     (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : ""));
   fill($("review-list"), ...(n ? decisions.map((it) => el("li", {},
-    el("button", { type: "button", onclick: () => { toggleReview(false); openThread(it.id, it.id); } },
+    el("button", { type: "button", onclick: () => { openThread(it.id, it.id); } },
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
       el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
@@ -2855,10 +2894,11 @@ function beginThread(id) {
 }
 
 async function openThread(id, focusId) {
+  rememberEntry();
   const changed = beginThread(id), gen = state.gen;
-  root.classList.add("show-conv");
-  await loadThread(changed);
+  await loadThread(true);
   if (gen !== state.gen) return;
+  if (state.data) commitConversation();
   if (state.data) { // a single message opens with its device's single messages shown
     const s = state.overview && state.overview.threads.find((x) => x.id === state.data.messages[0].id);
     if (s && s.count === 1 && !(s.review || s.running || s.waiting)) state.singlesOpen[s.peer] = true;
@@ -2916,6 +2956,7 @@ async function loadThread(scrollToEnd) {
   state.draftKey = key;
   if (state.deviceAgentID && !state.targetCatalog) loadTargetCatalog();
   syncComposer();
+  if (scrollToEnd) { commitConversation(); $("timeline").scrollTop = $("timeline").scrollHeight; }
   const unread = t.messages.filter((m) => m.unread).map((m) => m.id);
   if (unread.length) api("/api/act", { do: "read", ids: unread }).catch(() => {});
   await refreshTyping();
@@ -4318,6 +4359,7 @@ function announceChanges(o, first) {
 // Main navigation belongs to this skin. Identity and every action still come
 // from the same provider on both platforms.
 function selectSection(section) {
+  backPath.length = 0;
   keepDraft();
   if (section === "people") loadTeams();
   state.contactView = section === "people" ? "people" : "recent";
@@ -4718,7 +4760,7 @@ function start() {
       e.preventDefault(); e.returnValue = '';
     }
   });
-  loadOverview().then(async (o) => {
+  const ready = loadOverview().then(async (o) => {
     if (!alive) return;
     showClassic();
     const clicked = state.clickedAtStart;
@@ -4737,13 +4779,14 @@ function start() {
       o.threads.find((t) => !t.notice_only);
     const dm = (o.dms || [])[0];
     const wide = !state.thread && !state.dm && window.matchMedia("(min-width: 761px)").matches;
-    if (wide && dm && (!first || new Date(dm.last_at) > new Date(first.last_at))) openDM(dm.id);
-    else if (wide && first) openThread(first.id);
+    if (wide && dm && (!first || new Date(dm.last_at) > new Date(first.last_at))) await openDM(dm.id);
+    else if (wide && first) await openThread(first.id);
   }).catch(() => { if (alive) $("lost").hidden = false; });
   listen();
+  return ready;
 }
-start();
-return () => {
+const ready = start();
+const stop = () => {
   keepDraft();
   if (wsAPI()?.state) workspaceCapture(wsNow(), wsAPI().state(wsNow()));
   alive = false; state.gen++;
@@ -4756,5 +4799,7 @@ return () => {
   for (const draft of [state, ...Object.values(state.drafts)]) for (const f of draft.files || []) if (f.url) URL.revokeObjectURL(f.url);
   root.replaceChildren();
 };
+stop.ready = ready;
+return stop;
 
 }

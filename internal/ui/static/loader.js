@@ -249,6 +249,7 @@
         skins: () => common.skins, selected, home, choose: (id) => go(id), host: () => window.agentnet, workspaces,
         manage: common.manageLocalSkins || null,
       });
+      await bar.ready; // No unstyled host controls before the skin’s first paint.
     }
 
     let trusted = isTrusted(selected, null);

@@ -310,7 +310,7 @@ function fileChips(m, files) {
   return el("div", { class: "files" }, files.map((f, i) => {
     const idx = f.index === undefined ? i : f.index;
     const slot = el("span", { class: "file-open" });
-    const open = el("button", { type: "button", class: "text-btn", onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot, m.dir) }, "Open");
+    const open = el("button", { type: "button", class: "text-btn", "data-file-open": m.id + ":" + idx, onclick: (e) => openFile(m.id, idx, f.name, e.currentTarget, slot, m.dir) }, "Open");
     // A file sent from here opens only when the backend says a kept copy
     // is openable; without that word it is with the recipient only. A
     // received one opens unless the backend says it is not openable.
@@ -358,7 +358,8 @@ async function fetchFile(id, i, dir, host = currentHost) {
 // under its safe name; its object URL lives until the conversation changes.
 async function openFile(id, i, name, button, slot, dir) {
   button.disabled = true;
-  button.textContent = "Opening…";
+  button.setAttribute("aria-busy", "true");
+  announce("Opening " + name + "…");
   const host = currentHost, gen = state.gen; // the membership this file is in
   try {
     const { bytes, image } = await fetchFile(id, i, dir, host);
@@ -366,8 +367,22 @@ async function openFile(id, i, name, button, slot, dir) {
     const url = URL.createObjectURL(new Blob([bytes], { type: image || "application/octet-stream" }));
     state.opened.push(url);
     if (image) {
-      fill(slot, el("img", { src: url, alt: name, class: "file-preview" }), el("a", { href: url, download: name, class: "text-btn" }, "Save"));
-      button.hidden = true;
+      const picture = el("img", { src: url, alt: name, class: "file-preview" });
+      await picture.decode();
+      if (!alive || gen !== state.gen) return;
+      const viewer = el("dialog", { class: "file-viewer", "aria-label": name },
+        picture,
+        el("div", { class: "file-viewer-actions" },
+          el("a", { href: url, download: name, class: "text-btn" }, "Save " + name),
+          el("button", { type: "button", class: "btn", onclick: () => viewer.close() }, "Close preview")));
+      root.append(viewer);
+      viewer.addEventListener("close", () => {
+        viewer.remove();
+        const opener = button.isConnected ? button : [...root.querySelectorAll("[data-file-open]")].find(b => b.dataset.fileOpen === id + ":" + i);
+        if (alive && opener) opener.focus({preventScroll: true});
+        else if (alive) focusZoomLayer($("zoom"));
+      }, {once: true});
+      viewer.showModal();
     } else {
       // Not a picture: a link the person clicks to save it, where their
       // browser puts downloads. Nothing is claimed about where it went.
@@ -380,12 +395,14 @@ async function openFile(id, i, name, button, slot, dir) {
     button.textContent = "Open";
     announce("Could not open " + name + ": " + e.message);
   } finally {
+    button.removeAttribute("aria-busy");
     button.disabled = false;
   }
 }
 
 // releaseOpened frees the pictures and files opened in the conversation left.
 function releaseOpened() {
+  for (const viewer of root.querySelectorAll(".file-viewer")) { viewer.close(); viewer.remove(); }
   state.opened.forEach((u) => URL.revokeObjectURL(u));
   state.opened = [];
 }
@@ -1529,8 +1546,22 @@ function deviceOwner(address) {
 // devices"), closed until opened: the person stays one node.
 function deviceDisclosure(p, open) {
   const n = devicesOf(p).length;
-  return el("details", { class: "person-devices" },
-    el("summary", {}, (p.state === "self" ? "You" : p.label) + " on " + plural(n, "device", "devices")), identityDetails(p), deviceList(p, open));
+  const body = el("div", {class: "device-disclosure-body"}, identityDetails(p), deviceList(p, open));
+  const details = el("details", { class: "person-devices", "data-person": personKey(p) },
+    el("summary", {}, (p.state === "self" ? "You" : p.label) + " on " + plural(n, "device", "devices")), body);
+  details.querySelector("summary").addEventListener("click", e => {
+    e.preventDefault();
+    const opening = !details.open;
+    for (const animation of body.getAnimations()) animation.cancel();
+    if (!motion()) { details.open = opening; return; }
+    details.open = true;
+    const height = body.scrollHeight + "px";
+    const animation = body.animate(opening
+      ? [{height: "0px", opacity: 0}, {height, opacity: 1}]
+      : [{height, opacity: 1}, {height: "0px", opacity: 0}], {duration: 220, easing: "ease-out", fill: "both"});
+    animation.finished.then(() => { details.open = opening; animation.cancel(); }).catch(() => {});
+  });
+  return details;
 }
 
 function identityDetails(p) {
@@ -1572,7 +1603,7 @@ function deviceList(p, open = (addr) => openHub({ kind: "device", key: addr })) 
     const n = c ? c.conversations.length + c.singles.length : 0;
     return el("li", { class: "device-row" },
       el("span", {}, el("strong", {}, d.name), d.this ? " (this device)" : "", el("span", { class: "hint" }, " · " + d.address)),
-      n > 0 ? el("button", { type: "button", class: "text-btn", onclick: () => open(d.address) }, plural(n, "device conversation", "device conversations"))
+      n > 0 ? el("button", { type: "button", class: "text-btn", onclick: (e) => open(d.address, e.currentTarget) }, plural(n, "device conversation", "device conversations"))
         : !d.this && d.address !== me && el("button", { type: "button", class: "text-btn", onclick: () => newConversationDialog(d.address) }, "Write to it…"));
   }));
 }
@@ -2659,22 +2690,22 @@ function searchItems(q, threads, open) {
   }
   return [
     people.length > 0 && el("li", { class: "result-head" }, plural(people.length, "person", "people")),
-    ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.person(p) },
+    ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.person(p, e.currentTarget) },
       el("span", { class: "result-kind" }, "Person"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, p.label, p.person && el("span", { class: "hint", title: "Person ID: " + p.person }, " · @" + p.person.slice(0, 8))),
         el("span", { class: "hint" }, "via " + p.address + " · " + (personStateText[p.state] || p.state)))))),
     dms.length > 0 && el("li", { class: "result-head" }, dms.some(humanGroup) ? plural(dms.length, "conversation", "conversations") : plural(dms.length, "DM", "DMs")),
-    ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.dm(d) },
+    ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.dm(d, e.currentTarget) },
       el("span", { class: "result-kind" }, humanGroup(d) ? "Group" : "DM"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, d.title || "No messages yet"),
         el("span", { class: "hint" }, "with " + d.peer.label + " · " + when(d.last_at))), dmFlags(d)))),
     agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "agent", "agents")),
-    ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.contact(c) },
+    ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.contact(c, e.currentTarget) },
       el("span", { class: "result-kind" }, "Agent"), el("span", { class: "result-main" }, who(c.peer),
         el("span", { class: "hint" }, " · " + plural(c.conversations.length, "conversation", "conversations"))), presenceBadge(c.peer), counts(c)))),
     ...listed.map(memberRow),
     conversations.length > 0 && el("li", { class: "result-head" }, plural(conversations.length, "conversation or message", "conversations or messages")),
-    ...shown.map((t) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.conversation(t) },
+    ...shown.map((t) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.conversation(t, e.currentTarget) },
       el("span", { class: "result-kind" }, kind(t)),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, t.title),
         el("span", { class: "hint" }, "with ", t.peer, " · ", when(t.last_at))), threadFlag(t)))),
@@ -3241,6 +3272,7 @@ function trustDialog(t) {
 function dialog({ title, body, ok, run, gate, focus }) {
   const d = $("dialog");
   if (d.open) d.close();
+  state.dialogOpener = root.getRootNode().activeElement;
   state.dialogRestore = null; // text dialogs say how to reopen them after an update
   $("dialog-title").textContent = title;
   fill($("dialog-body"), ...body);
@@ -4494,7 +4526,7 @@ function start() {
     if (e.key === "Enter") { const first = $("conv-list").querySelector(".result"); if (first) first.click(); }
   });
   on(root, "keydown", (e) => {
-    if (!$("dialog").open && !$("settings").open && $("review").hidden && Zoom.onKey(e)) { e.preventDefault(); return; }
+    if (!$("dialog").open && !$("settings").open && !root.querySelector(".file-viewer[open]") && $("review").hidden && Zoom.onKey(e)) { e.preventDefault(); return; }
     if (e.key === "Escape" && !$("review").hidden) { toggleReview(false); $("review-btn").focus(); return; }
     if (e.key === "/" && !$("settings").open && !$("dialog").open && !$("routing-settings").open && !e.target.closest("input, textarea, select")) {
       e.preventDefault();
@@ -4514,7 +4546,13 @@ function start() {
     if (!(await reconnect())) announce("Still not connected. If the daemon restarted, run agentnet ui for the new address.");
   });
   $("reload").addEventListener("click", reloadUpdated);
-  $("dialog").addEventListener("close", () => { state.dialogRestore = null; });
+  $("dialog").addEventListener("close", () => {
+    state.dialogRestore = null;
+    if (!alive) return;
+    if (state.dialogOpener?.isConnected) state.dialogOpener.focus({preventScroll: true});
+    else focusZoomLayer($("zoom"));
+    state.dialogOpener = null;
+  });
   on(window, "focus", () => { // a missed change is caught when the person comes back
     if (!$("lost").hidden) return;
     refetch(false);
@@ -4549,6 +4587,10 @@ function start() {
     Zoom.refresh();
   }).catch(() => { if (alive) $("lost").hidden = false; });
   listen();
+}
+function revealZoomContent(content) {
+  for (const animation of content.getAnimations()) animation.cancel();
+  if (motion()) content.animate([{opacity: 0, transform: "scale(.98)"}, {opacity: 1, transform: "none"}], {duration: 180, easing: "ease-out"});
 }
 const motion = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const needsYou = (m) => !isReport(m) && (m.actions || []).some((a) => decisionActions.includes(a));
@@ -4620,6 +4662,7 @@ function writeDialog(t, m) {
       if (!alive || gen !== state.gen || host !== currentHost) throw Error("Workspace changed; reopen this draft there.");
       if (m) await act({ do: "reply", id: m.id, body: body.value }, host);
       else await sendWithFiles("/api/send", { to: t.peer, kind: kind.value, body: body.value, reply_to: last ? last.id : "" }, canFiles, host);
+      if (alive && gen === state.gen && host === currentHost) { await loadThread(); Zoom.revealEnd = true; Zoom.refresh(); }
     },
   });
   state.dialogRestore = { type: "write", msg: m ? m.id : null };
@@ -4642,6 +4685,9 @@ function dmWriteDialog(d) {
     run: async () => {
       if (!alive || gen !== state.gen || host !== currentHost) throw Error("Workspace changed; reopen this draft there.");
       const r = await sendWithFiles("/api/dm/send", { conv: d.id, body: body.value }, canFiles, host);
+      if (alive && gen === state.gen && host === currentHost) {
+        await loadDM(); Zoom.revealEnd = true; Zoom.refresh();
+      }
       announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
         : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     },
@@ -4679,15 +4725,18 @@ function zoomDirectory(threads) {
 // Every Zoom redraw keeps keyboard focus in its own surface. Never take
 // focus from settings, the host strip, or anything outside this hierarchy.
 function focusZoomLayer(layer) {
-  const target = [...layer.querySelectorAll(".zoom-content button, .zoom-content [tabindex]")]
+  const target = [...layer.querySelectorAll('.zoom-content button, .zoom-content [tabindex]:not([tabindex="-1"])')]
     .find(element => !element.disabled && element.getClientRects().length);
   target?.focus({preventScroll: true});
   const focused = layer.getRootNode().activeElement;
-  if (!focused || !layer.contains(focused)) $("zoom").focus({preventScroll: true});
+  if (!focused || !layer.contains(focused)) {
+    const scene = layer.querySelector(".zoom-content");
+    if (scene) { scene.tabIndex = -1; scene.focus({preventScroll: true}); }
+  }
 }
 
 const Zoom = {
-  generation: 0, level: 0, peer: null, person: null, dm: null, msg: null, origins: [], query: "",
+  generation: 0, navigating: null, dirty: false, finish: null, revealEnd: false, level: 0, peer: null, person: null, dm: null, msg: null, origins: [], query: "",
 
   // Two kinds of path: a person (by their record) and their DMs, or a
   // device contact (by address) and its conversations. Never both at once.
@@ -4709,6 +4758,15 @@ const Zoom = {
   // refresh redraws the current level after new data, without motion.
   refresh() {
     if (!alive || !state.overview) return;
+    if (this.navigating !== null) { this.dirty = true; return; }
+    const localMotion = $("zoom").getAnimations({subtree: true}).filter(a => a.playState === "running" && !(a instanceof CSSAnimation));
+    if (localMotion.length) {
+      if (!this.redrawAfterAnimation) {
+        this.redrawAfterAnimation = true;
+        Promise.allSettled(localMotion.map(a => a.finished)).then(() => { this.redrawAfterAnimation = false; this.refresh(); });
+      }
+      return;
+    }
     if (this.person) {
       if (this.level >= 2 && (!state.dmData || state.dm !== this.dm)) this.level = 1;
       if (this.level === 3 && !state.dmData.messages.some((m) => m.id === this.msg)) this.level = 2;
@@ -4718,24 +4776,36 @@ const Zoom = {
     }
     const surface = $("zoom"), focused = root.getRootNode().activeElement;
     const ownedFocus = !!focused && surface.contains(focused);
+    const oldContent = surface.querySelector(".zoom-layer:last-child .zoom-content");
+    const scroll = oldContent?.scrollTop || 0;
+    const atEnd = oldContent && oldContent.scrollHeight - scroll - oldContent.clientHeight < 60;
+    const expanded = [...surface.querySelectorAll(".zoom-layer:last-child details[open]")].map(d => d.dataset.person).filter(Boolean);
+    const focusText = ownedFocus && focused.tagName === "BUTTON" ? focused.textContent : null;
     const typing = focused?.classList.contains("zoom-search");
     const selection = typing ? [focused.selectionStart, focused.selectionEnd] : null;
     fill(surface, this.layer());
+    const content = surface.querySelector(".zoom-content");
+    for (const d of surface.querySelectorAll("details[data-person]")) d.open = expanded.includes(d.dataset.person);
+    content.scrollTop = this.level === 2 && (atEnd || this.revealEnd) ? content.scrollHeight : scroll;
+    this.revealEnd = false;
     if (typing) {
       const search = surface.querySelector(".zoom-search");
       search.focus({preventScroll: true});
       search.setSelectionRange(...selection);
-    } else if (ownedFocus) focusZoomLayer(surface);
+    } else if (ownedFocus) {
+      const match = focusText && [...surface.querySelectorAll("button")].find(b => !b.disabled && b.textContent === focusText);
+      if (match) match.focus({preventScroll: true}); else focusZoomLayer(surface);
+    }
   },
 
   // results is what the Zoom search finds; choosing one zooms to it.
   results() {
-    const pick = (level, patch) => { this.query = ""; this.go(level, patch); };
+    const pick = (level, patch, from) => { this.query = ""; this.go(level, patch, from); };
     return el("div", { class: "zoom-results" }, el("ul", { class: "conv-list" }, searchItems(this.query, state.overview.threads, {
-      person: (p) => pick(1, { person: personKey(p), peer: null }),
-      dm: (d) => pick(2, { dm: d.id }),
-      contact: (c) => pick(1, { peer: c.peer, person: null }),
-      conversation: (t) => pick(2, { thread: t.id, peer: t.peer, person: null }),
+      person: (p, from) => pick(1, { person: personKey(p), peer: null }, from),
+      dm: (d, from) => pick(2, { dm: d.id }, from),
+      contact: (c, from) => pick(1, { peer: c.peer, person: null }, from),
+      conversation: (t, from) => pick(2, { thread: t.id, peer: t.peer, person: null }, from),
     })));
   },
 
@@ -4747,7 +4817,7 @@ const Zoom = {
     const content = el("div", { class: "zoom-content" }, this.content(views));
     const search = el("input", { type: "search", class: "zoom-search", placeholder: "Search…",
       "aria-label": "Search people, agents and conversations", autocomplete: "off", spellcheck: "false", value: this.query,
-      oninput: (e) => { this.query = e.target.value; fill(content, this.content(views)); },
+      oninput: (e) => { this.query = e.target.value; fill(content, this.content(views)); revealZoomContent(content); },
       onkeydown: (e) => { if (e.key === "Escape" && this.query) { e.stopPropagation(); e.target.value = ""; this.query = ""; fill(content, this.content(views)); } } });
     return el("div", { class: "zoom-layer" },
       el("div", { class: "zoom-side" }, search, el("nav", { class: "ladder", "aria-label": "Zoom level" },
@@ -4760,11 +4830,13 @@ const Zoom = {
   },
 
   async go(level, patch, from) {
+    this.finish?.();
     const generation = ++this.generation, host = currentHost;
+    this.navigating = generation;
     toggleReview(false);
-    const inward = level > this.level;
+    const inward = level > this.level || (level === this.level && !!from);
     if (inward && from) this.origins[this.level] = from.getBoundingClientRect();
-    const origin = inward ? (from ? from.getBoundingClientRect() : null) : this.origins[level];
+    const origin = from ? from.getBoundingClientRect() : inward ? null : this.origins[level];
     const { thread, dm, ...rest } = patch;
     Object.assign(this, rest, { level });
     if (thread) {
@@ -4795,9 +4867,18 @@ const Zoom = {
       old.style.transformOrigin = fresh.style.transformOrigin;
       old.classList.add(inward ? "zoom-away-in" : "zoom-away-out");
       fresh.classList.add(inward ? "zoom-arrive-in" : "zoom-arrive-out");
-      old.addEventListener("animationend", () => old.remove(), { once: true });
-      fresh.addEventListener("animationend", () => fresh.classList.remove("zoom-arrive-in", "zoom-arrive-out"), { once: true });
-    } else if (old) old.remove();
+      const finish = () => {
+        old.remove(); fresh.classList.remove("zoom-arrive-in", "zoom-arrive-out");
+        if (generation !== this.generation) return;
+        this.finish = null; this.navigating = null;
+        if (this.dirty) { this.dirty = false; this.refresh(); }
+      };
+      this.finish = finish;
+      const arrivals = fresh.getAnimations();
+      Promise.allSettled(arrivals.map(a => a.finished)).then(() => { if (this.finish === finish) finish(); });
+    } else {
+      old?.remove(); this.navigating = null; this.dirty = false;
+    }
     focusZoomLayer(fresh);
   },
 
@@ -4819,7 +4900,7 @@ const Zoom = {
     const dms = o.dms || [], people = entries ? entries.filter((e) => e.person).map((e) => e.person) : o.people || [];
     // Each person is one node, you included (once); their devices open
     // under it on a click, from their checked record.
-    const devices = (p) => (p.state === "pinned" || p.state === "self") && deviceDisclosure(p, (addr) => this.go(1, { peer: addr, person: null }));
+    const devices = (p) => (p.state === "pinned" || p.state === "self") && deviceDisclosure(p, (addr, from) => this.go(1, { peer: addr, person: null }, from));
     const me = o.person;
     const meFace = [avatar(me.label, "node-face"), el("span", { class: "node-name" }, me.label + " (you)"),
       el("span", { class: "node-status" }, me.published ? "others can start a DM with you" : "not on your server yet")];
@@ -4865,7 +4946,7 @@ const Zoom = {
       const d=state.dmData;
       return el("section", {class:"zoom-person"}, el("h2",{},d.title),
         el("p",{class:"hint"},groupMemberCount(d) + ". Ordinary messages do not run agents."),
-        el("ul",{class:"thread-list"},dmRow(d,(id,from)=>this.go(2,{dm:id},from))));
+        el("ul",{class:"thread-list"},dmRow((state.overview.dms || []).find(x => x.id === d.id) || {...d, last_at: d.messages.at(-1)?.at || d.created},(id,from)=>this.go(2,{dm:id},from))));
     }
     const p = this.personOf();
     if (!p) return el("p", { class: "hint" }, "That person is not listed here any more.");
@@ -4875,7 +4956,7 @@ const Zoom = {
       el("header", { class: "zoom-head" }, avatar(p.label || p.address), el("div", {}, el("h2", {}, p.label),
         el("p", { class: "hint" }, "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state) +
           (online ? " · their computer is " + online : "")))),
-      deviceDisclosure(p, (addr) => this.go(1, { peer: addr, person: null })),
+      deviceDisclosure(p, (addr, from) => this.go(1, { peer: addr, person: null }, from)),
       el("div", { class: "zoom-contact" },
         dms.length ? el("ul", { class: "thread-list", "aria-label": "DMs with " + p.label }, dms.map((d) => dmRow(d, (id, from) => this.go(2, { dm: id }, from))))
           : el("p", { class: "hint" }, "No DM with " + p.label + " yet."),

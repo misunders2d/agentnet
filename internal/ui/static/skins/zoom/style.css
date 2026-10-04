@@ -757,10 +757,10 @@ button.reaction { cursor: pointer; }
 .zoom-arrive-in { animation: zArriveIn .5s ease; z-index: 2; }
 .zoom-away-out { animation: zAwayOut .5s ease forwards; pointer-events: none; z-index: 1; }
 .zoom-arrive-out { animation: zArriveOut .5s ease; z-index: 2; }
-@keyframes zAwayIn { to { transform: scale(2.6); opacity: 0; } }
-@keyframes zArriveIn { from { transform: scale(.25); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes zAwayOut { to { transform: scale(.35); opacity: 0; } }
-@keyframes zArriveOut { from { transform: scale(2.4); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes zAwayIn { 0% { transform: none; opacity: 1; } 20% { opacity: 0; } 100% { transform: scale(2.6); opacity: 0; } }
+@keyframes zArriveIn { 0% { transform: scale(.25); opacity: 0; } 20% { opacity: 0; } 100% { transform: none; opacity: 1; } }
+@keyframes zAwayOut { 0% { transform: none; opacity: 1; } 20% { opacity: 0; } 100% { transform: scale(.35); opacity: 0; } }
+@keyframes zArriveOut { 0% { transform: scale(2.4); opacity: 0; } 20% { opacity: 0; } 100% { transform: none; opacity: 1; } }
 .zoom-side { padding: 18px 12px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .ladder { display: flex; flex-direction: column; gap: 2px; }
 .rung { display: flex; align-items: center; gap: 10px; border: 0; background: none; text-align: left; padding: 8px; border-radius: 10px; color: var(--muted); font-weight: 600; font-size: 13.5px; min-width: 0; }
@@ -835,3 +835,18 @@ button.reaction { cursor: pointer; }
 .zoom-agents .agent-node::before { display: none; }
 
 .zoom-reminders { width: min(720px, 100%); justify-self: center; }
+
+/* A picture opens without changing the chat's geometry or removing its opener. */
+.file-viewer { max-width: min(90vw, 780px); max-height: 85dvh; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); }
+.file-viewer::backdrop { background: rgb(0 0 0 / .45); }
+.file-viewer .file-preview { max-width: 100%; max-height: 65dvh; width: auto; height: auto; margin: 0 auto 12px; }
+.file-viewer-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
+.zoom-content:focus { outline: none; }
+.device-disclosure-body { overflow: hidden; }
+@media (prefers-reduced-motion: no-preference) {
+  .zoom-root #dialog[open], .zoom-root .file-viewer[open] { animation: zoomDialogIn .18s ease-out; }
+  @keyframes zoomDialogIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+}
+
+.zoom-content .person-cards { align-items: flex-start; }

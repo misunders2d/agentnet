@@ -749,3 +749,9 @@ button.reaction { cursor: pointer; }
 
 /* Identity chips stay below the name, including a narrow desktop sidebar. */
 .person-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
+
+/* A picture opens without changing the chat's geometry or removing its opener. */
+.file-viewer { max-width: min(90vw, 780px); max-height: 85dvh; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text); }
+.file-viewer::backdrop { background: rgb(0 0 0 / .45); }
+.file-viewer .file-preview { max-width: 100%; max-height: 65dvh; width: auto; height: auto; margin: 0 auto 12px; }
+.file-viewer-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }

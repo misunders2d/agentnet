@@ -49,6 +49,7 @@ let server,browser;const errors=[];
  browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox']});const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));
  await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.ready);
  await page.locator('#conv-list').getByText('Vitalii',{exact:true}).first().click();await page.locator('#conv-name').filter({hasText:'Vitalii'}).waitFor();
+ if(await page.locator('#hub:visible').count()) await page.locator('#hub .thread-row').first().click();
  await page.locator('#body').fill('Saved contract-only draft');
  const before=await page.evaluate(()=>({streams,catalogListeners,hostCalls,outside}));assert(before.streams===1&&before.catalogListeners===1&&before.hostCalls>0);assert.deepEqual(before.outside,[]);
  assert(await page.locator('[data-skin=host-classic-copy]').getAttribute('aria-pressed')==='true');
