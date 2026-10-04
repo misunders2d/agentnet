@@ -117,9 +117,14 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/loader.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}
-	for _, a := range []string{"app.js", "lenses.js", "app.css", "vendor/qr.mjs", "drivespace-setup.mjs"} {
+	for _, a := range []string{"loader.js", "skinbar.mjs", "skin-base.css", "skins/index.json", "skins/comic/entry.mjs", "vendor/qr.mjs", "drivespace-setup.mjs"} {
 		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != 200 {
 			t.Errorf("asset %s: %d", a, r.StatusCode)
+		}
+	}
+	for _, a := range []string{"app.js", "lenses.js", "app.css", "default.html", "messenger.mjs"} { // the bundled app is not served: no interface loads it
+		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
+			t.Errorf("asset %s served: %d", a, r.StatusCode)
 		}
 	}
 	if r := do(t, ts, "GET", "/assets/vendor/age.mjs", "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
