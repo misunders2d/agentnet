@@ -206,6 +206,17 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   unavailable with the Hub's own-usage report). Show unknown as unknown, never
   zero; the Hub's quota is the whole server's, never an allowance.
 - Presence refresh: `/api/refresh`, triggered by user navigation; no polling.
+- What a conversation view says without its sentences: a DM message's
+  `reply_to` names the message as this device shows it (an agent's answer
+  names its executor's copy of the request; the view links it to the
+  request's own `id`); a participation record carries `event_type` (`invite`,
+  `accept`, `decline`, `dismiss` or `scope`) and `event_by` (its author's
+  person label as known here, or device address) beside `event`. A DM
+  summary carries `guests` (active participations: people and agents),
+  `decide` (its requests with actions for this device's person; none on a
+  browser) and, when its latest row is a participation record, `last_event`
+  `{kind, pid, by}` (a scope counts as its invite). A device thread summary
+  carries `agent_id` when one is named.
 
 ## Independent example and validation
 

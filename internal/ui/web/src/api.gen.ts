@@ -210,6 +210,8 @@ export interface DMMessage {
   exec?: ExecView;
   actions?: string[];
   job_detail?: string;
+  event_type?: string;
+  event_by?: string;
 }
 
 export interface DMSummary {
@@ -228,6 +230,9 @@ export interface DMSummary {
   unread: number;
   held: number;
   waiting: number;
+  guests: number;
+  decide: number;
+  last_event?: LastEvent;
 }
 
 export interface DMThread {
@@ -448,6 +453,12 @@ export interface HubStoragePolicy {
   incomplete_uploads: string;
   manual_delivered_age_default_seconds: number;
   manual_unattached_age_default_seconds: number;
+}
+
+export interface LastEvent {
+  kind: string;
+  pid: string;
+  by: string;
 }
 
 export interface LinkRequest {
@@ -855,6 +866,7 @@ export interface ThreadSummary {
   key_changed: boolean;
   notices: number;
   notice_only: boolean;
+  agent_id?: string;
 }
 
 export interface TypingEntry {
