@@ -438,3 +438,40 @@ Post-release discussion must resolve:
 
 No TUI code, prototype, Herdr change or release commitment is authorized by
 this recorded request alone. Root owns bringing it to the post-release debate.
+
+## 9. D7: every interface is a standalone skin package (Oct 4)
+
+Owner decision (Sergey, 2026-10-04), replacing ROOM_V1 D7 ("the previous
+interface stays selectable until the skins work"): "every skin is a
+standalone module. users can build their own skins."
+
+- **One core, skins on top.** AgentNet is the core: the daemon (or the
+  browser engine) and the documented skin contract (docs/UI_SKINS.md, host
+  API v1). Every interface is a complete skin package (`skin.json`, entry
+  module, stylesheet, declared files) loaded through the same host path:
+  catalog, document rules, a root in a shadow tree, `mount`/`unmount`.
+  Built-in packages differ only in trust: the host trusts its fixed list
+  (`comic`, `classic`, `zoom`), never a manifest; installed and
+  browser-local packages need the person's consent to their exact digest.
+- **Comic is the default built-in package.** The messenger source
+  (`internal/ui/web`) builds `internal/ui/static/skins/comic/`, embedded and
+  served at `/assets/skins/comic/` on daemon and relay. It uses only the
+  public host API; a contract-only check mounts it (and the Notebook
+  example) from copied package bytes at an unrelated path.
+- **Classic and Zoom** come in a later update as standalone packages on the
+  same contract (extracted from the bundled app's sources, which stay in the
+  tree for that and for their tests). The bundled app is no longer offered
+  or loadable, and its emoji Comic lens is retired. A saved choice of
+  `default`, `classic` or none opens Comic; `?skin=default` names Comic.
+- **Contract additions (v1, additive):** `host.onSkinsChange`, a documented
+  `host.manageLocalSkins(root) -> teardown`, an optional `host.reconnect()`
+  (identity-checked rebind after this computer's program restarts),
+  destination kinds for `host.onOpen` (`message` with `{conv, dir}`,
+  `review`), and a manifest's `document` rules (`@font-face`, `@property`),
+  which the host adopts at document level because browsers ignore them in
+  shadow trees.
+- **Switching.** Comic: Settings → Appearance → Skin. Every other skin gets
+  the host's one switcher bar above it (one step back to Comic, the skin
+  menu with import/removal of browser-local skins, the workspace control).
+  Wording: interfaces are never called "previous", "earlier", "legacy" or
+  "older", and AgentNet (the core) is never something to "switch back to".

@@ -11,7 +11,7 @@ export function Sheet({ open, onOpenChange, title, description, children, footer
 }) {
   const portal = usePortal();
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus">
       <Dialog.Portal container={portal}>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-[#1B1530]/40 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
         <Dialog.Popup className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none stroke shadow-pop transition-all duration-[280ms] ease-out-soft "

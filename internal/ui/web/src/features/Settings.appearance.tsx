@@ -90,7 +90,8 @@ export function AppearanceSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
   const [target, setTarget] = useState<SkinEntry | null>(null);
   // The host refreshes its catalog in place when a package is imported or removed.
   useEffect(() => host.onSkinsChange(refresh), [host]);
-  const skins = host.skins;
+  // Comic is always listed first: it is the skin drawing this page.
+  const skins = host.skins.some((s) => s.id === COMIC) ? host.skins : [{ api: 1, id: COMIC, name: "Comic", builtin: true }, ...host.skins];
 
   return (
     <>

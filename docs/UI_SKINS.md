@@ -1,72 +1,126 @@
-# UI packages
+# Skins
 
-AgentNet's UI host loads a complete interface independently of the messenger.
-A package can replace navigation, layout, conversation presentation, dialogs,
-settings and interaction flow. It uses the same data and actions as the built-in
-interface. It does not change membership, encryption, delivery or permissions.
+AgentNet is the core: the program (the daemon on this computer, or the
+browser engine a relay serves) and the skin contract documented here, host
+API v1. Every interface is a **skin**: a standalone package that draws the
+whole interface (navigation, layout, conversations, dialogs, settings and
+flow) on that contract. A skin uses the same data and actions as any other;
+it does not change membership, encryption, delivery or permissions.
 
-This is the trusted package boundary for a future UI marketplace. It does not
-implement marketplace discovery, downloads, signing, sandboxing or billing.
+Anyone can build a skin. The built-in ones are packages too, loaded through
+exactly the same path; only trust differs (see [Trust](#trust)).
 
-The intended distribution contract is client-owned: a person must be able to
-install, choose and share a skin without changing their relay or other clients.
-Desktop local installation and browser-local import, storage and removal use
-the same manifest and consent digest. Relay-provided packages are optional
-offerings, not a prerequisite. The Notebook-specific journey below binds
-compatibility evidence to exact package bytes. General conformance adapters
-and advisory LLM review remain future work; neither is skin certification.
+- **Comic** (`comic`) is AgentNet's own skin and the default: the messenger,
+  built from `internal/ui/web` into the package `internal/ui/static/skins/comic/`
+  and embedded in the program.
+- **Classic** and **Zoom** (`classic`, `zoom`) come in a later update as
+  standalone packages on this same contract.
+- Installed skins: packages placed next to the program (below), and
+  browser-local skins imported into one browser.
 
-## Install without rebuilding AgentNet
+This is the trusted package boundary for a future skin marketplace. It does
+not implement marketplace discovery, downloads, signing, sandboxing or
+billing. Distribution is client-owned: a person can install, choose and share
+a skin without changing their relay or other clients.
+
+## How a skin is loaded
+
+The UI host (`internal/ui/static/loader.js`) does the same for every skin:
+
+1. reads the catalog (`/assets/skins/index.json`: the built-in packages first,
+   then installed ones) and the packages stored in this browser;
+2. picks the skin: `?skin=<id>`, else the one chosen before in this browser,
+   else Comic. A saved `default` or `classic` (the names before skins were
+   packages) opens Comic and is rewritten once; `?skin=default` names Comic;
+3. asks for trust unless the skin is built in;
+4. adopts the package's [document rules](#document-rules-fonts) at document level;
+5. gives the skin a root in a shadow tree of the page's `#skin` element, links
+   the host's base sheet and then the package's stylesheet inside it;
+6. imports the entry and calls `mount(root, host)`; on a workspace switch (or
+   a rebind) it calls `unmount(root)` and mounts again on a fresh root over a
+   host bound to the new membership.
+
+Comic draws its own way to switch (Settings → Appearance → Skin) and its
+own workspace menu. Every other skin gets the host's **switcher bar** above
+it: one step back to Comic, the skin menu (Comic, then installed and
+browser-local skins, with import and removal), and the workspace control
+(switch, join, leave, reconnect). The bar sits in the page's flow above the
+skin's box, never over it, in its own shadow tree, so no skin stylesheet can
+hide or restyle it; notifications the skin does not take wait there with a
+button that opens them in Comic. This keeps the way back reachable for a
+conforming skin; a skin's code still runs with the page's full trust, so this
+is a conformance expectation, not a security guarantee.
+
+### Trust
+
+A built-in skin is trusted by the host's own fixed list of ids (`comic`,
+`classic`, `zoom`), never by anything a manifest says. No installed or
+browser-local package may use those ids or `default`: the program skips such
+a directory and the browser refuses such a package. Any other skin asks first:
+it can read your chats and act as you, including sending messages and
+approving work. Consent is to the package's exact digest, per browser origin
+(including the daemon's port); a changed package asks again.
+
+Installed code has the same access as Comic. This is **not** a sandbox.
+Installing on a relay makes the package available to every browser device
+using that relay; the relay operator already controls the page served to
+those devices. Never install an untrusted package or let another account
+write these directories.
+
+## Install and update a skin
+
+### On this computer or a relay
 
 Place a package in `<home>/skins/<id>/` for a laptop daemon, or
-`<hub-data>/skins/<id>/` for a relay's browser page. Restart the serving process.
-No Go changes, rebuild or changes to embedded app files are needed.
+`<hub-data>/skins/<id>/` for a relay's browser page, and restart the serving
+process. No Go changes, rebuild or changes to embedded files are needed.
 
-On Unix, the skins directory, package directories and files must belong to the
-serving user and must not be writable by group or others. Keep the home/data
-folder private. On Windows, access control comes from the home folder's inherited
-ACL; AgentNet does not inspect Windows skin ACLs separately.
+On Unix, the skins directory, package directories and files must belong to
+the serving user and must not be writable by group or others. Keep the
+home/data folder private. On Windows, access control comes from the home
+folder's inherited ACL; AgentNet does not inspect Windows skin ACLs
+separately.
 
-Select the package in **You → Appearance → Interface**, or open the
-page with `?skin=<id>` after authenticating. The first use of a package (and each
-changed version) asks for trust. Selection and consent are local to that browser
-origin, including the daemon's port. The built-in interface remains available at
-`?skin=default`. Remove the package and restart to uninstall it.
+Choose it in Comic under **Settings → Appearance → Skin**, or open the page
+with `?skin=<id>` after authenticating. The first use asks for trust.
 
-Installed code has the same access as the default interface: it can read chats,
-send messages and invoke permitted actions. This is **not** a sandbox. Installing
-on a relay makes the package available to every browser device using that relay;
-the relay operator already controls the page served to those devices. Never
-install an untrusted package or let another account write these directories.
+**Update:** replace the package's files and restart the serving process.
+Packages are immutable snapshots until restart, so replacing files never
+swaps code underneath an open page; the new digest asks for trust again.
+**Uninstall:** remove the directory and restart; a browser that had chosen it
+opens Comic.
 
-Packages are immutable snapshots until restart. The consent digest covers the
-manifest and every declared file. Requests cannot read undeclared files, paths
-outside the package, or symlinks. Limits: 32 packages, 32 files per package,
-4 MiB per file, 16 MiB per package and 64 MiB for the catalog.
+The consent digest covers the manifest and every declared file. Requests
+cannot read undeclared files, paths outside the package, or symlinks.
+Limits: 32 packages, 32 files per package, 4 MiB per file, 16 MiB per
+package and 64 MiB for the catalog.
 
 ### Import into this browser
 
-Under **You → Appearance → Interfaces stored in this browser**, choose a
-package folder, or select its `skin.json` and declared files. Import validates
-and stores the package; it does not execute it or upload anything. Select it
-in **Interface**, review the full-trust notice and digest, then choose **Use
-this UI**. A changed digest requires fresh consent. Browser-local IDs have a
-`local:` prefix, so a relay package cannot replace a local selection.
+In Comic under **Settings → Appearance → Skin**, or from the switcher's
+**Import or remove skins…**, choose a package folder, or select its
+`skin.json` and declared files. Import validates and stores the package; it
+does not execute it or upload anything. Choose it under Skin, review the
+trust notice and digest, then choose **Use this skin**. Browser-local IDs
+have a `local:` prefix, so a relay package cannot replace a local selection.
+
+**Update:** import the new version the same way; its new digest asks for
+trust again. Tabs already using the version they loaded keep it until they
+reload. **Remove** deletes every version of that package in this browser.
 
 The browser's CacheStorage keeps immutable package snapshots. Its existing
 service worker serves only the reserved `/local-skins/<digest>/` asset path;
 chat and API requests keep their normal transport. Relative imports and CSS
-remain inside the selected version. Updates retain older snapshots for tabs
-already using them; **Remove** deletes every version of that local package.
-The 64 MiB local limit includes retained versions and manifest bytes. Clearing
-browser site data or browser storage eviction can remove packages; the built-in
-interface remains the fallback. Packages and consent belong to this browser
-profile and origin, including the daemon port, not to a workspace or relay.
+remain inside the selected version. The 64 MiB local limit includes retained
+versions and manifest bytes. Clearing browser site data or storage eviction
+can remove packages; Comic remains. Packages and consent belong to this
+browser profile and origin, including the daemon port, not to a workspace or
+relay.
 
 This requires a secure context with Service Workers, CacheStorage, Web Locks
-and WebCrypto. Unsupported browsers show that local storage is unavailable.
-Choosing a local interface explicitly activates the asset worker; importing
-alone does not take over tabs. No marketplace or package download service is
+and WebCrypto. Unsupported browsers say that skins cannot be stored there.
+Choosing a local skin explicitly activates the asset worker; importing alone
+does not take over tabs. No marketplace or package download service is
 involved.
 
 ## Manifest
@@ -80,41 +134,56 @@ involved.
   "name": "Notebook example",
   "entry": "entry.mjs",
   "style": "style.css",
-  "files": ["entry.mjs", "style.css"]
+  "document": "document.css",
+  "files": ["entry.mjs", "style.css", "document.css", "fonts/body.woff2"]
 }
 ```
 
-IDs use lowercase letters, digits and hyphens, starting with a letter. `default`
-is reserved. Only declared JS/MJS, CSS, JSON, PNG, SVG, WebP and WOFF2 assets are
-served. Entry and optional style must appear in `files`. Unsupported API versions
-and invalid packages are omitted. Package-owned imports use local relative
-paths; host-provided modules may use `/assets/` paths (the bundled Notebook
-uses the shared typing presenter). There is no CDN loading or evaluation of
-inline code.
+IDs use lowercase letters, digits and hyphens, starting with a letter;
+`comic`, `classic`, `zoom` and `default` are reserved. `files` lists every
+file the package uses (at most 32, no duplicates); only declared JS/MJS, CSS,
+JSON, PNG, SVG, WebP and WOFF2 files are served. `entry` (JS/MJS) and the
+optional `style` and `document` (CSS) must appear in `files`. Unsupported API
+versions and invalid packages are omitted. Package-owned imports and assets
+use relative paths (resolve them against `import.meta.url` in code, or
+relative to the stylesheet in CSS); the one host module a skin may import is
+`/assets/typing.mjs` (`mountTyping`, the shared typing presenter). There is
+no CDN loading or evaluation of inline code: the page's CSP allows no inline
+styles or scripts, so use the stylesheet, never `style` attributes in markup.
 
-The entry exports `async function mount(root, host)`. It owns `root`; use DOM text
-nodes for message and profile content. No default UI scripts or global helpers
-are needed. Styling is package-owned. `core.css` supplies setup-page styles and
-semantic colors such as `--surface`, `--text`, `--muted`, `--accent` and `--danger`.
-A package can replace these in its stylesheet. Settings and flow are package-owned;
-there is no mandatory layout schema or framework.
+### Document rules (fonts)
 
-`root` lives in a shadow tree of the page's `#skin` element, with `core.css` and
-the package's stylesheet linked inside it: the package's rules apply to its own
-tree only, and `document.querySelector` does not reach its elements (query from
-`root`). This is styling isolation, not a security boundary: the code still runs
-with the page's full trust. The page's CSP allows no inline styles or scripts,
-so use the stylesheet, never `style` attributes.
+Browsers ignore `@font-face` and `@property` inside a shadow tree. A package
+that needs them declares a `document` stylesheet: the host reads it, keeps
+**only** its `@font-face` and `@property` rules, resolves every `url()`
+against the file and drops a rule whose URL leaves the package, and adopts
+the result at document level before mounting. Anything else in that file is
+ignored. Comic declares its Onest and Rubik faces and Tailwind's registered
+properties this way.
 
-The host keeps its own strip above every installed interface: an "AgentNet"
-button (bottom right, in its own shadow tree, above the skin's mount) that names
-the interface and the address in use and lists the way back to the built-in
-interface and to other installed ones. A package's stylesheet is scoped to its
-own tree, so a conforming package leaves that way back reachable; the package's
-code still runs with the page's full trust, so this is a conformance
-expectation, not a security guarantee. What a package does not do, it should
-say on its page rather than leave out silently; the host button is where the
-built-in interface takes over.
+### The root and its styles
+
+The entry exports `async function mount(root, host)` and optionally
+`async function unmount(root)`. The skin owns `root` and nothing outside it:
+
+- `root` lives in a shadow tree of `#skin`, under the host's base sheet
+  (`/assets/skin-base.css`: `core.css` in the lowest cascade layer, so the
+  package's own rules always win) and the package's stylesheet. Semantic
+  colors such as `--surface`, `--text`, `--muted`, `--accent` and `--danger`
+  inherit from the page; a package can replace them.
+- The skin's box fills the page under the switcher (or the whole page for
+  Comic) and scrolls inside itself; the page never scrolls.
+- Put theme, tokens and resets on `root` (`:root` and `html`/`body` rules do
+  not match in a shadow tree). Render popups (menus, dialogs, sheets) into a
+  container inside `root`. Read focus from `root.getRootNode().activeElement`,
+  query from `root`, never `document`. Do not write to `document.body`,
+  `<html>` (`lang`, classes, styles) or anything else outside `root`, and do
+  not read the host's own page globals.
+- `unmount` stops what `host.listen` returned, timers and object URLs, and
+  leaves `root` empty. Use DOM text nodes for message and profile content.
+
+The shadow tree is styling isolation, not a security boundary: the code
+still runs with the page's full trust.
 
 ## Host API v1
 
@@ -122,42 +191,45 @@ built-in interface takes over.
 | --- | --- |
 | `host.version` | `1`; additive extensions keep this version. |
 | `host.platform` | `daemon` or `browser`. |
-| `host.api(path, body?)` | Existing JSON `/api/*` read/action surface. Omit body for GET; provide an object for POST. Resolves parsed JSON or rejects with a user-readable error. |
+| `host.api(path, body?)` | Existing JSON `/api/*` read/action surface. Omit body for GET; provide an object for POST. Resolves parsed JSON or rejects with a user-readable error. A skin never fetches `/api` or `/events` itself. |
 | `host.listen(fn)` | Push events `{type:"change",seq}`, `{type:"disconnect"}` or `{type:"restart"}`. Returns an unsubscribe function. Reload data on change. Reconnect/reload after interruption; do not poll. |
-| `host.onOpen(fn)` | Required. Register notification routing. `fn(channel)` resolves via `/api/notify/resolve?chan=...`; `fn(convID,"conversation")` opens a known DM directly. A missing destination opens the inbox, never another arbitrary chat. |
+| `host.onOpen(fn, kinds?)` | Required. Registers notification routing: `fn(target, kind, context)`. Every skin gets `"channel"` (a browser notification's channel: resolve it with GET `/api/notify/resolve?chan=…`, which answers `{conv}` when this device has that conversation; an empty channel means news in more than one) and `"conversation"` (a DM id). Listing `"message"` in `kinds` adds `fn(messageID, "message", {conv?, dir?})` (the conversation and direction the notification names) and `"review"` adds `fn("", "review")`. A destination a skin does not take waits in the switcher with the way to open it in Comic. A missing destination opens the skin's list, never another arbitrary chat. |
 | `host.stage(file)` | Prepares a File for sending; resolves an opaque attachment value for `files` in a send. Keep that value only until that send consumes it. Browser encrypts through its engine; daemon stages locally. |
 | `host.file(messageID,index,dir)` | Opens an attachment this device holds: a received one, or a copy kept of one it sent. Pass the message's own `dir` (`in` or `out`): a received id is the sender's choice and can equal a sent one here. Resolves `{bytes:Uint8Array}` (browser may add name/size/image). Show Open only where the view says `openable: true`; a sent file without a kept copy says so in `note`. Validate magic bytes before inline display; never execute HTML or SVG. |
-| `host.skins` | Installed catalog, including the built-in interface. |
-| `host.selectSkin(id)` | Reloads into an installed UI. The current UI must preserve or explicitly resolve unsent drafts first. |
+| `host.skins` | The catalog: `{api, id, name, digest?, local?, builtin?}` for Comic, the other built-in, installed and browser-local skins. `builtin` is the host's word (its fixed list), never a manifest's. The array is updated in place. |
+| `host.onSkinsChange(fn)` | Calls `fn()` when `host.skins` changes (a browser-local skin imported or removed). Returns an unsubscribe function. |
+| `host.selectSkin(id)` | Reloads into a skin from `host.skins`. The current skin must preserve or explicitly resolve unsent drafts first. |
+| `host.manageLocalSkins(root)` | Optional (present where the browser can store skins). Draws the host's browser-local skin manager (import files or a folder, the stored skins, Remove) into an element the skin owns; returns its teardown, which empties that element. Consent stays the host's: a stored skin asks for trust when chosen. |
+| `host.reconnect()` | Optional, present only on this computer's program with workspaces. After the program restarted and retired this membership's handle, binds the same membership again (only when the program still names it with the endpoint, realm, address and key it proved in its own overview) and mounts the skin again over the new binding. Resolves without remounting when the binding still holds. Nothing under way is retargeted or replayed: staged files and sends stay with the old binding, so a skin keeps text drafts and asks for files again. |
 | `host.workspace` | The membership this host is bound to: `{id, name, endpoint, address, realm, state}`. A host never changes membership: what a skin holds when an operation starts (a send, a staged file, a file open) stays bound to it. |
-| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}` over the persistent switcher the host draws above every interface. `has(id)` is by local registration only, never by anything a message or notification says. Optional, present only on this computer's program (never in a browser enrollment), so check before use: `disconnected()` resolves the memberships disconnected here, each `{id, name, endpoint, address, realm, state}` (`list()` leaves them out); `reconnect(id)` routes one of them again, as the same membership with the same keys and history under a new handle, and refuses one whose identity changed. It does not select it. |
+| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}`. `has(id)` is by local registration only, never by anything a message or notification says. Optional, present only on this computer's program (never in a browser enrollment), so check before use: `disconnected()` resolves the memberships disconnected here, each `{id, name, endpoint, address, realm, state}` (`list()` leaves them out); `reconnect(id)` routes one of them again, as the same membership with the same keys and history under a new handle, and refuses one whose identity changed. It does not select it. |
 
 ### Workspaces
 
-The host draws the workspace switcher (the module's selector, Join,
-Disconnect and, on this computer's program, Reconnect for a disconnected
-membership) above every interface. When the person selects another
-workspace the host mounts the skin again with a host bound to that
+When the person selects another workspace (in the skin's own menu or the
+host's switcher) the host mounts the skin again with a host bound to that
 membership: `module.unmount(root)` (optional) is called first, then
 `module.mount(newRoot, newHost)`. Keep drafts in
 `host.workspaces.state(host.workspace.id)`, keyed there by conversation type
-and id. The same conversation id in two memberships still names separate
-drafts; shared labels never merge people or workspaces. This renderer state
-survives workspace remounts on the current page, not page reloads. Stop what `host.listen` returned
-in `unmount`. An operation started before the switch keeps its host: a
-send under way goes where it was written, a staged file belongs to the
-workspace it was staged in (the host refuses it elsewhere).
+and id (Comic also keeps text drafts per workspace in this browser's
+storage, so they survive a reload and a switch of skin). The same
+conversation id in two memberships still names separate drafts; shared
+labels never merge people or workspaces. Stop what `host.listen` returned in
+`unmount`. An operation started before the switch keeps its host: a send
+under way goes where it was written, a staged file belongs to the workspace
+it was staged in (the host refuses it elsewhere).
 
-A notification fragment is `#conv=<hash>&workspace=<id>`: the host
-verifies the id against its registrations, selects that workspace, then
-calls `onOpen`'s handler; an unknown id opens nothing (never the current
-workspace instead).
+A notification fragment is `#conv=<hash>&workspace=<id>`,
+`#msg=<id>[&conv=<hash>][&dir=in|out][&workspace=<id>]` or
+`#review[&workspace=<id>]`: the host verifies the workspace id against its
+registrations, selects that workspace, then calls the `onOpen` handler; an
+unknown id opens nothing (never the current workspace instead).
 
 The host handles the authenticated transport, browser engine and enrollment.
-It does not interpret receipt states as task completion, silently approve anything,
-or automatically send messages. All effects still require normal core checks.
-A skin should use returned actions/capabilities to decide which controls exist.
-A browser has no local responder or daemon reminders.
+It does not interpret receipt states as task completion, silently approve
+anything, or automatically send messages. All effects still require normal
+core checks. A skin should use returned actions/capabilities to decide which
+controls exist. A browser has no local responder or daemon reminders.
 
 Common JSON routes (see `internal/ui/ui.go` for concrete view types and
 `internal/ui/server.go` for request bodies):
@@ -207,24 +279,67 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   zero; the Hub's quota is the whole server's, never an allowance.
 - Presence refresh: `/api/refresh`, triggered by user navigation; no polling.
 
-## Independent example and validation
 
-`examples/skins/notebook/` is a small independent UI: a notebook with a table of
-contents (people, then devices and services), one conversation page at a time,
-a To line and target-named Send button, files added by choosing or dropping,
-received and kept files opened as clippings, and explicit decision buttons. It
-imports none of the default application. It is a developer example, not a
-feature-complete alternative: it says on its page that finding new people,
-adding devices, settings and notifications are not in it. Install it in a
-synthetic home to exercise the contract.
+## Build your own skin
 
-Default text drafts are saved before switching interfaces and restored when
-returning to AgentNet. Other interfaces have their own drafts. Pending default
-attachments must be sent or removed first. Closing/reloading the default page
-still loses unsent files.
+1. Start from `examples/skins/notebook/` (plain modules and CSS, no build
+   step) or any toolchain whose output is ES modules and CSS. Comic is built
+   with React, Base UI and Tailwind (`internal/ui/web/build.sh`); its package
+   is the reference for a bundled skin.
+2. Write `skin.json` listing every file. Register `host.onOpen` in `mount`,
+   use only the host API above, keep everything inside `root`, and leave
+   `root` empty in `unmount`.
+3. Try it without installing: import the folder into a browser (Comic,
+   Settings → Appearance → Skin). Or install it next to the program and
+   restart.
+4. Check it (below), on both providers, desktop and phone, light and dark,
+   with unread/error/offline states, file safety, drafts, keyboard/focus and
+   notification routing. Never use live enrollment codes or real messages as
+   a fixture.
 
-Notebook keeps text, native File objects, send kind and selected conversation in
-the host's existing per-workspace view state. Switching A/B/A restores that
+## Checks
+
+**Contract only** (`internal/ui/testdata/skin_contract_check.cjs`, Go test
+`TestSkinPackagesContractOnly`, opt-in with `AGENTNET_PLAYWRIGHT`): mounts
+packages from copied package bytes at an unrelated path, with only a public
+host the check implements itself (no loader, no workspace shell, no page
+globals), over the demo daemon. It fails on a read of a private page global,
+a direct `/api` or `/events` request, a request for an undeclared file (the
+documented `/assets/typing.mjs` excepted), any DOM write outside the root,
+errors, or a root left non-empty after `unmount` (mount/unmount A/B/A). It
+runs Comic and the Notebook example at 1440 and 390 pixels:
+
+```sh
+AGENTNET_PLAYWRIGHT=/absolute/path/to/playwright-core go test ./internal/ui -run TestSkinPackagesContractOnly -v
+```
+
+**Production host** (`skins_browser_check.cjs`, `TestSkinsRendered`): the real
+loader and catalog with Comic as a package (shadow root, fonts and
+properties adopted, no switcher), saved choices, an installed skin behind
+its trust step under the switcher (layout, keyboard, theme), notification
+destinations, a browser-local skin imported, re-trusted after a change and
+removed, and the step back to Comic, at 1800×960 light and 390×844 dark.
+`workspace_reconnect_browser_check.cjs` covers the switcher's workspace
+control.
+
+Digest-bound passing evidence establishes those checks for those bytes, not
+a sandbox, safety guarantee or certification of harmlessness. Skins still
+execute with the page's full trust.
+
+## Independent example: Notebook
+
+`examples/skins/notebook/` is a small independent skin: a notebook with a
+table of contents (people, then devices and services), one conversation page
+at a time, a To line and target-named Send button, files added by choosing or
+dropping, received and kept files opened as clippings, reactions, edits and
+explicit decision buttons, in light and dark, desktop and phone. It imports
+nothing of Comic. It is a developer example, not a feature-complete skin: it
+says on its page that finding new people, adding devices, settings and
+notifications are not in it, and the switcher above it takes you to Comic
+for those.
+
+Notebook keeps text, native File objects, send kind and selected conversation
+in the host's per-workspace view state. Switching A/B/A restores that
 workspace's draft and target, even when another workspace has the same ids.
 Sends already started keep their original host and target; returning during a
 send does not duplicate it. Accepted sends clear only the text and files they
@@ -237,6 +352,10 @@ A send already under way may still be accepted after leaving. Clean pages have
 no leave listener. This is not crash durability: warning display needs browser
 support and user interaction and is unreliable on mobile OS termination. See
 [the browser API's limits](https://developer.mozilla.org/en-US/docs/Web/API/Window/beforeunload_event).
+
+Comic keeps text drafts per workspace in this browser; switching skins asks
+to send or remove files waiting in a draft first, since files cannot survive
+the reload.
 
 ### Notebook journey and digest evidence
 
@@ -277,7 +396,3 @@ An advisory review should name the digest and tested journeys alongside any
 unchecked flows. Digest-bound passing evidence establishes those compatibility
 checks for those bytes, not a sandbox, safety guarantee or certification of
 harmlessness. Skins still execute with the page's full trust.
-
-Before publishing a skin, test both providers, desktop and mobile, unread/error/
-offline states, file safety, drafts, keyboard/focus and notification routing.
-Never use live enrollment codes or real messages as a fixture.

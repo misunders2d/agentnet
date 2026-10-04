@@ -24,7 +24,7 @@ export const menuIcons = {
 export function PlusMenu({ actions, disabled, onOpenChange, onClosed }: { actions: MenuAction[]; disabled?: boolean; onOpenChange?: (open: boolean) => void; onClosed?: () => void }) {
   const portal = usePortal();
   return (
-    <Menu.Root onOpenChange={(o) => onOpenChange?.(o)} onOpenChangeComplete={(o) => { if (!o) onClosed?.(); }}>
+    <Menu.Root modal={false} onOpenChange={(o) => onOpenChange?.(o)} onOpenChangeComplete={(o) => { if (!o) onClosed?.(); }}>
       <Menu.Trigger disabled={disabled} aria-label="Add to message" title="Add to message"
         className="group grid size-11 shrink-0 place-items-center self-end rounded-full bg-surface stroke press hover:bg-sunken disabled:opacity-40 data-[popup-open]:bg-ink lg:mb-0.5">
         <IconPlus size={22} stroke={2.4} className="text-ink transition-transform duration-200 ease-out-soft group-data-[popup-open]:rotate-45 group-data-[popup-open]:text-canvas motion-reduce:transition-none" />

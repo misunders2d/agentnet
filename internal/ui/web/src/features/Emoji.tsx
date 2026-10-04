@@ -200,7 +200,7 @@ function CategoryTabs({ parts, current, onJump }: { parts: Section[]; current: n
         ))}
       </div>
       {rest.length > 0 && (
-        <Menu.Root>
+        <Menu.Root modal={false}>
           <Menu.Trigger aria-label={"More categories" + (inRest ? ", now " + parts[current].label : "")} title="More categories"
             className={tab(inRest) + " flex-[1_1_0] rounded-xl data-[popup-open]:bg-sunken data-[popup-open]:opacity-100 data-[popup-open]:grayscale-0"}>
             <span aria-hidden="true" className="flex items-center gap-px">

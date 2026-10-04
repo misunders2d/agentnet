@@ -866,8 +866,9 @@ this computer. Start the daemon with --ui to serve it over your real inbox:
 The page does what the commands do, with the same rules: sending, replying,
 accepting, declining, approving and trusting go through the same operations
 as agentnet send, reply, accept and the rest, and nothing is approved or run
-that those would not. Conversations are threads of linked replies, shown as a
-classic chat, a comic you page through, or a space you zoom into. Files
+that those would not. The page opens in Comic, AgentNet's own skin; other
+skins, packages anyone can build on the same contract, can be installed in
+<home>/skins or imported into one browser (Settings, Appearance). Files
 already received are listed; sending files and saving them stay on the
 command line (agentnet send --file, agentnet download).
 

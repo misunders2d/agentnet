@@ -165,7 +165,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
         ? <Button variant="act" icon={<IconUserPlus size={20} />} onClick={() => store.openInvite(ctx.conv)} className="shrink-0">Bring in</Button>
         : <IconButton label="Bring someone in" onClick={() => store.openInvite(ctx.conv)} className="shrink-0 bg-act text-act-ink stroke hover:bg-act"><IconUserPlus size={21} /></IconButton>)}
 
-      <Menu.Root>
+      <Menu.Root modal={false}>
         <Menu.Trigger aria-label="More" title="More" className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken data-[popup-open]:bg-sunken">
           <IconDotsVertical size={22} />
         </Menu.Trigger>

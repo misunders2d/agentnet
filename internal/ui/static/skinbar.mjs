@@ -177,7 +177,7 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
       ...(manage ? [el("hr", "sep"), item("menuitem", glyph(icon("plus", 20), "dashed"), "Import or remove skins…", "Skins stored in this browser", () => { skinMenu.close(false); managerDialog(); })] : []));
   });
   const managerDialog = () => {
-    showDialog("Skins in this browser", (f) => {
+    showDialog("Import or remove skins", (f) => {
       const box = el("div", "manager");
       teardown = manage(box);
       f.append(box, actions(btn("Done", "act", () => dialog.close())));
