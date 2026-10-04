@@ -138,6 +138,35 @@ offline, no polling) and docs/UI_SKINS.md (host API v1).
 - **Guest controls:** header guest chips are a summary only. Dismiss, "What X saw" and the exposure strip live in the panel, which removes the 24px × buttons.
 - **Shortcuts:** Ctrl K searches; Alt D switches Answer and Do it.
 
+## Topics (an agent's separate conversations)
+Owner decisions and the API: docs/plans/TOPICS.md. One agent is one row in
+the chat list; each of its topics is a separate reply chain.
+- **Bar** under the header: at most 6 chips (`TOPICS.barMax`), as many as
+  fit: what needs you, then unread, then the open topic, then the most recent
+  active; the open topic always keeps its chip. The last chip is **All
+  topics (N)**, with a red count (a dot on phones) when topics not shown have
+  unread messages. No scrollbar: chips share the width and truncate (title in
+  full on hover); phones fit one topic chip. "+ New topic" sits at the end (an
+  icon with a label for screen readers on phones).
+- **State in words:** Needs you (yellow), Waiting (agent violet), Done (green),
+  Archived (muted), each with an icon. Bar chips show the icon with the word
+  for screen readers and on hover; lists show the word.
+- **The open chip is the topic menu** (ink chip with a chevron): Rename…,
+  Mark done or Reopen, All topics. Rename opens a sheet that says the name is
+  kept on this device only, with "Use its first message" to undo.
+- **All topics:** desktop a 440px side panel from the right edge, phone a
+  full-screen sheet with Back. Search field, then Active / Done / Archived
+  as three equal pill buttons with counts, then rows: title, time, state,
+  the last line (or "Agent: <conclusion>" when the agent finished it),
+  unread count; Show more pages on. Footer: "Names you give topics and Done
+  marks are kept on this device only."
+- **End of a done topic:** a card after the last message: Done, who finished
+  it, "<Agent>'s conclusion: …" in the agent's words, and Reopen. An archived
+  topic says Archived, how long it has been quiet, and that nothing was
+  deleted and a new message makes it active again.
+- **Chat search** lists matching topics (archived too) under "Topics", each
+  opening that topic.
+
 ## Invite → guest → dismiss
 1. **Open the sheet** from "+" → "Bring someone in", the header icon, or the panel. The sheet says: "They join as a guest and see only what you share. Anyone here can dismiss them."
 2. **Pick who.** Search people and agents. A person is preselected only for a stated, local reason, such as "mentioned by Vitalii". There is no suggestion engine.
