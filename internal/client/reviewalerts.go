@@ -59,7 +59,7 @@ func notificationReport(body, host, key string) (Report, bool) {
 		if it.Kind != envelope.KindTask && it.Kind != envelope.KindQuestion && it.Kind != envelope.KindMessage {
 			return Report{}, false
 		}
-		if it.State != stateAwaiting && it.State != stateHeld && it.State != stateNeedHuman {
+		if it.State != stateAwaiting && it.State != stateHeld && it.State != stateNeedHuman && it.State != stateInterrupt { // alertReviewStates
 			return Report{}, false
 		}
 		if it.Blocker != blockerOf(it.Kind, it.State) {

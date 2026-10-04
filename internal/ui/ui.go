@@ -334,7 +334,8 @@ type DMMessage struct {
 // AgentActions are the decisions this device's person can take on a
 // request to its agent in state: run a task that needs their accept (or
 // run one again) or decline it (the requester is told, nothing runs it),
-// stop a run, or close what the agent handed back.
+// stop a run, or close what the agent handed back or what a stopped daemon
+// left interrupted (client.Resolve).
 func AgentActions(kind, state string) []string {
 	switch state {
 	case "awaiting": // a task, or a guest's question, waiting for this host's one-time acceptance
@@ -345,7 +346,12 @@ func AgentActions(kind, state string) []string {
 		return []string{DoCancel}
 	case "needs_human":
 		return []string{DoAccept, DoResolve}
-	case "interrupted", "failed", "cancelled":
+	case "interrupted":
+		if kind == KindTask || kind == KindQuestion {
+			return []string{DoAccept, DoResolve}
+		}
+		return []string{DoAccept}
+	case "failed", "cancelled":
 		return []string{DoAccept}
 	}
 	return nil
@@ -721,7 +727,7 @@ const ReasonSelfConsented = "self_consented"
 
 // ConvItem is a conversation item waiting for the person
 // (client.ConvReview); Reason is one of client.ReviewAwaiting,
-// ReviewNeedsHuman, ReviewInvite or ReviewHeldTurn, and Conv is the
+// ReviewNeedsHuman, ReviewInterrupted, ReviewInvite or ReviewHeldTurn, and Conv is the
 // conversation the page opens for it. Opening it, or clicking an alert
 // about it, decides nothing. Actions are the decisions available here: on
 // a request (ID) through /api/act, on an invitation (PID only) through
@@ -1039,6 +1045,10 @@ func Next(dir, kind, state, peer string, answered bool) string {
 		switch state {
 		case "held", "awaiting", "needs_human":
 			return "you"
+		case "interrupted": // client reviewStates: a request is run again or closed by the person
+			if kind == KindQuestion || kind == KindTask {
+				return "you"
+			}
 		case "pending", "accepted", "running", "cancel_requested":
 			return "your responder"
 		}
@@ -1073,7 +1083,9 @@ func ActionsFor(kind, state string) []string {
 		return []string{DoReply, DoAccept, DoResolve}
 	case "running":
 		return []string{DoCancel}
-	case "interrupted", "failed", "cancelled":
+	case "interrupted": // run again, answered by hand, or closed without running (client.Resolve)
+		return []string{DoAccept, DoReply, DoResolve}
+	case "failed", "cancelled":
 		return []string{DoAccept, DoReply}
 	}
 	return nil

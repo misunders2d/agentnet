@@ -1055,7 +1055,10 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return err
 		}
 		if sp.info.Person == me.info.Person {
-			return nil // this person's own message, from another of its devices: never an alert
+			// This person's own message, from another of its devices: never an
+			// alert, and a turn of theirs answers what was held for them
+			// before it was written there.
+			return turnClosesHeld(tx, in, in.TS*1000)
 		}
 		return queueAlert(tx, in, sender.Fingerprint(), now)
 	}

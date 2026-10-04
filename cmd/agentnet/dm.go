@@ -270,6 +270,9 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if keys := taskGrantees(a, p); args[0] == "accept-agent" && p.HostHere && len(keys) > 0 {
 			fmt.Fprintf(stdout, "tasks from %s now run on this device without asking while this agent participates (%s)\n", strings.Join(keys, ", "), grantEnd(p))
 		}
+		if why := a.NothingRuns(p.AgentID); args[0] == "accept-agent" && p.HostHere && why != "" {
+			fmt.Fprintf(stdout, "warning: nothing here runs what is asked of this agent yet, so it waits: %s\n", why)
+		}
 		return nil
 	case "invite-guest":
 		fs := flag.NewFlagSet("dm invite-guest", flag.ContinueOnError)

@@ -446,7 +446,7 @@ func TestQuestionCounterQuestionRoundTrip(t *testing.T) {
 	if err := w.bob.Approve(w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	runWith(t, w, w.bob, RunOptions{})

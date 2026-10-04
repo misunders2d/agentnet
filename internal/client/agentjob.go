@@ -452,33 +452,60 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 			other = p.info.Label
 		}
 	}
-	asker := host + ", your own person"
-	if !j.Local {
-		asker = "the other person, " + other
+	// The asker is named from the request's exact key (or the guest scope
+	// it was captured under), never assumed: a guest is an outside,
+	// temporary person, and the host's own person may ask from another of
+	// their devices.
+	guests, author, err := a.requestGuests(j, m)
+	if err != nil {
+		return "", err
+	}
+	asker := "someone who is neither a member nor a guest here (" + j.From + ")"
+	switch {
+	case j.Local:
+		asker = host + ", your own person"
+	case author != nil:
+		asker = guestName(*author) + ", an outside person present in this conversation only temporarily, as a guest"
+	default:
+		for _, p := range m.persons {
+			switch {
+			case !p.has(j.From, j.Key):
+			case p.info.Person == info.Host.Person:
+				asker = host + ", your own person (from their device " + j.From + ")"
+			case m.group != nil || info.External:
+				asker = p.info.Label + " (" + j.From + ")"
+			default:
+				asker = "the other person, " + p.info.Label
+			}
+		}
+	}
+	// Every reader of the reply besides the members: the guests its
+	// request's audience names that are still present (as its output goes).
+	also := ""
+	if len(guests) > 0 {
+		var names []string
+		for _, g := range guests {
+			names = append(names, guestName(g))
+		}
+		also = fmt.Sprintf(" It also reaches the guests present now, outside people invited only temporarily: %s.", strings.Join(names, ", "))
 	}
 	var b strings.Builder
 	if m.group != nil {
 		var audience []string
 		for _, p := range m.persons {
 			audience = append(audience, p.info.Label)
-			if p.has(j.From, j.Key) {
-				asker = p.info.Label + " (" + j.From + ")"
-			}
 		}
 		slices.Sort(audience)
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. Your person accepted bounded participation in the group between %s. Replies go only to its current human members and this exact invited host. Use selected grants and this PID's addressed turns only; no ambient room history or other assistants' sessions.\n", host, a.Address, strings.Join(audience, ", "))
+		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. Your person accepted bounded participation in the group between %s. Replies go only to its current human members and this exact invited host.%s Use selected grants and this PID's addressed turns only; no ambient room history or other assistants' sessions.\n", host, a.Address, strings.Join(audience, ", "), also)
 	} else if info.External {
 		var audience []string
 		for _, member := range m.root.Members {
 			p := m.persons[member.Person]
 			audience = append(audience, p.info.Label)
-			if p.has(j.From, j.Key) {
-				asker = p.info.Label + " (" + j.From + ")"
-			}
 		}
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted bounded participation in the direct conversation between %s; your reply is sent to those two members. You are an invited external agent, with selected snapshots and addressed turns only, not ordinary room membership or ambient history access.\n", host, a.Address, host, strings.Join(audience, " and "))
+		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted bounded participation in the direct conversation between %s; your reply is sent to those two members.%s You are an invited external agent, with selected snapshots and addressed turns only, not ordinary room membership or ambient history access.\n", host, a.Address, host, strings.Join(audience, " and "), also)
 	} else {
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.\n", host, a.Address, host, other)
+		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.%s\n", host, a.Address, host, other, also)
 	}
 	if j.Kind == envelope.KindTask {
 		fmt.Fprintf(&b, "%s gives you the task below. Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n", asker)
@@ -527,6 +554,51 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	}
 	fmt.Fprintf(&b, "\n## %s from %s\n%s\n", heading, asker, j.Body)
 	return b.String(), nil
+}
+
+// requestGuests reads request j's captured audience (the HumanTurn stored
+// with it here, or with its outgoing copy when it was asked here): the
+// guests it names that are still present here now, whom its output
+// reaches, and the guest that authored it (its exact key under that
+// author scope), if one did. A request captured with no guests has none.
+func (a *Agent) requestGuests(j job, m dmMembers) (present []ParticipationInfo, author *ParticipationInfo, err error) {
+	h, err := storedHuman(a.store.db, "in", j.ID)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && h == nil {
+		if h, err = storedHuman(a.store.db, "out", j.ID); errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, nil
+		}
+	}
+	if err != nil || h == nil {
+		return nil, nil, err
+	}
+	for _, s := range h.Audience {
+		g, err := participationIn(a.store.db, j.Conv, s.PID, m, a.Address)
+		if errors.Is(err, ErrNoParticipation) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if g.Role != protocol.RoleHuman {
+			continue
+		}
+		if s.PID == h.AuthorPID && g.Host.Address == j.From && g.Host.Fingerprint == j.Key {
+			author = &g
+		}
+		if g.HumanActive() {
+			present = append(present, g)
+		}
+	}
+	return present, author, nil
+}
+
+// guestName is how a prompt names a guest: their own claimed name and the
+// exact device they take part from.
+func guestName(g ParticipationInfo) string {
+	if g.Host.Label == "" {
+		return "a guest (" + g.Host.Address + ")"
+	}
+	return g.Host.Label + " (" + g.Host.Address + ")"
 }
 
 // heldBack is why an output was not stored for sending.

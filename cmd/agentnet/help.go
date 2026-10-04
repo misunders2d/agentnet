@@ -57,7 +57,7 @@ Questions and tasks sent to you:
   approve    answer an agent's questions automatically (unapprove to stop);
              approve --tasks: run its tasks without asking, for its exact key
   approvals  list who is approved, with task keys and whether they still hold
-  resolve    close an item your responder marked needs_human
+  resolve    close an item marked needs_human or interrupted (no reply is sent)
   remind     remind me later about a received message (list, done, cancel)
   open       review an item (or --review, all waiting) with your coding agent
   review-to  tell another agent of yours, without content, when items wait here
@@ -235,7 +235,18 @@ Items waiting for your decision (--review):
                for your responder's items:
                reply ID TEXT or decline ID answers a question or task;
                accept ID reruns it afresh (e.g. after you add context);
-               resolve ID closes it without sending anything
+               resolve ID closes it without a reply
+  interrupted  the daemon stopped while your responder ran it; nothing
+               reruns it on its own (a task may already have had effects):
+               accept ID runs it again afresh, reply ID TEXT or decline ID
+               answers it, resolve ID closes it without a reply
+  conv_held    a question or task for you in a conversation: nothing runs
+               it; your next turn there answers it (agentnet dm send),
+               resolve ID closes it without one
+Then, apart, what else waits here, each with where it is decided: requests
+to your agent that have not run (and why), invitations for your agent or to a
+group, devices asking to be linked to your person, and messages held back
+(e.g. until you trust a sender's changed key). doctor counts them too.
 While the daemon runs, a desktop notification with only a count (no content)
 tells you when new items wait (Linux: notify-send; macOS: osascript;
 Windows: a notification-area balloon, whose icon stays while the daemon
@@ -250,7 +261,11 @@ Windows desktop). Clicks are not handled on macOS.
   --unread   only unread messages
   --review   only items waiting for your decision; does not mark them read
   --peek     inspect without changing any message's read state
-  --json     machine-readable output`,
+  --json     machine-readable output; with --review it also lists the
+             reports from other machines (status review_notice), decided
+             there; the rest the text output lists after them (agents that
+             joined without your accept, and what else waits) is not in it:
+             see the text output or agentnet doctor`,
 
 	"conversation": `Usage: agentnet conversation [--json] [--offset N] [--limit N] ID
 
@@ -486,7 +501,10 @@ or rerun one that was interrupted, failed, cancelled or marked needs_human.
 A rerun starts afresh; it does not resume the earlier run. Only you can do
 this; nothing a sender does can. In a DM this applies only to a request to
 your own agent (agentnet help dm), which still runs only while its
-participation allows it.
+participation allows it. When nothing here would run it (no responder
+chosen, or answering by hand chosen; the agent it names is not set up here;
+its participation, or the asking guest's, has ended), accept refuses and
+says why: the item stays as it was.
 
 --always (tasks only, not in a DM) also lets future tasks from the same sender run without
 asking, in one step: only for the exact key that signed this task, and only
@@ -505,7 +523,11 @@ you is answered in the conversation.`,
 	"cancel": `Usage: agentnet cancel ID
 
 Stop your responder while it is running ID. On Linux and macOS the harness and
-the processes it started are stopped; on Windows only the harness itself.`,
+the processes it started are stopped; on Windows only the harness itself.
+Only the daemon runs anything: with no daemon running, cancel refuses (a run
+the daemon left when it stopped shows as interrupted when it starts again).
+On Linux a harness also dies with a daemon that crashes, and the next daemon
+stops what is left of it before marking it interrupted.`,
 
 	"open": `Usage: agentnet open ID
        agentnet open --review
@@ -551,22 +573,33 @@ record.`,
 
 	"resolve": `Usage: agentnet resolve ID
 
-Close an item your responder marked needs_human after you have dealt with it.
-It sends nothing; to answer the sender, use reply or decline instead. With
-the PID of your agent that joined without your accept (inbox --review), it
-dismisses that notice; the agent stays (dm dismiss-agent PID ends it).`,
+Close an item your responder marked needs_human after you have dealt with it,
+or one that was interrupted (the daemon stopped while it ran) that you do not
+want run again, or a question or task held for you in a conversation that you
+do not want to answer there (replying there closes it too). It sends no
+reply and runs nothing (a requester that reads statuses is told it was
+closed; nothing at all for a turn held in a conversation); to answer the
+sender, use reply or decline instead. With the PID of your agent that joined
+without your accept (inbox --review), it dismisses that notice; the agent
+stays (dm dismiss-agent PID ends it).`,
 
 	"review-to": `Usage: agentnet review-to               (show)
        agentnet review-to ADDRESS
        agentnet review-to --off
 
 For a machine where nobody sees desktop notifications (a server): when a
-held question, a task awaiting acceptance or a needs_human item waits here,
-the daemon sends ADDRESS (another agent of the same person, e.g. their
-laptop) one plain message with only a count and this agent's address: no
-text, senders or ids of the requests. Each item is reported once. Deciding
-still happens on this machine: nothing received there can accept, decline
-or approve anything here, and the senders are told nothing.
+held question, a task awaiting acceptance, a needs_human item or an
+interrupted one waits here, the daemon sends ADDRESS (another agent of the
+same person, e.g. their laptop) one plain message with only a count and this
+agent's address: no text, senders or ids of the requests. Each item is
+reported once. Deciding still happens on this machine: nothing received
+there can accept, decline or approve anything here, and the senders are told
+nothing.
+
+ADDRESS must be an agent on your Hub that is not revoked: it is checked when
+you set it (nothing changes while the Hub cannot be asked), and doctor says
+when notices to it are not getting out (they could not be queued, or the Hub
+refused them).
 
 ADDRESS files the notice (from any agent; it grants and proves nothing) as
 needs_human for its own person (desktop
@@ -710,8 +743,9 @@ requests waiting here from their own messenger: accept, decline, reply,
 resolve, stop. The grant names that device's exact pinned key, is made
 here only, and nothing received can make or widen it. Granted operators
 receive this machine's review reports with the waiting requests named
-(id, sender, kind, state, first line); "agentnet review-to" alone still
-gets a count and nothing more. Each decision is applied once, in the state
+(id, sender, kind, state, first line), except interrupted ones for now: an
+older operator device drops a whole report naming one (inbox --review here
+lists them). "agentnet review-to" alone still gets a count and nothing more. Each decision is applied once, in the state
 the operator saw; a repeated or stale one is refused and the operator is
 told what the request's state is now.
 `,
