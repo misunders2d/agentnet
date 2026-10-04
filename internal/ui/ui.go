@@ -694,7 +694,7 @@ const ReasonSelfConsented = "self_consented"
 
 // ConvItem is a conversation item waiting for the person
 // (client.ConvReview); Reason is one of client.ReviewAwaiting,
-// ReviewNeedsHuman, ReviewInvite or ReviewHeldTurn, and Conv is the
+// ReviewNeedsHuman, ReviewInterrupted, ReviewInvite or ReviewHeldTurn, and Conv is the
 // conversation the page opens for it. Opening it, or clicking an alert
 // about it, decides nothing. Actions are the decisions available here: on
 // a request (ID) through /api/act, on an invitation (PID only) through
@@ -1012,6 +1012,10 @@ func Next(dir, kind, state, peer string, answered bool) string {
 		switch state {
 		case "held", "awaiting", "needs_human":
 			return "you"
+		case "interrupted": // client reviewStates: a request is run again or closed by the person
+			if kind == KindQuestion || kind == KindTask {
+				return "you"
+			}
 		case "pending", "accepted", "running", "cancel_requested":
 			return "your responder"
 		}

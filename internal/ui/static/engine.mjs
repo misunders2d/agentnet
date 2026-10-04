@@ -6070,8 +6070,8 @@ export class Engine {
       const here = !m.fp && !m.excerpt_pid, fp = here ? this.fp : m.fp;
       const answered = msgs.some((r) => r.fp && r.reply_to === m.id && (r.kind === "answer" || r.kind === "result"));
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
-      if (!e || !["awaiting", "needs_human"].includes(e.state)) continue;
-      needsYou.push({ reason: e.state === "awaiting" ? "agent_awaiting" : "agent_needs_human", conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
+      if (!e || !["awaiting", "needs_human", "interrupted"].includes(e.state)) continue; // client.PageReview's states
+      needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted" }[e.state], conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
         why: "Decide on " + e.host + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
     }
   }

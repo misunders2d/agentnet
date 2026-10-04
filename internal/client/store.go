@@ -618,10 +618,14 @@ const (
 	stateNotDelivered = "not_delivered" // it ran, but its output was held back (also an outbox state); kept here
 )
 
-// reviewStates are the states that wait for the local human's decision.
-var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld}
+// reviewStates are the states that wait for the local human's decision
+// (the arguments of inReview). An interrupted question or task is one:
+// nothing reruns it on its own (a task may already have had effects), so
+// the person runs it again (Accept) or closes it (Resolve, Reply, Decline).
+// An interrupted follow-up is no request: nobody waits on it.
+var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inReview = `state IN (?, ?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // alertReviewStates are the review states that ask for attention by the
 // legacy desktop review notification and the review notice to another
@@ -629,10 +633,11 @@ const inReview = `state IN (?, ?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_rece
 // them, as it is a person's DM turn, which follows the DM's own opt-in
 // alerts (alerts.go). It stays in review (reviewStates) all the same. A
 // request to this device's agent that needs the person (awaiting,
-// needs_human) keeps them.
-var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
+// needs_human, interrupted) keeps them. They are the arguments of
+// inAlertReview.
+var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inAlertReview = `state IN (?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inAlertReview = `(state IN (?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // inboxArgs are insertInbox's arguments. The arrival is kept to the
 // millisecond too, as a conversation message's is, so that the inbox lists

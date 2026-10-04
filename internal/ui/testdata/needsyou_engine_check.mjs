@@ -29,4 +29,19 @@ for (const [claim, at] of [[9e12, now], [1e12, now], [253402300799, now], [-5, n
   assert.equal(listed(claim, []).at, new Date(at).toISOString(), "no record row here: claim " + claim);
 for (const [claim, shown] of [[9e12, ""], [1e12, ""], [253402300799, ""], [-5, ""], [0, ""], [1759500000, new Date(1759500000e3).toISOString()]])
   assert.equal(e.agentView(info(claim), [], null).invited, shown, "the agent view's invited, claim " + claim);
-console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out");
+// This browser's request to the laptop's agent is listed, read-only, in
+// the states client.PageReview lists it in on the laptop: awaiting,
+// needs_human, and interrupted (the laptop's daemon stopped while it ran:
+// run it again there, or close it there); never while it runs.
+const active = { ...info(1759500000), state: "active" };
+const req = { id: "2".repeat(32), lid: "3".repeat(32), pid, kind: "task", body: "rotate the key", at: received,
+  target: { address: "admin/laptop", fingerprint: "a".repeat(8) } };
+const status = (state) => ({ sub: "status", from: "admin/laptop", lid: "4".repeat(32), ref: { id: req.lid, fingerprint: e.fp },
+  body: JSON.stringify({ state, n: 1, at: 1759500000 }) });
+for (const [state, reason] of [["awaiting", "agent_awaiting"], ["needs_human", "agent_needs_human"], ["interrupted", "agent_interrupted"], ["running", ""]]) {
+  const needs = [], held = [];
+  e.needsYouOf(conv, [active], [req], [status(state)], needs, held);
+  assert.deepEqual(needs.map((n) => n.reason), reason ? [reason] : [], "a request the laptop reports " + state);
+  if (reason) assert.equal(needs[0].decide_on, "admin/laptop", "decided on the laptop");
+}
+console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out; requests listed as their host reports them, interrupted included");

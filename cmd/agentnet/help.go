@@ -57,7 +57,7 @@ Questions and tasks sent to you:
   approve    answer an agent's questions automatically (unapprove to stop);
              approve --tasks: run its tasks without asking, for its exact key
   approvals  list who is approved, with task keys and whether they still hold
-  resolve    close an item your responder marked needs_human
+  resolve    close an item marked needs_human or interrupted (nothing is sent)
   remind     remind me later about a received message (list, done, cancel)
   open       review an item (or --review, all waiting) with your coding agent
   review-to  tell another agent of yours, without content, when items wait here
@@ -236,6 +236,10 @@ Items waiting for your decision (--review):
                reply ID TEXT or decline ID answers a question or task;
                accept ID reruns it afresh (e.g. after you add context);
                resolve ID closes it without sending anything
+  interrupted  the daemon stopped while your responder ran it; nothing
+               reruns it on its own (a task may already have had effects):
+               accept ID runs it again afresh, reply ID TEXT or decline ID
+               answers it, resolve ID closes it without sending anything
 While the daemon runs, a desktop notification with only a count (no content)
 tells you when new items wait (Linux: notify-send; macOS: osascript;
 Windows: a notification-area balloon, whose icon stays while the daemon
@@ -547,22 +551,25 @@ record.`,
 
 	"resolve": `Usage: agentnet resolve ID
 
-Close an item your responder marked needs_human after you have dealt with it.
-It sends nothing; to answer the sender, use reply or decline instead. With
-the PID of your agent that joined without your accept (inbox --review), it
-dismisses that notice; the agent stays (dm dismiss-agent PID ends it).`,
+Close an item your responder marked needs_human after you have dealt with it,
+or one that was interrupted (the daemon stopped while it ran) that you do not
+want run again. It sends nothing and runs nothing; to answer the sender, use
+reply or decline instead. With the PID of your agent that joined without your
+accept (inbox --review), it dismisses that notice; the agent stays (dm
+dismiss-agent PID ends it).`,
 
 	"review-to": `Usage: agentnet review-to               (show)
        agentnet review-to ADDRESS
        agentnet review-to --off
 
 For a machine where nobody sees desktop notifications (a server): when a
-held question, a task awaiting acceptance or a needs_human item waits here,
-the daemon sends ADDRESS (another agent of the same person, e.g. their
-laptop) one plain message with only a count and this agent's address: no
-text, senders or ids of the requests. Each item is reported once. Deciding
-still happens on this machine: nothing received there can accept, decline
-or approve anything here, and the senders are told nothing.
+held question, a task awaiting acceptance, a needs_human item or an
+interrupted one waits here, the daemon sends ADDRESS (another agent of the
+same person, e.g. their laptop) one plain message with only a count and this
+agent's address: no text, senders or ids of the requests. Each item is
+reported once. Deciding still happens on this machine: nothing received
+there can accept, decline or approve anything here, and the senders are told
+nothing.
 
 ADDRESS files the notice (from any agent; it grants and proves nothing) as
 needs_human for its own person (desktop
