@@ -3896,7 +3896,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapExternalParticipation, wire.CapGroup, wire.CapProgress, wire.CapReplyReceiver, wire.CapHumanParticipation, wire.CapAgentReaction, wire.CapConvClear, ...(f.includes("signals1") ? [wire.CapTyping] : [])])));
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapExternalParticipation, wire.CapGroup, wire.CapProgress, wire.CapReplyReceiver, wire.CapHumanParticipation, wire.CapAgentReaction, wire.CapConvClear, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rm1: every room reader rule is enforced here (ROOM_V1 §2.1)
       await this.publishPerson().catch(() => {});
       await this.flushReceipts();
       await this.retryHeld();

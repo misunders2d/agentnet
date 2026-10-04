@@ -132,8 +132,10 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // requires). Every session of a device advertises the same list: the
 // relay takes a device to support only what ALL its live sessions do, so a
 // session that said less (link.go's waiting one) would keep senders
-// holding controls, Drive records and statuses for it.
-var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapReplyReceiver, protocol.CapTyping}
+// holding controls, Drive records and statuses for it. It is at most
+// protocol.MaxAdvertisedCaps long; rm1 (protocol.CapRoom) says this program
+// enforces every room reader rule (ROOM_V1 §2.1).
+var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapReplyReceiver, protocol.CapRoom, protocol.CapTyping}
 
 // publishOwn publishes this run's capability record and, once per roster,
 // this installation's person.

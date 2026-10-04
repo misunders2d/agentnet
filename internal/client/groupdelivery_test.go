@@ -56,11 +56,10 @@ func publishGroupFixtureCaps(t *testing.T, a *Agent, group bool) {
 	if err := a.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &profile); err != nil {
 		t.Fatal(err)
 	}
-	caps := slices.DeleteFunc(slices.Clone(ownCaps), func(cap string) bool { return cap == protocol.CapGroup })
-	if group {
-		caps = append(caps, protocol.CapGroup)
+	caps := slices.Clone(ownCaps)
+	if !group {
+		caps = without(ownCaps, protocol.CapGroup)
 	}
-	slices.Sort(caps)
 	for _, session := range profile.Sessions {
 		ts := time.Now().Unix() + 100
 		if group {

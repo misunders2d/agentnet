@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,19 @@ func roomOutboxState(t *testing.T, a *Agent, id string) (string, string) {
 		t.Fatal(err)
 	}
 	return state, why
+}
+
+// ROOM_V1 §2.1: this program advertises rm1 (it enforces every room
+// reader rule), within the 16 names a device lists so readers keep their
+// parse headroom; the list is sorted and unique, as a signed record needs.
+func TestOwnCapsAdvertiseRoom(t *testing.T) {
+	if !slices.Contains(ownCaps, protocol.CapRoom) || len(ownCaps) > protocol.MaxAdvertisedCaps || !slices.IsSorted(ownCaps) || len(slices.Compact(slices.Clone(ownCaps))) != len(ownCaps) {
+		t.Fatalf("own capabilities %v", ownCaps)
+	}
+	rec := protocol.CapsRecord{Address: "fixture/desk", Session: protocol.NewID(), Caps: ownCaps, TS: 1}
+	if err := rec.Validate(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // ROOM_V1 §2.5 in a DM: a room shape keeps its primary requirement (hgp1

@@ -35,7 +35,7 @@ func dropCapSuccessor(t *testing.T, a *Agent, cap string) {
 				latest = r
 			}
 		}
-		caps := slices.DeleteFunc(slices.Clone(latest.Caps), func(c string) bool { return c == cap })
+		caps := without(latest.Caps, cap) // an older reader: no rm1 either
 		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: caps, TS: max(latest.TS+1, time.Now().Unix())}
 		rec.Sign(a.id.Sign)
 		if err := a.hub.do(tctx(t), "PUT", "/v1/caps", rec, nil); err != nil {

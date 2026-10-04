@@ -65,7 +65,7 @@ Membership does not change:
 `protocol.CapRoom="rm1"` and `wire.CapRoom` take slot 16 of 16:
 - Go has 15 (`client/conv.go:136`).
 - The engine has 14 plus typing (`engine.mjs:3862`).
-- The relay only runs `ParseCapsRecord` (`hub/profile.go:25`), so it needs no change.
+- The relay only runs `ParseCapsRecord` (`hub/profile.go:25`), so it needs no change (raising `protocol.MaxCaps` raised it there too; P1).
 
 **Advertising rule:** a binary advertises `rm1` only once it enforces **every** reader rule in §2.2–2.5. Senders can switch features on later, so no later phase needs another capability.
 
@@ -336,7 +336,7 @@ CREATE TABLE agent_grants(address TEXT NOT NULL, agent_id TEXT NOT NULL,
 - The trust set lives in `config`.
 - Run folders live on disk.
 
-**Hub:** a code change only (the parse limit), with no schema change.
+**Hub:** no code of its own: the parse limit is `protocol.MaxCaps`, which the relay's `ParseCapsRecord` uses (P1); no schema change.
 
 **Browser:** no IndexedDB version bump, because the stores have no indexes (`engine.mjs:63-64`).
 
@@ -406,6 +406,15 @@ Until visitor-context ingest lands, the engine refuses to accept a group-guest i
   - A device without rm1 waits, then is released.
   - The implication holds, and a 17-token record parses.
   - Go and JS agree both ways.
+- **Shipped (2026-10-04).** rm1 is advertised by the native program (`ownCaps`, 16 of 16) and the browser engine, in the last commit, after these reader rules:
+  - **Capability (§2.1).** `protocol.CapRoom`; `CapsRecord.Reads` (Go) and `capsReads` (`wire.mjs`) make rm1 imply apx1, agi1, hgp1, agr1, prg1, grp1, rcv1 and clr1 in `Profile.Supports` / `profileSupports`. A record parses with up to 32 names (`MaxCaps`), a device advertises at most 16 (`MaxAdvertisedCaps`; the browser's `newCaps` refuses more). The relay parses with `protocol.ParseCapsRecord`, so it needed no code of its own: `TestCapsParseHeadroom` shows it stores and serves a 17-name record and still takes an old one.
+  - **Events (§2.2).** `AudienceRoom`, `Until`; `Validate`/`validateEvent`, `ScopeOf`/`scopeOf`, `Projects`/`projects` (exact projection, `SameScope`), the agreement of scopes standing for an invite, and group room scopes counted through `verifyInviteEpoch` (`loadHosts`, the engine's `dmMembers`). Past `Until` a participation resolves as `dismissed` with no `Dismissal`. `ParticipationInfo.Audience`, `Until`, `Following()`.
+  - **Turns (§2.3).** `HumanTurn` on a group v3 root; a role-less proof scope only with room; an agent author (`HumanTurn.AgentAuthor`) only on a request with an agent origin, and an agent origin only for one; `HumanEdit`: a revision or retraction carrying its turn's audience, admitted (`admitHumanEdit`, engine `admitHumanEdit`) only from the key that sent the turn, under the same author scope, to no wider audience. Readers also refuse an author whose counted participation's role differs from its captured scope.
+  - **Group turns (§2.4).** A person guest's turn (`roomGroupTurn`: PID = AuthorPID) is admitted by members and by the guest's exact host; a member's turn carrying `Human` is verified against its captured audience. A following reader keeps no group admission and forwards nothing. `ordinaryGroupTurn`, and so group history (D2), keeps its members-only shape.
+  - **Gating (§2.5).** `roomCopy` (Go, from the stored columns; engine `roomCopy`) adds rm1 in `deliver`, `releaseConv` and the engine's `post`; a room history copy keeps its body so delivery can judge it. `agentRequirement` gives a group's captured turn grp1 and a DM room event hgp1, before and after the history unwrap; rm1 is in the `requireParticipationCaps` allowlist.
+  - **Receivers (§3).** `humanAuthority` (and so `humanTurnAuthorization`, `mayDeliverHuman`): a DM, or a group with verified context; `follows()`/`Following()` for the audience; `verifyHumanProof` takes a group's members from its context. `humanEndReader` lets a DM follower's host read shared lifecycle records. Engine: `humanEvidence` (groups via `groupHumanEvidence`; member-hosted room agents), `humanAuthorization`, `admitGroupTurn`; a browser refuses to decide a group guest invitation (X8).
+  - **Tests.** Events: `TestParticipationRoomEvents`, `TestParticipationRoomRefuses`, `TestParticipationRoomParsesFromJSON`, `TestRoomEventsInADM`, `TestRoomEventsGroupScopeCounts`, `TestBrowserRoomEventsMatchGo` (golden v1 hashes in both), `TestBrowserRoomEngine`. Turns: `TestHumanTurnRoomShapes`, `TestBrowserRoomTurnsMatchGo`, `TestRoomFollowerReadsInADM`, `TestRoomAgentAsksInADM`, `TestRoomEditsInADM`, `TestRoomGroupTurns`, `TestRoomFollowerReadsSharedLifecycle`, `TestBrowserRoomReceiverEngine`; `TestHumanReactionWireVectors` now keeps edits carrying an audience valid. Delivery: `TestRoomCopiesWaitForRM1`, `TestRoomGroupCopiesWaitForRM1`, `TestRoomRequirementAndRoomCopy`, `TestCapsRoomImplicationAndHeadroom`, `TestCapsParseHeadroom`, the capabilities subtest of `TestBrowserWireV2MatchesGo`; advertising: `TestOwnCapsAdvertiseRoom` and `agent_engine_check.mjs`.
+  - **Left for later phases.** Every sending side (`humanPlan`, `discloseHumanConv`, `inviteParticipation` in groups, follower copies, `groupDeliveryRecipient`'s follower branch, excerpts): P2/P4; a P1 reader admits a group follower by `humanTurnAuthorization`, not by `groupDeliveryRecipient`. Group lifecycle sharing with followers (`assistantHostReader`, `disclosedHumanEvent` stay DM-only): P4. A request or output carrying `Human` in a group is held by a P1 reader (the group PID path does not read it): P3/P4. Showing a guest's or follower's revision in a view (it is stored; a retraction already blanks the turn): P5. A group edit carrying `Human` is stored without a group admission stamp, so it is not forwarded as group control history. The browser's `humanEndReader` is unchanged (it never hosts a follower). J3 needs a P2 sender and was not run.
 
 **P2: DM followers.** The §3 send side for DMs, deferred excerpts, room context and posts, and the conversation-result outbox (§6), shipped once the P0f gate holds for conversation readers. Tests:
 - An invite needs rm1 on the host and on every member device.
