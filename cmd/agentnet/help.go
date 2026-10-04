@@ -507,7 +507,11 @@ Refuse a task or question; the sender receives a result/answer with status
 	"cancel": `Usage: agentnet cancel ID
 
 Stop your responder while it is running ID. On Linux and macOS the harness and
-the processes it started are stopped; on Windows only the harness itself.`,
+the processes it started are stopped; on Windows only the harness itself.
+Only the daemon runs anything: with no daemon running, cancel refuses (a run
+the daemon left when it stopped shows as interrupted when it starts again).
+On Linux a harness also dies with a daemon that crashes, and the next daemon
+stops what is left of it before marking it interrupted.`,
 
 	"open": `Usage: agentnet open ID
        agentnet open --review

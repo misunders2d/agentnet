@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/lockfile"
 )
 
 // Errors for replying to questions and tasks.
@@ -162,8 +164,19 @@ func (a *Agent) Resolve(id string) error {
 	return nil
 }
 
-// Cancel asks the worker to stop the question or task it is running.
+// ErrNoDaemon refuses a cancel no daemon would act on.
+var ErrNoDaemon = errors.New("no daemon runs here now, so nothing is running this: a daemon stopped while it ran, and it shows as interrupted when the daemon starts again (agentnet daemon), any harness of it still running stopped first (Linux)")
+
+// Cancel asks the worker to stop the question or task it is running. Only
+// a daemon runs anything here: with none running (it stopped or crashed
+// while this ran), the cancel is refused rather than recorded as if
+// something would act on it.
 func (a *Agent) Cancel(id string) error {
+	if !a.daemonRuns() {
+		if s, _ := a.store.jobState(id); s == stateRunning || s == stateCancelReq {
+			return ErrNoDaemon
+		}
+	}
 	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND state = ?`, stateCancelReq, id, stateRunning)
 	if err != nil {
 		return err
@@ -173,6 +186,17 @@ func (a *Agent) Cancel(id string) error {
 	}
 	notifyDaemon(a.home)
 	return nil
+}
+
+// daemonRuns reports whether a daemon holds this home now (this process's
+// own included); when that cannot be told, it says it does.
+func (a *Agent) daemonRuns() bool {
+	release, err := lockfile.Acquire(filepath.Join(a.home, "daemon.lock"))
+	if err != nil {
+		return true
+	}
+	release()
+	return false
 }
 
 // Approve lets questions from address be answered automatically.

@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -1204,9 +1204,23 @@ func (s *store) markNotified(ids []string) error {
 // rerun automatically: a task may already have had effects. Their
 // requesters are told (status_due; noteStatus).
 func (s *store) interruptRunning() error {
-	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running', status_due = status_due + 1
-		WHERE state IN (?, ?)`, stateInterrupt, stateRunning, stateCancelReq)
+	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running', status_due = status_due + 1,
+		run_pgid = NULL, run_start = NULL WHERE state IN (?, ?)`, stateInterrupt, stateRunning, stateCancelReq)
 	return s.done(err)
+}
+
+// runGroupSchema keeps the process group of a running job's harness, and
+// its leader's start (procStart), so a daemon starting after one that died
+// can stop what is left of the run before marking it interrupted.
+const runGroupSchema = `
+ALTER TABLE inbox ADD COLUMN run_pgid INTEGER;
+ALTER TABLE inbox ADD COLUMN run_start TEXT;
+`
+
+// setRunGroup records job id's harness process group (pgid 0: it ended).
+func (s *store) setRunGroup(id string, pgid int, start string) error {
+	_, err := s.db.Exec(`UPDATE inbox SET run_pgid = nullif(?, 0), run_start = nullif(?, '') WHERE id = ?`, pgid, start, id)
+	return err
 }
 
 // threadText returns up to max earlier messages of the conversation with

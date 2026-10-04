@@ -479,6 +479,7 @@ func (a *Agent) hold(env envelope.Envelope, reason string) error {
 // starts the single worker for this home. The returned function stops it and
 // waits, killing any harness it is running.
 func (a *Agent) startWorker(ctx context.Context) (func(), error) {
+	a.stopSurvivors() // a harness a daemon that died left running: stopped first
 	if err := a.store.interruptRunning(); err != nil {
 		return nil, err
 	}
@@ -519,4 +520,44 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	go func() { defer close(done); a.worker(ctx, wake) }()
 	a.wakeWorker()
 	return func() { cancel(); <-done; stopKicks(); a.wakeWorker = func() {}; notify.Close() }, nil
+}
+
+// stopSurvivors stops the harnesses an earlier daemon left running (it
+// died: on a normal stop it stops them itself), before their jobs are
+// marked interrupted, so a rerun never runs beside one. Only a group still
+// proven to be that run's is stopped (survivingGroup).
+func (a *Agent) stopSurvivors() {
+	home, err := filepath.Abs(a.home) // as the run was given it (runJob)
+	if err != nil {
+		home = a.home
+	}
+	rows, err := a.store.db.Query(`SELECT id, run_pgid, coalesce(run_start, '') FROM inbox WHERE state IN (?, ?) AND run_pgid IS NOT NULL`,
+		stateRunning, stateCancelReq)
+	if err != nil {
+		a.Logf("runs left by an earlier daemon: %v", err)
+		return
+	}
+	type run struct {
+		id    string
+		pgid  int
+		start string
+	}
+	var runs []run
+	for rows.Next() {
+		var r run
+		if rows.Scan(&r.id, &r.pgid, &r.start) == nil {
+			runs = append(runs, r)
+		}
+	}
+	rows.Close()
+	for _, r := range runs {
+		if !survivingGroup(r.pgid, r.start, home) {
+			continue
+		}
+		if err := killGroup(r.pgid); err != nil {
+			a.Logf("%s: its harness, left running by a daemon that stopped, could not be stopped (process group %d): %v", r.id, r.pgid, err)
+			continue
+		}
+		a.Logf("%s: its harness was still running, left by a daemon that stopped (process group %d): stopped", r.id, r.pgid)
+	}
 }

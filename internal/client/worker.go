@@ -268,7 +268,18 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	cmd.WaitDelay = 5 * time.Second
 	ownProcessGroup(cmd)
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
-	runErr := cmd.Run()
+	runErr := cmd.Start()
+	if runErr == nil {
+		// Its process group, for a later daemon to stop if this one dies
+		// while it runs (stopSurvivors).
+		if pgid := runGroup(cmd); pgid > 0 {
+			if err := a.store.setRunGroup(j.ID, pgid, procStart(pgid)); err != nil {
+				a.Logf("%s %s: process group not recorded: %v", j.Kind, j.ID, err)
+			}
+			defer a.store.setRunGroup(j.ID, 0, "")
+		}
+		runErr = cmd.Wait()
+	}
 	if j.run.outPath() != "" {
 		// Nothing the run started may change its outbox, or the copies sent
 		// from it, once it has ended: what is left of its process group is

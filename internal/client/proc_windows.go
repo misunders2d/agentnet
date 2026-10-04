@@ -11,3 +11,8 @@ func ownProcessGroup(cmd *exec.Cmd) {}
 // stopGroup: no process group is kept on Windows (and runs there get no
 // outbox).
 func stopGroup(cmd *exec.Cmd) {}
+
+// runGroup: no process group (0: none recorded).
+func runGroup(cmd *exec.Cmd) int { return 0 }
+
+func killGroup(int) error { return nil }

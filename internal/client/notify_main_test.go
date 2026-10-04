@@ -25,6 +25,11 @@ func TestMain(m *testing.M) {
 	if cmd := os.Getenv("AGENTNET_TEST_CLI"); cmd != "" {
 		os.Exit(runTestCLI(cmd))
 	}
+	// A daemon that starts a harness as the worker does, then waits to be
+	// killed (runproc_linux_test.go).
+	if pidFile := os.Getenv("AGENTNET_TEST_HARNESS_PARENT"); pidFile != "" {
+		os.Exit(runTestHarnessParent(pidFile))
+	}
 	os.Setenv("AGENTNET_NOTIFY", "off")
 	terminalLauncher = ""
 	os.Exit(m.Run())
