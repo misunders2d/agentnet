@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -204,11 +205,21 @@ func shownRows(msgs []client.ConvMessage, people dmPeople) []client.ConvMessage 
 // device shows under another copy's id when it sent the request, or under
 // its logical id (an external request's executor copy has the logical id
 // as its id). A reply naming any copy or the logical id of a message here
-// names that message's id; anything else stays as sent.
+// names that message's id; anything else stays as sent. A logical id is
+// unique per sender key only: one that two keys used here names no one
+// message, so a reply naming it stays as sent.
 func linkReplies(msgs []client.ConvMessage, out []DMMessage) {
+	keyOf, twice := map[string]string{}, map[string]bool{} // logical id → the key that sent it; ones two keys used
+	for _, m := range msgs {
+		key := cmp.Or(m.Key, m.Claimed)
+		if k, ok := keyOf[m.LID]; ok && k != key {
+			twice[m.LID] = true
+		}
+		keyOf[m.LID] = key
+	}
 	shown := map[string]string{}
 	for _, m := range msgs {
-		if m.LID != "" {
+		if m.LID != "" && !twice[m.LID] {
 			shown[m.LID] = m.ID
 		}
 		for _, c := range m.Copies {

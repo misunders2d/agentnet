@@ -227,11 +227,18 @@ const rel0 = (ctls) => ctls.some((x) => x.pid && x.sub === wire.SubReaction); //
 // (an agent's answer, its executor's copy of the request), which this
 // device shows under another copy's id or under its logical id. The
 // returned function gives the id a reply_to names as shown here; anything
-// else stays as sent.
-const linkReplies = (msgs) => {
-  const shown = new Map();
+// else stays as sent. A logical id is unique per sender key only (self:
+// this device's key, for rows it sent): one that two keys used names no
+// one message, so a reply naming it stays as sent.
+const linkReplies = (msgs, self) => {
+  const keyOf = new Map(), twice = new Set(), shown = new Map();
   for (const m of msgs) {
-    if (m.lid) shown.set(m.lid, m.id);
+    const key = m.fp || m.claimed_key || self;
+    if (keyOf.has(m.lid) && keyOf.get(m.lid) !== key) twice.add(m.lid);
+    keyOf.set(m.lid, key);
+  }
+  for (const m of msgs) {
+    if (m.lid && !twice.has(m.lid)) shown.set(m.lid, m.id);
     for (const c of m.copies || []) shown.set(c.id, m.id);
   }
   for (const m of msgs) shown.set(m.id, m.id); // an exact id is always its own message
@@ -1975,7 +1982,7 @@ export class Engine {
     }catch(e){frozen=e.message;members=await this.groupPeople(packet).catch(()=>[]);}
     const inbox=await this.store.all("inbox"),outbox=await this.store.all("outbox"),ctls=[...inbox,...outbox].filter(r=>r.control&&r.conv===conv);
     const visitorPIDs=new Set(infos.filter(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp).map(i=>i.pid));
-    const messages=this.convMessages(conv,inbox,outbox).filter(m=>role!=="visitor"||visitorPIDs.has(m.pid||m.excerpt_pid)),shownReply=linkReplies(messages);
+    const messages=this.convMessages(conv,inbox,outbox).filter(m=>role!=="visitor"||visitorPIDs.has(m.pid||m.excerpt_pid)),shownReply=linkReplies(messages,this.fp);
     const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone";
     return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:infos.map(i=>this.agentView(i,messages,null,members,role)),messages:await Promise.all(messages.map(async m=>{
       const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members):"",fp=m.fp||this.fp,ev=event?this.eventFields(m.body,members):null;
@@ -5225,7 +5232,7 @@ export class Engine {
     const parts = new Map((await this.participationsOf(c)).map(p => [p.pid, p]));
     const humans = new Map([...parts].filter(([, p]) => p.role === "human"));
     msgs = await this.oneRowPerRecord(msgs, humans);
-    const shownReply = linkReplies(msgs);
+    const shownReply = linkReplies(msgs, this.fp);
     const pinned = (await this.store.all("persons")).filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
     return { id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : guests.some(p => p.host_here) ? "human_guest" : "visitor", guests, audience_pending: guests.some(p => p.audience_pending), created: iso(c.created * 1000), mine: c.creator === this.address,
       frozen: peer && peer.state === "conflict" ? peer.address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it." : "",

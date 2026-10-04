@@ -59,6 +59,31 @@ const shown = (view, body) => view.messages.find((m) => m.body === body);
   e.stop();
 }
 
+// 1b. A logical id is unique per sender key only: the other person may
+// send a message under the logical id of a request it saw. A reply naming
+// that logical id then names no one message here and stays as sent; a
+// reply naming the request's copy still links to it.
+{
+  const f = await fixture(), { e, store } = f;
+  const pid = id(), lid = id(), a = id(), b = id(), target = { address: f.peerAddress, fingerprint: f.peer.fingerprint };
+  await store.write([
+    { s: "outbox", k: a, v: sent(f, { id: a, lid, kind: "question", body: "is it green?", pid, target, to: f.peerAddress }) },
+    { s: "outbox", k: b, v: sent(f, { id: b, lid, kind: "question", body: "is it green?", pid, target, to: "self/laptop", own: true }) },
+  ]);
+  const asked = shown(await e.dm(f.conv), "is it green?");
+  const executorCopy = asked.id === a ? b : a, clash = id();
+  await store.write([
+    { s: "inbox", k: clash, v: received(f, { id: clash, lid, body: "same logical id", at: now + 1 }) },
+    { s: "inbox", k: id(), v: received(f, { id: "byl".padEnd(32, "0"), lid: id(), kind: "answer", body: "by logical id", reply_to: lid, pid, at: now + 2 }) },
+    { s: "inbox", k: id(), v: received(f, { id: "byc".padEnd(32, "0"), lid: id(), kind: "answer", body: "by copy", reply_to: executorCopy, pid, at: now + 3 }) },
+  ]);
+  const view = await e.dm(f.conv);
+  check(shown(view, "same logical id").id === clash, "the message under the same logical id is shown");
+  check(shown(view, "by logical id").reply_to === lid, "a reply naming a logical id two keys used stays as sent: " + shown(view, "by logical id").reply_to);
+  check(shown(view, "by copy").reply_to === asked.id, "a reply naming the request's copy still links to it");
+  e.stop();
+}
+
 // 2. Participation records carry their type and author plainly (event_type,
 // event_by: the author's person label as known here, else the device's
 // address), and the chat list says how many guests are present, how many

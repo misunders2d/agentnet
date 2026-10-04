@@ -127,3 +127,33 @@ func TestLiveAnswerLinksToTheRequestAsShown(t *testing.T) {
 		t.Fatalf("the answer links to %q, the request is shown as %q", answer.ReplyTo, request.ID)
 	}
 }
+
+// A logical id is unique per sender key only: another member may send a
+// message under the logical id of a request it saw. A reply naming that
+// logical id then names no one message here, so it stays as sent, while a
+// reply naming a copy still links to its message; a logical id one key
+// used (on two of its rows) still links.
+func TestLinkRepliesThroughAnUnambiguousLogicalIDOnly(t *testing.T) {
+	const lid, own, other = "10000000000000000000000000000001", "a1", "b2"
+	msgs := []client.ConvMessage{
+		{ID: "request", LID: lid, Key: own, Copies: []client.ConvCopy{{ID: "copy-to-bob"}, {ID: "copy-to-phone"}}},
+		{ID: "same-lid", LID: lid, Key: other},
+		{ID: "own-1", LID: "20000000000000000000000000000002", Key: own},
+		{ID: "own-2", LID: "20000000000000000000000000000002", Claimed: own},
+		{ID: "answer-by-lid", LID: "3", Key: other, ReplyTo: lid},
+		{ID: "answer-by-copy", LID: "4", Key: other, ReplyTo: "copy-to-phone"},
+		{ID: "reply-to-own", LID: "5", Key: other, ReplyTo: "20000000000000000000000000000002"},
+	}
+	out := make([]DMMessage, len(msgs))
+	for i, m := range msgs {
+		out[i] = DMMessage{ID: m.ID, ReplyTo: m.ReplyTo}
+	}
+	linkReplies(msgs, out)
+	for id, want := range map[string]string{"answer-by-lid": lid, "answer-by-copy": "request", "reply-to-own": "own-2"} {
+		for _, m := range out {
+			if m.ID == id && m.ReplyTo != want {
+				t.Errorf("%s links to %q, want %q", id, m.ReplyTo, want)
+			}
+		}
+	}
+}
