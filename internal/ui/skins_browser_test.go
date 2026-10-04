@@ -79,4 +79,3 @@ func TestSkinsRendered(t *testing.T) {
 	}
 	t.Logf("%s", out)
 }
-

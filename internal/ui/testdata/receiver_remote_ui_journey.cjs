@@ -1,7 +1,7 @@
-// Production loader/app/styles, synthetic loopback provider only. No native harness claim.
+// The bundled app (bundled_app.cjs), synthetic loopback provider only. No native harness claim.
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict'),os=require('node:os'),{createHash}=require('node:crypto');
-const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
+const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT),{bundledAppPage}=require('./bundled_app.cjs');
 const assets=path.resolve(__dirname,'../static'),evidence=process.env.AGENTNET_REMOTE_RECEIVER_EVIDENCE;
 assert(evidence,'private evidence path required');fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const profile=fs.mkdtempSync(path.join(process.env.TMPDIR||os.tmpdir(),'remote-receiver-ui-'));
@@ -22,10 +22,10 @@ async function listen(){
   const url=new URL(req.url,'http://127.0.0.1'),name=url.pathname;let raw='';for await(const chunk of req)raw+=chunk;
   const body=raw&&req.headers['content-type']?.includes('application/json')?JSON.parse(raw):null;
   if(name==='/events'){res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(': fixture stream\n\n');return;}
-  if(name==='/assets/skins/index.json')return json(res,[JSON.parse(fs.readFileSync(path.join(__dirname,'../static/skins/comic/skin.json'),'utf8'))]);
+  if(name==='/'){res.writeHead(200,{'Content-Type':'text/html'});res.end(bundledAppPage('Remote receiver fixture'));return;}
   if(name==='/assets/icon-192.png'&&process.env.AGENTNET_REMOTE_RECEIVER_ICON){const bytes=fs.readFileSync(process.env.AGENTNET_REMOTE_RECEIVER_ICON);served['icon-192.png']=sha(bytes);res.writeHead(200,{'Content-Type':'image/png'});res.end(bytes);return;}
-  if(name==='/'||name.startsWith('/assets/')){
-   const file=name==='/'?'index.html':name.slice('/assets/'.length);if(file.includes('..'))return json(res,{},403);
+  if(name.startsWith('/assets/')){
+   const file=name.slice('/assets/'.length);if(file.includes('..'))return json(res,{},403);
    const target=path.join(assets,file);if(!fs.existsSync(target))return json(res,{},404);
    const bytes=fs.readFileSync(target);served[file]=sha(bytes);res.writeHead(200,{'Content-Type':mime(file)});res.end(bytes);return;
   }

@@ -37,7 +37,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
   mounted.set(root, { root: r, store, stopTheme, parts: [app, portals] });
   r.render(
     <CSPProvider disableStyleElements>
-      <OwnedContext.Provider value={{ root, portals }}>
+      <OwnedContext.Provider value={{ root, app, portals }}>
         <StoreContext.Provider value={store}>
           <App />
         </StoreContext.Provider>

@@ -475,3 +475,14 @@ standalone module. users can build their own skins."
   menu with import/removal of browser-local skins, the workspace control).
   Wording: interfaces are never called "previous", "earlier", "legacy" or
   "older", and AgentNet (the core) is never something to "switch back to".
+- **Built-in names are reserved too.** No installed or browser-local package
+  may show as Comic, Classic or Zoom; lists say where each skin comes from.
+  The browser keeps the choice, trust and reserved ids and names in one
+  module (`static/skin-choice.mjs`), pinned to `static/skins.go` by Go tests.
+- **Bundled-app journeys retired.** The real-binary world journeys that
+  drove the bundled app (`internal/ui/testdata/retired-bundled-app/`, listed
+  in its README) no longer match any interface a release serves; they are
+  kept there, not run, until Classic's package can be selected, then
+  retargeted at it. Fixture checks that serve the bundled app themselves
+  (`bundled_app.cjs`, `onboarding_rendered_test.go` and the other
+  `default.html` fixtures) keep running against its sources.

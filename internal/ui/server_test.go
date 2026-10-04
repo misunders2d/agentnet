@@ -117,7 +117,7 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/loader.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}
-	for _, a := range []string{"loader.js", "skinbar.mjs", "skin-base.css", "skins/index.json", "skins/comic/entry.mjs", "vendor/qr.mjs", "drivespace-setup.mjs"} {
+	for _, a := range []string{"loader.js", "skinbar.mjs", "skin-choice.mjs", "skin-base.css", "skins/index.json", "skins/comic/entry.mjs", "vendor/qr.mjs", "drivespace-setup.mjs"} {
 		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != 200 {
 			t.Errorf("asset %s: %d", a, r.StatusCode)
 		}

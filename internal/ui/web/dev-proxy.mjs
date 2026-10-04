@@ -26,7 +26,7 @@ const types = { ".mjs": "text/javascript; charset=utf-8", ".js": "text/javascrip
 const comic = "/assets/skins/comic/";
 const staticDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "static");
 // The host, as checked out (no binary rebuild).
-const hostFiles = ["loader.js", "skinbar.mjs", "skinbar.css", "core.css", "skin-base.css", "local-skins.mjs"];
+const hostFiles = ["loader.js", "skinbar.mjs", "skinbar.css", "skin-choice.mjs", "core.css", "skin-base.css", "local-skins.mjs"];
 const fileFor = (p) => {
   if (p.startsWith(comic) && p.length > comic.length) return path.join(path.resolve(out), p.slice(comic.length));
   if (p.startsWith("/assets/") && hostFiles.includes(p.slice("/assets/".length))) return path.join(staticDir, p.slice("/assets/".length));

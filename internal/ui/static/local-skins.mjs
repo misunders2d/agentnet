@@ -2,12 +2,11 @@
 // one small catalog response is published LAST, after every file is durable.
 // No chat, key, token or remote request is stored here. The digest format and
 // limits match static/skins.go. Existing browser APIs own persistence/fetching.
+// No package may use a built-in skin's id, or "default" (skin-choice.mjs).
+import { RESERVED as reserved, takenName } from './skin-choice.mjs';
 const catalogName = 'agentnet-skin-catalog-v1';
 const prefix = 'agentnet-skin-package-v1-';
 const types = {js:'text/javascript; charset=utf-8',mjs:'text/javascript; charset=utf-8',css:'text/css; charset=utf-8',json:'application/json',png:'image/png',webp:'image/webp',svg:'image/svg+xml',woff2:'font/woff2'};
-// The built-in skins (present and to come) and the old name of the default:
-// no package may use them (static/skins.go ReservedSkinIDs).
-const reserved = ['comic','classic','zoom','default'];
 const enc = new TextEncoder(), decode = new TextDecoder('utf-8',{fatal:true});
 const hex = bytes => [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('');
 const hash = bytes => crypto.subtle.digest('SHA-256',bytes);
@@ -39,6 +38,7 @@ export async function prepare(files) {
   if(!m || typeof m!=='object' || Array.isArray(m))fail('Invalid AgentNet skin manifest.');
   const css=(name)=>name===undefined||name===''||(typeof name==='string'&&m.files.includes(name)&&name.endsWith('.css'));
   if(m.api!==1 || typeof m.id!=='string' || !/^[a-z][a-z0-9-]{0,47}$/.test(m.id)||reserved.includes(m.id)||typeof m.name!=='string'||!m.name.trim()||enc.encode(m.name).length>80||!Array.isArray(m.files)||!m.files.length||m.files.length>32||new Set(m.files).size!==m.files.length||!m.files.includes(m.entry)||!/^.+\.m?js$/.test(m.entry)||!css(m.style)||!css(m.document))fail('Invalid AgentNet skin manifest.');
+  if(takenName(m.name))fail('“'+m.name.trim()+'” is the name of a skin built into AgentNet. A package needs a name of its own.');
   const assets=[], pieces=[raw];let total=raw.length;
   for(const name of m.files){
     if(!pathOK(name)||name==='skin.json'||!Object.hasOwn(types,name.split('.').at(-1)))fail('Unsupported package file: '+name);

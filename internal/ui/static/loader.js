@@ -23,10 +23,9 @@
   "use strict";
   const page = document.getElementById("skin");
   const browser = window.agentnetEngine;
-  // The built-in skins: trusted by this list (static/skins.go keeps these ids
-  // from every installed or browser-local package), never by a manifest.
-  const BUILT_IN = ["comic", "classic", "zoom"];
-  const HOME = "comic"; // the default skin
+  // Which skin opens and whether it needs consent: built-in skins are
+  // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
+  const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
   const json = async (path, body) => {
     if (!path.startsWith("/api/")) throw new Error("Expected an AgentNet API path");
     if (browser) return browser.api(path, body);
@@ -95,10 +94,9 @@
   let offered = [];
   const refreshSkins = async () => {
     const local = localSkins ? await localSkins.catalog().catch(() => []) : [];
-    // builtin is the host's word, set here from its own list, never a manifest's.
-    const mark = (s) => Object.freeze({ ...s, builtin: !s.local && BUILT_IN.includes(s.id) });
+    // builtin is the host's word, set by mark from its own list, never a manifest's.
     // Every immutable workspace host keeps this SAME array reference.
-    common.skins.splice(0, common.skins.length, ...offered.map(mark), ...local.filter((s) => s.local).map(mark));
+    common.skins.splice(0, common.skins.length, ...offered.map(mark), ...local.filter((s) => s.local && !takenName(s.name)).map(mark));
     for (const fn of [...skinsListeners]) { try { fn(); } catch (_) { /* one listener's failure is its own */ } }
   };
   if (localSkins) common.manageLocalSkins = (root) => localSkins.manager(root, { changed: refreshSkins });
@@ -228,18 +226,16 @@
     if (!r.ok) throw new Error("Could not load the list of skins");
     offered = (await r.json()).filter((s) => s && s.api === 1);
     await refreshSkins();
-    const home = common.skins.find((s) => s.id === HOME);
-    if (!home) throw new Error("This program has no Comic skin");
-    homeName = home.name;
-    // A choice saved before Comic was a package (the default interface was
-    // "default", the bundled app "classic") opens Comic, and is rewritten
-    // once; ?skin=default stays a name for Comic.
+    // A choice saved before Comic was a package ("default", "classic")
+    // opens Comic and is rewritten once; ?skin=default names Comic too.
     let saved = null;
     try { saved = localStorage.getItem("agentnet.skin"); } catch (_) { /* local preference */ }
-    if (saved === "default" || saved === "classic") { saved = HOME; try { localStorage.setItem("agentnet.skin", HOME); } catch (_) {} }
-    let requested = new URL(location.href).searchParams.get("skin") || saved || HOME;
-    if (requested === "default") requested = HOME;
-    selected = common.skins.find((s) => s.id === requested) || home;
+    const choice = choose(common.skins, { query: new URL(location.href).searchParams.get("skin"), saved });
+    const home = choice.home;
+    if (!home) throw new Error("This program has no Comic skin");
+    homeName = home.name;
+    if (choice.save) try { localStorage.setItem("agentnet.skin", choice.save); } catch (_) { /* local preference */ }
+    selected = choice.selected;
 
     // The switcher over every skin but Comic: before trust is asked, so the
     // way back is there from the first moment.
@@ -252,8 +248,8 @@
       });
     }
 
-    let trusted = selected.builtin;
-    if (!trusted) try { trusted = localStorage.getItem("agentnet.skin.trusted." + selected.id) === selected.digest; } catch (_) { /* ask */ }
+    let trusted = isTrusted(selected, null);
+    if (!trusted) try { trusted = isTrusted(selected, localStorage.getItem("agentnet.skin.trusted." + selected.id)); } catch (_) { /* ask */ }
     if (!trusted) await new Promise((resolve) => {
       const digest = text("p", "Fingerprint " + selected.digest.slice(0, 16) + "…" + selected.digest.slice(-8), "skin-card-digest");
       card(page, {

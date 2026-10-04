@@ -6,8 +6,13 @@
 //   - talk to /api or /events itself instead of through the host,
 //   - request a file its manifest does not declare (documented host
 //     modules such as /assets/typing.mjs excepted),
-//   - write to the DOM outside the root it was given,
-// and requires mount/unmount A/B/A to leave nothing behind.
+//   - write to the DOM outside the root it was given, or to the page's
+//     adopted style sheets or font set,
+//   - leave window or document listeners behind after unmount,
+// and requires mount/unmount A/B/A to leave nothing behind. Comic's
+// journey also sends a message through the host, and checks
+// that its dialogs are modal inside its root: aria-modal, the app behind
+// them inert, and Tab and Shift+Tab never leaving them.
 //
 //   node skin_contract_check.cjs DAEMON_URL_WITH_TOKEN SKIN_DIR...
 // DAEMON_URL is a demo daemon (ui.NewFixture); AGENTNET_PLAYWRIGHT names an
@@ -34,7 +39,7 @@ const packages = dirs.map((dir) => {
 
 const harness = `
 const realFetch = window.fetch.bind(window), RealES = window.EventSource;
-const report = (window.__report = { globals: [], direct: [], outside: [], errors: [] });
+const report = (window.__report = { globals: [], direct: [], outside: [], errors: [], listeners: [] });
 // Private page globals: none exists here; touching one is recorded.
 for (const name of ['agentnet', 'agentnetOpen', 'agentnetEngine', 'agentnetWorkspace', 'agentnetWorkspaces', 'agentnetLens']) {
   Object.defineProperty(window, name, { configurable: false, get() { report.globals.push(name); return undefined; }, set() { report.globals.push(name + '='); } });
@@ -47,11 +52,21 @@ const json = async (path, body) => {
   return r.json();
 };
 let openHandler = null;
+const streams = new Set(); // what window.__restart ends, as AgentNet restarting would
+window.__streams = () => streams.size;
+window.__restart = () => { for (const end of [...streams]) { streams.delete(end); end('restart'); } };
 const host = Object.freeze({
   version: 1, platform: 'daemon', api: json,
   workspace: Object.freeze({ id: 'default', name: 'Contract check', endpoint: location.origin, address: '', realm: '', state: 'enrolled' }),
   workspaces: null,
-  listen(fn) { const es = new RealES('/events?contract-host=${marker}'); es.addEventListener('change', (e) => fn({ type: 'change', seq: Number(e.data) })); es.onerror = () => { es.close(); fn({ type: 'disconnect' }); }; return () => es.close(); },
+  listen(fn) {
+    const es = new RealES('/events?contract-host=${marker}');
+    const end = (type) => { if (es.readyState === 2) return; es.close(); fn({ type }); };
+    es.addEventListener('change', (e) => fn({ type: 'change', seq: Number(e.data) }));
+    es.onerror = () => end('disconnect');
+    streams.add(end);
+    return () => { streams.delete(end); es.close(); };
+  },
   async file(id, index, dir) { const r = await own('/api/files/' + encodeURIComponent(id) + '/' + index + (dir ? '?dir=' + dir : '')); if (!r.ok) throw new Error(r.statusText); return { bytes: new Uint8Array(await r.arrayBuffer()) }; },
   async stage(file) { const r = await own('/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }); if (!r.ok) throw new Error((await r.text()).trim() || r.statusText); return (await r.json()).id; },
   onOpen(fn) { openHandler = fn; },
@@ -77,14 +92,49 @@ if (manifest.document) {
   }
   document.adoptedStyleSheets = [kept];
 }
+// Page-level listeners the skin adds (on window and document), tracked so
+// unmount can be required to remove every one it added. React DOM's one
+// document 'selectionchange' listener, added once per page and never
+// removed by design, is not the skin's.
+const live = new Set();
+for (const [name, target] of [['window', window], ['document', document]]) {
+  const add = target.addEventListener, remove = target.removeEventListener;
+  const capture = (o) => typeof o === 'boolean' ? o : !!(o && o.capture);
+  const find = (type, fn, o) => [...live].find((e) => e.target === name && e.type === type && e.fn === fn && e.capture === capture(o));
+  target.addEventListener = function (type, fn, o) {
+    if (fn && !find(type, fn, o) && !(name === 'document' && type === 'selectionchange')) {
+      const entry = { target: name, type, fn, capture: capture(o), stack: (new Error().stack || '').split('\\n').slice(2, 4).join(' | ') };
+      live.add(entry);
+      if (o && o.once) add.call(target, type, () => live.delete(entry), { once: true, capture: capture(o) });
+      if (o && o.signal) o.signal.addEventListener('abort', () => live.delete(entry));
+    }
+    return add.call(this, type, fn, o);
+  };
+  target.removeEventListener = function (type, fn, o) { const e = find(type, fn, o); if (e) live.delete(e); return remove.call(this, type, fn, o); };
+}
+// The page's adopted sheets and fonts belong to the host.
+const sheets = Object.getOwnPropertyDescriptor(Document.prototype, 'adoptedStyleSheets');
+const pageSheets = [...document.adoptedStyleSheets];
+Object.defineProperty(document, 'adoptedStyleSheets', { configurable: true, get() { return sheets.get.call(document); }, set(v) { report.outside.push('set document.adoptedStyleSheets'); sheets.set.call(document, v); } });
+for (const m of ['add', 'delete', 'clear']) { const f = document.fonts[m].bind(document.fonts); document.fonts[m] = (...a) => { report.outside.push('document.fonts.' + m); return f(...a); }; }
+window.__pageSheetsKept = () => { const now = sheets.get.call(document); return now.length === pageSheets.length && now.every((s, i) => s === pageSheets[i]); };
 const holder = document.getElementById('skin'), shadow = holder.attachShadow({ mode: 'open' });
 if (manifest.style) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = base + manifest.style; shadow.append(l); await new Promise((r) => { l.onload = r; l.onerror = r; }); }
 const module = await import(base + manifest.entry);
 new MutationObserver((list) => { for (const m of list) report.outside.push(m.type + ' ' + m.target.nodeName + (m.attributeName ? '@' + m.attributeName : '')); })
   .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+const before = new Set(live); // what importing the module itself added
 let root = null;
+window.__listenersLeft = () => [...live].filter((e) => !before.has(e)).map((e) => e.target + ' ' + e.type + ' @ ' + e.stack);
 window.__mount = async () => { openHandler = null; root = document.createElement('div'); root.className = 'skin-root'; shadow.append(root); await module.mount(root, host); if (!openHandler) throw new Error('no host.onOpen'); return true; };
-window.__unmount = async () => { if (typeof module.unmount === 'function') await module.unmount(root); const left = root.childNodes.length; root.remove(); root = null; return left; };
+window.__unmount = async () => {
+  if (typeof module.unmount === 'function') await module.unmount(root);
+  const left = root.childNodes.length; root.remove(); root = null;
+  await new Promise((r) => setTimeout(r, 50)); // effects that clean up a tick later
+  for (const l of window.__listenersLeft()) report.listeners.push(l);
+  if (!window.__pageSheetsKept()) report.outside.push('document.adoptedStyleSheets changed');
+  return left;
+};
 window.__open = (conv) => openHandler && openHandler(conv, 'conversation');
 await window.__mount();
 window.__ready = true;
@@ -120,6 +170,25 @@ const server = http.createServer((req, res) => {
   res.writeHead(404).end();
 });
 
+// A modal dialog inside the skin's root: aria-modal, the app behind it
+// inert, and focus held inside through 10 Tabs and 10 Shift+Tabs.
+async function staysModal(page, role, what) {
+  const state = await page.evaluate((role) => {
+    const sr = document.getElementById('skin').shadowRoot, d = sr.querySelector('[role=' + role + ']');
+    return { modal: d && d.getAttribute('aria-modal'), behindInert: [...sr.querySelectorAll('nav')].every((n) => !!n.closest('[inert]')) };
+  }, role);
+  if (state.modal !== 'true' || !state.behindInert) throw new Error(what + ': not modal inside the root ' + JSON.stringify(state));
+  for (const key of [...Array(10).fill('Tab'), ...Array(10).fill('Shift+Tab')]) {
+    await page.keyboard.press(key);
+    const where = await page.evaluate((role) => {
+      const sr = document.getElementById('skin').shadowRoot, a = sr.activeElement, d = sr.querySelector('[role=' + role + ']');
+      return { inside: !!(a && d && d.contains(a)), what: a ? a.nodeName + ' ' + (a.getAttribute('aria-label') || a.textContent || '').trim().slice(0, 24) : 'page ' + (document.activeElement && document.activeElement.nodeName) };
+    }, role);
+    if (!where.inside) throw new Error(what + ': ' + key + ' moved focus out of the dialog to ' + where.what);
+  }
+}
+let sent = 0;
+
 // What each skin must show and do, through its own words.
 const journeys = {
   comic: async (page) => {
@@ -131,6 +200,7 @@ const journeys = {
     await page.getByRole('button', { name: 'Use Example' }).click(); // a sheet (Base UI dialog)
     await page.getByRole('dialog').waitFor();
     await page.waitForTimeout(400);
+    await staysModal(page, 'dialog', 'the trust sheet');
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'detached' });
     await page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Chats' }).click();
@@ -141,7 +211,21 @@ const journeys = {
     await page.getByRole('button', { name: 'More', exact: true }).click();
     await page.getByRole('menu').waitFor();
     await page.waitForTimeout(300);
-    await page.keyboard.press('Escape');
+    await page.getByRole('menuitem', { name: /Delete conversation/ }).click();
+    await page.getByRole('alertdialog').waitFor();
+    await page.waitForTimeout(400);
+    await staysModal(page, 'alertdialog', 'the delete confirmation');
+    await page.getByRole('button', { name: 'Keep it' }).click();
+    await page.getByRole('alertdialog').waitFor({ state: 'detached' });
+    // A message in a new topic with Bob's agent, sent with host.api. (The
+    // demo daemon offers no file limits, so Comic offers no files here;
+    // host.stage is walked in the company world, internal/ui/testdata.)
+    await page.getByRole('button', { name: 'New topic' }).click();
+    const text = 'Contract check message ' + (++sent);
+    const form = page.getByRole('form', { name: 'Write a message' });
+    await form.getByRole('textbox').fill(text);
+    await form.locator('button[type=submit]').click(); // Enter is a new line on phones
+    await page.getByRole('log').first().getByText(text).first().waitFor({ timeout: 15000 });
     const plus = page.getByRole('button', { name: 'Add to message' });
     await plus.waitFor();
     await plus.click();
@@ -154,6 +238,11 @@ const journeys = {
     await page.getByRole('heading', { name: 'Notebook', exact: true }).waitFor({ timeout: 20000 });
     await page.locator('.notebook nav button').first().click();
     await page.getByRole('textbox', { name: 'Message' }).waitFor();
+    // The event stream ends as when AgentNet restarts: Notebook reconnects by itself.
+    await page.evaluate(() => window.__restart());
+    await page.getByText('AgentNet is restarting. Reconnecting…').waitFor();
+    await page.getByText('AgentNet is restarting. Reconnecting…').waitFor({ state: 'detached', timeout: 10000 });
+    await page.waitForFunction(() => window.__streams() === 1, null, { timeout: 5000 }); // listening again
   },
 };
 
@@ -171,7 +260,8 @@ const journeys = {
       page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
       directHits.length = 0; undeclared.length = 0;
       await page.goto(origin + '/?pkg=' + encodeURIComponent(p.base));
-      await page.waitForFunction(() => window.__ready === true, null, { timeout: 20000 });
+      await page.waitForFunction(() => window.__ready === true, null, { timeout: 20000 })
+        .catch((e) => { throw new Error(p.manifest.id + ': the harness did not mount it: ' + errors.join('; ') + ' (' + e.message + ')'); });
       const journey = journeys[p.manifest.id] && (async (pg) => {
         try { await journeys[p.manifest.id](pg); } catch (e) {
           if (process.env.AGENTNET_SCREENSHOTS) await pg.screenshot({ path: path.join(process.env.AGENTNET_SCREENSHOTS, 'contract-' + p.manifest.id + '-' + w + '-FAIL.png') });
@@ -186,8 +276,9 @@ const journeys = {
       const left2 = await page.evaluate(() => window.__unmount());
       await page.evaluate(() => window.__mount());
       if (journey) await journey(page);
+      const left3 = await page.evaluate(() => window.__unmount());
       const report = await page.evaluate(() => window.__report);
-      const outcome = { skin: p.manifest.id, width: w, globals: report.globals, direct: [...report.direct, ...directHits.map((d) => 'request ' + d)], undeclared: [...undeclared], outside: report.outside, leftAfterUnmount: [left1, left2], errors: [...errors, ...report.errors] };
+      const outcome = { skin: p.manifest.id, width: w, globals: report.globals, direct: [...report.direct, ...directHits.map((d) => 'request ' + d)], undeclared: [...undeclared], outside: report.outside, leftAfterUnmount: [left1, left2, left3], listenersLeft: report.listeners, errors: [...errors, ...report.errors] };
       results.push(outcome);
       await page.close();
     }
@@ -198,7 +289,8 @@ const journeys = {
     assert.deepEqual(r.direct, [], r.skin + ': direct API or event stream');
     assert.deepEqual(r.undeclared, [], r.skin + ': undeclared assets or imports');
     assert.deepEqual(r.outside, [], r.skin + ': DOM writes outside its root');
-    assert.deepEqual(r.leftAfterUnmount, [0, 0], r.skin + ': unmount leaves its root empty');
+    assert.deepEqual(r.leftAfterUnmount, [0, 0, 0], r.skin + ': unmount leaves its root empty');
+    assert.deepEqual(r.listenersLeft, [], r.skin + ': window or document listeners left after unmount');
     assert.deepEqual(r.errors, [], r.skin + ': errors');
   }
   console.log('skin contract check PASS: ' + packages.map((p) => p.manifest.id).join(', ') + ' at 1440 and 390, A/B/A');

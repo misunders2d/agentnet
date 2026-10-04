@@ -55,8 +55,14 @@ is a conformance expectation, not a security guarantee.
 
 A built-in skin is trusted by the host's own fixed list of ids (`comic`,
 `classic`, `zoom`), never by anything a manifest says. No installed or
-browser-local package may use those ids or `default`: the program skips such
-a directory and the browser refuses such a package. Any other skin asks first:
+browser-local package may use those ids or `default`, or show as a built-in
+skin (the name Comic, Classic or Zoom, in any case or spacing): the program
+skips such a directory and the browser refuses such a package. Every list of
+skins says where each one comes from (built in, installed on this computer,
+stored in this browser). The rules live in one browser module,
+`/assets/skin-choice.mjs` (which skin opens, its trust, the reserved ids and
+names), shared by the host and the browser-local package manager; Go tests
+pin it to `static/skins.go`. Any other skin asks first:
 it can read your chats and act as you, including sending messages and
 approving work. Consent is to the package's exact digest, per browser origin
 (including the daemon's port); a changed package asks again.
@@ -177,10 +183,18 @@ The entry exports `async function mount(root, host)` and optionally
   not match in a shadow tree). Render popups (menus, dialogs, sheets) into a
   container inside `root`. Read focus from `root.getRootNode().activeElement`,
   query from `root`, never `document`. Do not write to `document.body`,
-  `<html>` (`lang`, classes, styles) or anything else outside `root`, and do
-  not read the host's own page globals.
-- `unmount` stops what `host.listen` returned, timers and object URLs, and
-  leaves `root` empty. Use DOM text nodes for message and profile content.
+  `<html>` (`lang`, classes, styles), the page's adopted style sheets or font
+  set, or anything else outside `root`, and do not read the host's own page
+  globals.
+- A modal dialog is modal inside `root`: mark it `aria-modal="true"`, make
+  the rest of the skin behind it `inert`, and keep Tab and Shift+Tab within
+  it. Page-level scroll locks and `aria-hidden` on the page's other elements
+  (what many dialog libraries do in their fully modal mode) write outside
+  `root`. Comic does this for every sheet and confirmation (`owned.tsx`
+  `useModal`).
+- `unmount` stops what `host.listen` returned, timers, object URLs and every
+  `window` or `document` listener the skin added, and leaves `root` empty.
+  Use DOM text nodes for message and profile content.
 
 The shadow tree is styling isolation, not a security boundary: the code
 still runs with the page's full trust.
@@ -340,9 +354,14 @@ packages from copied package bytes at an unrelated path, with only a public
 host the check implements itself (no loader, no workspace shell, no page
 globals), over the demo daemon. It fails on a read of a private page global,
 a direct `/api` or `/events` request, a request for an undeclared file (the
-documented `/assets/typing.mjs` excepted), any DOM write outside the root,
-errors, or a root left non-empty after `unmount` (mount/unmount A/B/A). It
-runs Comic and the Notebook example at 1440 and 390 pixels:
+documented `/assets/typing.mjs` excepted), any DOM write outside the root
+(including the page's adopted style sheets and font set), a `window` or
+`document` listener left after `unmount`, errors, or a root left non-empty
+after `unmount` (mount/unmount A/B/A). Comic's journey also sends a message
+through the host and requires its sheets and confirmations to be modal
+inside the root (aria-modal, the app behind them inert, focus kept inside
+through 10 Tabs and 10 Shift+Tabs). It runs Comic and the Notebook example
+at 1440 and 390 pixels:
 
 ```sh
 AGENTNET_PLAYWRIGHT=/absolute/path/to/playwright-core go test ./internal/ui -run TestSkinPackagesContractOnly -v
@@ -352,7 +371,8 @@ AGENTNET_PLAYWRIGHT=/absolute/path/to/playwright-core go test ./internal/ui -run
 loader and catalog with Comic as a package (shadow root, fonts and
 properties adopted, no switcher), saved choices, an installed skin behind
 its trust step under the switcher (layout, keyboard, theme), notification
-destinations, a browser-local skin imported, re-trusted after a change and
+destinations (a review notice that names only a message opens its
+conversation in Comic), a browser-local skin imported, re-trusted after a change and
 removed, and the step back to Comic, at 1800×960 light and 390×844 dark.
 `workspace_reconnect_browser_check.cjs` covers the switcher's workspace
 control.
@@ -379,6 +399,12 @@ workspace's draft and target, even when another workspace has the same ids.
 Sends already started keep their original host and target; returning during a
 send does not duplicate it. Accepted sends clear only the text and files they
 captured; new edits and other drafts stay.
+
+When the event stream ends (AgentNet restarting, or the connection lost),
+Notebook reconnects by itself, with growing pauses: through
+`host.reconnect()` where the host has it (the same membership bound again,
+Notebook mounted again over it, text drafts kept), then a fresh stream and
+refresh. After about a minute without an answer it asks for a reload.
 
 While any workspace has draft text, files or a send in progress, Notebook uses
 the browser's native `beforeunload` warning for host escape/reload. Cancel keeps

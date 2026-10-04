@@ -47,6 +47,14 @@ var BuiltinSkins = []string{"comic"}
 // use: the built-in skins, those to come, and the old name of the default.
 var ReservedSkinIDs = []string{"comic", "classic", "zoom", "default"}
 
+// ReservedSkinName reports whether name is a built-in skin's (present or
+// to come), ignoring case and spacing: no installed or browser-local
+// package may show as Comic, Classic or Zoom (skin-choice.mjs takenName).
+func ReservedSkinName(name string) bool {
+	n := strings.ToLower(strings.Join(strings.Fields(name), " "))
+	return n != "default" && slices.Contains(ReservedSkinIDs, n)
+}
+
 var skinID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
 var skinTypes = map[string]string{
 	".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
@@ -97,7 +105,7 @@ func Skins(directory string) http.Handler {
 					}
 					skin, files, err := readSkin(dir, entry.Name())
 					dir.Close()
-					if err != nil {
+					if err != nil || ReservedSkinName(skin.Name) {
 						continue
 					}
 					size := 0

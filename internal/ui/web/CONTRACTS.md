@@ -67,11 +67,14 @@ decide.
   root: no `document.body`/`documentElement` writes (theme, `lang`, classes,
   styles), no `document.querySelector`/`activeElement` (use `owned.tsx`).
   Every Base UI portal gets `container={usePortal()}`; dialogs use
-  `modal="trap-focus"` and menus `modal={false}` (a modal lock would style
-  the page's body). Assets come from the package (`new URL(…,
-  import.meta.url)`); `@font-face`/`@property` go to `src/document.css` or
-  are moved there by the build. `internal/ui/testdata/skin_contract_check.cjs`
-  checks all of this on the built package.
+  `modal="trap-focus"` and spread `useModal(open)` on their `Dialog.Popup`
+  (aria-modal, the app behind inert, Tab kept inside), and menus use
+  `modal={false}` (a fully modal lock would style the page's body and hide
+  the page's other elements). Global listeners are removed on unmount.
+  Assets come from the package (`new URL(…, import.meta.url)`);
+  `@font-face`/`@property` go to `src/document.css` or are moved there by
+  the build. `internal/ui/testdata/skin_contract_check.cjs` checks all of
+  this on the built package.
 - **CSP:** no `style="..."` in markup strings, no `dangerouslySetInnerHTML`,
   `innerHTML`, `eval`. React's `style` prop is fine (it uses the DOM style
   object). Libraries must not inject `<style>` elements.

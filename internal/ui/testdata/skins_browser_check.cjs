@@ -99,16 +99,20 @@ const local = (version) => {
       await page.getByRole('menu', { name: 'Skins' }).waitFor({ state: 'hidden' });
 
       // Notifications Notebook does not take wait in the switcher.
-      const mid = 'a'.repeat(32), conv = 'b'.repeat(64);
+      const mid = 'a'.repeat(32), conv = 'b'.repeat(64); // a workspace this device lacks
       await page.evaluate((h) => { location.hash = h; }, '#review');
       await page.getByText('Something is waiting for your decision.').waitFor();
       await snap('notice');
       await page.evaluate((h) => { location.hash = h; }, '#msg=' + mid + '&conv=' + conv + '&dir=in&workspace=unknown');
       await page.getByText('A notification is for a workspace that isn’t on this device.').waitFor();
-      await page.evaluate((h) => { location.hash = h; }, '#msg=' + mid + '&conv=' + conv + '&dir=in');
+      // A review notice names only the message and its direction (as
+      // internal/client/reviewopen.go does): Comic finds its conversation.
+      const lab = await page.evaluate(async () => (await (await fetch('/api/overview')).json()).threads.find((t) => t.peer === 'erin/lab'));
+      await page.evaluate((h) => { location.hash = h; }, '#msg=' + lab.id + '&dir=in');
       await page.getByText('A notification is waiting for you.').waitFor();
       await page.getByRole('button', { name: 'Open it in Comic' }).click();
       await comicUp();
+      await page.getByRole('log').first().getByText(/reinstalling this machine next week/).first().waitFor(); // Lab's conversation is open
       assert.equal(new URL(page.url()).hash, '', tag + ': Comic took the message destination');
       assert.equal(new URL(page.url()).searchParams.get('skin'), 'comic');
 

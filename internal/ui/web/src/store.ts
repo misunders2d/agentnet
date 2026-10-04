@@ -180,14 +180,29 @@ export class Store {
   setPanel(panel: boolean) { this.set({ panel }); }
 
   // openMessage opens the conversation a notification's message belongs to:
-  // the conversation the host names (context.conv), else the device
-  // conversation addressed by that message.
+  // the conversation the host names (context.conv); else the device
+  // conversation that message starts; else the conversation that holds it,
+  // found by looking (a DM's review notice names only the message and its
+  // direction), never guessed. Nothing is sent, accepted or read by landing.
   async openMessage(id: string, context?: OpenContext) {
     this.set({ tab: "chats" });
     if (context?.conv && /^[0-9a-f]{64}$/.test(context.conv)) { await this.open({ kind: "dm", id: context.conv, focus: id }); return; }
-    const o = this.state.overview;
-    const dm = (o?.dms || []).find((d) => d.id === id);
-    await this.open(dm ? { kind: "dm", id } : { kind: "thread", id, focus: id });
+    const o = this.state.overview, dms = o?.dms || [];
+    if (dms.some((d) => d.id === id)) { await this.open({ kind: "dm", id }); return; }
+    if ((o?.threads || []).some((t) => t.id === id)) { await this.open({ kind: "thread", id, focus: id }); return; }
+    for (const d of dms) {
+      try {
+        const v = await this.api.dm(d.id);
+        if ((v.messages || []).some((m) => m.id === id && (!context?.dir || m.dir === context.dir))) { await this.open({ kind: "dm", id: d.id, focus: id }); return; }
+      } catch { /* the next one */ }
+    }
+    if (!context?.conv) { // a later message of a device conversation
+      try {
+        const t = await this.api.thread(id);
+        if ((t.messages || []).some((m) => m.id === id)) { await this.open({ kind: "thread", id, focus: id }); return; }
+      } catch { /* not a device conversation here */ }
+    }
+    this.toast("That message is not on this device.");
   }
 
   // openChannel opens the conversation a browser notification's channel

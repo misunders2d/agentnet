@@ -180,7 +180,7 @@ func TestRelayPageLoadsOnlyServedFiles(t *testing.T) {
 // app.css) stay in the source tree for their tests and are not shipped:
 // no interface reaches them.
 func TestDaemonPageInBundle(t *testing.T) {
-	for _, name := range []string{"index.html", "loader.js", "core.css", "skin-base.css", "skinbar.mjs", "skinbar.css", "local-skins.mjs", "skins/comic/skin.json", "skins/comic/entry.mjs"} {
+	for _, name := range []string{"index.html", "loader.js", "core.css", "skin-base.css", "skinbar.mjs", "skinbar.css", "skin-choice.mjs", "local-skins.mjs", "skins/comic/skin.json", "skins/comic/entry.mjs"} {
 		if _, err := fs.ReadFile(Files, name); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}

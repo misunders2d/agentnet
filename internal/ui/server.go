@@ -215,7 +215,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
-		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8",
+		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8", "skin-choice.mjs": "text/javascript; charset=utf-8",
 		"manifest.webmanifest": "application/manifest+json",
 		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
 		"assistant-setup.mjs":  "text/javascript; charset=utf-8",

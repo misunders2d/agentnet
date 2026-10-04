@@ -287,10 +287,34 @@ export async function mount(root, host) {
       await refresh();
     } catch (e) { say(e.message); }
   });
-  const stop = host.listen((event) => {
-    if (event.type === "change") { const d = draft(); if (d) d.text = body.value; refresh(); }
-    else { typing.disconnect(); say(event.type === "restart" ? "AgentNet is restarting. Reload in a moment to reconnect." : "Connection interrupted. Reload to reconnect.", "error", "load"); }
-  });
+  // The event stream: changes refresh; when it ends (AgentNet restarting,
+  // or the connection lost) Notebook reconnects by itself. host.reconnect,
+  // where the host has it, binds this workspace again after a restart and
+  // mounts Notebook again over it (drafts are kept; files are asked again).
+  let stop = () => {};
+  const reconnect = async () => {
+    for (const wait of [1000, 2000, 4000, 8000, 15000, 30000]) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      if (!live) return;
+      try {
+        if (host.reconnect) { await host.reconnect(); if (!live) return; } // mounted again over the new binding
+        await host.api("/api/overview");
+        if (!live) return;
+        listen(); await refresh(); say("Connected again.", "ok", "load");
+        return;
+      } catch (_) { /* the next attempt */ }
+    }
+    if (live) say("AgentNet is not answering. Reload to try again.", "error", "load");
+  };
+  const listen = () => {
+    stop = host.listen((event) => {
+      if (event.type === "change") { const d = draft(); if (d) d.text = body.value; refresh(); return; }
+      stop(); typing.disconnect();
+      say(event.type === "restart" ? "AgentNet is restarting. Reconnecting…" : "Connection lost. Reconnecting…", "error", "load");
+      void reconnect();
+    });
+  };
+  listen();
   mounted.set(root, { stop() {
     const d = draft(); if (d) { d.text = body.value; d.kind = kind.value; }
     live = false; loading++; freeOpened(); typing.destroy(); stop();
