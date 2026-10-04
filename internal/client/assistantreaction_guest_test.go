@@ -23,18 +23,52 @@ func profileOf(t *testing.T, a *Agent) protocol.Profile {
 	return prof
 }
 
+// sessionRecords waits until every live session of a has published its own
+// capability record, and returns each one's latest. A successor needs that
+// record: one signed first for a session whose daemon has not published
+// yet would hide the daemon's own (the Hub keeps only a newer timestamp).
+func sessionRecords(t *testing.T, a *Agent) map[string]protocol.CapsRecord {
+	t.Helper()
+	var latest map[string]protocol.CapsRecord
+	eventually(t, "a published capability record for every live session of "+a.Address, func() bool {
+		prof := profileOf(t, a)
+		latest = map[string]protocol.CapsRecord{}
+		for _, raw := range prof.Caps {
+			if r, err := protocol.ParseCapsRecord(raw); err == nil && slices.Contains(prof.Sessions, r.Session) && r.TS >= latest[r.Session].TS {
+				latest[r.Session] = r
+			}
+		}
+		return len(latest) == len(prof.Sessions)
+	})
+	return latest
+}
+
+// runPublished runs a's daemon and waits until the session it starts is
+// live with its own capability record. A session still live from before
+// (a link's waiting session stays live through the Hub's grace period)
+// does not count, so fixture records signed afterwards succeed the
+// daemon's own.
+func runPublished(t *testing.T, a *Agent) func() {
+	t.Helper()
+	before := profileOf(t, a).Sessions
+	stop := runAgent(t, a)
+	eventually(t, "the daemon session's own capabilities at "+a.Address, func() bool {
+		prof := profileOf(t, a)
+		for _, raw := range prof.Caps {
+			if r, err := protocol.ParseCapsRecord(raw); err == nil && !slices.Contains(before, r.Session) && slices.Contains(prof.Sessions, r.Session) {
+				return true
+			}
+		}
+		return false
+	})
+	return stop
+}
+
 // dropCapSuccessor removes cap from each live session's latest signed
 // record, as that record's immediate successor (addCapSuccessor's inverse).
 func dropCapSuccessor(t *testing.T, a *Agent, cap string) {
 	t.Helper()
-	prof := profileOf(t, a)
-	for _, session := range prof.Sessions {
-		var latest protocol.CapsRecord
-		for _, raw := range prof.Caps {
-			if r, err := protocol.ParseCapsRecord(raw); err == nil && r.Session == session && r.TS >= latest.TS {
-				latest = r
-			}
-		}
+	for session, latest := range sessionRecords(t, a) {
 		caps := slices.DeleteFunc(slices.Clone(latest.Caps), func(c string) bool { return c == cap })
 		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: caps, TS: max(latest.TS+1, time.Now().Unix())}
 		rec.Sign(a.id.Sign)

@@ -364,18 +364,7 @@ func TestAssistantReactionGroupParticipation(t *testing.T) {
 // ahead of the clock; a current-time record would only wait for them.
 func addCapSuccessor(t *testing.T, a *Agent, cap string) {
 	t.Helper()
-	label, name, _ := protocol.SplitAddress(a.Address)
-	var prof protocol.Profile
-	if err := a.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
-		t.Fatal(err)
-	}
-	for _, session := range prof.Sessions {
-		var latest protocol.CapsRecord
-		for _, raw := range prof.Caps {
-			if r, err := protocol.ParseCapsRecord(raw); err == nil && r.Session == session && r.TS >= latest.TS {
-				latest = r
-			}
-		}
+	for session, latest := range sessionRecords(t, a) {
 		caps := append(slices.Clone(latest.Caps), cap)
 		slices.Sort(caps)
 		caps = slices.Compact(caps)

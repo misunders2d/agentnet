@@ -496,7 +496,8 @@ func TestAssistantReactionExternalHistoryWaitsForOldReader(t *testing.T) {
 	if _, err = host.AcceptParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "active", func() bool { return stateAt(t, w.bob, p.PID).Claimable() })
+	// Alice asks, so her copy must be active too, not only bob's.
+	eventually(t, "active", func() bool { return stateAt(t, w.alice, p.PID).Claimable() && stateAt(t, w.bob, p.PID).Claimable() })
 	q, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "react later")
 	if err != nil {
 		t.Fatal(err)
@@ -520,7 +521,10 @@ func TestAssistantReactionExternalHistoryWaitsForOldReader(t *testing.T) {
 	if out := <-awaited; out.err != nil {
 		t.Fatal(out.err)
 	}
-	runAgent(t, phone)
+	// The link's waiting session may still be live: the drop must also
+	// succeed the daemon session's own record, or that later publish
+	// brings agr1 back.
+	runPublished(t, phone)
 	fakeNotify(phone)
 	waitNamedAgentCaps(t, phone)
 	dropCapSuccessor(t, phone, protocol.CapAgentReaction) // an older reader: participation caps, no agr1
