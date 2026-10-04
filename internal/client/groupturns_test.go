@@ -388,10 +388,12 @@ func TestGroupTurnKeptOfflineNotSentToRemovedDevice(t *testing.T) {
 	if _, err := w.alice.sendKey(tctx(t), phone.Address); err != nil {
 		t.Fatal(err)
 	}
+	// Alice goes offline before Bob removes the phone, so the removal cannot
+	// reach her running daemon first: she still has it pinned when she sends.
+	stops[w.alice]()
 	if err := w.bob.RemoveDevice(tctx(t), phone.Address); err != nil {
 		t.Fatal(err)
 	}
-	stops[w.alice]()
 	home := w.alice.home
 	w.alice.Close()
 	alice, err := Open(home)
