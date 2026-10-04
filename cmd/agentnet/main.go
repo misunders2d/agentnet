@@ -290,12 +290,7 @@ func run(args []string) error {
 		if len(rest) != 1 {
 			return errors.New("usage: fingerprint ADDRESS")
 		}
-		pinned, current, err := a.Fingerprints(ctx, rest[0])
-		if pinned == "" {
-			pinned = "(not yet trusted)"
-		}
-		fmt.Printf("trusted   %s\ndirectory %s\n", pinned, current)
-		return err
+		return runFingerprint(ctx, a, rest[0], os.Stdout)
 	case "trust":
 		if len(rest) != 1 {
 			return errors.New("usage: trust ADDRESS")
@@ -998,6 +993,22 @@ func runTaskGrant(a *client.Agent, cmd, arg string) error {
 	return nil
 }
 
+// runFingerprint shows the key trusted here for address and the directory's.
+func runFingerprint(ctx context.Context, a *client.Agent, address string, stdout io.Writer) error {
+	pinned, current, err := a.Fingerprints(ctx, address)
+	if pinned == "" {
+		pinned = "(not yet trusted)"
+	}
+	fmt.Fprintf(stdout, "trusted   %s\ndirectory %s\n", pinned, current)
+	if err != nil {
+		return err
+	}
+	if revoked, _ := a.Revoked(ctx, address); revoked {
+		fmt.Fprintln(stdout, "status    revoked by a Hub admin: nothing from or to it counts, and trust refuses it")
+	}
+	return nil
+}
+
 func runApprovals(a *client.Agent) error {
 	qs, err := a.QuestionApprovals()
 	if err != nil {
@@ -1013,7 +1024,29 @@ func runApprovals(a *client.Agent) error {
 	for _, t := range ts {
 		fmt.Printf("tasks      %s  key %s  %s\n", t.Address, t.Fingerprint, t.Status)
 	}
-	if len(qs) == 0 && len(ts) == 0 {
+	// An agent of this device accepted into a conversation runs, without
+	// asking, the tasks of the member keys its invitation named: accepting
+	// it was that grant, which stands until it is dismissed.
+	convs, err := a.Conversations()
+	if err != nil {
+		return err
+	}
+	granted := 0
+	for _, c := range convs {
+		parts, err := a.Participations(c.ID)
+		if err != nil {
+			return err
+		}
+		for _, p := range parts {
+			if !p.HostHere || !p.Claimable() || len(p.TaskKeys) == 0 {
+				continue
+			}
+			granted++
+			fmt.Printf("tasks      from %s  in conversation %s through your agent %s (accepting it granted this; %s)\n",
+				strings.Join(taskGrantees(a, p), ", "), c.ID, p.PID, grantEnd(p))
+		}
+	}
+	if len(qs) == 0 && len(ts) == 0 && granted == 0 {
 		fmt.Println("none: every question and task waits for you")
 	}
 	return nil

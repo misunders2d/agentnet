@@ -159,6 +159,19 @@ func TestDesktopAlertMuteOffAndFreeze(t *testing.T) {
 	}
 }
 
+// BUG-38: alerts allowed for a person cover every current device of that
+// person, not only the device whose key was allowed; a key the person does
+// not hold still alerts nothing (TestDesktopAlertOnceAfterGrace).
+func TestDesktopAlertCoversEveryDeviceOfAnAllowedPerson(t *testing.T) {
+	w, conv, n, _ := alertWorld(t, time.Second)
+	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "while off, from the laptop"})
+	allowAliceAt(t, w)
+	phone := linked(t, w.alice)
+	eventually(t, "the DM on alice's phone", func() bool { return len(convBodies(t, phone, conv)) > 0 })
+	sendAt(t, phone, w.bob, conv, ConvOutgoing{Body: "from alice's phone"})
+	eventually(t, "an alert for alice's phone", func() bool { return n.count() == 1 })
+}
+
 // A pending alert survives a restart and is shown once after it.
 func TestDesktopAlertAcrossRestart(t *testing.T) {
 	w, conv, n, stopBob := alertWorld(t, 2*time.Second)

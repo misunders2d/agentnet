@@ -421,6 +421,8 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if m.PID != "" {
 			p, e := a.Participation(m.PID)
 			humanAuthor = e == nil && p.Role == protocol.RoleHuman
+		} else if pid, e := a.ownHumanPID(conv); e == nil {
+			m.PID = pid // an accepted guest's device: its own exact participation, as the page names it ("" for a member)
 		}
 		if humanAuthor {
 			h, e := a.humanPlan(ctx, conv, m.PID)

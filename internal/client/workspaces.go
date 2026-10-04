@@ -18,6 +18,10 @@ const DefaultWorkspace = "default"
 
 var ErrWorkspaceUnknown = errors.New("unknown or disconnected workspace")
 
+// ErrWorkspaceExists refuses joining again a workspace this installation
+// holds (enrolled or disconnected): reconnect it instead.
+var ErrWorkspaceExists = errors.New("workspace already exists")
+
 // Workspace names an independently enrolled local membership. ID is a local
 // routing handle, Realm is the relay's namespace; neither grants authority.
 type Workspace struct {
@@ -162,8 +166,15 @@ func (w *Workspaces) Open(id string) (*Agent, error) {
 // Join retains its local joining ID on failure for exact retry. The registry
 // never stores invitations, credentials, arbitrary paths or peer grants.
 func (w *Workspaces) Join(ctx context.Context, id, name, code, agentName string) (Workspace, error) {
+	name, err := workspaceName(name)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if !protocol.ValidName(agentName) {
+		return Workspace{}, ErrDeviceName
+	}
 	var result Workspace
-	err := w.modify(func(r *workspaceRegistry) error {
+	err = w.modify(func(r *workspaceRegistry) error {
 		if id == "" {
 			id = protocol.NewID()
 		} else if !validWorkspaceID(id) || id == DefaultWorkspace {
@@ -173,7 +184,7 @@ func (w *Workspaces) Join(ctx context.Context, id, name, code, agentName string)
 		for i, v := range r.Items {
 			if v.ID == id {
 				if v.State != "joining" {
-					return errors.New("workspace already exists")
+					return ErrWorkspaceExists
 				}
 				index = i
 			}

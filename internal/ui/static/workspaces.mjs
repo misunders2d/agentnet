@@ -92,6 +92,18 @@ export class WorkspaceShell {
   e.connected=false;this.members.delete(id);this.states.delete(id);
   if(this.active===id){this.active=null;const next=this.members.keys().next().value;if(next)this.select(next);}
  }
+ // A native membership disconnected here keeps its keys and history; the
+ // program lists it with its state and can route it again.
+ async disconnected(){const all=await json(this.fetch,"/api/workspaces/all");return Array.isArray(all)?all.filter(w=>ID.test(w?.id)&&w.state==="disconnected"&&!this.members.get(w.id)?.connected):[];}
+ // Reconnect binds that same membership again under a new handle: never a
+ // second membership, and never one the program answers for another.
+ async reconnect(id) {
+  if(this.members.get(id)?.connected)throw new Error("Workspace already connected");
+  const was=(await this.disconnected()).find(w=>w.id===id);if(!was)throw new Error("No disconnected workspace with that ID here");
+  const next=await json(this.fetch,"/api/workspaces/reconnect",{id});
+  if(next?.id!==id||next.endpoint!==was.endpoint||next.realm!==was.realm||next.address!==was.address)throw new Error("Workspace identity changed; reconnect refused");
+  return this.register(next);
+ }
  // Notification routes come from a locally bound registration, never payload.ws.
  openFromRegistration(boundID,conversation,open) {
   if(!this.members.get(boundID)?.connected)throw new Error("Unknown notification registration");

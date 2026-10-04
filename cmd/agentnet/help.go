@@ -396,6 +396,8 @@ migrated. All devices in new DMs need the person2-capable version.`,
        agentnet dm agents ID
        agentnet dm accept-agent|decline-agent|dismiss-agent PID
        agentnet dm ask-agent [--task] PID TEXT
+       agentnet dm invite-guest [--share LID,...] [--note TEXT] ID HOST
+       agentnet dm accept-guest|decline-guest|end-guest PID
 
 A DM is a conversation between two persons (see agentnet help person), with
 its own id: each dm new starts a separate one, even with the same person,
@@ -422,8 +424,19 @@ on (a member's own installation, whose person accepts or declines with
 dm accept-agent / dm decline-agent, all or nothing), the earlier messages it
 may be shown (--grant, logical ids from dm show; nothing else earlier) and
 who may give it follow-up tasks (--tasks). Both people see the invite.
-Either person can end it with dm dismiss-agent; inviting again starts a new
-participation.
+Either person can end it with dm dismiss-agent (a host outside the DM
+cannot end its own agent's participation; only a member can); inviting
+again starts a new participation. Accepting an invitation that lists --tasks keys lets their
+tasks run on the host without asking while the agent participates: dm
+agents shows those keys before you accept, accept-agent repeats them, and
+approvals lists the grant until the agent is dismissed.
+
+A member can invite a person from outside the DM as a guest with dm
+invite-guest (HOST is that person's device; --share names earlier messages
+they are shown, logical ids from dm show). The guest decides with dm
+accept-guest or dm decline-guest; once accepted, the guest's dm send goes to
+the conversation under that participation. dm end-guest is a member
+removing the guest, or the guest leaving; shared copies remain.
 
 Your own agent joins without dm accept-agent when you invite it from its
 own device or from a device of yours it trusts (agentnet help person), for
@@ -742,7 +755,7 @@ Give the whole text to the coding agent on their computer, privately. The
 label is your statement about who they are. revoke immediately cuts ADDRESS
 off.
 
-  --ttl D    how long the invite is valid (max 720h)
+  --ttl D    how long the invite is valid: more than 0, at most 720h (others are refused)
   --admin    the invited agent becomes an admin too
   --raw      print only the invite code (for scripts)
   --link     print only a private, single-use browser invitation link (the

@@ -193,3 +193,34 @@ const uploadShell=new WorkspaceShell({fetch:async p=>{
 const uploadOld=uploadShell.register(nativeBinding),flight=uploadOld.stage({name:"unsent",size:2});
 await uploadShell.recoverNative("default",nativeKey);uploadRelease();assert.equal(await flight,"retired-upload");assert(uploadCalls[0].includes(nativeBinding.handle));await assert.rejects(uploadOld.api("/api/send",{}),/Stale/);
 console.log("in-flight native upload remains bound to retired generation PASS");
+
+// BUG-19: a disconnected native workspace is listed with its state and
+// reconnects under a new handle as the same membership. A connected one, one
+// not listed as disconnected, or an answer naming another membership is
+// refused; a handle from before the disconnect stays stale.
+{
+ const c={...b,id:"c".repeat(32),endpoint:"https://c.example",handle:"3".repeat(32),address:"alice/laptop"};
+ const back={...c,handle:"4".repeat(32)};
+ let cState="enrolled",answer=back;const posted=[];
+ const reShell=new WorkspaceShell({fetch:async(path,opts)=>{
+  if(path==="/api/workspaces/all")return{ok:true,json:async()=>[{...a},{...c,handle:cState==="enrolled"?c.handle:"",state:cState}]};
+  if(path==="/api/workspaces/disconnect"){cState="disconnected";return{ok:true,json:async()=>({})};}
+  if(path==="/api/workspaces/reconnect"){posted.push(JSON.parse(opts.body));if(answer===back)cState="enrolled";return{ok:true,json:async()=>answer};}
+  return{ok:false,status:404,text:async()=>"not found"};
+ }});
+ reShell.register(a);const before=reShell.register(c);
+ assert.deepEqual(await reShell.disconnected(),[]);
+ await assert.rejects(reShell.reconnect(c.id),/already connected/);
+ await reShell.disconnect(c.id);
+ assert.deepEqual((await reShell.disconnected()).map(w=>[w.id,w.name,w.address]),[[c.id,c.name,c.address]]);
+ await assert.rejects(reShell.reconnect("e".repeat(32)),/No disconnected workspace/);
+ answer={...back,address:"mallory/laptop"};
+ await assert.rejects(reShell.reconnect(c.id),/identity changed/);assert.equal(reShell.members.has(c.id),false);
+ answer=back;
+ const host=await reShell.reconnect(c.id);
+ assert.equal(host.workspace.id,c.id);assert.equal(host.workspace.handle,back.handle);assert.deepEqual(posted.at(-1),{id:c.id});
+ assert.deepEqual(reShell.list().map(w=>w.id),[a.id,c.id]);assert.equal(reShell.active,a.id);
+ await assert.rejects(before.api("/api/send",{}),/Stale/);
+ assert.deepEqual(await reShell.disconnected(),[]);
+ console.log("native disconnect is undone by reconnect: same membership, new handle, stale old handle PASS");
+}

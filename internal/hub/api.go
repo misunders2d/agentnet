@@ -330,7 +330,7 @@ func (h *Hub) handleInvite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "", "this Hub cannot serve browser invitations: that needs hub serve --web and HTTPS that browsers trust (not a certificate pin)")
 		return
 	}
-	if req.TTL <= 0 || req.TTL > 30*24*time.Hour {
+	if req.TTL <= 0 || req.TTL > protocol.MaxInviteTTL {
 		req.TTL = 7 * 24 * time.Hour
 	}
 	secret := protocol.NewID() + protocol.NewID()

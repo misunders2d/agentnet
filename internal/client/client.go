@@ -173,6 +173,11 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 				"Hub: %s. Ask the person to confirm that address or choose another NAME, then run: agentnet join --agent NAME CODE",
 				address, ErrAddressTaken, he.Msg)
 		}
+		if errors.As(err, &he) && he.Status == http.StatusForbidden {
+			// A definite refusal: this invitation can never enroll.
+			return nil, fmt.Errorf("the Hub refused this invitation (%w): it is invalid, expired or already used, and nothing was enrolled. "+
+				"Ask for a new invitation, then run: agentnet join --agent NAME NEW_CODE", err)
+		}
 		return nil, fmt.Errorf("enrollment not confirmed: %w (run the same join command again to retry)", err)
 	}
 	if err := st.setConfig(saved); err != nil {
@@ -884,6 +889,14 @@ func (a *Agent) Fingerprints(ctx context.Context, address string) (pinned, curre
 	return pinned, e.Public.Fingerprint(), nil
 }
 
+// Revoked reports whether the Hub's directory says a Hub admin revoked
+// address. A person's signed roster may still list such a device until that
+// person removes it (agentnet person remove).
+func (a *Agent) Revoked(ctx context.Context, address string) (bool, error) {
+	e, err := a.directory(ctx, address)
+	return err == nil && e.Revoked, err
+}
+
 // Trust pins the directory's current keys for address and promotes messages
 // held because of a key change that now verify. Each message moves to the
 // inbox atomically, so an interrupted Trust can simply be run again.
@@ -899,6 +912,9 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 	e, err := a.directory(ctx, address)
 	if err != nil {
 		return "", err
+	}
+	if e.Revoked { // fail closed: nothing from or to it counts any more
+		return "", fmt.Errorf("%s was revoked by a Hub admin: there is no key of it to trust, and nothing was trusted", address)
 	}
 	if got := e.Public.Fingerprint(); expect != "" && got != expect {
 		return "", fmt.Errorf("%s's key is now %s, not the %s you compared; nothing was trusted: compare the new fingerprint", address, got, expect)
@@ -940,9 +956,21 @@ func (a *Agent) TrustKey(ctx context.Context, address, expect string) (string, e
 
 // Invite asks the Hub for an invite code for person label (admin only).
 func (a *Agent) Invite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
+	if err := inviteTTL(ttl); err != nil {
+		return "", err
+	}
 	var out struct{ Code string }
 	err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin}, &out)
 	return out.Code, err
+}
+
+// inviteTTL refuses a lifetime the Hub would not keep (it would quietly
+// give the invite a week instead), naming the allowed range.
+func inviteTTL(ttl time.Duration) error {
+	if ttl <= 0 || ttl > protocol.MaxInviteTTL {
+		return fmt.Errorf("invite lifetime %s is out of range: choose more than 0 and at most %gh (30 days); nothing was created", ttl, protocol.MaxInviteTTL.Hours())
+	}
+	return nil
 }
 
 // BrowserInvite creates an invite for a browser invitation link (admin
@@ -951,6 +979,9 @@ func (a *Agent) Invite(ctx context.Context, label string, ttl time.Duration, adm
 // still connect through an older pinned endpoint after that migration;
 // its connection's pin says nothing about the endpoint in the new invite.
 func (a *Agent) BrowserInvite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
+	if err := inviteTTL(ttl); err != nil {
+		return "", err
+	}
 	var out struct{ Code string }
 	if err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin, Browser: true}, &out); err != nil {
 		var he *HubError
