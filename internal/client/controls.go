@@ -1325,9 +1325,11 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 // controlAuthorized decides, for a conversation control from a device of
 // person author, whether it may be stored: a reaction needs membership
 // only (the caller checked); a revision or retraction needs the target's
-// sender key to belong to the same person. why says what is missing.
+// sender key to belong to the same person. A status is no edit: it speaks
+// for the request only from the device that request is for, which the
+// caller checked (statusAllowed). why says what is missing.
 func (a *Agent) controlAuthorized(m dmMembers, in envelope.Inner, author string) (reason, why string) {
-	if in.Sub == envelope.SubReaction {
+	if in.Sub == envelope.SubReaction || in.Sub == envelope.SubStatus {
 		return "", ""
 	}
 	switch owner := a.personOfKeyIn(m, in.Ref.Fingerprint); {
@@ -1475,7 +1477,8 @@ func (a *Agent) decorateConv(conv string, msgs []ConvMessage) error {
 				key = selfFP
 			}
 			if e, ok := execs[ControlRef{ID: msg.LID, Fingerprint: key}]; ok && e.Host == msg.Target.Address { // only the target device speaks for it (admission checked the key)
-				e.settle(a.hostConnected(e.Host), "", 0, time.Now().Unix())
+				status, at := convAnswer(msgs, *msg)
+				e.settle(a.hostConnected(e.Host), status, at, time.Now().Unix())
 				msg.Exec = &e
 			}
 		}

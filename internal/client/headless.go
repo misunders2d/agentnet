@@ -94,6 +94,27 @@ func legacyAnswer(msgs []ConversationMessage, id string) (status string, at int6
 	return "", 0
 }
 
+// convAnswer is legacyAnswer for a conversation request: the terminal
+// answer or result its target device sent for it, named by any copy of
+// the request (the executor's own) or its logical id, and its time here.
+func convAnswer(msgs []ConvMessage, request ConvMessage) (status string, at int64) {
+	if request.Target == nil {
+		return "", 0
+	}
+	ids := map[string]bool{request.ID: true, request.LID: true}
+	for _, c := range request.Copies {
+		ids[c.ID] = true
+	}
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Sub == "" && (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && ids[m.ReplyTo] && m.PID == request.PID &&
+			m.From == request.Target.Address && execTerminal(m.status) {
+			return m.status, m.At
+		}
+	}
+	return "", 0
+}
+
 // execTerminal reports whether state is one a host reports last.
 func execTerminal(state string) bool {
 	switch state {
