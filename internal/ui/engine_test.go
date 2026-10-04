@@ -1102,7 +1102,7 @@ func TestBrowserEngineFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { alice.Close() })
-	runDaemon(t, alice)
+	stopAlice := runDaemon(t, alice)
 	if _, err := alice.CreatePerson(ctx, "Alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -1225,6 +1225,11 @@ func TestBrowserEngineFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Alice's daemon is stopped while the file reaches the Hub and is changed
+	// there: a running daemon keeps a received file's ciphertext as soon as it
+	// holds the message (prefetchFiles), and a copy kept before the change is
+	// the genuine one, so the change would never reach Go.
+	stopAlice()
 	bad := w.ok(map[string]any{"op": "sendFiles", "conv": conv, "files": []any{file("flip.txt", []byte("flip me"))}})["v"].(map[string]any)
 	w.until("the file to flip at the Hub", func() bool {
 		r := w.ok(map[string]any{"op": "outbox", "id": bad["id"]})["rec"].(map[string]any)
@@ -1232,6 +1237,11 @@ func TestBrowserEngineFiles(t *testing.T) {
 	})
 	badRec := w.ok(map[string]any{"op": "outbox", "id": bad["id"]})["rec"].(map[string]any)
 	flip(badRec["attachments"].([]any)[0].(map[string]any)["blob"].(map[string]any)["id"].(string))
+	alice.Close()
+	if alice, err = client.Open(aliceHome); err != nil {
+		t.Fatal(err)
+	}
+	runDaemon(t, alice)
 	w.until("alice holds the flipped file's message", func() bool { return has(bad["id"].(string)) })
 	if rc, _, err := alice.OpenAttachment(ctx, bad["id"].(string), 0); err == nil {
 		rc.Close()

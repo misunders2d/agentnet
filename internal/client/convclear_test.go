@@ -461,6 +461,9 @@ func TestDeleteGroupConversationKeepsMembership(t *testing.T) {
 	eventually(t, "the first turn here", func() bool { return len(groupTurns(t, w.alice, conv)) == 1 })
 	sendConv(t, carol, conv, ConvOutgoing{Body: "from carol"})
 	eventually(t, "both turns here", func() bool { return len(groupTurns(t, w.alice, conv)) == 2 })
+	for _, a := range []*Agent{w.bob, carol} {
+		eventually(t, "both turns at "+a.Address, func() bool { return len(groupTurns(t, a, conv)) == 2 })
+	}
 	done, err := w.alice.DeleteConversation(tctx(t), conv)
 	if err != nil || done.Erased != 2 || done.Devices != 0 {
 		t.Fatalf("delete: %+v %v", done, err)
