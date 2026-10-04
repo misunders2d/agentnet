@@ -11,6 +11,21 @@ import (
 // dmShow returns `agentnet dm show` for a conversation.
 func dmShow(c *cli, home, conv string) string { return c.run("--home", home, "dm", "show", conv) }
 
+// dmShowArriving is dmShow for a conversation that may still be on its way
+// to home: "" while dm show says it has no such conversation, and any other
+// failure is fatal.
+func dmShowArriving(c *cli, home, conv string) string {
+	c.t.Helper()
+	out, err := c.try("--home", home, "dm", "show", conv)
+	if err != nil {
+		if strings.Contains(out, "no such conversation here") {
+			return ""
+		}
+		c.t.Fatalf("agentnet --home %s dm show %s: %v\n%s", home, conv, err, out)
+	}
+	return out
+}
+
 // TestCLIDM: persons are created only explicitly; two DMs with the same
 // person stay separate, both ways and across a daemon restart; a question in
 // a DM is held for the person, never run, and legacy accept/reply refuse it.

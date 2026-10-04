@@ -159,7 +159,7 @@ func TestCLIGroupLifecycle(t *testing.T) {
 		if home == "bob" {
 			other = "alice"
 		}
-		waitFor(t, "CLI ordinary encrypted group message", func() bool { return strings.Contains(dmShow(c, other, packet.Root.ID()), body) })
+		waitFor(t, "CLI ordinary encrypted group message", func() bool { return strings.Contains(dmShowArriving(c, other, packet.Root.ID()), body) })
 	}
 	// A different group's explicit decline never installs membership.
 	if err = json.Unmarshal([]byte(c.run("--home", "alice", "group", "create", "Declined CLI group")), &packet); err != nil {

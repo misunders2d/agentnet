@@ -32,6 +32,12 @@ export interface Host {
     join?(body: { name: string; invite: string; agent: string; id?: string }): Promise<Host>;
     disconnect?(id: string): Promise<void>;
     state?(id: string): Record<string, unknown>;
+    // Present only where this computer's program can route a membership it
+    // disconnected again (never a browser enrollment): the memberships
+    // disconnected here, and reconnecting one (same keys and history, a new
+    // handle; it is not selected).
+    disconnected?(): Promise<Workspace[]>;
+    reconnect?(id: string): Promise<Host>;
   };
   /** Mounts the browser-local interface package importer (local-skins.mjs) into root. */
   manageLocalSkins?(root: HTMLElement): void;

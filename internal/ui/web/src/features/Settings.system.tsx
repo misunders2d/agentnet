@@ -1,8 +1,8 @@
 // Storage (what AgentNet holds here and on your server, as the program
 // reports it: unknown stays unknown), workspaces (the memberships this
 // computer holds) and About (version, updates, technical details).
-import { IconArrowUpRight, IconPlus, IconRefresh } from "@tabler/icons-react";
-import { useEffect, useReducer, useState } from "react";
+import { IconArrowUpRight, IconPlugConnected, IconPlus, IconRefresh } from "@tabler/icons-react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
 import type { Workspace } from "../host";
@@ -12,7 +12,7 @@ import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { harnessName } from "./Settings.assistant";
-import { JoinSheet, LeaveSheet, workspaceLabel } from "./WorkspaceSwitcher";
+import { JoinSheet, LeaveSheet, useDisconnected, useReconnect, workspaceLabel } from "./WorkspaceSwitcher";
 import { Card, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
 
 // ---- Storage -----------------------------------------------------------------
@@ -128,10 +128,24 @@ function Coin({ ws }: { ws: Workspace }) {
 export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const ws = store.host.workspaces;
-  const [, refresh] = useReducer((n: number) => n + 1, 0);
+  const [revision, refresh] = useReducer((n: number) => n + 1, 0);
   const [joining, setJoining] = useState(false);
   const [leaving, setLeaving] = useState<Workspace | null>(null);
   useEffect(() => ws?.onChange(refresh), [ws]);
+  const gone = useDisconnected(ws, revision);
+  const { busy, error, done, reconnect } = useReconnect(ws, refresh);
+  // Focus follows the reconnect (its button was disabled while it ran): to
+  // the workspace back in the list, or back to the button when it failed.
+  const box = useRef<HTMLDivElement>(null);
+  const focusOn = useRef("");
+  useEffect(() => { focusOn.current = done || error?.id || ""; }, [done, error]);
+  useEffect(() => { // once, as soon as that row is drawn
+    if (!focusOn.current || !box.current) return;
+    const row = box.current.querySelector<HTMLElement>("[data-ws=\"" + CSS.escape(focusOn.current) + "\"]");
+    if (!row) return;
+    focusOn.current = "";
+    (row.querySelector<HTMLElement>("button:not([disabled])") || row).focus();
+  });
   const head = <PageHead title="Workspaces" titleRef={titleRef} lead="Each workspace is its own server, with its own people and chats. You switch between them here." />;
   if (!ws) return (
     <>{head}
@@ -145,11 +159,11 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
     ws.select(id);
   };
   return (
-    <>
+    <div ref={box}>
       {head}
       <ul className="space-y-3">
         {list.map((w) => (
-          <li key={w.id}>
+          <li key={w.id} data-ws={done === w.id ? w.id : undefined} tabIndex={done === w.id ? -1 : undefined} className="rounded-2xl">
             <Card className="px-4 pb-1 pt-4">
               <div className="flex items-center gap-3">
                 <Coin ws={w} />
@@ -170,10 +184,36 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
           </li>
         ))}
       </ul>
+      {gone.list.length > 0 && <>
+        <div className="mt-6"><GroupLabel>Not connected</GroupLabel></div>
+        <Hint className="-mt-1 mb-3">You left these on this {store.host.platform === "browser" ? "browser" : "computer"}. Their keys and chats are still here; reconnecting brings them back as the same device.</Hint>
+        <ul className="space-y-3">
+          {gone.list.map((w) => (
+            <li key={w.id} data-ws={done === w.id ? undefined : w.id}>
+              <Card className="px-4 pb-1 pt-4">
+                <div className="flex items-center gap-3">
+                  <span className="opacity-60"><Coin ws={w} /></span>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold">{workspaceLabel(w)}</p>
+                    <Hint className="truncate">{hostOf(w.endpoint)}</Hint>
+                  </div>
+                  <Button size="sm" variant="outline" icon={<IconPlugConnected size={18} aria-hidden="true" />} disabled={!!busy} aria-label={"Reconnect " + workspaceLabel(w)} onClick={() => reconnect(w)}>{busy === w.id ? "Reconnecting…" : "Reconnect"}</Button>
+                </div>
+                {error?.id === w.id && <p role="alert" className="pt-2 text-[14px] font-semibold text-danger">Couldn’t reconnect: {error.text}</p>}
+                <Details>
+                  <Fact name="You were">{w.address}</Fact>
+                  <Fact name="Server">{w.endpoint}</Fact>
+                </Details>
+              </Card>
+            </li>
+          ))}
+        </ul>
+      </>}
+      {gone.error && <p role="alert" className="mt-3 text-[14px] font-semibold text-danger">Couldn’t list the workspaces you left: {gone.error}</p>}
       {ws.join && <Button variant="outline" size="lg" className="mt-5" icon={<IconPlus size={20} />} onClick={() => setJoining(true)}>Join a workspace</Button>}
       <JoinSheet ws={ws} open={joining} onClose={() => setJoining(false)} onJoined={refresh} />
       <LeaveSheet ws={ws} target={leaving} onClose={() => setLeaving(null)} onLeft={refresh} />
-    </>
+    </div>
   );
 }
 

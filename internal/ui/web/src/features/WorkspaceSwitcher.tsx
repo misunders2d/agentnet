@@ -1,11 +1,12 @@
 // The workspace switcher: which AgentNet server this is, the others this
-// computer belongs to, joining one with an invitation and leaving one. The
+// computer belongs to, joining one with an invitation, leaving one and
+// reconnecting one this computer left (where its program can). The
 // host owns the memberships (loader.js); switching remounts the whole
 // interface over the chosen one, so nothing here can act on another
 // workspace by accident. Hidden when the host has no workspace list.
 import { Popover } from "@base-ui/react/popover";
-import { useState, type FormEvent } from "react";
-import { IconCheck, IconChevronDown, IconDoorExit, IconPlus, IconCircleCheck } from "@tabler/icons-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { IconCheck, IconChevronDown, IconDoorExit, IconPlus, IconCircleCheck, IconPlugConnected } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { errorText, type T } from "../api";
 import type { Host, Workspace } from "../host";
@@ -48,6 +49,46 @@ function stateWord(w: Workspace, connected: boolean): string {
   return "";
 }
 
+/** useDisconnected: the workspaces this computer left and can reconnect, read
+ *  from its program each time revision changes (none where it can't). */
+export function useDisconnected(ws: Memberships | null | undefined, revision: number) {
+  const [state, setState] = useState<{ list: Workspace[]; error: string }>({ list: [], error: "" });
+  useEffect(() => {
+    if (!ws?.disconnected) return;
+    let live = true;
+    ws.disconnected().then((list) => { if (live) setState({ list: list || [], error: "" }); })
+      .catch((e) => { if (live) setState((s) => ({ list: s.list, error: errorText(e) })); });
+    return () => { live = false; };
+  }, [ws, revision]);
+  return state;
+}
+
+/** useReconnect reconnects a workspace this computer left: the same
+ *  membership, with its keys and chats, routed again. It is not selected.
+ *  busy is the one reconnecting; error says why the last one failed (shown
+ *  under its row, where it can be seen); done is the last one reconnected.
+ *  Success is also said in a toast, after onDone(w). */
+export function useReconnect(ws: Memberships | null | undefined, onDone: (w: Workspace) => void) {
+  const store = useApp();
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState<{ id: string; text: string } | null>(null);
+  const [done, setDone] = useState("");
+  const reconnect = async (w: Workspace) => {
+    if (!ws?.reconnect) return;
+    setBusy(w.id); setError(null); setDone("");
+    try {
+      await ws.reconnect(w.id);
+      setDone(w.id);
+      onDone(w);
+      store.toast("Reconnected " + workspaceLabel(w) + ". Its chats and keys are back.", "ok");
+    } catch (e) {
+      setError({ id: w.id, text: errorText(e) });
+    }
+    setBusy("");
+  };
+  return { busy, error, done, reconnect };
+}
+
 /** WorkspaceCoin: the desktop rail's top coin; it opens the workspace menu. */
 export function WorkspaceCoin() {
   return <WorkspaceControl variant="coin" />;
@@ -64,15 +105,16 @@ function WorkspaceControl({ variant }: { variant: "coin" | "pill" }) {
   const [menu, setMenu] = useState(false);
   const [joining, setJoining] = useState(false);
   const [leaving, setLeaving] = useState<Workspace | null>(null);
-  const [, setRevision] = useState(0); // the list changes only through join and leave here
+  const [revision, setRevision] = useState(0); // the list changes only through join, leave and reconnect here
   if (!ws) return null;
 
   const current = store.host.workspace;
   const label = workspaceLabel(current);
   const letters = coinLetters(label);
   const refresh = () => setRevision((n) => n + 1);
+  // A reconnect closes the menu, so its toast shows (a phone's sheet covers toasts).
   const menuBody = (
-    <WorkspaceMenu ws={ws} onDone={() => setMenu(false)}
+    <WorkspaceMenu ws={ws} revision={revision} onChanged={refresh} onDone={() => setMenu(false)}
       onJoin={ws.join ? () => { setMenu(false); setJoining(true); } : undefined}
       onLeave={ws.disconnect ? (w) => { setMenu(false); setLeaving(w); } : undefined} />
   );
@@ -111,10 +153,17 @@ function WorkspaceControl({ variant }: { variant: "coin" | "pill" }) {
   );
 }
 
-function WorkspaceMenu({ ws, onDone, onJoin, onLeave }: { ws: Memberships; onDone: () => void; onJoin?: () => void; onLeave?: (w: Workspace) => void }) {
+function WorkspaceMenu({ ws, revision, onChanged, onDone, onJoin, onLeave }: {
+  ws: Memberships; revision: number; onChanged: () => void; onDone: () => void; onJoin?: () => void; onLeave?: (w: Workspace) => void;
+}) {
   const store = useApp();
   const active = ws.active();
   const list = ws.list();
+  const gone = useDisconnected(ws, revision);
+  const { busy, error, reconnect } = useReconnect(ws, () => { onChanged(); onDone(); });
+  // A failed reconnect gives focus back to its button (it was disabled while it ran).
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  useEffect(() => { if (error) buttons.current.get(error.id)?.focus(); }, [error]);
   const pick = (w: Workspace) => {
     onDone();
     if (w.id === active) return;
@@ -148,6 +197,33 @@ function WorkspaceMenu({ ws, onDone, onJoin, onLeave }: { ws: Memberships; onDon
           );
         })}
       </ul>
+      {gone.list.length > 0 && (
+        <div className="pt-3">
+          <h3 className="px-2 pb-1 text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Not connected</h3>
+          <ul className="flex flex-col gap-1">
+            {gone.list.map((w) => {
+              const name = workspaceLabel(w);
+              const server = serverName(w.endpoint);
+              return (
+                <li key={w.id} className="rounded-2xl px-2 py-2">
+                  <div className="flex items-center gap-3">
+                    <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl border-[1.5px] border-dashed border-outline font-display text-[15px] font-extrabold text-muted">{coinLetters(name)}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-bold">{name}</span>
+                      <span className="block truncate text-[13px] text-muted">{"Not connected" + (server && server !== name ? " · " + server : "")}</span>
+                    </span>
+                    <Button ref={(b) => { if (b) buttons.current.set(w.id, b); else buttons.current.delete(w.id); }}
+                      size="sm" variant="outline" icon={<IconPlugConnected size={18} aria-hidden="true" />} disabled={!!busy} onClick={() => reconnect(w)}
+                      aria-label={"Reconnect " + name}>{busy === w.id ? "Reconnecting…" : "Reconnect"}</Button>
+                  </div>
+                  {error?.id === w.id && <p role="alert" className="pt-1.5 pl-[52px] text-[13px] font-semibold text-danger">Couldn’t reconnect: {error.text}</p>}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      {gone.error && <p role="alert" className="px-2 pt-2 text-[13px] font-semibold text-danger">Couldn’t list the workspaces you left: {gone.error}</p>}
       {onJoin && (
         <button type="button" onClick={onJoin}
           className="mt-2 flex min-h-12 w-full items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-outline px-2 py-2 text-left font-bold hover:bg-sunken lg:border">
@@ -276,7 +352,7 @@ export function LeaveSheet({ target: workspace, onClose, onLeft, ws }: { target:
       <div className="flex flex-col gap-3 text-text-2">
         <p>This device stops getting messages from {label}.</p>
         <p>Your chats and keys for it stay on this device, and nothing is removed on that server.</p>
-        <p>To come back later, you need a new invitation.</p>
+        <p>{memberships.reconnect ? "To come back, reconnect it from the workspace menu or Settings → Workspaces." : "To come back later, you need a new invitation."}</p>
       </div>
     </Sheet>
   );

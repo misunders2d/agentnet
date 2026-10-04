@@ -6,3 +6,9 @@
 /internal/ui/static/**/*.png binary
 /internal/ui/static/**/*.woff2 binary
 /internal/ui/webvendor/** text eol=lf
+# The messenger's sources and build record are compared byte for byte too
+# (api.gen.ts against the Go types, SHA256SUMS against static/). The license
+# file holds the vendored packages' texts exactly as shipped, CRLF included.
+/internal/ui/web/src/** text eol=lf
+/internal/ui/web/SHA256SUMS text eol=lf
+/internal/ui/web/LICENSES.txt -text

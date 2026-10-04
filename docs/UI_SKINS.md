@@ -130,7 +130,7 @@ built-in interface takes over.
 | `host.skins` | Installed catalog, including the built-in interface. |
 | `host.selectSkin(id)` | Reloads into an installed UI. The current UI must preserve or explicitly resolve unsent drafts first. |
 | `host.workspace` | The membership this host is bound to: `{id, name, endpoint, address, realm, state}`. A host never changes membership: what a skin holds when an operation starts (a send, a staged file, a file open) stays bound to it. |
-| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}` over the persistent switcher the host draws above every interface. `has(id)` is by local registration only, never by anything a message or notification says. |
+| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}` over the persistent switcher the host draws above every interface. `has(id)` is by local registration only, never by anything a message or notification says. Optional, present only on this computer's program (never in a browser enrollment), so check before use: `disconnected()` resolves the memberships disconnected here, each `{id, name, endpoint, address, realm, state}` (`list()` leaves them out); `reconnect(id)` routes one of them again, as the same membership with the same keys and history under a new handle, and refuses one whose identity changed. It does not select it. |
 
 ### Workspaces
 

@@ -2,29 +2,15 @@
 // you allow it. Everything is read from the server's views; the phase of a
 // request comes from its actions[] (what may be done now) and stored state.
 import type { T } from "../api";
-import { agentName, agentWhere, firstLine, niceDevice, personName, plain } from "../model";
+import { agentName, agentWhere, chatName, firstLine, isMine, nameOf, niceDevice, personName, personOf, plain } from "../model";
+
+// The words shared with the chat list live in model.ts; re-exported for this screen's files.
+export { Reason, chatName, chatOf, convTitle, decidable, isMine, nameOf, personOf, senderOf } from "../model";
 
 export type Req = T.DMMessage | T.Message;
 
 export const isThreadMsg = (m: Req): m is T.Message => "author" in m;
 const isRequest = (m: Req) => m.kind === "question" || m.kind === "task";
-
-/** The person a device address belongs to, as the overview knows it. */
-export function personOf(address: string, o: T.Overview | null): T.PersonView | null {
-  if (!o || !address) return null;
-  const has = (p: T.PersonView) => p.address === address || (p.devices || []).some((d) => d.address === address);
-  if (o.person && has(o.person)) return o.person;
-  return (o.people || []).find(has) || null;
-}
-
-export const isMine = (address: string, o: T.Overview | null) =>
-  !!o && (address === o.me.address || (!!o.person && personOf(address, o) === o.person));
-
-/** "Vitalii" for vitalii/desk; the device in words when no person is known. */
-export const nameOf = (address: string, o: T.Overview | null) => {
-  const p = personOf(address, o);
-  return p ? personName(p) : niceDevice(address) || "Someone";
-};
 
 /** "your Phone", "Vitalii’s Desk": a device in a sentence (its name as shown everywhere). */
 export function deviceWords(address: string, o: T.Overview | null) {
@@ -131,7 +117,16 @@ export const kindWord = (kind: string) => (kind === "task" ? "task" : kind === "
 
 /** Plain words for a review item's reason: names instead of addresses. */
 export function whyWords(why: string, peer: string, o: T.Overview | null) {
-  if (/^Tasks run only if you accept them/.test(why)) return "Runs only if you allow it";
+  if (/^Tasks run only if you accept them/.test(why) || /without standing permission for tasks/.test(why)) return "Runs only if you allow it";
   if (/is not approved for automatic answers$/.test(why)) return "Answered only if you allow it";
   return capital(why.split(peer).join(nameOf(peer, o)));
 }
+
+// ---- conversation items (overview.needs_you and .held, ui.ConvItem) ------------
+
+/** Self-consent notices: your own agent joined a chat without your accept
+ *  because you invited it from a device of yours (owner decision D3). */
+export const isSelfConsent = (r: T.ReviewItem) => r.reason === "self_consented";
+
+/** "in your chat with Vitalii": where a conversation item is, for a sentence. */
+export const inChat = (conv: string, o: T.Overview | null) => "in " + chatName(conv, o);

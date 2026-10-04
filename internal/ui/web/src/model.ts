@@ -16,7 +16,8 @@ export interface ChatItem {
   last: string;
   lastAt: string;
   unread: number;
-  needsYou: number;            // things held for this person here
+  needsYou: number;            // OKs this device gives here: requests or invitations for your agent (not ones decided on another device)
+  held: number;                // questions or tasks held here for you to answer: not OKs, never counted as one
   guests: number;              // people or agents helping right now
   working: boolean;            // an agent is working on something here
   frozen?: string;
@@ -56,6 +57,9 @@ export const owner = (p: T.PersonView | undefined | null, me?: T.PersonView | nu
 export function chatList(o: T.Overview | null, agentNames: Record<string, string>): ChatItem[] {
   if (!o) return [];
   const items: ChatItem[] = [];
+  // What waits for this device's decision in each chat (one decided on another device is not counted).
+  const decide = new Map<string, number>();
+  for (const c of o.needs_you || []) if (!c.decide_on) decide.set(c.conv, (decide.get(c.conv) || 0) + 1);
   for (const d of o.dms || []) {
     const group = d.kind === "group";
     items.push({
@@ -68,7 +72,8 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       last: firstLine(d.last),
       lastAt: d.last_at,
       unread: d.unread,
-      needsYou: d.held,
+      needsYou: decide.get(d.id) || 0,
+      held: d.held,
       guests: 0,
       working: false,
       frozen: d.frozen,
@@ -95,6 +100,7 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       lastAt: latest.last_at,
       unread: ts.reduce((n, t) => n + t.unread, 0),
       needsYou: ts.reduce((n, t) => n + t.review, 0),
+      held: 0,
       guests: 0,
       working: ts.some((t) => t.running > 0),
       topics: ts.map((t) => ({ id: t.id, title: firstLine(t.title, 60), lastAt: t.last_at, unread: t.unread })),
@@ -110,6 +116,19 @@ export function deviceOwner(address: string, o: T.Overview | null): T.PersonView
   if (holds(o.person)) return o.person || null;
   return (o.people || []).find(holds) || null;
 }
+
+/** personOf: the person a device address belongs to, as the overview knows it. */
+export const personOf = (address: string, o: T.Overview | null): T.PersonView | null => (address ? deviceOwner(address, o) : null);
+
+/** isMine: the address is this device, or another device of this person. */
+export const isMine = (address: string, o: T.Overview | null) =>
+  !!o && (address === o.me.address || (!!o.person && personOf(address, o) === o.person));
+
+/** nameOf: "Vitalii" for vitalii/desk; the device in words when no person is known. */
+export const nameOf = (address: string, o: T.Overview | null) => {
+  const p = personOf(address, o);
+  return p ? personName(p) : niceDevice(address) || "Someone";
+};
 
 /** agentSubtitle says whose device an address is, in words. */
 export function agentSubtitle(address: string, o: T.Overview | null): string {
@@ -267,4 +286,36 @@ export function agentName(agentId: string | undefined, names: Record<string, str
 /** agentWhere says whose agent it is and where it runs: "Your agent · Zenbook". */
 export function agentWhere(host: T.PersonView | null | undefined, address: string, me: T.PersonView | null | undefined): string {
   return owner(host, me) + " agent · " + niceDevice(address);
+}
+
+// ---- conversation items (overview.needs_you and .held, ui.ConvItem) -------
+// Shared by the chat list's banner and the OKs screen.
+
+/** Why a conversation item waits (client.Review*). */
+export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_human", invite: "agent_invite", heldTurn: "person_turn" } as const;
+
+/** decidable: the items this device decides. One with decide_on is decided
+ *  on that device (a browser runs no agent), so it is shown but never counted. */
+export const decidable = (o: T.Overview | null) => (o?.needs_you || []).filter((c) => !c.decide_on);
+
+export const chatOf = (conv: string, o: T.Overview | null) => (o?.dms || []).find((d) => d.id === conv) || null;
+
+/** chatName: "your chat with Vitalii", "“Savannah rush order”": a chat by its name. */
+export function chatName(conv: string, o: T.Overview | null) {
+  const d = chatOf(conv, o);
+  return !d ? "a chat" : d.kind === "group" ? (d.title ? "“" + d.title + "”" : "a group") : "your chat with " + personName(d.peer);
+}
+
+/** senderOf: who sent a conversation item, for a sentence ("You" for your own devices). */
+export const senderOf = (c: T.ConvItem, o: T.Overview | null) => (isMine(c.peer, o) ? "You" : nameOf(c.peer, o));
+
+/** convTitle: what a conversation item is, as one sentence that names who and what. */
+export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
+  const who = senderOf(c, o);
+  switch (c.reason) {
+    case Reason.invite: return who + " invited your agent into " + chatName(c.conv, o);
+    case Reason.needsHuman: return "Your agent needs you for " + (who === "You" ? "your " : who + "’s ") + (c.kind === "task" ? "task" : "question");
+    case Reason.heldTurn: return who + (c.kind === "task" ? " gave you a task" : " asked you something");
+    default: return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
+  }
 }

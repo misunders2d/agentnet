@@ -64,7 +64,7 @@ func TestCLIGroupSelectedHistoryFile(t *testing.T) {
 	unselected := c.writeRandom("unselected.bin", 8193)
 	_ = unselected
 	c.run("--home", "alice", "dm", "send", "--file", "unselected.bin", conv, "UNSELECTED earlier private turn")
-	waitFor(t, "Bob receives parent", func() bool { return strings.Contains(dmShow(c, "bob", conv), "UNSELECTED earlier private turn") })
+	waitFor(t, "Bob receives parent", func() bool { return strings.Contains(dmShowArriving(c, "bob", conv), "UNSELECTED earlier private turn") })
 	data := c.writeRandom("selected.bin", 45001)
 	c.run("--home", "bob", "dm", "send", "--file", "selected.bin", conv, "SELECTED exact historical turn")
 	waitFor(t, "Alice receives selected source", func() bool { return strings.Contains(dmShow(c, "alice", conv), "SELECTED exact historical turn") })
@@ -87,8 +87,11 @@ func TestCLIGroupSelectedHistoryFile(t *testing.T) {
 		t.Fatal("unbounded selector accepted")
 	}
 	waitFor(t, "Carol exact pending selection", func() bool { return strings.Contains(c.run("--home", "carol", "group", "invitations"), selected.ID) })
-	if text := dmShow(c, "carol", conv); strings.Contains(text, "earlier private turn") || strings.Contains(text, "historical turn") || strings.Contains(text, "selected.bin") {
-		t.Fatal("preaccept history/file metadata leaked")
+	// Before accepting, the group is not Carol's conversation: dm show says
+	// so, or lists nothing, and never leaks history or file metadata.
+	if text, err := c.try("--home", "carol", "dm", "show", conv); (err != nil && !strings.Contains(text, "no such conversation here")) ||
+		strings.Contains(text, "earlier private turn") || strings.Contains(text, "historical turn") || strings.Contains(text, "selected.bin") {
+		t.Fatalf("preaccept history/file metadata leaked or unexpected failure: %v\n%s", err, text)
 	}
 	c.run("--home", "carol", "group", "accept", selected.ID)
 	var imported client.ConvMessage
