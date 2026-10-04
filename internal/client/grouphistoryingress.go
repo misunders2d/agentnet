@@ -54,6 +54,9 @@ func (a *Agent) admitGroupHistory(ctx context.Context, env envelope.Envelope, in
 	if decodeGroupCarrierJSON([]byte(in.Body), &item) == nil && item.V == 1 && groupControlSub(item.Sub) {
 		return a.admitGroupControlHistory(ctx, env, in, root, sender, item, fromQuarantine, hold)
 	}
+	if item.V == 1 && item.PID != "" && item.Human != nil { // as its live copy (admitConv): not read yet (ROOM_V1 P3/P4)
+		return hold(reasonInvalid, "group: history of a participation turn carrying a captured audience is not read yet")
+	}
 	if item.V == 1 && groupParticipationHistoryItem(item) {
 		return a.admitGroupParticipationHistory(ctx, env, in, root, sender, item, fromQuarantine, hold)
 	}

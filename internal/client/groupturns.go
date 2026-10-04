@@ -151,6 +151,15 @@ func ordinaryGroupTurn(in envelope.Inner) bool {
 	return in.Kind == envelope.KindMessage && in.Sub == "" && in.Target == nil && in.PID == "" && in.AgentID == "" && in.Status == "" && in.Ref == nil && (in.Origin == "" || in.Origin == envelope.OriginUI)
 }
 
+// roomGroupTurn is an ordinary group turn of a person guest of the room,
+// carrying its captured audience (ROOM_V1 §2.4): its PID is its author's
+// participation. Group history keeps to ordinaryGroupTurn.
+func roomGroupTurn(in envelope.Inner) bool {
+	pid := in.PID
+	in.PID = ""
+	return in.Human != nil && pid != "" && pid == in.Human.AuthorPID && ordinaryGroupTurn(in)
+}
+
 func sameGroupRoot(a, b protocol.ConvRoot) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
@@ -362,7 +371,7 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	if in.Sub == envelope.SubFile {
 		return a.admitGroupFile(ctx, env, in, root, sender, hold)
 	}
-	if !ordinaryGroupTurn(in) {
+	if !ordinaryGroupTurn(in) && !roomGroupTurn(in) {
 		return hold(reasonInvalid, "group: this operation is not an ordinary human turn")
 	}
 	packet, err := groupTurnPacketIn(a.store.db, in.Conv)
@@ -381,16 +390,26 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 	if err != nil {
 		return err
 	}
+	// A captured audience (ROOM_V1 §3): its author and this reader are each a
+	// current member device or the exact host of a following participation,
+	// which humanTurnAuthorization decides with the turn's proof stored. A
+	// following reader (no member) keeps no admission and forwards nothing.
+	readerMember := true
+	if in.Human != nil {
+		if err := a.verifyHumanProof(ctx, root, in.Human); err != nil {
+			return hold(reasonProof, err.Error())
+		}
+		readerMember = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()) == nil
+	}
 	check := func(q dbq) error {
 		current, e := groupTurnPacketIn(q, in.Conv)
 		if e != nil {
 			return e
 		}
-		if e = groupTurnCheck(q, current, a.Address, a.Self().Fingerprint()); e != nil {
-			return e
-		}
-		if e = groupTurnCheck(q, current, sender.Address, sender.Fingerprint()); e != nil {
-			return e
+		for _, d := range []identity.Public{a.Self(), sender} {
+			if e = groupTurnCheck(q, current, d.Address, d.Fingerprint()); e != nil && (in.Human == nil || errors.Is(e, ErrGroupContextPending) || errors.Is(e, errPersonConflict)) {
+				return e
+			}
 		}
 		if in.Replica != (me.roster.Person == sp.roster.Person) {
 			return errors.New("group: replica does not match sender's own person")
@@ -426,14 +445,30 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		return hold(reasonInvalid, err.Error())
 	}
 	now := time.Now()
-	admission, err := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
-	if err != nil {
-		return err
+	var admission protocol.GroupAdmission
+	var forward []outCopy
+	if readerMember {
+		if admission, err = groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint()); err != nil {
+			return err
+		}
+		forward = a.forwardStale(me, in, sender.Fingerprint(), in.Root, admission.Hash())
 	}
-	forward := a.forwardStale(me, in, sender.Fingerprint(), in.Root, admission.Hash())
 	result, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
+		if in.Human != nil {
+			if e := insertHumanProof(tx, in.Human); e != nil {
+				return e
+			}
+		}
 		if e := check(tx); e != nil {
 			return e
+		}
+		if in.Human != nil {
+			if e := humanTurnAuthorization(tx, in, sender.Address, sender.Fingerprint(), a.Address, a.Self().Fingerprint(), false); e != nil {
+				return e
+			}
+			if !readerMember {
+				return nil // a following host: no admission to stamp, no alert (as a DM guest)
+			}
 		}
 		for _, copy := range forward {
 			current, e := groupTurnPacketIn(tx, in.Conv)
@@ -467,6 +502,9 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		return queueAlert(tx, in, sender.Fingerprint(), now)
 	})
+	if err != nil && in.Human != nil {
+		return hold(reasonProof, err.Error()) // as a DM's captured turn: authority waits for its evidence
+	}
 	if err != nil {
 		return err
 	}

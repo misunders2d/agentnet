@@ -18,11 +18,17 @@ const agentCapabilitySchema = `ALTER TABLE outbox ADD COLUMN required_cap TEXT;`
 
 var errAgentIdentityUnsupported = fmt.Errorf("%w: named agent capability unavailable", errPermanent)
 
+// agentRequirement is a copy's primary requirement. A room shape keeps its
+// conversation's primary (a group's grp1, a DM's hgp1); delivery adds rm1
+// to it (roomCopy, ROOM_V1 §2.5).
 func agentRequirement(in envelope.Inner) string {
 	if isResponderProgress(in) && in.Conv == "" { // a conversation's progress keeps its own requirement; delivery adds prg1
 		return protocol.CapProgress
 	}
 	if in.Human != nil {
+		if root, err := protocol.ParseConvRoot(in.Root); err == nil && root.Kind == protocol.ConvKindGroup {
+			return protocol.CapGroup // a captured audience in a group: a group copy
+		}
 		return protocol.CapHumanParticipation
 	}
 	if in.ReceiverRoute != nil && in.ReceiverRoute.Op != "request" {
@@ -59,7 +65,7 @@ func agentRequirement(in envelope.Inner) string {
 	if in.Sub == envelope.SubEvent {
 		var e protocol.ParticipationEvent
 		if json.Unmarshal([]byte(in.Body), &e) == nil {
-			if e.Role == protocol.RoleHuman || e.Type == protocol.EventScope { // a scope exists only for human audiences
+			if e.Role == protocol.RoleHuman || e.Type == protocol.EventScope || e.Audience == protocol.AudienceRoom { // a scope exists only for human and room audiences
 				return protocol.CapHumanParticipation
 			}
 			if e.Host != nil && e.Host.AgentID != "" {
@@ -68,6 +74,48 @@ func agentRequirement(in envelope.Inner) string {
 		}
 	}
 	return ""
+}
+
+// roomCopy reports whether a stored copy is a room shape (ROOM_V1 §2.5),
+// which delivery sends only to a reader of rm1, besides its primary
+// requirement: an event of a room participation, a captured audience on a
+// group root, with a room scope or an agent author, or on an edit; a
+// history copy by the item it carries. It reads the copy's stored columns
+// (conv, sub, body, human).
+func roomCopy(q dbq, conv, sub, body, human string) (bool, error) {
+	if sub == envelope.SubHistory {
+		var item HistoryItem
+		if body == "" || json.Unmarshal([]byte(body), &item) != nil {
+			return false, nil
+		}
+		sub, body, human = item.Sub, item.Body, humanJSON(item.Human)
+	}
+	if human != "" {
+		var h envelope.HumanTurn
+		if err := json.Unmarshal([]byte(human), &h); err != nil {
+			return false, err
+		}
+		if sub == envelope.SubRevision || sub == envelope.SubRetraction || h.AgentAuthor() {
+			return true, nil
+		}
+		for _, e := range h.Proof {
+			if e.Audience == protocol.AudienceRoom {
+				return true, nil
+			}
+		}
+		root, _, found, err := conversationIn(q, conv)
+		return found && root.Kind == protocol.ConvKindGroup, err
+	}
+	var e protocol.ParticipationEvent
+	if sub != envelope.SubEvent || json.Unmarshal([]byte(body), &e) != nil {
+		return false, nil
+	}
+	if e.Audience == protocol.AudienceRoom {
+		return true, nil
+	}
+	var n int // a decision or end of a room participation held here
+	err := q.QueryRow(`SELECT count(*) FROM participation_events WHERE conv=? AND pid=? AND json_extract(event,'$.audience')=?`, conv, e.PID, protocol.AudienceRoom).Scan(&n)
+	return n > 0, err
 }
 
 func namedAgentFields(in envelope.Inner) bool {
@@ -86,7 +134,7 @@ func copyRequirement(c outCopy) string {
 }
 
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
-	if required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear {
+	if required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)
@@ -115,6 +163,9 @@ func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Publi
 		}
 		if required == protocol.CapConvClear {
 			return fmt.Errorf("%w: %s cannot apply conversation deletions yet; it deletes it once updated", errAgentIdentityUnsupported, key.Address)
+		}
+		if required == protocol.CapRoom {
+			return fmt.Errorf("%w: %s cannot read room participation yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
 		}
 		return fmt.Errorf("%w: %s cannot read named agents yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
 	}

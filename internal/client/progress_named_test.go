@@ -38,8 +38,12 @@ func signCapsNow(t *testing.T, a *Agent, caps []string) {
 	}
 }
 
+// without is caps less drop, as an older program lists them: one that
+// does not read drop does not read rm1 either when rm1 implies drop.
 func without(caps []string, drop string) []string {
-	return slices.DeleteFunc(slices.Clone(caps), func(c string) bool { return c == drop })
+	return slices.DeleteFunc(slices.Clone(caps), func(c string) bool {
+		return c == drop || c == protocol.CapRoom && slices.Contains(protocol.RoomImplies, drop)
+	})
 }
 
 // withCap is caps plus add, sorted and once, as a signed record requires.

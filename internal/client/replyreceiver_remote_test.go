@@ -42,7 +42,7 @@ func TestReceiverNormalCapabilityProfileAndUnsupportedPeer(t *testing.T) {
 		t.Fatal(e)
 	}
 	// An older session remains unsupported even after current local activation.
-	old := protocol.CapsRecord{Address: w.bob.Address, Session: profile.Sessions[0], Caps: slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapReplyReceiver }), TS: time.Now().Unix() + 100}
+	old := protocol.CapsRecord{Address: w.bob.Address, Session: profile.Sessions[0], Caps: without(ownCaps, protocol.CapReplyReceiver), TS: time.Now().Unix() + 100}
 	old.Sign(w.bob.id.Sign)
 	if e := w.bob.hub.do(tctx(t), "PUT", "/v1/caps", old, nil); e != nil {
 		t.Fatal(e)

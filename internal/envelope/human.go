@@ -22,7 +22,10 @@ type HumanScope struct {
 // scope record) and the host's acceptance: never the invitation itself (its
 // grant, task keys or note), never unselected earlier turns. It rides on an
 // ordinary turn, or on an addressed request to an assistant participation
-// (PID) and that assistant's output, so the captured audience sees them.
+// (PID) and that assistant's output, so the captured audience sees them; in
+// a DM or a group (ROOM_V1 §2.3), and on an edit of such a turn. Its audience
+// is the human guests and room participants (protocol.AudienceRoom); an
+// author (AuthorPID) whose scope has no role is an agent room participant.
 type HumanTurn struct {
 	AuthorPID string                        `json:"author_pid,omitempty"`
 	Audience  []HumanScope                  `json:"audience"`
@@ -52,7 +55,8 @@ func (h HumanTurn) Validate(conv string) error {
 	for _, e := range h.Proof {
 		s, ok := seen[e.PID]
 		raw, _ := json.Marshal(e)
-		if !ok || len(e.Sig) != ed25519.SignatureSize || len(raw) > protocol.MaxParticipationEvent || e.Conv != conv || e.Validate() != nil || (e.Type != protocol.EventScope && e.Type != protocol.EventAccept) || e.Type == protocol.EventScope && e.Role != protocol.RoleHuman {
+		if !ok || len(e.Sig) != ed25519.SignatureSize || len(raw) > protocol.MaxParticipationEvent || e.Conv != conv || e.Validate() != nil || (e.Type != protocol.EventScope && e.Type != protocol.EventAccept) ||
+			e.Type == protocol.EventScope && e.Role != protocol.RoleHuman && e.Audience != protocol.AudienceRoom { // an agent only as a room participant
 			return errors.New("human: proof outside audience")
 		}
 		hash := e.Hash()
@@ -71,6 +75,31 @@ func (h HumanTurn) Validate(conv string) error {
 	}
 	return nil
 }
+
+// AgentAuthor reports whether h's author (AuthorPID) is an agent room
+// participant: its proof scope has no role (Validate: then a room's), and
+// none says otherwise.
+func (h HumanTurn) AgentAuthor() bool {
+	agent := false
+	for _, e := range h.Proof {
+		if h.AuthorPID != "" && e.Type == protocol.EventScope && e.PID == h.AuthorPID {
+			if e.Role != "" {
+				return false
+			}
+			agent = true
+		}
+	}
+	return agent
+}
+
+// HumanEdit reports whether in is an edit (a revision or retraction) of a
+// turn carrying a captured audience: it carries that audience too, and its
+// author (AuthorPID, "" for a member) is the edited turn's (ROOM_V1 §2.3;
+// the reader checks that against the turn it holds).
+func HumanEdit(in Inner) bool {
+	return in.V == Version3 && in.Human != nil && (in.Sub == SubRevision || in.Sub == SubRetraction)
+}
+
 func validateHumanInner(in Inner) error {
 	if in.Human == nil {
 		return nil
@@ -78,21 +107,30 @@ func validateHumanInner(in Inner) error {
 	if in.V == Version3 {
 		// An assistant's reaction to an addressed request, to that request's
 		// captured audience: its host is the author (as of its output), and a
-		// control carries no root (the DM is the reader's pinned one). No
-		// other control carries an audience.
-		if !AssistantReaction(in) || in.Conv == "" || in.PID == "" || in.Human.AuthorPID != "" || len(in.Root) != 0 || in.Kind != KindMessage {
-			return errors.New("human: on a control, only an assistant's reaction to its captured audience")
+		// control carries no root (the conversation is the reader's pinned
+		// one). An edit names its turn's author; it names no participation.
+		// No other control carries an audience.
+		if HumanEdit(in) {
+			if in.Conv == "" || in.PID != "" || len(in.Root) != 0 || in.Kind != KindMessage {
+				return errors.New("human: an edit carries its turn's captured audience in its conversation only")
+			}
+		} else if !AssistantReaction(in) || in.Conv == "" || in.PID == "" || in.Human.AuthorPID != "" || len(in.Root) != 0 || in.Kind != KindMessage {
+			return errors.New("human: on a control, only an assistant's reaction or an edit to its captured audience")
 		}
 		return in.Human.Validate(in.Conv)
 	}
 	root, err := protocol.ParseConvRoot(in.Root)
-	if err != nil || root.ID() != in.Conv || root.Kind != protocol.ConvKindDM || len(root.Members) != 2 || in.V != Version2 || in.Sub != "" {
-		return errors.New("human: ordinary non-executing DM turn only")
+	dm := root.Kind == protocol.ConvKindDM && len(root.Members) == 2
+	group := root.Kind == protocol.ConvKindGroup && root.V == protocol.GroupRootVersion
+	if err != nil || root.ID() != in.Conv || !dm && !group || in.V != Version2 || in.Sub != "" {
+		return errors.New("human: ordinary non-executing DM or group turn only")
 	}
-	switch h := in.Human; {
-	case in.Kind == KindMessage && in.Status == "" && in.Target == nil && in.AgentID == "" && !AgentOrigin(in.Origin) && in.Emotion == "" && in.PID == h.AuthorPID:
-		// an ordinary turn
-	case (in.Kind == KindQuestion || in.Kind == KindTask) && in.Target != nil && in.PID != "" && in.PID != h.AuthorPID && in.AgentID == "" && !AgentOrigin(in.Origin) && in.Status == "" && in.ReceiverRoute == nil:
+	// An agent author (a room participant) only asks, labelled as an agent
+	// (ROOM_V1 §2.3); a person never carries an agent origin.
+	switch h, agent := in.Human, in.Human.AgentAuthor(); {
+	case in.Kind == KindMessage && in.Status == "" && in.Target == nil && in.AgentID == "" && !AgentOrigin(in.Origin) && in.Emotion == "" && in.PID == h.AuthorPID && !agent:
+		// an ordinary turn of a member or a person guest
+	case (in.Kind == KindQuestion || in.Kind == KindTask) && in.Target != nil && in.PID != "" && in.PID != h.AuthorPID && in.AgentID == "" && AgentOrigin(in.Origin) == agent && in.Status == "" && in.ReceiverRoute == nil:
 		// a request addressed to the assistant participation PID
 	case (in.Kind == KindAnswer || in.Kind == KindResult || in.Kind == KindMessage && in.Status == StatusProgress) && in.Target == nil && in.PID != "" && h.AuthorPID == "" && in.ReceiverRoute == nil:
 		// that assistant's output, to the captured audience

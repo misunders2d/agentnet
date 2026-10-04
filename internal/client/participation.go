@@ -61,6 +61,8 @@ type ParticipationInfo struct {
 	Held        int                 `json:"held"`                // events that do not count here now
 	HeldDismiss int                 `json:"held_dismiss"`        // of those, dismissals
 	Invited     int64               `json:"invited,omitempty"`   // the inviter's claim, unix seconds
+	Audience    string              `json:"audience,omitempty"`  // protocol.AudienceConversation or AudienceRoom, as invited
+	Until       int64               `json:"until,omitempty"`     // a room's end time as invited; past it here, it counts as ended
 }
 
 // dmMembers are a DM's member persons as pinned here now, by person id: a
@@ -178,7 +180,9 @@ func (m dmMembers) memberKey(fp string) bool {
 //     mix, even two accepts) is a conflict, which never runs;
 //   - a dismiss by either member counts if it follows an event that counts
 //     here; it ends the participation for good, whatever else is held;
-//   - an event following one not held (yet) is held until it arrives.
+//   - an event following one not held (yet) is held until it arrives;
+//   - a room invitation's Until, by this device's clock, ends it once past
+//     (ROOM_V1 §2.2); it orders nothing.
 //
 // Held events are counted (Held; HeldDismiss for dismissals): while any is
 // held the participation is not Claimable, since the missing evidence may
@@ -227,7 +231,7 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		case protocol.EventDismiss:
 			dismisses = append(dismisses, ev)
 		case protocol.EventScope:
-			if m.group == nil { // a DM invite's public projection, by its own author
+			if m.group == nil || m.groupInvites[ev.Hash()] { // an invite's public projection, by its own author; in a group, a room scope whose binding verifies
 				scopes = append(scopes, ev)
 			}
 		default:
@@ -236,7 +240,8 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 	}
 	// Without the invite itself (another guest, an outside assistant host), its
 	// author's scope stands for it: host, agent and role, never grant, task
-	// keys or note. Holding the invite, only its exact projection counts.
+	// keys or note. Holding the invite, only its exact projection counts; an
+	// invite held here that does not count is never stood in for.
 	if len(invites) == 0 && len(scopes) > 0 {
 		var s protocol.ParticipationEvent
 		for _, x := range scopes {
@@ -246,10 +251,14 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		}
 		agree := true
 		for _, x := range scopes {
-			agree = agree && x.Prev == s.Prev && x.Author == s.Author && *x.Host == *s.Host && x.Role == s.Role
+			agree = agree && protocol.SameScope(x, s)
 		}
-		if _, ok := m.host(s.Host); ok && agree {
-			invites[s.Prev] = protocol.ParticipationEvent{V: 1, Conv: s.Conv, PID: s.PID, Type: protocol.EventInvite, Author: s.Author, TS: s.TS, Host: s.Host, Audience: s.Audience, Role: s.Role}
+		held := false
+		for _, ev := range events {
+			held = held || ev.Type == protocol.EventInvite && ev.Hash() == s.Prev
+		}
+		if _, ok := m.host(s.Host); ok && agree && !held {
+			invites[s.Prev] = protocol.ParticipationEvent{V: 1, Conv: s.Conv, PID: s.PID, Type: protocol.EventInvite, Author: s.Author, TS: s.TS, Host: s.Host, Audience: s.Audience, Group: s.Group, Role: s.Role, Until: s.Until}
 			info.Scope = s.Hash()
 		} else if !agree {
 			info.State, info.Conflict = PartConflict, "different invitation scopes share this participation id"
@@ -282,6 +291,7 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		_, member := m.persons[inv.Host.Person]
 		info.External = !member
 		info.Grant, info.TaskKeys, info.Note, info.Invited = inv.Grant, inv.TaskKeys, inv.Note, inv.TS
+		info.Audience, info.Until = inv.Audience, inv.Until
 		info.State = PartInvited
 	default:
 		info.State, info.Conflict = PartConflict, "different invites share this participation id"
@@ -320,6 +330,9 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		}
 		info.State = PartDismissed
 	}
+	if info.Until > 0 && (info.State == PartInvited || info.State == PartActive) && time.Now().Unix() > info.Until {
+		info.State = PartDismissed // ended by its own end time, here: no dismissal names it
+	}
 	return info
 }
 
@@ -330,6 +343,19 @@ func (p ParticipationInfo) Claimable() bool {
 }
 func (p ParticipationInfo) HumanActive() bool {
 	return p.Role == protocol.RoleHuman && p.State == PartActive && p.Held == 0
+}
+
+// follows reports whether the participation is of the room's captured
+// audience, in whatever state: a human guest, or a room participant.
+func (p ParticipationInfo) follows() bool {
+	return p.Role == protocol.RoleHuman || p.Audience == protocol.AudienceRoom
+}
+
+// Following reports whether the participation is in the room's captured
+// audience now (ROOM_V1 §1): it follows, is active, and no event of it is
+// held.
+func (p ParticipationInfo) Following() bool {
+	return p.follows() && p.State == PartActive && p.Held == 0
 }
 
 // Participation resolves one participation.
