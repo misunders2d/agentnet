@@ -156,11 +156,11 @@ again with `POST /api/workspaces/reconnect` and body `{"id": "<its id>"}`
 (JSON, same origin, at the page's root, never under a membership's
 `/workspaces/<id>/<handle>/` prefix). The answer is the membership bound again
 under a new handle (`state: "enrolled"`); 404 says no disconnected
-membership has that id. `host.api` is bound to one membership's prefix and
-`host.workspaces` does not offer these two yet, so an interface reaches them
-only through the host (`WorkspaceShell.disconnected()` and `reconnect(id)`
-implement both); the host's own bar shows Reconnect… over interfaces other
-than the default one, which draws its own switcher.
+membership has that id. `host.api` is bound to one membership's prefix, so
+an interface reaches these two through `host.workspaces.disconnected()` and
+`host.workspaces.reconnect(id)` (above), present on this computer's program
+only; the host's own bar shows Reconnect… over interfaces other than the
+default one, which draws its own switcher.
 
 A notification fragment is `#conv=<hash>&workspace=<id>`: the host
 verifies the id against its registrations, selects that workspace, then
