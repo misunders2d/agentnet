@@ -6,10 +6,12 @@ Copy this directory, change only skin.json ID/name, run ./build.sh OUTPUT.
 The build regenerates its manifest module. No source, runtime, build import
 or symlink points at Classic or Comic. Duplicate helpers are package-owned.
 
-Entry exports mount(root, host)/unmount(root). It uses host.skin (manifest
-fallback), api, stage, file, listen, onOpen, skins/selectSkin and optional
-onSkinsChange, manageLocalSkins, reconnect, drive, workspaces. The requested
-additive shapes await the host owner's documented production integration.
+Entry exports mount(root, host)/unmount(root). Identity comes from its own
+manifest; optional host.skin is honored when supplied, but is absent from the
+current contract. It uses api, stage, file, listen, onOpen, skins/selectSkin and
+optional onSkinsChange, manageLocalSkins, reconnect, drive, workspaces. onOpen
+kinds is an array; reconnect lets the host rebind/remount, with no returned host.
+Zoom is embedded through the same package loader as Comic and Classic.
 No private globals, raw transport or loader DOM. Queries/styles own root.
 
 Zoom alone renders hierarchy and write dialogs. Hidden draft controls support

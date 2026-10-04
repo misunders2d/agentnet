@@ -647,7 +647,7 @@ currentHost.onOpen((target, kind, context) => {
   const dest = kind === 'review' ? {review: true} : kind === 'message' ? {msg: target, ...context} : kind === 'conversation' ? target : null;
   if (dest !== null) { if (state.overview) void openClicked(dest); else state.clickedAtStart = dest; }
   else openNotified(target);
-}, {kinds: ['conversation', 'message', 'review']});
+}, ['message', 'review']);
 
 async function retryOpen() {
   if (state.switching) await state.switching; // a workspace being shown first
@@ -3966,19 +3966,18 @@ async function reconnect() {
   } catch (e) {
     if (e.status !== 409 || e.message !== "stale or disconnected workspace" || !host.reconnect || state.sending || state.dialogBusy) return false;
     try {
-      currentHost = await host.reconnect(state.overview?.me);
-      if (gen !== state.gen || wsNow() !== workspace) return false;
-      // Native staged IDs live in the old daemon. Keep the user's file and
-      // metadata, but require an explicit reattachment before any later send.
+      // Native staged IDs live in the old daemon. Keep text/file metadata,
+      // but require explicit reattachment when the host mounts a new root.
       for (const files of [state.files, ...Object.values(state.drafts).map((d) => d.files || [])]) {
         for (const f of files) if (f.staged) { f.staged = ""; f.reattachRequired = true; }
       }
-      if (typingUI) typingUI.destroy();
-      typingUI = null; typingLoading = null;
+      await host.reconnect(); // identity-checked rebind + remount; no returned host
+      if (!alive) return true; // replacement root owns reconnection now
+      if (gen !== state.gen || currentHost !== host || wsNow() !== workspace) return false;
       await loadOverview();
       renderPending();
       if (state.files.some((f) => f.reattachRequired)) $("compose-error").textContent = overLimit(state.files);
-    } catch (err) { announce(err.message); return false; }
+    } catch (err) { if (alive) announce(err.message); return false; }
   }
   if (gen !== state.gen || wsNow() !== workspace) return false;
   try {
@@ -4534,6 +4533,7 @@ function start() {
     }
   });
   loadOverview().then(async (o) => {
+    if (!alive) return;
     showZoom();
     const clicked = state.clickedAtStart;
     state.clickedAtStart = null;
@@ -4547,7 +4547,7 @@ function start() {
     }
     if (await restoreAfterReload()) return; // back after an update, with what was unsent
     Zoom.refresh();
-  }).catch(() => { $("lost").hidden = false; });
+  }).catch(() => { if (alive) $("lost").hidden = false; });
   listen();
 }
 const motion = () => !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -4994,6 +4994,7 @@ return () => {
   for (const timer of timers) globalThis.clearTimeout(timer);
   releaseOpened(); closeMentions();
   for (const draft of [state, ...Object.values(state.drafts)]) for (const f of draft.files || []) if (f.url) URL.revokeObjectURL(f.url);
+  root.replaceChildren();
 };
 
 }

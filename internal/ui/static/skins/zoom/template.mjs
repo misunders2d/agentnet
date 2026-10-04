@@ -23,7 +23,7 @@ export const markup = `
 
 <div class="workspace">
 <nav class="nav-rail" aria-label="Main navigation">
-  <img class="rail-logo" src="/assets/icon-192.png" alt="AgentNet" width="32" height="32">
+  <img class="rail-logo" src="${new URL('./icon.png', import.meta.url).href}" alt="AgentNet" width="32" height="32">
   <button id="nav-chats" class="nav-item selected" type="button" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H9l-5 4zM8 8h8M8 12h5"/></svg><span class="nav-label">Chats</span></button>
   <button id="nav-people" class="nav-item" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"/></svg><span class="nav-label">People</span></button>
         <div class="review-wrap">

@@ -15,7 +15,8 @@ export default {
     "drivespace-setup.mjs",
     "assistant-setup.mjs",
     "assistant-setup.css",
-    "qr.mjs"
+    "qr.mjs",
+    "icon.png"
   ]
 }
 ;

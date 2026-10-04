@@ -14,19 +14,20 @@ window.fetch=()=>{throw Error('Direct module fetch')};window.EventSource=functio
 window.hostCalls=0;window.streams=0;window.catalogListeners=0;window.outside=[];
 const observer=new MutationObserver(records=>{for(const r of records)if(r.target.getRootNode()!==root)outside.push(r.type+':'+r.target.nodeName)});
 observer.observe(document.documentElement,{attributes:true,childList:true,subtree:true});
-const view={};
+const view={};window.reconnects=0;window.sendCount=0;
 const known={version:1,platform:'daemon',skin:{id:'host-classic-copy',name:'Host identity'},workspace:{id:'default'},workspaces:{state:()=>view},skins:[{id:'host-classic-copy',name:'Host identity'},{id:'default',name:'Comic'}],selectSkin(){},onOpen(){},
  onSkinsChange(){catalogListeners++;return()=>catalogListeners--;},
- api:async(p,b)=>{hostCalls++;if(p==='/api/dm/send'&&window.sendGate){window.sendStarted=true;await window.sendGate;window.sendGate=null}const r=await raw('/transport'+p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});if(!r.ok)throw Error(await r.text());return r.json()},
- listen(fn){streams++;const es=new Source('/transport/events');es.addEventListener('change',e=>fn({type:'change',seq:Number(e.data)}));return()=>{es.close();streams--}},
+ api:async(p,b)=>{hostCalls++;if(window.retired&&p==='/api/overview'){const e=Error('stale or disconnected workspace');e.status=409;throw e;}if(b&&['/api/dm/send','/api/send'].includes(p))window.sendCount++;if(p==='/api/dm/send'&&window.sendGate){window.sendStarted=true;await window.sendGate;window.sendGate=null}const r=await raw('/transport'+p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});if(!r.ok)throw Error(await r.text());return r.json()},
+ listen(fn){window.restart=()=>fn({type:'restart'});streams++;const es=new Source('/transport/events');es.addEventListener('change',e=>fn({type:'change',seq:Number(e.data)}));return()=>{es.close();streams--}},
  stage:async f=>{const r=await raw('/transport/api/upload?name='+encodeURIComponent(f.name),{method:'POST',body:f});return(await r.json()).id},
  file:async(id,i,dir)=>{const r=await raw('/transport/api/files/'+id+'/'+i+'?dir='+dir);return{bytes:new Uint8Array(await r.arrayBuffer())}},
 };
-const host=new Proxy(known,{get(t,k){if(k==='drive'||k==='manageLocalSkins'||k==='reconnect')return undefined;if(!(k in t))throw Error('Undocumented host member '+String(k));return t[k]}});
+known.reconnect=async(...args)=>{if(args.length)throw Error('reconnect takes no arguments');window.reconnects++;await unmount(box);window.retired=false;await mount(box,host);};
+const host=new Proxy(known,{get(t,k){if(k==='drive'||k==='manageLocalSkins')return undefined;if(!(k in t))throw Error('Undocumented host member '+String(k));return t[k]}});
 window.view=view;window.unmountClassic=()=>unmount(box);window.mountClassic=()=>mount(box,host);await mount(box,host);window.ready=true;`;
 let server,browser;const errors=[];
 (async()=>{
- const urls=JSON.parse(fs.readFileSync(path.join(evidence,'world/urls.json'),'utf8'));const native=new URL(urls.sergey.page);
+ const urls=JSON.parse(fs.readFileSync(path.join(process.env.AGENTNET_SKIN_WORLD||path.join(evidence,'world'),'urls.json'),'utf8'));const native=new URL(urls.sergey.page);
  assert(native.hostname==='127.0.0.1'&&native.port!=='18990');
  const login=await fetch(native.href,{redirect:'manual'});const cookie=login.headers.get('set-cookie')?.split(';')[0];assert(cookie);
  server=http.createServer(async(req,res)=>{try{
@@ -40,8 +41,7 @@ let server,browser;const errors=[];
   let body,type='text/javascript';
   if(u.pathname==='/'){body='<!doctype html><meta name="viewport" content="width=device-width"><style>html,body,#surface{margin:0;height:100%;}</style><div id="surface"></div><script type="module" src="/bootstrap.mjs"></script>';type='text/html'}
   else if(u.pathname==='/bootstrap.mjs')body=bootstrap;
-  else if(u.pathname==='/assets/icon-192.png'){body=fs.readFileSync(path.resolve(__dirname,'../static/ant.png'));type='image/png'}
-  else if(u.pathname.startsWith('/copied-package/')){const n=u.pathname.slice('/copied-package/'.length);if(!manifest.files.includes(n)){res.writeHead(404);res.end();return}body=fs.readFileSync(path.join(pkg,n));type=n.endsWith('.css')?'text/css':'text/javascript'}
+  else if(u.pathname.startsWith('/copied-package/')){const n=u.pathname.slice('/copied-package/'.length);if(!manifest.files.includes(n)){res.writeHead(404);res.end();return}body=fs.readFileSync(path.join(pkg,n));type=n.endsWith('.css')?'text/css':n.endsWith('.png')?'image/png':'text/javascript'}
   else {res.writeHead(404);res.end();return}
   res.writeHead(200,{'Content-Type':type});res.end(body);
  }catch(e){res.writeHead(500);res.end('Fixture transport failed')}});
@@ -58,7 +58,15 @@ let server,browser;const errors=[];
  const text='Classic pending remount '+Date.now();await page.locator('#body').fill(text);await page.locator('#composer').evaluate(el=>el.requestSubmit());await page.waitForFunction(()=>window.sendStarted);
  await page.evaluate(()=>unmountClassic());await page.evaluate(()=>mountClassic());await page.waitForFunction(()=>document.querySelector('#surface').shadowRoot.querySelector('#body').value.length>0);await page.evaluate(()=>releaseSend());
  await page.locator('#timeline').getByText(text,{exact:true}).waitFor();await page.waitForFunction(()=>!document.querySelector('#surface').shadowRoot.querySelector('#send').disabled&&document.querySelector('#surface').shadowRoot.querySelector('#body').value==='');
+ await page.locator('#body').fill('Reconnect keeps draft');await page.locator('#file-input').setInputFiles({name:'restart.txt',mimeType:'text/plain',buffer:Buffer.from('synthetic restart')});
+ await page.evaluate(()=>unmountClassic());await page.evaluate(()=>{for(const d of Object.values(view['host-classic-copy'].drafts))for(const f of d.files||[])f.staged='retired-daemon-stage';});await page.evaluate(()=>mountClassic());
+ await page.waitForFunction(()=>document.querySelector('#surface').shadowRoot.querySelector('#body').value==='Reconnect keeps draft');
+ const sentBeforeRestart=await page.evaluate(()=>sendCount);await page.evaluate(()=>{window.retired=true;restart();});await page.waitForFunction(()=>reconnects===1);
+ await page.waitForFunction(()=>document.querySelector('#surface').shadowRoot.querySelector('#body').value==='Reconnect keeps draft');
+ await page.locator('#attach-list').getByText(/Reattach after restart/).waitFor();
+ await page.locator('#composer').evaluate(f=>f.requestSubmit());await page.waitForFunction(()=>document.querySelector('#surface').shadowRoot.querySelector('#compose-error').textContent.includes('reattach'));
+ assert.equal(await page.evaluate(()=>sendCount),sentBeforeRestart,'Reconnect must never replay staged files or send');assert.deepEqual(await page.evaluate(()=>({streams,catalogListeners})),{streams:1,catalogListeners:1});
  await page.evaluate(()=>unmountClassic());assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>outside),[]);
- const result={pass:true,host_version:1,adapter:'isolated public host backed by disposable native API',checks:['Copied package at unrelated URL mounts without private globals','Host-provided skin identity selects current interface and namespaces drafts','All native data/actions/file traffic passes captured public host','No document writes outside owned shadow root','Unmount stops stream/catalog listeners','Remount restores workspace draft','Pending send remains on captured host and clears accepted draft after remount','No page errors'],limits:['Optional new host capabilities await production host branch','Does not certify arbitrary skins or sandbox full-trust code']};
+ const result={pass:true,host_version:1,adapter:'isolated public host backed by disposable native API',checks:['Copied package at unrelated URL mounts without private globals','Host-provided skin identity selects current interface and namespaces drafts','All native data/actions/file traffic passes captured public host','No document writes outside owned shadow root','Unmount stops stream/catalog listeners','Remount restores workspace draft','Final void reconnect remounts, keeps text, retires staged IDs, rejects send until reattachment and never replays','Pending send remains on captured host and clears accepted draft after remount','No page errors'],limits:['Google provider consent not exercised here; Drive checked by the production and provider journeys','Does not certify arbitrary skins or sandbox full-trust code']};
  fs.writeFileSync(path.join(evidence,'contract-result.json'),JSON.stringify(result,null,2),{mode:0o600});console.log('PASS Classic runtime contract and lifecycle');
 })().catch(e=>{console.error('FAIL Classic contract: '+e.message+'; page errors: '+errors.join('; '));process.exitCode=1;}).finally(async()=>{await browser?.close();server?.closeAllConnections();server?.close();});

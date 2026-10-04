@@ -23,75 +23,89 @@ func catalogOf(t *testing.T, dir string) []map[string]any {
 	return list
 }
 
-// Comic is a package like any other: listed first, with its manifest's
+// Built-in skins are packages like any other: Comic first, with each manifest's
 // entry, style, document rules and files, and a digest of its bytes.
 func TestBuiltinSkinCatalog(t *testing.T) {
 	for _, dir := range []string{"", t.TempDir()} {
 		list := catalogOf(t, dir)
-		if len(list) != 1 || list[0]["id"] != "comic" || list[0]["name"] != "Comic" || list[0]["entry"] != "entry.mjs" || list[0]["style"] != "style.css" ||
-			list[0]["document"] != "document.css" || len(list[0]["digest"].(string)) != 64 {
+		if len(list) != 3 {
 			t.Fatalf("catalog %q: %v", dir, list)
 		}
-		if _, ok := list[0]["builtin"]; ok {
-			t.Fatal("the catalog carries a trust word: trust is the host's own list")
+		for i, id := range []string{"comic", "classic", "zoom"} {
+			skin := list[i]
+			if skin["id"] != id || skin["entry"] != "entry.mjs" || skin["style"] != "style.css" || len(skin["digest"].(string)) != 64 {
+				t.Fatalf("catalog %q: %v", dir, list)
+			}
+			if _, ok := skin["builtin"]; ok {
+				t.Fatal("the catalog carries a trust word: trust is the host's own list")
+			}
+		}
+		if list[0]["name"] != "Comic" || list[0]["document"] != "document.css" || list[1]["name"] != "Classic" || list[2]["name"] != "Zoom" {
+			t.Fatal(list)
 		}
 	}
-	if !slices.Equal(BuiltinSkins, []string{"comic"}) {
+	if !slices.Equal(BuiltinSkins, []string{"comic", "classic", "zoom"}) {
 		t.Fatalf("built-in skins %v", BuiltinSkins)
 	}
 }
 
-// What the program serves for the built-in package is byte for byte what
-// web/build.sh recorded in web/SHA256SUMS, and every file the manifest
+// What the program serves for each built-in package is byte for byte what
+// its build.sh recorded in SHA256SUMS, and every file the manifest
 // declares is served; nothing else under the package is.
 func TestBuiltinSkinServedBytesMatchBuild(t *testing.T) {
-	sums, err := os.ReadFile(filepath.Join("..", "web", "SHA256SUMS"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	listed := map[string]string{}
-	for _, l := range strings.Split(strings.TrimSpace(string(sums)), "\n") {
-		sum, name, ok := strings.Cut(l, "  ")
-		if !ok {
-			t.Fatalf("bad SHA256SUMS line %q", l)
+	for _, id := range BuiltinSkins {
+		sumsPath := filepath.Join("..", "skins", id, "SHA256SUMS")
+		if id == "comic" {
+			sumsPath = filepath.Join("..", "web", "SHA256SUMS")
 		}
-		listed[name] = sum
-	}
-	var m Skin
-	raw, err := os.ReadFile(filepath.Join("skins", "comic", "skin.json"))
-	if err != nil || json.Unmarshal(raw, &m) != nil {
-		t.Fatalf("manifest: %v", err)
-	}
-	if fmt.Sprintf("%x", sha256.Sum256(raw)) != listed["skin.json"] {
-		t.Error("skins/comic/skin.json does not match web/SHA256SUMS: run web/build.sh")
-	}
-	if len(listed) != len(m.Files)+1 {
-		t.Errorf("SHA256SUMS lists %d files, the manifest declares %d (+ skin.json)", len(listed), len(m.Files))
-	}
-	for _, relay := range []bool{false, true} {
-		for _, name := range m.Files {
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest("GET", "/assets/skins/comic/"+name, nil)
-			if relay {
-				Relay().ServeHTTP(w, r)
-			} else {
-				Skins("").ServeHTTP(w, r)
-			}
-			if w.Code != 200 || fmt.Sprintf("%x", sha256.Sum256(w.Body.Bytes())) != listed[name] {
-				t.Errorf("relay=%v %s: %d, served bytes differ from SHA256SUMS", relay, name, w.Code)
-			}
+		sums, err := os.ReadFile(sumsPath)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	// The package directory holds exactly the declared files.
-	filepath.WalkDir(filepath.Join("skins", "comic"), func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			rel := strings.TrimPrefix(filepath.ToSlash(p), "skins/comic/")
-			if _, ok := listed[rel]; !ok {
-				t.Errorf("%s is in the package but not built by web/build.sh", p)
+		listed := map[string]string{}
+		for _, l := range strings.Split(strings.TrimSpace(string(sums)), "\n") {
+			sum, name, ok := strings.Cut(l, "  ")
+			if !ok {
+				t.Fatalf("bad SHA256SUMS line %q", l)
+			}
+			listed[name] = sum
+		}
+		var m Skin
+		raw, err := os.ReadFile(filepath.Join("skins", id, "skin.json"))
+		if err != nil || json.Unmarshal(raw, &m) != nil {
+			t.Fatalf("manifest: %v", err)
+		}
+		if fmt.Sprintf("%x", sha256.Sum256(raw)) != listed["skin.json"] {
+			t.Errorf("%s manifest does not match %s", id, sumsPath)
+		}
+		if len(listed) != len(m.Files)+1 {
+			t.Errorf("SHA256SUMS lists %d files, the manifest declares %d (+ skin.json)", len(listed), len(m.Files))
+		}
+		for _, relay := range []bool{false, true} {
+			for _, name := range m.Files {
+				w := httptest.NewRecorder()
+				r := httptest.NewRequest("GET", "/assets/skins/"+id+"/"+name, nil)
+				if relay {
+					Relay().ServeHTTP(w, r)
+				} else {
+					Skins("").ServeHTTP(w, r)
+				}
+				if w.Code != 200 || fmt.Sprintf("%x", sha256.Sum256(w.Body.Bytes())) != listed[name] {
+					t.Errorf("relay=%v %s: %d, served bytes differ from SHA256SUMS", relay, name, w.Code)
+				}
 			}
 		}
-		return err
-	})
+		// The package directory holds exactly the declared files.
+		filepath.WalkDir(filepath.Join("skins", id), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				rel := strings.TrimPrefix(filepath.ToSlash(p), "skins/"+id+"/")
+				if _, ok := listed[rel]; !ok {
+					t.Errorf("%s is in the package but not recorded in SHA256SUMS", p)
+				}
+			}
+			return err
+		})
+	}
 }
 
 // No installed package may take a built-in skin's id, one to come, or the
@@ -114,7 +128,7 @@ func TestReservedSkinIDs(t *testing.T) {
 		}
 	}
 	list := catalogOf(t, home)
-	if len(list) != 1 || list[0]["name"] != "Comic" {
+	if len(list) != len(BuiltinSkins) || list[0]["name"] != "Comic" {
 		t.Fatalf("a reserved id was listed: %v", list)
 	}
 	w := httptest.NewRecorder()
@@ -138,10 +152,10 @@ func TestSkinManifestCannotClaimTrust(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := catalogOf(t, home)
-	if len(list) != 2 || list[1]["id"] != "notebook" || len(list[1]["digest"].(string)) != 64 {
+	if len(list) != len(BuiltinSkins)+1 || list[len(BuiltinSkins)]["id"] != "notebook" || len(list[len(BuiltinSkins)]["digest"].(string)) != 64 {
 		t.Fatalf("catalog %v", list)
 	}
-	if _, ok := list[1]["builtin"]; ok {
+	if _, ok := list[len(BuiltinSkins)]["builtin"]; ok {
 		t.Fatal("a package claimed built-in trust")
 	}
 }
@@ -161,7 +175,7 @@ func TestSkinDocumentRulesDeclared(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(home, "notebook", "skin.json"), []byte(c.manifest), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if got := len(catalogOf(t, home)) == 2; got != c.ok {
+		if got := len(catalogOf(t, home)) == len(BuiltinSkins)+1; got != c.ok {
 			t.Errorf("%s: listed %v, want %v", c.manifest, got, c.ok)
 		}
 	}
