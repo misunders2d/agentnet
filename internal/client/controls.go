@@ -720,6 +720,9 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 	if envelope.AssistantReaction(in) { // the assistant's, decided as its reply would be
 		return a.admitAssistantReaction(ctx, env, in, sender, fromQuarantine, hold)
 	}
+	if envelope.HumanEdit(in) { // to its turn's captured audience: decided as that turn was
+		return a.admitHumanEdit(ctx, env, in, sender, fromQuarantine, hold)
+	}
 	if in.Sub == envelope.SubClear { // this person's own deletion: no conversation act (convclear.go)
 		return a.admitClear(ctx, env, in, sender, fromQuarantine, hold)
 	}
@@ -943,6 +946,65 @@ func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in enve
 		a.kickNow()
 	}
 	a.applyRetraction(in)
+	return nil
+}
+
+// admitHumanEdit admits an edit carrying its turn's captured audience
+// (envelope.HumanEdit; ROOM_V1 §2.3) only from that turn's author: the
+// very key that sent the turn, under the same author scope (AuthorPID, ""
+// for a member), to no audience the turn did not have; and only where the
+// turn's own author and reader authority (humanAuthorization) holds now.
+func (a *Agent) admitHumanEdit(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool, hold func(string, string) error) error {
+	root, _, found, err := a.store.conversation(in.Conv)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return hold(reasonProof, "the conversation is not here (yet)")
+	}
+	if in.Ref.Fingerprint != sender.Fingerprint() {
+		return hold(reasonInvalid, "an edit to a captured audience comes only from the key that sent its turn")
+	}
+	where, args := inScope(ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}) // received from that key: never this device's own
+	var raw string
+	err = a.store.db.QueryRow(`SELECT coalesce(human,'') FROM inbox i WHERE i.ref_id IS NULL AND `+where+` LIMIT 1`, args...).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return hold(reasonProof, "the edited turn is not here (yet)")
+	}
+	if err != nil {
+		return err
+	}
+	var turn envelope.HumanTurn
+	if raw == "" || json.Unmarshal([]byte(raw), &turn) != nil {
+		return hold(reasonInvalid, "an edit carries a captured audience its turn did not")
+	}
+	if turn.AuthorPID != in.Human.AuthorPID {
+		return hold(reasonInvalid, "an edit comes only from its turn's author")
+	}
+	captured := map[envelope.HumanScope]bool{}
+	for _, s := range turn.Audience {
+		captured[s] = true
+	}
+	for _, s := range in.Human.Audience {
+		if !captured[s] {
+			return hold(reasonInvalid, "an edit's audience is broader than its turn's")
+		}
+	}
+	if err := a.verifyHumanProof(ctx, root, in.Human); err != nil {
+		return hold(reasonProof, err.Error())
+	}
+	res, err := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
+		if err := insertHumanProof(tx, in.Human); err != nil {
+			return err
+		}
+		return humanAuthorization(tx, in.Conv, in.Human, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint())
+	})
+	if err != nil {
+		return hold(reasonProof, err.Error())
+	}
+	if res == admitted {
+		a.applyRetraction(in)
+	}
 	return nil
 }
 

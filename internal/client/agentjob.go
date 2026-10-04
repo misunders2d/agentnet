@@ -29,7 +29,9 @@ import (
 // grant holds for that exact key). An accepted human guest's request (its
 // captured author scope, active, same key) has no member authority: a
 // question needs this host's approval of that asker or a one-time accept, a
-// task its exact-key grant or a one-time accept. A request without authority
+// task its exact-key grant or a one-time accept. An agent room
+// participant's ask (ROOM_V1 §4.3) has no authority at all yet: the host's
+// person accepts each one. A request without authority
 // waits for the host's person (stateAwaiting); a request whose participation
 // ended never runs (stateNotRun); anything else keeps waiting for evidence.
 //
@@ -116,6 +118,19 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 	if v.m.group != nil && !v.m.requestEpoch(r.Sender, r.Key, r.Target) {
 		return verdictStop, "requester's original group admission changed", nil
 	}
+	// An agent room participant's ask (ROOM_V1 §4.3): no member authority,
+	// never TaskKeys, grants or approvals, wherever the asking agent runs;
+	// until the §4.4 checks, this host's person decides each one (§10.4).
+	if agent, ended, err := roomAgentAsk(q, r, v.m); err != nil {
+		return 0, "", err
+	} else if ended {
+		return verdictStop, "the asking agent's participation ended", nil
+	} else if agent {
+		if output || r.State == stateAccepted {
+			return verdictRun, "", nil
+		}
+		return verdictAsk, "an agent in the room asks your agent: accept it to run it once (agentnet accept ID)", nil
+	}
 	if !r.Local && !v.m.device(r.Sender, r.Key) {
 		guest, ended, err := humanRequestAuthor(q, r, v.m)
 		if err != nil {
@@ -175,6 +190,37 @@ func humanRequestAuthor(q dbq, r agentReq, m dmMembers) (guest, ended bool, err 
 	}
 	exact := g.Role == protocol.RoleHuman && g.Host.Address == r.Sender && g.Host.Fingerprint == r.Key
 	return exact && g.HumanActive(), exact && (g.State == PartDismissed || g.State == PartDeclined), nil
+}
+
+// roomAgentAsk reports whether request r was asked by an agent room
+// participant (its stored captured audience names an agent author:
+// HumanTurn.AgentAuthor), and whether that author's participation, as held
+// here with r's very sender key as its host, has ended.
+func roomAgentAsk(q dbq, r agentReq, m dmMembers) (agent, ended bool, err error) {
+	var raw string
+	err = q.QueryRow(`SELECT coalesce(human,'') FROM inbox WHERE id=? AND conv=? AND pid=?`, r.ID, r.Conv, r.PID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && raw == "" {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	var h envelope.HumanTurn
+	if err := json.Unmarshal([]byte(raw), &h); err != nil {
+		return false, false, err
+	}
+	if !h.AgentAuthor() {
+		return false, false, nil
+	}
+	p, err := participationIn(q, r.Conv, h.AuthorPID, m, "")
+	if errors.Is(err, ErrNoParticipation) {
+		return true, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	exact := p.Host.Address == r.Sender && p.Host.Fingerprint == r.Key
+	return true, exact && (p.State == PartDismissed || p.State == PartDeclined), nil
 }
 
 // beforeAgentClaim lets tests act between a claim's decision and its write.

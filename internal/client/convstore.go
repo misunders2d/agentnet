@@ -514,13 +514,14 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 // dedicated record needs its own capability before release).
 type waitingCopy struct {
 	to, sub, required, status, agentID, conv, pid, body string
-	human                                               bool // carries a captured audience (hgp1 besides its requirement)
+	human                                               bool   // carries a captured audience (hgp1 besides its requirement)
+	humanRaw                                            string // that audience, as stored (rm1 besides it for a room's: roomCopy)
 }
 
 // convWaiting returns the ids and recipients of waiting conversation
 // messages.
 func (s *store) convWaiting() (map[string]waitingCopy, error) {
-	rows, err := s.db.Query(`SELECT id, recipient, coalesce(sub, ''), coalesce(required_cap, ''), coalesce(status, ''), coalesce(agent_id, ''), coalesce(conv, ''), coalesce(pid, ''), coalesce(body, ''), coalesce(human, '') <> '' FROM outbox WHERE state = ?`, stateConvWaiting)
+	rows, err := s.db.Query(`SELECT id, recipient, coalesce(sub, ''), coalesce(required_cap, ''), coalesce(status, ''), coalesce(agent_id, ''), coalesce(conv, ''), coalesce(pid, ''), coalesce(body, ''), coalesce(human, '') FROM outbox WHERE state = ?`, stateConvWaiting)
 	if err != nil {
 		return nil, err
 	}
@@ -529,9 +530,10 @@ func (s *store) convWaiting() (map[string]waitingCopy, error) {
 	for rows.Next() {
 		var id string
 		var w waitingCopy
-		if err := rows.Scan(&id, &w.to, &w.sub, &w.required, &w.status, &w.agentID, &w.conv, &w.pid, &w.body, &w.human); err != nil {
+		if err := rows.Scan(&id, &w.to, &w.sub, &w.required, &w.status, &w.agentID, &w.conv, &w.pid, &w.body, &w.humanRaw); err != nil {
 			return nil, err
 		}
+		w.human = w.humanRaw != ""
 		out[id] = w
 	}
 	return out, rows.Err()

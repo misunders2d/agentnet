@@ -401,7 +401,10 @@ func ParseConvRoot(data []byte) (ConvRoot, error) {
 //	"caps":["env2"],"ts":<unix seconds>}
 //
 // At most MaxCaps entries of 1–32 characters [a-z0-9-], sorted and unique;
-// the signed record at most MaxCapsRecord bytes. Each daemon session
+// the signed record at most MaxCapsRecord bytes. A device advertises at
+// most MaxAdvertisedCaps: readers parse twice that, so a later program may
+// list more without looking, to an older reader, as if it read nothing (a
+// record that does not parse counts for nothing). Each daemon session
 // publishes its own; the relay keeps the newest per (device, session).
 // A relay can withhold a record but cannot forge one; which sessions are
 // live is only the relay's statement (see Profile).
@@ -436,10 +439,12 @@ const CapHeadless = "hdl1"
 // revisions, retractions of messages).
 const CapControl = "ctl3"
 
-// Bounds of a capability record.
+// Bounds of a capability record: what a reader parses, and what a device
+// advertises (ROOM_V1 §2.1: parse headroom).
 const (
-	MaxCaps       = 16
-	MaxCapsRecord = 1024
+	MaxCaps           = 32
+	MaxAdvertisedCaps = 16
+	MaxCapsRecord     = 1024
 )
 
 // CapsRecord lists what one device session can read.
@@ -463,6 +468,12 @@ func (c *CapsRecord) Sign(key ed25519.PrivateKey) { c.Sig = ed25519.Sign(key, c.
 
 // Has reports whether c lists capability name.
 func (c CapsRecord) Has(name string) bool { return slices.Contains(c.Caps, name) }
+
+// Reads reports whether c says its session reads capability name: it lists
+// it, or lists CapRoom, which implies each of RoomImplies.
+func (c CapsRecord) Reads(name string) bool {
+	return c.Has(name) || c.Has(CapRoom) && slices.Contains(RoomImplies, name)
+}
 
 // Validate checks the shape of c.
 func (c CapsRecord) Validate() error {
@@ -528,7 +539,8 @@ type Profile struct {
 
 // Supports reports whether the device with signKey at address supports
 // capability name by p: there are sessions, and each has a record that
-// verifies, names that device and session, and lists name.
+// verifies, names that device and session, and reads name (CapsRecord.Reads:
+// lists it, or a capability that implies it).
 func (p Profile) Supports(address string, signKey ed25519.PublicKey, name string) bool {
 	if len(p.Sessions) == 0 {
 		return false
@@ -539,7 +551,7 @@ func (p Profile) Supports(address string, signKey ed25519.PublicKey, name string
 		if err != nil || c.Verify(signKey) != nil || c.Address != address {
 			continue
 		}
-		if c.Has(name) {
+		if c.Reads(name) {
 			has[c.Session] = true
 		}
 	}

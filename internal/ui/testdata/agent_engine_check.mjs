@@ -341,6 +341,7 @@ for (const oldAfterReload of [false, true]) {
   await e.onConnect();
   const ad = f.calls.find((x) => x.p === "/v1/caps");
   check(ad && wire.parseCaps(ad.body).caps.includes(wire.CapAgentIdentity), "named-agent reader advertises agi1");
+  check(wire.parseCaps(ad.body).caps.includes(wire.CapRoom) && wire.parseCaps(ad.body).caps.length <= wire.MaxAdvertisedCaps, "room reader advertises rm1 within 16 names (ROOM_V1 §2.1)");
   e.stop();
 }
 console.log("named-agent engine checks passed: " + checks);

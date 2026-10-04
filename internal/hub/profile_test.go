@@ -194,6 +194,40 @@ func TestCapabilitiesBySession(t *testing.T) {
 	}
 }
 
+// ROOM_V1 §2.1 parse headroom: the relay stores and serves a record of a
+// later program listing more than 16 capabilities (up to protocol.MaxCaps),
+// so readers see what it reads; a record past the bound is refused, and an
+// older program's short record stays valid.
+func TestCapsParseHeadroom(t *testing.T) {
+	h, _, _ := testHub(t)
+	bob, vit := enroll(t, h, "bob"), enroll(t, h, "vitalii")
+	session := strings.Repeat("c", 32)
+	h.store.setLastSession(vit.addr, session)
+	h.presence.connect(vit.addr, protocol.SessionAd{Address: vit.addr, Session: session})
+	names := func(n int) []string {
+		out := []string{protocol.CapEnv2}
+		for i := 1; i < n; i++ {
+			out = append(out, fmt.Sprintf("x%02d", i))
+		}
+		return out
+	}
+	if c, b := vit.call(t, h, "PUT", "/v1/caps", capsFor(vit, session, 10, names(17)...)); c != http.StatusNoContent {
+		t.Fatalf("a 17-name record: %d %s", c, b)
+	}
+	if p := profileOf(t, h, bob, vit); !supportsEnv2(p, vit) || !p.Supports(vit.addr, vit.id.Public(vit.addr).SignKey, "x16") {
+		t.Fatalf("the 17-name record is not served as read: %+v", p)
+	}
+	if c, _ := vit.call(t, h, "PUT", "/v1/caps", capsFor(vit, session, 11, names(33)...)); c != http.StatusBadRequest {
+		t.Fatalf("a 33-name record: %d", c)
+	}
+	if c, b := vit.call(t, h, "PUT", "/v1/caps", capsFor(vit, session, 12, protocol.CapEnv2)); c != http.StatusNoContent {
+		t.Fatalf("an older program's record: %d %s", c, b)
+	}
+	if p := profileOf(t, h, bob, vit); !supportsEnv2(p, vit) || p.Supports(vit.addr, vit.id.Public(vit.addr).SignKey, "x16") {
+		t.Fatalf("the newer short record does not decide: %+v", p)
+	}
+}
+
 // The Hub lists what it supports, and relays version 2 envelopes.
 func TestFeaturesAndVersion2(t *testing.T) {
 	h, _, _ := testHub(t)
