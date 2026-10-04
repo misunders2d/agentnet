@@ -373,6 +373,18 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		if reason, why := a.controlAuthorized(m, orig, owner); reason != "" {
 			return hold(reason, why)
 		}
+		if orig.Sub == envelope.SubStatus { // only the device the request is for speaks for it, as directly
+			if ok, why := a.statusAllowed(orig, item.From, item.FromKey); !ok {
+				here, err := a.convRowHere(in.Conv, orig.Ref)
+				if err != nil {
+					return err
+				}
+				if !here { // the request may still come
+					return hold(reasonProof, why)
+				}
+				return hold(reasonInvalid, why)
+			}
+		}
 		if envelope.AssistantReaction(orig) { // the assistant's, bound as its direct copy is
 			if reason, err := assistantHistoryCheck(a.store.db, orig, key.Address, key.Fingerprint(), a.Address, a.Self().Fingerprint()); err != nil {
 				if reason == "" {

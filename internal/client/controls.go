@@ -1326,8 +1326,9 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 // person author, whether it may be stored: a reaction needs membership
 // only (the caller checked); a revision or retraction needs the target's
 // sender key to belong to the same person. A status is no edit: it speaks
-// for the request only from the device that request is for, which the
-// caller checked (statusAllowed). why says what is missing.
+// for the request only from the device that request is for, which every
+// caller checks (statusAllowed; history.go for one carried as history).
+// why says what is missing.
 func (a *Agent) controlAuthorized(m dmMembers, in envelope.Inner, author string) (reason, why string) {
 	if in.Sub == envelope.SubReaction || in.Sub == envelope.SubStatus {
 		return "", ""

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -80,5 +81,83 @@ func TestConvRequestAwaitingToldToRequester(t *testing.T) {
 	_, found, _, _, told, err := w.bob.store.claimAgentPageTold("agentstub", w.bob.Address, w.bob.Self().Fingerprint(), 0, agentPage)
 	if err != nil || found || !slices.Contains(told, in.ID) || jobState(t, w.bob, in.ID) != stateNotRun {
 		t.Fatalf("ended request: found %v, told %v, state %q, %v", found, told, jobState(t, w.bob, in.ID), err)
+	}
+}
+
+// A conversation request takes no remote decision: a status answering a
+// decision this device sent there about a device-thread request of the
+// same id is that thread's, never one for a conversation request.
+func TestConvStatusTakesNoRemoteDecision(t *testing.T) {
+	w := newWorld(t, "")
+	request, decision, fp := protocol.NewID(), protocol.NewID(), w.alice.Self().Fingerprint()
+	sent, _ := json.Marshal(envelope.Decision{Action: "accept", Expect: "awaiting", Attempt: 1, Report: "r"})
+	if _, err := w.alice.store.db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, sub, ref_id, ref_fp) VALUES(?, ?, ?, '{}', 'delivered', ?, ?, ?, ?)`,
+		decision, w.bob.Address, string(sent), time.Now().Unix(), envelope.SubDecision, request, fp); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(envelope.Status{State: "running", Decision: decision, Report: "r", Attempt: 1})
+	status := envelope.Inner{Body: string(body), Ref: &envelope.Ref{ID: request, Fingerprint: fp}}
+	if ok, why := w.alice.statusAllowed(status, w.bob.Address, w.bob.Self().Fingerprint()); !ok {
+		t.Fatalf("the answer to that decision in its device thread refused: %s", why)
+	}
+	status.Conv = protocol.NewID()
+	if ok, _ := w.alice.statusAllowed(status, w.bob.Address, w.bob.Self().Fingerprint()); ok {
+		t.Fatal("a conversation status let through by a device-thread decision")
+	}
+}
+
+// A status carried as history is held to the same rule as a direct one:
+// only the device the request is for speaks for it. Alice's new phone
+// keeps the status Bob's device, which her task is for, sent about it, and
+// holds as invalid a status her laptop forwards as its own about that task.
+func TestHistoryCarriedStatusOnlyFromTheRequestsDevice(t *testing.T) {
+	w, conv, _, _ := agentWorld(t)
+	pid := participate(t, w, conv, nil, nil)
+	task, err := w.alice.AskAgent(tctx(t), pid, envelope.KindTask, "restart the deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	phone := linked(t, w.alice)
+	eventually(t, "the phone has the task", func() bool { _, ok := findLID(t, phone, conv, task.LID); return ok })
+	me, _, _ := w.alice.store.selfPerson(w.alice.Address)
+	var phoneDev identity.Public
+	for _, d := range me.roster.Devices {
+		if d.Address == phone.Address {
+			phoneDev = d
+		}
+	}
+	_, raw, _, _ := w.alice.store.conversation(conv)
+	forward := func(from string, key identity.Public) envelope.Inner {
+		t.Helper()
+		body, _ := json.Marshal(envelope.Status{State: "running", N: 7, At: time.Now().Unix()})
+		st := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: from, TS: time.Now().Unix(), Kind: envelope.KindMessage,
+			Sub: envelope.SubStatus, Body: string(body), Conv: conv, LID: protocol.NewID(),
+			Ref: &envelope.Ref{ID: task.LID, Fingerprint: w.alice.Self().Fingerprint()}}
+		c, err := w.alice.historyCopy(phoneDev, conv, raw, itemOf(st, key.Fingerprint(), time.Now().UnixMilli()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, _ := w.alice.store.db.Begin()
+		if err := insertCopies(tx, []outCopy{c}); err != nil {
+			t.Fatal(err)
+		}
+		tx.Commit()
+		if _, err := w.alice.deliver(tctx(t), c.env, nil); err != nil {
+			t.Fatal(err)
+		}
+		st.ID = c.env.ID // the carrier, as the phone holds it
+		return st
+	}
+	heldInvalid := func(id string) bool {
+		var n int
+		phone.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id = ? AND reason = ?`, id, reasonInvalid).Scan(&n)
+		return n == 1
+	}
+	kept := forward(w.bob.Address, w.bob.Self())
+	eventually(t, "the phone to keep the status of the task's device", func() bool { return controlRows(t, phone, kept.LID) == 1 })
+	forged := forward(w.alice.Address, w.alice.Self())
+	eventually(t, "the phone to decide on the laptop's own status", func() bool { return heldInvalid(forged.ID) || controlRows(t, phone, forged.LID) != 0 })
+	if n := controlRows(t, phone, forged.LID); n != 0 || !heldInvalid(forged.ID) {
+		t.Fatalf("the laptop's own status about the task was stored (%d), not held as invalid", n)
 	}
 }
