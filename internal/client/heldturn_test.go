@@ -77,17 +77,72 @@ func TestHeldTurnClosesOnReply(t *testing.T) {
 	q3 := held("third question")
 	in := envelope.Inner{Conv: conv, Kind: envelope.KindAnswer, Origin: envelope.OriginAgentPrefix + "claude"}
 	tx, _ := w.bob.store.db.Begin()
-	if err := turnClosesHeld(tx, in); err != nil {
+	if err := turnClosesHeld(tx, in, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	in = envelope.Inner{Conv: conv, Kind: envelope.KindQuestion, Origin: envelope.OriginUI, Target: &envelope.Target{Address: w.bob.Address}}
-	if err := turnClosesHeld(tx, in); err != nil {
+	if err := turnClosesHeld(tx, in, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	tx.Commit()
 	if s, _ := w.bob.store.jobState(q3); s != stateConvHeld {
 		t.Fatalf("an agent's turn closed a held question: %s", s)
 	}
+}
+
+// A turn of the person's from another of their devices closes what was
+// held for them here, but only what had reached this device when they
+// wrote it: one written earlier and delivered late (a phone that was
+// offline) answers nothing that arrived after it (review finding 1).
+func TestHeldTurnClosesOnlyWhatPrecededIt(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "hi bob"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the conversation at bob", func() bool { return len(convBodies(t, w.bob, conv)) == 1 })
+	phone := linked(t, w.bob)
+	eventually(t, "the conversation on bob's phone", func() bool { return len(convBodies(t, phone, conv)) == 1 })
+	if _, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Kind: envelope.KindQuestion, Body: "split the shipment?"}); err != nil {
+		t.Fatal(err)
+	}
+	var q string
+	eventually(t, "the question held at bob's laptop", func() bool {
+		w.bob.store.db.QueryRow(`SELECT id FROM inbox WHERE conv = ? AND state = ?`, conv, stateConvHeld).Scan(&q)
+		return q != ""
+	})
+	// The question reached the laptop two seconds ago (so that the phone's
+	// answer below is certainly written after it); a turn written on the
+	// phone a minute before is delivered only now.
+	arrived := time.Now().Add(-2 * time.Second)
+	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET received_at = ?, received_ms = ? WHERE id = ?`, arrived.Unix(), arrived.UnixMilli(), q); err != nil {
+		t.Fatal(err)
+	}
+	late := envelope.Inner{ID: protocol.NewID(), From: phone.Address, Conv: conv, Kind: envelope.KindMessage, Body: "hello?", TS: arrived.Unix() - 60}
+	tx, err := w.bob.store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := turnClosesHeld(tx, late, late.TS*1000); err != nil { // as conv.go passes a turn from another device
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := w.bob.store.jobState(q); s != stateConvHeld {
+		t.Fatalf("a turn written before the question arrived closed it: %s", s)
+	}
+	// The person answers on the phone: the laptop closes it.
+	if _, err := phone.SendConv(tctx(t), conv, ConvOutgoing{Body: "Yes, split it"}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the phone's answer to close the question on the laptop", func() bool {
+		s, _ := w.bob.store.jobState(q)
+		return s == stateManual
+	})
 }
 
 // BUG-24: inbox --review and doctor list what else waits here, apart from

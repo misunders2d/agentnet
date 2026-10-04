@@ -470,7 +470,7 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
 				return err
 			}
-			if err := turnClosesHeld(tx, in); err != nil {
+			if err := turnClosesHeld(tx, in, now.UnixMilli()); err != nil {
 				return err
 			}
 		}
@@ -516,14 +516,19 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 // turnClosesHeld closes the questions and tasks held for the person
 // (stateConvHeld: nothing runs them) in the conversation of turn in, a turn
 // the person sent, here or from another of their devices: they answered
-// there. The turn's own copy is left as it is; a request to an agent, an
-// agent's output, a control or a record closes nothing.
-func turnClosesHeld(tx *sql.Tx, in envelope.Inner) error {
+// there. Only what had reached this device when the turn was written
+// closes: written is that time in Unix milliseconds (now, for a turn sent
+// here; the start of the second its device stamped, in.TS, for one from
+// another device), so a turn written earlier and delivered late answers
+// nothing that came after it. The turn's own copy is left as it is; a
+// request to an agent, an agent's output, a control or a record closes
+// nothing.
+func turnClosesHeld(tx *sql.Tx, in envelope.Inner, written int64) error {
 	if in.Conv == "" || in.Sub != "" || in.Target != nil || strings.HasPrefix(in.Origin, envelope.OriginAgentPrefix) {
 		return nil
 	}
-	_, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE conv = ? AND state = ? AND id != ?`,
-		stateManual, "answered in the conversation", in.Conv, stateConvHeld, in.ID)
+	_, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE conv = ? AND state = ? AND id != ? AND coalesce(received_ms, received_at * 1000) <= ?`,
+		stateManual, "answered in the conversation", in.Conv, stateConvHeld, in.ID, written)
 	return err
 }
 

@@ -54,7 +54,9 @@ const turn = (n, extra) => ({ id: String(n).repeat(32), lid: String(n + 1).repea
 const heldIds = (msgs) => { const needs = [], held = []; e.needsYouOf(conv, [], msgs, [], needs, held); return held.map((h) => h.id); };
 assert.deepEqual(heldIds([heldTurn]), [heldTurn.id], "held until answered");
 assert.deepEqual(heldIds([heldTurn, turn(7)]), [], "answered from this browser");
-assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8) })]), [], "answered from another device of the person");
+assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8), ts: received / 1000 + 1 })]), [], "answered from another device of the person");
+assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8), ts: received / 1000 - 60, at: received + 5000 })]), [heldTurn.id], "a turn written before it arrived, delivered late, answers nothing");
+assert.deepEqual(heldIds([{ ...heldTurn, at: received + 400 }, turn(7, { own: true, fp: "a".repeat(8), ts: received / 1000, at: received + 5000 })]), [heldTurn.id], "a turn stamped in the second it arrived may have been written before it: it answers nothing");
 assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8), origin: "agent:claude", kind: "answer" })]), [heldTurn.id], "an agent's output answers nothing");
 assert.deepEqual(heldIds([heldTurn, turn(7, { kind: "question", target: { address: "admin/laptop", fingerprint: "a".repeat(8) } })]), [heldTurn.id], "a request to an agent answers nothing");
 assert.deepEqual(heldIds([turn(7, { at: received - 1000 }), heldTurn]), [heldTurn.id], "an earlier turn answers nothing");

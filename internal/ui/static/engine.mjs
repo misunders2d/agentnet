@@ -6045,13 +6045,18 @@ export class Engine {
   async agentsOf(c) { return (await this.participationsOf(c)).filter(p => p.role !== "human"); }
 
   // heldOpen: whether turn m, held for the person (conv_held: nothing runs
-  // it), still waits for them. The person's own later turn in the same
+  // it), still waits for them. The person's own turn in the same
   // conversation, from this browser or another device of theirs, answers
-  // it, as client.turnClosesHeld closes it there (state manual); a request
-  // to an agent, an agent's output, a control or a record does not.
+  // it if written once m had reached this browser, as client.turnClosesHeld
+  // closes it there (state manual): one written earlier and delivered late
+  // does not. A turn sent here was written when it was stored (at); one
+  // from another device at the start of the second that device stamped
+  // (ts). A request to an agent, an agent's output, a control or a record
+  // answers nothing.
   heldOpen(m, msgs) {
+    const wrote = (x) => x.fp && Number.isSafeInteger(x.ts) ? x.ts * 1000 : x.at;
     return m.state === "conv_held" && !msgs.some((x) => x !== m && (x.own || !x.fp && !x.excerpt_pid) && !x.sub && !x.target &&
-      !String(x.origin || "").startsWith("agent:") && x.at >= m.at);
+      !String(x.origin || "").startsWith("agent:") && wrote(x) >= m.at);
   }
 
   // needsYouOf adds what waits for this person in conversation conv
