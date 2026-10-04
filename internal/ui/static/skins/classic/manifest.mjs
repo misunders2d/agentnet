@@ -1,4 +1,4 @@
-{
+export default {
   "api": 1,
   "id": "classic",
   "name": "Classic",
@@ -18,3 +18,4 @@
     "qr.mjs"
   ]
 }
+;

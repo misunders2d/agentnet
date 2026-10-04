@@ -6,6 +6,7 @@
   "style": "style.css",
   "files": [
     "entry.mjs",
+    "manifest.mjs",
     "style.css",
     "template.mjs",
     "typing.mjs",

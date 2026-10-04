@@ -15,7 +15,7 @@ window.hostCalls=0;window.streams=0;window.catalogListeners=0;window.outside=[];
 const observer=new MutationObserver(records=>{for(const r of records)if(r.target.getRootNode()!==root)outside.push(r.type+':'+r.target.nodeName)});
 observer.observe(document.documentElement,{attributes:true,childList:true,subtree:true});
 const view={};
-const known={version:1,platform:'daemon',workspace:{id:'default'},workspaces:{state:()=>view},skins:[{id:'classic',name:'Classic'},{id:'default',name:'Comic'}],selectSkin(){},onOpen(){},
+const known={version:1,platform:'daemon',skin:{id:'host-classic-copy',name:'Host identity'},workspace:{id:'default'},workspaces:{state:()=>view},skins:[{id:'host-classic-copy',name:'Host identity'},{id:'default',name:'Comic'}],selectSkin(){},onOpen(){},
  onSkinsChange(){catalogListeners++;return()=>catalogListeners--;},
  api:async(p,b)=>{hostCalls++;if(p==='/api/dm/send'&&window.sendGate){window.sendStarted=true;await window.sendGate;window.sendGate=null}const r=await raw('/transport'+p,b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});if(!r.ok)throw Error(await r.text());return r.json()},
  listen(fn){streams++;const es=new Source('/transport/events');es.addEventListener('change',e=>fn({type:'change',seq:Number(e.data)}));return()=>{es.close();streams--}},
@@ -23,7 +23,7 @@ const known={version:1,platform:'daemon',workspace:{id:'default'},workspaces:{st
  file:async(id,i,dir)=>{const r=await raw('/transport/api/files/'+id+'/'+i+'?dir='+dir);return{bytes:new Uint8Array(await r.arrayBuffer())}},
 };
 const host=new Proxy(known,{get(t,k){if(k==='drive'||k==='manageLocalSkins'||k==='reconnect')return undefined;if(!(k in t))throw Error('Undocumented host member '+String(k));return t[k]}});
-window.unmountClassic=()=>unmount(box);window.mountClassic=()=>mount(box,host);await mount(box,host);window.ready=true;`;
+window.view=view;window.unmountClassic=()=>unmount(box);window.mountClassic=()=>mount(box,host);await mount(box,host);window.ready=true;`;
 let server,browser;const errors=[];
 (async()=>{
  const urls=JSON.parse(fs.readFileSync(path.join(evidence,'world/urls.json'),'utf8'));const native=new URL(urls.sergey.page);
@@ -51,13 +51,14 @@ let server,browser;const errors=[];
  await page.locator('#conv-list').getByText('Vitalii',{exact:true}).first().click();await page.locator('#conv-name').filter({hasText:'Vitalii'}).waitFor();
  await page.locator('#body').fill('Saved contract-only draft');
  const before=await page.evaluate(()=>({streams,catalogListeners,hostCalls,outside}));assert(before.streams===1&&before.catalogListeners===1&&before.hostCalls>0);assert.deepEqual(before.outside,[]);
- await page.evaluate(()=>unmountClassic());assert.deepEqual(await page.evaluate(()=>({streams,catalogListeners})),{streams:0,catalogListeners:0});
+ assert(await page.locator('[data-skin=host-classic-copy]').getAttribute('aria-pressed')==='true');
+ await page.evaluate(()=>unmountClassic());assert(await page.evaluate(()=>!!view['host-classic-copy']&&!view.classic));assert.deepEqual(await page.evaluate(()=>({streams,catalogListeners})),{streams:0,catalogListeners:0});
  await page.evaluate(()=>mountClassic());await page.locator('#body').filter({visible:true}).waitFor();await page.waitForFunction(()=>document.querySelector('#surface').shadowRoot.querySelector('#body').value==='Saved contract-only draft');
  await page.evaluate(()=>{window.sendGate=new Promise(r=>window.releaseSend=r)});
  const text='Classic pending remount '+Date.now();await page.locator('#body').fill(text);await page.locator('#composer').evaluate(el=>el.requestSubmit());await page.waitForFunction(()=>window.sendStarted);
  await page.evaluate(()=>unmountClassic());await page.evaluate(()=>mountClassic());await page.waitForFunction(()=>document.querySelector('#surface').shadowRoot.querySelector('#body').value.length>0);await page.evaluate(()=>releaseSend());
  await page.locator('#timeline').getByText(text,{exact:true}).waitFor();await page.waitForFunction(()=>!document.querySelector('#surface').shadowRoot.querySelector('#send').disabled&&document.querySelector('#surface').shadowRoot.querySelector('#body').value==='');
  await page.evaluate(()=>unmountClassic());assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>outside),[]);
- const result={pass:true,host_version:1,adapter:'isolated public host backed by disposable native API',checks:['Copied package at unrelated URL mounts without private globals','All native data/actions/file traffic passes captured public host','No document writes outside owned shadow root','Unmount stops stream/catalog listeners','Remount restores workspace draft','Pending send remains on captured host and clears accepted draft after remount','No page errors'],limits:['Optional new host capabilities await production host branch','Does not certify arbitrary skins or sandbox full-trust code']};
+ const result={pass:true,host_version:1,adapter:'isolated public host backed by disposable native API',checks:['Copied package at unrelated URL mounts without private globals','Host-provided skin identity selects current interface and namespaces drafts','All native data/actions/file traffic passes captured public host','No document writes outside owned shadow root','Unmount stops stream/catalog listeners','Remount restores workspace draft','Pending send remains on captured host and clears accepted draft after remount','No page errors'],limits:['Optional new host capabilities await production host branch','Does not certify arbitrary skins or sandbox full-trust code']};
  fs.writeFileSync(path.join(evidence,'contract-result.json'),JSON.stringify(result,null,2),{mode:0o600});console.log('PASS Classic runtime contract and lifecycle');
 })().catch(e=>{console.error('FAIL Classic contract: '+e.message+'; page errors: '+errors.join('; '));process.exitCode=1;}).finally(async()=>{await browser?.close();server?.closeAllConnections();server?.close();});

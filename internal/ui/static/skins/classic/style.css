@@ -746,3 +746,6 @@ button.reaction { cursor: pointer; }
 
 /* Leave the public host escape control reachable without overlapping our controls. */
 .classic-root { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
+
+/* Identity chips stay below the name, including a narrow desktop sidebar. */
+.person-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }

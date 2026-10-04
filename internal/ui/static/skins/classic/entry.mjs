@@ -1,4 +1,5 @@
 import { markup } from './template.mjs';
+import manifest from './manifest.mjs';
 const mounted = new WeakMap();
 export async function mount(root, host) {
   if (host.version !== 1) throw new Error('Classic requires AgentNet host API v1');
@@ -30,8 +31,11 @@ const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}
 
 // A send may finish after this root was unmounted. Workspace renderer state
 // holds its activity; completion updates only the currently mounted view.
+const skinKey = (host.skin?.id || manifest.id).replace(/^local:/, "");
+const pendingKey = skinKey + "Pending";
+const ownSkin = (id) => currentHost.skin ? id === currentHost.skin.id : id === manifest.id || id === "local:" + manifest.id;
 const workspaceState = currentHost.workspaces?.state?.(currentHost.workspace.id);
-const pending = workspaceState ? (workspaceState.classicPending ??= {busy: false}) : {busy: false};
+const pending = workspaceState ? (workspaceState[pendingKey] ??= {busy: false}) : {busy: false};
 const pendingChanged = () => { if (alive) syncComposer(); };
 const pendingAccepted = ({key, text, files, reply, answering}) => {
   if (!alive || state.draftKey !== key) return;
@@ -1322,7 +1326,8 @@ function personRow(p, dms) {
     avatar(p.label || p.address),
     el("span", { class: "conv-main" },
       el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, p.label),
-        el("span", { class: "kind-tag" }, "Person"), p.person && el("span", { class: "kind-tag", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8)), last && el("span", { class: "conv-time" }, when(last.last_at))),
+        last && el("span", { class: "conv-time" }, when(last.last_at))),
+      el("span", { class: "person-tags" }, el("span", { class: "kind-tag" }, "Person"), p.person && el("span", { class: "kind-tag", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8))),
       el("span", { class: "conv-bottom" },
         el("span", { class: "conv-last" }, last ? last.last || "No messages yet" : "No DM yet"),
         p.state === "conflict" && el("span", { class: "conv-flag danger" }, "Frozen"),
@@ -4080,7 +4085,7 @@ const wsAPI = () => (currentHost && currentHost.workspaces) || null;
 function savedOf(id) {
   const w = wsAPI();
   if (!w || id === wsNow() && alive) return null;
-  try { return w.state(id).classic || null; } catch (e) { return null; } // disconnected: nothing kept
+  try { return w.state(id)[skinKey] || null; } catch (e) { return null; } // disconnected: nothing kept
 }
 // draftsOf: a membership's drafts, shown or kept; {} for one no longer here.
 const draftsOf = (id) => (alive && id === wsNow() ? state.drafts : (savedOf(id) || {}).drafts || {});
@@ -4096,7 +4101,7 @@ function workspaceCapture(id, st) {
   const view = {};
   for (const k of viewKeys) view[k] = state[k];
   view.scroll = $("timeline").scrollTop;
-  st.classic = view;
+  st[skinKey] = view;
   state.capturedFor = id;
 }
 // workspaceSwitched shows the membership selected now: its kept view, or
@@ -4189,8 +4194,8 @@ function hasUnsentDrafts() {
     try {
       for (const { id } of w.list()) {
         if (id === wsNow()) continue;
-        const view = w.state(id).classic;
-        if (w.state(id).classicPending?.busy || view && Object.values(view.drafts || {}).some(pending)) return true;
+        const view = w.state(id)[skinKey];
+        if (w.state(id)[pendingKey]?.busy || view && Object.values(view.drafts || {}).some(pending)) return true;
       }
     } catch (_) { return true; } // an uninspected saved view must not be discarded
   }
@@ -4225,7 +4230,7 @@ function reloadUpdated() {
   return true;
 }
 
-const reloadKey = "agentnet.classic.reload." + currentHost.workspace.id;
+const reloadKey = "agentnet." + skinKey + ".reload." + currentHost.workspace.id;
 
 // keepForReload stores unsent text: every conversation's draft, the
 // composer, and an open dialog's fields (not its consent boxes).
@@ -4595,7 +4600,7 @@ function renderInstalledInterfaces() {
       } else change();
     };
     for (const s of currentHost.skins) {
-      $("interfaces").append(el("button", { type: "button", "data-skin": s.id, "aria-pressed": String((s.id === "classic" || s.id === "local:classic")), onclick: () => (s.id !== "classic" && s.id !== "local:classic") && switchTo(s.id) }, s.name));
+      $("interfaces").append(el("button", { type: "button", "data-skin": s.id, "aria-pressed": String(ownSkin(s.id)), onclick: () => !ownSkin(s.id) && switchTo(s.id) }, s.name));
     }
   }
 }
@@ -4719,7 +4724,7 @@ function start() {
     const clicked = state.clickedAtStart;
     state.clickedAtStart = null;
     if (clicked) { await openClicked(clicked); return; }
-    const saved = wsAPI()?.state(wsNow()).classic;
+    const saved = wsAPI()?.state(wsNow())[skinKey];
     if (saved) {
       for (const k of viewKeys) if (saved[k] !== undefined) state[k] = saved[k];
       if (saved.thread) await openThread(saved.thread); else if (saved.dm) await openDM(saved.dm);
