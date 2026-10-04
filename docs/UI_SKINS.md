@@ -166,6 +166,14 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
 - Conversations: `/api/send` `{to,kind,body,reply_to,files}`;
   `/api/dm/new`; `/api/dm/send` `{conv,body,reply_to,files}`.
 - Decisions: `/api/act`; returned message actions determine availability.
+- Standing grants: GET `/api/approvals` lists what `agentnet approvals` does:
+  `{questions[{address}], tasks[{address, fingerprint, status}],
+  participations[{conv, pid, agent_id?, keys[], tasks_from[], external?}],
+  read_only}`; `POST /api/approvals/revoke` `{kind: "question"|"task",
+  address}` or `{kind: "participation", pid}` ends that one grant (as
+  `unapprove`, `unapprove --tasks`, `dm dismiss-agent`; an `external` one is
+  ended by a member only). A browser keeps none: its list is empty and
+  `read_only`, and revoking is refused.
 - Identity: `/api/person` creates a person (it does **not** rename);
   `POST /api/person/label` `{label}` changes the existing person's self-claimed
   display name through a signed roster step. Keep person ID, keys, devices,

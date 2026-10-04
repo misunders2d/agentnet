@@ -6642,6 +6642,10 @@ export class Engine {
     case "/api/team": { const t = this.teamsService(); if (!t) throw new Error("Teams are not available on this server."); return t.team(body || {}); }
     case "/api/teams/snapshot": { const t = this.teamsService(); if (!t) throw new Error("Teams are not available on this server."); return t.teamsSnapshot((body || {}).teams || []); }
     case "/api/operator/decide": return this.decide(body || {});
+    case "/api/approvals": // liveapprovals.go: a browser keeps no standing grants
+      if (body !== undefined) throw new Error("The list of standing grants is read only.");
+      return { questions: [], tasks: [], participations: [], read_only: true };
+    case "/api/approvals/revoke": throw new Error("Nothing runs in this browser: approvals and grants are made and revoked on a computer with AgentNet.");
     case "/api/notify/enable": return this.enableNotify();
     case "/api/notify/disable": return this.disableNotify();
     case "/api/notify/mute": return this.muteDM(body.conv, !!body.muted);

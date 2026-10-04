@@ -9,8 +9,8 @@ import (
 // The browser device's engine gives the new messenger what the daemon's
 // page gives it (testdata/messenger_fields_engine_check.mjs): replies
 // linked to the message as shown here, participation records' type and
-// author, the chat list's guests, decisions and last record, and a device
-// thread's agent.
+// author, the chat list's guests, decisions and last record, a device
+// thread's agent, and its standing grants (none: read-only).
 func TestBrowserMessengerFieldsEngine(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

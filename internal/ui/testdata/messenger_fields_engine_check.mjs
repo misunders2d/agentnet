@@ -101,4 +101,16 @@ const shown = (view, body) => view.messages.find((m) => m.body === body);
   e.stop();
 }
 
+// 3. Standing grants (liveapprovals.go): a browser holds none, so its list
+// is empty and read-only, and revoking one is refused here.
+{
+  const f = await fixture(), { e } = f;
+  const v = await e.api("/api/approvals");
+  check(v.read_only === true && Array.isArray(v.questions) && !v.questions.length && Array.isArray(v.tasks) && !v.tasks.length &&
+    Array.isArray(v.participations) && !v.participations.length && Object.keys(v).length === 4, "an empty, read-only list: " + JSON.stringify(v));
+  await assert.rejects(() => e.api("/api/approvals/revoke", { kind: "question", address: f.peerAddress }), /Nothing runs in this browser/); checks++;
+  await assert.rejects(() => e.api("/api/approvals", {}), /read only/); checks++;
+  e.stop();
+}
+
 console.log("PASS messenger fields engine checks: " + checks);
