@@ -127,6 +127,10 @@ async function handle(req) {
     await wire.verifyEvent(e, wire.unb64(req.key, "key"));
     return { hash: await wire.eventHash(e) };
   }
+  case "scopeOf": // protocol.ScopeOf's canonical bytes, and Projects / SameScope as the device decides them
+    return { canonical: new TextDecoder().decode(wire.eventCanonical(await wire.scopeOf(wire.parseEvent(req.invite), req.ts))) };
+  case "projects":
+    return { projects: await wire.projects(wire.parseEvent(req.scope), wire.parseEvent(req.invite)) };
   case "open": {
     const from = await wire.parsePublic(JSON.parse(req.from));
     return { inner: await wire.open(req.envelope, keys, req.self || address, from) };

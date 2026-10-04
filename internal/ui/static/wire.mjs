@@ -1662,6 +1662,7 @@ function marshalEvent(e, withSig) {
   if (e.note) s += ',"note":' + goString(e.note);
   if (e.group) s += ',"group":{"seq":' + goInt(e.group.seq,"group sequence") + ',"hash":' + goString(e.group.hash) + ',"host_role":' + goString(e.group.host_role) + (e.group.host_admission ? ',"host_admission":' + goString(e.group.host_admission) : "") + (e.group.task_admissions?.length ? ',"task_admissions":' + goStrings(e.group.task_admissions) : "") + "}";
   if (e.role) s += ',"role":' + goString(e.role);
+  if (e.until) s += ',"until":' + goInt(e.until, "end time");
   return s + sigJSON(e, withSig) + "}";
 }
 export const eventJSON = (e) => marshalEvent(e, true);
@@ -1711,11 +1712,14 @@ export function validateEvent(e) {
   if (a.group_admission && !validHash(a.group_admission)) throw new Error("participation: invalid author group admission");
   if (!validAddress(a.address)) throw new Error("participation: invalid address " + a.address);
   if (!eventTypes.has(e.type)) throw new Error("participation: unknown event type " + e.type);
+  const room = e.audience === "room"; // ROOM_V1 §2.2
+  if (e.until != null && (!Number.isSafeInteger(e.until) || e.until < 0 || e.until !== 0 && (!room || !["invite", "scope"].includes(e.type)))) throw new Error("participation: only a room invitation and its scope have an end time");
   if (e.type === "invite") {
     if (e.role && e.role !== "human") throw new Error("participation: unknown role");
-    if (e.role === "human" && (e.host?.agent_id || e.task_keys?.length || e.group || a.group_admission)) throw new Error("participation: human invite carries no agent or group authority");
-    if (e.prev !== "" || !e.host || e.audience !== "conversation") {
-      throw new Error("participation: an invite has no prev, and names a host and the conversation audience");
+    // A human guest has no executor or task authority; in a group it is a room visitor.
+    if (e.role === "human" && (e.host?.agent_id || e.task_keys?.length || (e.group || a.group_admission) && (!room || !e.group || e.group.host_role !== "visitor" || e.group.task_admissions?.length))) throw new Error("participation: a human guest has no executor or task authority, and in a group is a room visitor");
+    if (e.prev !== "" || !e.host || e.audience !== "conversation" && !room) {
+      throw new Error("participation: an invite has no prev, and names a host and the conversation or room audience");
     }
     if (!validID(e.host.person) || !validFingerprint(e.host.fingerprint) || e.host.agent_id && !validID(e.host.agent_id)) throw new Error("participation: invalid host");
     if (!validAddress(e.host.address)) throw new Error("participation: host: invalid address " + e.host.address);
@@ -1731,9 +1735,12 @@ export function validateEvent(e) {
     if (!noteText.test(e.note)) throw new Error("participation: note has a control character");
     return;
   }
-  if (e.type === "scope") { // the invite's public projection: never its grant, task keys or note
-    if (!validHash(e.prev) || !e.host || e.audience !== "conversation" || e.grant !== null || e.task_keys !== null || e.note !== "" || e.group || a.group_admission ||
+  if (e.type === "scope") { // the invite's public projection: never its grant, task keys or note; a room's also its group binding, never its task admissions
+    if (!validHash(e.prev) || !e.host || e.audience !== "conversation" && !room || e.grant !== null || e.task_keys !== null || e.note !== "" || !room && (e.group || a.group_admission) ||
       (e.role && e.role !== "human") || (e.role === "human" && e.host.agent_id)) throw new Error("participation: a scope names its invite, host, agent and role only");
+    const g = e.group;
+    if (g && (!(g.seq >= 0) || !validHash(g.hash) || !validHash(a.group_admission) || !["member", "visitor"].includes(g.host_role) || (g.host_role === "member" && !validHash(g.host_admission)) ||
+      (g.host_role === "visitor" && g.host_admission) || g.task_admissions?.length || e.role === "human" && g.host_role !== "visitor") || !g && a.group_admission) throw new Error("participation: malformed room scope group binding");
     if (!validID(e.host.person) || !validFingerprint(e.host.fingerprint) || e.host.agent_id && !validID(e.host.agent_id)) throw new Error("participation: invalid host");
     if (!validAddress(e.host.address)) throw new Error("participation: host: invalid address " + e.host.address);
     return;
@@ -1755,7 +1762,7 @@ export async function signEvent(keys, fields) {
 
 export function parseEvent(json) {
   const f = strictRecord(json, MaxParticipationEvent, "participation", { v: "int", conv: "string", pid: "string", type: "string", prev: "string",
-    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", sig: "string" });
+    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", until: "int", sig: "string" });
   const a = strict(f.author || {}, "participation author", { person: "string", roster: "string", address: "string", fingerprint: "string", group_admission: "string" });
   const h = f.host ? strict(f.host, "participation host", { person: "string", address: "string", fingerprint: "string", agent_id: "string" }) : null;
   const group = f.group ? strict(f.group,"participation group",{seq:"int",hash:"string",host_role:"string",host_admission:"string",task_admissions:"array"}) : null;
@@ -1766,24 +1773,24 @@ export function parseEvent(json) {
     host: h ? { person: h.person || "", address: h.address || "", fingerprint: h.fingerprint || "", ...(h.agent_id ? { agent_id: h.agent_id } : {}) } : null,
     grant: f.grant ? f.grant.map((g) => { const x = strict(g, "participation grant", { lid: "string", fingerprint: "string" });
       return { lid: x.lid || "", fingerprint: x.fingerprint || "" }; }) : null,
-    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
+    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(f.until ? { until: f.until } : {}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
   validateEvent(e);
   fitsRecord(eventJSON(e), MaxParticipationEvent, "participation");
   return e;
 }
 
-// scopeOf is protocol.ScopeOf: the unsigned public projection of DM invite
-// inv, for its author to sign. projects is ParticipationEvent.Projects.
-export async function scopeOf(inv, ts) {
-  return { v: 1, conv: inv.conv, pid: inv.pid, type: "scope", prev: await eventHash(inv), author: { ...inv.author }, ts, host: { ...inv.host },
-    grant: null, audience: "conversation", task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}) };
-}
-export async function projects(s, inv) {
-  const same = (x, y) => x.person === y.person && x.address === y.address && x.fingerprint === y.fingerprint && (x.agent_id || "") === (y.agent_id || "");
-  return s.type === "scope" && inv.type === "invite" && !!inv.host && !!s.host && s.conv === inv.conv && s.pid === inv.pid && s.prev === await eventHash(inv) &&
-    same(s.author, inv.author) && roster(s.author) === roster(inv.author) && same(s.host, inv.host) && (s.role || "") === (inv.role || "") && !inv.group;
-}
-const roster = (a) => a.roster + "/" + (a.group_admission || "");
+// scopeOf is protocol.ScopeOf: the unsigned public projection of invite inv
+// (its hash invHash, when known), for its author to sign; a room's also
+// names its end time and group binding, never its task admissions.
+// projects is ParticipationEvent.Projects, sameScope protocol.SameScope;
+// projectsHash is projects with the invite's hash known (synchronous).
+export const scopeOfHash = (inv, invHash, ts) => ({ v: 1, conv: inv.conv, pid: inv.pid, type: "scope", prev: invHash, author: { ...inv.author }, ts, host: { ...inv.host },
+  grant: null, audience: inv.audience, task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}), ...(inv.until ? { until: inv.until } : {}),
+  ...(inv.group ? { group: { seq: inv.group.seq, hash: inv.group.hash, host_role: inv.group.host_role, ...(inv.group.host_admission ? { host_admission: inv.group.host_admission } : {}), task_admissions: null } } : {}) });
+export async function scopeOf(inv, ts) { return scopeOfHash(inv, await eventHash(inv), ts); }
+export const sameScope = (x, y) => marshalEvent({ ...x, ts: 1 }, false) === marshalEvent({ ...y, ts: 1 }, false);
+export const projectsHash = (s, inv, invHash) => s.type === "scope" && inv.type === "invite" && !!inv.host && !!s.host && (!inv.group || inv.audience === "room") && sameScope(s, scopeOfHash(inv, invHash, s.ts));
+export async function projects(s, inv) { return projectsHash(s, inv, await eventHash(inv)); }
 
 export async function verifyEvent(e, authorKey) {
   validateEvent(e);

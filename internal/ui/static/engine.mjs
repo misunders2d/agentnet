@@ -5922,7 +5922,7 @@ export class Engine {
       const g=await this.groupRead(checks,"kv","group/"+c.id);
       for(const {e,hash} of events || await this.convEvents(c.id)) {
         const scope=e.group, author=out.get(e.author.person), record=scope && g.records[scope.seq] && wire.parseGroupCommit(g.records[scope.seq]);
-        if(e.type!=="invite" || !scope || !record || record.hash!==scope.hash || scope.seq>packet.state.seq || !author || out.epochs.get(e.author.fingerprint)!==e.author.group_admission)continue;
+        if(e.type!=="invite"&&e.type!=="scope" || !scope || !record || record.hash!==scope.hash || scope.seq>packet.state.seq || !author || out.epochs.get(e.author.fingerprint)!==e.author.group_admission)continue; // a room scope carries its invite's binding
         const host=out.get(e.host.person), isMember=!!host;
         if(scope.host_role==="member" ? !isMember || out.epochs.get(e.host.fingerprint)!==scope.host_admission : scope.host_role!=="visitor" || isMember || scope.host_admission)continue;
         if((e.task_keys || []).some((fp,i)=>!out.epochs.get(fp)||out.epochs.get(fp)!==scope.task_admissions?.[i]))continue;
@@ -5969,7 +5969,7 @@ export class Engine {
   // with the members as pinned now. A record that does not count is held:
   // it has no effect until its evidence is here.
   resolveAgent(pid, evs, m) {
-    const info = { pid, role: "", state: "pending", held: 0, host: null, inviter: null, grant: [], taskKeys: [], note: "", invite: "", scope: "", decision: "", dismissal: "", conflict: "", invited: 0 };
+    const info = { pid, role: "", state: "pending", held: 0, host: null, inviter: null, grant: [], taskKeys: [], note: "", invite: "", scope: "", decision: "", dismissal: "", conflict: "", invited: 0, audience: "", until: 0 };
     // A current device of a member person (the person as seen from it);
     // an author also names a step of that person's chain.
     const at = (p, address, fp) => (p && p.devices.some((d) => d.address === address && d.fingerprint === fp) ? { ...p, address, fingerprint: fp } : null);
@@ -5985,21 +5985,19 @@ export class Engine {
       if (x.e.type === "invite") {
         if (!host(x.e.host) || !(x.e.task_keys || []).every(memberKey) || (m.group ? !m.groupInvites.has(x.hash) : !!x.e.group)) { info.held++; continue; }
         invites.set(x.hash, x);
-      } else if (x.e.type === "scope") { if (!m.group) scopes.push(x); } // a DM invite's public projection, by its own author
+      } else if (x.e.type === "scope") { if (!m.group || m.groupInvites.has(x.hash)) scopes.push(x); } // an invite's public projection, by its own author; in a group, a room scope whose binding verifies
       else if (x.e.type === "dismiss") dismisses.push(x);
       else decisions.push(x);
     }
     // Without the invite itself (another guest, an outside assistant host), its
     // author's scope stands for it: host, agent and role, never grant, task
     // keys or note. Holding the invite, only its exact projection counts.
-    const sameDev = (x, y) => x.person === y.person && x.address === y.address && x.fingerprint === y.fingerprint && (x.agent_id || "") === (y.agent_id || "");
-    const sameAuthor = (x, y) => sameDev(x, y) && x.roster === y.roster && (x.group_admission || "") === (y.group_admission || "");
     if (!invites.size && scopes.length) {
       const s = scopes.reduce((a, b) => (b.hash < a.hash ? b : a));
-      const agree = scopes.every(x => x.e.prev === s.e.prev && sameAuthor(x.e.author, s.e.author) && sameDev(x.e.host, s.e.host) && (x.e.role || "") === (s.e.role || ""));
+      const agree = scopes.every(x => wire.sameScope(x.e, s.e)); // protocol.SameScope: audience, end time and group binding too
       if (!agree) return Object.assign(info, { state: "conflict", conflict: "different invitation scopes share this participation id" });
       if (host(s.e.host)) {
-        invites.set(s.e.prev, { e: { v: 1, conv: s.e.conv, pid, type: "invite", prev: "", author: s.e.author, ts: s.e.ts, host: s.e.host, grant: null, audience: s.e.audience, task_keys: null, note: "", ...(s.e.role ? { role: s.e.role } : {}) }, hash: s.e.prev });
+        invites.set(s.e.prev, { e: { v: 1, conv: s.e.conv, pid, type: "invite", prev: "", author: s.e.author, ts: s.e.ts, host: s.e.host, grant: null, audience: s.e.audience, task_keys: null, note: "", ...(s.e.role ? { role: s.e.role } : {}), ...(s.e.until ? { until: s.e.until } : {}), ...(s.e.group ? { group: s.e.group } : {}) }, hash: s.e.prev });
         info.scope = s.hash;
       } else info.held++;
     }
@@ -6007,8 +6005,8 @@ export class Engine {
     let inv = null;
     if (invites.size === 1) {
       [[info.invite, inv]] = [...invites];
-      if (!info.scope) for (const s of scopes) if (s.e.prev === info.invite && sameAuthor(s.e.author, inv.e.author) && sameDev(s.e.host, inv.e.host) && (s.e.role || "") === (inv.e.role || "") && !inv.e.group && (!info.scope || s.hash < info.scope)) info.scope = s.hash;
-      Object.assign(info, { role: inv.e.role || "", host: host(inv.e.host), inviter: author(inv.e.author), grant: inv.e.grant || [], taskKeys: inv.e.task_keys || [],
+      if (!info.scope) for (const s of scopes) if (wire.projectsHash(s.e, inv.e, info.invite) && (!info.scope || s.hash < info.scope)) info.scope = s.hash;
+      Object.assign(info, { role: inv.e.role || "", host: host(inv.e.host), inviter: author(inv.e.author), grant: inv.e.grant || [], taskKeys: inv.e.task_keys || [], audience: inv.e.audience || "", until: inv.e.until || 0,
         external: m.group ? inv.e.group.host_role === "visitor" : !m.has(inv.e.host.person),
         ...(m.group ? {group:inv.e.group} : {}),
         ...(inv.e.host.agent_id ? { agent_id: inv.e.host.agent_id } : {}), note: inv.e.note, invited: inv.e.ts, state: "invited" });
@@ -6033,6 +6031,8 @@ export class Engine {
       if (info.state !== "dismissed" || x.hash < info.dismissal) { info.dismissal = x.hash; info.dismissalEvent = wire.eventJSON(x.e); }
       info.state = "dismissed";
     }
+    // A room's end time, by this device's clock (ROOM_V1 §2.2): past it, it counts as ended; it orders nothing.
+    if (info.until > 0 && ["invited", "active"].includes(info.state) && Math.floor(this.now() / 1000) > info.until) info.state = "dismissed";
     return info;
   }
 
