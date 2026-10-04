@@ -34,11 +34,28 @@ jobs:
       # Expanded suite needs time on slow CI disks; individual assertions stay bounded.
       - name: test (real binaries and processes on this OS)
         run: go test -count=1 -timeout 1800s ./...
-      - name: race
-        if: runner.os == 'Linux'
-        run: go test -race -count=1 -timeout 3600s ./...
+  # The race suite on Linux, split over parallel runners: internal/client's
+  # tests in six shards (scripts/race-shard.sh), every other package in one.
+  race:
+    if: ${{ !inputs.windows_task_probe }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [client-0, client-1, client-2, client-3, client-4, client-5, others]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          package-manager-cache: false
+      - name: race (${{ matrix.shard }})
+        run: scripts/race-shard.sh ${{ matrix.shard }} 6
       - name: browser storage (real IndexedDB, headless)
-        if: runner.os == 'Linux'
+        if: matrix.shard == 'others'
         shell: bash
         run: |
           export AGENTNET_CHROME="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium)"
