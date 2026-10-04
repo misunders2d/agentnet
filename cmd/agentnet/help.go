@@ -735,8 +735,9 @@ requests waiting here from their own messenger: accept, decline, reply,
 resolve, stop. The grant names that device's exact pinned key, is made
 here only, and nothing received can make or widen it. Granted operators
 receive this machine's review reports with the waiting requests named
-(id, sender, kind, state, first line); "agentnet review-to" alone still
-gets a count and nothing more. Each decision is applied once, in the state
+(id, sender, kind, state, first line), except interrupted ones for now: an
+older operator device drops a whole report naming one (inbox --review here
+lists them). "agentnet review-to" alone still gets a count and nothing more. Each decision is applied once, in the state
 the operator saw; a repeated or stale one is refused and the operator is
 told what the request's state is now.
 `,

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -157,13 +158,20 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		return
 	}
 	feats, ferr := a.relayFeatures(ctx)
-	countText := fmt.Sprintf("%d request(s) wait for a person's decision on %s. Review there: agentnet inbox --review", len(items), a.Address)
 	for _, to := range recipients {
+		list := items
+		if isOperator[to] {
+			// An operator device of an older version (v0.6.2) drops a whole
+			// report naming an interrupted request, and with it the alert
+			// for everything else waiting here: until operators have
+			// updated, they are not told of those (review here lists them).
+			list = slices.DeleteFunc(slices.Clone(items), func(it ReportItem) bool { return it.State == stateInterrupt })
+		}
 		// Each recipient is told once per item (reported): a recipient
 		// added later gets what waits now, and one that could not be told
 		// keeps its items pending, whatever happened with the others.
 		var ids []string
-		for _, it := range items {
+		for _, it := range list {
 			var n int
 			a.store.db.QueryRow(`SELECT count(*) FROM reported WHERE item = ? AND recipient = ?`, it.ID, to).Scan(&n)
 			if n == 0 && !a.reviewTried[to+"\x00"+it.ID] {
@@ -179,12 +187,12 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		// The requests themselves go only to a granted operator that reads
 		// reports; the review destination alone learns the count and no
 		// more, as before (no identity or request state by accident).
-		body := countText
+		body := fmt.Sprintf("%d request(s) wait for a person's decision on %s. Review there: agentnet inbox --review", len(list), a.Address)
 		reportKey := ""
 		if isOperator[to] && ferr == nil {
 			if key, err := a.sendKey(ctx, to); err == nil {
 				if ok, _ := a.capSupport(ctx, to, key, feats, protocol.CapHeadless); ok {
-					body = a.reportBody(items)
+					body = a.reportBody(list)
 					reportKey = key.Fingerprint()
 				}
 			}
@@ -232,7 +240,7 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		}
 		if _, err := a.SendMessage(ctx, Outgoing{To: to, Kind: envelope.KindMessage, Status: envelope.StatusReviewNotice, Body: body, claim: claim}); err != nil {
 			if !errors.Is(err, errNoNewReview) {
-				a.Logf("review notice to %s not queued (%v); %d item(s) wait: see `agentnet inbox --review`", to, err, len(items))
+				a.Logf("review notice to %s not queued (%v); %d item(s) wait: see `agentnet inbox --review`", to, err, len(list))
 				a.noteReviewFailure(to, gen, err.Error()) // doctor says so
 			}
 			continue

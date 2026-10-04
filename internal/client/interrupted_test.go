@@ -1,6 +1,7 @@
 package client
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -106,5 +107,60 @@ func TestInterruptedAgentRequestNeedsYou(t *testing.T) {
 	}
 	if r, ok := needsYou(t, w.bob, pid, id); ok {
 		t.Fatalf("a closed request is still listed: %+v", r)
+	}
+}
+
+// An operator device of an older version (v0.6.2) drops a whole report
+// that names an interrupted request, and with it the desktop alert for
+// everything else that waits there. Until operators have updated, their
+// reports leave interrupted requests out; everything else is still named
+// (review finding 2).
+func TestOperatorReportLeavesInterruptedOut(t *testing.T) {
+	w := newWorld(t, "")
+	dave := mustJoin(t, filepath.Join(t.TempDir(), "dave"), w.aliceInvites("dave"), "desk") // the requester
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	runAgent(t, dave)
+	stopped, err := dave.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "wrap the 400 cases", Kind: envelope.KindTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, stopped.ID, stateAwaiting)
+	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateRunning, stopped.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.store.interruptRunning(); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, stopped.ID, stateInterrupt)
+	waiting, err := dave.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "label the pallets", Kind: envelope.KindTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, waiting.ID, stateAwaiting)
+	if _, err := w.bob.Send(tctx(t), w.alice.Address, "hi", ""); err != nil { // pins alice's key
+		t.Fatal(err)
+	}
+	if _, err := w.bob.GrantOperator(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the operator's report", func() bool {
+		for _, m := range mustNotices(t, w.alice) {
+			if r, ok := w.alice.NoticeReport(m); ok && slices.ContainsFunc(r.Items, func(it ReportItem) bool { return it.ID == waiting.ID }) {
+				return true
+			}
+		}
+		return false
+	})
+	for _, m := range mustNotices(t, w.alice) {
+		r, ok := w.alice.NoticeReport(m)
+		if !ok {
+			continue
+		}
+		for _, it := range r.Items {
+			if it.State != stateAwaiting && it.State != stateHeld && it.State != stateNeedHuman { // what v0.6.2 reads
+				t.Fatalf("an operator's report names a request in state %s, for which an older operator device drops the report: %+v", it.State, r.Items)
+			}
+		}
 	}
 }
