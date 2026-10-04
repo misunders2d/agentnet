@@ -28,7 +28,7 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 	}
 	m.groupInvites = map[string]bool{}
 	for _, ev := range events {
-		if ev.Type == protocol.EventInvite && m.group != nil {
+		if (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) && m.group != nil { // a room scope carries its invite's binding
 			valid, err := m.verifyInviteEpoch(q, ev)
 			if err != nil {
 				return err

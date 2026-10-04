@@ -580,6 +580,13 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	if required == "" && receiverCap {
 		required = protocol.CapReplyReceiver
 	}
+	room, err := roomCopy(a.store.db, conv, sub, body, humanRaw)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if required == "" && room {
+		required = protocol.CapRoom
+	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
 		if err == nil && required == protocol.CapAgentReaction && capturedFP != "" && key.Fingerprint() != capturedFP {
@@ -605,6 +612,10 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			}
 			if err == nil && required == protocol.CapAgentReaction && humanRaw != "" { // to a captured audience: as a human-audience turn
 				err = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation)
+			}
+			// A room shape needs rm1 besides its primary requirement (ROOM_V1 §2.5).
+			if err == nil && room && required != protocol.CapRoom {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapRoom)
 			}
 			control := env.V == envelope.Version3 && groupControlSub(sub)
 			status := sub == envelope.SubStatus

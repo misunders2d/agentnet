@@ -54,6 +54,16 @@ const CapExternalParticipation = "apx1"
 const CapHumanParticipation = "hgp1"
 const RoleHuman = "human"
 
+// CapRoom means the device reads room participation (ROOM_V1 §2): the room
+// audience on participation events and their Until, a captured audience
+// (envelope.HumanTurn) on group turns and on turns an agent participant
+// authors, and edits carrying it. A session that lists it also reads every
+// capability RoomImplies names, so later programs may stop listing those.
+const CapRoom = "rm1"
+
+// RoomImplies are the capabilities CapRoom implies (CapsRecord.Reads).
+var RoomImplies = []string{CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear}
+
 // Participation event types.
 const (
 	EventInvite  = "invite"
@@ -65,6 +75,12 @@ const (
 
 // AudienceConversation: the agent's outputs go to the DM (its members).
 const AudienceConversation = "conversation"
+
+// AudienceRoom: a room participation (ROOM_V1 §1, CapRoom): a follower agent
+// (no role) of a DM or group, or a person guest of a group (RoleHuman, host
+// role visitor). While active it sees its grant and every turn captured for
+// it (envelope.HumanTurn); Until may end it.
+const AudienceRoom = "room"
 
 // Bounds of a participation event.
 const (
@@ -121,11 +137,12 @@ type ParticipationEvent struct {
 	// Invite only.
 	Host     *ParticipationHost  `json:"host,omitempty"`
 	Grant    []GrantRef          `json:"grant,omitempty"`     // earlier messages of this DM the agent may be given
-	Audience string              `json:"audience,omitempty"`  // AudienceConversation
+	Audience string              `json:"audience,omitempty"`  // AudienceConversation or AudienceRoom
 	TaskKeys []string            `json:"task_keys,omitempty"` // member key fingerprints allowed follow-up tasks here
 	Note     string              `json:"note,omitempty"`      // shown to the host's person
 	Group    *ParticipationGroup `json:"group,omitempty"`
-	Role     string              `json:"role,omitempty"` // invite only; absent retains legacy agent semantics
+	Role     string              `json:"role,omitempty"`  // invite only; absent retains legacy agent semantics
+	Until    int64               `json:"until,omitempty"` // room invite and scope only: past it, by the reader's own clock, the participation counts as ended; it orders nothing
 
 	Sig []byte `json:"sig,omitempty"`
 }
@@ -160,16 +177,23 @@ func (e ParticipationEvent) Validate() error {
 	if _, _, err := SplitAddress(a.Address); err != nil {
 		return fmt.Errorf("participation: %w", err)
 	}
+	room := e.Audience == AudienceRoom
+	if e.Until < 0 || e.Until != 0 && (!room || e.Type != EventInvite && e.Type != EventScope) {
+		return errors.New("participation: only a room invitation and its scope have an end time")
+	}
 	switch e.Type {
 	case EventInvite:
 		if e.Role != "" && e.Role != RoleHuman {
 			return errors.New("participation: unknown role")
 		}
-		if e.Role == RoleHuman && (e.Host == nil || e.Host.AgentID != "" || len(e.TaskKeys) != 0 || e.Group != nil || a.GroupAdmission != "") {
-			return errors.New("participation: a human guest has no executor, task or group authority")
+		// A human guest has no executor or task authority; in a group it is
+		// a room visitor (ROOM_V1 §2.2).
+		if e.Role == RoleHuman && (e.Host == nil || e.Host.AgentID != "" || len(e.TaskKeys) != 0 ||
+			(e.Group != nil || a.GroupAdmission != "") && (!room || e.Group == nil || e.Group.HostRole != "visitor" || len(e.Group.TaskAdmissions) != 0)) {
+			return errors.New("participation: a human guest has no executor or task authority, and in a group is a room visitor")
 		}
-		if e.Prev != "" || e.Host == nil || e.Audience != AudienceConversation {
-			return errors.New("participation: an invite has no prev, and names a host and the conversation audience")
+		if e.Prev != "" || e.Host == nil || e.Audience != AudienceConversation && !room {
+			return errors.New("participation: an invite has no prev, and names a host and the conversation or room audience")
 		}
 		h := e.Host
 		if !ValidID(h.Person) || !ValidFingerprint(h.Fingerprint) || (h.AgentID != "" && !ValidAgentID(h.AgentID)) {
@@ -210,9 +234,16 @@ func (e ParticipationEvent) Validate() error {
 			}
 		}
 	case EventScope:
-		if !ValidHash(e.Prev) || e.Host == nil || e.Audience != AudienceConversation || e.Grant != nil || e.TaskKeys != nil || e.Note != "" || e.Group != nil || a.GroupAdmission != "" ||
-			e.Role != "" && e.Role != RoleHuman || e.Role == RoleHuman && e.Host.AgentID != "" {
+		// A room scope also names its invitation's group binding, never its
+		// task admissions (ScopeOf).
+		if !ValidHash(e.Prev) || e.Host == nil || e.Audience != AudienceConversation && !room || e.Grant != nil || e.TaskKeys != nil || e.Note != "" ||
+			!room && (e.Group != nil || a.GroupAdmission != "") || e.Role != "" && e.Role != RoleHuman || e.Role == RoleHuman && e.Host.AgentID != "" {
 			return errors.New("participation: a scope names its invite, host, agent and role only")
+		}
+		if g := e.Group; g != nil && (g.Seq < 0 || !ValidHash(g.Hash) || !ValidHash(a.GroupAdmission) || (g.HostRole != "member" && g.HostRole != "visitor") ||
+			(g.HostRole == "member" && !ValidHash(g.HostAdmission)) || (g.HostRole == "visitor" && g.HostAdmission != "") || len(g.TaskAdmissions) != 0 || e.Role == RoleHuman && g.HostRole != "visitor") ||
+			g == nil && a.GroupAdmission != "" {
+			return errors.New("participation: malformed room scope group binding")
 		}
 		h := e.Host
 		if !ValidID(h.Person) || !ValidFingerprint(h.Fingerprint) || (h.AgentID != "" && !ValidAgentID(h.AgentID)) {
@@ -231,18 +262,35 @@ func (e ParticipationEvent) Validate() error {
 	return nil
 }
 
-// ScopeOf is the unsigned public projection of the DM invite inv, for its
-// author to sign: no grant, task keys or note.
+// ScopeOf is the unsigned public projection of the invite inv, for its
+// author to sign: its host, agent, role and audience, and for a room its
+// end time and group binding; no grant, task keys (or their admissions) or
+// note.
 func ScopeOf(inv ParticipationEvent, ts int64) ParticipationEvent {
 	host := *inv.Host
-	return ParticipationEvent{V: 1, Conv: inv.Conv, PID: inv.PID, Type: EventScope, Prev: inv.Hash(), Author: inv.Author, TS: ts,
-		Host: &host, Audience: AudienceConversation, Role: inv.Role}
+	s := ParticipationEvent{V: 1, Conv: inv.Conv, PID: inv.PID, Type: EventScope, Prev: inv.Hash(), Author: inv.Author, TS: ts,
+		Host: &host, Audience: inv.Audience, Role: inv.Role, Until: inv.Until}
+	if g := inv.Group; g != nil {
+		s.Group = &ParticipationGroup{Seq: g.Seq, Hash: g.Hash, HostRole: g.HostRole, HostAdmission: g.HostAdmission}
+	}
+	return s
 }
 
-// Projects reports whether scope s is exactly the public projection of inv.
+// Projects reports whether scope s is exactly the public projection of inv
+// (ScopeOf, at s's time). A group invitation to the conversation audience
+// has none.
 func (s ParticipationEvent) Projects(inv ParticipationEvent) bool {
-	return s.Type == EventScope && inv.Type == EventInvite && inv.Host != nil && s.Host != nil && s.Conv == inv.Conv && s.PID == inv.PID &&
-		s.Prev == inv.Hash() && s.Author == inv.Author && *s.Host == *inv.Host && s.Role == inv.Role && inv.Group == nil
+	if s.Type != EventScope || inv.Type != EventInvite || inv.Host == nil || s.Host == nil || inv.Group != nil && inv.Audience != AudienceRoom {
+		return false
+	}
+	return SameScope(s, ScopeOf(inv, s.TS))
+}
+
+// SameScope reports whether scopes x and y project the same invitation
+// identically: equal but for their time and signature.
+func SameScope(x, y ParticipationEvent) bool {
+	x.TS, y.TS = 0, 0
+	return string(x.Canonical()) == string(y.Canonical())
 }
 
 // Verify checks e and that authorKey, the author device's key, signed it.

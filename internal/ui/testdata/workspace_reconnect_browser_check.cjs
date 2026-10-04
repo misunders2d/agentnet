@@ -1,7 +1,11 @@
 // BUG-19 rendered check: the host's workspace bar (real loader.js, real
-// workspaces.mjs) over a synthetic program API. Disconnecting a joined
-// workspace points to Reconnect, not to joining again; Reconnect lists the
-// disconnected membership and routes that same one again under a new handle.
+// workspaces.mjs) over a synthetic program API, under the previous
+// interface (the default messenger draws its own switcher, so the host's
+// bar is drawn over any other one). Disconnecting a joined workspace points
+// to Reconnect, not to joining again; Reconnect lists the disconnected
+// membership and routes that same one again under a new handle. An
+// interface does the same through host.workspaces.disconnected() and
+// reconnect(id).
 // Uses an installed Playwright via AGENTNET_PLAYWRIGHT; no existing browser
 // is attached. Optional AGENTNET_SCREENSHOTS writes only to that directory.
 const fs = require('fs'), http = require('http'), path = require('path'), assert = require('node:assert/strict');
@@ -39,7 +43,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u.pathname === '/') return send(200, 'text/html', '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/core.css"><div id="skin"></div><script src="/assets/loader.js"></script>');
-  if (u.pathname === '/assets/skins/index.json') return json([{ id: 'default', api: 1, name: 'AgentNet' }]);
+  if (u.pathname === '/assets/skins/index.json') return json([{ id: 'default', api: 1, name: 'AgentNet' }, { id: 'classic', api: 1, name: 'Previous interface' }]);
   if (u.pathname === '/assets/default.html') return send(200, 'text/html', '<body><h1>Default fixture</h1></body>');
   if (['/assets/app.js', '/assets/lenses.js'].includes(u.pathname)) return send(200, 'text/javascript', '');
   if (u.pathname === '/assets/app.css') return send(200, 'text/css', '');
@@ -66,7 +70,7 @@ const server = http.createServer((req, res) => {
       page.on('console', (m) => { if (['error', 'warning'].includes(m.type()) && !m.text().startsWith('Failed to load resource')) errors.push(m.type() + ': ' + m.text()); });
       page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && !['/favicon.ico', '/assets/local-skins.mjs'].includes(p)) errors.push(r.status() + ' ' + p); }); // optional files an older program lacks
       page.on('dialog', (d) => d.accept());
-      await page.goto(origin + '/');
+      await page.goto(origin + '/?skin=classic');
       const select = page.getByLabel('Active workspace', { exact: true });
       await select.waitFor();
       const options = () => select.locator('option').evaluateAll((os) => os.map((o) => o.value));
@@ -109,10 +113,25 @@ const server = http.createServer((req, res) => {
       await tool('Reconnect…');
       await page.waitForFunction(() => document.querySelector('#workspace-shell .workspace-note').textContent === 'No disconnected workspace here.');
       assert.equal(await page.locator('.workspace-reconnect').count(), 0);
+
+      // The host an interface gets: host.workspaces lists the memberships
+      // disconnected here (list() leaves them out) and reconnects one.
+      const before = state.acme.handle;
+      await tool('Disconnect…');
+      await page.waitForFunction(() => /Disconnected from Acme/.test(document.querySelector('#workspace-shell .workspace-note').textContent));
+      const viaHost = await page.evaluate(async (id) => {
+        const w = window.agentnet.workspaces, gone = await w.disconnected();
+        const listed = w.list().some((x) => x.id === id);
+        await w.reconnect(id);
+        return { gone: gone.map((x) => [x.id, x.state, x.name]), listed, has: w.has(id) };
+      }, other);
+      assert.deepEqual(viaHost, { gone: [[other, 'disconnected', 'Acme']], listed: false, has: true }, name + ': host.workspaces');
+      assert.deepEqual(state.posts.slice(2).map((p) => [p.path, p.body.id]), [['/api/workspaces/disconnect', other], ['/api/workspaces/reconnect', other]]);
+      assert.notEqual(state.acme.handle, before, name + ': the same membership under a new handle');
       assert.deepEqual(errors, [], name + ': page errors');
       await page.close();
     }
-    console.log('workspace reconnect check PASS: desktop/390, disconnect note points to Reconnect, same membership under a new handle, nothing left to reconnect');
+    console.log('workspace reconnect check PASS: desktop/390, disconnect note points to Reconnect, same membership under a new handle, nothing left to reconnect, host.workspaces disconnected()/reconnect(id)');
   } finally {
     if (browser) await browser.close();
     await new Promise((r) => server.close(r));

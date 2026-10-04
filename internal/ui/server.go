@@ -94,6 +94,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/topics", s.topics)                           // livetopics.go: one page of topics
 	mux.HandleFunc("POST /api/topic/{what}", s.changeTopic)               // rename, done, reopen (this device only)
 	mux.HandleFunc("POST /api/operator/decide", s.decide)
+	mux.HandleFunc("GET /api/approvals", s.approvals) // liveapprovals.go: standing grants, as agentnet approvals lists them
+	mux.HandleFunc("POST /api/approvals/revoke", s.revokeApproval)
 	mux.HandleFunc("GET /api/drive", s.drive) // drivespace.go: a conversation's shared Drive space
 	mux.HandleFunc("POST /api/drive", s.drive)
 	mux.HandleFunc("POST /api/drive/upload", s.driveUpload)

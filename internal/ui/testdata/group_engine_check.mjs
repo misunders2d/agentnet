@@ -92,7 +92,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    check((await w.e.groupThread(conv)).messages.find(m=>m.id===pv[role+'-question'].inner.id)?.exec?.state==='running','native '+role+' status bound to exact request host');
    await w.receive(pv[role+'-answer']);
    const shown=await w.e.groupThread(conv),answer=shown.messages.find(m=>m.agent_id===pv[role+'-agent']&&m.kind==='answer');
-   check(!!answer&&answer.pid===pv[role+'-pid']&&answer.reply_to===pv[role+'-question'].inner.lid,'native '+role+' output exact PID AgentID shared request LID');
+   check(!!answer&&answer.pid===pv[role+'-pid']&&answer.reply_to===pv[role+'-question'].inner.id&&shown.messages.find(m=>m.id===answer.reply_to)?.lid===pv[role+'-question'].inner.lid,'native '+role+' output exact PID AgentID linked to its shared request LID as shown');
    check(!shown.messages.find(m=>m.id===pv[role+'-question'].inner.id)?.exec,'native '+role+' answer supersedes running snapshot status');
    await w.receive(pv[role+'-wrong-agent']);check((await w.st.get('held',pv[role+'-wrong-agent'].inner.id))?.reason==='invalid','native '+role+' wrong named output refused');
    // The assistant's own reaction: its exact host, PID and agent; stored only

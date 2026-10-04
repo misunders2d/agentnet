@@ -48,6 +48,11 @@ type ThreadSummary struct {
 	Renamed     bool   `json:"renamed,omitempty"`
 	AutoTitle   string `json:"auto_title,omitempty"`
 
+	// AgentID is the thread's agent when one is named: the latest a request
+	// names as its target, or an answer, result or progress as its author
+	// (as admission bound them); never a received request's local executor.
+	AgentID string `json:"agent_id,omitempty"`
+
 	lastID, conclusionID, custom string // what topicText reads, and the name set here
 }
 
@@ -62,6 +67,8 @@ type threadRow struct {
 	notice   bool // in only: a review notice (see envelope.StatusReviewNotice)
 	replied  bool // out only: a received message replies to it
 	selected bool // in only: local receiver input, not a remote execution job
+	// agent is the agent it names: a request's target, an output's author.
+	agent string
 }
 
 // Threads lists every thread with every peer, archived topics included,
@@ -176,13 +183,17 @@ func (s *store) conversationPeers() ([]string, error) {
 }
 
 // threadRows reads direction, kind, state and read state for every
-// device-history message exchanged with peer, and which sent questions or
-// tasks have a reply.
+// device-history message exchanged with peer, which sent questions or
+// tasks have a reply, and the agent each names: a request's target agent,
+// or an output's author (a received request's agent_id is its local
+// executor, never its sender's word).
 func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
-	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedInFor("inbox"),
+	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id),
+		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END
+		FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedInFor("inbox"),
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
@@ -191,7 +202,7 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	for rows.Next() {
 		var r threadRow
 		var status string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -205,14 +216,15 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, '') FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
+	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, '')
+		FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent); err != nil {
 			return nil, err
 		}
 		r.replied = replies[r.id]

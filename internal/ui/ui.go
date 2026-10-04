@@ -243,6 +243,25 @@ type DMSummary struct {
 	Unread  int               `json:"unread"`
 	Held    int               `json:"held"`    // their questions or tasks held for the person; nothing runs them
 	Waiting int               `json:"waiting"` // messages kept here because they cannot read conversations now
+	// Guests are the participations active in it now: people and agents
+	// brought in to help (GuestView, AgentView). Decide counts its requests
+	// waiting for this device's person's decision here (Overview.NeedsYou
+	// items with actions; none on a device that runs no agent). LastEvent
+	// is set when its latest message is a participation record.
+	Guests    int        `json:"guests"`
+	Decide    int        `json:"decide"`
+	LastEvent *LastEvent `json:"last_event,omitempty"`
+}
+
+// LastEvent is a participation record as a chat list shows it: what
+// happened (invite, accept, decline or dismiss; an invitation's public
+// scope counts as its invite), to which participation, and who did it (the
+// author's person label as known here, or their device's address). It is
+// the record's own word, plainly; DMMessage.Event says it in a sentence.
+type LastEvent struct {
+	Kind string `json:"kind"`
+	PID  string `json:"pid"`
+	By   string `json:"by"`
 }
 
 // DMThread is one conversation's messages, oldest first.
@@ -310,16 +329,22 @@ type DMMessage struct {
 	// here (accept, cancel, resolve), and what the run left to say.
 	Actions   []string `json:"actions,omitempty"`
 	JobDetail string   `json:"job_detail,omitempty"`
+	// A participation record's type (invite, accept, decline, dismiss or
+	// scope) and its author (their person's label as known here, or their
+	// device's address), plainly, so a page never parses Event.
+	EventType string `json:"event_type,omitempty"`
+	EventBy   string `json:"event_by,omitempty"`
 }
 
 // AgentActions are the decisions this device's person can take on a
 // request to its agent in state: run a task that needs their accept (or
-// run one again), stop a run, or close what the agent handed back.
+// run one again) or decline it (the requester is told, nothing runs it),
+// stop a run, or close what the agent handed back.
 func AgentActions(kind, state string) []string {
 	switch state {
 	case "awaiting": // a task, or a guest's question, waiting for this host's one-time acceptance
 		if kind == KindTask || kind == KindQuestion {
-			return []string{DoAccept}
+			return []string{DoAccept, DoDecline}
 		}
 	case "running":
 		return []string{DoCancel}
@@ -643,6 +668,8 @@ type ThreadSummary struct {
 	Pending     bool   `json:"pending"`
 	Renamed     bool   `json:"renamed,omitempty"`
 	AutoTitle   string `json:"auto_title,omitempty"`
+	// AgentID is the thread's agent, when one is named (client.ThreadSummary).
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // Directory is who else the server (Hub) lists as enrolled, for finding

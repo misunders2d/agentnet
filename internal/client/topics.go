@@ -214,6 +214,9 @@ func summarize(self, peer string, g []string, rows map[string]threadRow, l topic
 	for i, id := range g {
 		r := rows[id]
 		facts[i] = r
+		if r.agent != "" { // oldest first: the latest named one stays
+			t.AgentID = r.agent
+		}
 		t.NoticeOnly = t.NoticeOnly && r.notice
 		switch {
 		case r.notice:

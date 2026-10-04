@@ -91,6 +91,20 @@ export interface AgentView {
   can_ask: boolean;
 }
 
+export interface ApprovalRevoke {
+  kind: string;
+  address?: string;
+  pid?: string;
+}
+
+export interface ApprovalsView {
+  questions: QuestionApproval[] | null;
+  tasks: TaskGrantView[] | null;
+  participations: ParticipationGrant[] | null;
+  read_only: boolean;
+  unresolved?: string[];
+}
+
 export interface AssistantSetupHarness {
   id: string;
   label: string;
@@ -210,6 +224,8 @@ export interface DMMessage {
   exec?: ExecView;
   actions?: string[];
   job_detail?: string;
+  event_type?: string;
+  event_by?: string;
 }
 
 export interface DMSummary {
@@ -228,6 +244,9 @@ export interface DMSummary {
   unread: number;
   held: number;
   waiting: number;
+  guests: number;
+  decide: number;
+  last_event?: LastEvent;
 }
 
 export interface DMThread {
@@ -450,6 +469,12 @@ export interface HubStoragePolicy {
   manual_unattached_age_default_seconds: number;
 }
 
+export interface LastEvent {
+  kind: string;
+  pid: string;
+  by: string;
+}
+
 export interface LinkRequest {
   id: string;
   address: string;
@@ -562,6 +587,15 @@ export interface Overview {
   history?: HistoryCopy[];
 }
 
+export interface ParticipationGrant {
+  conv: string;
+  pid: string;
+  agent_id?: string;
+  keys: string[] | null;
+  tasks_from: PersonView[] | null;
+  external?: boolean;
+}
+
 export interface PeerKey {
   pinned?: string;
   pending?: string;
@@ -602,6 +636,10 @@ export interface QuarantineItem {
   peer: string;
   reason: string;
   at: string;
+}
+
+export interface QuestionApproval {
+  address: string;
 }
 
 export interface ReactionView {
@@ -786,6 +824,12 @@ export interface Target {
   group_admission?: string;
 }
 
+export interface TaskGrantView {
+  address: string;
+  fingerprint: string;
+  status: string;
+}
+
 export interface TeamChange {
   team?: string;
   op: string;
@@ -873,6 +917,7 @@ export interface ThreadSummary {
   pending: boolean;
   renamed?: boolean;
   auto_title?: string;
+  agent_id?: string;
 }
 
 export interface TopicChange {

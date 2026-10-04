@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -105,8 +106,10 @@ func (l *Live) dmOverview(o *Overview) error {
 		if err != nil {
 			return err
 		}
+		people := l.conversationPeople(c)
+		shown := shownRows(msgs, people) // its rows as the conversation shows them (DM)
 		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
-			Count: len(msgs), Unread: len(unread[c.ID]), LastAt: time.Unix(c.Created, 0)}
+			Count: len(shown), Unread: len(unread[c.ID]), LastAt: time.Unix(c.Created, 0)}
 		s.Kind, s.Frozen = c.Kind, c.Frozen
 		if c.Role == "visitor" && c.Kind == protocol.ConvKindDM {
 			views, e := l.guestViews(c.ID)
@@ -130,6 +133,15 @@ func (l *Live) dmOverview(o *Overview) error {
 		} else {
 			s.Members = originalViews(c)
 		}
+		// Who is present to help: a conversation whose participations
+		// cannot be resolved here now (a group's pending context) counts none.
+		if infos, err := l.a.Participations(c.ID); err == nil {
+			for _, info := range infos {
+				if info.State == client.PartActive {
+					s.Guests++
+				}
+			}
+		}
 		for _, m := range msgs {
 			switch {
 			case m.Dir == "in" && m.State == "conv_held":
@@ -138,8 +150,7 @@ func (l *Live) dmOverview(o *Overview) error {
 				s.Waiting++
 			}
 		}
-		if len(msgs) > 0 {
-			people := l.conversationPeople(c)
+		if len(shown) > 0 {
 			line := func(m client.ConvMessage) string { // a participation record in words, not its body
 				if m.Sub == envelope.SubEvent {
 					return eventText(m.Body, people)
@@ -153,16 +164,76 @@ func (l *Live) dmOverview(o *Overview) error {
 				}
 				return firstLine(m.Body)
 			}
-			s.Title, s.Last = line(msgs[0]), line(msgs[len(msgs)-1])
+			last := shown[len(shown)-1]
+			s.Title, s.Last, s.LastEvent = line(shown[0]), line(last), lastEvent(last, people)
 			if c.Kind == protocol.ConvKindGroup {
 				s.Title = c.Title
 			}
-			s.LastAt = time.Unix(msgs[len(msgs)-1].At, 0)
+			s.LastAt = time.Unix(last.At, 0)
 		}
 		o.DMs = append(o.DMs, s)
 	}
 	sort.SliceStable(o.DMs, func(i, j int) bool { return o.DMs[i].LastAt.After(o.DMs[j].LastAt) })
 	return nil
+}
+
+// shownRows are a conversation's messages as its timeline shows them: a
+// participation record gets its own row only as dmPeople.eventShown says
+// (one row per signed record, a held invitation standing for its own
+// public scope), every turn its row. The chat list's lines and count are
+// the timeline's.
+func shownRows(msgs []client.ConvMessage, people dmPeople) []client.ConvMessage {
+	seen := map[string]bool{}
+	for _, m := range msgs { // a held invitation stands for its own public scope
+		if ev, err := protocol.ParseParticipationEvent([]byte(m.Body)); m.Sub == envelope.SubEvent && err == nil && ev.Type == protocol.EventInvite {
+			seen["invite/"+ev.PID] = true
+		}
+	}
+	var out []client.ConvMessage
+	for _, m := range msgs {
+		if m.Sub == envelope.SubEvent && !people.eventShown(m, seen) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// linkReplies points each shown reply at the message it replies to as this
+// device shows it. A reply names the copy its author's device holds: an
+// agent's answer names its executor's copy of the request, which this
+// device shows under another copy's id when it sent the request, or under
+// its logical id (an external request's executor copy has the logical id
+// as its id). A reply naming any copy or the logical id of a message here
+// names that message's id; anything else stays as sent. A logical id is
+// unique per sender key only: one that two keys used here names no one
+// message, so a reply naming it stays as sent.
+func linkReplies(msgs []client.ConvMessage, out []DMMessage) {
+	keyOf, twice := map[string]string{}, map[string]bool{} // logical id → the key that sent it; ones two keys used
+	for _, m := range msgs {
+		key := cmp.Or(m.Key, m.Claimed)
+		if k, ok := keyOf[m.LID]; ok && k != key {
+			twice[m.LID] = true
+		}
+		keyOf[m.LID] = key
+	}
+	shown := map[string]string{}
+	for _, m := range msgs {
+		if m.LID != "" && !twice[m.LID] {
+			shown[m.LID] = m.ID
+		}
+		for _, c := range m.Copies {
+			shown[c.ID] = m.ID
+		}
+	}
+	for _, m := range msgs { // an exact id is always its own message
+		shown[m.ID] = m.ID
+	}
+	for i := range out {
+		if id, ok := shown[out[i].ReplyTo]; ok {
+			out[i].ReplyTo = id
+		}
+	}
 }
 
 func firstLine(s string) string {
@@ -268,16 +339,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 				}
 			}
 		}
-		shownEvents := map[string]bool{}
-		for _, m := range msgs { // a held invitation stands for its own public scope
-			if ev, err := protocol.ParseParticipationEvent([]byte(m.Body)); m.Sub == envelope.SubEvent && err == nil && ev.Type == protocol.EventInvite {
-				shownEvents["invite/"+ev.PID] = true
-			}
-		}
-		for _, m := range msgs {
-			if m.Sub == envelope.SubEvent && !people.eventShown(m, shownEvents) {
-				continue
-			}
+		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, laggingCopy(m, c.Peer.Address), m.Detail),
 				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
@@ -311,9 +373,11 @@ func (l *Live) DM(id string) (DMThread, error) {
 			}
 			if m.Sub == envelope.SubEvent {
 				dm.Event, dm.Body, dm.StateText = eventText(m.Body, people), "", ""
+				dm.EventType, _, dm.EventBy = eventFields(m.Body, people)
 			}
 			t.Messages = append(t.Messages, dm)
 		}
+		linkReplies(msgs, t.Messages)
 		if t.Agents, err = l.agentViews(id, people, msgs); err != nil {
 			return DMThread{}, err
 		}

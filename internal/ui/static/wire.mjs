@@ -21,6 +21,7 @@ export const SubStatus = "status", SubDecision = "decision"; // headless: a host
 export const CapHeadless = "hdl1";        // protocol cap: reads status controls and version 2 reports, sends decisions
 export const CapExternalParticipation = "apx1"; // selected DM excerpts and exact outside-host participation
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
+export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
 export const SubGroupProof = "group-proof", SubGroupContext = "group-context"; // bounded quiet carriers; no capability advertisement
 export const SubGroupInvite = "group-invite", SubGroupConsent = "group-consent", SubGroupWithdrawal = "group-withdrawal";
@@ -547,15 +548,19 @@ async function checkV2(n) {
   if (n.human && n.v === Version3) {
     // An assistant's reaction to an addressed request, to that request's
     // captured audience (envelope/human.go): its host is the author and a
-    // control carries no root. No other control carries an audience.
-    if (!assistantReaction(n) || !n.conv || !n.pid || n.human.author_pid || n.root || n.kind !== "message") throw new Error("human: on a control, only an assistant's reaction to its captured audience");
+    // control carries no root. An edit names its turn's author, no
+    // participation. No other control carries an audience.
+    if (humanEdit(n)) {
+      if (!n.conv || n.pid || n.root || n.kind !== "message") throw new Error("human: an edit carries its turn's captured audience in its conversation only");
+    } else if (!assistantReaction(n) || !n.conv || !n.pid || n.human.author_pid || n.root || n.kind !== "message") throw new Error("human: on a control, only an assistant's reaction or an edit to its captured audience");
     await validateHumanTurn(n.human, n.conv);
   } else if (n.human) {
-    const root = parseRoot(n.root);
-    if (await rootID(root) !== n.conv || root.kind !== "dm" || root.members.length !== 2 || n.v !== Version2 || n.sub) throw new Error("human: ordinary non-executing DM turn only");
-    const h = n.human, author = h.author_pid || "";
-    const ordinary = n.kind === "message" && !n.status && !n.target && !n.agent_id && !agentOrigin(n.origin) && !n.emotion && n.pid === author;
-    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && !agentOrigin(n.origin) && !n.status && !n.receiver_route;
+    const root = parseConvRoot(n.root), dm = root.kind === "dm" && root.members.length === 2, group = root.kind === "group" && root.v === GroupRootVersion;
+    if (await rootID(root) !== n.conv || !dm && !group || n.v !== Version2 || n.sub) throw new Error("human: ordinary non-executing DM or group turn only");
+    // An agent author (a room participant) only asks, labelled as an agent (ROOM_V1 §2.3).
+    const h = n.human, author = h.author_pid || "", agent = agentAuthor(h);
+    const ordinary = n.kind === "message" && !n.status && !n.target && !n.agent_id && !agentOrigin(n.origin) && !n.emotion && n.pid === author && !agent;
+    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && agentOrigin(n.origin) === agent && !n.status && !n.receiver_route;
     const output = (["answer", "result"].includes(n.kind) || n.kind === "message" && n.status === StatusProgress) && !n.target && n.pid && !author && !n.receiver_route;
     if (!ordinary && !request && !output) throw new Error("human: ordinary turn, addressed request or assistant output only");
     await validateHumanTurn(n.human, n.conv);
@@ -843,7 +848,7 @@ export const MaxGroupHistory = 64, MaxGroupState = 256 << 10, MaxGroupCiphertext
 const groupRootDomain = "agentnet-conv-root-v3\n";
 export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot : MaxConvRoot;
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
-export const MaxCaps = 16;
+export const MaxCaps = 32, MaxAdvertisedCaps = 16; // protocol: a record parses with up to 32 names; a device lists at most 16
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1127,13 +1132,14 @@ export function parseHistory(json) {
   if (ref && !isControl(f.sub || "")) throw new Error("a malformed history item");
   const receiver = f.receiver_route ? parseReceiverRoute(f.receiver_route) : null;
   const human = f.human ? parseHumanTurn(f.human) : null;
-  if (human) { // the same three shapes as a live human turn (envelope/human.go)
-    const pid = f.pid || "", author = human.author_pid || "";
-    const ordinary = f.kind === "message" && !target && !f.agent_id && !agentOrigin(f.origin) && !f.emotion && !f.status && pid === author;
-    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && !agentOrigin(f.origin) && !f.status && !receiver;
+  if (human) { // the same shapes as a live human turn (envelope/human.go)
+    const pid = f.pid || "", author = human.author_pid || "", agent = agentAuthor(human);
+    const ordinary = f.kind === "message" && !target && !f.agent_id && !agentOrigin(f.origin) && !f.emotion && !f.status && pid === author && !agent;
+    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && agentOrigin(f.origin) === agent && !f.status && !receiver;
     const output = (["answer", "result"].includes(f.kind) || f.kind === "message" && f.status === StatusProgress) && !target && pid && !author && !receiver;
     const reaction = f.sub === SubReaction && historyAssistantReaction(f) && f.kind === "message" && pid && !author && !target && !receiver; // an assistant's reaction to its captured audience
-    if (!reaction && (f.sub || !ordinary && !request && !output)) throw new Error("human: malformed history turn");
+    const edit = [SubRevision, SubRetraction].includes(f.sub) && ref && f.kind === "message" && !pid && !target && !receiver && !f.agent_id && !f.origin; // an edit to its turn's captured audience
+    if (!reaction && !edit && (f.sub || !ordinary && !request && !output)) throw new Error("human: malformed history turn");
   }
   if (receiver && (receiver.op !== "request" || receiver.request_ref !== f.lid || f.sub || f.agent_id || ref || !["message", "question", "task"].includes(f.kind))) throw Error("receiver: history retains only original inert request routes");
   return { v: f.v, from: f.from, from_key: f.from_key, id: f.id, lid: f.lid, ts: f.ts || 0, at: f.at || 0, kind: f.kind || "", body: f.body || "",
@@ -1549,8 +1555,11 @@ export async function verifyAgent(r, host) {
   if (host.address !== r.host || await fingerprint(host) !== r.host_key || !await verifyBytes(host.sign_key, agentCanonical(r), r.sig)) throw new Error("agent: identity is not signed by its exact host device");
 }
 // The durable outbox keeps this requirement even when ciphertext cannot be reopened.
+// A room shape keeps its conversation's primary (a group's grp1, a DM's
+// hgp1); delivery adds rm1 to it (engine roomCopy, ROOM_V1 §2.5).
 export function agentRequirement(n) {
   try {
+    if (n.human && n.root && parseConvRoot(n.root).kind === "group") return CapGroup; // a captured audience in a group: a group copy
     if (n.sub === "excerpt" && n.pid) return CapExternalParticipation;
     if (n.sub === "history") n = parseHistory(n.body);
     if (assistantReaction(n) || historyAssistantReaction(n)) return CapAgentReaction; // as history too: never stored by an older reader as its host's mark
@@ -1559,7 +1568,7 @@ export function agentRequirement(n) {
     if (n.agent_id || n.target?.agent_id) return CapAgentIdentity;
     if (n.sub === "event") {
       const e = parseEvent(n.body);
-      if (e.role === "human" || e.type === "scope") return CapHumanParticipation; // a scope exists only for human audiences
+      if (e.role === "human" || e.type === "scope" || e.audience === "room") return CapHumanParticipation; // a scope exists only for human and room audiences
       if (e.host?.agent_id) return CapAgentIdentity;
     }
   } catch (e) { /* malformed bodies are rejected by their existing admission path */ }
@@ -1583,9 +1592,11 @@ export function validateCaps(c) {
   });
 }
 
-// newCaps is this device session's signed record (for PUT /v1/caps).
+// newCaps is this device session's signed record (for PUT /v1/caps): at
+// most MaxAdvertisedCaps names, so readers parsing MaxCaps keep headroom.
 export async function newCaps(keys, address, session, caps = [CapEnv2, CapPerson]) {
   const c = { address, session, caps: [...caps].sort(), ts: Math.floor(Date.now() / 1000) };
+  if (c.caps.length > MaxAdvertisedCaps) throw new Error("caps: a device advertises at most " + MaxAdvertisedCaps);
   validateCaps(c);
   c.sig = await signBytes(keys, capsCanonical(c));
   return c;
@@ -1605,10 +1616,16 @@ export async function verifyCaps(c, signKey) {
   if (!(await verifyBytes(signKey, capsCanonical(c), c.sig))) throw new Error("caps: signature invalid");
 }
 
+// RoomImplies are the capabilities CapRoom implies (protocol.RoomImplies);
+// capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
+// rm1 implies it.
+export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
+export const capsReads = (c, name) => (c.caps || []).includes(name) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each
 // has a record that verifies with signKey, names address and that session,
-// and lists name. Sessions are the relay's statement, not signed.
+// and reads name (capsReads). Sessions are the relay's statement, not signed.
 export async function profileSupports(profile, address, signKey, name) {
   const sessions = (profile && profile.sessions) || [];
   if (!sessions.length) return false;
@@ -1621,7 +1638,7 @@ export async function profileSupports(profile, address, signKey, name) {
     } catch (e) {
       continue;
     }
-    if (c.address === address && (c.caps || []).includes(name)) has.add(c.session);
+    if (c.address === address && capsReads(c, name)) has.add(c.session);
   }
   return sessions.every((s) => has.has(s));
 }
@@ -1653,6 +1670,7 @@ function marshalEvent(e, withSig) {
   if (e.note) s += ',"note":' + goString(e.note);
   if (e.group) s += ',"group":{"seq":' + goInt(e.group.seq,"group sequence") + ',"hash":' + goString(e.group.hash) + ',"host_role":' + goString(e.group.host_role) + (e.group.host_admission ? ',"host_admission":' + goString(e.group.host_admission) : "") + (e.group.task_admissions?.length ? ',"task_admissions":' + goStrings(e.group.task_admissions) : "") + "}";
   if (e.role) s += ',"role":' + goString(e.role);
+  if (e.until) s += ',"until":' + goInt(e.until, "end time");
   return s + sigJSON(e, withSig) + "}";
 }
 export const eventJSON = (e) => marshalEvent(e, true);
@@ -1702,11 +1720,14 @@ export function validateEvent(e) {
   if (a.group_admission && !validHash(a.group_admission)) throw new Error("participation: invalid author group admission");
   if (!validAddress(a.address)) throw new Error("participation: invalid address " + a.address);
   if (!eventTypes.has(e.type)) throw new Error("participation: unknown event type " + e.type);
+  const room = e.audience === "room"; // ROOM_V1 §2.2
+  if (e.until != null && (!Number.isSafeInteger(e.until) || e.until < 0 || e.until !== 0 && (!room || !["invite", "scope"].includes(e.type)))) throw new Error("participation: only a room invitation and its scope have an end time");
   if (e.type === "invite") {
     if (e.role && e.role !== "human") throw new Error("participation: unknown role");
-    if (e.role === "human" && (e.host?.agent_id || e.task_keys?.length || e.group || a.group_admission)) throw new Error("participation: human invite carries no agent or group authority");
-    if (e.prev !== "" || !e.host || e.audience !== "conversation") {
-      throw new Error("participation: an invite has no prev, and names a host and the conversation audience");
+    // A human guest has no executor or task authority; in a group it is a room visitor.
+    if (e.role === "human" && (e.host?.agent_id || e.task_keys?.length || (e.group || a.group_admission) && (!room || !e.group || e.group.host_role !== "visitor" || e.group.task_admissions?.length))) throw new Error("participation: a human guest has no executor or task authority, and in a group is a room visitor");
+    if (e.prev !== "" || !e.host || e.audience !== "conversation" && !room) {
+      throw new Error("participation: an invite has no prev, and names a host and the conversation or room audience");
     }
     if (!validID(e.host.person) || !validFingerprint(e.host.fingerprint) || e.host.agent_id && !validID(e.host.agent_id)) throw new Error("participation: invalid host");
     if (!validAddress(e.host.address)) throw new Error("participation: host: invalid address " + e.host.address);
@@ -1722,9 +1743,12 @@ export function validateEvent(e) {
     if (!noteText.test(e.note)) throw new Error("participation: note has a control character");
     return;
   }
-  if (e.type === "scope") { // the invite's public projection: never its grant, task keys or note
-    if (!validHash(e.prev) || !e.host || e.audience !== "conversation" || e.grant !== null || e.task_keys !== null || e.note !== "" || e.group || a.group_admission ||
+  if (e.type === "scope") { // the invite's public projection: never its grant, task keys or note; a room's also its group binding, never its task admissions
+    if (!validHash(e.prev) || !e.host || e.audience !== "conversation" && !room || e.grant !== null || e.task_keys !== null || e.note !== "" || !room && (e.group || a.group_admission) ||
       (e.role && e.role !== "human") || (e.role === "human" && e.host.agent_id)) throw new Error("participation: a scope names its invite, host, agent and role only");
+    const g = e.group;
+    if (g && (!(g.seq >= 0) || !validHash(g.hash) || !validHash(a.group_admission) || !["member", "visitor"].includes(g.host_role) || (g.host_role === "member" && !validHash(g.host_admission)) ||
+      (g.host_role === "visitor" && g.host_admission) || g.task_admissions?.length || e.role === "human" && g.host_role !== "visitor") || !g && a.group_admission) throw new Error("participation: malformed room scope group binding");
     if (!validID(e.host.person) || !validFingerprint(e.host.fingerprint) || e.host.agent_id && !validID(e.host.agent_id)) throw new Error("participation: invalid host");
     if (!validAddress(e.host.address)) throw new Error("participation: host: invalid address " + e.host.address);
     return;
@@ -1746,7 +1770,7 @@ export async function signEvent(keys, fields) {
 
 export function parseEvent(json) {
   const f = strictRecord(json, MaxParticipationEvent, "participation", { v: "int", conv: "string", pid: "string", type: "string", prev: "string",
-    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", sig: "string" });
+    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", until: "int", sig: "string" });
   const a = strict(f.author || {}, "participation author", { person: "string", roster: "string", address: "string", fingerprint: "string", group_admission: "string" });
   const h = f.host ? strict(f.host, "participation host", { person: "string", address: "string", fingerprint: "string", agent_id: "string" }) : null;
   const group = f.group ? strict(f.group,"participation group",{seq:"int",hash:"string",host_role:"string",host_admission:"string",task_admissions:"array"}) : null;
@@ -1757,24 +1781,24 @@ export function parseEvent(json) {
     host: h ? { person: h.person || "", address: h.address || "", fingerprint: h.fingerprint || "", ...(h.agent_id ? { agent_id: h.agent_id } : {}) } : null,
     grant: f.grant ? f.grant.map((g) => { const x = strict(g, "participation grant", { lid: "string", fingerprint: "string" });
       return { lid: x.lid || "", fingerprint: x.fingerprint || "" }; }) : null,
-    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
+    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(f.until ? { until: f.until } : {}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
   validateEvent(e);
   fitsRecord(eventJSON(e), MaxParticipationEvent, "participation");
   return e;
 }
 
-// scopeOf is protocol.ScopeOf: the unsigned public projection of DM invite
-// inv, for its author to sign. projects is ParticipationEvent.Projects.
-export async function scopeOf(inv, ts) {
-  return { v: 1, conv: inv.conv, pid: inv.pid, type: "scope", prev: await eventHash(inv), author: { ...inv.author }, ts, host: { ...inv.host },
-    grant: null, audience: "conversation", task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}) };
-}
-export async function projects(s, inv) {
-  const same = (x, y) => x.person === y.person && x.address === y.address && x.fingerprint === y.fingerprint && (x.agent_id || "") === (y.agent_id || "");
-  return s.type === "scope" && inv.type === "invite" && !!inv.host && !!s.host && s.conv === inv.conv && s.pid === inv.pid && s.prev === await eventHash(inv) &&
-    same(s.author, inv.author) && roster(s.author) === roster(inv.author) && same(s.host, inv.host) && (s.role || "") === (inv.role || "") && !inv.group;
-}
-const roster = (a) => a.roster + "/" + (a.group_admission || "");
+// scopeOf is protocol.ScopeOf: the unsigned public projection of invite inv
+// (its hash invHash, when known), for its author to sign; a room's also
+// names its end time and group binding, never its task admissions.
+// projects is ParticipationEvent.Projects, sameScope protocol.SameScope;
+// projectsHash is projects with the invite's hash known (synchronous).
+export const scopeOfHash = (inv, invHash, ts) => ({ v: 1, conv: inv.conv, pid: inv.pid, type: "scope", prev: invHash, author: { ...inv.author }, ts, host: { ...inv.host },
+  grant: null, audience: inv.audience, task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}), ...(inv.until ? { until: inv.until } : {}),
+  ...(inv.group ? { group: { seq: inv.group.seq, hash: inv.group.hash, host_role: inv.group.host_role, ...(inv.group.host_admission ? { host_admission: inv.group.host_admission } : {}), task_admissions: null } } : {}) });
+export async function scopeOf(inv, ts) { return scopeOfHash(inv, await eventHash(inv), ts); }
+export const sameScope = (x, y) => marshalEvent({ ...x, ts: 1 }, false) === marshalEvent({ ...y, ts: 1 }, false);
+export const projectsHash = (s, inv, invHash) => s.type === "scope" && inv.type === "invite" && !!inv.host && !!s.host && (!inv.group || inv.audience === "room") && sameScope(s, scopeOfHash(inv, invHash, s.ts));
+export async function projects(s, inv) { return projectsHash(s, inv, await eventHash(inv)); }
 
 export async function verifyEvent(e, authorKey) {
   validateEvent(e);
@@ -1782,6 +1806,16 @@ export async function verifyEvent(e, authorKey) {
 }
 
 // ---- scoped ordinary human turns (envelope/human.go) -----------------------------------------
+// agentAuthor is HumanTurn.AgentAuthor: the author is an agent room
+// participant (its proof scope has no role, and none says otherwise);
+// humanEdit is envelope.HumanEdit: a revision or retraction carrying its
+// turn's captured audience.
+export function agentAuthor(h) {
+  let agent = false;
+  for (const e of h.proof || []) if (h.author_pid && e.type === "scope" && e.pid === h.author_pid) { if (e.role) return false; agent = true; }
+  return agent;
+}
+export const humanEdit = (n) => n.v === Version3 && !!n.human && [SubRevision, SubRetraction].includes(n.sub);
 // Shape/hash validation only. Admission must also verify every signature against
 // the pinned current roster and the sender/recipient's exact accepted scope.
 export function humanJSON(h) {
@@ -1808,7 +1842,7 @@ export async function validateHumanTurn(h, conv) {
   for (const e of h.proof || []) {
     validateEvent(e);
     const scope = scopes.get(e.pid);
-    if (!scope || e.sig?.length !== 64 || utf8.encode(eventJSON(e)).length > MaxParticipationEvent || e.conv !== conv || !["scope", "accept"].includes(e.type) || (e.type === "scope" && e.role !== "human")) throw new Error("human: proof outside audience");
+    if (!scope || e.sig?.length !== 64 || utf8.encode(eventJSON(e)).length > MaxParticipationEvent || e.conv !== conv || !["scope", "accept"].includes(e.type) || (e.type === "scope" && e.role !== "human" && e.audience !== "room")) throw new Error("human: proof outside audience"); // an agent only as a room participant
     const hash = await eventHash(e);
     if (events.has(hash) || e.prev !== scope.invite || (e.type === "accept" && hash !== scope.decision)) throw new Error("human: duplicate or unrelated proof");
     events.add(hash);

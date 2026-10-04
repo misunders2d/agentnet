@@ -496,7 +496,11 @@ agentnet unapprove --tasks ADDRESS.`,
 	"decline": `Usage: agentnet decline ID [REASON]
 
 Refuse a task or question; the sender receives a result/answer with status
-"declined" and your reason.`,
+"declined" and your reason. In a conversation, this declines a request to
+your agent that waits for your accept: nothing runs it, and your reason
+stays here with it. The requester's device is told by the request's status
+when it can read statuses; nothing waits for that. A question or task for
+you is answered in the conversation.`,
 
 	"cancel": `Usage: agentnet cancel ID
 
