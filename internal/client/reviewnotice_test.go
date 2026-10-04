@@ -270,6 +270,33 @@ func TestReviewToChecksTheHubAndDoctorShowsFailures(t *testing.T) {
 	}
 }
 
+// A notice the Hub refused once does not keep doctor failing after later
+// notices to the same address got through: only refusals since the last
+// one that went out count (review finding 4).
+func TestReviewToHealthForgetsRefusalsBeforeADelivery(t *testing.T) {
+	w := newWorld(t, "")
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	notice := func(state, why string, ms int64) {
+		t.Helper()
+		if _, err := w.bob.store.db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, status, created_ms) VALUES(?, ?, 'n', '{}', ?, nullif(?, ''), ?, ?, ?)`,
+			protocol.NewID(), w.alice.Address, state, why, ms/1000, envelope.StatusReviewNotice, ms); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UnixMilli()
+	notice(stateFailed, "refused: unknown recipient", now-3000)
+	notice(protocol.StateDelivered, "", now-2000)
+	if h, err := w.bob.ReviewToHealth(); err != nil || h != "" {
+		t.Fatalf("a refusal before a delivered notice still counts: %q %v", h, err)
+	}
+	notice(stateFailed, "refused again", now-1000)
+	if h, err := w.bob.ReviewToHealth(); err != nil || !strings.Contains(h, "the Hub refused 1 notice(s) (last: refused again)") {
+		t.Fatalf("a refusal after the last delivered notice: %q %v", h, err)
+	}
+}
+
 // Only the exact notice shape is filed for the person; everything else,
 // including ordinary replies, stays quiet. A duplicate delivery is stored
 // once.

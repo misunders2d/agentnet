@@ -270,8 +270,9 @@ func (a *Agent) noteReviewFailure(to, gen, why string) {
 
 // ReviewToHealth says whether notices to the review_to agent are getting
 // out: the last notice that could not be queued since it was set, and how
-// many queued ones the Hub refused for good, with the last reason. Empty
-// when none failed (or review notices are off).
+// many queued ones the Hub refused for good since the last one that went
+// out, with the last reason. Empty when none failed (or review notices are
+// off).
 func (a *Agent) ReviewToHealth() (string, error) {
 	to, err := a.ReviewTo()
 	if err != nil || to == "" {
@@ -283,10 +284,15 @@ func (a *Agent) ReviewToHealth() (string, error) {
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
+	var since int64 // the last notice that went out: refusals before it are over
+	if err := a.store.db.QueryRow(`SELECT coalesce(max(created_ms), 0) FROM outbox WHERE recipient = ? AND status = ? AND state IN (?, ?)`,
+		to, envelope.StatusReviewNotice, protocol.StateCustody, protocol.StateDelivered).Scan(&since); err != nil {
+		return "", err
+	}
 	var refused int
 	var last string
-	if err := a.store.db.QueryRow(`SELECT count(*), coalesce((SELECT error FROM outbox WHERE recipient = ? AND status = ? AND state = ? ORDER BY created_ms DESC LIMIT 1), '')
-		FROM outbox WHERE recipient = ? AND status = ? AND state = ?`, to, envelope.StatusReviewNotice, stateFailed, to, envelope.StatusReviewNotice, stateFailed).Scan(&refused, &last); err != nil {
+	if err := a.store.db.QueryRow(`SELECT count(*), coalesce((SELECT error FROM outbox WHERE recipient = ? AND status = ? AND state = ? AND created_ms > ? ORDER BY created_ms DESC LIMIT 1), '')
+		FROM outbox WHERE recipient = ? AND status = ? AND state = ? AND created_ms > ?`, to, envelope.StatusReviewNotice, stateFailed, since, to, envelope.StatusReviewNotice, stateFailed, since).Scan(&refused, &last); err != nil {
 		return "", err
 	}
 	if refused > 0 {
