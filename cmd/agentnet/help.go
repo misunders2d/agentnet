@@ -254,7 +254,9 @@ Windows desktop). Clicks are not handled on macOS.
   --unread   only unread messages
   --review   only items waiting for your decision; does not mark them read
   --peek     inspect without changing any message's read state
-  --json     machine-readable output`,
+  --json     machine-readable output; with --review it also lists the
+             reports from other machines (status review_notice), decided
+             there, as the text output does`,
 
 	"conversation": `Usage: agentnet conversation [--json] [--offset N] [--limit N] ID
 

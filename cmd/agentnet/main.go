@@ -525,6 +525,15 @@ func runInbox(a *client.Agent, args []string) error {
 		return err
 	}
 	if *f.asJSON {
+		if *f.review {
+			// Reports from other machines too, as the text lists them: each
+			// is a message with status review_notice, decided THERE.
+			notices, err := a.Notices()
+			if err != nil {
+				return err
+			}
+			msgs = append(msgs, notices...)
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if msgs == nil {
