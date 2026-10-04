@@ -571,7 +571,10 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 	t.Run("file names made safe as Go makes them", func(t *testing.T) {
 		names := []string{"notes.txt", "../../evil<script>.png", `C:\Windows\system32\x.dll`, "a\x00b\x1fc\x7fd.txt", " .hidden. ", "...", "",
 			"CON", "con.txt", "Lpt9.tar.gz", "COM10.txt", "ok?*|\".md", "  spaced name .pdf", "naïve café 日本.txt", "emoji 😀.png",
-			strings.Repeat("é", 150) + ".txt", strings.Repeat("a", 199) + "😀", strings.Repeat("x", 300)}
+			strings.Repeat("é", 150) + ".txt", strings.Repeat("a", 199) + "😀", strings.Repeat("x", 300),
+			"rtl\u202egpj.exe", "invoice\u2066fdp\u2069.exe", "a\u200eb\u200fc\u061cd\ufeffe", "c1\u0085\u009bx", "\U0001f468\u200d\U0001f4bb notes.txt",
+			"\u0645\u062d\u0645\u062f\u200c\u0631\u0636\u0627.pdf", strings.Repeat("a", 251) + ".csv", strings.Repeat("\U0001f4ca", 62) + ".csv",
+			strings.Repeat("r", 180) + " order reconciliation.xlsx", "a." + strings.Repeat("b", 250)}
 		got := w.ok(map[string]any{"op": "safeName", "names": names})["names"].([]any)
 		for i, n := range names {
 			if want := client.SafeName(n); got[i] != want {

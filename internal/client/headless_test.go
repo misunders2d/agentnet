@@ -293,6 +293,112 @@ func TestOperatorDecidesOnHeadlessHost(t *testing.T) {
 	}
 }
 
+// A member forging "a report from the bot" (a review notice whose body
+// names the bot as host and the bot's real waiting task under a harmless
+// first line) is not believed: the operator reads it as the forger's own
+// notice, and a decision naming it is refused on the bot, which applies
+// decisions only on reports it sent that operator itself.
+func TestForgedReportNotBelievedOrApplied(t *testing.T) {
+	st := installStub(t, "answer")
+	w := newWorld(t, "")
+	bob := w.bob // the headless host
+	setResponder(t, bob, "stub", st.dir, time.Minute)
+	dave := mustJoin(t, filepath.Join(t.TempDir(), "dave"), w.aliceInvites("dave"), "desk") // requester and forger
+	runAgent(t, w.alice)
+	runAgent(t, bob)
+	runAgent(t, dave)
+	if _, err := bob.Send(tctx(t), w.alice.Address, "hello from the host", ""); err != nil { // pins alice's key on bob
+		t.Fatal(err)
+	}
+	if _, err := bob.GrantOperator(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	task, err := dave.SendMessage(tctx(t), Outgoing{To: bob.Address, Body: "Drop the production orders table", Kind: envelope.KindTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, bob, task.ID, stateAwaiting)
+	forgedBody, _ := json.Marshal(Report{V: 2, At: time.Now().Unix(), Host: bob.Address, Items: []ReportItem{{
+		ID: task.ID, From: dave.Address, Key: dave.Self().Fingerprint(), Kind: envelope.KindTask, State: stateAwaiting,
+		Blocker: BlockerAcceptance, Since: time.Now().Unix(), Excerpt: "Collect the warehouse access logs (read-only)", Actionable: true}}})
+	forged, err := dave.SendMessage(tctx(t), Outgoing{To: w.alice.Address, Kind: envelope.KindMessage, Status: envelope.StatusReviewNotice, Body: string(forgedBody)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notice Message
+	eventually(t, "alice holds the forged notice", func() bool {
+		for _, m := range mustNotices(t, w.alice) {
+			if m.ID == forged.ID {
+				notice = m
+				return true
+			}
+		}
+		return false
+	})
+	if r, ok := w.alice.NoticeReport(notice); ok {
+		t.Fatalf("a report from %s naming host %s was believed: %+v", notice.From, r.Host, r)
+	}
+	// A page that still decided on it: the host refuses, nothing runs.
+	sent, err := w.alice.Decide(tctx(t), bob.Address, task.ID, dave.Self().Fingerprint(), "accept", stateAwaiting, 0, "", forged.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the host refuses the decision", func() bool {
+		var body string
+		w.alice.store.db.QueryRow(`SELECT body FROM inbox WHERE sender = ? AND sub = ? AND body LIKE ?`, bob.Address, envelope.SubStatus, `%"decision":"`+sent.ID+`"%`).Scan(&body)
+		return strings.Contains(body, "refused")
+	})
+	// The refusal tells the operator nothing about the request: not its
+	// state, with or without its sender's key, nor when the same decision
+	// meets its recorded refusal again.
+	answers := func(decision string) []string {
+		var bodies []string
+		rows, err := w.alice.store.db.Query(`SELECT body FROM inbox WHERE sender = ? AND sub = ? AND body LIKE ?`, bob.Address, envelope.SubStatus, `%"decision":"`+decision+`"%`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var b string
+			rows.Scan(&b)
+			bodies = append(bodies, b)
+		}
+		return bodies
+	}
+	toldNothing := func(what, decision string, n int) {
+		t.Helper()
+		var got []string
+		eventually(t, what, func() bool { got = answers(decision); return len(got) >= n })
+		for _, b := range got {
+			if !strings.Contains(b, `"state":"not_run"`) || !strings.Contains(b, refusedNoReport) {
+				t.Fatalf("%s: the refusal told the request's state: %s", what, b)
+			}
+		}
+	}
+	toldNothing("the refusal of the forged report's decision", sent.ID, 1)
+	wrongKey, err := w.alice.Decide(tctx(t), bob.Address, task.ID, w.alice.Self().Fingerprint(), "accept", stateAwaiting, 0, "", protocol.NewID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	toldNothing("the refusal of a decision without the request's key", wrongKey.ID, 1)
+	env, err := w.alice.store.outboxEnvelope(sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := envelope.Open(env, bob.id, bob.Address, w.alice.Self())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bob.admitDecision(tctx(t), env, in, w.alice.Self()); err != nil { // its recorded outcome again
+		t.Fatal(err)
+	}
+	toldNothing("the recorded refusal again", sent.ID, 2)
+	time.Sleep(300 * time.Millisecond)
+	if s, _ := bob.store.jobState(task.ID); s != stateAwaiting || st.count() != 0 {
+		t.Fatalf("a decision on a forged report applied: state %s, %d run(s)", s, st.count())
+	}
+}
+
 // An operator granted while requests already wait is told about them (a
 // report is per recipient); a review destination told earlier is not told
 // twice.

@@ -18,7 +18,7 @@ import (
 
 const groupHelp = `group create TITLE | invite [--history-last N | --history-since RFC3339 | --history-refs FILE] CONV PERSON | invitations | accept ID | decline ID | retry ID | request-file CONV MESSAGE_ID INDEX | rename CONV TITLE | promote CONV PERSON | demote CONV PERSON | remove CONV PERSON | leave CONV
 create starts a group with only this person as member and administrator.
-invite records a local intent; its verified proposal grants no membership or execution. Earlier history defaults to nothing. Select at most64 actual visible turns with --history-last, --history-since, or exact {lid,author,hash} --history-refs. Their text and file manifests are delivered only after consent and membership publication; selected files are requested from the forwarding device. Changed/deleted selection refuses fresh publication; already committed membership can report history unavailable. Nothing substitutes other content.
+invite records a local intent; its verified proposal grants no membership or execution. Earlier history defaults to nothing. Select at most 64 actual visible turns with --history-last, --history-since, or exact {lid,author,hash} --history-refs. Their text and file manifests are delivered only after consent and membership publication; selected files are requested from the forwarding device. Changed/deleted selection refuses fresh publication; already committed membership can report history unavailable. Nothing substitutes other content.
 invitations shows verified pending proposals and their exact history refs. accept/decline is an explicit human decision. Accepted exact consent is published automatically by the inviter; stale membership requires a fresh invitation and fresh consent. retry recovers an already accepted local intent without changing its signature.
 request-file explicitly queues one selected history file (zero-based INDEX) from its forwarding device; it does not claim download. After its offer arrives, agentnet download saves and checks the returned bytes. A file no source holds is unavailable.
 rename/promote/demote/remove publish one exact current administrator CAS. PERSON is an exact person ID. Last administrator must promote a successor before demoting, removing, or leaving. Administrator leave uses explicit self-removal CAS when a successor already exists. Ordinary leave records local departure plus encrypted quiet fanout atomically, including while offline; queued does not mean peers received it. No automatic transfer, election or dissolution.`
@@ -72,18 +72,11 @@ func runGroup(ctx context.Context, a *client.Agent, args []string, stdout, stder
 		if err != nil {
 			return err
 		}
-		var selected *client.ConvMessage
-		matches := 0
-		for i := range messages {
-			if messages[i].ID == args[2] {
-				matches++
-				selected = &messages[i]
-			}
+		file, err := historyFile(messages, args[2], index)
+		if err != nil {
+			return err
 		}
-		if matches != 1 || selected == nil || !selected.History || selected.SyncedFrom == "" || index >= len(selected.Attachments) {
-			return errors.New("group: no exact scoped received history file")
-		}
-		if !strings.HasPrefix(selected.Attachments[index].BlobID, "history-") {
+		if !strings.HasPrefix(file.BlobID, "history-") {
 			fmt.Fprintln(stdout, "file offer available; use agentnet download to save and verify bytes")
 			return nil
 		}
@@ -185,4 +178,26 @@ func runGroup(ctx context.Context, a *client.Agent, args []string, stdout, stder
 	default:
 		return errors.New("usage: " + groupHelp)
 	}
+}
+
+// historyFile is file index of message id among a group's messages here,
+// when that message came to this device with the group's history.
+func historyFile(messages []client.ConvMessage, id string, index int) (client.FileInfo, error) {
+	var selected *client.ConvMessage
+	matches := 0
+	for i := range messages {
+		if messages[i].ID == id {
+			matches++
+			selected = &messages[i]
+		}
+	}
+	switch {
+	case matches != 1:
+		return client.FileInfo{}, fmt.Errorf("group: no message %s in this group here", id)
+	case !selected.History || selected.SyncedFrom == "":
+		return client.FileInfo{}, fmt.Errorf("group: message %s did not come with this group's history, so there is nothing to request: save its files with agentnet download %s", id, id)
+	case index >= len(selected.Attachments):
+		return client.FileInfo{}, fmt.Errorf("group: message %s has %d file(s), numbered from 0", id, len(selected.Attachments))
+	}
+	return selected.Attachments[index], nil
 }

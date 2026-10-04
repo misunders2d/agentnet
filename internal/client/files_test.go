@@ -338,9 +338,27 @@ func TestSafeName(t *testing.T) {
 		"a\x00b\nc":        "a_b_c",
 		"CON.txt":          "_CON.txt",
 		"/abs/path":        "_abs_path",
+		// Bidirectional and other invisible format characters cannot
+		// disguise the extension ("rtl\u202egpj.exe" shows as "rtlexe.jpg");
+		// joiners inside emoji and words stay.
+		"rtl\u202egpj.exe":                                     "rtl_gpj.exe",
+		"invoice\u2066fdp\u2069.exe":                           "invoice_fdp_.exe",
+		"a\u200eb\u200fc\u061cd\ufeffe":                        "a_b_c_d_e",
+		"c1\u0085\u009bx":                                      "c1__x",
+		"\U0001f468\u200d\U0001f4bb notes.txt":                 "\U0001f468\u200d\U0001f4bb notes.txt",
+		"\u0645\u062d\u0645\u062f\u200c\u0631\u0636\u0627.pdf": "\u0645\u062d\u0645\u062f\u200c\u0631\u0636\u0627.pdf",
+		// A long name keeps its extension: the stem is shortened.
+		strings.Repeat("a", 251) + ".csv":                       strings.Repeat("a", 196) + ".csv",
+		strings.Repeat("\U0001f4ca", 62) + ".csv":               strings.Repeat("\U0001f4ca", 49) + ".csv",
+		strings.Repeat("r", 180) + " order reconciliation.xlsx": strings.Repeat("r", 180) + " order reconcil.xlsx",
+		// Not an extension: cut from the end as before.
+		"a." + strings.Repeat("b", 250): "a." + strings.Repeat("b", 198),
 	} {
 		if got := SafeName(in); got != want {
 			t.Errorf("SafeName(%q) = %q, want %q", in, got, want)
+		}
+		if len(SafeName(in)) > 200 {
+			t.Errorf("SafeName(%q) is %d bytes", in, len(SafeName(in)))
 		}
 	}
 }

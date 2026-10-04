@@ -195,6 +195,9 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   a snapshot at `at`, never a live queue; offer actions only for `actionable`
   items, through `POST /api/operator/decide` `{host, id, key, action, expect,
   attempt, text, report}`; the host's answer lands on the item as `result`.
+  The host applies a decision only on a report it sent that operator and still
+  holds: once the host has deleted its chat with the operator, decisions on the
+  reports in it are refused.
   A notification's `#msg=<id>` (optionally `&conv=…&dir=in|out`) lands on that
   message and does nothing else.
 - Storage: GET `/api/storage` (read-only; `local.areas[]` with known usage or an

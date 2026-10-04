@@ -439,10 +439,11 @@ left out) and the request, and sends the agent's reply to the DM. It runs
 only while the participation is active with nothing unresolved, and only for
 a member's current key. A task also needs the host person's say: listed in
 --tasks when invited, standing permission for that exact key (approve
---tasks), or accept ID once (it waits for review until then). The reply goes out only with the
-emotion the agent itself chose ("emotion: WORD" as its last line); without
-one, or when the agent says the person must decide, nothing is sent and the
-host sees it in review. Failures and cancellations are not sent. A dismissal
+--tasks), or accept ID once (it waits for review until then). The reply goes
+out with the emotion the agent itself chose ("emotion: WORD" as its last
+line), or shown neutral without a readable one. When the agent says the
+person must decide, nothing is sent and the host sees it in review.
+Failures and cancellations are not sent. A dismissal
 (or a member's person freezing) stops what has not run, stops a running
 request and holds back output not yet handed over, which the host keeps;
 output already sent cannot be recalled. dm show gives each request's state

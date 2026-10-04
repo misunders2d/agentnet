@@ -128,14 +128,23 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 
 		// Labels: the device judges them as Go does.
 		labels := []string{"Vitalii", "Сергей", "李雷", "a b", "<script>&", "e\u0301", strings.Repeat("x", 64), strings.Repeat("x", 65),
-			"tab\tx", "nbsp\u00a0x", "\u00a0lead", "trail ", "zwj👩\u200d💻", "zero\u200bwidth", "\ufeffbom", "line\u2028sep", "😀", ""}
-		got := w.ok(map[string]any{"op": "validLabel", "labels": labels})["ok"].([]any)
+			"tab\tx", "nbsp\u00a0x", "\u00a0lead", "trail ", "zwj👩\u200d💻", "zero\u200bwidth", "\ufeffbom", "nel\u0085", "line\u2028sep", "😀", ""}
+		res := w.ok(map[string]any{"op": "validLabel", "labels": labels})
+		got, why := res["ok"].([]any), res["why"].([]any)
 		for i, l := range labels {
 			r := goRoster(bobID, bob.Address, "x")
 			r.Label = l
 			_, err := protocol.ParsePersonRoster([]byte(marshal(t, r)))
 			if (err == nil) != got[i].(bool) {
 				t.Errorf("label %q: Go %v, device %v", l, err, got[i])
+			}
+			// The device refuses with Go's words (the page shows them).
+			goWhy := ""
+			if err := protocol.ValidLabel(l); err != nil {
+				goWhy = err.Error()
+			}
+			if why[i] != goWhy {
+				t.Errorf("label %q: Go says %q, device %q", l, goWhy, why[i])
 			}
 		}
 	})

@@ -12,6 +12,7 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // runPerson shows or sets up this installation's person and its devices
@@ -141,8 +142,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			if c.Deleted {
 				continue
 			}
-			fmt.Fprintf(stdout, "%s  with %q (%s, %s)  since %s\n", c.ID, c.Peer.Label, c.Peer.Address, c.Peer.State,
-				time.Unix(c.Created, 0).Format("2006-01-02"))
+			fmt.Fprintln(stdout, convLine(c))
 		}
 		return nil
 	case "show":
@@ -153,43 +153,16 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if err != nil {
 			return err
 		}
-		for _, m := range msgs {
-			who := m.From
-			if m.Via != "" {
-				who = "you on " + m.Via
+		if len(msgs) == 0 {
+			convs, err := a.Conversations()
+			if err != nil {
+				return err
 			}
-			if m.Origin != "" && m.Emotion != "" {
-				who += " [" + m.Origin + ", " + m.Emotion + "]"
-			} else if m.Origin != "" {
-				who += " [" + m.Origin + "]"
-			}
-			state := m.State
-			if m.Detail != "" {
-				state += ": " + m.Detail
-			}
-			if m.Job != "" && m.Job != m.State { // a request to this device's agent, asked here
-				state += "; agent job " + m.Job
-				if m.JobDetail != "" {
-					state += ": " + m.JobDetail
-				}
-			}
-			kind := m.Kind
-			if m.Sub != "" {
-				kind += " " + m.Sub
-			}
-			if m.PID != "" {
-				kind += " pid " + m.PID
-			}
-			fmt.Fprintf(stdout, "%s  %s %s %s (%s)  %s lid %s\n  %s\n", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state,
-				m.ID, m.LID, strings.ReplaceAll(m.Body, "\n", "\n  "))
-			for _, f := range m.Attachments {
-				line := fmt.Sprintf("  [file] %q %d bytes", f.Name, f.Size)
-				if f.SavedPath != "" {
-					line += " saved " + f.SavedPath
-				}
-				fmt.Fprintln(stdout, line)
+			if !slices.ContainsFunc(convs, func(c client.ConversationInfo) bool { return c.ID == args[1] }) {
+				return client.ErrNoConversation
 			}
 		}
+		printConvMessages(stdout, msgs)
 		return nil
 	case "send":
 		fs := flag.NewFlagSet("dm send", flag.ContinueOnError)
@@ -311,6 +284,82 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		return nil
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
+}
+
+// convLine is one conversation in dm list: a group by its title and
+// members, a DM this person is not a member of (it hosts an assistant
+// there, or is a guest there who can read and send) by both its people,
+// any other DM by the other person.
+func convLine(c client.ConversationInfo) string {
+	since := time.Unix(c.Created, 0).Format("2006-01-02")
+	labels := make([]string, len(c.Members))
+	for i, m := range c.Members {
+		labels[i] = fmt.Sprintf("%q", m.Label)
+	}
+	switch {
+	case c.Kind == protocol.ConvKindGroup:
+		return fmt.Sprintf("%s  group %q with %s  since %s", c.ID, c.Title, strings.Join(labels, ", "), since)
+	case c.Role == "visitor" && len(labels) > 0:
+		return fmt.Sprintf("%s  between %s (you are not a member)  since %s", c.ID, strings.Join(labels, " and "), since)
+	}
+	return fmt.Sprintf("%s  with %q (%s, %s)  since %s", c.ID, c.Peer.Label, c.Peer.Address, c.Peer.State, since)
+}
+
+// printConvMessages prints a conversation's messages (dm show), oldest
+// first.
+func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
+	for _, m := range msgs {
+		who := m.From
+		if m.Via != "" {
+			who = "you on " + m.Via
+		}
+		if m.Origin != "" && m.Emotion != "" {
+			who += " [" + m.Origin + ", " + m.Emotion + "]"
+		} else if m.Origin != "" {
+			who += " [" + m.Origin + "]"
+		}
+		state := m.State
+		if m.Detail != "" {
+			state += ": " + m.Detail
+		}
+		if m.Job != "" && m.Job != m.State { // a request to this device's agent, asked here
+			state += "; agent job " + m.Job
+			if m.JobDetail != "" {
+				state += ": " + m.JobDetail
+			}
+		}
+		kind := m.Kind
+		if m.Sub != "" {
+			kind += " " + m.Sub
+		}
+		if m.PID != "" {
+			kind += " pid " + m.PID
+		}
+		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
+		fmt.Fprintf(stdout, "%s\n  %s\n", termText(header, "  "), termText(shownText(m.Body, m.Controls), "  "))
+		if m.Deleted {
+			continue // its files went with it
+		}
+		for _, f := range m.Attachments {
+			line := fmt.Sprintf("  [file] %q %d bytes", f.Name, f.Size)
+			if f.SavedPath != "" {
+				line += " saved " + f.SavedPath
+			}
+			fmt.Fprintln(stdout, line)
+		}
+	}
+}
+
+// shownText is a message's text as people see it now: its latest edit,
+// marked as edited, or a mark that its sender deleted it.
+func shownText(body string, c client.Controls) string {
+	switch {
+	case c.Deleted:
+		return "(deleted)"
+	case c.Edited:
+		return c.Shown(body) + " (edited)"
+	}
+	return body
 }
 
 func splitList(s string) []string {

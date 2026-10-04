@@ -4474,8 +4474,8 @@ export class Engine {
       const item = { id: m.id, peer: m.from, kind: "message", why: "A report from " + m.from, excerpt: firstLine(m.body), at: iso(m.at), notice: true };
       try {
         const v = JSON.parse(m.body);
-        if (v && v.v === 2 && Array.isArray(v.items) && typeof v.host === "string") {
-          item.report = { host: v.host || m.from, at: iso((v.at || 0) * 1000), items: v.items.filter((it) => it && wire.validID(it.id || "")).map((it) => {
+        if (v && v.v === 2 && Array.isArray(v.items) && typeof v.host === "string" && (!v.host || v.host === m.from)) { // a machine reports only its own requests
+          item.report = { host: m.from, at: iso((v.at || 0) * 1000), items: v.items.filter((it) => it && wire.validID(it.id || "")).map((it) => {
             const key = String(it.key || "");
             const o = { id: it.id, from: String(it.from || ""), key, kind: String(it.kind || ""), state: String(it.state || ""), blocker: String(it.blocker || ""), since: iso((it.since || 0) * 1000),
               attempt: Number.isSafeInteger(it.attempt) && it.attempt >= 0 ? it.attempt : 0, actionable: it.actionable === true && wire.validFingerprint(key) };
@@ -4498,7 +4498,7 @@ export class Engine {
   noticeLine(m) {
     try {
       const v = JSON.parse(m.body);
-      if (v && v.v === 2 && Array.isArray(v.items)) { const k = v.items.length; return k + (k === 1 ? " request" : " requests") + " reported by " + (v.host || m.from); }
+      if (v && v.v === 2 && Array.isArray(v.items) && (!v.host || v.host === m.from)) { const k = v.items.length; return k + (k === 1 ? " request" : " requests") + " reported by " + m.from; }
     } catch (e) { /* count text */ }
     return firstLine(m.body);
   }

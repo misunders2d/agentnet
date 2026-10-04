@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // PersonLabelProvider changes only a self-claimed person display label.
@@ -27,6 +28,10 @@ func (s *Server) renamePerson(w http.ResponseWriter, r *http.Request) {
 		Label string `json:"label"`
 	}
 	if !readJSON(w, r, &c) {
+		return
+	}
+	if err := protocol.ValidLabel(c.Label); err != nil {
+		writeErr(w, Refuse(sentence(err))) // the rule it breaks, as the CLI says it
 		return
 	}
 	v, err := p.RenamePerson(r.Context(), c.Label)
