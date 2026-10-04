@@ -94,6 +94,27 @@ func legacyAnswer(msgs []ConversationMessage, id string) (status string, at int6
 	return "", 0
 }
 
+// convAnswer is legacyAnswer for a conversation request: the terminal
+// answer or result its target device sent for it, named by any copy of
+// the request (the executor's own) or its logical id, and its time here.
+func convAnswer(msgs []ConvMessage, request ConvMessage) (status string, at int64) {
+	if request.Target == nil {
+		return "", 0
+	}
+	ids := map[string]bool{request.ID: true, request.LID: true}
+	for _, c := range request.Copies {
+		ids[c.ID] = true
+	}
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Sub == "" && (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && ids[m.ReplyTo] && m.PID == request.PID &&
+			m.From == request.Target.Address && execTerminal(m.status) {
+			return m.status, m.At
+		}
+	}
+	return "", 0
+}
+
 // execTerminal reports whether state is one a host reports last.
 func execTerminal(state string) bool {
 	switch state {
@@ -278,6 +299,10 @@ func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, s
 	if st.Decision != "" {
 		// An answer to a decision: only the very decision this device sent
 		// there, about that very request, naming the same report and attempt.
+		// Decisions are made on device-thread requests only.
+		if in.Conv != "" {
+			return false, "a conversation request takes no remote decision"
+		}
 		var body string
 		err := a.store.db.QueryRow(`SELECT body FROM outbox WHERE id = ? AND recipient = ? AND sub = ? AND conv IS NULL AND ref_id = ? AND ref_fp = ?`,
 			st.Decision, from, envelope.SubDecision, in.Ref.ID, in.Ref.Fingerprint).Scan(&body)
@@ -309,6 +334,16 @@ func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, s
 		return false, "the sender is not the device that request (from that key) is for"
 	}
 	return true, ""
+}
+
+// convRowHere reports whether conv holds a message of logical id ref.ID
+// sent under key ref.Fingerprint (received, or sent from this device).
+func (a *Agent) convRowHere(conv string, ref *envelope.Ref) (bool, error) {
+	var n int
+	err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE conv = ? AND lid = ? AND coalesce(verified_by, claimed_fp, '') = ?)
+		+ (SELECT count(*) FROM outbox WHERE conv = ? AND lid = ? AND ? = ?)`,
+		conv, ref.ID, ref.Fingerprint, conv, ref.ID, ref.Fingerprint, a.Self().Fingerprint()).Scan(&n)
+	return n > 0, err
 }
 
 // ---- decisions: an operator deciding on a host ----
