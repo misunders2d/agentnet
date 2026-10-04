@@ -6,14 +6,14 @@ import { IconChevronRight, IconRobot, IconSearch, IconX } from "@tabler/icons-re
 import { useAgentNames, useApp, useWide } from "../context";
 import { useStore } from "../store";
 import type { T } from "../api";
-import { agentName, firstLine, personName, type ChatItem } from "../model";
+import { Reason, agentName, convTitle, decidable, firstLine, personOf, senderOf, type ChatItem } from "../model";
 import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
-import { chatItems, personAt, type ListItem } from "./ChatList.words";
+import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
 import { WorkspacePill } from "./WorkspaceSwitcher";
-import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
+import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 
 type Filter = "all" | ChatItem["kind"];
@@ -106,7 +106,7 @@ export function ChatList() {
 
       {!overview ? (loadError ? <LoadFailed text={loadError} /> : <Skeleton />) : (
         <>
-          {!q && <NeedsYouBanner overview={overview} items={items} agentNames={agentNames} />}
+          {!q && <NeedsYouBanner overview={overview} agentNames={agentNames} />}
           {!q && <GroupInvitations />}
           {overview.persons && !overview.person && <NoName />}
           {shownFilters.length > 0 && (
@@ -142,20 +142,19 @@ export function ChatList() {
 /** What the banner names: the newest thing that waits, and where it is decided. */
 interface Named { face: ReactNode; headline: string; line: string; go: () => void }
 
-/** NeedsYouBanner names who wants what, and opens exactly that: the request
- *  in its conversation, or the OKs when it is decided there. */
-function NeedsYouBanner({ overview: o, items, agentNames }: { overview: T.Overview; items: ListItem[]; agentNames: Record<string, string> }) {
+/** NeedsYouBanner names who wants what, and opens exactly that: the newest
+ *  request in its conversation (or device thread), or the OKs when it is
+ *  decided there. It counts and names only what this device decides. */
+function NeedsYouBanner({ overview: o, agentNames }: { overview: T.Overview; agentNames: Record<string, string> }) {
   const store = useApp();
   const count = useNeedsYou(); // the same count as the OKs badge and header
   if (!count) return null;
   const me = o.person;
   let named: Named | null = null;
   const review = (o.review || []).filter((r) => !r.notice).sort((a, b) => (b.at || "").localeCompare(a.at || ""))[0];
-  const held = items.find((i) => i.kind !== "agent" && i.needsYou > 0);
-  const join = (me?.agents || []).filter((a) => a.address === o.me.address)
-    .flatMap((a) => (a.dms || []).filter((d) => d.state === "invited").map((d) => ({ ...d, agentId: a.agent_id })))[0];
+  const conv = decidable(o).sort((a, b) => b.at.localeCompare(a.at))[0];
   const device = (o.links || []).find((l) => l.state === "pending");
-  if (review) { // what is asked, then who asks
+  if (review && (!conv || review.at >= conv.at)) { // what is asked, then who asks
     // Whose agent asks; the row below says on which device (a phone's banner has room for one).
     const who = agentName(undefined, agentNames, personAt(review.peer, o), me);
     named = {
@@ -164,35 +163,20 @@ function NeedsYouBanner({ overview: o, items, agentNames }: { overview: T.Overvi
       line: (review.kind === "task" ? "Task from " : review.kind === "question" ? "Question from " : "From ") + who,
       go: () => void store.open({ kind: "thread", id: review.id, focus: review.id }),
     };
-  } else if (held) {
+  } else if (conv) {
+    const invite = conv.reason === Reason.invite;
+    const p = personOf(conv.peer, o);
     named = {
-      face: held.kind === "group" ? <GroupAvatar names={held.members || [held.title]} seed={held.avatarSeed} size={40} /> : <PersonAvatar name={held.title} seed={held.avatarSeed} size={40} />,
-      headline: (held.needsYou === 1 ? "A request waits in " : held.needsYou + " requests wait in ") + held.title,
-      line: "Nothing goes ahead until you say so",
-      go: () => void store.open(held.open),
-    };
-  } else if (join) {
-    const chat = (o.dms || []).find((d) => d.id === join.conv);
-    const where = !chat ? "a chat" : chat.kind === "group" ? (chat.title || "a group") : "your chat with " + personName(chat.peer);
-    named = {
-      face: <AgentAvatar seed={join.agentId || o.me.address} size={40} mood="waiting" />,
-      headline: agentName(join.agentId, agentNames, me, me) + " is invited into " + where,
-      line: "It joins only when you say so",
-      go: () => chat ? void store.open({ kind: "dm", id: chat.id }) : store.showTab("oks"),
+      face: invite ? <AgentAvatar seed={o.me.address} size={40} mood="waiting" /> : <PersonAvatar name={senderOf(conv, o)} seed={p?.person || p?.address || conv.peer} size={40} />,
+      headline: invite ? convTitle(conv, o) : firstLine(conv.excerpt, 120) || convTitle(conv, o),
+      line: invite ? "It joins only when you say so" : convTitle(conv, o),
+      go: () => void store.open({ kind: "dm", id: conv.conv, focus: conv.id }),
     };
   } else if (device) {
     named = {
       face: <PersonAvatar name={me?.label || "Me"} seed={me?.person || "me"} size={40} />,
       headline: "A new device, “" + device.name + "”, wants to join as you",
       line: "Approve it only if it is yours",
-      go: () => store.showTab("oks"),
-    };
-  } else if (count > (o.group_invitations || []).filter((i) => i.direction === "in" && i.status === "pending").length) {
-    // e.g. a request to your agent in a chat: the OKs list names each one
-    named = {
-      face: <AgentAvatar seed="oks" size={40} mood="waiting" />,
-      headline: count === 1 ? "Something waits for your OK" : count + " things wait for your OK",
-      line: "Review them in OKs",
       go: () => store.showTab("oks"),
     };
   }

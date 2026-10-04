@@ -1,146 +1,167 @@
 // OKs: everything that waits for this person's decision, newest first,
-// each naming who and what. Requests open their exact conversation, where
-// the approval card decides; invitations and new devices are decided here.
-// Reports from other computers sit apart, folded away.
-import { useState, type ReactNode } from "react";
-import { IconChevronRight, IconDeviceMobile, IconUsersGroup } from "@tabler/icons-react";
+// each naming who and what, straight from the overview: requests to your
+// agent and invitations for it decided here (needs_you), review decisions,
+// group invitations and new devices: exactly what the header counts.
+// Questions held for you, items another device of yours decides, and quiet
+// notices follow; reports from other computers sit apart, folded away.
+// Every row opens its exact conversation, where the approval card decides
+// the same way. An invitation card also reads its chat once, to name what
+// your agent would see there.
+import { useLayoutEffect, useRef, useState } from "react";
+import { IconDeviceMobile, IconUsersGroup } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, firstLine, personName, plain, when } from "../model";
+import { agentName, firstLine, when } from "../model";
 import { useStore } from "../store";
-import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
+import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { ScreenTitle } from "./Approvals.title";
 import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { Reports } from "./Approvals.reports";
-import { askerOf, capital, inSentence, myAgentName, nameOf, peerAgent, phaseOf, placeOf, whyWords } from "./Approvals.words";
-import { useNeedsYouChats, type Chats } from "./Approvals.chats";
+import { Body, Card, Landing, kindTag, useLand, useOpen } from "./Approvals.parts";
+import { ConvRow, SelfConsentRow } from "./Approvals.conv";
+import { capital, decidable, inSentence, isSelfConsent, nameOf, peerAgent, whyWords } from "./Approvals.words";
 
 export { ApprovalCard } from "./Approvals.card";
 
-/** Pending invitations of this device's own agent into a DM (its person decides). */
-function agentJoins(o: T.Overview) {
-  return (o.person?.agents || []).filter((a) => a.address === o.me.address)
-    .flatMap((a) => (a.dms || []).filter((d) => d.state === "invited").map((d) => ({ ...d, agentId: a.agent_id })));
-}
 const groupInvites = (o: T.Overview) => (o.group_invitations || []).filter((i) => i.direction === "in" && i.status === "pending");
 const deviceAsks = (o: T.Overview) => (o.links || []).filter((l) => l.state === "pending");
+const reviewAsks = (o: T.Overview) => (o.review || []).filter((r) => !r.notice);
 
-/** needsYouCount: the decisions waiting here that the overview alone proves
- *  (requests to your agent in chats are only in /api/dm: see useNeedsYou). */
+/** needsYouCount: the decisions waiting for this device, as the overview
+ *  lists them: requests to your agent and invitations for it that are
+ *  decided here (not on another device), review decisions, group
+ *  invitations to you and new devices. Notices and questions held for you
+ *  are listed in OKs but are not decisions, so they are not counted. */
 export function needsYouCount(o: T.Overview | null): number {
   if (!o) return 0;
-  return (o.review || []).filter((r) => !r.notice).length + (o.dms || []).reduce((n, d) => n + d.held, 0)
-    + groupInvites(o).length + deviceAsks(o).length + agentJoins(o).length;
-}
-
-/** A request in a chat that waits for this person: one of the OKs list's rows
- *  (a running one only offers Stop, so it doesn't count). */
-const waitsForYou = (m: T.DMMessage) => { const p = phaseOf(m); return !!p && p !== "running"; };
-
-function chatRequests(o: T.Overview | null, chats: Chats): number {
-  return (o?.dms || []).reduce((n, d) => n + (chats[d.id]?.messages || []).filter(waitsForYou).length, 0);
+  return decidable(o).length + reviewAsks(o).length + groupInvites(o).length + deviceAsks(o).length;
 }
 
 /** useNeedsYou: the one count of what waits for you, for the OKs badge, the
- *  home banner and the OKs header alike: needsYouCount(overview) plus the
- *  requests to your agent in chats (read once per change, shared). */
+ *  home banner and the OKs header alike. */
 export function useNeedsYou(): number {
-  const o = useStore(useApp(), (s) => s.overview);
-  const chats = useNeedsYouChats();
-  return needsYouCount(o) + chatRequests(o, chats);
+  return needsYouCount(useStore(useApp(), (s) => s.overview));
 }
 
-interface Item { key: string; at: string; node: ReactNode }
+interface Item { key: string; at: string; node: React.ReactNode }
+
+// Newest first; what carries no time (an invitation) leads.
+const newestFirst = (a: { at: string }, b: { at: string }) => (!a.at && !b.at ? 0 : !a.at ? -1 : !b.at ? 1 : b.at.localeCompare(a.at));
+
+/** useLanding keeps focus on the screen when a card's decision ends: the
+ *  clicked button was disabled while it ran, and the card itself goes once
+ *  the overview drops it. Focus then moves to the card if it is still
+ *  there, else the next one (or the one before), else the screen title.
+ *  It never takes focus that something else on the page holds. */
+function useLanding(cards: string) {
+  const root = useRef<HTMLDivElement>(null);
+  const title = useRef<HTMLHeadingElement>(null);
+  const want = useRef<{ key: string; order: string[]; until: number } | null>(null);
+  const settle = () => {
+    const w = want.current, box = root.current;
+    if (!w || !box) return;
+    if (Date.now() > w.until) { want.current = null; return; }
+    const a = document.activeElement as HTMLElement | null;
+    const lost = !a || a === document.body || (a instanceof HTMLButtonElement && a.disabled);
+    const card = (k: string) => box.querySelector<HTMLElement>("[data-card=\"" + CSS.escape(k) + "\"]");
+    const target = (li: HTMLElement) => li.querySelector<HTMLElement>("[data-open]") || li.querySelector<HTMLElement>("button:not([disabled])") || li;
+    const here = card(w.key);
+    if (here) { if (lost) target(here).focus(); return; } // still listed: wait until the overview drops it
+    want.current = null;
+    if (!lost) return;
+    const i = w.order.indexOf(w.key);
+    const next = w.order.slice(i + 1).map(card).find(Boolean) || w.order.slice(0, Math.max(i, 0)).reverse().map(card).find(Boolean);
+    (next ? target(next) : title.current)?.focus();
+  };
+  useLayoutEffect(settle, [cards]);
+  const land = (key: string) => {
+    const order = [...(root.current?.querySelectorAll<HTMLElement>("[data-card]") || [])].map((e) => e.dataset.card || "");
+    want.current = { key, order, until: Date.now() + 15000 };
+    requestAnimationFrame(settle);
+  };
+  return { root, title, land };
+}
+
+/** Listed: one card in a list, with its key for landing focus. */
+function Listed({ k, land, children }: { k: string; land: (key: string) => void; children: React.ReactNode }) {
+  return <li data-card={k} className="fade-in"><Landing.Provider value={() => land(k)}>{children}</Landing.Provider></li>;
+}
 
 export function OksView() {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const loadError = useStore(store, (s) => s.loadError);
-  const chats = useNeedsYouChats();
   const names = useAgentNames();
-  const count = needsYouCount(o) + chatRequests(o, chats);
+  const count = needsYouCount(o);
+
+  const items: Item[] = [];
+  const elsewhere: T.ConvItem[] = [];
+  if (o) {
+    for (const r of reviewAsks(o)) items.push({ key: "r:" + r.id, at: r.at, node: <ReviewRow r={r} o={o} names={names} /> });
+    for (const c of o.needs_you || []) {
+      if (c.decide_on) elsewhere.push(c); // decided on another device: listed apart, not counted
+      else items.push({ key: "n:" + c.conv + ":" + (c.id || c.pid), at: c.at, node: <ConvRow c={c} o={o} /> });
+    }
+    for (const g of groupInvites(o)) items.push({ key: "g:" + g.id, at: "", node: <GroupRow g={g} o={o} /> });
+    for (const l of deviceAsks(o)) items.push({ key: "d:" + l.id, at: l.requested_at, node: <DeviceRow l={l} /> });
+    items.sort(newestFirst);
+    elsewhere.sort(newestFirst);
+  }
+  const held = [...(o?.held || [])].sort(newestFirst);
+  const joined = (o?.review || []).filter(isSelfConsent).sort(newestFirst);
+  const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r));
+  const keys = [...items.map((i) => i.key), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id)];
+  const { root, title, land } = useLanding(keys.join("\n"));
 
   if (!o) return loadError ? <Failed text={loadError} retry={() => store.retryNow()} /> : <Loading />;
 
-  const items: Item[] = [];
-  for (const r of (o.review || []).filter((r) => !r.notice)) items.push({ key: "r:" + r.id, at: r.at, node: <ReviewRow r={r} o={o} names={names} /> });
-  for (const d of o.dms || []) {
-    const t = chats[d.id];
-    const held = (t?.messages || []).filter((m) => m.dir === "in" && m.state === "conv_held");
-    if (d.held > 0 && !held.length) items.push({ key: "h:" + d.id, at: d.last_at, node: <HeldCountRow d={d} /> });
-    for (const m of held) items.push({ key: "h:" + m.id, at: m.at, node: <HeldRow m={m} t={t} o={o} /> });
-    for (const m of (t?.messages || []).filter(waitsForYou)) items.push({ key: "q:" + m.id, at: m.at, node: <RequestRow m={m} t={t} o={o} names={names} /> });
-  }
-  for (const j of agentJoins(o)) {
-    const a = (chats[j.conv]?.agents || []).find((x) => x.pid === j.pid);
-    items.push({ key: "j:" + j.pid, at: a?.invited || "", node: <JoinRow conv={j.conv} pid={j.pid} a={a} t={chats[j.conv]} o={o} names={names} agentId={j.agentId} /> });
-  }
-  for (const g of groupInvites(o)) items.push({ key: "g:" + g.id, at: "", node: <GroupRow g={g} o={o} /> });
-  for (const l of deviceAsks(o)) items.push({ key: "d:" + l.id, at: l.requested_at, node: <DeviceRow l={l} /> });
-  // Newest first; what carries no time (an invitation) leads.
-  items.sort((a, b) => (!a.at ? -1 : !b.at ? 1 : b.at.localeCompare(a.at)));
-  const notices = (o.review || []).filter((r) => r.notice);
-
   return (
-    <div className="pb-8">
+    <div ref={root} className="pb-8">
       <header className="px-4 pt-5 pb-1">
-        <ScreenTitle>OKs</ScreenTitle>
+        <ScreenTitle ref={title}>OKs</ScreenTitle>
         {count > 0 && <p className="pt-2 text-[15px] font-semibold text-text-2 tnum">{count === 1 ? "1 thing needs you" : count + " things need you"}</p>}
       </header>
       {items.length ? (
         <div className="px-4 pt-3">
           <ul className="flex flex-col gap-3" aria-label="Waiting for you">
-            {items.map((i) => <li key={i.key} className="fade-in">{i.node}</li>)}
+            {items.map((i) => <Listed key={i.key} k={i.key} land={land}>{i.node}</Listed>)}
           </ul>
         </div>
-      ) : <AllClear />}
+      ) : !held.length && !elsewhere.length && <AllClear />}
+      {held.length > 0 && (
+        <section className="px-4 pt-6" aria-labelledby="oks-held">
+          <h2 id="oks-held" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Asked of you</h2>
+          <p className="pt-1 text-[14px] text-text-2">Answer them in the chat if you want to. Nothing runs them.</p>
+          <ul className="flex flex-col gap-3 pt-3">
+            {held.map((c) => { const k = "h:" + c.conv + ":" + c.id; return <Listed key={k} k={k} land={land}><ConvRow c={c} o={o} /></Listed>; })}
+          </ul>
+        </section>
+      )}
+      {elsewhere.length > 0 && (
+        <section className="px-4 pt-6" aria-labelledby="oks-elsewhere">
+          <h2 id="oks-elsewhere" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Decided on your other devices</h2>
+          <p className="pt-1 text-[14px] text-text-2">Your agent runs on another of your devices, so you decide these there.</p>
+          <ul className="flex flex-col gap-3 pt-3">
+            {elsewhere.map((c) => { const k = "e:" + c.conv + ":" + (c.id || c.pid); return <Listed key={k} k={k} land={land}><ConvRow c={c} o={o} /></Listed>; })}
+          </ul>
+        </section>
+      )}
+      {joined.length > 0 && (
+        <section className="px-4 pt-6" aria-labelledby="oks-notices">
+          <h2 id="oks-notices" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Just so you know</h2>
+          <ul className="flex flex-col gap-3 pt-3">
+            {joined.map((r) => <Listed key={"s:" + r.id} k={"s:" + r.id} land={land}><SelfConsentRow r={r} o={o} names={names} /></Listed>)}
+          </ul>
+        </section>
+      )}
       {notices.length > 0 && <Reports notices={notices} o={o} />}
     </div>
   );
 }
 
 // ---- rows ---------------------------------------------------------------------
-
-function Card({ children, onOpen, label, current }: { children: ReactNode; onOpen?: () => void; label?: string; current?: boolean }) {
-  const cls = "relative flex w-full gap-3 rounded-2xl bg-surface p-3.5 text-left stroke " + (current ? "ring-2 ring-agent-ink ring-offset-2 ring-offset-canvas" : "");
-  if (!onOpen) return <article className={cls}>{children}</article>;
-  return (
-    <button type="button" onClick={onOpen} aria-label={label} aria-current={current || undefined} className={cls + " press shadow-pop-sm hover:bg-sunken"}>
-      {children}
-      <span className="grid size-9 shrink-0 self-center place-items-center rounded-full bg-ink text-canvas" aria-hidden="true"><IconChevronRight size={20} stroke={2.5} /></span>
-    </button>
-  );
-}
-
-function Body({ tag, at, title, quote, meta, children }: { tag?: ReactNode; at?: string; title: ReactNode; quote?: string; meta?: string; children?: ReactNode }) {
-  return (
-    <div className="min-w-0 flex-1">
-      {(tag || at) && (
-        <div className="mb-1 flex items-center gap-2">
-          {tag}
-          {at && <time dateTime={at} className="tnum ml-auto text-[12px] font-semibold text-muted">{when(at)}</time>}
-        </div>
-      )}
-      <p className="text-[16px] font-bold leading-snug [overflow-wrap:anywhere]">{title}</p>
-      {quote && <p className="pt-1 line-clamp-2 text-[15px] leading-snug text-text-2 [overflow-wrap:anywhere]">“{quote}”</p>}
-      {meta && <p className="pt-1.5 text-[13px] font-medium text-muted">{meta}</p>}
-      {children}
-    </div>
-  );
-}
-
-const kindTag = (kind: string) => kind === "task" ? <Tag tone="agent">Task</Tag> : kind === "question" ? <Tag tone="agent">Question</Tag> : <Tag tone="muted">Follow-up</Tag>;
-
-function useOpen() {
-  const store = useApp();
-  const open = useStore(store, (s) => s.open);
-  return {
-    isOpen: (id: string, focus?: string) => !!open && open.id === id && (!focus || open.focus === focus),
-    go: (kind: "dm" | "thread", id: string, focus?: string) => void store.open({ kind, id, focus }),
-  };
-}
 
 function ReviewRow({ r, o, names }: { r: T.ReviewItem; o: T.Overview; names: Record<string, string> }) {
   const { isOpen, go } = useOpen();
@@ -156,83 +177,9 @@ function ReviewRow({ r, o, names }: { r: T.ReviewItem; o: T.Overview; names: Rec
   );
 }
 
-function RequestRow({ m, t, o, names }: { m: T.DMMessage; t: T.DMThread; o: T.Overview; names: Record<string, string> }) {
-  const { isOpen, go } = useOpen();
-  const asker = askerOf(m, o, names, t);
-  const who = asker.name;
-  const agent = myAgentName(m, names, o, t);
-  const phase = phaseOf(m);
-  const what = m.kind === "task" ? "task" : "question";
-  const title = phase === "needs_human" ? capital(agent) + " needs you for " + (who === "You" ? "your " : who + "’s ") + what
-    : phase === "stopped" ? capital(who === "You" ? "your " : who + "’s ") + what + " for " + agent + " didn’t finish"
-    : m.kind === "task" ? who + " gave " + agent + " a task" : who + " asked " + agent + " something";
-  return (
-    <Card onOpen={() => go("dm", t.id, m.id)} current={isOpen(t.id, m.id)} label={title + ". Review it."}>
-      {asker.agent ? <AgentAvatar seed={asker.seed} size={40} /> : <PersonAvatar name={asker.you ? "Me" : asker.name} seed={asker.seed} size={40} />}
-      <Body tag={phase === "needs_human" ? <Tag tone="act">Needs you</Tag> : phase === "stopped" ? <Tag tone="muted">Didn’t finish</Tag> : kindTag(m.kind)}
-        at={m.at} title={title} quote={firstLine(plain(m.body), 160)} meta={capital(placeOf(t, null, o))} />
-    </Card>
-  );
-}
-
-function HeldRow({ m, t, o }: { m: T.DMMessage; t: T.DMThread; o: T.Overview }) {
-  const { isOpen, go } = useOpen();
-  const who = nameOf(m.from, o);
-  const title = m.kind === "task" ? who + " gave you a task" : who + " asked you something";
-  return (
-    <Card onOpen={() => go("dm", t.id, m.id)} current={isOpen(t.id, m.id)} label={title + ". Answer in the chat."}>
-      <PersonAvatar name={who} seed={(t.kind === "group" ? "" : t.peer.person) || m.from} size={40} />
-      <Body tag={kindTag(m.kind)} at={m.at} title={title} quote={firstLine(plain(m.body), 160)}
-        meta={capital(placeOf(t, null, o)) + " · For you, not your agent"} />
-    </Card>
-  );
-}
-
-function HeldCountRow({ d }: { d: T.DMSummary }) {
-  const { isOpen, go } = useOpen();
-  const who = d.kind === "group" ? d.title || "A group" : personName(d.peer);
-  const title = d.held === 1 ? who + " has a question for you" : who + " has " + d.held + " things for you";
-  return (
-    <Card onOpen={() => go("dm", d.id)} current={isOpen(d.id)} label={title + ". Open the chat."}>
-      <PersonAvatar name={who} seed={d.kind === "group" ? d.id : d.peer.person || d.peer.address} size={40} />
-      <Body at={d.last_at} title={title} meta="For you, not your agent. Answer in the chat." />
-    </Card>
-  );
-}
-
-function JoinRow({ conv, pid, a, t, o, names, agentId }: { conv: string; pid: string; a?: T.AgentView; t?: T.DMThread; o: T.Overview; names: Record<string, string>; agentId?: string }) {
-  const store = useApp();
-  const { go } = useOpen();
-  const [busy, setBusy] = useState(false);
-  const agent = inSentence(o.person ? agentName(agentId, names, o.person, o.person) : (agentId && names[agentId]) || "Your agent");
-  const by = a ? (a.inviter.person && a.inviter.person === o.person?.person ? "You" : personName(a.inviter)) : "Someone";
-  const where = t ? placeOf(t, null, o) : "into a chat";
-  const decide = async (accept: boolean) => {
-    setBusy(true);
-    await store.run((api) => api.decideAgent(pid, accept), accept ? capital(agent) + " joined." : "Declined. " + capital(agent) + " stays out.");
-    setBusy(false);
-  };
-  const seen = (a?.shared || []).length;
-  const tasks = (a?.tasks_from || []).filter((p) => p.person !== o.person?.person).map(personName);
-  return (
-    <Card>
-      <AgentAvatar seed={agentId || o.me.address} size={40} mood="waiting" />
-      <Body tag={<Tag tone="act">Needs your OK</Tag>} at={a?.invited}
-        title={by + " invited " + agent + " " + where.replace(/^in /, "into ")} quote={a?.note ? firstLine(a.note, 160) : undefined}
-        meta={a ? (seen ? "It would see " + (seen === 1 ? "1 earlier message" : seen + " earlier messages") : "It would see nothing earlier") + " and what’s asked of it." : undefined}>
-        {tasks.length > 0 && <p className="pt-1 text-[13px] font-semibold text-approval-ink">{tasks.join(" and ")} could give it tasks without asking you.</p>}
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button variant="act" size="sm" disabled={busy} onClick={() => decide(true)}>Let it join</Button>
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => decide(false)}>Decline</Button>
-          {t && <Button variant="ghost" size="sm" onClick={() => go("dm", conv)}>Open chat</Button>}
-        </div>
-      </Body>
-    </Card>
-  );
-}
-
 function GroupRow({ g, o }: { g: T.GroupInvitationView; o: T.Overview }) {
   const store = useApp();
+  const land = useLand();
   const [busy, setBusy] = useState(false);
   const by = nameOf(g.inviter, o);
   const shared = (g.history || []).length;
@@ -240,6 +187,7 @@ function GroupRow({ g, o }: { g: T.GroupInvitationView; o: T.Overview }) {
     setBusy(true);
     await store.run((api) => api.decideGroup(g.id, accept), accept ? "Accepted. You’re in once the group’s admin confirms." : "Declined.");
     setBusy(false);
+    land();
   };
   return (
     <Card>
@@ -257,12 +205,14 @@ function GroupRow({ g, o }: { g: T.GroupInvitationView; o: T.Overview }) {
 
 function DeviceRow({ l }: { l: T.LinkRequest }) {
   const store = useApp();
+  const land = useLand();
   const [sure, setSure] = useState(false);
   const [busy, setBusy] = useState(false);
   const decide = async (accept: boolean) => {
     setBusy(true);
     await store.run((api) => api.decideDevice(l.id, accept), accept ? "“" + l.name + "” is now one of your devices." : "Refused. It didn’t join as you.");
     setBusy(false);
+    land();
   };
   return (
     <Card>

@@ -71,6 +71,9 @@
   } catch (e) { shell = null; ws = null; }
   if (shell && !shell.active) shell = null; // nothing enrolled: the legacy transport, as before
   const entryOf = (id) => shell && shell.members.get(id);
+  // Reconnect routes a membership disconnected here again: this computer's
+  // program only (a browser enrollment has no program to ask).
+  const canReconnect = !!shell && !memberships && typeof shell.reconnect === "function";
   const workspaces = shell ? Object.freeze({
     list: () => shell.list(),
     active: () => shell.active,
@@ -80,6 +83,10 @@
     onChange: (fn) => shell.onChange(fn),
     join: (body) => (memberships ? memberships.join(body) : shell.join(body)),
     disconnect: (id) => (memberships ? memberships.disconnect(id) : shell.disconnect(id)),
+    ...(canReconnect ? {
+      disconnected: () => shell.disconnected(), // memberships disconnected here, with their state
+      reconnect: (id) => shell.reconnect(id),
+    } : {}),
   }) : null;
   // hostFor binds one membership: the transport is that membership's own
   // and never changes; what the host adds (skins, notification routing,
@@ -183,7 +190,6 @@
     const bar = ws.mountWorkspaceSwitcher(root, shell, { beforeSwitch: (previous, st) => { if (switching) switching(previous, st); }, afterSwitch: () => note("") });
     const tools = document.createElement("span"); tools.className = "workspace-tools";
     const joinBtn = button("Join a workspace…", () => joinForm());
-    const canReconnect = !memberships && typeof shell.reconnect === "function";
     const leaveBtn = button("Disconnect…", async () => {
       const id = shell.active, b = entryOf(id) && entryOf(id).binding;
       if (!b) return;
