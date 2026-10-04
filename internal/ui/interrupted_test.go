@@ -6,14 +6,15 @@ import (
 )
 
 // BUG-07: an interrupted question or task waits for the person (client
-// reviewStates): the page says so and offers running it again. An
-// interrupted follow-up is no request: nobody waits on it.
+// reviewStates): the page says so and offers running it again, or closing
+// it without running it (resolve, as agentnet resolve does: review finding
+// 3). An interrupted follow-up is no request: nobody waits on it.
 func TestInterruptedNeedsYouOnThePage(t *testing.T) {
 	for _, k := range []string{KindQuestion, KindTask} {
 		if got := Next("in", k, "interrupted", "bob/desk", false); got != "you" {
 			t.Errorf("%s interrupted: next %q", k, got)
 		}
-		if a := ActionsFor(k, "interrupted"); !slices.Contains(a, DoAccept) {
+		if a := ActionsFor(k, "interrupted"); !slices.Contains(a, DoAccept) || !slices.Contains(a, DoResolve) {
 			t.Errorf("interrupted %s actions %v", k, a)
 		}
 	}

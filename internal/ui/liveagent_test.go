@@ -243,7 +243,8 @@ func TestAgentActions(t *testing.T) {
 		{"task", "running", "cancel"},
 		{"question", "needs_human", "accept,resolve"},
 		{"task", "failed", "accept"},
-		{"task", "interrupted", "accept"},
+		{"task", "interrupted", "accept,resolve"}, // run it again, or close it without running it (review finding 3)
+		{"question", "interrupted", "accept,resolve"},
 		{"question", "cancelled", "accept"},
 		{"question", "part_waiting", ""},
 		{"question", "answered", ""},
