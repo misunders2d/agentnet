@@ -67,13 +67,19 @@ func TestReminderDueOnceAndMoved(t *testing.T) {
 	if _, err := w.bob.SetReminder(q, time.Now().Add(-time.Minute)); err == nil {
 		t.Fatal("a reminder in the past")
 	}
-	r, err := w.bob.SetReminder(q, time.Now().Add(1500*time.Millisecond))
+	due := time.Now().Add(1500 * time.Millisecond)
+	r, err := w.bob.SetReminder(q, due)
 	if err != nil || r.State != ReminderPending || r.Overdue || r.Alerted || r.From != w.alice.Address {
 		t.Fatalf("set: %+v %v", r, err)
 	}
+	// Not before its time: due times are kept in whole seconds, so the
+	// earliest it may ask is the start of its due second. The count is read
+	// before the clock, so a slow machine that oversleeps sees a reminder
+	// that came on time, never a false "early".
 	time.Sleep(500 * time.Millisecond)
-	if c, _, _ := n.reminded(); c != 0 {
-		t.Fatal("notified early")
+	c, _, _ := n.reminded()
+	if now := time.Now(); c != 0 && now.Before(time.Unix(due.Unix(), 0)) {
+		t.Fatalf("notified early: %d by %s, due %s", c, now.Format(time.StampMilli), due.Format(time.StampMilli))
 	}
 	eventually(t, "the reminder", func() bool { c, _, _ := n.reminded(); return c == 1 })
 	_, bodies, argvs := n.reminded()
