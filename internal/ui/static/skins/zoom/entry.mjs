@@ -4745,7 +4745,7 @@ const Zoom = {
     const views = this.person ? [() => this.everyone(), () => this.personLevel(), () => this.dmLevel(), () => this.dmMessage()]
       : [() => this.everyone(), () => this.person_(), () => this.thread(), () => this.message()];
     const content = el("div", { class: "zoom-content" }, this.content(views));
-    const search = el("input", { type: "search", class: "zoom-search", placeholder: "Search people, agents and conversations",
+    const search = el("input", { type: "search", class: "zoom-search", placeholder: "Search…",
       "aria-label": "Search people, agents and conversations", autocomplete: "off", spellcheck: "false", value: this.query,
       oninput: (e) => { this.query = e.target.value; fill(content, this.content(views)); },
       onkeydown: (e) => { if (e.key === "Escape" && this.query) { e.stopPropagation(); e.target.value = ""; this.query = ""; fill(content, this.content(views)); } } });
