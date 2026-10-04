@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,15 +157,18 @@ func TestHumanGuestAsksMemberHostedAssistant(t *testing.T) {
 		t.Fatalf("request under another key: %s, runs %d", s, stub.runs())
 	}
 
-	// Carol leaves; Bob's later one-time acceptance cannot run her task.
+	// Carol leaves; Bob's later one-time acceptance cannot run her task: it
+	// is refused, saying why (BUG-23), and nothing runs.
 	if _, err := carol.DismissParticipation(tctx(t), hp.PID); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "Bob observes the leave", func() bool { return stateAt(t, w.bob, hp.PID).State == PartDismissed })
-	if err := w.bob.Accept(task.LID); err != nil {
-		t.Fatal(err)
+	if err := w.bob.Accept(task.LID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "asking guest's participation ended") {
+		t.Fatalf("accept of an ended guest's task: %v", err)
 	}
-	eventually(t, "ended guest's task not run", func() bool { return jobState(t, w.bob, task.LID) == stateNotRun })
+	if s := jobState(t, w.bob, task.LID); s != stateAwaiting {
+		t.Fatalf("ended guest's task, accept refused: %s", s)
+	}
 	if stub.runs() != runs {
 		t.Fatal("ended guest's task ran")
 	}
@@ -275,10 +279,12 @@ func TestHumanGuestAsksOutsideHostedAssistant(t *testing.T) {
 		p, err := charlie.Participation(hp.PID)
 		return err == nil && p.State == PartDismissed
 	})
-	if err := charlie.Accept(task.LID); err != nil {
-		t.Fatal(err)
+	if err := charlie.Accept(task.LID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "asking guest's participation ended") {
+		t.Fatalf("accept of an ended guest's task: %v", err)
 	}
-	eventually(t, "ended guest's task not run", func() bool { return jobState(t, charlie, task.LID) == stateNotRun })
+	if s := jobState(t, charlie, task.LID); s != stateAwaiting {
+		t.Fatalf("ended guest's task, accept refused: %s", s)
+	}
 	if stub.runs() != runs {
 		t.Fatal("ended guest's task ran")
 	}

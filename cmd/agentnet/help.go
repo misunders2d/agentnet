@@ -492,7 +492,10 @@ or rerun one that was interrupted, failed, cancelled or marked needs_human.
 A rerun starts afresh; it does not resume the earlier run. Only you can do
 this; nothing a sender does can. In a DM this applies only to a request to
 your own agent (agentnet help dm), which still runs only while its
-participation allows it.
+participation allows it. When nothing here would run it (no responder
+chosen, or answering by hand chosen; the agent it names is not set up here;
+its participation, or the asking guest's, has ended), accept refuses and
+says why: the item stays as it was.
 
 --always (tasks only, not in a DM) also lets future tasks from the same sender run without
 asking, in one step: only for the exact key that signed this task, and only

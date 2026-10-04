@@ -173,10 +173,13 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 		pins, e := host.groupWithdrawals(packet.State.Conv)
 		return e == nil && groupWithdrawalPinned(pins, *leave.Withdrawal)
 	})
-	if err = host.Accept(task.ID); err != nil {
-		t.Fatal(err)
+	// Accepting it is refused, saying why (BUG-23): nothing would run it.
+	if err = host.Accept(task.ID); !errors.Is(err, ErrNothingRuns) {
+		t.Fatalf("accept of a task after its inviter's departure: %v", err)
 	}
-	waitState(t, host, task.ID, stateNotRun)
+	if s, _ := host.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
+		t.Fatalf("a refused accept left the task %s", s)
+	}
 	if stub.runs() != 0 {
 		t.Fatal("received departure allowed queued task claim")
 	}
@@ -348,10 +351,13 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	if !stateAt(t, w.bob, stablePID.PID).Claimable() {
 		t.Fatal("unrelated requester change ended stable invite")
 	}
-	if err = w.bob.Accept(task.ID); err != nil {
-		t.Fatal(err)
+	// Accepting it is refused, saying why (BUG-23): nothing would run it.
+	if err = w.bob.Accept(task.ID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "group admission changed") {
+		t.Fatalf("accept of a task whose requester's admission changed: %v", err)
 	}
-	waitState(t, w.bob, task.ID, stateNotRun)
+	if s, _ := w.bob.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
+		t.Fatalf("a refused accept left the task %s", s)
+	}
 	if stub.runs() != 0 {
 		t.Fatal("same-key requester rejoin revived queued task")
 	}

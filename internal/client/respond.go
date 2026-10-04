@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -17,6 +18,9 @@ var (
 	ErrBeingAnswered   = errors.New("the worker is answering this now; run `agentnet cancel` first")
 	ErrAlreadyAnswered = errors.New("this has already been answered")
 	ErrNotPending      = errors.New("nothing to accept: not a held question or a task awaiting acceptance")
+	// ErrNothingRuns refuses an accept that nothing here would act on: the
+	// item stays as it was, and the error says why and what would.
+	ErrNothingRuns = errors.New("nothing here would run it, so it was not accepted")
 )
 
 // replyKind is what answers a received message of kind k.
@@ -123,12 +127,25 @@ func (a *Agent) Accept(id string) error {
 		notifyDaemon(a.home)
 		return nil
 	}
-	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND (conv IS NULL AND
-		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
-		OR pid IS NOT NULL AND replica = 0 AND ((kind IN (?, ?) AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?))))`,
-		stateAccepted, id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
+	acceptable := []any{id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
 		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman,
-		envelope.KindTask, envelope.KindQuestion, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman)
+		envelope.KindTask, envelope.KindQuestion, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman}
+	const acceptableWhere = ` WHERE id = ? AND (conv IS NULL AND
+		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
+		OR pid IS NOT NULL AND replica = 0 AND ((kind IN (?, ?) AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?))))`
+	var n int
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM inbox`+acceptableWhere, acceptable...).Scan(&n); err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrNotPending
+	}
+	if why, err := a.acceptBlocked(id); err != nil {
+		return err
+	} else if why != "" {
+		return fmt.Errorf("%w: %s", ErrNothingRuns, why)
+	}
+	res, err := a.store.db.Exec(`UPDATE inbox SET state = ?`+acceptableWhere, append([]any{stateAccepted}, acceptable...)...)
 	if err != nil {
 		return err
 	}
@@ -139,6 +156,68 @@ func (a *Agent) Accept(id string) error {
 	notifyDaemon(a.home)
 	a.noteStatus(id)
 	return nil
+}
+
+// acceptBlocked says why nothing here would run request id if it were
+// accepted ("" when something would, or when id is no such request, which
+// Accept refuses on its own): a request to this device's agent whose
+// participation ended (or whose asking guest left), or one no responder
+// or local agent here would take (NothingRuns).
+func (a *Agent) acceptBlocked(id string) (string, error) {
+	var j job
+	var target string
+	var pid sql.NullString
+	err := a.store.db.QueryRow(`SELECT sender, coalesce(verified_by, ''), kind, coalesce(conv, ''), pid, coalesce(target, ''), local FROM inbox WHERE id = ?`, id).
+		Scan(&j.From, &j.Key, &j.Kind, &j.Conv, &pid, &target, &j.Local)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if target != "" {
+		j.Target = &envelope.Target{}
+		if json.Unmarshal([]byte(target), j.Target) != nil {
+			j.Target = nil
+		}
+	}
+	agentID := ""
+	if j.Target != nil {
+		agentID = j.Target.AgentID
+	}
+	if pid.Valid {
+		j.ID, j.PID = id, pid.String
+		v, why, err := agentVerdict(a.store.db, j.agentReq(stateAccepted), a.Address, a.Self().Fingerprint(), false, map[string]*partView{})
+		if err != nil {
+			return "", err
+		}
+		if v == verdictStop {
+			return why, nil
+		}
+	}
+	return a.NothingRuns(agentID), nil
+}
+
+// NothingRuns says why nothing on this device would run a request to its
+// agent agentID ("" its default responder), or "" when something would.
+func (a *Agent) NothingRuns(agentID string) string {
+	r, err := a.Responder()
+	if err != nil {
+		return err.Error()
+	}
+	if agentID == "" {
+		if r != nil {
+			return ""
+		}
+		if chosen, _ := a.ResponderChosen(); chosen {
+			return "you chose to answer by hand here, so no responder runs anything: answer it yourself (agentnet reply ID TEXT), or choose a responder (agentnet responder set)"
+		}
+		return "no responder is chosen here: choose one (agentnet responder set), or answer it yourself (agentnet reply ID TEXT)"
+	}
+	if _, err := a.ResolveExecutorIn(a.store.db, agentID, r); err != nil {
+		return "the agent it names (" + agentID + ") is not available here: " + err.Error()
+	}
+	return ""
 }
 
 // Resolve records that the local human dealt with an item the responder

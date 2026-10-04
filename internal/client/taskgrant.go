@@ -110,6 +110,12 @@ func (a *Agent) GrantTasks(address string) (string, error) {
 // future tasks from its sender, but only for the key that verified this
 // task and only while that key is still the pinned one.
 func (a *Agent) AcceptAlways(id string) (sender, fp string, err error) {
+	// Asked before the transaction (the store has one connection), told
+	// after the checks below.
+	blocked, err := a.acceptBlocked(id)
+	if err != nil {
+		return "", "", err
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return "", "", err
@@ -136,6 +142,9 @@ func (a *Agent) AcceptAlways(id string) (sender, fp string, err error) {
 	}
 	if !verifiedBy.Valid || verifiedBy.String != fp {
 		return "", "", ErrTaskKeyDiffer
+	}
+	if blocked != "" {
+		return "", "", fmt.Errorf("%w: %s", ErrNothingRuns, blocked)
 	}
 	res, err := tx.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND state IN (?, ?, ?, ?, ?)`,
 		stateAccepted, id, stateAwaiting, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman)
