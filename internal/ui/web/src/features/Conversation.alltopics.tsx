@@ -34,6 +34,7 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState("");
   const asked = useRef(0);
+  const search = useRef<HTMLInputElement>(null);
 
   // Counts per filter, from the overview: it lists active and done topics and counts archived ones.
   const shown = (overview?.threads || []).filter((t) => t.peer === peer && !t.notice_only).map(topicOf);
@@ -51,7 +52,7 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
     shownFor.current = key;
     if (!same) { setItems([]); setNext(""); } // never another filter's rows under this one
     setLoading(true);
-    store.api.topics({ peer, state: filter, q, limit: same ? Math.min(Math.max(items.length, TOPICS.pageSize), 200) : TOPICS.pageSize }).then((p) => {
+    store.api.topics({ peer, state: filter, q, limit: same ? Math.min(Math.max(items.length, TOPICS.pageSize), TOPICS.pageMax) : TOPICS.pageSize }).then((p) => {
       if (ask !== asked.current) return;
       setItems((p.topics || []).map(topicOf)); setNext(p.next || ""); setMatched(p.matched); setFailed("");
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
@@ -73,7 +74,8 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-[#1B1530]/30 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-none" />
-        <Dialog.Popup className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none transition-transform duration-[280ms] ease-out-soft motion-reduce:transition-none "
+        {/* Focus starts in the search box, except on touch, where that would cover the list with the keyboard. */}
+        <Dialog.Popup initialFocus={(how) => (how === "touch" ? true : search.current)} className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none transition-transform duration-[280ms] ease-out-soft motion-reduce:transition-none "
           + (wide ? "inset-y-0 right-0 w-[440px] border-l-[1.5px] border-outline shadow-pop data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full"
             : "inset-0 data-[starting-style]:translate-y-full data-[ending-style]:translate-y-full")}>
           <div className={"flex shrink-0 items-center gap-2 border-b-[1.5px] border-outline bg-surface " + (wide ? "h-[76px] px-5" : "h-16 pl-1 pr-3")}>
@@ -89,7 +91,7 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
             <label className="flex h-11 items-center gap-2 rounded-xl bg-surface pl-3 stroke has-[input:focus-visible]:outline-3 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-agent-ink">
               <IconSearch size={18} stroke={2.2} aria-hidden="true" className="shrink-0" />
               <span className="sr-only">Search topics</span>
-              <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search names and last messages" autoComplete="off" enterKeyHint="search"
+              <input ref={search} type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search names and last messages" autoComplete="off" enterKeyHint="search"
                 className="min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted focus-visible:outline-none lg:text-[15px] [&::-webkit-search-cancel-button]:hidden" />
               {query && <IconButton label="Clear search" onClick={() => setQuery("")} className="shrink-0"><IconX size={18} /></IconButton>}
             </label>
@@ -131,7 +133,7 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
                       <span className="flex min-w-0 items-center gap-2">
                         <TopicMark t={t} />
                         <span className="min-w-0 flex-1 truncate text-[13.5px] text-text-2">
-                          {t.doneBy === "agent" && t.conclusion ? <><b className="font-bold text-agent-ink">{t.concludedBy && t.concludedBy === overview?.me.address ? "Your agent:" : "Agent:"}</b> {t.conclusion}</> : t.last}
+                          {t.conclusion ? <><b className="font-bold text-agent-ink">{t.doneBy === "you" ? "You:" : t.concludedBy && t.concludedBy === overview?.me.address ? "Your agent:" : "Agent:"}</b> {t.conclusion}</> : t.last}
                         </span>
                         {t.unread > 0 && <span aria-hidden="true" className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{t.unread}</span>}
                       </span>

@@ -1,34 +1,53 @@
 // Topics in the chat list's search: an agent's topics by name or last line,
 // archived ones too (GET /api/topics), so an older conversation is found
-// without opening the agent first.
+// without opening the agent first. The first TOPICS.chatSearchMax show at
+// once; "Show more" pages through the rest.
 import { useEffect, useState } from "react";
 import { errorText } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { TOPICS, chatList, deviceKind, firstLine, topicOf, when, type Topic } from "../model";
 import { useStore } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
+import { Button } from "../ui/Button";
 import { TopicMark, topicLabel } from "./Conversation.topics";
 
 export function TopicResults({ query, onCount }: { query: string; onCount: (n: number) => void }) {
   const store = useApp();
   const overview = useStore(store, (s) => s.overview);
   const names = useAgentNames();
-  const [hits, setHits] = useState<{ q: string; topics: Topic[]; matched: number } | null>(null);
+  const [hits, setHits] = useState<{ q: string; topics: Topic[]; matched: number; next: string } | null>(null);
   const [failed, setFailed] = useState("");
+  const [more, setMore] = useState(false); // a further page is being read
   const long = query.length >= TOPICS.searchMin;
 
   useEffect(() => {
     if (!long) { setHits(null); onCount(0); return; }
     let alive = true;
     const x = setTimeout(() => {
-      store.api.topics({ q: query, limit: TOPICS.chatSearchMax }).then((p) => {
+      // When anything changes, as many as were shown (one request).
+      const shown = hits && hits.q === query ? hits.topics.length : 0;
+      store.api.topics({ q: query, limit: Math.min(Math.max(shown, TOPICS.chatSearchMax), TOPICS.pageMax) }).then((p) => {
         if (!alive) return;
         const topics = (p.topics || []).map(topicOf);
-        setHits({ q: query, topics, matched: p.matched }); setFailed(""); onCount(topics.length);
+        setHits({ q: query, topics, matched: p.matched, next: p.next || "" }); setFailed(""); onCount(topics.length);
       }, (e) => { if (alive) { setFailed(errorText(e)); onCount(0); } });
     }, TOPICS.searchDelay);
     return () => { alive = false; clearTimeout(x); };
   }, [query, overview?.seq]);
+
+  const showMore = () => {
+    if (!hits?.next) return;
+    const was = hits;
+    setMore(true);
+    store.api.topics({ q: was.q, before: was.next, limit: TOPICS.pageSize }).then((p) => {
+      setHits((h) => {
+        if (!h || h.q !== was.q) return h; // the search changed meanwhile
+        const topics = [...h.topics, ...(p.topics || []).map(topicOf).filter((t) => !h.topics.some((x) => x.id === t.id && x.peer === t.peer))];
+        onCount(topics.length);
+        return { ...h, topics, matched: p.matched, next: p.next || "" };
+      });
+    }, (e) => setFailed(errorText(e))).finally(() => setMore(false));
+  };
 
   if (!long || (!hits?.topics.length && !failed)) return null;
   const agents = new Map(chatList(overview, names).filter((i) => i.kind === "agent").map((i) => [i.peer || "", i.title]));
@@ -58,6 +77,11 @@ export function TopicResults({ query, onCount }: { query: string; onCount: (n: n
           </li>
         ))}
       </ul>
+      {hits?.next && (
+        <div className="flex justify-center px-4 pt-1 lg:px-3">
+          <Button size="sm" variant="outline" disabled={more} onClick={showMore}>Show more topics ({hits.matched - hits.topics.length})</Button>
+        </div>
+      )}
     </div>
   );
 }

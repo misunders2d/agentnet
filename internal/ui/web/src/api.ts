@@ -14,7 +14,8 @@ export function api(host: Host) {
   const post = <R>(path: string, body: unknown) => host.api<R>(path, body);
   return {
     host,
-    overview: () => get<T.Overview>("/api/overview"),
+    // topics=1: archived topics are counted, not listed (they are paged through topics below).
+    overview: () => get<T.Overview>("/api/overview?topics=1"),
     dm: (id: string) => get<T.DMThread>(q("/api/dm", { id })),
     thread: (id: string) => get<T.Thread>(q("/api/thread", { id })),
     refresh: (id: string) => post<T.Presence>("/api/refresh", { id }),

@@ -16,9 +16,12 @@ import (
 
 // The topic bar, the open topic's menu, All topics and the end of a done
 // topic as the default messenger renders them over a real installation
-// with 45 topics with one agent, at 1800x960 and 390x844, light and dark:
-// the bar never scrolls and holds at most six chips, All topics lists,
-// filters and searches, and every control has a name. Opt-in: needs an
+// with 48 topics with one agent, at 1800x960 and 390x844, light and dark:
+// the bar never scrolls and holds at most six chips (two topics on a
+// phone), topics that need the person and are not in the bar mark the All
+// topics chip, All topics lists, filters and searches (focus starts in its
+// search), the menu works from the keyboard, a result the person here wrote
+// by hand reads as theirs, and every control has a name. Opt-in: needs an
 // installed Playwright (AGENTNET_PLAYWRIGHT) and Chromium
 // (AGENTNET_CHROMIUM or /usr/bin/chromium).
 func TestTopicsRendered(t *testing.T) {
@@ -42,6 +45,9 @@ func TestTopicsRendered(t *testing.T) {
 		send(envelope.KindMessage, fmt.Sprintf("Shipment note %d: pallets for dock %d are labelled", i, i%4+1))
 	}
 	ids := []string{send(envelope.KindQuestion, "May I move the Savannah order to Friday?")}
+	for _, q := range []string{"Can the Denver pallets wait a day?", "Should I reprint the dock 2 labels?", "Is the Tuesday truck confirmed?"} {
+		ids = append(ids, send(envelope.KindQuestion, q)) // more questions held for the person than a phone's bar shows
+	}
 	for aisle := 1; aisle <= 4; aisle++ { // one finished task per rendering: each run reopens its own
 		ids = append(ids, send(envelope.KindTask, fmt.Sprintf("Count the bath sets in aisle %d", aisle)))
 	}
@@ -54,7 +60,7 @@ func TestTopicsRendered(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	for i, task := range ids[1:] {
+	for i, task := range ids[4:] {
 		if _, err := bob.Reply(ctx, task, fmt.Sprintf("%d bath sets\nall dry", 410+i+1)); err != nil {
 			t.Fatal(err)
 		}
@@ -65,7 +71,7 @@ func TestTopicsRendered(t *testing.T) {
 	s = New(live, ts.Listener.Addr().String(), testToken) // before the server starts: the browser is another process
 	ts.Start()
 	cmd := exec.Command(node, "testdata/topics_ui_check.cjs")
-	cmd.Env = append(os.Environ(), "TOPICS_URL="+ts.URL+"/?t="+testToken, "TOPICS_TOTAL=45")
+	cmd.Env = append(os.Environ(), "TOPICS_URL="+ts.URL+"/?t="+testToken, "TOPICS_TOTAL=48")
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "topics ui check PASS") {
 		t.Fatalf("%v\n%s", err, out)

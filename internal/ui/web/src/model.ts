@@ -36,13 +36,16 @@ export interface ChatItem {
 export const TOPICS = {
   barMax: 6,          // chips in a conversation's topic bar, "All topics (N)" included
   chipMinWidth: 104,  // px a topic chip keeps before the bar shows one fewer (the rest are under All topics)
+  chipMaxWidth: "16rem", // the widest a topic chip grows on a wide screen
   barTitle: 40,       // characters of a topic's name in a bar chip (the chip truncates further)
   listTitle: 90,      // characters of a topic's name in the All topics list
   pageSize: 30,       // topics fetched per page of the All topics list
   searchDelay: 250,   // ms after the last keystroke before a topic search is sent
   searchMin: 2,       // characters before the chat list also searches older topics
   chatSearchMax: 8,   // topics the chat list's search shows
-  titleMax: 120,      // characters in a name you give a topic (the server's limit, client.TopicTitleMax)
+  // The server's limits, pinned to client/topics.go by internal/ui topics_browser_test.go:
+  titleMax: 120,      // characters in a name you give a topic (client.TopicTitleMax)
+  pageMax: 200,       // topics one request may list (client.TopicPageMax)
 } as const;
 
 export type TopicState = "active" | "done" | "archived";
@@ -63,8 +66,10 @@ export interface Topic {
   pending: boolean;            // anything in it is still open: never archived
   state: TopicState;
   doneBy?: "agent" | "you";
-  conclusion?: string;         // the agent's final reply, first line
+  conclusion?: string;         // the final reply that made it done, first line: the agent's, or yours when you answered by hand here
   concludedBy?: string;        // the device that sent it
+  count: number;               // its messages, as this view shows them (a Mark done covers no later one)
+  quietSince: string;          // when it went quiet: its last message, or a later Mark done / Reopen here
 }
 
 export const topicOf = (t: T.ThreadSummary): Topic => ({
@@ -72,6 +77,7 @@ export const topicOf = (t: T.ThreadSummary): Topic => ({
   needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending,
   state: t.state === "done" || t.state === "archived" ? t.state : "active",
   doneBy: t.done_by === "agent" || t.done_by === "you" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
+  count: t.count, quietSince: t.quiet_since || t.last_at,
 });
 
 /** newestFirst orders topics (or anything with lastAt and id) most recently active first. */

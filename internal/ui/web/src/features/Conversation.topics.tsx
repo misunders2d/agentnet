@@ -91,8 +91,9 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
   }, [total, listed, wide]);
 
   const pick = barTopics(topics, open, room);
-  const hiddenUnread = topics.filter((t) => !pick.some((p) => p.id === t.id)).reduce((n, t) => n + t.unread, 0)
-    + ((overview?.topics || []).find((c) => c.peer === thread.peer)?.archived_unread || 0);
+  const hidden = topics.filter((t) => !pick.some((p) => p.id === t.id));
+  const hiddenUnread = hidden.reduce((n, t) => n + t.unread, 0) + ((overview?.topics || []).find((c) => c.peer === thread.peer)?.archived_unread || 0);
+  const hiddenNeeds = hidden.filter((t) => t.needsYou > 0).length; // never archived: what needs you is pending
   const leaveNew = () => { if (fresh) store.setDraft(thread.id, { ...store.draft(thread.id), newTopic: false }); };
   const chip = "inline-flex h-11 min-w-0 items-center gap-1.5 rounded-full px-3.5 text-[14px] font-semibold ";
 
@@ -107,7 +108,7 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
             {t.unread > 0 && <span aria-hidden="true" className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{t.unread}</span>}
           </>
         );
-        const width = { minWidth: TOPICS.chipMinWidth, maxWidth: wide ? "16rem" : undefined };
+        const width = { minWidth: TOPICS.chipMinWidth, maxWidth: wide ? TOPICS.chipMaxWidth : undefined };
         if (current && listed) {
           return (
             <TopicMenu key={t.id} topic={t} onAll={() => setAll(true)}
@@ -127,11 +128,17 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
       })}
       <span aria-hidden="true" className="ml-auto" />
       {listed && (
-        <button ref={allRef} type="button" aria-haspopup="dialog" onClick={() => setAll(true)}
-          aria-label={"All topics (" + total + ")" + (hiddenUnread ? ", " + hiddenUnread + " unread in other topics" : "")}
-          className={chip + "shrink-0 bg-surface stroke text-ink hover:bg-sunken"}>
-          {wide && <IconListSearch size={18} stroke={2.2} aria-hidden="true" />}
-          <span className="tnum">All topics ({total})</span>
+        <button ref={allRef} type="button" aria-haspopup="dialog" onClick={() => setAll(true)} title={"All topics (" + total + ")"}
+          aria-label={"All topics (" + total + ")" + (hiddenNeeds ? ", " + hiddenNeeds + (hiddenNeeds === 1 ? " needs you" : " need you") : "")
+            + (hiddenUnread ? ", " + hiddenUnread + " unread in other topics" : "")}
+          className={chip + "shrink-0 bg-surface stroke text-ink hover:bg-sunken " + (wide ? "" : "gap-1 px-3")}>
+          {hiddenNeeds > 0
+            ? <span aria-hidden="true" className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-act px-1 text-[11px] font-bold text-act-ink tnum">
+                {wide ? (hiddenNeeds > 99 ? "99+" : hiddenNeeds) : <IconAlertCircle size={14} stroke={2.6} />}
+              </span>
+            : <IconListSearch size={18} stroke={2.2} aria-hidden="true" className="shrink-0" />}
+          {/* A phone keeps the words short: its one topic chip keeps room for its name. */}
+          <span className="tnum">{wide ? "All topics (" + total + ")" : "All " + total}</span>
           {hiddenUnread > 0 && (wide
             ? <span aria-hidden="true" className="grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{hiddenUnread > 99 ? "99+" : hiddenUnread}</span>
             : <span aria-hidden="true" className="size-2.5 shrink-0 rounded-full bg-danger" />)}
@@ -176,7 +183,8 @@ function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: ReactNode
 
 /** changeTopic sends one of your changes to a topic and says what it did. */
 export function changeTopic(store: ReturnType<typeof useApp>, what: "rename" | "done" | "reopen", t: Topic, title?: string) {
-  return store.run((a) => a.changeTopic(what, { peer: t.peer, id: t.id, ...(what === "rename" ? { title: title || "" } : {}) })).then((r) => {
+  // count: the messages this view showed, so a mark never covers one you have not seen.
+  return store.run((a) => a.changeTopic(what, { peer: t.peer, id: t.id, ...(what === "rename" ? { title: title || "" } : { count: t.count }) })).then((r) => {
     if (r?.note) store.toast(r.note, "ok");
     return !!r;
   });
@@ -214,8 +222,9 @@ function RenameTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChang
 }
 
 /** TopicEnd closes a done or archived topic's messages: what the agent
- *  concluded (its own words, labelled as its), or that you marked it done,
- *  or that it is archived; Reopen makes it active again. */
+ *  concluded (its own words, labelled as its), or your own final reply when
+ *  you answered it by hand here, or that you marked it done, or that it is
+ *  archived; Reopen makes it active again. */
 export function TopicEnd({ ctx }: { ctx: Ctx }) {
   const store = useApp();
   const t = ctx.thread?.topic ? topicOf(ctx.thread.topic) : null;
@@ -226,15 +235,16 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
     <section aria-label="Topic state" className="mx-3 mt-4 rounded-2xl bg-surface p-4 stroke lg:mx-5">
       <div className="flex flex-wrap items-center gap-2">
         {archived ? <Tag tone="muted"><IconArchive size={12} stroke={2.6} aria-hidden="true" />Archived</Tag> : <Tag tone="ok"><IconCircleCheck size={12} stroke={2.6} aria-hidden="true" />Done</Tag>}
-        {t.doneBy === "you" && <span className="text-[13px] text-text-2">You marked it done on this device.</span>}
+        {t.doneBy === "you" && !t.conclusion && <span className="text-[13px] text-text-2">You marked it done on this device.</span>}
+        {t.doneBy === "you" && t.conclusion && !archived && <span className="text-[13px] text-text-2">You answered it.</span>}
         {t.doneBy === "agent" && !archived && <span className="text-[13px] text-text-2">{agent} finished it.</span>}
       </div>
-      {t.doneBy === "agent" && t.conclusion && (
-        <p className="mt-2 text-[15px]"><span className="font-bold">{agent}’s conclusion:</span> <span className="text-text-2">{t.conclusion}</span></p>
+      {t.conclusion && (
+        <p className="mt-2 text-[15px]"><span className="font-bold">{t.doneBy === "you" ? "Your answer:" : agent + "’s conclusion:"}</span> <span className="text-text-2">{t.conclusion}</span></p>
       )}
       {archived && (
         <p className="mt-2 text-[14px] text-text-2">
-          Quiet since {dayLabel(t.lastAt).toLowerCase() === "today" ? "today" : new Date(t.lastAt).toLocaleDateString([], { month: "short", day: "numeric" })}, with nothing waiting. Nothing was deleted: a new message here makes it active again.
+          Quiet since {dayLabel(t.quietSince).toLowerCase() === "today" ? "today" : new Date(t.quietSince).toLocaleDateString([], { month: "short", day: "numeric" })}, with nothing waiting. Nothing was deleted: a new message here makes it active again.
         </p>
       )}
       <div className="mt-3">

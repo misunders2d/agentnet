@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -46,5 +48,39 @@ func TestBrowserTopicsMatchGo(t *testing.T) {
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &got); err != nil || got.Checks < 60 {
 		t.Fatalf("checks %d, %v\n%s%s", got.Checks, err, stdout.Bytes(), stderr.Bytes())
+	}
+}
+
+// TestMessengerTopicLimitsMatchGo pins the server limits the messenger's
+// TOPICS block (web/src/model.ts) repeats to the Go client's constants, and
+// keeps its page sizes within what one request may ask for.
+func TestMessengerTopicLimitsMatchGo(t *testing.T) {
+	src, err := os.ReadFile("web/src/model.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?s)export const TOPICS = \{(.*?)\} as const;`).FindSubmatch(src)
+	if block == nil {
+		t.Fatal("no TOPICS block in model.ts")
+	}
+	value := func(name string) int {
+		t.Helper()
+		m := regexp.MustCompile(`(?m)^\s*` + name + `:\s*(\d+),`).FindSubmatch(block[1])
+		if m == nil {
+			t.Fatalf("TOPICS.%s missing", name)
+		}
+		n, _ := strconv.Atoi(string(m[1]))
+		return n
+	}
+	if got := value("titleMax"); got != client.TopicTitleMax {
+		t.Errorf("TOPICS.titleMax %d, client.TopicTitleMax %d", got, client.TopicTitleMax)
+	}
+	if got := value("pageMax"); got != client.TopicPageMax {
+		t.Errorf("TOPICS.pageMax %d, client.TopicPageMax %d", got, client.TopicPageMax)
+	}
+	for _, name := range []string{"pageSize", "chatSearchMax"} {
+		if got := value(name); got < 1 || got > client.TopicPageMax {
+			t.Errorf("TOPICS.%s %d is not a page the server lists (1..%d)", name, got, client.TopicPageMax)
+		}
 	}
 }
