@@ -39,7 +39,7 @@ func TestInstalledSkinSnapshot(t *testing.T) {
 	}
 	w := get("/assets/skins/index.json")
 	var list []Skin
-	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list) != 3 || list[1].ID != "classic" || list[2].Digest == "" { // default, classic, then the package
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil || len(list) != 2 || list[0].ID != "comic" || list[1].ID != "notebook" || list[1].Digest == "" { // Comic, then the package
 		t.Fatalf("catalog: %s %v", w.Body, err)
 	}
 	entry := "/assets/skins/notebook/entry.mjs"
@@ -116,7 +116,7 @@ func TestSkinRejectsUnsafePackages(t *testing.T) {
 			Skins(home).ServeHTTP(w, httptest.NewRequest("GET", "/assets/skins/index.json", nil))
 			var list []Skin
 			json.Unmarshal(w.Body.Bytes(), &list)
-			if len(list) != 2 { // only the built-in interfaces
+			if len(list) != 1 || list[0].ID != "comic" { // only the built-in skin
 				t.Fatalf("unsafe package listed: %s", w.Body)
 			}
 		})

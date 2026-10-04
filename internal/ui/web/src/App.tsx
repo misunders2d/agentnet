@@ -2,7 +2,6 @@
 // list, the open conversation and, when it has guests or a pending OK, the
 // "In this chat" panel. Phones show one of these at a time.
 import { IconMessageCircle, IconRobot, IconCircleCheck, IconSettings } from "@tabler/icons-react";
-import { useEffect } from "react";
 import { useApp, useWide } from "./context";
 import { useStore, type Tab } from "./store";
 import { ChatList } from "./features/ChatList";
@@ -29,7 +28,6 @@ export function App() {
   const overview = useStore(store, (s) => s.overview);
   const oks = useNeedsYou();
 
-  useEffect(() => { document.documentElement.lang = navigator.language || "en"; }, []);
 
   const main = tab === "agents" ? <AgentsView /> : tab === "oks" ? <OksView /> : tab === "settings" ? <Settings /> : <ChatList />;
 

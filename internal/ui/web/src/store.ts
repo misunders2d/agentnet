@@ -7,7 +7,7 @@
 // can act on another workspace by accident.
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type T } from "./api";
-import type { Host, HostEvent } from "./host";
+import type { Host, HostEvent, OpenContext } from "./host";
 
 export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
 export type Open = null | { kind: "dm"; id: string; focus?: string } | { kind: "thread"; id: string; focus?: string };
@@ -145,10 +145,12 @@ export class Store {
           return;
         } catch (e) {
           // The daemon was replaced under a workspace of this computer: the
-          // host can bind the same membership again (loader.js).
-          const w = (window as unknown as { agentnetWorkspace?: { recoverNative?: (h: Host, me: unknown) => Promise<Host> } }).agentnetWorkspace;
-          if (errorText(e) === "stale or disconnected workspace" && w?.recoverNative) {
-            try { await w.recoverNative(this.host, this.state.overview?.me); } catch { /* next attempt */ }
+          // host binds the same membership again (identity-checked) and
+          // mounts Comic again over it. Text drafts are kept per
+          // workspace; staged files and sends under way are not replayed.
+          if (errorText(e) === "stale or disconnected workspace" && this.host.reconnect) {
+            try { await this.host.reconnect(); } catch { /* next attempt */ }
+            if (!this.alive) return; // mounted again over the new binding
           }
         }
       }
@@ -177,12 +179,27 @@ export class Store {
   closeInvite() { this.set({ invite: null }); }
   setPanel(panel: boolean) { this.set({ panel }); }
 
-  // openMessage opens the conversation a notification's message belongs to.
-  // A device conversation is addressed by any of its messages.
-  async openMessage(id: string) {
+  // openMessage opens the conversation a notification's message belongs to:
+  // the conversation the host names (context.conv), else the device
+  // conversation addressed by that message.
+  async openMessage(id: string, context?: OpenContext) {
+    this.set({ tab: "chats" });
+    if (context?.conv && /^[0-9a-f]{64}$/.test(context.conv)) { await this.open({ kind: "dm", id: context.conv, focus: id }); return; }
     const o = this.state.overview;
     const dm = (o?.dms || []).find((d) => d.id === id);
     await this.open(dm ? { kind: "dm", id } : { kind: "thread", id, focus: id });
+  }
+
+  // openChannel opens the conversation a browser notification's channel
+  // names; one this device does not have opens nothing in its place.
+  async openChannel(chan: string) {
+    this.set({ tab: "chats" });
+    try {
+      const r = await this.api.notifyResolve(chan);
+      const conv = r?.conv || "";
+      if (/^[0-9a-f]{64}$/.test(conv)) { await this.open({ kind: "dm", id: conv }); return; }
+    } catch { /* said below */ }
+    this.toast("The conversation of that notification is not on this device.");
   }
 
   close() {

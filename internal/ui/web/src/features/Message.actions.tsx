@@ -19,6 +19,7 @@ import { ReactPopover, controlRef, useReact } from "./Message.reactions";
 import { QuickReactions } from "./Emoji";
 import { decode, encode, shift } from "./Composer.mentions";
 import { copyText, deviceWords, isRequest, isThreadMsg, shownText, type AnyMsg, type Ctx } from "./Message.model";
+import { usePortal } from "../owned";
 
 export interface Can { react: boolean; reply: boolean; edit: boolean; del: boolean; select: boolean }
 
@@ -34,6 +35,7 @@ export interface Acts {
 // ---- desktop: the hover toolbar ---------------------------------------------------
 
 export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; mine: boolean }) {
+  const portal = usePortal();
   const btn = "grid size-11 place-items-center rounded-full text-text-2 hover:bg-sunken hover:text-ink";
   return (
     <div className={"absolute top-0 z-10 flex items-center rounded-full bg-surface stroke opacity-0 shadow-pop-sm transition-opacity duration-150 group-hover/msg:opacity-100 group-focus-within/msg:opacity-100 has-[[data-popup-open]]:opacity-100 "
@@ -45,7 +47,7 @@ export function Toolbar({ m, ctx, can, acts, mine }: { m: AnyMsg; ctx: Ctx; can:
       {can.reply && <button type="button" aria-label="Reply" title="Reply" onClick={acts.reply} className={btn}><IconArrowBackUp size={20} /></button>}
       <Menu.Root>
         <Menu.Trigger aria-label="More actions" title="More actions" className={btn + " data-[popup-open]:bg-sunken"}><IconDots size={20} /></Menu.Trigger>
-        <Menu.Portal>
+        <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align={mine ? "end" : "start"} sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-52 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               <Items can={can} acts={acts} m={m} render={(icon, label, onClick, danger) => (
@@ -162,9 +164,10 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
 export function Confirm({ open, onOpenChange, title, children, ok, onOk, danger = true }: {
   open: boolean; onOpenChange: (o: boolean) => void; title: string; children: ReactNode; ok: string; onOk: () => void; danger?: boolean;
 }) {
+  const portal = usePortal();
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
-      <AlertDialog.Portal>
+      <AlertDialog.Portal container={portal}>
         <AlertDialog.Backdrop className="fixed inset-0 z-40 bg-[#1B1530]/40 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
         <AlertDialog.Popup className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-canvas p-5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-200 ease-out-soft data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
           <AlertDialog.Title className="font-display text-[22px] font-extrabold leading-tight">{title}</AlertDialog.Title>

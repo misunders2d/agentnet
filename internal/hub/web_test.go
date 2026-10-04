@@ -21,7 +21,7 @@ func TestBrowserPageOptIn(t *testing.T) {
 		if enabled {
 			want = http.StatusOK
 		}
-		for _, path := range []string{"/", "/assets/app.css", "/assets/wire.mjs"} {
+		for _, path := range []string{"/", "/assets/core.css", "/assets/wire.mjs", "/assets/skins/index.json", "/assets/skins/comic/entry.mjs"} {
 			w := request(http.MethodGet, path)
 			if w.Code != want {
 				t.Fatalf("web=%t GET %s: %d, want %d", enabled, path, w.Code, want)

@@ -79,7 +79,8 @@ export function api(host: Host) {
     remind: (id: string, due: Date) => post<unknown>("/api/remind", { id, due: Math.floor(due.getTime() / 1000) }), // unix seconds
     remindDone: (id: string) => post<unknown>("/api/remind/done", { id }),
     remindCancel: (id: string) => post<unknown>("/api/remind/cancel", { id }),
-    notify: (what: "enable" | "disable" | "mute" | "allow" | "seen", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[] } = {}) => post<{ note: string }>("/api/notify/" + what, body),
+    notifyResolve: (chan: string) => get<{ conv?: string }>(q("/api/notify/resolve", { chan })), // a browser notification's channel
+    notify: (what:"enable" | "disable" | "mute" | "allow" | "seen", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[] } = {}) => post<{ note: string }>("/api/notify/" + what, body),
 
     // Teams and storage
     teams: () => get<T.TeamsView>("/api/teams"),

@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload } from "@tabler/icons-react";
 import { errorText } from "../api";
 import { useApp } from "../context";
+import { usePortal } from "../owned";
 import { niceDevice, size as bytes } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
@@ -66,18 +67,22 @@ function useFileBytes() {
   };
 }
 
-function save(url: string, name: string) {
+// save hands the file to the browser through a link clicked inside the
+// skin's own tree (never the page's body).
+function save(url: string, name: string, into: HTMLElement) {
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
   a.rel = "noopener";
-  document.body.append(a);
+  a.hidden = true;
+  into.append(a);
   a.click();
   a.remove();
 }
 
 function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
   const load = useFileBytes();
+  const portal = usePortal();
   const box = useRef<HTMLButtonElement>(null);
   const [url, setUrl] = useState("");
   const [failed, setFailed] = useState(false);
@@ -102,7 +107,7 @@ function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
           : <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
       </button>
       <Sheet open={big} onOpenChange={setBig} title={f.name} description={bytes(f.size)} wide
-        footer={<Button variant="act" size="lg" icon={<IconDownload size={20} />} onClick={() => save(url, f.name)}>Download</Button>}>
+        footer={<Button variant="act" size="lg" icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>}>
         <img src={url} alt={f.name} className="mx-auto max-h-[60dvh] rounded-2xl object-contain" />
       </Sheet>
     </>
@@ -111,6 +116,7 @@ function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
 
 function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
   const store = useApp();
+  const portal = usePortal();
   const load = useFileBytes();
   const [busy, setBusy] = useState(false);
   const st = standing(m, f);
@@ -119,7 +125,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
 
   const open = async () => {
     setBusy(true);
-    try { save((await load(m, f)).url, f.name); }
+    try { save((await load(m, f)).url, f.name, portal); }
     catch (e) { store.toast("Couldn’t open " + f.name + ": " + errorText(e), "error"); }
     setBusy(false);
   };

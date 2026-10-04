@@ -7,6 +7,7 @@ import { IconBolt, IconCheck, IconClock, IconFileText, IconLock, IconPlayerStop,
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { deliveryWord, deviceKind, timeOf } from "../model";
+import { useOwned } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -53,6 +54,7 @@ type Sheet = null | "always" | "approve" | "decline" | "stop" | "close";
 
 function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const store = useApp();
+  const { root } = useOwned();
   const [busy, setBusy] = useState("");
   const [sheet, setSheet] = useState<Sheet>(null);
   const acts = m.actions || [];
@@ -74,7 +76,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const reply = () => {
     store.setDraft(conv, { ...store.draft(conv), replyTo: m.id });
     // The composer's own field (Composer.tsx); it shows the reply it now carries.
-    requestAnimationFrame(() => document.querySelector<HTMLElement>('form[aria-label="Write a message"] textarea')?.focus());
+    requestAnimationFrame(() => root.querySelector<HTMLElement>('form[aria-label="Write a message"] textarea')?.focus());
   };
   const replyHere = !!conv && (isThreadMsg(m) ? can("reply") : !dm?.frozen);
 

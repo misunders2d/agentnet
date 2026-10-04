@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/testhub"
-	"github.com/misunders2d/agentnet/internal/ui/static"
 )
 
 // Exercise production settings, native persistence and guarded APIs with an
@@ -90,7 +88,7 @@ func TestOnboardingRenderedNativeChoices(t *testing.T) {
 				}
 				mux := http.NewServeMux()
 				mux.HandleFunc("GET /fixture", func(w http.ResponseWriter, r *http.Request) {
-					body, err := fs.ReadFile(static.Files, "default.html")
+					body, err := os.ReadFile("static/default.html")
 					if err != nil {
 						http.Error(w, "fixture markup unavailable", http.StatusInternalServerError)
 						return
@@ -105,7 +103,11 @@ func TestOnboardingRenderedNativeChoices(t *testing.T) {
 				})
 				var server *Server
 				var api http.Handler
-				mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { api.ServeHTTP(w, r) }))
+				mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if !serveBundledApp(w, r) {
+						api.ServeHTTP(w, r)
+					}
+				}))
 				ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.guard(mux).ServeHTTP(w, r) }))
 				server = New(NewLive(a), ts.Listener.Addr().String(), testToken)
 				api = server.Handler()

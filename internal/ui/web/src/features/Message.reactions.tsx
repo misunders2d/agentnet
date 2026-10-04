@@ -9,6 +9,7 @@ import type { T } from "../api";
 import { useApp } from "../context";
 import { EmojiPicker, QuickReactions } from "./Emoji";
 import { agentLabel, agentOf, isThreadMsg, type AnyMsg, type Ctx } from "./Message.model";
+import { usePortal } from "../owned";
 
 export const controlRef = (m: AnyMsg, ctx: Ctx): T.ControlAction =>
   isThreadMsg(m) ? { id: m.id, dir: m.dir } : { conv: ctx.conv, id: m.id, dir: m.dir };
@@ -80,6 +81,7 @@ function AddReaction({ m, ctx, wide }: { m: AnyMsg; ctx: Ctx; wide: boolean }) {
 
 /** ReactPopover: the quick reactions, then the whole picker, anchored to its trigger. */
 export function ReactPopover({ m, ctx, trigger, wide, onDone }: { m: AnyMsg; ctx: Ctx; trigger: ReactElement; wide: boolean; onDone?: () => void }) {
+  const portal = usePortal();
   const [open, setOpen] = useState(false);
   const [more, setMore] = useState(false);
   const react = useReact(m, ctx);
@@ -88,7 +90,7 @@ export function ReactPopover({ m, ctx, trigger, wide, onDone }: { m: AnyMsg; ctx
   return (
     <Popover.Root open={open} onOpenChange={(o) => { setOpen(o); if (!o) setMore(false); }}>
       <Popover.Trigger render={trigger} />
-      <Popover.Portal>
+      <Popover.Portal container={portal}>
         <Popover.Positioner side="top" align={wide ? "center" : "start"} sideOffset={6} collisionPadding={12} className="z-50">
           <Popover.Popup className="rounded-full outline-none transition-[opacity,scale] duration-200 ease-out-soft data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
             <Popover.Title className="sr-only">React to this message</Popover.Title>
@@ -103,11 +105,12 @@ export function ReactPopover({ m, ctx, trigger, wide, onDone }: { m: AnyMsg; ctx
 
 /** EmojiDialog: the whole picker on its own, for phones (opened from a message's sheet). */
 export function EmojiDialog({ open, onOpenChange, m, ctx }: { open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx }) {
+  const portal = usePortal();
   const react = useReact(m, ctx);
   const mine = (m.reactions || []).filter((r) => r.mine).map((r) => r.emoji);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
+      <Dialog.Portal container={portal}>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-[#1B1530]/40 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
         <Dialog.Popup className="fixed bottom-3 left-1/2 z-50 -translate-x-1/2 outline-none transition-[opacity,translate] duration-[280ms] ease-out-soft data-[starting-style]:translate-y-8 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
           <Dialog.Title className="sr-only">Choose a reaction</Dialog.Title>

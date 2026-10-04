@@ -1,17 +1,32 @@
-// UI host v1. The engine and authenticated transport outlive any visual flow.
-// Installed skins are full-trust local code, selected explicitly by the user.
-// A skin renders inside its own shadow tree, so its stylesheet cannot reach
-// the host's own controls; that is styling isolation only, not a sandbox.
+// UI host v1 (docs/UI_SKINS.md). AgentNet is the core: the program and the
+// documented skin contract this file serves. Every interface is a skin, a
+// complete package loaded the same way: its manifest from the catalog
+// (/assets/skins/index.json, plus the packages stored in this browser),
+// its document rules (fonts) adopted by the page, its stylesheet and root
+// inside a shadow tree of #skin, and its entry's mount/unmount. Built-in
+// skins (Comic, the default) are packages too; only trust differs: a
+// built-in one is trusted by this host's fixed list, any other one after
+// the person accepts its exact digest. A shadow tree is styling isolation,
+// not a sandbox: every skin runs with the page's full trust.
+//
+// Every skin but Comic gets the host's switcher above it (skinbar.mjs):
+// one step back to Comic, the skin menu and the workspace control. Comic
+// draws its own (Settings → Appearance → Skin, and its workspace menu).
 //
 // Workspaces: when the program serves /assets/workspaces.mjs, the host keeps
 // one shell with one immutable transport per membership (a home of this
 // computer's AgentNet, or a browser enrollment with its own engine). What a
-// view holds when an operation starts (a send, an upload, a file open) stays
-// bound to that membership: choosing another workspace never retargets it.
+// skin holds when an operation starts (a send, an upload, a file open) stays
+// bound to that membership: choosing another workspace never retargets it;
+// the skin is mounted again over a host bound to the new one.
 (async () => {
   "use strict";
-  const mount = document.getElementById("skin");
+  const page = document.getElementById("skin");
   const browser = window.agentnetEngine;
+  // The built-in skins: trusted by this list (static/skins.go keeps these ids
+  // from every installed or browser-local package), never by a manifest.
+  const BUILT_IN = ["comic", "classic", "zoom"];
+  const HOME = "comic"; // the default skin
   const json = async (path, body) => {
     if (!path.startsWith("/api/")) throw new Error("Expected an AgentNet API path");
     if (browser) return browser.api(path, body);
@@ -19,10 +34,9 @@
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
     return r.json();
   };
-  let openHandler, pending;
-  window.agentnetOpen = (chan) => { if (openHandler) openHandler(chan); else pending = chan; };
-  // legacy is the one-workspace transport of an older program (no shell).
-  const legacy = {
+  // single is the one-workspace transport of a program without the
+  // workspace module.
+  const single = {
     platform: browser ? "browser" : "daemon", api: json,
     workspace: { id: "default", name: "This computer", endpoint: location.origin, address: "", realm: "", handle: "", state: "enrolled" },
     listen(fn) {
@@ -47,29 +61,61 @@
       return (await r.json()).id;
     },
   };
+
+  // ---- what every host carries: notification routing, the catalog
+  //
+  // onOpen(fn, kinds): fn(target, kind, context). Every skin gets "channel"
+  // (a browser notification's channel) and "conversation" (a DM id);
+  // "message" ({conv, dir} in context) and "review" only when it lists
+  // them. A destination the skin does not take is offered by the host's
+  // switcher, with the way to open it in Comic.
+  let openHandler = null, openKinds = new Set(), pendingChannel;
+  const deliverChannel = (chan) => { if (openHandler) openHandler(chan, "channel"); else pendingChannel = chan; };
+  window.agentnetOpen = deliverChannel; // device.mjs: a notification was clicked
+  const skinsListeners = new Set();
+  const go = (id, hash) => { const u = new URL(location.href); u.searchParams.set("skin", id); if (hash !== undefined) u.hash = hash; location.assign(u); };
   const common = {
     version: 1,
-    onOpen(fn) { openHandler = fn; if (pending !== undefined) { fn(pending); pending = undefined; } },
+    onOpen(fn, kinds) {
+      openHandler = typeof fn === "function" ? fn : null;
+      openKinds = new Set(["channel", "conversation", ...(Array.isArray(kinds) ? kinds.filter((k) => k === "message" || k === "review") : [])]);
+      if (openHandler && pendingChannel !== undefined) { const c = pendingChannel; pendingChannel = undefined; openHandler(c, "channel"); }
+    },
     skins: [],
+    onSkinsChange(fn) { skinsListeners.add(fn); return () => { skinsListeners.delete(fn); }; },
     selectSkin(id) {
       if (!common.skins.some((s) => s.id === id)) throw new Error("Unknown skin");
-      const url = new URL(location.href); url.searchParams.set("skin", id); location.assign(url);
+      go(id);
     },
   };
+  // The browser-local package manager (local-skins.mjs): the same consent
+  // and storage rules wherever a skin draws it.
+  let localSkins = null;
+  try { localSkins = await import("/assets/local-skins.mjs"); } catch (_) { /* a program without it: hosted packages still work */ }
+  let offered = [];
+  const refreshSkins = async () => {
+    const local = localSkins ? await localSkins.catalog().catch(() => []) : [];
+    // builtin is the host's word, set here from its own list, never a manifest's.
+    const mark = (s) => Object.freeze({ ...s, builtin: !s.local && BUILT_IN.includes(s.id) });
+    // Every immutable workspace host keeps this SAME array reference.
+    common.skins.splice(0, common.skins.length, ...offered.map(mark), ...local.filter((s) => s.local).map(mark));
+    for (const fn of [...skinsListeners]) { try { fn(); } catch (_) { /* one listener's failure is its own */ } }
+  };
+  if (localSkins) common.manageLocalSkins = (root) => localSkins.manager(root, { changed: refreshSkins });
 
   // ---- workspaces: one shell, immutable bound transports
   //
   // The daemon's page lists its memberships from the program; a browser
   // device brings its own shell and enrollments (device.mjs). Without the
-  // module (an older program) there is one workspace on the legacy transport.
-  let shell = null, ws = null;
+  // module there is one workspace on the single transport.
+  let shell = null;
   const memberships = window.agentnetWorkspaces || null;
   try {
-    ws = await import("/assets/workspaces.mjs");
+    const ws = await import("/assets/workspaces.mjs");
     if (memberships) shell = memberships.shell;
     else if (!browser) { shell = new ws.WorkspaceShell(); await shell.load(); }
-  } catch (e) { shell = null; ws = null; }
-  if (shell && !shell.active) shell = null; // nothing enrolled: the legacy transport, as before
+  } catch (e) { shell = null; }
+  if (shell && !shell.active) shell = null; // nothing enrolled: the single transport
   const entryOf = (id) => shell && shell.members.get(id);
   // Reconnect routes a membership disconnected here again: this computer's
   // program only (a browser enrollment has no program to ask).
@@ -79,7 +125,7 @@
     active: () => shell.active,
     has: (id) => !!(entryOf(id) && entryOf(id).connected), // known and connected here, by local registration only
     select: (id) => { if (!workspaces.has(id)) throw new Error("Unknown workspace"); switchTo(id); },
-    state: (id) => shell.state(id), // this membership's own view state (drafts, open conversation), kept by the renderer
+    state: (id) => shell.state(id), // this membership's own view state (drafts, open conversation), kept by the skin
     onChange: (fn) => shell.onChange(fn),
     join: (body) => (memberships ? memberships.join(body) : shell.join(body)),
     disconnect: (id) => (memberships ? memberships.disconnect(id) : shell.disconnect(id)),
@@ -88,308 +134,223 @@
       reconnect: (id) => shell.reconnect(id),
     } : {}),
   }) : null;
+  const switchTo = (id) => { if (id !== shell.active) shell.select(id); };
+
   // hostFor binds one membership: the transport is that membership's own
   // and never changes; what the host adds (skins, notification routing,
-  // the workspace list) is the same for every one.
+  // the workspace list) is the same for every one. The identity a
+  // membership proved in its overview is what host.reconnect checks.
+  const known = new Map(); // membership id -> { address, fingerprint } from its own overview
+  const canRebind = !!shell && !memberships && !browser && typeof shell.recoverNative === "function";
+  let remount = null, rebinding = null;
   const hostFor = (id) => {
-    const bound = shell ? shell.bind(id) : legacy;
-    return Object.freeze(Object.assign({}, bound, common, { workspaces }));
+    const bound = shell ? shell.bind(id) : single;
+    const wid = bound.workspace.id;
+    const api = async (path, body) => {
+      const r = await bound.api(path, body);
+      if (body === undefined && path === "/api/overview" && r && r.me && r.me.fingerprint) known.set(wid, { address: r.me.address, fingerprint: r.me.fingerprint });
+      return r;
+    };
+    const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces }, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
+    return host;
   };
-  let switching = null; // the renderer's capture hook, set once it is mounted
-  const switchTo = (id) => {
-    const previous = shell.active;
-    if (id === previous) return;
-    if (switching) switching(previous, shell.state(previous));
-    shell.select(id);
-  };
-  window.agentnet = hostFor(shell ? shell.active : "default");
-  if (shell) shell.onChange((e) => { window.agentnet = hostFor(e.id); }); // new operations take the new host; ones under way keep theirs
-  // The renderer registers how it keeps and restores a membership's view:
-  // capture(previous, state) before the selection changes, switched(event)
-  // after. app.js sets both; a skin gets remounted with the new host instead.
-  window.agentnetWorkspace = shell ? {
-    hook(h) { switching = h.capture || null; if (h.switched) shell.onChange(h.switched); },
-    async recoverNative(host, identity) {
+  // rebind: this computer's program restarted and retired the membership's
+  // handle. The host binds the same membership again, only when the
+  // program still names it with the same endpoint, realm, address and key
+  // it proved before, and mounts the skin again over the new binding.
+  // Nothing under way is retargeted or replayed: the old host's staged
+  // files and sends stay with the old binding.
+  const rebind = (host) => {
+    if (rebinding) return rebinding;
+    rebinding = (async () => {
       const id = host.workspace.id;
-      if (browser || memberships || host.platform !== "daemon" || window.agentnet !== host || shell.active !== id) throw new Error("Workspace changed during reconnect");
-      await shell.recoverNative(id, identity);
       if (window.agentnet !== host || shell.active !== id) throw new Error("Workspace changed during reconnect");
+      const before = entryOf(id);
+      await shell.recoverNative(id, known.get(id));
+      if (shell.active !== id) throw new Error("Workspace changed during reconnect");
+      if (entryOf(id) === before) return; // the same binding still holds
       window.agentnet = hostFor(id);
-      return window.agentnet;
-    },
-  } : null;
+      if (remount) await remount();
+    })().finally(() => { rebinding = null; });
+    return rebinding;
+  };
+  window.agentnet = hostFor(shell ? shell.active : "default"); // the host bound to the workspace shown now (the host's own pointer)
+  if (shell) shell.onChange((e) => { window.agentnet = hostFor(e.id); }); // new operations take the new host; ones under way keep theirs
 
-  const script = (src) => new Promise((resolve, reject) => {
-    const s = document.createElement("script"); s.src = src; s.onload = resolve; s.onerror = reject; document.head.append(s);
+  // ---- the host's own pages and parts
+  const text = (tag, value, cls) => { const e = document.createElement(tag); e.textContent = value; if (cls) e.className = cls; return e; };
+  const button = (label, fn, cls) => { const b = text("button", label, "btn" + (cls ? " " + cls : "")); b.type = "button"; b.onclick = fn; return b; };
+  const link = (href, into) => new Promise((resolve, reject) => {
+    const l = document.createElement("link"); l.rel = "stylesheet"; l.href = href;
+    l.onload = resolve; l.onerror = () => reject(new Error("Could not load " + href));
+    into.append(l);
   });
-  const style = (href, into) => { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = href; (into || document.head).append(l); };
-  const text = (tag, value) => { const e = document.createElement(tag); e.textContent = value; return e; };
-  const button = (label, fn) => { const b = text("button", label); b.type = "button"; b.className = "btn"; b.onclick = fn; return b; };
-
-  // hostBar is the host's own strip over any installed skin: which
-  // interface this is, who you are here, and the way back to the built-in
-  // one. It lives in its own shadow tree with its own styles, above the
-  // skin, so no skin stylesheet can hide, move or restyle it.
-  let notificationHint = () => {};
-  const hostBar = (selected) => {
-    const bar = document.createElement("div");
-    bar.id = "host-bar";
-    const sh = bar.attachShadow({ mode: "open" });
-    // Styles come from core.css, linked into this shadow tree: the page's
-    // CSP allows no inline styles, and no skin stylesheet reaches in here.
-    const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "/assets/core.css";
-    const notice = document.createElement("div"); notice.className = "host-notification"; notice.hidden = true; notice.setAttribute("role", "status");
-    notificationHint = (label, actionable = false) => {
-      notice.replaceChildren(); notice.hidden = !label;
-      if (!label) return;
-      const item = actionable ? button(label, () => common.selectSkin("default")) : text("span", label);
-      item.className = "host-pill";
-      notice.append(item);
-    };
-    const pill = text("button", "AgentNet ▾"); pill.className = "host-pill"; pill.setAttribute("aria-haspopup", "menu"); pill.setAttribute("aria-expanded", "false");
-    pill.title = "Interface: " + selected.name + ". Switch, or see who you are here.";
-    const menu = document.createElement("div"); menu.className = "host-menu"; menu.setAttribute("role", "menu"); menu.hidden = true;
-    const who = text("p", "Interface: " + selected.name + " · " + window.agentnet.platform);
-    menu.append(who);
-    for (const s of common.skins) {
-      if (s.id === selected.id) continue;
-      const b = text("button", (s.id === "default" ? "Back to AgentNet" : "Switch to " + s.name)); b.setAttribute("role", "menuitem");
-      b.onclick = () => common.selectSkin(s.id);
-      menu.append(b);
-    }
-    const toggle = async (open) => {
-      menu.hidden = !open;
-      pill.setAttribute("aria-expanded", String(open));
-      if (open) {
-        const h = window.agentnet; // the membership shown now
-        try { const o = await h.api("/api/overview"); who.textContent = "Interface: " + selected.name + " · you are " + o.me.address + (shell ? " in " + h.workspace.name : ""); } catch (_) { /* the skin may be offline */ }
-        (menu.querySelector("button") || pill).focus();
+  const card = (into, { title, lines, actions, mark, alert }) => {
+    const gate = text("div", "", "skin-gate");
+    const c = text("section", "", "skin-card");
+    if (alert) c.setAttribute("role", "alert");
+    const h = text("h1", title); h.id = "skin-gate-title"; c.setAttribute("aria-labelledby", h.id);
+    if (mark) { const m = text("span", mark, "skin-card-mark"); m.setAttribute("aria-hidden", "true"); c.append(m); }
+    c.append(h, ...lines);
+    const row = text("div", "", "skin-card-actions"); row.append(...actions); c.append(row);
+    gate.append(c);
+    into.replaceChildren(gate);
+    (actions[0] || h).focus();
+  };
+  // adoptDocument: a package's document rules (manifest "document"). The
+  // page keeps only its @font-face and @property rules, with every URL
+  // resolved inside the package; anything else in it is dropped. Browsers
+  // ignore both kinds inside a shadow tree, so they apply at document level.
+  const adoptDocument = async (href, base) => {
+    const r = await fetch(href);
+    if (!r.ok) throw new Error("Could not load the skin’s fonts");
+    const parsed = new CSSStyleSheet();
+    parsed.replaceSync(await r.text()); // never follows @import
+    const kept = new CSSStyleSheet(), inside = new URL(base, location.href);
+    for (const rule of parsed.cssRules) {
+      if (typeof CSSPropertyRule !== "undefined" && rule instanceof CSSPropertyRule) kept.insertRule(rule.cssText, kept.cssRules.length);
+      else if (rule instanceof CSSFontFaceRule) {
+        let ok = true;
+        const css = rule.cssText.replace(/url\(\s*(["']?)([^"')]*)\1\s*\)/g, (_, q, u) => {
+          const abs = new URL(u, new URL(href, location.href));
+          if (abs.origin !== inside.origin || !abs.pathname.startsWith(inside.pathname)) ok = false;
+          return 'url("' + abs.href + '")';
+        });
+        if (ok) kept.insertRule(css, kept.cssRules.length);
       }
-    };
-    pill.onclick = () => toggle(menu.hidden);
-    sh.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) { toggle(false); pill.focus(); } });
-    sh.append(css, notice, pill, menu);
-    return bar;
+    }
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, kept];
   };
 
-  // workspaceBar is the persistent switcher, owned by the host outside
-  // every interface: the module's selector, Join, Disconnect and Reconnect.
-  // Joining needs the invitation you were given (it names the server);
-  // leaving keeps this device's keys and history for that workspace and
-  // revokes nothing there, and Reconnect routes that same membership again
-  // (this computer's program only: a browser enrollment has no program to
-  // ask).
-  const workspaceBar = () => {
-    if (!shell || !ws) return;
-    const root = document.createElement("div");
-    root.id = "workspace-shell";
-    document.body.prepend(root);
-    style("/assets/workspaces.css");
-    const status = text("span", ""); status.className = "workspace-note"; status.setAttribute("role", "status");
-    const note = (s) => { status.textContent = s; };
-    const bar = ws.mountWorkspaceSwitcher(root, shell, { beforeSwitch: (previous, st) => { if (switching) switching(previous, st); }, afterSwitch: () => note("") });
-    const tools = document.createElement("span"); tools.className = "workspace-tools";
-    const joinBtn = button("Join a workspace…", () => joinForm());
-    const leaveBtn = button("Disconnect…", async () => {
-      const id = shell.active, b = entryOf(id) && entryOf(id).binding;
-      if (!b) return;
-      if (id === "default") { note("This computer's own workspace stays; only joined ones can be disconnected."); return; }
-      if (!window.confirm("Disconnect from " + b.name + " (" + new URL(b.endpoint).host + ")? Your keys and history for it stay on this device; nothing is revoked at that server.")) return;
-      try {
-        if (switching) switching(id, shell.state(id));
-        await workspaces.disconnect(id);
-        bar.refresh();
-        note("Disconnected from " + b.name + ". Its keys and history stay here" + (canReconnect ? "; Reconnect… connects it again." : "; join again with a new invitation to reconnect."));
-      } catch (e) { note(e.message); }
-    });
-    tools.append(joinBtn, leaveBtn);
-    if (canReconnect) tools.append(button("Reconnect…", () => reconnectForm()));
-    tools.append(status);
-    const reconnectForm = async () => {
-      if (root.querySelector(".workspace-reconnect")) return;
-      note("");
-      let gone;
-      try { gone = await shell.disconnected(); } catch (e) { note(e.message); return; }
-      if (!gone.length) { note("No disconnected workspace here."); return; }
-      if (root.querySelector(".workspace-reconnect")) return; // opened again while listing
-      const f = document.createElement("form"); f.className = "workspace-join workspace-reconnect";
-      const pickL = text("label", "Disconnected workspace"); const pick = document.createElement("select"); pick.setAttribute("aria-label", "Disconnected workspace");
-      for (const w of gone) { const o = text("option", (w.name || "Unnamed workspace") + " · " + new URL(w.endpoint).host + " · " + w.address); o.value = w.id; pick.append(o); }
-      pickL.append(pick);
-      const err = text("p", ""); err.className = "workspace-error"; err.setAttribute("role", "alert");
-      const go = button("Reconnect", async () => {
-        const w = gone.find((x) => x.id === pick.value);
-        if (!w) return;
-        go.disabled = true; err.textContent = "";
-        try {
-          await shell.reconnect(w.id);
-          bar.refresh(); f.remove();
-          note("Reconnected " + (w.name || "the workspace") + " as " + w.address + ", with its keys and history. Choose it above to work there.");
-        } catch (e) { err.textContent = e.message; go.disabled = false; }
-      });
-      go.className = "btn primary";
-      const cancel = button("Cancel", () => f.remove());
-      f.addEventListener("submit", (e) => { e.preventDefault(); go.click(); });
-      f.append(pickL, err, go, cancel);
-      root.append(f);
-      pick.focus();
-    };
-    root.querySelector(".workspace-bar").append(tools);
-    const joinForm = () => {
-      if (root.querySelector(".workspace-join:not(.workspace-reconnect)")) return; // the reconnect form shares only its look
-      note("");
-      const f = document.createElement("form"); f.className = "workspace-join";
-      const field = (tag, label, attrs) => { const l = text("label", label); const i = document.createElement(tag); Object.assign(i, attrs); l.append(i); return [l, i]; };
-      const [nameL, name] = field("input", "Name it, for you", { maxLength: 48, required: true, placeholder: "e.g. Acme" });
-      const [invL, invite] = field("textarea", "Invitation you were given", { rows: 2, required: true, placeholder: "agentnet-invite-v1:…", spellcheck: false });
-      const [agentL, agent] = field("input", "This device's name there", { maxLength: 32, required: true, placeholder: "laptop", autocapitalize: "none" });
-      const err = text("p", ""); err.className = "workspace-error"; err.setAttribute("role", "alert");
-      let retryID = null; // a join that failed keeps its allocated id: the next try continues it, never a second membership
-      const go = button("Join", async () => {
-        const body = { name: name.value.trim(), invite: invite.value.trim(), agent: agent.value.trim(), ...(retryID ? { id: retryID } : {}) };
-        if (!body.name || !body.invite || !body.agent) { err.textContent = "A name, the invitation and a device name are all needed."; return; }
-        go.disabled = true; err.textContent = "";
-        try {
-          const h = await workspaces.join(body);
-          invite.value = ""; // the invitation is single-use and is not kept on the page
-          bar.refresh(); f.remove();
-          note("Joined " + body.name + " as " + (h.workspace.address || body.agent) + ". Choose it above to work there.");
-        } catch (e) {
-          if (e.retryID) { retryID = e.retryID; f.dataset.retry = retryID; }
-          err.textContent = e.message + (retryID ? " Paste a new invitation and press Join again: the same joining workspace is retried." : "");
-          go.disabled = false;
-        }
-      });
-      go.className = "btn primary";
-      const cancel = button("Cancel", () => f.remove());
-      f.addEventListener("submit", (e) => { e.preventDefault(); go.click(); });
-      f.append(nameL, invL, agentL, err, go, cancel);
-      root.append(f);
-      name.focus();
-    };
-  };
-
+  let selected = null, surface = page, homeName = "Comic";
   try {
     const r = await fetch("/assets/skins/index.json");
-    if (!r.ok) throw new Error("Could not load the UI catalog");
-    const offered = await r.json();
-    let localSkins = null;
-    try { localSkins = await import("/assets/local-skins.mjs"); } catch (_) { /* older program: hosted packages still work */ }
-    // The interface package importer, for an interface that draws its own
-    // settings (the built-in messenger): the same manager the previous
-    // interface mounted, with the same consent and storage rules.
-    if (localSkins) common.manageLocalSkins = (root) => localSkins.manager(root, { changed: refreshSkins });
-    const refreshSkins = async () => {
-      const local = localSkins ? await localSkins.catalog().catch(() => []) : [];
-      // Every immutable workspace host keeps this SAME array reference.
-      common.skins.splice(0, common.skins.length, ...offered, ...local);
-      window.dispatchEvent(new Event("agentnet-skins-change"));
-    };
+    if (!r.ok) throw new Error("Could not load the list of skins");
+    offered = (await r.json()).filter((s) => s && s.api === 1);
     await refreshSkins();
-    let saved = "default";
-    try { saved = localStorage.getItem("agentnet.skin") || saved; } catch (_) { /* local preference */ }
-    const requested = new URL(location.href).searchParams.get("skin") || saved;
-    const selected = common.skins.find((s) => s.id === requested && s.api === 1) || common.skins[0];
-    if (selected.id !== "default") workspaceBar(); // the default interface draws its own workspace switcher
-    if (selected.id === "classic") {
-      const r = await fetch("/assets/default.html");
-      if (!r.ok) throw new Error("Could not load the previous interface");
-      // Trusted bundled markup, never message text or a remotely supplied template.
-      const doc = new DOMParser().parseFromString(await r.text(), "text/html");
-      mount.replaceChildren(...doc.body.childNodes);
-      style("/assets/app.css");
-      await script("/assets/lenses.js"); await script("/assets/app.js");
-      const manager = document.getElementById("local-interfaces");
-      if (manager && localSkins) localSkins.manager(manager, { changed: refreshSkins });
-    } else {
-      const builtin = selected.id === "default";
-      let consent = builtin;
-      if (!consent) try { consent = localStorage.getItem("agentnet.skin.trusted." + selected.id) === selected.digest; } catch (_) { /* ask */ }
-      if (!consent) await new Promise((resolve) => {
-        const card = text("section", ""); card.className = "join-card";
-        card.append(text("h1", "Use “" + selected.name + "”?"), text("p", "This installed UI can read your chats and act as you, including sending messages and approving work. Use it only if you trust its author."), text("p", "Digest: " + selected.digest),
-          button("Use this UI", () => { try { localStorage.setItem("agentnet.skin.trusted." + selected.id, selected.digest); } catch (_) {} resolve(); }),
-          button("Use AgentNet", () => common.selectSkin("default")));
-        mount.replaceChildren(card);
+    const home = common.skins.find((s) => s.id === HOME);
+    if (!home) throw new Error("This program has no Comic skin");
+    homeName = home.name;
+    // A choice saved before Comic was a package (the default interface was
+    // "default", the bundled app "classic") opens Comic, and is rewritten
+    // once; ?skin=default stays a name for Comic.
+    let saved = null;
+    try { saved = localStorage.getItem("agentnet.skin"); } catch (_) { /* local preference */ }
+    if (saved === "default" || saved === "classic") { saved = HOME; try { localStorage.setItem("agentnet.skin", HOME); } catch (_) {} }
+    let requested = new URL(location.href).searchParams.get("skin") || saved || HOME;
+    if (requested === "default") requested = HOME;
+    selected = common.skins.find((s) => s.id === requested) || home;
+
+    // The switcher over every skin but Comic: before trust is asked, so the
+    // way back is there from the first moment.
+    let bar = null;
+    if (selected.id !== HOME) {
+      const { mountSkinBar } = await import("/assets/skinbar.mjs");
+      bar = mountSkinBar(document.body, {
+        skins: () => common.skins, selected, home, choose: (id) => go(id), host: () => window.agentnet, workspaces,
+        manage: common.manageLocalSkins || null,
       });
-      if (selected.local) await localSkins.activate();
-      const packagePath = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
-      mount.replaceChildren();
-      // The built-in interface renders into the page itself. An installed
-      // one gets a root of its own inside a shadow tree: its stylesheet
-      // applies there and nowhere else. Colors such as --surface still
-      // inherit from the page.
-      let parent = mount;
-      if (builtin) {
-        // The built-in messenger brings its whole stylesheet; the host's
-        // core.css (for the enrollment page, skins and the host bar) would
-        // otherwise override it, being unlayered.
-        for (const l of document.querySelectorAll('link[rel="stylesheet"][href="/assets/core.css"]')) l.remove();
-        style("/assets/messenger.css");
-        mount.classList.add("messenger-root");
-      } else {
-        parent = mount.attachShadow({ mode: "open" });
-        style("/assets/core.css", parent); // semantic colors and the root's own box; the skin's sheet comes after it
-        if (selected.style) style(packagePath + selected.style, parent);
-      }
-      const module = await import(builtin ? "/assets/messenger.mjs" : packagePath + selected.entry);
-      if (typeof module.mount !== "function") throw new Error("The skin has no mount function");
-      // mountSkin gives the interface a fresh root over one membership's
-      // host. On a workspace switch it is mounted again over the new one:
-      // what it held for the old membership goes out with its root, and
-      // operations it started keep the host they started with.
-      let root = null, mounting = Promise.resolve();
-      const mountSkin = async () => {
-        openHandler = undefined;
-        if (root) { if (typeof module.unmount === "function") { try { await module.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
-        root = document.createElement("div");
-        root.id = builtin ? "messenger" : "skin";
-        root.className = "skin-root";
-        parent.append(root);
-        await module.mount(root, window.agentnet);
-        if (!openHandler) throw new Error("This UI must register notification handling with host.onOpen");
-      };
-      await mountSkin();
-      if (window.agentnetWorkspace) window.agentnetWorkspace.hook({ switched: () => { mounting = mountSkin().catch((e) => { root.replaceChildren(text("p", e.message)); }); } });
-      // Notification fallback belongs to the host, outside an installed
-      // skin. Its explicit action preserves the exact fragment and workspace
-      // on reload.
-      if (!builtin) document.body.append(hostBar(selected));
-      // A notification's #conv=<hash>[&workspace=<id>]: the workspace named
-      // must be one registered here; an unknown one opens nothing (never the
-      // current workspace instead).
-      const openConversation = () => {
-        const hash = location.hash || "";
-        notificationHint("");
-        const review = hash === "#review" || hash.startsWith("#review&");
-        if (review || hash.startsWith("#msg=")) {
-          const q = new URLSearchParams(hash.slice(1)), wid = q.get("workspace");
-          if (!review && !/^[0-9a-f]{32}$/.test(q.get("msg") || "")) return;
-          if (wid !== null && (!workspaces || !workspaces.has(wid))) {
-            notificationHint("Notification workspace unavailable here");
-            return;
-          }
-          if (builtin) { history.replaceState(null, "", location.pathname + location.search); openHandler(review ? "" : q.get("msg"), review ? "review" : "message"); return; }
-          notificationHint(review ? "Open review in AgentNet" : "Open message in AgentNet", true);
-          return; // never consume this destination until the person opens it
-        }
-        if (!hash.startsWith("#conv=")) return;
-        history.replaceState(null, "", location.pathname + location.search);
-        const q = new URLSearchParams(hash.slice(1));
-        const conv = q.get("conv") || "", wid = q.get("workspace");
-        if (!/^[0-9a-f]{64}$/.test(conv)) return;
-        if (wid !== null) {
-          if (!workspaces || !workspaces.has(wid)) return;
-          if (wid !== shell.active) { const once = shell.onChange(() => { once(); mounting.then(() => openHandler && openHandler(conv, "conversation")); }); switchTo(wid); return; }
-        }
-        openHandler(conv, "conversation");
-      };
-      window.addEventListener("hashchange", openConversation);
-      openConversation();
     }
+
+    let trusted = selected.builtin;
+    if (!trusted) try { trusted = localStorage.getItem("agentnet.skin.trusted." + selected.id) === selected.digest; } catch (_) { /* ask */ }
+    if (!trusted) await new Promise((resolve) => {
+      const digest = text("p", "Fingerprint " + selected.digest.slice(0, 16) + "…" + selected.digest.slice(-8), "skin-card-digest");
+      card(page, {
+        title: "Use the skin “" + selected.name + "”?", mark: "✦",
+        lines: [
+          text("p", "This skin was made by someone else. It can read your chats and act as you, including sending messages and approving work. Use it only if you trust whoever made it."),
+          text("p", (selected.local ? "It is stored in this browser" : "It is installed on this computer") + ". You are asked again whenever it changes."),
+          digest,
+        ],
+        actions: [
+          button("Use this skin", () => { try { localStorage.setItem("agentnet.skin.trusted." + selected.id, selected.digest); } catch (_) {} resolve(); }, "primary"),
+          button("Use " + homeName, () => go(HOME)),
+        ],
+      });
+    });
+    if (selected.local) await localSkins.activate();
+    const base = selected.local ? "/local-skins/" + selected.digest + "/" : "/assets/skins/" + selected.id + "/";
+    if (selected.document) await adoptDocument(base + selected.document, base);
+    page.replaceChildren();
+    surface = page.attachShadow({ mode: "open" });
+    // The host's base sheet (core.css, lowest layer), then the package's own.
+    await link("/assets/skin-base.css", surface);
+    if (selected.style) await link(base + selected.style, surface);
+    const module = await import(base + selected.entry);
+    if (typeof module.mount !== "function") throw new Error("This skin has no mount function");
+
+    // mountSkin gives the skin a fresh root over the host of the workspace
+    // shown now. On a workspace switch (or a rebind) it is mounted again:
+    // unmount first, and what it held for the old membership goes out with
+    // its root; operations it started keep the host they started with.
+    let root = null, mounting = Promise.resolve();
+    const mountSkin = async () => {
+      openHandler = null; openKinds = new Set();
+      if (root) { if (typeof module.unmount === "function") { try { await module.unmount(root); } catch (_) { /* replaced anyway */ } } root.remove(); }
+      root = document.createElement("div");
+      root.id = "skin";
+      root.className = "skin-root";
+      surface.append(root);
+      await module.mount(root, window.agentnet);
+      if (!openHandler) throw new Error("This skin must register notification handling with host.onOpen");
+    };
+    const failed = (e) => {
+      const box = text("div", ""); box.className = "skin-root";
+      if (root) root.replaceWith(box); else surface.append(box);
+      root = box;
+      card(box, { title: "Couldn’t open " + selected.name, lines: [text("p", e.message || "Loading failed.")], alert: true,
+        actions: selected.id === HOME ? [button("Reload", () => location.reload(), "primary")] : [button("Use " + homeName, () => go(HOME), "primary"), button("Reload", () => location.reload())] });
+    };
+    remount = () => (mounting = mounting.then(mountSkin).catch(failed));
+    await mountSkin();
+    if (shell) shell.onChange(() => { remount(); });
+
+    // A notification's destination: #conv=<64 hex>, #msg=<32 hex>[&conv=…][&dir=in|out]
+    // or #review, each with an optional &workspace=<id>. The workspace must
+    // be one registered here; an unknown one opens nothing (never the
+    // current workspace instead).
+    const notice = (words, action) => { if (bar) bar.notify(words, action ? { label: action, run: () => go(HOME, location.hash) } : null); };
+    const clear = () => history.replaceState(null, "", location.pathname + location.search);
+    const route = () => {
+      const hash = location.hash || "";
+      notice("");
+      const review = hash === "#review" || hash.startsWith("#review&"), msg = hash.startsWith("#msg="), conv = hash.startsWith("#conv=");
+      if (!review && !msg && !conv) return;
+      const q = new URLSearchParams(hash.slice(1)), wid = q.get("workspace");
+      let target = "", kind = "review", context;
+      if (conv) {
+        target = q.get("conv") || ""; kind = "conversation";
+        if (!/^[0-9a-f]{64}$/.test(target)) { clear(); return; }
+      } else if (msg) {
+        target = q.get("msg") || ""; kind = "message";
+        if (!/^[0-9a-f]{32}$/.test(target)) return;
+        const c = q.get("conv"), d = q.get("dir");
+        context = Object.freeze({ ...(c && /^[0-9a-f]{64}$/.test(c) ? { conv: c } : {}), ...(d === "in" || d === "out" ? { dir: d } : {}) });
+      }
+      if (wid !== null && (!workspaces || !workspaces.has(wid))) {
+        if (conv) clear();
+        else notice("A notification is for a workspace that isn’t on this device.");
+        return;
+      }
+      if (!openKinds.has(kind)) { // never consumed until the person opens it
+        notice(kind === "review" ? "Something is waiting for your decision." : "A notification is waiting for you.", "Open it in " + homeName);
+        return;
+      }
+      clear();
+      const deliver = () => { if (openHandler && openKinds.has(kind)) openHandler(target, kind, context); };
+      if (wid !== null && wid !== shell.active) { const once = shell.onChange(() => { once(); mounting.then(deliver); }); switchTo(wid); return; }
+      deliver();
+    };
+    window.addEventListener("hashchange", route);
+    route();
     try { localStorage.setItem("agentnet.skin", selected.id); } catch (_) {}
   } catch (e) {
-    const use = (id) => () => { const u = new URL(location.href); u.searchParams.set("skin", id); location.assign(u); };
-    mount.replaceChildren(text("h1", "Could not open this UI"), text("p", e.message || "UI loading failed"), button("Use AgentNet", use("default")), button("Use the previous interface", use("classic")));
+    const box = text("div", "");
+    box.className = "skin-root";
+    surface.replaceChildren(...(surface === page ? [] : [...surface.querySelectorAll("link")]), box);
+    const name = selected ? selected.name : homeName;
+    card(box, { title: "Couldn’t open " + name, lines: [text("p", e.message || "Loading failed.")], alert: true,
+      actions: !selected || selected.id === HOME ? [button("Reload", () => location.reload(), "primary")] : [button("Use " + homeName, () => go(HOME), "primary"), button("Reload", () => location.reload())] });
   }
 })();

@@ -1,43 +1,58 @@
-// The default messenger interface. The UI host (loader.js) calls mount with
-// a root element and its host API v1 (docs/UI_SKINS.md): every read and
-// action goes through host.api, host.listen, host.file and host.stage,
-// exactly like an installed interface.
+// Comic, AgentNet's default skin, as a skin package (docs/UI_SKINS.md).
+// The UI host (loader.js) calls mount with a root element inside a shadow
+// tree and its host API v1: every read and action goes through host.api,
+// host.listen, host.file and host.stage, exactly like any other skin. Comic
+// owns that root and nothing else: its theme, popups and focus stay there.
 import { createRoot, type Root } from "react-dom/client";
 import { CSPProvider } from "@base-ui/react/csp-provider";
 import { App } from "./App";
 import { StoreContext } from "./context";
 import type { Host } from "./host";
+import { OwnedContext, ownTheme } from "./owned";
 import { Store } from "./store";
 import { applySavedTheme } from "./features/Settings";
 
-const mounted = new WeakMap<Element, { root: Root; store: Store }>();
+const mounted = new WeakMap<Element, { root: Root; store: Store; stopTheme: () => void; parts: HTMLElement[] }>();
 
-export async function mount(root: Element, host: Host): Promise<void> {
+export async function mount(root: HTMLElement, host: Host): Promise<void> {
+  root.classList.add("an-root");
+  root.lang = navigator.language || "en";
+  const app = document.createElement("div");
+  const portals = document.createElement("div");
+  portals.className = "an-portals";
+  root.append(app, portals);
+  const stopTheme = ownTheme(root);
   applySavedTheme();
   const store = new Store(host);
   // A notification click opens its exact conversation; it never accepts
-  // or approves anything (the host routes #conv= and #msg= links here).
-  host.onOpen((target, kind) => {
+  // or approves anything (the host routes #conv=, #msg= and #review here).
+  host.onOpen((target, kind, context) => {
     if (kind === "conversation" && /^[0-9a-f]{64}$/.test(target)) void store.open({ kind: "dm", id: target });
-    else if (kind === "message" && target) void store.openMessage(target);
+    else if (kind === "message" && target) void store.openMessage(target, context);
     else if (kind === "review") store.showTab("oks");
-  });
-  const r = createRoot(root);
-  mounted.set(root, { root: r, store });
+    else if (target) void store.openChannel(target); // a browser notification's channel
+    else store.showTab("chats"); // news in more than one conversation
+  }, ["conversation", "message", "review"]);
+  const r = createRoot(app);
+  mounted.set(root, { root: r, store, stopTheme, parts: [app, portals] });
   r.render(
     <CSPProvider disableStyleElements>
-      <StoreContext.Provider value={store}>
-        <App />
-      </StoreContext.Provider>
+      <OwnedContext.Provider value={{ root, portals }}>
+        <StoreContext.Provider value={store}>
+          <App />
+        </StoreContext.Provider>
+      </OwnedContext.Provider>
     </CSPProvider>,
   );
   void store.start();
 }
 
-export async function unmount(root: Element): Promise<void> {
+export async function unmount(root: HTMLElement): Promise<void> {
   const m = mounted.get(root);
   if (!m) return;
+  mounted.delete(root);
   m.store.stop();
   m.root.unmount();
-  mounted.delete(root);
+  m.stopTheme();
+  for (const p of m.parts) p.remove();
 }

@@ -1,7 +1,9 @@
-// Development proxy: serves a dev build of the messenger (dev.sh OUT) in
+// Development proxy: serves a dev build of the Comic skin package (dev.sh
+// OUT) at /assets/skins/comic/ and the host's own files as checked out, in
 // front of a running daemon's page, forwarding everything else (the page,
-// the API, the event stream) to that daemon as if the browser were on its
-// own origin. Loopback only; for development and journeys, never shipped.
+// the catalog, the API, the event stream) to that daemon as if the browser
+// were on its own origin. Loopback only; for development and journeys,
+// never shipped.
 //
 //   node dev-proxy.mjs DAEMON_URL_WITH_TOKEN OUT [PORT]
 // prints: proxy http://127.0.0.1:PORT/
@@ -20,22 +22,21 @@ await new Promise((resolve, reject) => {
     r.resume(); r.on("end", resolve);
   }).on("error", reject);
 });
-const types = { ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".json": "application/json" };
-const local = (p) => p === "/assets/messenger.mjs" || p === "/assets/messenger.css" || p.startsWith("/assets/m/");
+const types = { ".mjs": "text/javascript; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2", ".json": "application/json" };
+const comic = "/assets/skins/comic/";
 const staticDir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "static");
-const fromRepo = (p) => p === "/assets/loader.js"; // the host, as checked out (no binary rebuild)
+// The host, as checked out (no binary rebuild).
+const hostFiles = ["loader.js", "skinbar.mjs", "skinbar.css", "core.css", "skin-base.css", "local-skins.mjs"];
+const fileFor = (p) => {
+  if (p.startsWith(comic) && p.length > comic.length) return path.join(path.resolve(out), p.slice(comic.length));
+  if (p.startsWith("/assets/") && hostFiles.includes(p.slice("/assets/".length))) return path.join(staticDir, p.slice("/assets/".length));
+  return null;
+};
 const server = http.createServer((req, res) => {
   const p = new URL(req.url, "http://x").pathname;
-  if (req.method === "GET" && fromRepo(p)) {
-    fs.readFile(path.join(staticDir, p.replace(/^\/assets\//, "")), (err, data) => {
-      if (err) { res.writeHead(404).end(); return; }
-      res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" }).end(data);
-    });
-    return;
-  }
-  if (req.method === "GET" && local(p)) {
-    const file = path.join(out, p.replace(/^\/assets\//, ""));
-    if (!file.startsWith(path.resolve(out))) { res.writeHead(404).end(); return; }
+  const file = req.method === "GET" ? fileFor(p) : null;
+  if (file) {
+    if (!file.startsWith(path.resolve(out) + path.sep) && !file.startsWith(staticDir + path.sep)) { res.writeHead(404).end(); return; }
     fs.readFile(file, (err, data) => {
       if (err) { res.writeHead(404).end(); return; }
       res.writeHead(200, { "Content-Type": types[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-store" }).end(data);

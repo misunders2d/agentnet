@@ -5,8 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { Menu } from "@base-ui/react/menu";
 import { EmojiPicker as Picker, defaultEmojiDataResolver, useSkinTone, type EmojiData, type EmojiDataResolver, type SkinTone } from "frimousse";
 import { IconChevronDown, IconDots, IconMoodPlus, IconSearch, IconX } from "@tabler/icons-react";
+import { usePortal } from "../owned";
 
 const toneKey = "agentnet.messenger.skin-tone";
+// The emoji data ships in the package (m/emoji/en/), next to this module.
+const emojiBase = new URL("m/emoji", import.meta.url).href;
 const tones: SkinTone[] = ["none", "light", "medium-light", "medium", "medium-dark", "dark"];
 
 function savedTone(): SkinTone {
@@ -109,7 +112,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
   };
 
   return (
-    <Picker.Root locale="en" emojibaseUrl="/assets/m/emoji" resolveEmojiData={resolve} columns={columns} skinTone={tone}
+    <Picker.Root locale="en" emojibaseUrl={emojiBase} resolveEmojiData={resolve} columns={columns} skinTone={tone}
       onEmojiSelect={(e) => onPick(e.emoji)} onKeyDown={keys} aria-label="Emoji"
       className="flex h-[min(430px,70dvh)] w-[min(408px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl bg-surface text-ink stroke shadow-pop">
       <div className="flex items-center gap-1.5 p-2 pb-1">
@@ -166,6 +169,7 @@ const TAB = 44; // every category tab is a full 44px target
  *  picker is too narrow (phones), the last tabs move into a "More" menu, so
  *  nothing scrolls sideways and no tab is cut. */
 function CategoryTabs({ parts, current, onJump }: { parts: Section[]; current: number; onJump: (i: number) => void }) {
+  const portal = usePortal();
   const [box, setBox] = useState<HTMLDivElement | null>(null);
   const [fit, setFit] = useState(parts.length);
   useEffect(() => {
@@ -205,7 +209,7 @@ function CategoryTabs({ parts, current, onJump }: { parts: Section[]; current: n
             </span>
             {inRest && bar}
           </Menu.Trigger>
-          <Menu.Portal>
+          <Menu.Portal container={portal}>
             <Menu.Positioner side="bottom" align="end" sideOffset={4} collisionPadding={12} className="z-[60] outline-none">
               <Menu.Popup className="min-w-52 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
                 {rest.map((p, j) => (
@@ -282,7 +286,7 @@ export function useEmojiPreload(when: boolean) {
   useEffect(() => {
     if (!when) return;
     const c = new AbortController();
-    Promise.resolve(defaultEmojiDataResolver("en", { emojibaseUrl: "/assets/m/emoji", signal: c.signal })).catch(() => {});
+    Promise.resolve(defaultEmojiDataResolver("en", { emojibaseUrl: emojiBase, signal: c.signal })).catch(() => {});
     return () => c.abort();
   }, [when]);
 }

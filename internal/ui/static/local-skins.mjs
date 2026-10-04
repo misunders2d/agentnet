@@ -5,6 +5,9 @@
 const catalogName = 'agentnet-skin-catalog-v1';
 const prefix = 'agentnet-skin-package-v1-';
 const types = {js:'text/javascript; charset=utf-8',mjs:'text/javascript; charset=utf-8',css:'text/css; charset=utf-8',json:'application/json',png:'image/png',webp:'image/webp',svg:'image/svg+xml',woff2:'font/woff2'};
+// The built-in skins (present and to come) and the old name of the default:
+// no package may use them (static/skins.go ReservedSkinIDs).
+const reserved = ['comic','classic','zoom','default'];
 const enc = new TextEncoder(), decode = new TextDecoder('utf-8',{fatal:true});
 const hex = bytes => [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('');
 const hash = bytes => crypto.subtle.digest('SHA-256',bytes);
@@ -33,8 +36,9 @@ export async function prepare(files) {
   const raw=new Uint8Array(await manifest.arrayBuffer());
   if(raw.length>16384)fail('The manifest exceeds 16 KiB.');
   let m;try{m=JSON.parse(decode.decode(raw));}catch(_){fail('The manifest must be UTF-8 JSON.');}
-  if(!m || typeof m!=='object' || Array.isArray(m))fail('Invalid AgentNet interface manifest.');
-  if(m.api!==1 || typeof m.id!=='string' || !/^[a-z][a-z0-9-]{0,47}$/.test(m.id)||m.id==='default'||typeof m.name!=='string'||!m.name.trim()||enc.encode(m.name).length>80||!Array.isArray(m.files)||!m.files.length||m.files.length>32||new Set(m.files).size!==m.files.length||!m.files.includes(m.entry)||!/^.+\.m?js$/.test(m.entry)||(m.style&&(!m.files.includes(m.style)||!m.style.endsWith('.css'))))fail('Invalid AgentNet interface manifest.');
+  if(!m || typeof m!=='object' || Array.isArray(m))fail('Invalid AgentNet skin manifest.');
+  const css=(name)=>name===undefined||name===''||(typeof name==='string'&&m.files.includes(name)&&name.endsWith('.css'));
+  if(m.api!==1 || typeof m.id!=='string' || !/^[a-z][a-z0-9-]{0,47}$/.test(m.id)||reserved.includes(m.id)||typeof m.name!=='string'||!m.name.trim()||enc.encode(m.name).length>80||!Array.isArray(m.files)||!m.files.length||m.files.length>32||new Set(m.files).size!==m.files.length||!m.files.includes(m.entry)||!/^.+\.m?js$/.test(m.entry)||!css(m.style)||!css(m.document))fail('Invalid AgentNet skin manifest.');
   const assets=[], pieces=[raw];let total=raw.length;
   for(const name of m.files){
     if(!pathOK(name)||name==='skin.json'||!Object.hasOwn(types,name.split('.').at(-1)))fail('Unsupported package file: '+name);
@@ -45,24 +49,24 @@ export async function prepare(files) {
   }
   const joined=new Uint8Array(pieces.reduce((n,x)=>n+x.length,0));let offset=0;for(const part of pieces){joined.set(part,offset);offset+=part.length;}
   const digest=hex(await hash(joined));
-  return {item:{api:1,id:'local:'+m.id,package_id:m.id,name:m.name,entry:m.entry,style:m.style||'',files:m.files,digest,local:true,size:total},assets};
+  return {item:{api:1,id:'local:'+m.id,package_id:m.id,name:m.name,entry:m.entry,style:m.style||'',document:m.document||'',files:m.files,digest,local:true,size:total},assets};
 }
 export async function install(files) {
-  if(!supported())fail('This browser cannot retain local interfaces.');
+  if(!supported())fail('This browser cannot store skins.');
   const prepared=await prepare(files); // declared local File bytes only
   return navigator.locks.request('agentnet-local-skins',async()=>{
     const {item,assets}=prepared, list=await catalog();
-    if(!list.some(x=>x.id===item.id)&&list.length>=32)fail('Remove an interface before importing another (limit 32).');
+    if(!list.some(x=>x.id===item.id)&&list.length>=32)fail('Remove a skin before importing another (limit 32).');
     const names=(await caches.keys()).filter(x=>x.startsWith(prefix));let total=0;
     for(const name of names){const cache=await caches.open(name);const ready=await cache.match(new URL('/local-skins/ready',location.origin));
       if(!ready){await caches.delete(name);continue;}const meta=await ready.json();total+=Number(meta.size)||0;
     }
-    if(!names.includes(prefix+item.digest)&&total+item.size>64*1024*1024)fail('Local interfaces use the 64 MiB limit. Remove old interfaces first.');
+    if(!names.includes(prefix+item.digest)&&total+item.size>64*1024*1024)fail('Skins stored in this browser use the 64 MiB limit. Remove one first.');
     const name=prefix+item.digest, cache=await caches.open(name);
     if(!await cache.match(new URL('/local-skins/ready',location.origin))){
       try { for(const f of assets)await cache.put(new URL('/local-skins/'+item.digest+'/'+f.name,location.origin),new Response(f.bytes,{headers:{'Content-Type':f.type,'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}}));
         await cache.put(new URL('/local-skins/ready',location.origin),Response.json({id:item.id,size:item.size}));
-      }catch(e){await caches.delete(name);throw new Error('Interface not stored: browser storage is unavailable or full.');}
+      }catch(e){await caches.delete(name);throw new Error('Skin not stored: browser storage is unavailable or full.');}
     }
     await (await caches.open(catalogName)).put(url(item.id),Response.json(item));
     return item;
@@ -78,12 +82,12 @@ export async function remove(id) {
   });
 }
 const waitState=(worker,state)=>new Promise((resolve,reject)=>{
-  const reached=()=>worker.state===state||(state==='installed'&&['activating','activated'].includes(worker.state));if(reached()){resolve();return;}const timer=setTimeout(()=>{worker.removeEventListener('statechange',change);reject(new Error('Interface worker is not ready. Close other AgentNet tabs and reopen this page.'));},15000);
-  function change(){if(reached()||worker.state==='redundant'){clearTimeout(timer);worker.removeEventListener('statechange',change);reached()?resolve():reject(new Error('Interface worker could not be activated.'));}}
+  const reached=()=>worker.state===state||(state==='installed'&&['activating','activated'].includes(worker.state));if(reached()){resolve();return;}const timer=setTimeout(()=>{worker.removeEventListener('statechange',change);reject(new Error('The skin worker is not ready. Close other AgentNet tabs and reopen this page.'));},15000);
+  function change(){if(reached()||worker.state==='redundant'){clearTimeout(timer);worker.removeEventListener('statechange',change);reached()?resolve():reject(new Error('The skin worker could not be activated.'));}}
   worker.addEventListener('statechange',change);change();
 });
 export async function activate() {
-  if(!supported())fail('This browser cannot load local interfaces.');
+  if(!supported())fail('This browser cannot load stored skins.');
   const reg=await navigator.serviceWorker.register('/sw.js');
   // Re-registering an existing worker can resolve before its update starts.
   // Wait for the explicit update job before inspecting installing/waiting;
@@ -92,18 +96,27 @@ export async function activate() {
   await reg.update().catch(e=>{if(!reg.active)throw e;});
   if(reg.installing)await waitState(reg.installing,'installed');
   if(reg.waiting){const worker=reg.waiting;worker.postMessage({type:'agentnet-local-skins-activate'});await waitState(worker,'activated');}
-  const worker=reg.active;if(!worker)fail('Local interface worker is unavailable.');
+  const worker=reg.active;if(!worker)fail('The skin worker is unavailable.');
   // Called only after explicit interface selection/trust. Claiming never
   // reloads tabs, fetches chats or changes their selected interface.
-  await new Promise((resolve,reject)=>{const channel=new MessageChannel(),timer=setTimeout(()=>reject(new Error('Reload AgentNet to use local interfaces.')),5000);channel.port1.onmessage=e=>{clearTimeout(timer);channel.port1.close();e.data?.ready?resolve():reject(new Error('Local interface worker was refused.'));};worker.postMessage({type:'agentnet-local-skins-claim'},[channel.port2]);});
+  await new Promise((resolve,reject)=>{const channel=new MessageChannel(),timer=setTimeout(()=>reject(new Error('Reload AgentNet to use stored skins.')),5000);channel.port1.onmessage=e=>{clearTimeout(timer);channel.port1.close();e.data?.ready?resolve():reject(new Error('The skin worker was refused.'));};worker.postMessage({type:'agentnet-local-skins-claim'},[channel.port2]);});
 }
+// manager draws the browser-local skin manager into root (host.manageLocalSkins):
+// import a package (its files or its folder), the skins stored here and
+// Remove. It returns its teardown: root is emptied and nothing it started
+// reports into it any more.
 export function manager(root,{changed}) {
+  let live=true;
+  const stop=()=>{live=false;root.replaceChildren();};
   root.replaceChildren();
-  const text=(tag,value)=>{const e=document.createElement(tag);e.textContent=value;return e;};
-  root.append(text('h3','Interfaces stored in this browser'),text('p','Import a package from its author. It can read your chats and act as you when selected. Nothing is uploaded to your server.'));
-  if(!supported()){root.append(text('p','Local interface storage is unavailable in this browser.'));return;}
-  const status=text('p',''),list=document.createElement('div');status.setAttribute('role','status');
-  const refresh=async()=>{list.replaceChildren();for(const item of await catalog()){const row=document.createElement('p');row.append(text('strong',item.name+' '),text('span','Digest '+item.digest.slice(0,12)+' · '));const del=text('button','Remove');del.type='button';del.className='btn';del.onclick=async()=>{if(!confirm('Remove '+item.name+' from this browser? Open tabs using it may need to switch back to AgentNet.'))return;try{await remove(item.id);await changed();await refresh();status.textContent='Removed from this browser.';}catch(_){status.textContent='Could not remove this interface.';}};row.append(del);list.append(row);}};
-  const picker=(folder)=>{const label=text('label',folder?'Import package folder':'Import package files'),input=document.createElement('input');input.type='file';input.multiple=true;if(folder)input.webkitdirectory=true;input.setAttribute('aria-label',label.textContent);label.append(input);input.onchange=async()=>{status.textContent='Checking package…';try{const item=await install(input.files);await changed();await refresh();status.textContent='Stored '+item.name+'. Choose it in Interface above to review trust before running it.';}catch(e){status.textContent=e.message;}finally{input.value='';}};return label;};
-  root.append(picker(false));if('webkitdirectory' in document.createElement('input'))root.append(picker(true));root.append(status,list);refresh().catch(()=>{status.textContent='Could not read local interfaces.';});
+  const text=(tag,value,cls)=>{const e=document.createElement(tag);e.textContent=value;if(cls)e.className=cls;return e;};
+  root.append(text('h3','Skins stored in this browser'),text('p','Import a skin package you got from its author. Nothing is uploaded to your server. When you choose it, you are asked to trust it first: it can read your chats and act as you.'));
+  if(!supported()){root.append(text('p','This browser cannot store skins.'));return stop;}
+  const status=text('p',''),list=text('div','','items'),pickers=text('div','','pickers');status.setAttribute('role','status');
+  const say=(s)=>{if(live)status.textContent=s;};
+  const refresh=async()=>{const items=await catalog();if(!live)return;list.replaceChildren();for(const item of items){const row=text('p','','item');row.append(text('strong',item.name),text('span','Fingerprint '+item.digest.slice(0,12)));const del=text('button','Remove');del.type='button';del.setAttribute('aria-label','Remove '+item.name);del.onclick=async()=>{if(!confirm('Remove '+item.name+' from this browser? A tab using it opens Comic the next time it loads.'))return;try{await remove(item.id);await changed();await refresh();say('Removed from this browser.');}catch(_){say('Could not remove this skin.');}};row.append(del);list.append(row);}};
+  const picker=(folder)=>{const label=text('label',folder?'Import a skin folder':'Import skin files'),input=document.createElement('input');input.type='file';input.multiple=true;if(folder)input.webkitdirectory=true;input.setAttribute('aria-label',label.textContent);label.append(input);input.onchange=async()=>{say('Checking the package…');try{const item=await install(input.files);await changed();await refresh();say('Stored '+item.name+'. Choose it under Skin: you review trust before it runs.');}catch(e){say(e.message);}finally{input.value='';}};return label;};
+  pickers.append(picker(false));if('webkitdirectory' in document.createElement('input'))pickers.append(picker(true));
+  root.append(pickers,status,list);refresh().catch(()=>say('Could not read the skins stored here.'));
+  return stop;
 }

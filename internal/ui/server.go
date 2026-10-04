@@ -57,7 +57,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
-	mux.HandleFunc("GET /assets/m/{path...}", s.messengerAsset)
 	mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
 		r.SetPathValue("name", "manifest.webmanifest")
 		s.asset(w, r)
@@ -213,8 +212,8 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		w.Write(static.AppIcon(size))
 		return
 	}
-	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8", "default.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
-		"messenger.mjs": "text/javascript; charset=utf-8", "messenger.css": "text/css; charset=utf-8",
+	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
+		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8",
 		"manifest.webmanifest": "application/manifest+json",
 		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
 		"assistant-setup.mjs":  "text/javascript; charset=utf-8",
@@ -231,24 +230,6 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(data)
-}
-
-// messengerAsset serves the default interface's fonts and emoji data from
-// the bundle's m/ directory; nothing else.
-func (s *Server) messengerAsset(w http.ResponseWriter, r *http.Request) {
-	name := "m/" + r.PathValue("path")
-	if !fs.ValidPath(name) {
-		http.NotFound(w, r)
-		return
-	}
-	data, err := fs.ReadFile(static.Files, name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", static.ContentType(name))
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(data)
 }
