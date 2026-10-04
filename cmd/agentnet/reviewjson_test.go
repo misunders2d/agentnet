@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -45,5 +47,29 @@ func TestReviewJSONIncludesNotices(t *testing.T) {
 	}
 	if !slices.Contains(ids, taskID) || !slices.Contains(ids, noticeID) || len(ids) != 2 {
 		t.Fatalf("inbox --review --json lists %v, want the task and the notice", ids)
+	}
+}
+
+// The help says what inbox --review --json leaves out of what the text
+// output lists (review finding 5), and that resolve, which sends no reply,
+// still tells a requester that reads statuses the request was closed
+// (review finding 6).
+func TestHelpSaysWhatReviewJSONAndResolveDo(t *testing.T) {
+	text := func(args ...string) string {
+		t.Helper()
+		var out bytes.Buffer
+		if err := printHelp(&out, args); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(out.String()), " ")
+	}
+	if inbox := text("inbox"); strings.Contains(inbox, "decided there, as the text output does") || !strings.Contains(inbox, "is not in it") {
+		t.Fatalf("help inbox claims --review --json matches the text output:\n%s", inbox)
+	}
+	if strings.Contains(text(), "interrupted (nothing is sent)") {
+		t.Fatal("help says resolve sends nothing, yet a requester that reads statuses is told")
+	}
+	if r := text("resolve"); strings.Contains(r, "It sends nothing and runs nothing") || !strings.Contains(r, "reads statuses is told it was closed") {
+		t.Fatalf("help resolve:\n%s", r)
 	}
 }

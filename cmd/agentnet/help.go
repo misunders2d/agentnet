@@ -57,7 +57,7 @@ Questions and tasks sent to you:
   approve    answer an agent's questions automatically (unapprove to stop);
              approve --tasks: run its tasks without asking, for its exact key
   approvals  list who is approved, with task keys and whether they still hold
-  resolve    close an item marked needs_human or interrupted (nothing is sent)
+  resolve    close an item marked needs_human or interrupted (no reply is sent)
   remind     remind me later about a received message (list, done, cancel)
   open       review an item (or --review, all waiting) with your coding agent
   review-to  tell another agent of yours, without content, when items wait here
@@ -235,11 +235,11 @@ Items waiting for your decision (--review):
                for your responder's items:
                reply ID TEXT or decline ID answers a question or task;
                accept ID reruns it afresh (e.g. after you add context);
-               resolve ID closes it without sending anything
+               resolve ID closes it without a reply
   interrupted  the daemon stopped while your responder ran it; nothing
                reruns it on its own (a task may already have had effects):
                accept ID runs it again afresh, reply ID TEXT or decline ID
-               answers it, resolve ID closes it without sending anything
+               answers it, resolve ID closes it without a reply
   conv_held    a question or task for you in a conversation: nothing runs
                it; your next turn there answers it (agentnet dm send),
                resolve ID closes it without one
@@ -263,7 +263,9 @@ Windows desktop). Clicks are not handled on macOS.
   --peek     inspect without changing any message's read state
   --json     machine-readable output; with --review it also lists the
              reports from other machines (status review_notice), decided
-             there, as the text output does`,
+             there; the rest the text output lists after them (agents that
+             joined without your accept, and what else waits) is not in it:
+             see the text output or agentnet doctor`,
 
 	"conversation": `Usage: agentnet conversation [--json] [--offset N] [--limit N] ID
 
@@ -570,10 +572,12 @@ record.`,
 Close an item your responder marked needs_human after you have dealt with it,
 or one that was interrupted (the daemon stopped while it ran) that you do not
 want run again, or a question or task held for you in a conversation that you
-do not want to answer there (replying there closes it too). It sends nothing
-and runs nothing; to answer the sender, use reply or decline instead. With the
-PID of your agent that joined without your accept (inbox --review), it
-dismisses that notice; the agent stays (dm dismiss-agent PID ends it).`,
+do not want to answer there (replying there closes it too). It sends no
+reply and runs nothing (a requester that reads statuses is told it was
+closed; nothing at all for a turn held in a conversation); to answer the
+sender, use reply or decline instead. With the PID of your agent that joined
+without your accept (inbox --review), it dismisses that notice; the agent
+stays (dm dismiss-agent PID ends it).`,
 
 	"review-to": `Usage: agentnet review-to               (show)
        agentnet review-to ADDRESS

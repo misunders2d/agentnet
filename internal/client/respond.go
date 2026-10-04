@@ -225,7 +225,8 @@ func (a *Agent) NothingRuns(agentID string) string {
 // interrupted (it is not run again), or with one held for them in a
 // conversation (closed without answering there), or dismisses the notice
 // of an agent participation accepted without a click (id: its PID;
-// selfconsent.go). It sends nothing; to answer the sender, use Reply or
+// selfconsent.go). It sends no reply (a requester that reads statuses is
+// told it was closed: noteStatus); to answer the sender, use Reply or
 // Decline instead.
 func (a *Agent) Resolve(id string) error {
 	res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND (state = ? OR state = ? AND kind IN (?, ?))`,
