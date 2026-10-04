@@ -136,8 +136,9 @@ async function world() {
     const result = await w.receive(await w.from(c, e, output), e);
     check((await e.store.get('inbox', result)).agent_id === w.agent.id, 'output exact binding on both human copies');
     const thread = await e.dm(w.conv), report = thread.messages.find((m) => m.id === result);
-    const parents = thread.messages.filter((m) => m.lid === report.reply_to && m.pid === invite.pid && m.kind === 'task');
-    check(parents.length === 1 && parents[0].lid === request.lid && parents[0].target.agent_id === w.agent.id, 'DM projection preserves verified logical request ID on both human copies');
+    // The output names the logical request; the view links it to the request as shown here.
+    const parents = thread.messages.filter((m) => m.id === report.reply_to && m.pid === invite.pid && m.kind === 'task');
+    check(parents.length === 1 && parents[0].lid === request.lid && parents[0].target.agent_id === w.agent.id, 'DM projection links the output to the verified logical request on both human copies');
     if (e === b) check(parents[0].id !== parents[0].lid, 'audience physical copy differs from projected logical request ID');
   }
   const sibling = w.users[3]; // Separate enrolled person cannot impersonate host, label irrelevant.

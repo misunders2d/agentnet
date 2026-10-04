@@ -219,6 +219,20 @@ labels never merge people or workspaces. Stop what `host.listen` returned in
 under way goes where it was written, a staged file belongs to the workspace
 it was staged in (the host refuses it elsewhere).
 
+Disconnected memberships (BUG-19): `GET /api/workspaces` lists the mounted
+memberships only, each with its `handle`. This computer's program lists
+every membership with its `state` at `GET /api/workspaces/all` (a
+disconnected one has `state: "disconnected"` and no handle) and routes one
+again with `POST /api/workspaces/reconnect` and body `{"id": "<its id>"}`
+(JSON, same origin, at the page's root, never under a membership's
+`/workspaces/<id>/<handle>/` prefix). The answer is the membership bound again
+under a new handle (`state: "enrolled"`); 404 says no disconnected
+membership has that id. `host.api` is bound to one membership's prefix, so
+a skin reaches these two through `host.workspaces.disconnected()` and
+`host.workspaces.reconnect(id)` (above), present on this computer's program
+only; the host's switcher offers Reconnect over every skin but Comic, which
+draws its own workspace menu.
+
 A notification fragment is `#conv=<hash>&workspace=<id>`,
 `#msg=<id>[&conv=<hash>][&dir=in|out][&workspace=<id>]` or
 `#review[&workspace=<id>]`: the host verifies the workspace id against its
@@ -238,6 +252,16 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
 - Conversations: `/api/send` `{to,kind,body,reply_to,files}`;
   `/api/dm/new`; `/api/dm/send` `{conv,body,reply_to,files}`.
 - Decisions: `/api/act`; returned message actions determine availability.
+- Standing grants: GET `/api/approvals` lists what `agentnet approvals` does:
+  `{questions[{address}], tasks[{address, fingerprint, status}],
+  participations[{conv, pid, agent_id?, keys[], tasks_from[], external?}],
+  read_only, unresolved?[]}` (`unresolved`: conversations whose agents
+  cannot be resolved here now, such as a group whose context is pending;
+  their grants are listed once they can be); `POST /api/approvals/revoke` `{kind: "question"|"task",
+  address}` or `{kind: "participation", pid}` ends that one grant (as
+  `unapprove`, `unapprove --tasks`, `dm dismiss-agent`; an `external` one is
+  ended by a member only). A browser keeps none: its list is empty and
+  `read_only`, and revoking is refused.
 - Identity: `/api/person` creates a person (it does **not** rename);
   `POST /api/person/label` `{label}` changes the existing person's self-claimed
   display name through a signed roster step. Keep person ID, keys, devices,
@@ -278,6 +302,17 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   unavailable with the Hub's own-usage report). Show unknown as unknown, never
   zero; the Hub's quota is the whole server's, never an allowance.
 - Presence refresh: `/api/refresh`, triggered by user navigation; no polling.
+- What a conversation view says without its sentences: a DM message's
+  `reply_to` names the message as this device shows it (an agent's answer
+  names its executor's copy of the request; the view links it to the
+  request's own `id`); a participation record carries `event_type` (`invite`,
+  `accept`, `decline`, `dismiss` or `scope`) and `event_by` (its author's
+  person label as known here, or device address) beside `event`. A DM
+  summary carries `guests` (active participations: people and agents),
+  `decide` (its requests with actions for this device's person; none on a
+  browser) and, when its latest row is a participation record, `last_event`
+  `{kind, pid, by}` (a scope counts as its invite). A device thread summary
+  carries `agent_id` when one is named.
 
 
 ## Build your own skin

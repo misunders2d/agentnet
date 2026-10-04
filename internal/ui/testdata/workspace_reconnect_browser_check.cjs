@@ -101,10 +101,28 @@ const server = http.createServer((req, res) => {
       await menu();
       await page.waitForTimeout(300);
       assert.equal(await page.getByRole('menuitem', { name: /Reconnect/ }).count(), 0, name + ': nothing left to reconnect');
+      await page.keyboard.press('Escape');
+
+      // The host a skin gets: host.workspaces lists the memberships
+      // disconnected here (list() leaves them out) and reconnects one.
+      const before = state.acme.handle;
+      await menu();
+      await page.getByRole('menuitem', { name: /Leave Acme/ }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Leave Acme', exact: true }).click();
+      await notice.filter({ hasText: 'You left Acme' }).waitFor();
+      const viaHost = await page.evaluate(async (id) => {
+        const w = window.agentnet.workspaces, gone = await w.disconnected();
+        const listed = w.list().some((x) => x.id === id);
+        await w.reconnect(id);
+        return { gone: gone.map((x) => [x.id, x.state, x.name]), listed, has: w.has(id) };
+      }, other);
+      assert.deepEqual(viaHost, { gone: [[other, 'disconnected', 'Acme']], listed: false, has: true }, name + ': host.workspaces');
+      assert.deepEqual(state.posts.slice(2).map((p) => [p.path, p.body.id]), [['/api/workspaces/disconnect', other], ['/api/workspaces/reconnect', other]]);
+      assert.notEqual(state.acme.handle, before, name + ': the same membership under a new handle');
       assert.deepEqual(errors, [], name + ': page errors');
       await page.close();
     }
-    console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect');
+    console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect, host.workspaces disconnected()/reconnect(id)');
   } finally {
     if (browser) await browser.close();
     await new Promise((r) => server.close(r));

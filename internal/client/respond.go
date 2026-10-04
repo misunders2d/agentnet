@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -79,14 +80,17 @@ func (a *Agent) ReplyWait(ctx context.Context, id, body string, wait time.Durati
 	return a.SendMessage(ctx, m)
 }
 
-// Decline refuses a task (or held question) and tells the sender.
+// Decline refuses a task (or held question) and tells the sender. In a
+// conversation, it refuses a request to this device's agent that waits
+// for its person's accept (declineConv); a question or task for the person
+// is answered in the conversation instead.
 func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, error) {
 	if in, fp, e := a.storedReceiverSetup(id); e == nil && in.ReceiverRoute.Op == "delegate" {
 		return a.declineReceiverDelegation(ctx, in, fp, reason)
 	}
 	sender, kind, err := a.store.inboxKind(id)
 	if errors.Is(err, ErrConversationItem) {
-		return SendResult{}, err
+		return a.declineConv(id, reason)
 	}
 	if err != nil {
 		return SendResult{}, fmt.Errorf("no inbox message %s", id)
@@ -96,6 +100,33 @@ func (a *Agent) Decline(ctx context.Context, id, reason string) (SendResult, err
 	}
 	return a.SendMessage(ctx, Outgoing{To: sender, Body: reason, ReplyTo: id, Kind: replyKind(kind),
 		Status: envelope.StatusDeclined, claim: takeOver(id, kind, stateDeclined)})
+}
+
+// declineConv refuses request id to this device's agent in a conversation
+// while it waits for its person's accept: the requests Accept takes
+// (received, not a replica, a question or task of a participation), in
+// state awaiting only. It is the person's decision, never their agent's
+// turn: the request is marked declined, the reason kept here with it, and
+// its requester is told by the request's status, as of any other change of
+// it (noteStatus); nothing runs it then or later. A question or task for
+// the person stays ErrConversationItem: it is answered in the conversation.
+func (a *Agent) declineConv(id, reason string) (SendResult, error) {
+	res, err := a.store.db.Exec(`UPDATE inbox SET state = ?, responder = 'manual', detail = nullif(?, '')
+		WHERE id = ? AND conv IS NOT NULL AND pid IS NOT NULL AND replica = 0 AND kind IN (?, ?) AND state = ?`,
+		stateDeclined, strings.TrimSpace(reason), id, envelope.KindQuestion, envelope.KindTask, stateAwaiting)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		var pid sql.NullString
+		if err := a.store.db.QueryRow(`SELECT pid FROM inbox WHERE id = ?`, id).Scan(&pid); err != nil || !pid.Valid {
+			return SendResult{}, ErrConversationItem
+		}
+		return SendResult{}, errors.New("nothing to decline: only a request to your agent that waits for your accept can be declined")
+	}
+	a.NoteChange()
+	a.noteStatus(id)
+	return SendResult{ID: id, State: stateDeclined}, nil
 }
 
 // Accept lets the worker run a task awaiting acceptance, answer a held

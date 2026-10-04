@@ -270,6 +270,39 @@ func eventText(body string, p dmPeople) string {
 	return "A record about an agent (" + ev.Type + ")."
 }
 
+// eventFields are a participation record's type and its author, plainly
+// (DMMessage.EventType, EventBy): the author's person label as known here,
+// whoever that is, else the signing device's address; nothing for a record
+// that cannot be read.
+func eventFields(body string, p dmPeople) (kind, pid, by string) {
+	ev, err := protocol.ParseParticipationEvent([]byte(body))
+	if err != nil {
+		return "", "", ""
+	}
+	by = ev.Author.Address
+	if v, ok := p.byPerson(ev.Author.Person); ok && v.Label != "" {
+		by = v.Label
+	}
+	return ev.Type, ev.PID, by
+}
+
+// lastEvent is conv's latest message as a chat list says it when it is a
+// participation record (DMSummary.LastEvent): an invitation's public scope
+// is its invite.
+func lastEvent(m client.ConvMessage, p dmPeople) *LastEvent {
+	if m.Sub != envelope.SubEvent {
+		return nil
+	}
+	kind, pid, by := eventFields(m.Body, p)
+	if kind == "" {
+		return nil
+	}
+	if kind == protocol.EventScope {
+		kind = protocol.EventInvite
+	}
+	return &LastEvent{Kind: kind, PID: pid, By: by}
+}
+
 // humanEventText says what a person's participation record does: people are
 // invited, join, decline, leave or are removed; nothing about an agent.
 func humanEventText(ev protocol.ParticipationEvent, info client.ParticipationInfo, known bool, who string, p dmPeople) string {

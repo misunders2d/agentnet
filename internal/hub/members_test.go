@@ -60,11 +60,26 @@ func testAd(m member) protocol.SessionAd {
 	return ad
 }
 
+// endGrace ends the grace period of agent's disconnected session now: its
+// pending end runs as when the period runs out. Tests that look at an agent
+// within grace give it a long one, so that holds however long their
+// requests take, and end it here.
+func endGrace(t *testing.T, h *Hub, agent, session string) {
+	t.Helper()
+	h.presence.mu.Lock()
+	defer h.presence.mu.Unlock()
+	s := h.presence.sessions[agent][session]
+	if s == nil || s.conns > 0 || s.timer == nil {
+		t.Fatalf("session %s of %s is not within its grace period", session, agent)
+	}
+	s.timer.Reset(0)
+}
+
 // Every enrolled, unrevoked agent can list the others, most recently joined
 // first, with presence as the Hub sees it; revoked agents are neither listed
 // nor allowed to list, and an unsigned request is refused.
 func TestMembersList(t *testing.T) {
-	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, SessionGrace: 50 * time.Millisecond})
+	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, SessionGrace: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +110,11 @@ func TestMembersList(t *testing.T) {
 	if p := presenceOf(listMembers(t, h, bob)); p[vit.addr] != protocol.PresenceReconnecting {
 		t.Fatalf("within grace: %v", p)
 	}
+	endGrace(t, h, vit.addr, ad.Session)
 	deadline := time.Now().Add(5 * time.Second)
 	for presenceOf(listMembers(t, h, bob))[vit.addr] != protocol.PresenceOffline {
 		if time.Now().After(deadline) {
-			t.Fatal("still listed as reconnecting after the grace period")
+			t.Fatal("still listed as reconnecting after the grace period ended")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -162,7 +178,7 @@ func TestPresenceStateChanges(t *testing.T) {
 // agent connected), then whenever an agent joins, connects, disconnects or
 // is revoked. The stream announces this with MembersHeader.
 func TestMembersPushed(t *testing.T) {
-	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, Heartbeat: time.Minute, SessionGrace: 50 * time.Millisecond})
+	h, err := Open(Config{DataDir: filepath.Join(t.TempDir(), "hub"), PublicURL: "https://127.0.0.1:1", Logf: t.Logf, Heartbeat: time.Minute, SessionGrace: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,6 +234,7 @@ func TestMembersPushed(t *testing.T) {
 	until("connected", func(p map[string]string) bool { return p[vit.addr] == protocol.PresenceConnected })
 	h.presence.disconnect(vit.addr, vad.Session)
 	until("reconnecting", func(p map[string]string) bool { return p[vit.addr] == protocol.PresenceReconnecting })
+	endGrace(t, h, vit.addr, vad.Session)
 	until("offline after grace", func(p map[string]string) bool { return p[vit.addr] == protocol.PresenceOffline })
 	if c, b := admin.call(t, h, "POST", "/v1/admin/revoke", protocol.RevokeRequest{Address: vit.addr}); c != http.StatusOK {
 		t.Fatalf("revoke: %d %s", c, b)

@@ -84,7 +84,7 @@ func (l *Live) Overview() (Overview, error) {
 		}
 		o.Threads = append(o.Threads, ThreadSummary{ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
 			Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: changedKeys[t.Peer],
-			Notices: t.Notices, NoticeOnly: t.NoticeOnly})
+			Notices: t.Notices, NoticeOnly: t.NoticeOnly, AgentID: t.AgentID})
 	}
 	review, err := l.a.PageReview()
 	if err != nil {
@@ -93,6 +93,7 @@ func (l *Live) Overview() (Overview, error) {
 	for _, c := range review.Conv {
 		o.NeedsYou = append(o.NeedsYou, convItem(c))
 	}
+	countDecisions(&o)
 	for _, c := range review.Held {
 		o.Held = append(o.Held, convItem(c))
 	}
@@ -117,6 +118,21 @@ func (l *Live) Overview() (Overview, error) {
 		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
 	}
 	return o, nil
+}
+
+// countDecisions sets each conversation's Decide: its requests among
+// o.NeedsYou that this device's person decides here (with actions; an
+// invitation is decided by its PID, not counted).
+func countDecisions(o *Overview) {
+	decide := map[string]int{}
+	for _, c := range o.NeedsYou {
+		if c.ID != "" && len(c.Actions) > 0 {
+			decide[c.Conv]++
+		}
+	}
+	for i := range o.DMs {
+		o.DMs[i].Decide = decide[o.DMs[i].ID]
+	}
 }
 
 // convItem is a conversation item waiting for the person, as the page

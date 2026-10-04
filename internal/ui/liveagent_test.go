@@ -238,8 +238,8 @@ func TestAgentActions(t *testing.T) {
 		kind, state string
 		want        string
 	}{
-		{"task", "awaiting", "accept"},
-		{"question", "awaiting", "accept"}, // a conversation guest's question: one-time acceptance
+		{"task", "awaiting", "accept,decline"},
+		{"question", "awaiting", "accept,decline"}, // a conversation guest's question: one-time acceptance, or not
 		{"task", "running", "cancel"},
 		{"question", "needs_human", "accept,resolve"},
 		{"task", "failed", "accept"},
@@ -327,7 +327,7 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 		}
 		return task.State == "awaiting"
 	})
-	if strings.Join(task.Actions, ",") != "accept" || !strings.Contains(task.StateText, "accept") {
+	if strings.Join(task.Actions, ",") != "accept,decline" || !strings.Contains(task.StateText, "accept") {
 		t.Fatalf("the waiting task on alice's page: %+v", task)
 	}
 	if _, err := os.Stat(log); err == nil {
