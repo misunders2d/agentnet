@@ -180,6 +180,13 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 	if s, _ := host.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
 		t.Fatalf("a refused accept left the task %s", s)
 	}
+	// Accepted before the departure: the worker does not run it either.
+	if _, err = host.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateAccepted, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	host.NoteChange() // as a stored change does: the worker looks again from the start
+	host.wakeWorker()
+	waitState(t, host, task.ID, stateNotRun)
 	if stub.runs() != 0 {
 		t.Fatal("received departure allowed queued task claim")
 	}
@@ -358,6 +365,13 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	if s, _ := w.bob.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
 		t.Fatalf("a refused accept left the task %s", s)
 	}
+	// Accepted before the admission changed: the worker does not run it either.
+	if _, err = w.bob.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateAccepted, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.bob.NoteChange() // as a stored change does: the worker looks again from the start
+	w.bob.wakeWorker()
+	waitState(t, w.bob, task.ID, stateNotRun)
 	if stub.runs() != 0 {
 		t.Fatal("same-key requester rejoin revived queued task")
 	}

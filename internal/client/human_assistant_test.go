@@ -169,6 +169,13 @@ func TestHumanGuestAsksMemberHostedAssistant(t *testing.T) {
 	if s := jobState(t, w.bob, task.LID); s != stateAwaiting {
 		t.Fatalf("ended guest's task, accept refused: %s", s)
 	}
+	// Accepted before Carol left: the worker does not run it either.
+	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateAccepted, task.LID); err != nil {
+		t.Fatal(err)
+	}
+	w.bob.NoteChange() // as a stored change does: the worker looks again from the start
+	w.bob.wakeWorker()
+	eventually(t, "ended guest's accepted task not run", func() bool { return jobState(t, w.bob, task.LID) == stateNotRun })
 	if stub.runs() != runs {
 		t.Fatal("ended guest's task ran")
 	}
@@ -285,6 +292,13 @@ func TestHumanGuestAsksOutsideHostedAssistant(t *testing.T) {
 	if s := jobState(t, charlie, task.LID); s != stateAwaiting {
 		t.Fatalf("ended guest's task, accept refused: %s", s)
 	}
+	// Accepted before the guest left: the worker does not run it either.
+	if _, err := charlie.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateAccepted, task.LID); err != nil {
+		t.Fatal(err)
+	}
+	charlie.NoteChange() // as a stored change does: the worker looks again from the start
+	charlie.wakeWorker()
+	eventually(t, "ended guest's accepted task not run", func() bool { return jobState(t, charlie, task.LID) == stateNotRun })
 	if stub.runs() != runs {
 		t.Fatal("ended guest's task ran")
 	}
