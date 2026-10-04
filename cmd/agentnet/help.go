@@ -573,6 +573,11 @@ reported once. Deciding still happens on this machine: nothing received
 there can accept, decline or approve anything here, and the senders are told
 nothing.
 
+ADDRESS must be an agent on your Hub that is not revoked: it is checked when
+you set it (nothing changes while the Hub cannot be asked), and doctor says
+when notices to it are not getting out (they could not be queued, or the Hub
+refused them).
+
 ADDRESS files the notice (from any agent; it grants and proves nothing) as
 needs_human for its own person (desktop
 notification, inbox --review, session hooks); it never runs, cannot be

@@ -150,7 +150,7 @@ func run(args []string) error {
 			fmt.Println("review notices off")
 			return nil
 		case len(rest) == 1 && !strings.HasPrefix(rest[0], "-"):
-			if err := a.SetReviewTo(rest[0]); err != nil {
+			if err := a.SetReviewTo(ctx, rest[0]); err != nil {
 				return err
 			}
 			fmt.Printf("review notices go to %s\n", rest[0])

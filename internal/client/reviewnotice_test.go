@@ -55,7 +55,7 @@ func TestReviewNoticeReachesNamedAgentOnce(t *testing.T) {
 	bobNotes.fail = errors.New("no desktop here")
 	setResponder(t, w.bob, "stub", st.dir, time.Minute)
 	setResponder(t, w.alice, "stub", st.dir, time.Minute)
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	stopBob, _ := runWith(t, w, w.bob, RunOptions{})
@@ -94,7 +94,7 @@ func TestReviewNoticeReachesNamedAgentOnce(t *testing.T) {
 
 	// Alice names bob too: her notice is received, not a local request, so
 	// nothing goes back and no loop starts.
-	if err := w.alice.SetReviewTo(w.bob.Address); err != nil {
+	if err := w.alice.SetReviewTo(tctx(t), w.bob.Address); err != nil {
 		t.Fatal(err)
 	}
 	w.alice.wakeWorker()
@@ -148,7 +148,9 @@ func TestReviewNoticeReachesNamedAgentOnce(t *testing.T) {
 func TestReviewNoticeNotQueuedStaysPending(t *testing.T) {
 	w := newWorld(t, "")
 	fakeNotify(w.bob)
-	if err := w.bob.SetReviewTo("nobody/none"); err != nil {
+	// An address the Hub does not list (set before it was checked, or
+	// removed since): SetReviewTo refuses one now.
+	if err := w.bob.store.setConfig(map[string]string{reviewToKey: "nobody/none", reviewToGenKey: protocol.NewID()}); err != nil {
 		t.Fatal(err)
 	}
 	runWith(t, w, w.bob, RunOptions{})
@@ -178,7 +180,7 @@ func TestReviewNoticeNotQueuedStaysPending(t *testing.T) {
 	}
 	// Correcting the address wakes the running daemon and retries at once,
 	// without a restart.
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "notice after fixing the address", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 1 })
@@ -190,14 +192,14 @@ func TestReviewNoticeNotQueuedStaysPending(t *testing.T) {
 func TestReviewToRefusesSelfAndBadAddresses(t *testing.T) {
 	w := newWorld(t, "")
 	for _, addr := range []string{w.bob.Address, "", "nobody", w.alice.Address + "#" + protocol.NewID()} {
-		if err := w.bob.SetReviewTo(addr); err == nil {
+		if err := w.bob.SetReviewTo(tctx(t), addr); err == nil {
 			t.Fatalf("accepted %q", addr)
 		}
 	}
 	if to, _ := w.bob.ReviewTo(); to != "" {
 		t.Fatalf("set to %q", to)
 	}
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.bob.ClearReviewTo(); err != nil {
@@ -205,6 +207,66 @@ func TestReviewToRefusesSelfAndBadAddresses(t *testing.T) {
 	}
 	if to, _ := w.bob.ReviewTo(); to != "" {
 		t.Fatalf("still %q", to)
+	}
+}
+
+// BUG-31: review-to refuses an address the Hub does not list as an agent
+// (a typo, an agent that never joined) instead of reporting success, and
+// one the Hub revoked; and doctor says when notices to the address set
+// are not getting out, instead of "ok" while only the daemon log knows.
+func TestReviewToChecksTheHubAndDoctorShowsFailures(t *testing.T) {
+	w := newWorld(t, "")
+	fakeNotify(w.bob)
+	for _, addr := range []string{"ghost/nowhere", "admin/alicee"} {
+		err := w.bob.SetReviewTo(tctx(t), addr)
+		if err == nil || !strings.Contains(err.Error(), "not an agent on your Hub") {
+			t.Fatalf("review-to %s: %v", addr, err)
+		}
+	}
+	carol := mustJoin(t, t.TempDir(), w.aliceInvites("carol"), "desk")
+	if err := w.alice.Revoke(tctx(t), carol.Address); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.SetReviewTo(tctx(t), carol.Address); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("review-to a revoked agent: %v", err)
+	}
+	if to, _ := w.bob.ReviewTo(); to != "" {
+		t.Fatalf("set to %q", to)
+	}
+	doctor := func() (Check, bool) {
+		for _, c := range w.bob.Doctor(tctx(t)) {
+			if c.Name == "review-to" {
+				return c, true
+			}
+		}
+		return Check{}, false
+	}
+	if c, ok := doctor(); ok {
+		t.Fatalf("review-to off, yet doctor says %+v", c)
+	}
+	// An address that stopped being listed after it was set: the notice
+	// cannot be queued, and doctor says so (not only the daemon log).
+	if err := w.bob.store.setConfig(map[string]string{reviewToKey: "nobody/none", reviewToGenKey: protocol.NewID()}); err != nil {
+		t.Fatal(err)
+	}
+	runWith(t, w, w.bob, RunOptions{})
+	runWith(t, w, w.alice, RunOptions{})
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "q", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "held question", func() bool { s, _ := w.bob.store.jobState(q.ID); return s == stateHeld })
+	eventually(t, "doctor to say notices fail", func() bool {
+		c, ok := doctor()
+		return ok && !c.OK && strings.Contains(c.Result, "review notices to nobody/none are not getting out") && strings.Contains(c.Result, "could not be queued")
+	})
+	// Fixed: the notice goes out and doctor is content again.
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "notice after fixing the address", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 1 })
+	if c, ok := doctor(); !ok || !c.OK || c.Result != "notices go to "+w.alice.Address+"; none failed" {
+		t.Fatalf("doctor after the fix: %+v %v", c, ok)
 	}
 }
 
@@ -262,7 +324,7 @@ func TestReviewNoticeAgainAfterNeedsHuman(t *testing.T) {
 	w := newWorld(t, "")
 	fakeNotify(w.bob)
 	setResponder(t, w.bob, "stubhuman", st.dir, time.Minute)
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	runWith(t, w, w.bob, RunOptions{})
@@ -284,7 +346,7 @@ func TestReviewNoticeAgainAfterNeedsHuman(t *testing.T) {
 // anything short of the exact notice shape is not treated as one.
 func TestReviewNoticeCountsLocalFollowUps(t *testing.T) {
 	w := newWorld(t, "")
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	add := func(kind, status, replyTo string) string {

@@ -48,7 +48,7 @@ func TestInterruptedWaitsForThePerson(t *testing.T) {
 		}
 	}
 	// The review notice to the person's other agent counts it.
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	w.bob.wakeWorker()

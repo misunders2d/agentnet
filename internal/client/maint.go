@@ -196,5 +196,12 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	} else {
 		add("review", true, "nothing waits for your decision")
 	}
+	if why, err := a.ReviewToHealth(); err != nil {
+		add("review-to", false, "%v", err)
+	} else if why != "" {
+		add("review-to", false, "%s", why)
+	} else if to, _ := a.ReviewTo(); to != "" {
+		add("review-to", true, "notices go to %s; none failed", to)
+	}
 	return out
 }

@@ -33,7 +33,7 @@ func TestDMTurnsFollowDMAlertsNotReviewNotifications(t *testing.T) {
 	t.Cleanup(func() { alertGrace = old })
 	w, conv, _, _ := agentWorld(t)
 	n := fakeNotify(w.bob)
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	quiet := func(what string) {
