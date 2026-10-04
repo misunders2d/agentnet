@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -154,6 +155,63 @@ func TestRoomAgentAsksInADM(t *testing.T) {
 	if inboxHas(t, w.bob, env.ID) {
 		t.Fatal("a guest's turn was read as an agent's")
 	}
+}
+
+// ROOM_V1 §4.4 and §10.4 at the asked agent's host: an agent room
+// participant's ask never runs by member authority (a member device's
+// question rule, the invite's task keys): the host's person decides each
+// one, whether the asking agent is hosted outside or on a member's own
+// device; accepted once, it runs; once the asking agent ended, it never
+// runs.
+func TestRoomAgentAskWaitsForTheHost(t *testing.T) {
+	w, carol, conv, ap, hp, outside := roomDM(t)
+	if !slices.Contains(ap.TaskKeys, w.alice.Self().Fingerprint()) {
+		t.Fatalf("fixture: Alice's key gives the assistant tasks: %v", ap.TaskKeys)
+	}
+	own := roomInvite(t, w.alice, conv, w.alice, "", 0) // Alice's own agent, on her member device
+	sendEvent(t, w.alice, conv, own)
+	sendEvent(t, w.alice, conv, signedAs(w.alice, protocol.ScopeOf(own, time.Now().Unix())))
+	eventually(t, "Alice's agent invited at Alice", func() bool { return stateAt(t, w.alice, own.PID).State == PartInvited })
+	if _, err := w.alice.AcceptParticipation(tctx(t), own.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "Alice's agent follows at both", func() bool {
+		return stateAt(t, w.alice, own.PID).Following() && stateAt(t, w.bob, own.PID).Following()
+	})
+	ask := func(from *Agent, author, kind string, audience ...string) envelope.Inner {
+		in := roomTurn(t, from, conv, captured(t, from, author, audience...))
+		in.Kind, in.PID, in.Origin, in.Emotion = kind, ap.PID, "agent:claude", "curious"
+		in.Target = &envelope.Target{Address: w.bob.Address, Fingerprint: w.bob.Self().Fingerprint(), AgentID: ap.AgentID}
+		return in
+	}
+	decided := func(id string) string {
+		eventually(t, "Bob decides "+id, func() bool { s := jobState(t, w.bob, id); return s != "" && s != stateAgentWaiting })
+		return jobState(t, w.bob, id)
+	}
+	task := sealTo(t, w.alice, w.bob, ask(w.alice, own.PID, envelope.KindTask, hp.PID, outside.PID, own.PID))
+	question := ask(w.alice, own.PID, envelope.KindQuestion, hp.PID, outside.PID, own.PID)
+	qenv := sealTo(t, w.alice, w.bob, question)
+	far := sealTo(t, carol, w.bob, ask(carol, outside.PID, envelope.KindTask, hp.PID, outside.PID))
+	for _, c := range []struct{ what, id string }{{"a member-hosted agent's task", task.ID}, {"a member-hosted agent's question", qenv.ID}, {"an outside agent's task", far.ID}} {
+		if s := decided(c.id); s != stateAwaiting {
+			t.Errorf("%s at the asked host: %s, want %s", c.what, s, stateAwaiting)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	if err := w.bob.Accept(qenv.ID); err != nil {
+		t.Fatal(err)
+	}
+	replyAt(t, w.bob, conv, question.LID)
+	if _, err := w.alice.DismissParticipation(tctx(t), own.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "Bob observes the end", func() bool { return stateAt(t, w.bob, own.PID).State == PartDismissed })
+	if err := w.bob.Accept(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "an ended agent's accepted task not run", func() bool { return jobState(t, w.bob, task.ID) == stateNotRun })
 }
 
 // ROOM_V1 §2.3 in a DM: an edit carrying its turn's captured audience is
