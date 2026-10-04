@@ -548,6 +548,103 @@ async function makeWorld() {
   let why = "";
   try { await A.e.messageControl("edit", { conv: convId, id: mine.id, dir: "out", text: "revive" }); } catch (err) { why = err.message; }
   check(why.includes("was deleted"), "editing a deleted message is refused: " + why);
+  // nor reacted to or deleted again (client TestControlsRefusedOnDeletedMessage)
+  const queued = (await A.store.all("outbox")).length;
+  for (const [what, extra] of [["react", { emoji: "👍" }], ["delete", {}]]) {
+    why = "";
+    try { await A.e.messageControl(what, { conv: convId, id: mine.id, dir: "out", ...extra }); } catch (err) { why = err.message; }
+    check(why.includes("was deleted"), what + " on a deleted message is refused: " + why);
+  }
+  check((await A.store.all("outbox")).length === queued, "nothing was queued for a deleted message");
+}
+
+// A reaction composed here is one emoji, and taking off one that is not
+// there is refused, both before anything is sent (client
+// TestReactionIsOneEmoji, TestRemovingAbsentReactionRefused).
+{
+  const { store, e } = await fresh();
+  await store.write([
+    { s: "inbox", k: ID, v: { id: ID, v: 1, from: "peer/desk", fp: PEER, kind: "message", body: "theirs", at: 1 } },
+    { s: "outbox", k: ID2, v: { ...ctl(ID2, wire.SubReaction, JSON.stringify({ emoji: "👍", op: "add", n: 1 }), { id: ID, fingerprint: PEER }, "me/phone"), to: "peer/desk", aside: true, state: "delivered" } },
+    { s: "inbox", k: "c9".padEnd(32, "0"), v: ctl("c9".padEnd(32, "0"), wire.SubReaction, JSON.stringify({ emoji: "👀", op: "add", n: 1 }), { id: ID, fingerprint: PEER }) },
+  ]);
+  for (const emoji of ["$", "+", "€", "𠀀", "👍".repeat(12), "👍👍", "🇱🇻🇺🇸"]) {
+    let why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji }); } catch (err) { why = err.message; }
+    check(why === "A reaction is one emoji.", JSON.stringify(emoji) + " is refused as a reaction: " + why);
+  }
+  for (const emoji of ["🎉", "👀"]) { // never added here; the peer's own is not mine to take off
+    let why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji, remove: true }); } catch (err) { why = err.message; }
+    check(why.includes("no " + emoji + " reaction of yours"), "removing " + emoji + " that is not mine is refused: " + why);
+  }
+  let why = "";
+  try { await e.messageControl("react", { id: ID, dir: "in", emoji: "👍", remove: true }); } catch (err) { why = err.message; }
+  check(!why.includes("reaction of yours"), "removing my own reaction goes on to be sent: " + why);
+  check((await store.all("outbox")).length === 1, "nothing was queued for a refused reaction");
+  for (const [emoji, ok] of [["👍🏽", true], ["🇱🇻", true], ["✓", true], ["$", false], ["👍👍", false], ["𠀀", false],
+    ["\u25fb\ufe0f", true], ["\u25fe", true], ["\u2934\ufe0f", true], ["\u2935\ufe0f", true], ["\u2800", false], ["\u2a00", false]]) check(wire.oneEmoji(emoji) === ok, "oneEmoji(" + JSON.stringify(emoji) + ")");
+  check(wire.validEmoji("$") && wire.validEmoji("👍".repeat(12)), "what peers already sent stays readable");
+}
+
+// My own reaction added under the older rule (any validEmoji) shows as mine,
+// so it can be taken off, though it is no longer composed here (client
+// TestOwnOlderRuleReactionRemovable).
+{
+  const { store, e } = await fresh();
+  const older = ["$", "👍👍"];
+  await store.write([
+    { s: "inbox", k: ID, v: { id: ID, v: 1, from: "peer/desk", fp: PEER, kind: "message", body: "theirs", at: 1 } },
+    ...older.map((emoji, i) => {
+      const id = ("d" + i).padEnd(32, "0");
+      return { s: "outbox", k: id, v: { ...ctl(id, wire.SubReaction, JSON.stringify({ emoji, op: "add", n: 1 }), { id: ID, fingerprint: PEER }, "me/phone"), to: "peer/desk", aside: true, state: "delivered" } };
+    }),
+  ]);
+  for (const emoji of older) {
+    check(await e.reactedHere("", { id: ID, fingerprint: PEER }, emoji), JSON.stringify(emoji) + " shows as mine");
+    let why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji }); } catch (err) { why = err.message; }
+    check(why === "A reaction is one emoji.", JSON.stringify(emoji) + " is not added again: " + why);
+    why = "";
+    try { await e.messageControl("react", { id: ID, dir: "in", emoji, remove: true }); } catch (err) { why = err.message; }
+    check(!why.includes("one emoji") && !why.includes("reaction of yours"), "removing my own " + JSON.stringify(emoji) + " goes on to be sent: " + why);
+  }
+}
+
+// Text that shows nothing (white space and default ignorable characters
+// only) is no message and no edit (client TestInvisibleTextRefused).
+{
+  const { store, e } = await fresh();
+  await store.write([{ s: "outbox", k: ID, v: { id: ID, v: 1, to: "peer/desk", kind: "message", body: "mine", at: 2, state: "delivered" } }]);
+  for (const text of ["ZWSP", "IDEOGRAPHIC_ZWSP", "JOINERS", "BRAILLE_BLANK"]) {
+    const s = { ZWSP: String.fromCodePoint(0x200b), IDEOGRAPHIC_ZWSP: String.fromCodePoint(0x3000, 0x200b), JOINERS: " " + String.fromCodePoint(0x200d, 0x2060, 0xfeff), BRAILLE_BLANK: String.fromCodePoint(0x2800) }[text];
+    let why = "";
+    try { await e.sendDM({ conv: "c".repeat(64), body: s }); } catch (err) { why = err.message; }
+    check(why === "Write a message or add a file first.", text + " is no message: " + why);
+    why = "";
+    try { await e.sendDirect({ to: "peer/desk", kind: "message", body: s }); } catch (err) { why = err.message; }
+    check(why === "Write a message or add a file first.", text + " is no device message: " + why);
+    why = "";
+    try { await e.messageControl("edit", { id: ID, dir: "out", text: s }); } catch (err) { why = err.message; }
+    check(why.startsWith("An edit is 1 to"), text + " is no edit: " + why);
+  }
+  check(!wire.blank("a" + String.fromCodePoint(0x200b) + "b") && !wire.blank(String.fromCodePoint(0x2800) + "x") && wire.blank(""), "visible text with a zero-width space or a braille blank is not blank");
+}
+
+// Equal counters from two devices of one person: the tie is broken on the
+// control's logical id, the same in every copy, never on the id of the copy
+// this device holds (client TestConcurrentControlsResolveAlikeOnEveryDevice).
+// Two devices hold the same four controls under different copy ids.
+{
+  const { e } = await fresh();
+  const T = "7".repeat(32), id = (c) => c.repeat(32);
+  const row = (copy, lid, sub, pay) => ({ id: copy, lid, v: 3, control: true, conv: "c".repeat(64), from: "peer/desk", fp: PEER, person: "P", kind: "message", sub, body: JSON.stringify(pay), ref: { id: T, fingerprint: PEER }, at: 1 });
+  for (const ids of [[id("f"), id("2"), id("5"), id("3")], [id("6"), id("9"), id("c"), id("7")]]) {
+    const rows = [row(ids[0], id("1"), wire.SubRevision, { rev: 1, text: "from the desk" }), row(ids[1], id("e"), wire.SubRevision, { rev: 1, text: "from the phone" }),
+      row(ids[2], id("4"), wire.SubReaction, { emoji: "👍", op: "add", n: 1 }), row(ids[3], id("d"), wire.SubReaction, { emoji: "👍", op: "remove", n: 1 })];
+    const v = e.controlsOn(rows, "P", (x) => x.person || "", () => "", () => false);
+    check(v.edited && v.text === "from the phone" && !(v.reactions || []).length, "equal counters resolve on the logical id, whatever the copy ids " + ids.map((x) => x[0]).join("") + ": " + JSON.stringify(v));
+  }
 }
 
 if (failed) process.exit(1);

@@ -597,6 +597,9 @@ func TestLiveFiles(t *testing.T) {
 	if _, err := pb.SendDM(DMDraft{Conv: conv}); !errors.Is(err, ErrRefused) {
 		t.Fatalf("nothing to send: %v", err)
 	}
+	if _, err := pb.SendDM(DMDraft{Conv: conv, Body: "\u200b\u3000"}); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "Write a message") {
+		t.Fatalf("text that shows nothing: %v", err)
+	}
 	// A send takes every file it names: with one gone it is refused, and
 	// the ones found go with it, plaintext included; a discarded file goes.
 	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }

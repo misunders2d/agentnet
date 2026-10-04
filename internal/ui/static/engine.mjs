@@ -1334,7 +1334,7 @@ export class Engine {
   // them, never v1.
   async sendDM({ conv, body, reply_to: replyTo, files = [], reply_receiver = null, pid = "" }) {
     body = String(body || "").trim();
-    if (!body && !files.length) throw new Error("Write a message or add a file first.");
+    if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
     checkFiles(files);
     const c = (await this.store.get("convs", conv)) || await this.groupRecord(conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
@@ -1804,7 +1804,7 @@ export class Engine {
     body = String(body || "").trim();
     kind = kind || "message";
     to = String(to || "").trim();
-    if (!body && !files.length) throw new Error("Write a message or add a file first.");
+    if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
     if (!["message", "question", "task"].includes(kind)) throw new Error("Choose message, question or task.");
     if (!wire.validAddress(to)) throw new Error("That is not an AgentNet address.");
     if (to === this.address) throw new Error("That is this browser.");
@@ -4580,7 +4580,8 @@ export class Engine {
       let pay;
       try { pay = wire.parseControl(c.sub, c.body); } catch (e) { continue; }
       if (pay.decision) continue; // an answer to an operator's decision: it belongs to that report's item, never to exec
-      if (!best || pay.n > best.n || (pay.n === best.n && c.id > best.id)) best = { ...pay, id: c.id };
+      const id = c.lid || c.id; // as controlsOn: the same on every device
+      if (!best || pay.n > best.n || (pay.n === best.n && id > best.id)) best = { ...pay, id };
     }
     if (!best) return null;
     const m = this.members.current ? this.members.list.find((x) => x.address === host) : null;
@@ -4894,10 +4895,12 @@ export class Engine {
 
   // controlsOn resolves what ctls (this device's control rows) did to one
   // message: reactions (per author, per emoji, the highest counter wins;
-  // equal: the later id), the latest revision by its author, and whether
-  // its author retracted it. who names an author for the page; author(c)
-  // is a control's author identity (a key in a device thread, a person in
-  // a conversation), targetAuthor the target's.
+  // equal: the later control id), the latest revision by its author, and
+  // whether its author retracted it. A control's id is its logical id in a
+  // conversation, the same in every device's copy (client controlRow), so
+  // every device breaks a tie alike. who names an author for the page;
+  // author(c) is a control's author identity (a key in a device thread, a
+  // person in a conversation), targetAuthor the target's.
   controlsOn(ctls, targetAuthor, author, who, mineIs, idOf = (a) => a, hostLabel) {
     const byAuthorEmoji = new Map(), assistants = new Map();
     let rev = null, deleted = false;
@@ -4906,12 +4909,13 @@ export class Engine {
       try { pay = wire.parseControl(c.sub, c.body); } catch (e) { continue; }
       const asst = assistantActor(c, hostLabel), a = asst ? asst.id : author(c); // an assistant reacts as itself, never as its host
       if (asst) assistants.set(a, asst);
+      const id = c.lid || c.id;
       if (c.sub === wire.SubReaction) {
         const k = a + "\n" + pay.emoji;
         const cur = byAuthorEmoji.get(k);
-        if (!cur || pay.n > cur.n || (pay.n === cur.n && c.id > cur.id)) byAuthorEmoji.set(k, { n: pay.n, id: c.id, op: pay.op, a, emoji: pay.emoji });
+        if (!cur || pay.n > cur.n || (pay.n === cur.n && id > cur.id)) byAuthorEmoji.set(k, { n: pay.n, id, op: pay.op, a, emoji: pay.emoji });
       } else if (a === targetAuthor) {
-        if (c.sub === wire.SubRevision && (!rev || pay.rev > rev.rev || (pay.rev === rev.rev && c.id > rev.id))) rev = { rev: pay.rev, id: c.id, text: pay.text };
+        if (c.sub === wire.SubRevision && (!rev || pay.rev > rev.rev || (pay.rev === rev.rev && id > rev.id))) rev = { rev: pay.rev, id, text: pay.text };
         if (c.sub === wire.SubRetraction) deleted = true;
       }
     }
@@ -4929,6 +4933,18 @@ export class Engine {
     if (rev) { out.edited = true; out.revision = rev.rev; out.text = rev.text; }
     if (deleted) out.deleted = true;
     return out;
+  }
+
+  // reactedHere says whether this person (in a device thread, this device)
+  // has emoji on the message ref names, as its view resolves it
+  // (client Agent.controlsOf): only that can be taken off.
+  async reactedHere(conv, ref, emoji) {
+    const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))].filter((r) => r.control && r.sub === wire.SubReaction &&
+      (r.conv || "") === conv && r.ref && r.ref.id === ref.id && r.ref.fingerprint === ref.fingerprint);
+    const me = this.me && this.me.person;
+    const view = conv ? this.controlsOn(rows, "", (x) => x.person || "", () => "", (p) => !!me && p === me)
+      : this.controlsOn(rows, "", (x) => x.fp || this.fp, () => "", (fp) => fp === this.fp);
+    return (view.reactions || []).some((r) => r.emoji === emoji && r.mine);
   }
 
   // nextCounter is this author's next counter for a control on ref (one
@@ -4978,18 +4994,21 @@ export class Engine {
     const targetFp = kept === "outbox" ? this.fp : rec.fp;
     if (!targetFp) throw new Error("That message's sender key is not recorded here: it cannot be referred to.");
     const ref = { id: conv ? rec.lid : rec.id, fingerprint: targetFp };
+    const deleted = await this.isRetracted(rec); // it shows nothing more to react to, edit or delete (client Agent.deleted)
     let sub, payload;
     if (what === "react") {
-      if (!wire.validEmoji(x.emoji || "")) throw new Error("A reaction is one emoji.");
+      if (!(x.remove ? wire.validEmoji : wire.oneEmoji)(x.emoji || "")) throw new Error("A reaction is one emoji."); // my own added under the older rule can still be taken off
+      if (deleted) throw new Error("That message was deleted: it takes no reactions.");
+      if (x.remove && !(await this.reactedHere(conv, ref, x.emoji))) throw new Error("There is no " + x.emoji + " reaction of yours on that message to remove.");
       sub = wire.SubReaction;
       payload = { emoji: x.emoji, op: x.remove ? "remove" : "add", n: await this.nextCounter(conv, ref, sub, x.emoji) };
     } else if (what === "edit" || what === "delete") {
       const mine = conv ? (await this.personOfFp(targetFp)) === (this.me && this.me.person) : targetFp === this.fp;
       if (!mine) throw new Error(conv ? "Only the sender's person edits or deletes a message." : "Only the sender edits or deletes a message.");
+      if (deleted) throw new Error(what === "edit" ? "That message was deleted; it cannot be edited." : "That message was deleted already.");
       if (what === "edit") {
-        if (await this.isRetracted(rec)) throw new Error("That message was deleted; it cannot be edited.");
         const text = String(x.text || "");
-        if (!text.trim() || new TextEncoder().encode(text).length > wire.MaxRevisionBytes) throw new Error("An edit is 1 to " + wire.MaxRevisionBytes + " bytes of text.");
+        if (wire.blank(text) || new TextEncoder().encode(text).length > wire.MaxRevisionBytes) throw new Error("An edit is 1 to " + wire.MaxRevisionBytes + " bytes of text.");
         sub = wire.SubRevision;
         payload = { rev: await this.nextCounter(conv, ref, sub, ""), text };
       } else { sub = wire.SubRetraction; payload = {}; }
@@ -6166,7 +6185,7 @@ export class Engine {
   // on the other person's computer: its one target.
   async askAgent({ pid, kind = "question", body, files = [], reply_receiver = null }) {
     body = String(body || "").trim();
-    if (!body && !files.length) throw new Error("Write what to ask or add a file first.");
+    if (wire.blank(body) && !files.length) throw new Error("Write what to ask or add a file first.");
     checkFiles(files);
     if (kind !== "question" && kind !== "task") throw new Error("An agent is asked a question or given a task.");
     const { c, info } = await this.agentConv(pid);

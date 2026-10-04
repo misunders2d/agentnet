@@ -329,7 +329,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if len(out.Files) > envelope.MaxAttachments || len(out.Files) != 0 && out.sub != "" {
 		return ConvSent{}, errors.New("files belong only to an addressed participation turn, within the attachment limit")
 	}
-	if out.Body == "" && out.sub == "" && len(out.Files) == 0 {
+	if envelope.Blank(out.Body) && out.sub == "" && len(out.Files) == 0 { // text that shows nothing, as SendConv judges it
 		return ConvSent{}, errors.New("nothing to send: no text and no files")
 	}
 	var devices []identity.Public

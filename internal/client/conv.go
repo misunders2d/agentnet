@@ -497,7 +497,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if len(m.Files) > envelope.MaxAttachments {
 			return ConvSent{}, fmt.Errorf("at most %d attachments per message", envelope.MaxAttachments)
 		}
-	} else if m.Body == "" && m.sub == "" {
+	} else if envelope.Blank(m.Body) && m.sub == "" {
 		return ConvSent{}, errors.New("nothing to send: no text and no files")
 	}
 	// Fresh evidence first: newer roster steps of both persons decide the

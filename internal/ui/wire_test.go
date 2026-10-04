@@ -580,6 +580,33 @@ func TestBrowserWireMatchesGo(t *testing.T) {
 		}
 	})
 
+	t.Run("emoji judged as Go judges them", func(t *testing.T) {
+		list := []string{"👍", "❤️", "🇱🇻", "👍🏽", "1️\u20e3", "#️\u20e3", "👨\u200d👩\u200d👧\u200d👦", "✓", "☕", "★", "©️", "↔️", "🫩",
+			"\u25fb\ufe0f", "\u25fc\ufe0f", "\u25fd", "\u25fe", "\u2934\ufe0f", "\u2935\ufe0f",
+			"$", "+", "€", "^", "×", "𠀀", "👍👍", strings.Repeat("👍", 12), "🇱🇻🇺🇸", "🇱🇻👍", "11\u20e3", "\u200d👍", "👍\u200d", "a", "", "\u2800", "\u2800\ufe0f", "\u2a00", "\u2295"} // invalid UTF-8 cannot travel as JSON: envelope.TestValidEmoji covers it
+		got := w.ok(map[string]any{"op": "emoji", "list": list})
+		valid, one := got["valid"].([]any), got["one"].([]any)
+		for i, s := range list {
+			if valid[i] != envelope.ValidEmoji(s) || one[i] != envelope.OneEmoji(s) {
+				t.Errorf("%q: JS valid %v one %v, Go valid %v one %v", s, valid[i], one[i], envelope.ValidEmoji(s), envelope.OneEmoji(s))
+			}
+		}
+	})
+
+	t.Run("blank text judged as Go judges it", func(t *testing.T) {
+		var list []string
+		for r := rune(0); r <= 0x3200; r++ { // each rune alone, and visible text around it
+			list = append(list, string(r), "a"+string(r))
+		}
+		list = append(list, "", string([]rune{0xE0041, 0x1BCA0, 0x1D173}), string([]rune{0xE0041, 0x1F44D}))
+		got := w.ok(map[string]any{"op": "blank", "list": list})["blank"].([]any)
+		for i, s := range list {
+			if got[i] != envelope.Blank(s) {
+				t.Errorf("%q: JS blank %v, Go %v", s, got[i], envelope.Blank(s))
+			}
+		}
+	})
+
 	t.Run("keys after a reload", func(t *testing.T) {
 		again := w.ok(map[string]any{"op": "reload"})
 		if again["public"] != setup["public"] || again["extractable"] != false || again["export_refused"] != true {

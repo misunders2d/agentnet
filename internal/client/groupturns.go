@@ -172,7 +172,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if !ordinaryGroupTurn(test) || m.claim != nil || m.selfJob {
 		return ConvSent{}, errors.New("group: only ordinary human messages are supported")
 	}
-	if m.Body == "" && len(m.Files) == 0 {
+	if envelope.Blank(m.Body) && len(m.Files) == 0 {
 		return ConvSent{}, errors.New("nothing to send: no text and no files")
 	}
 	if len(m.Files) > envelope.MaxAttachments {

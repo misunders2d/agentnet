@@ -102,6 +102,10 @@ async function handle(req) {
   }
   case "safeName":
     return { names: req.names.map((n) => wire.safeName(n)) };
+  case "emoji": // as envelope.ValidEmoji (what arrives) and envelope.OneEmoji (what is composed here)
+    return { valid: req.list.map((s) => wire.validEmoji(s)), one: req.list.map((s) => wire.oneEmoji(s)) };
+  case "blank": // as envelope.Blank
+    return { blank: req.list.map((s) => wire.blank(s)) };
   case "validChannel":
     return { valid: req.list.map((s) => wire.validChannel(s)) };
   case "verifyEnvelope": // an envelope made elsewhere, checked with that sender's signing key

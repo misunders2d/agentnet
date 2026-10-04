@@ -283,6 +283,72 @@ func TestHistoryFilesOnRequest(t *testing.T) {
 	}
 }
 
+// Saving a history turn whose files are not all here yet saves the ones
+// that are and names each one still to be asked for, instead of a false
+// integrity failure: nothing is fetched or locked for a file never asked
+// for, and a lock an earlier version left for one goes.
+func TestDownloadHistoryFileNotRequestedYet(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	dir := t.TempDir()
+	first, _ := writeFile(t, dir, "first.bin", 3000)
+	second, secondData := writeFile(t, dir, "second.bin", 4000)
+	if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "two files", Files: []OutgoingFile{{Path: first}, {Path: second}}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the laptop to keep both files", func() bool {
+		msgs, _ := w.alice.ConversationMessages(conv)
+		if len(msgs) != 1 || len(msgs[0].Attachments) != 2 {
+			return false
+		}
+		for _, f := range msgs[0].Attachments {
+			if _, err := os.Stat(w.alice.downloadPath(f.BlobID)); err != nil {
+				return false
+			}
+		}
+		return true
+	})
+	phone := linked(t, w.alice)
+	var m ConvMessage
+	eventually(t, "the phone's history with both files", func() bool {
+		msgs, _ := phone.ConversationMessages(conv)
+		if len(msgs) != 1 || len(msgs[0].Attachments) != 2 {
+			return false
+		}
+		m = msgs[0]
+		return true
+	})
+	stale := phone.downloadPath(m.Attachments[0].BlobID) + ".lock"
+	if !strings.HasPrefix(m.Attachments[0].BlobID, historyBlob) || os.MkdirAll(filepath.Dir(stale), 0o700) != nil || os.WriteFile(stale, nil, 0o600) != nil {
+		t.Fatalf("history placeholder %+v", m.Attachments[0])
+	}
+	if err := phone.RequestFile(tctx(t), m.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the second file here", func() bool {
+		msgs, _ := phone.ConversationMessages(conv)
+		return len(msgs) == 1 && msgs[0].Attachments[1].Availability == "" && !strings.HasPrefix(msgs[0].Attachments[1].BlobID, historyBlob)
+	})
+	out := t.TempDir()
+	saved, err := phone.Download(tctx(t), m.ID, out, false)
+	if err == nil || !strings.Contains(err.Error(), "first.bin: this file came with the conversation's history") || strings.Contains(err.Error(), "integrity") {
+		t.Fatalf("download before the first file was asked for: %v", err)
+	}
+	if len(saved) != 1 || filepath.Base(saved[0]) != "second.bin" {
+		t.Fatalf("saved %v", saved)
+	}
+	if got, _ := os.ReadFile(saved[0]); !bytes.Equal(got, secondData) {
+		t.Fatal("the second file differs")
+	}
+	assertOnlyFiles(t, out, "second.bin")
+	if left, _ := filepath.Glob(filepath.Join(phone.home, "downloads", historyBlob+"*")); len(left) != 0 {
+		t.Fatalf("left for a file never asked for: %v", left)
+	}
+}
+
 func sha(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
 
 // The page's history progress must not wait on itself: the store has one

@@ -313,7 +313,10 @@ nothing (exit 0) if AgentNet is not set up here.`,
 Save all attachments of message ID into DIR (default: current directory).
 Each file is checked against the sender's signature before it gets its name.
 Existing files are kept unless --force; names are made safe and unique.
-Running it again after an interruption continues where it stopped.`,
+Running it again after an interruption continues where it stopped.
+A file that came with a group's history is saved once requested (agentnet
+group request-file); until then it is named in the error and the message's
+other files are still saved.`,
 
 	"status": `Usage: agentnet status [--wait D] ID
 

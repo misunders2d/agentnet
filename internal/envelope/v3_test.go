@@ -143,3 +143,24 @@ func TestValidEmoji(t *testing.T) {
 		}
 	}
 }
+
+// A reaction composed here is one emoji; what peers already sent within
+// ValidEmoji stays readable.
+func TestOneEmoji(t *testing.T) {
+	for _, ok := range []string{"👍", "❤️", "🇱🇻", "👍🏽", "1️⃣", "#️⃣", "👨‍👩‍👧‍👦", "🏴󠁧󠁢󠁳󠁣󠁴󠁿", "✓", "☕", "★", "©️", "↔️", "🫩",
+		"\u25fb\ufe0f", "\u25fc\ufe0f", "\u25fd", "\u25fe", "\u2934\ufe0f", "\u2935\ufe0f"} { // emoji whose base is a math symbol
+		if !OneEmoji(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"$", "+", "€", "^", "×", "𠀀", "👍👍", strings.Repeat("👍", MaxEmojiRunes), "🇱🇻🇺🇸", "🇱🇻👍", "11⃣", "\u200d👍", "👍\u200d", "👍\u200d$", "a", "", "\u2800", "\u2800\ufe0f", "\u2a00", "\u2295"} { // braille blank shows nothing; other math signs stay refused
+		if OneEmoji(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	for _, sent := range []string{"$", "+", "𠀀", strings.Repeat("👍", MaxEmojiRunes)} {
+		if !ValidEmoji(sent) {
+			t.Errorf("%q, as peers sent it, is no longer readable", sent)
+		}
+	}
+}

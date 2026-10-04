@@ -415,6 +415,45 @@ export function validEmoji(s) {
   return symbol;
 }
 
+// blank is envelope.Blank: text that shows nothing, only white space,
+// default ignorable code points and the braille blank (U+2800). Composed
+// text needs more (or a file).
+export const blank = (s) => /^[\p{White_Space}\p{Default_Ignorable_Code_Point}\u2800]*$/u.test(s);
+
+// oneEmoji is envelope.OneEmoji: a reaction composed here is validEmoji and
+// exactly one emoji sequence (a base, or a pair of regional indicators,
+// joined to more only by zero-width joiners) whose bases are pictographs or
+// other symbols, never currency, math (but the emoji among them) or
+// modifier signs or characters of other planes. What arrives is still
+// judged by validEmoji alone.
+export function oneEmoji(s) {
+  if (!validEmoji(s)) return false;
+  let bases = 0, joined = false, pairing = false;
+  for (const ch of s) {
+    const r = ch.codePointAt(0);
+    if (r === 0x200D) { joined = true; continue; }
+    if (r === 0xFE0F || r === 0xFE0E || r === 0x20E3 || (r >= 0xE0020 && r <= 0xE007F) || (r >= 0x1F3FB && r <= 0x1F3FF)) continue; // part of the emoji before it
+    if (r >= 0x1F1E6 && r <= 0x1F1FF) { // regional indicators: two make one flag
+      if (pairing) { pairing = false; continue; }
+      pairing = true;
+    } else if ((r >= 0x30 && r <= 0x39) || ch === "#" || ch === "*" || emojiBase(r, ch)) pairing = false;
+    else return false;
+    if (!joined) bases++;
+    joined = false;
+  }
+  return bases === 1 && !joined;
+}
+
+// emojiBase is envelope.emojiBase: a rune of the emoji blocks, an arrow,
+// an emoji that is a math symbol, or another symbol of the Basic
+// Multilingual Plane but the braille blank, which shows nothing.
+function emojiBase(r, ch) {
+  if (r >= 0x1F000 && r <= 0x1FAFF) return true;
+  if (r > 0xFFFF || r === 0x2800) return false;
+  if ((r >= 0x2190 && r <= 0x21FF) || (r >= 0x25FB && r <= 0x25FE) || r === 0x2934 || r === 0x2935) return true;
+  return /\p{So}/u.test(ch);
+}
+
 // parseControl reads a control's payload strictly (envelope.checkVersion3):
 // a reaction {emoji, op, n}, a revision {rev, text} or a retraction {reason?}.
 export function parseControl(sub, body) {

@@ -332,7 +332,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 // older format and never a question or task.
 func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	body := strings.TrimSpace(d.Body)
-	if body == "" && len(d.Files) == 0 {
+	if envelope.Blank(body) && len(d.Files) == 0 {
 		return Sent{}, Refuse("Write a message or add a file first.")
 	}
 	receiver, err := l.selectedReplyReceiver(d.ReplyReceiver)

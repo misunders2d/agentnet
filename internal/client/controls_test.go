@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -949,5 +950,260 @@ func TestLateLinkedDeviceGetsNoDeletedText(t *testing.T) {
 	}
 	if strings.Contains(raw, "deleted") || strings.Contains(raw, "edited before") {
 		t.Fatalf("the late phone stores deleted text: %q", raw)
+	}
+}
+
+// A reaction composed here is one emoji: a currency or math sign, another
+// script's character or a row of emoji is refused before anything is sent,
+// while sequences that render as one emoji (skin tone, flag, family) go.
+func TestReactionIsOneEmoji(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "react to me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.alice, ref, "👍🏽", false) // also waits for bob's capabilities
+	for _, bad := range []string{"$", "+", "€", "𠀀", strings.Repeat("👍", 12), "👍👍", "🇱🇻🇺🇸"} {
+		if _, err := w.alice.React(tctx(t), ref, bad, false); err == nil {
+			t.Errorf("%q accepted as a reaction", bad)
+		}
+	}
+	for _, good := range []string{"🇱🇻", "👨‍👩‍👧‍👦", "1️⃣", "❤️", "✓"} {
+		if _, err := w.alice.React(tctx(t), ref, good, false); err != nil {
+			t.Errorf("%q refused: %v", good, err)
+		}
+	}
+	var n int
+	w.alice.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE sub = ?`, envelope.SubReaction).Scan(&n)
+	if n != 6 {
+		t.Fatalf("%d reactions sent, want 6", n)
+	}
+}
+
+// Taking off a reaction that is not there says so instead of reporting it
+// removed, and sends nothing.
+func TestRemovingAbsentReactionRefused(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "react to me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.alice, ref, "👍", false) // also waits for bob's capabilities
+	bobRef, err := w.bob.RefOf(conv, turn.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.bob, bobRef, "👀", false) // bob's own reaction is not alice's to take off
+	eventually(t, "alice to show bob's reaction", func() bool { return len(convMsgByID(t, w.alice, conv, turn.ID).Reactions) == 2 })
+	sent := func() int {
+		var n int
+		w.alice.store.db.QueryRow(`SELECT count(DISTINCT lid) FROM outbox WHERE sub = ?`, envelope.SubReaction).Scan(&n)
+		return n
+	}
+	before := sent()
+	for _, emoji := range []string{"🎉", "👀"} {
+		if _, err := w.alice.React(tctx(t), ref, emoji, true); err == nil || !strings.Contains(err.Error(), "no "+emoji+" reaction of yours") {
+			t.Errorf("removing %s alice never added: %v", emoji, err)
+		}
+	}
+	if sent() != before {
+		t.Fatal("a removal of nothing was sent")
+	}
+	if _, err := w.alice.React(tctx(t), ref, "👍", true); err != nil {
+		t.Fatalf("removing her own reaction: %v", err)
+	}
+	if _, err := w.alice.React(tctx(t), ref, "👍", true); err == nil {
+		t.Fatal("the same reaction removed twice")
+	}
+}
+
+// A reaction of one's own added under the older rule (any ValidEmoji, as an
+// older version or another device still sends) shows as one's own, so it
+// can be taken off, though such a reaction is no longer composed here.
+func TestOwnOlderRuleReactionRemovable(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "react to me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	react(t, w.alice, ref, "👍", false) // also waits for bob's capabilities
+	older := []string{"$", "👍👍"}
+	for _, emoji := range older { // as the older rule let them be sent
+		n, err := w.alice.store.nextCounter(ref, envelope.SubReaction, emoji)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(envelope.Reaction{Emoji: emoji, Op: "add", N: n})
+		if _, err := w.alice.sendControl(tctx(t), ref, envelope.SubReaction, string(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mine := func(emoji string) bool {
+		return slices.ContainsFunc(convMsgByID(t, w.alice, conv, turn.ID).Reactions, func(v ReactionView) bool { return v.Emoji == emoji && v.Mine })
+	}
+	for _, emoji := range older {
+		if !mine(emoji) {
+			t.Fatalf("%q is not shown as alice's own", emoji)
+		}
+		if _, err := w.alice.React(tctx(t), ref, emoji, false); err == nil {
+			t.Errorf("%q added again under the one-emoji rule", emoji)
+		}
+		if _, err := w.alice.React(tctx(t), ref, emoji, true); err != nil {
+			t.Errorf("removing her own %q: %v", emoji, err)
+		} else if mine(emoji) {
+			t.Errorf("%q still shown after its removal", emoji)
+		}
+	}
+}
+
+// A deleted message takes no more controls: its author can neither edit
+// nor delete it again, and no one can react to it. Each is refused before
+// anything is stored or sent, in a conversation and in a device thread.
+func TestControlsRefusedOnDeletedMessage(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	turn, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "wrong chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob to hold the turn", func() bool { return inboxCount(t, w.bob, `id = ?`, turn.ID) == 1 })
+	ref, err := w.alice.RefOf(conv, turn.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the deletion sent", func() bool {
+		_, err := w.alice.Retract(tctx(t), ref, "")
+		return err == nil
+	})
+	eventually(t, "bob to show the deletion", func() bool { return convMsgByID(t, w.bob, conv, turn.ID).Deleted })
+	bobRef, err := w.bob.RefOf(conv, turn.ID, "in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello, err := w.bob.Send(tctx(t), w.alice.Address, "device hello", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to hold the device message", func() bool { return inboxCount(t, w.alice, `id = ?`, hello.ID) == 1 })
+	threadRef, err := w.bob.RefOf("", hello.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the device message deleted", func() bool {
+		_, err := w.bob.Retract(tctx(t), threadRef, "")
+		return err == nil
+	})
+	controls := func(a *Agent) int {
+		var n int
+		a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE ref_id IS NOT NULL`).Scan(&n)
+		return n
+	}
+	before := map[*Agent]int{w.alice: controls(w.alice), w.bob: controls(w.bob)}
+	for name, try := range map[string]func() (ControlSent, error){
+		"edit":                func() (ControlSent, error) { return w.alice.Revise(tctx(t), ref, "resurrected") },
+		"delete again":        func() (ControlSent, error) { return w.alice.Retract(tctx(t), ref, "") },
+		"own reaction":        func() (ControlSent, error) { return w.alice.React(tctx(t), ref, "👍", false) },
+		"peer reaction":       func() (ControlSent, error) { return w.bob.React(tctx(t), bobRef, "👍", false) },
+		"thread edit":         func() (ControlSent, error) { return w.bob.Revise(tctx(t), threadRef, "resurrected") },
+		"thread delete again": func() (ControlSent, error) { return w.bob.Retract(tctx(t), threadRef, "") },
+	} {
+		if _, err := try(); err == nil || !strings.Contains(err.Error(), "deleted") {
+			t.Errorf("%s on a deleted message: %v", name, err)
+		}
+	}
+	for a, n := range before {
+		if got := controls(a); got != n {
+			t.Errorf("%s stored %d more control(s) for a deleted message", a.Address, got-n)
+		}
+	}
+	if m := convMsgByID(t, w.alice, conv, turn.ID); m.Edited || m.Text != "" || len(m.Reactions) != 0 {
+		t.Fatalf("the deleted turn at alice: %+v", m.Controls)
+	}
+}
+
+// Two devices of one person edit, or add and take off a reaction, at once
+// with the same counter. Each device holds its own copy of each control,
+// under an id of that copy, so the tie is broken on the control's logical
+// id, the one value every copy shares: every device shows the same text
+// and the same reactions, whichever copy ids it holds.
+func TestConcurrentControlsResolveAlikeOnEveryDevice(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "draft"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the laptop to hold the turn", func() bool { return inboxCount(t, w.alice, `id = ?`, turn.ID) == 1 })
+	phone := linked(t, w.alice)
+	shown := func(a *Agent) (ConvMessage, bool) {
+		msgs, _ := a.ConversationMessages(conv)
+		for _, m := range msgs {
+			if m.LID == turn.LID {
+				return m, true
+			}
+		}
+		return ConvMessage{}, false
+	}
+	eventually(t, "the phone to hold the turn", func() bool { _, ok := shown(phone); return ok })
+	bobFP := w.bob.Self().Fingerprint()
+	id := func(c string) string { return strings.Repeat(c, 32) }
+	// Logical ids: the second control's is the greater. Copy ids: the
+	// laptop's copy of the first control has the greater id, the phone's
+	// the lesser, so a tie broken on copy ids differs between them.
+	type ctl struct{ copyID, lid, sub, body string }
+	first := []ctl{{id("f"), id("1"), envelope.SubRevision, `{"rev":1,"text":"from the desk"}`}, {id("3"), id("4"), envelope.SubReaction, `{"emoji":"👍","op":"add","n":1}`}}
+	second := []ctl{{id("2"), id("e"), envelope.SubRevision, `{"rev":1,"text":"from the phone"}`}, {id("5"), id("d"), envelope.SubReaction, `{"emoji":"👍","op":"remove","n":1}`}}
+	onPhone := map[string]string{id("f"): id("6"), id("3"): id("c"), id("2"): id("9"), id("5"): id("7")}
+	for _, a := range []*Agent{w.alice, phone} {
+		for _, c := range append(append([]ctl{}, first...), second...) {
+			copyID := c.copyID
+			if a == phone {
+				copyID = onPhone[copyID]
+			}
+			in := envelope.Inner{V: envelope.Version3, ID: copyID, From: w.bob.Address, To: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage,
+				Sub: c.sub, Body: c.body, Conv: conv, LID: c.lid, Ref: &envelope.Ref{ID: turn.LID, Fingerprint: bobFP}}
+			if res, err := a.store.addConvInbox(in, bobFP, "", false, nil); err != nil || res != admitted {
+				t.Fatalf("%s storing %s: %s %v", a.Address, c.sub, res, err)
+			}
+		}
+	}
+	for _, a := range []*Agent{w.alice, phone} {
+		m, _ := shown(a)
+		if !m.Edited || m.Text != "from the phone" || len(m.Reactions) != 0 {
+			t.Errorf("%s shows %q (edited %v), reactions %+v: want the control with the greater logical id", a.Address, m.Text, m.Edited, m.Reactions)
+		}
 	}
 }

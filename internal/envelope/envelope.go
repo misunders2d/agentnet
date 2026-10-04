@@ -344,6 +344,92 @@ func ValidEmoji(s string) bool {
 	return symbol
 }
 
+// Blank reports whether text shows nothing: it holds only white space,
+// default ignorable code points (zero-width spaces and joiners, direction
+// marks and isolates, word joiners, variation selectors, fillers, the byte
+// order mark, tags) and the braille blank (U+2800, a symbol that draws no
+// dot). Text composed here, a message or an edit, needs more than that
+// unless files go with it; what arrives is not judged by it.
+func Blank(text string) bool {
+	for _, r := range text {
+		if !unicode.IsSpace(r) && !ignorable(r) && r != 0x2800 {
+			return false
+		}
+	}
+	return true
+}
+
+// ignorable is Unicode's Default_Ignorable_Code_Point property.
+func ignorable(r rune) bool {
+	switch {
+	case r == 0x00AD, r == 0x034F, r == 0x061C, r == 0x115F, r == 0x1160, r == 0x17B4, r == 0x17B5, r == 0x3164, r == 0xFEFF, r == 0xFFA0:
+		return true
+	case r >= 0x180B && r <= 0x180F, r >= 0x200B && r <= 0x200F, r >= 0x202A && r <= 0x202E, r >= 0x2060 && r <= 0x206F,
+		r >= 0xFE00 && r <= 0xFE0F, r >= 0xFFF0 && r <= 0xFFF8, r >= 0x1BCA0 && r <= 0x1BCA3, r >= 0x1D173 && r <= 0x1D17A, r >= 0xE0000 && r <= 0xE0FFF:
+		return true
+	}
+	return false
+}
+
+// OneEmoji reports whether s is one emoji as a reaction composed here
+// must be: ValidEmoji, and exactly one emoji sequence (a base emoji, or a
+// pair of regional indicators, joined to more only by zero-width joiners,
+// with its selectors, keycap, tags and skin tone), whose base runes are
+// pictographs or other symbols, never currency, math (but the emoji among
+// them) or modifier signs or characters of other planes. A row of emoji is
+// not one. What arrives is
+// still judged by ValidEmoji alone, so reactions peers already sent stay
+// readable.
+func OneEmoji(s string) bool {
+	if !ValidEmoji(s) {
+		return false
+	}
+	bases, joined, pairing := 0, false, false
+	for _, r := range s {
+		switch {
+		case r == 0x200D:
+			joined = true
+			continue
+		case r == 0xFE0F, r == 0xFE0E, r == 0x20E3, r >= 0xE0020 && r <= 0xE007F, r >= 0x1F3FB && r <= 0x1F3FF:
+			continue // part of the emoji before it
+		case r >= 0x1F1E6 && r <= 0x1F1FF: // regional indicators: two make one flag
+			if pairing {
+				pairing = false
+				continue
+			}
+			pairing = true
+		case r >= '0' && r <= '9', r == '#', r == '*': // a keycap's base (ValidEmoji holds them to one)
+			pairing = false
+		case emojiBase(r):
+			pairing = false
+		default:
+			return false
+		}
+		if !joined {
+			bases++
+		}
+		joined = false
+	}
+	return bases == 1 && !joined
+}
+
+// emojiBase reports whether r may be the base of an emoji: any rune of the
+// emoji blocks (U+1F000 to U+1FAFF, also ones assigned after this
+// program), an arrow, the emoji that are math symbols (◻️ ◼️ ◽ ◾ ⤴️ ⤵️), or
+// another symbol of the Basic Multilingual Plane (©, ☕, ★, ✓) but the
+// braille blank, which shows nothing.
+func emojiBase(r rune) bool {
+	switch {
+	case r >= 0x1F000 && r <= 0x1FAFF:
+		return true
+	case r > 0xFFFF, r == 0x2800:
+		return false
+	case r >= 0x2190 && r <= 0x21FF, r >= 0x25FB && r <= 0x25FE, r == 0x2934, r == 0x2935:
+		return true
+	}
+	return unicode.Is(unicode.So, r)
+}
+
 // checkVersion3 validates a control: only a plain message with a known
 // control sub, an exact Ref, a bounded payload of that sub's shape, and
 // none of the fields of a turn (root, target, participation, fan, files,
