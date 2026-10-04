@@ -164,20 +164,29 @@ func (a *Agent) Accept(id string) error {
 // participation ended (or whose asking guest left), or one no responder
 // or local agent here would take (NothingRuns). A request taken in under a
 // reply session is its session worker's (claimReplyReceiverJob), which
-// needs no responder here: never refused here.
+// needs no responder here, but only while its input still waits for that
+// worker (pending, unclaimed): a session run that started and was
+// interrupted is never taken up again, so accepting it would run nothing.
 func (a *Agent) acceptBlocked(id string) (string, error) {
 	var j job
 	var target string
 	var pid sql.NullString
-	var session bool
+	var session, sessionTakes bool
 	err := a.store.db.QueryRow(`SELECT sender, coalesce(verified_by, ''), kind, coalesce(conv, ''), pid, coalesce(target, ''), local,
-		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id) FROM inbox WHERE id = ?`, id).
-		Scan(&j.From, &j.Key, &j.Kind, &j.Conv, &pid, &target, &j.Local, &session)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && session {
+		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id),
+		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id AND state = 'pending' AND live_claim IS NULL) FROM inbox WHERE id = ?`, id).
+		Scan(&j.From, &j.Key, &j.Kind, &j.Conv, &pid, &target, &j.Local, &session, &sessionTakes)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
+	}
+	if session {
+		if sessionTakes {
+			return "", nil
+		}
+		return "its reply-session run was interrupted; nothing here runs it again: reply, decline or resolve it", nil
 	}
 	if target != "" {
 		j.Target = &envelope.Target{}

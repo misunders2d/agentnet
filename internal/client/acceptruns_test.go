@@ -92,23 +92,39 @@ func TestAcceptRefusesEndedParticipation(t *testing.T) {
 // nothing would run it (review finding 9).
 func TestAcceptReplySessionInputWithoutResponder(t *testing.T) {
 	w := newWorld(t, "") // bob chose no responder
-	id, binding := protocol.NewID(), protocol.NewID()
-	for _, q := range []struct {
-		sql  string
-		args []any
-	}{
-		{`INSERT INTO inbox(id, sender, ts, kind, body, received_at, state) VALUES(?, ?, 1, ?, 'which region?', 1, ?)`, []any{id, w.alice.Address, envelope.KindQuestion, stateInterrupt}},
-		{`INSERT INTO reply_receivers(id, conv, request_ref, receiver, created_at) VALUES(?, ?, ?, '{"kind":"managed_agent"}', 1)`, []any{binding, protocol.NewID(), protocol.NewID()}},
-		{`INSERT INTO reply_receiver_inputs(binding, inbox_id) VALUES(?, ?)`, []any{binding, id}},
-	} {
-		if _, err := w.bob.store.db.Exec(q.sql, q.args...); err != nil {
-			t.Fatal(err)
+	insert := func(inputState string) string {
+		t.Helper()
+		id, binding := protocol.NewID(), protocol.NewID()
+		for _, q := range []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO inbox(id, sender, ts, kind, body, received_at, state) VALUES(?, ?, 1, ?, 'which region?', 1, ?)`, []any{id, w.alice.Address, envelope.KindQuestion, stateInterrupt}},
+			{`INSERT INTO reply_receivers(id, conv, request_ref, receiver, created_at) VALUES(?, ?, ?, '{"kind":"managed_agent"}', 1)`, []any{binding, protocol.NewID(), protocol.NewID()}},
+			{`INSERT INTO reply_receiver_inputs(binding, inbox_id, state) VALUES(?, ?, ?)`, []any{binding, id, inputState}},
+		} {
+			if _, err := w.bob.store.db.Exec(q.sql, q.args...); err != nil {
+				t.Fatal(err)
+			}
 		}
+		return id
 	}
-	if err := w.bob.Accept(id); err != nil {
-		t.Fatalf("accept of an interrupted reply-session request: %v", err)
+	// Still waiting for its session worker: accepting it lets that worker
+	// take it, with no responder here.
+	waiting := insert("pending")
+	if err := w.bob.Accept(waiting); err != nil {
+		t.Fatalf("accept of a reply-session request its worker still takes: %v", err)
 	}
-	if s, _ := w.bob.store.jobState(id); s != stateAccepted {
+	if s, _ := w.bob.store.jobState(waiting); s != stateAccepted {
 		t.Fatalf("accepted, it is %s", s)
+	}
+	// Its session run started and was interrupted: the session worker never
+	// takes it again, so accept is refused and the request stays as it was.
+	ran := insert("accepted")
+	if err := w.bob.Accept(ran); !errors.Is(err, ErrNothingRuns) {
+		t.Fatalf("accept of an interrupted reply-session run: %v", err)
+	}
+	if s, _ := w.bob.store.jobState(ran); s != stateInterrupt {
+		t.Fatalf("refused, it is %s", s)
 	}
 }
