@@ -18,6 +18,7 @@ import { candidates, decode, encode, guestAuthor, matches, shift, trigger, type 
 import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, type MenuAction } from "./Composer.parts";
 import { MentionList, optionId } from "./Composer.picker";
 import { useTypingSignal } from "./Composer.typing";
+import { usePortal } from "../owned";
 
 const EMPTY: Draft = { text: "" };
 
@@ -30,6 +31,7 @@ type Target =
   | { kind: "answer"; id: string; task: boolean };
 
 export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread }) {
+  const portal = usePortal();
   const store = useApp();
   const wide = useWide();
   const names = useAgentNames();
@@ -418,7 +420,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       {dragRect && <DropTarget rect={dragRect} lim={lim} />}
 
       <Popover.Root open={emojiOpen} onOpenChange={setEmojiOpen}>
-        <Popover.Portal>
+        <Popover.Portal container={portal}>
           <Popover.Positioner anchor={row} side="top" align="start" sideOffset={8} collisionPadding={12} className="z-40">
             <Popover.Popup finalFocus={field} aria-label="Emoji"
               className="origin-[var(--transform-origin)] outline-none transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">

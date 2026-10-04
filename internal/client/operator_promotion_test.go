@@ -48,7 +48,7 @@ func TestOperatorPromotionCountThenGrantSeparateInstanceAndRestart(t *testing.T)
 	setResponder(t, w.bob, "stub", st.dir, time.Minute)
 	runAgent(t, w.alice)
 	stop := runAgent(t, w.bob)
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	task, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindTask, Body: "original waiting task"})
@@ -179,7 +179,7 @@ func TestOperatorPromotionRefusesStalePregrantSnapshot(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
 	operatorPromotionPin(t, w.bob, w.alice)
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	task := operatorPromotionSeed(t, w.bob, w.alice, stateAwaiting)

@@ -11,6 +11,7 @@ import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
+import { TopicResults } from "./ChatList.topics";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
 import { WorkspacePill } from "./WorkspaceSwitcher";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
@@ -24,7 +25,7 @@ const filters: { id: Filter; label: string }[] = [
 // The title's highlighter stripe: saturated yellow in light; in dark the same
 // yellow at about a third, so the light letters stay readable where they cross it.
 const stripe = "relative z-0 after:absolute after:-left-1 after:-right-1.5 after:bottom-0.5 after:-z-10 after:h-[38%] after:-rotate-[1.5deg] after:rounded after:bg-act after:content-[''] "
-  + "dark:after:bg-act/35 [@media(prefers-color-scheme:dark)]:[:root:not([data-theme=light])_&]:after:bg-act/35";
+  + "dark:after:bg-act/35";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
@@ -38,6 +39,7 @@ export function ChatList() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [searching, setSearching] = useState(false);
+  const [topicHits, setTopicHits] = useState(0); // topics the search found (ChatList.topics.tsx)
   const search = useRef<HTMLInputElement>(null);
 
   const items = useMemo(() => chatItems(overview, agentNames), [overview, agentNames]);
@@ -48,7 +50,7 @@ export function ChatList() {
   const active: Filter = filter !== "all" && kinds.has(filter) ? filter : "all";
   const q = query.trim();
   const shown = items.filter((i) => (active === "all" || i.kind === active)
-    && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title));
+    && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title, ...(i.topics || []).map((t) => t.title)));
   const unread = items.reduce((n, i) => n + i.unread, 0);
   const showSearch = wide || searching || !!q;
 
@@ -132,7 +134,8 @@ export function ChatList() {
             </ul>
           )}
           {!q && !items.length && overview.person && <NoChats />}
-          {q && <SearchExtras query={q} overview={overview} none={!shown.length} />}
+          {q && overview.topic_list && <TopicResults query={q} onCount={setTopicHits} />}
+          {q && <SearchExtras query={q} overview={overview} none={!shown.length && !topicHits} />}
         </>
       )}
     </section>

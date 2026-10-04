@@ -14,7 +14,8 @@ export function api(host: Host) {
   const post = <R>(path: string, body: unknown) => host.api<R>(path, body);
   return {
     host,
-    overview: () => get<T.Overview>("/api/overview"),
+    // topics=1: archived topics are counted, not listed (they are paged through topics below).
+    overview: () => get<T.Overview>("/api/overview?topics=1"),
     dm: (id: string) => get<T.DMThread>(q("/api/dm", { id })),
     thread: (id: string) => get<T.Thread>(q("/api/thread", { id })),
     refresh: (id: string) => post<T.Presence>("/api/refresh", { id }),
@@ -56,6 +57,12 @@ export function api(host: Host) {
     markRead: (ids: string[]) => post<{ note: string }>("/api/act", { do: "read", ids } satisfies T.Action),
     decide: (d: T.DecisionAction) => post<{ note: string }>("/api/operator/decide", d),
 
+    // Topics (an agent's separate conversations): one page of the All topics
+    // list, and the person's own changes, kept on this device only.
+    topics: (p: { peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
+      get<T.TopicPage>(q("/api/topics", Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])))),
+    changeTopic: (what: "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
+
     // Files
     stage: (file: File) => host.stage(file),
     discard: (ids: string[]) => post<unknown>("/api/upload/discard", { ids }),
@@ -79,7 +86,8 @@ export function api(host: Host) {
     remind: (id: string, due: Date) => post<unknown>("/api/remind", { id, due: Math.floor(due.getTime() / 1000) }), // unix seconds
     remindDone: (id: string) => post<unknown>("/api/remind/done", { id }),
     remindCancel: (id: string) => post<unknown>("/api/remind/cancel", { id }),
-    notify: (what: "enable" | "disable" | "mute" | "allow" | "seen", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[] } = {}) => post<{ note: string }>("/api/notify/" + what, body),
+    notifyResolve: (chan: string) => get<{ conv?: string }>(q("/api/notify/resolve", { chan })), // a browser notification's channel
+    notify: (what:"enable" | "disable" | "mute" | "allow" | "seen", body: { conv?: string; person?: string; muted?: boolean; allowed?: boolean; ids?: string[] } = {}) => post<{ note: string }>("/api/notify/" + what, body),
 
     // Teams and storage
     teams: () => get<T.TeamsView>("/api/teams"),

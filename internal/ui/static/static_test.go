@@ -175,11 +175,24 @@ func TestRelayPageLoadsOnlyServedFiles(t *testing.T) {
 	}
 }
 
-// The daemon's page is in the bundle too.
+// The daemon's page is in the bundle too: the host and the built-in skin
+// packages. The bundled app's files (default.html, app.js, lenses.js,
+// app.css) stay in the source tree for their tests and are not shipped:
+// no interface reaches them.
 func TestDaemonPageInBundle(t *testing.T) {
-	for _, name := range []string{"index.html", "app.js", "lenses.js", "app.css"} {
+	for _, name := range []string{"index.html", "loader.js", "core.css", "skin-base.css", "skinbar.mjs", "skinbar.css", "skin-choice.mjs", "local-skins.mjs", "skins/comic/skin.json", "skins/comic/entry.mjs"} {
 		if _, err := fs.ReadFile(Files, name); err != nil {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"default.html", "app.js", "lenses.js", "app.css", "messenger.mjs", "messenger.css", "m"} {
+		if _, err := fs.Stat(Files, name); err == nil {
+			t.Errorf("%s is shipped, but no interface may load it", name)
+		}
+	}
+	for _, p := range []string{"/assets/default.html", "/assets/app.js", "/assets/lenses.js", "/assets/app.css", "/assets/messenger.mjs", "/assets/m/fonts/onest-latin-wght-normal.woff2"} {
+		if resp := serve("GET", p); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("relay serves %s: %d", p, resp.StatusCode)
 		}
 	}
 }

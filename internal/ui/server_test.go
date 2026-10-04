@@ -117,9 +117,14 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/loader.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}
-	for _, a := range []string{"app.js", "lenses.js", "app.css", "vendor/qr.mjs", "drivespace-setup.mjs"} {
+	for _, a := range []string{"loader.js", "skinbar.mjs", "skin-choice.mjs", "skin-base.css", "skins/index.json", "skins/comic/entry.mjs", "vendor/qr.mjs", "drivespace-setup.mjs"} {
 		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != 200 {
 			t.Errorf("asset %s: %d", a, r.StatusCode)
+		}
+	}
+	for _, a := range []string{"app.js", "lenses.js", "app.css", "default.html", "messenger.mjs"} { // the bundled app is not served: no interface loads it
+		if r := do(t, ts, "GET", "/assets/"+a, "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
+			t.Errorf("asset %s served: %d", a, r.StatusCode)
 		}
 	}
 	if r := do(t, ts, "GET", "/assets/vendor/age.mjs", "", authed(ts, nil)); r.StatusCode != http.StatusNotFound {
@@ -188,7 +193,7 @@ func TestNativeManifestRequiresSession(t *testing.T) {
 // Peer text reaches the page only as JSON strings and is inserted as text:
 // the page has no HTML sinks and no inline script or style.
 //
-// The default interface (messenger.mjs) bundles React DOM, whose
+// The Comic skin (skins/comic/entry.mjs) bundles React DOM, whose
 // dangerouslySetInnerHTML support names innerHTML; React writes it only for
 // that prop, which the interface's own source never uses (checked below on
 // web/src). The bundle may name innerHTML exactly as often as React DOM
@@ -201,9 +206,9 @@ func TestPageInsertsTextOnly(t *testing.T) {
 			return err
 		}
 		data, _ := fs.ReadFile(static.Files, path)
-		if path == "messenger.mjs" {
+		if path == "skins/comic/entry.mjs" {
 			if n := strings.Count(string(data), "innerHTML"); n != reactDOMInnerHTML {
-				t.Errorf("messenger.mjs names innerHTML %d times, React DOM alone %d: review what writes HTML", n, reactDOMInnerHTML)
+				t.Errorf("Comic's entry.mjs names innerHTML %d times, React DOM alone %d: review what writes HTML", n, reactDOMInnerHTML)
 			}
 			data = []byte(strings.ReplaceAll(string(data), "innerHTML", ""))
 		}

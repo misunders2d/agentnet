@@ -168,6 +168,18 @@ func TestWorkspaceReconnectAfterDisconnect(t *testing.T) {
 	if !listed {
 		t.Fatalf("disconnected workspace not listed with its state: %+v", all)
 	}
+	// GET /api/workspaces is the list of mounted memberships, each with its
+	// handle (the shell registers every one as connected): a disconnected
+	// one is listed only by GET /api/workspaces/all.
+	var mounted []WorkspaceBinding
+	if status := workspaceCall(t, ts, "GET", "/api/workspaces", nil, &mounted); status != 200 {
+		t.Fatalf("mounted workspaces: %d", status)
+	}
+	for _, w := range mounted {
+		if w.ID == joined.ID || w.Handle == "" || w.State != "enrolled" {
+			t.Fatalf("the mount list names a disconnected or unrouted workspace: %+v", mounted)
+		}
+	}
 	var refused map[string]string
 	status := workspaceCall(t, ts, "POST", "/api/workspaces/join", WorkspaceJoin{ID: joined.ID, Name: "Other", Invite: code, Agent: "laptop"}, &refused)
 	if status != http.StatusConflict || !strings.Contains(refused["error"], "Reconnect") {

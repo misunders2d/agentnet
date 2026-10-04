@@ -29,7 +29,9 @@ import (
 // grant holds for that exact key). An accepted human guest's request (its
 // captured author scope, active, same key) has no member authority: a
 // question needs this host's approval of that asker or a one-time accept, a
-// task its exact-key grant or a one-time accept. A request without authority
+// task its exact-key grant or a one-time accept. An agent room
+// participant's ask (ROOM_V1 §4.3) has no authority at all yet: the host's
+// person accepts each one. A request without authority
 // waits for the host's person (stateAwaiting); a request whose participation
 // ended never runs (stateNotRun); anything else keeps waiting for evidence.
 //
@@ -116,6 +118,19 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 	if v.m.group != nil && !v.m.requestEpoch(r.Sender, r.Key, r.Target) {
 		return verdictStop, "requester's original group admission changed", nil
 	}
+	// An agent room participant's ask (ROOM_V1 §4.3): no member authority,
+	// never TaskKeys, grants or approvals, wherever the asking agent runs;
+	// until the §4.4 checks, this host's person decides each one (§10.4).
+	if agent, ended, err := roomAgentAsk(q, r, v.m); err != nil {
+		return 0, "", err
+	} else if ended {
+		return verdictStop, "the asking agent's participation ended", nil
+	} else if agent {
+		if output || r.State == stateAccepted {
+			return verdictRun, "", nil
+		}
+		return verdictAsk, "an agent in the room asks your agent: accept it to run it once (agentnet accept ID)", nil
+	}
 	if !r.Local && !v.m.device(r.Sender, r.Key) {
 		guest, ended, err := humanRequestAuthor(q, r, v.m)
 		if err != nil {
@@ -177,6 +192,37 @@ func humanRequestAuthor(q dbq, r agentReq, m dmMembers) (guest, ended bool, err 
 	return exact && g.HumanActive(), exact && (g.State == PartDismissed || g.State == PartDeclined), nil
 }
 
+// roomAgentAsk reports whether request r was asked by an agent room
+// participant (its stored captured audience names an agent author:
+// HumanTurn.AgentAuthor), and whether that author's participation, as held
+// here with r's very sender key as its host, has ended.
+func roomAgentAsk(q dbq, r agentReq, m dmMembers) (agent, ended bool, err error) {
+	var raw string
+	err = q.QueryRow(`SELECT coalesce(human,'') FROM inbox WHERE id=? AND conv=? AND pid=?`, r.ID, r.Conv, r.PID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && raw == "" {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	var h envelope.HumanTurn
+	if err := json.Unmarshal([]byte(raw), &h); err != nil {
+		return false, false, err
+	}
+	if !h.AgentAuthor() {
+		return false, false, nil
+	}
+	p, err := participationIn(q, r.Conv, h.AuthorPID, m, "")
+	if errors.Is(err, ErrNoParticipation) {
+		return true, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	exact := p.Host.Address == r.Sender && p.Host.Fingerprint == r.Key
+	return true, exact && (p.State == PartDismissed || p.State == PartDeclined), nil
+}
+
 // beforeAgentClaim lets tests act between a claim's decision and its write.
 var beforeAgentClaim = func() {}
 
@@ -191,10 +237,18 @@ var beforeAgentClaim = func() {}
 // change that starts a new look. next is the position of the last request
 // looked at; full reports that the page was full (more may follow).
 func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit int, resolve ...func(dbq, string) (*ExecutorStamp, error)) (j job, found bool, next int64, full bool, err error) {
+	j, found, next, full, _, err = s.claimAgentPageTold(responder, self, selfFP, pos, limit, resolve...)
+	return j, found, next, full, err
+}
+
+// claimAgentPageTold is claimAgentPage that also reports the requests the
+// look moved to a state their requester is told of (headless.go
+// noteStatus): waiting for this host's person, or not run.
+func (s *store) claimAgentPageTold(responder, self, selfFP string, pos int64, limit int, resolve ...func(dbq, string) (*ExecutorStamp, error)) (j job, found bool, next int64, full bool, told []string, err error) {
 	next = pos
 	tx, err := s.db.Begin()
 	if err != nil {
-		return j, false, pos, false, err
+		return j, false, pos, false, nil, err
 	}
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(status, ''),
@@ -204,7 +258,7 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 		  AND EXISTS (SELECT 1 FROM participation_events e WHERE e.conv = inbox.conv AND e.pid = inbox.pid)
 		ORDER BY arrival LIMIT ?`, pos, limit)
 	if err != nil {
-		return j, false, pos, false, err
+		return j, false, pos, false, nil, err
 	}
 	type row struct {
 		j       job
@@ -218,7 +272,7 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 		if err := rows.Scan(&r.j.ID, &r.j.From, &r.j.Key, &r.j.Kind, &r.j.Body, &r.j.ReplyTo, &r.j.Status,
 			&r.j.Conv, &r.j.PID, &target, &r.state, &r.j.Local, &r.arrival); err != nil {
 			rows.Close()
-			return j, false, pos, false, err
+			return j, false, pos, false, nil, err
 		}
 		if target != "" {
 			r.j.Target = &envelope.Target{}
@@ -230,7 +284,7 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return j, false, pos, false, err
+		return j, false, pos, false, nil, err
 	}
 	views := map[string]*partView{}
 	wrote := false
@@ -238,7 +292,7 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 		next = r.arrival
 		v, why, err := agentVerdict(tx, r.j.agentReq(r.state), self, selfFP, false, views)
 		if err != nil {
-			return j, false, pos, false, err
+			return j, false, pos, false, nil, err
 		}
 		var res sql.Result
 		switch v {
@@ -258,7 +312,7 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 				err = ErrUnknownAgent
 			}
 			if err != nil && !errors.Is(err, ErrUnknownAgent) {
-				return j, false, pos, false, err
+				return j, false, pos, false, nil, err
 			}
 			if err != nil || (len(resolve) > 0 && stamp == nil) {
 				if err == nil {
@@ -266,9 +320,12 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 				}
 				res, err = tx.Exec(`UPDATE inbox SET state=?,detail=? WHERE id=? AND state=?`, stateNotRun, "not run: selected agent unavailable", r.j.ID, r.state)
 				if err != nil {
-					return j, false, pos, false, err
+					return j, false, pos, false, nil, err
 				}
 				wrote = true
+				if n, _ := res.RowsAffected(); n == 1 {
+					told = append(told, r.j.ID)
+				}
 				continue
 			}
 			beforeAgentClaim()
@@ -291,9 +348,14 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 			res, err = tx.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE id = ? AND state = ?`, stateNotRun, "not run: "+why, r.j.ID, r.state)
 		}
 		if err != nil {
-			return j, false, pos, false, err
+			return j, false, pos, false, nil, err
 		}
 		wrote = wrote || res != nil
+		if v == verdictAsk || v == verdictStop {
+			if n, _ := res.RowsAffected(); n == 1 {
+				told = append(told, r.j.ID)
+			}
+		}
 		if found {
 			j = r.j
 			break
@@ -301,16 +363,16 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 	}
 	if found {
 		if err := tx.QueryRow(`SELECT count(*) FROM attachments WHERE message_id = ?`, j.ID).Scan(&j.Attachments); err != nil {
-			return job{}, false, pos, false, err
+			return job{}, false, pos, false, nil, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return job{}, false, pos, false, err
+		return job{}, false, pos, false, nil, err
 	}
 	if wrote {
 		s.changed()
 	}
-	return j, found, next, !found && len(page) == limit, nil
+	return j, found, next, !found && len(page) == limit, told, nil
 }
 
 // agentSweep is where the worker's look at requests to its agent stands.
@@ -327,7 +389,9 @@ type agentSweep struct {
 
 // claimAgentJob claims the oldest request to this device's agent that may
 // run now, looking at one page. more: nothing was claimed but more pages
-// follow; the caller continues at once.
+// follow; the caller continues at once. A request the look leaves waiting
+// for this host's person, or closes as not run, is told to its requester
+// (noteStatus), as a device message's state is when it arrives.
 func (a *Agent) claimAgentJob(responder string, resolve ...func(dbq, string) (*ExecutorStamp, error)) (j job, ok, more bool, err error) {
 	sw := &a.agentSweep
 	seq, _ := a.Changed()
@@ -337,7 +401,10 @@ func (a *Agent) claimAgentJob(responder string, resolve ...func(dbq, string) (*E
 		}
 		sw.started, sw.idle = seq, false
 	}
-	j, ok, next, full, err := a.store.claimAgentPage(responder, a.Address, a.id.Public(a.Address).Fingerprint(), sw.pos, agentPage, resolve...)
+	j, ok, next, full, told, err := a.store.claimAgentPageTold(responder, a.Address, a.id.Public(a.Address).Fingerprint(), sw.pos, agentPage, resolve...)
+	for _, id := range told {
+		a.noteStatus(id)
+	}
 	switch {
 	case err != nil, ok:
 		sw.pos = 0 // after a job, a new look starts from the oldest again
@@ -385,33 +452,60 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 			other = p.info.Label
 		}
 	}
-	asker := host + ", your own person"
-	if !j.Local {
-		asker = "the other person, " + other
+	// The asker is named from the request's exact key (or the guest scope
+	// it was captured under), never assumed: a guest is an outside,
+	// temporary person, and the host's own person may ask from another of
+	// their devices.
+	guests, author, err := a.requestGuests(j, m)
+	if err != nil {
+		return "", err
+	}
+	asker := "someone who is neither a member nor a guest here (" + j.From + ")"
+	switch {
+	case j.Local:
+		asker = host + ", your own person"
+	case author != nil:
+		asker = guestName(*author) + ", an outside person present in this conversation only temporarily, as a guest"
+	default:
+		for _, p := range m.persons {
+			switch {
+			case !p.has(j.From, j.Key):
+			case p.info.Person == info.Host.Person:
+				asker = host + ", your own person (from their device " + j.From + ")"
+			case m.group != nil || info.External:
+				asker = p.info.Label + " (" + j.From + ")"
+			default:
+				asker = "the other person, " + p.info.Label
+			}
+		}
+	}
+	// Every reader of the reply besides the members: the guests its
+	// request's audience names that are still present (as its output goes).
+	also := ""
+	if len(guests) > 0 {
+		var names []string
+		for _, g := range guests {
+			names = append(names, guestName(g))
+		}
+		also = fmt.Sprintf(" It also reaches the guests present now, outside people invited only temporarily: %s.", strings.Join(names, ", "))
 	}
 	var b strings.Builder
 	if m.group != nil {
 		var audience []string
 		for _, p := range m.persons {
 			audience = append(audience, p.info.Label)
-			if p.has(j.From, j.Key) {
-				asker = p.info.Label + " (" + j.From + ")"
-			}
 		}
 		slices.Sort(audience)
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. Your person accepted bounded participation in the group between %s. Replies go only to its current human members and this exact invited host. Use selected grants and this PID's addressed turns only; no ambient room history or other assistants' sessions.\n", host, a.Address, strings.Join(audience, ", "))
+		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. Your person accepted bounded participation in the group between %s. Replies go only to its current human members and this exact invited host.%s Use selected grants and this PID's addressed turns only; no ambient room history or other assistants' sessions.\n", host, a.Address, strings.Join(audience, ", "), also)
 	} else if info.External {
 		var audience []string
 		for _, member := range m.root.Members {
 			p := m.persons[member.Person]
 			audience = append(audience, p.info.Label)
-			if p.has(j.From, j.Key) {
-				asker = p.info.Label + " (" + j.From + ")"
-			}
 		}
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted bounded participation in the direct conversation between %s; your reply is sent to those two members. You are an invited external agent, with selected snapshots and addressed turns only, not ordinary room membership or ambient history access.\n", host, a.Address, host, strings.Join(audience, " and "))
+		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted bounded participation in the direct conversation between %s; your reply is sent to those two members.%s You are an invited external agent, with selected snapshots and addressed turns only, not ordinary room membership or ambient history access.\n", host, a.Address, host, strings.Join(audience, " and "), also)
 	} else {
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.\n", host, a.Address, host, other)
+		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.%s\n", host, a.Address, host, other, also)
 	}
 	if j.Kind == envelope.KindTask {
 		fmt.Fprintf(&b, "%s gives you the task below. Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n", asker)
@@ -460,6 +554,51 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	}
 	fmt.Fprintf(&b, "\n## %s from %s\n%s\n", heading, asker, j.Body)
 	return b.String(), nil
+}
+
+// requestGuests reads request j's captured audience (the HumanTurn stored
+// with it here, or with its outgoing copy when it was asked here): the
+// guests it names that are still present here now, whom its output
+// reaches, and the guest that authored it (its exact key under that
+// author scope), if one did. A request captured with no guests has none.
+func (a *Agent) requestGuests(j job, m dmMembers) (present []ParticipationInfo, author *ParticipationInfo, err error) {
+	h, err := storedHuman(a.store.db, "in", j.ID)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && h == nil {
+		if h, err = storedHuman(a.store.db, "out", j.ID); errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, nil
+		}
+	}
+	if err != nil || h == nil {
+		return nil, nil, err
+	}
+	for _, s := range h.Audience {
+		g, err := participationIn(a.store.db, j.Conv, s.PID, m, a.Address)
+		if errors.Is(err, ErrNoParticipation) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if g.Role != protocol.RoleHuman {
+			continue
+		}
+		if s.PID == h.AuthorPID && g.Host.Address == j.From && g.Host.Fingerprint == j.Key {
+			author = &g
+		}
+		if g.HumanActive() {
+			present = append(present, g)
+		}
+	}
+	return present, author, nil
+}
+
+// guestName is how a prompt names a guest: their own claimed name and the
+// exact device they take part from.
+func guestName(g ParticipationInfo) string {
+	if g.Host.Label == "" {
+		return "a guest (" + g.Host.Address + ")"
+	}
+	return g.Host.Label + " (" + g.Host.Address + ")"
 }
 
 // heldBack is why an output was not stored for sending.

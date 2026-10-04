@@ -7,6 +7,7 @@ import { Menu } from "@base-ui/react/menu";
 import { IconArrowUp, IconBolt, IconCornerUpLeft, IconMessageCircle, IconMoodSmile, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
 import { AgentAvatar } from "../ui/Avatar";
 import type { Span } from "./Composer.mentions";
+import { usePortal } from "../owned";
 
 /** keep stops a tap from taking focus off the text field, so a phone's
  *  keyboard stays open; the click itself still happens. */
@@ -21,13 +22,14 @@ export const menuIcons = {
 };
 
 export function PlusMenu({ actions, disabled, onOpenChange, onClosed }: { actions: MenuAction[]; disabled?: boolean; onOpenChange?: (open: boolean) => void; onClosed?: () => void }) {
+  const portal = usePortal();
   return (
-    <Menu.Root onOpenChange={(o) => onOpenChange?.(o)} onOpenChangeComplete={(o) => { if (!o) onClosed?.(); }}>
+    <Menu.Root modal={false} onOpenChange={(o) => onOpenChange?.(o)} onOpenChangeComplete={(o) => { if (!o) onClosed?.(); }}>
       <Menu.Trigger disabled={disabled} aria-label="Add to message" title="Add to message"
         className="group grid size-11 shrink-0 place-items-center self-end rounded-full bg-surface stroke press hover:bg-sunken disabled:opacity-40 data-[popup-open]:bg-ink lg:mb-0.5">
         <IconPlus size={22} stroke={2.4} className="text-ink transition-transform duration-200 ease-out-soft group-data-[popup-open]:rotate-45 group-data-[popup-open]:text-canvas motion-reduce:transition-none" />
       </Menu.Trigger>
-      <Menu.Portal>
+      <Menu.Portal container={portal}>
         <Menu.Positioner side="top" align="start" sideOffset={10} collisionPadding={12} className="z-40 outline-none">
           <Menu.Popup className="w-72 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
             {actions.map((a) => (

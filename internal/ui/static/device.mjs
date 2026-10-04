@@ -1,7 +1,7 @@
 // The relay's page: this browser as an AgentNet device. It checks what the
 // browser can do, allows one tab only, proves storage works, joins only
 // when the person asks (with an invitation for this server), then starts
-// the engine and the usual views (app.js, lenses.js) over it.
+// the engine and the UI host (loader.js), which mounts the chosen skin over it.
 import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
 import { decodeInvite, decodeOffer, newID, support, validName } from "./wire.mjs";
 import * as ws from "./workspaces.mjs";

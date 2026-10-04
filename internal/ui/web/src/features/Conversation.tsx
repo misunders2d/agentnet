@@ -11,7 +11,7 @@ import { Composer } from "./Composer";
 import { InviteSheet } from "./InviteSheet";
 import { RoomSheet } from "./RoomPanel";
 import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
-import { TopicBar } from "./Conversation.topics";
+import { TopicBar, TopicEnd } from "./Conversation.topics";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
 
@@ -61,8 +61,8 @@ function Open() {
     <section aria-label={title} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
       {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
-      {ctx.thread && <TopicBar conv={ctx.conv} />}
-      <Timeline ctx={ctx} messages={messages} focus={open.focus} selected={selected} onSelect={toggle}
+      {ctx.thread && <TopicBar thread={ctx.thread} />}
+      <Timeline ctx={ctx} messages={messages} focus={open.focus} selected={selected} onSelect={toggle} end={th ? <TopicEnd ctx={ctx} /> : undefined}
         footer={left && (
           // The room panel's words; the timeline keeps its last lines clear of it.
           <div role="status" className="pop-in flex items-center gap-3 rounded-2xl stroke bg-ink py-2 pl-4 pr-2 text-canvas shadow-pop">

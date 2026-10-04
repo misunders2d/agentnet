@@ -238,12 +238,13 @@ func TestAgentActions(t *testing.T) {
 		kind, state string
 		want        string
 	}{
-		{"task", "awaiting", "accept"},
-		{"question", "awaiting", "accept"}, // a conversation guest's question: one-time acceptance
+		{"task", "awaiting", "accept,decline"},
+		{"question", "awaiting", "accept,decline"}, // a conversation guest's question: one-time acceptance, or not
 		{"task", "running", "cancel"},
 		{"question", "needs_human", "accept,resolve"},
 		{"task", "failed", "accept"},
-		{"task", "interrupted", "accept"},
+		{"task", "interrupted", "accept,resolve"}, // run it again, or close it without running it (review finding 3)
+		{"question", "interrupted", "accept,resolve"},
 		{"question", "cancelled", "accept"},
 		{"question", "part_waiting", ""},
 		{"question", "answered", ""},
@@ -327,7 +328,7 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 		}
 		return task.State == "awaiting"
 	})
-	if strings.Join(task.Actions, ",") != "accept" || !strings.Contains(task.StateText, "accept") {
+	if strings.Join(task.Actions, ",") != "accept,decline" || !strings.Contains(task.StateText, "accept") {
 		t.Fatalf("the waiting task on alice's page: %+v", task)
 	}
 	if _, err := os.Stat(log); err == nil {
@@ -503,6 +504,7 @@ func TestLiveReminders(t *testing.T) {
 		return err == nil && len(d.Messages) == 1 && terr == nil
 	})
 	mine, _ := pb.SendDM(DMDraft{Conv: conv, Body: "my own"})
+	before, _ := pb.DM(conv) // bob's own turn answered the held question (BUG-24): it is no longer held
 
 	o, _ := pb.Overview()
 	if !o.Remind || len(o.Reminders) != 0 {
@@ -526,8 +528,8 @@ func TestLiveReminders(t *testing.T) {
 		t.Fatalf("reminders: %+v", o.Reminders)
 	}
 	eventually("the DM reminder overdue", func() bool { o, _ = pb.Overview(); return o.Reminders[0].Overdue })
-	if d, _ := pb.DM(conv); d.Messages[0].State != "conv_held" {
-		t.Fatalf("the reminded question changed: %+v", d.Messages[0])
+	if d, _ := pb.DM(conv); d.Messages[0].State != before.Messages[0].State || before.Messages[0].State != "manual" {
+		t.Fatalf("the reminded question changed: %+v (was %s)", d.Messages[0], before.Messages[0].State)
 	}
 	// Done and cancel end it; again is not found.
 	if err := pb.CancelReminder(dev.ID); err != nil {

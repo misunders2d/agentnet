@@ -46,8 +46,13 @@ func NewLive(a *client.Agent) *Live {
 // Changed implements Provider.
 func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
 
-// Overview implements Provider.
-func (l *Live) Overview() (Overview, error) {
+// Overview implements Provider: every thread, archived topics included.
+func (l *Live) Overview() (Overview, error) { return l.overview(true) }
+
+// TopicOverview implements Topics: archived topics counted, not listed.
+func (l *Live) TopicOverview() (Overview, error) { return l.overview(false) }
+
+func (l *Live) overview(listArchived bool) (Overview, error) {
 	seq, _ := l.a.Changed()
 	o := Overview{Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
 		Threads: []ThreadSummary{}, Review: []ReviewItem{}, NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: []QuarantineItem{}}
@@ -69,22 +74,32 @@ func (l *Live) Overview() (Overview, error) {
 	if err := l.identityOverview(&o); err != nil {
 		return o, err
 	}
-	threads, err := l.a.Threads()
+	threads, peers, err := l.a.TopicOverview(listArchived) // livetopics.go
 	if err != nil {
 		return o, err
 	}
 	changedKeys := map[string]bool{}
-	for _, t := range threads {
-		if _, seen := changedKeys[t.Peer]; !seen {
-			k, err := l.a.PeerKeyOf(t.Peer)
-			if err != nil {
-				return o, err
-			}
-			changedKeys[t.Peer] = k.Pending != ""
+	changed := func(peer string) (bool, error) {
+		if v, seen := changedKeys[peer]; seen {
+			return v, nil
 		}
-		o.Threads = append(o.Threads, ThreadSummary{ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
-			Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: changedKeys[t.Peer],
-			Notices: t.Notices, NoticeOnly: t.NoticeOnly})
+		k, err := l.a.PeerKeyOf(peer)
+		changedKeys[peer] = k.Pending != ""
+		return changedKeys[peer], err
+	}
+	for _, t := range threads {
+		kc, err := changed(t.Peer)
+		if err != nil {
+			return o, err
+		}
+		o.Threads = append(o.Threads, threadSummary(t, kc))
+	}
+	for _, p := range peers {
+		kc, err := changed(p.Peer)
+		if err != nil {
+			return o, err
+		}
+		o.Topics = append(o.Topics, PeerTopics{Peer: p.Peer, Total: p.Total, Archived: p.Archived, ArchivedUnread: p.ArchivedUnread, Latest: threadSummary(p.Latest, kc)})
 	}
 	review, err := l.a.PageReview()
 	if err != nil {
@@ -93,6 +108,7 @@ func (l *Live) Overview() (Overview, error) {
 	for _, c := range review.Conv {
 		o.NeedsYou = append(o.NeedsYou, convItem(c))
 	}
+	countDecisions(&o)
 	for _, c := range review.Held {
 		o.Held = append(o.Held, convItem(c))
 	}
@@ -117,6 +133,21 @@ func (l *Live) Overview() (Overview, error) {
 		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
 	}
 	return o, nil
+}
+
+// countDecisions sets each conversation's Decide: its requests among
+// o.NeedsYou that this device's person decides here (with actions; an
+// invitation is decided by its PID, not counted).
+func countDecisions(o *Overview) {
+	decide := map[string]int{}
+	for _, c := range o.NeedsYou {
+		if c.ID != "" && len(c.Actions) > 0 {
+			decide[c.Conv]++
+		}
+	}
+	for i := range o.DMs {
+		o.DMs[i].Decide = decide[o.DMs[i].ID]
+	}
 }
 
 // convItem is a conversation item waiting for the person, as the page
@@ -195,6 +226,12 @@ func (l *Live) Thread(id string) (Thread, error) {
 		return t, err
 	}
 	t.Key = PeerKey{Pinned: k.Pinned, Pending: k.Pending}
+	topic, err := l.a.TopicOf(id)
+	if err != nil {
+		return t, err
+	}
+	ts := threadSummary(topic, k.Pending != "")
+	t.Topic = &ts
 	if approved, err := l.a.QuestionApprovals(); err == nil {
 		for _, a := range approved {
 			if a == c.Peer {
@@ -389,7 +426,7 @@ func (l *Live) Act(x Action) (string, error) {
 		note = "Declined."
 	case DoResolve:
 		err = l.a.Resolve(x.ID)
-		note = "Closed. Nothing was sent."
+		note = "Closed. No reply was sent."
 	case DoCancel:
 		err = l.a.Cancel(x.ID)
 		note = "Stopping your responder."

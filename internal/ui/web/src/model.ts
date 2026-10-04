@@ -22,11 +22,77 @@ export interface ChatItem {
   working: boolean;            // an agent is working on something here
   frozen?: string;
   members?: string[];          // group member names, for stacked avatars
-  topics?: Topic[];            // an agent's separate conversations, newest first
+  topics?: Topic[];            // an agent's separate conversations not archived, newest first
+  peer?: string;               // an agent's device address
+  topicTotal?: number;         // every topic with that agent, archived ones too
 }
 
-/** Topic is one of an agent's separate conversations (a device thread). */
-export interface Topic { id: string; title: string; lastAt: string; unread: number }
+// ---- topics (docs/plans/TOPICS.md) ------------------------------------------
+
+/** Topic tunables for the screens. Owner (2026-10-04): "this should all be
+ *  easily changed, if needed — not via settings, but with code": change them
+ *  here; there is no setting. How topics are derived (when one is archived,
+ *  page limits) is the server's: client/topics.go and engine.mjs. */
+export const TOPICS = {
+  barMax: 6,          // chips in a conversation's topic bar, "All topics (N)" included
+  chipMinWidth: 104,  // px a topic chip keeps before the bar shows one fewer (the rest are under All topics)
+  chipMaxWidth: "16rem", // the widest a topic chip grows on a wide screen
+  barTitle: 40,       // characters of a topic's name in a bar chip (the chip truncates further)
+  listTitle: 90,      // characters of a topic's name in the All topics list
+  pageSize: 30,       // topics fetched per page of the All topics list
+  searchDelay: 250,   // ms after the last keystroke before a topic search is sent
+  searchMin: 2,       // characters before the chat list also searches older topics
+  chatSearchMax: 8,   // topics the chat list's search shows
+  // The server's limits, pinned to client/topics.go by internal/ui topics_browser_test.go:
+  titleMax: 120,      // characters in a name you give a topic (client.TopicTitleMax)
+  pageMax: 200,       // topics one request may list (client.TopicPageMax)
+} as const;
+
+export type TopicState = "active" | "done" | "archived";
+
+/** Topic is one of an agent's separate conversations (a device thread): each
+ *  is its own reply chain, so its own session on the agent's side. */
+export interface Topic {
+  id: string;
+  peer: string;
+  title: string;
+  autoTitle?: string;          // its first line, when you gave it a name of your own
+  renamed: boolean;
+  last: string;
+  lastAt: string;
+  unread: number;
+  needsYou: number;            // decisions waiting for you in it
+  waiting: boolean;            // a request in it waits for the agent, or the agent is working
+  pending: boolean;            // anything in it is still open: never archived
+  state: TopicState;
+  doneBy?: "agent" | "you";
+  conclusion?: string;         // the final reply that made it done, first line: the agent's, or yours when you answered by hand here
+  concludedBy?: string;        // the device that sent it
+  count: number;               // its messages, as this view shows them (a Mark done covers no later one)
+  quietSince: string;          // when it went quiet: its last message, or a later Mark done / Reopen here
+}
+
+export const topicOf = (t: T.ThreadSummary): Topic => ({
+  id: t.id, peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
+  needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending,
+  state: t.state === "done" || t.state === "archived" ? t.state : "active",
+  doneBy: t.done_by === "agent" || t.done_by === "you" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
+  count: t.count, quietSince: t.quiet_since || t.last_at,
+});
+
+/** newestFirst orders topics (or anything with lastAt and id) most recently active first. */
+export const newestFirst = <X extends { lastAt: string; id: string }>(a: X, b: X) =>
+  Date.parse(b.lastAt) - Date.parse(a.lastAt) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+
+/** topicMark is a topic's state in one word, or null for an ordinary active
+ *  one: what needs you comes first, then archived, done and waiting. */
+export function topicMark(t: Topic): null | { key: "needs" | "archived" | "done" | "waiting"; word: string } {
+  if (t.needsYou > 0) return { key: "needs", word: "Needs you" };
+  if (t.state === "archived") return { key: "archived", word: "Archived" };
+  if (t.state === "done") return { key: "done", word: "Done" };
+  if (t.waiting) return { key: "waiting", word: "Waiting" };
+  return null;
+}
 
 /** plain removes mention markup: [@Name](agentnet:...) reads as @Name. */
 export const mentionRef = /\[@([^\[\]\r\n]{1,80})\]\(agentnet:(person|guest|agent)\/([A-Za-z0-9_-]{1,64})\)/g;
@@ -81,14 +147,19 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
     });
   }
   // One row per agent: its separate conversations are topics inside it.
+  // Archived topics are only counted (overview.topics): an agent whose
+  // topics are all archived keeps its row, which opens its latest topic.
   const byPeer = new Map<string, T.ThreadSummary[]>();
   for (const t of o.threads || []) {
     if (t.notice_only) continue; // another computer's reports: shown under OKs, not as a chat
     byPeer.set(t.peer, [...(byPeer.get(t.peer) || []), t]);
   }
-  for (const [peer, ts] of byPeer) {
-    ts.sort((a, b) => (b.last_at || "").localeCompare(a.last_at || ""));
-    const latest = ts[0], person = deviceOwner(peer, o);
+  const counts = new Map((o.topics || []).map((c) => [c.peer, c]));
+  for (const peer of new Set([...byPeer.keys(), ...counts.keys()])) {
+    const ts = (byPeer.get(peer) || []).map(topicOf).sort(newestFirst), c = counts.get(peer);
+    const latest = c && (!ts[0] || newestFirst(topicOf(c.latest), ts[0]) < 0) ? topicOf(c.latest) : ts[0];
+    if (!latest) continue;
+    const person = deviceOwner(peer, o);
     items.push({
       key: "agent:" + peer,
       open: { kind: "thread", id: latest.id },
@@ -97,13 +168,15 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       subtitle: person ? "on " + niceDevice(peer) : "Agent · no person linked",
       avatarSeed: peer,
       last: firstLine(latest.last),
-      lastAt: latest.last_at,
-      unread: ts.reduce((n, t) => n + t.unread, 0),
-      needsYou: ts.reduce((n, t) => n + t.review, 0),
+      lastAt: latest.lastAt,
+      unread: ts.reduce((n, t) => n + t.unread, 0) + (c?.archived_unread || 0),
+      needsYou: ts.reduce((n, t) => n + t.needsYou, 0),
       held: 0,
       guests: 0,
-      working: ts.some((t) => t.running > 0),
-      topics: ts.map((t) => ({ id: t.id, title: firstLine(t.title, 60), lastAt: t.last_at, unread: t.unread })),
+      working: (byPeer.get(peer) || []).some((t) => t.running > 0),
+      topics: ts,
+      peer,
+      topicTotal: c ? c.total : ts.length,
     });
   }
   return items.sort((a, b) => (b.lastAt || "").localeCompare(a.lastAt || ""));

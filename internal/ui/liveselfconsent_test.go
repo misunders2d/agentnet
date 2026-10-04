@@ -3,7 +3,10 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,5 +124,32 @@ func TestLiveSelfConsentNotice(t *testing.T) {
 	}
 	if _, err := pa.Act(Action{Do: DoResolve, ID: def.PID}); err == nil {
 		t.Fatal("a notice dismissed twice")
+	}
+
+	// The other one, as the page does it: listed in GET /api/overview,
+	// dismissed with POST /api/act {"do":"resolve","id":PID}.
+	var s *Server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
+	t.Cleanup(ts.Close)
+	s = New(pa, strings.TrimPrefix(ts.URL, "http://"), testToken)
+	listed := func() []ReviewItem {
+		t.Helper()
+		var o Overview
+		if resp := do(t, ts, "GET", "/api/overview", "", authed(ts, nil)); resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&o) != nil {
+			t.Fatalf("GET /api/overview: %d", resp.StatusCode)
+		}
+		return o.Review
+	}
+	if r := listed(); len(r) != 1 || r[0].ID != builder.PID || r[0].Reason != ReasonSelfConsented || !r[0].Notice {
+		t.Fatalf("the page's review items: %+v", r)
+	}
+	if resp := do(t, ts, "POST", "/api/act", `{"do":"resolve","id":"`+builder.PID+`"}`, post(ts)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/act resolve: %d", resp.StatusCode)
+	}
+	if r := listed(); len(r) != 0 {
+		t.Fatalf("after the page dismissed it: %+v", r)
+	}
+	if p, err := alice.Participation(builder.PID); err != nil || p.State != client.PartActive {
+		t.Fatalf("the page's dismissal ended the agent: %+v %v", p, err)
 	}
 }

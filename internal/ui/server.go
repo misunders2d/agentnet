@@ -57,7 +57,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
-	mux.HandleFunc("GET /assets/m/{path...}", s.messengerAsset)
 	mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
 		r.SetPathValue("name", "manifest.webmanifest")
 		s.asset(w, r)
@@ -91,7 +90,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/file/request", s.requestFile)
 	mux.HandleFunc("POST /api/message/{what}", s.control)
 	mux.HandleFunc("POST /api/conversation/delete", s.deleteConversation) // livedelete.go
+	mux.HandleFunc("GET /api/topics", s.topics)                           // livetopics.go: one page of topics
+	mux.HandleFunc("POST /api/topic/{what}", s.changeTopic)               // rename, done, reopen (this device only)
 	mux.HandleFunc("POST /api/operator/decide", s.decide)
+	mux.HandleFunc("GET /api/approvals", s.approvals) // liveapprovals.go: standing grants, as agentnet approvals lists them
+	mux.HandleFunc("POST /api/approvals/revoke", s.revokeApproval)
 	mux.HandleFunc("GET /api/drive", s.drive) // drivespace.go: a conversation's shared Drive space
 	mux.HandleFunc("POST /api/drive", s.drive)
 	mux.HandleFunc("POST /api/drive/upload", s.driveUpload)
@@ -213,8 +216,8 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		w.Write(static.AppIcon(size))
 		return
 	}
-	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8", "default.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "lenses.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8",
-		"messenger.mjs": "text/javascript; charset=utf-8", "messenger.css": "text/css; charset=utf-8",
+	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
+		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8", "skin-choice.mjs": "text/javascript; charset=utf-8",
 		"manifest.webmanifest": "application/manifest+json",
 		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
 		"assistant-setup.mjs":  "text/javascript; charset=utf-8",
@@ -235,24 +238,6 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// messengerAsset serves the default interface's fonts and emoji data from
-// the bundle's m/ directory; nothing else.
-func (s *Server) messengerAsset(w http.ResponseWriter, r *http.Request) {
-	name := "m/" + r.PathValue("path")
-	if !fs.ValidPath(name) {
-		http.NotFound(w, r)
-		return
-	}
-	data, err := fs.ReadFile(static.Files, name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", static.ContentType(name))
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(data)
-}
-
 // qrModule is the vendored QR encoder the page loads when it shows a link
 // for a new device.
 func (s *Server) qrModule(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +252,11 @@ func (s *Server) qrModule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
-	o, err := s.p.Overview()
+	get := s.p.Overview
+	if t, ok := s.p.(Topics); ok && r.URL.Query().Get("topics") == "1" { // archived topics counted, not listed (livetopics.go)
+		get = t.TopicOverview
+	}
+	o, err := get()
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -275,6 +264,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	_, o.Agents = s.p.(Participants)
 	_, o.ReplyReceivers = s.p.(ReplyReceivers)
 	_, o.ReplySessions = s.p.(ReplySessionCatalogProvider)
+	_, o.TopicList = s.p.(Topics)
 	writeJSON(w, o)
 }
 

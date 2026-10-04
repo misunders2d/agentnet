@@ -13,6 +13,7 @@ import type { Host, Workspace } from "../host";
 import { deviceName } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button, IconButton } from "../ui/Button";
+import { usePortal } from "../owned";
 
 type Memberships = NonNullable<Host["workspaces"]>;
 
@@ -100,6 +101,7 @@ export function WorkspacePill() {
 }
 
 function WorkspaceControl({ variant }: { variant: "coin" | "pill" }) {
+  const portal = usePortal();
   const store = useApp();
   const ws = store.host.workspaces;
   const [menu, setMenu] = useState(false);
@@ -127,7 +129,7 @@ function WorkspaceControl({ variant }: { variant: "coin" | "pill" }) {
             className="mb-2 grid size-12 place-items-center rounded-[15px] border-2 border-white bg-act font-display text-[17px] font-extrabold tracking-tight text-act-ink transition-transform duration-200 ease-out-soft hover:-rotate-6 data-[popup-open]:-rotate-6 motion-reduce:transition-none motion-reduce:hover:rotate-0 motion-reduce:data-[popup-open]:rotate-0">
             {letters}
           </Popover.Trigger>
-          <Popover.Portal>
+          <Popover.Portal container={portal}>
             <Popover.Positioner side="right" align="start" sideOffset={14} collisionPadding={12} className="z-40">
               <Popover.Popup className="w-[340px] origin-[var(--transform-origin)] rounded-3xl bg-canvas p-3 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:duration-100 motion-reduce:data-[ending-style]:scale-100 motion-reduce:data-[starting-style]:scale-100">
                 <Popover.Title className="px-2 pt-1 pb-2 font-display text-[22px] font-extrabold leading-tight">Workspaces</Popover.Title>

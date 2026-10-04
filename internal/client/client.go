@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -44,8 +45,10 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
-	humanMu        sync.RWMutex // local human end commits serialize with ordinary copy/file delivery
-	statusLocks    sync.Map     // request id → *sync.Mutex: one status of a request at a time (headless.go)
+	humanMu        sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
+	statusLocks    sync.Map      // request id → *sync.Mutex: one status of a request at a time (headless.go)
+	statusWake     chan struct{} // wakes this process's status sender (statusLoop)
+	statusLive     atomic.Bool   // statusLoop runs in this process
 	home           string
 	id             *identity.Identity
 	store          *store
@@ -218,7 +221,7 @@ func Open(home string) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify,
-		changes: newChangeFeed(), alertWake: make(chan struct{}, 1)}
+		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bump
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
@@ -580,6 +583,13 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	if required == "" && receiverCap {
 		required = protocol.CapReplyReceiver
 	}
+	room, err := roomCopy(a.store.db, conv, sub, body, humanRaw)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if required == "" && room {
+		required = protocol.CapRoom
+	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
 		if err == nil && required == protocol.CapAgentReaction && capturedFP != "" && key.Fingerprint() != capturedFP {
@@ -605,6 +615,10 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			}
 			if err == nil && required == protocol.CapAgentReaction && humanRaw != "" { // to a captured audience: as a human-audience turn
 				err = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation)
+			}
+			// A room shape needs rm1 besides its primary requirement (ROOM_V1 §2.5).
+			if err == nil && room && required != protocol.CapRoom {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapRoom)
 			}
 			control := env.V == envelope.Version3 && groupControlSub(sub)
 			status := sub == envelope.SubStatus

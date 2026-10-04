@@ -63,13 +63,21 @@ type Overview struct {
 	ReplySessions    bool                  `json:"reply_sessions"`  // safe native registration catalog, not process liveness
 	Demo             bool                  `json:"demo"`
 	Me               Me                    `json:"me"`
-	Threads          []ThreadSummary       `json:"threads"`
-	Review           []ReviewItem          `json:"review"`
-	Quarantine       []QuarantineItem      `json:"quarantine"`
-	Release          string                `json:"release,omitempty"` // a recommended build other than this one
-	Seq              uint64                `json:"seq"`
-	Version          string                `json:"version"` // the program serving the page (an update changes it)
-	Directory        Directory             `json:"directory"`
+	// Threads are the device threads, each with its topic state. A page
+	// that lists topics itself asks GET /api/overview?topics=1 and gets
+	// them without archived topics: those are counted per peer in Topics
+	// and listed through GET /api/topics (TopicList says that route is
+	// served here). Without the flag every thread is listed, archived
+	// topics too, as a page that knows nothing of topics needs.
+	Threads    []ThreadSummary  `json:"threads"`
+	Topics     []PeerTopics     `json:"topics,omitempty"`
+	TopicList  bool             `json:"topic_list"`
+	Review     []ReviewItem     `json:"review"`
+	Quarantine []QuarantineItem `json:"quarantine"`
+	Release    string           `json:"release,omitempty"` // a recommended build other than this one
+	Seq        uint64           `json:"seq"`
+	Version    string           `json:"version"` // the program serving the page (an update changes it)
+	Directory  Directory        `json:"directory"`
 	// NeedsYou are the conversation items waiting for the person's decision
 	// (requests to the agent here, invitations for it); Held are the person
 	// turns held in conversations, answered there. Neither is in Review,
@@ -238,6 +246,25 @@ type DMSummary struct {
 	Unread  int               `json:"unread"`
 	Held    int               `json:"held"`    // their questions or tasks held for the person; nothing runs them
 	Waiting int               `json:"waiting"` // messages kept here because they cannot read conversations now
+	// Guests are the participations active in it now: people and agents
+	// brought in to help (GuestView, AgentView). Decide counts its requests
+	// waiting for this device's person's decision here (Overview.NeedsYou
+	// items with actions; none on a device that runs no agent). LastEvent
+	// is set when its latest message is a participation record.
+	Guests    int        `json:"guests"`
+	Decide    int        `json:"decide"`
+	LastEvent *LastEvent `json:"last_event,omitempty"`
+}
+
+// LastEvent is a participation record as a chat list shows it: what
+// happened (invite, accept, decline or dismiss; an invitation's public
+// scope counts as its invite), to which participation, and who did it (the
+// author's person label as known here, or their device's address). It is
+// the record's own word, plainly; DMMessage.Event says it in a sentence.
+type LastEvent struct {
+	Kind string `json:"kind"`
+	PID  string `json:"pid"`
+	By   string `json:"by"`
 }
 
 // DMThread is one conversation's messages, oldest first.
@@ -305,22 +332,34 @@ type DMMessage struct {
 	// here (accept, cancel, resolve), and what the run left to say.
 	Actions   []string `json:"actions,omitempty"`
 	JobDetail string   `json:"job_detail,omitempty"`
+	// A participation record's type (invite, accept, decline, dismiss or
+	// scope) and its author (their person's label as known here, or their
+	// device's address), plainly, so a page never parses Event.
+	EventType string `json:"event_type,omitempty"`
+	EventBy   string `json:"event_by,omitempty"`
 }
 
 // AgentActions are the decisions this device's person can take on a
 // request to its agent in state: run a task that needs their accept (or
-// run one again), stop a run, or close what the agent handed back.
+// run one again) or decline it (the requester is told, nothing runs it),
+// stop a run, or close what the agent handed back or what a stopped daemon
+// left interrupted (client.Resolve).
 func AgentActions(kind, state string) []string {
 	switch state {
 	case "awaiting": // a task, or a guest's question, waiting for this host's one-time acceptance
 		if kind == KindTask || kind == KindQuestion {
-			return []string{DoAccept}
+			return []string{DoAccept, DoDecline}
 		}
 	case "running":
 		return []string{DoCancel}
 	case "needs_human":
 		return []string{DoAccept, DoResolve}
-	case "interrupted", "failed", "cancelled":
+	case "interrupted":
+		if kind == KindTask || kind == KindQuestion {
+			return []string{DoAccept, DoResolve}
+		}
+		return []string{DoAccept}
+	case "failed", "cancelled":
 		return []string{DoAccept}
 	}
 	return nil
@@ -623,6 +662,26 @@ type ThreadSummary struct {
 	KeyChanged bool      `json:"key_changed"`
 	Notices    int       `json:"notices"`     // open review notices (reports from another machine)
 	NoticeOnly bool      `json:"notice_only"` // the thread is only review notices: not a conversation
+	// The thread as a topic (client topics.go, docs/plans/TOPICS.md):
+	// State is active, done or archived (TopicActive...); DoneBy agent or
+	// you while done (kept once archived); Conclusion is the first line of
+	// the agent's final reply and ConcludedBy the device that sent it;
+	// Pending says something in it is still open (it is never archived
+	// then); Renamed says Title is the person's own name for it here, and
+	// AutoTitle is then the automatic one (its first line). A name and
+	// Mark done / Reopen are kept on this device only.
+	State       string `json:"state"`
+	DoneBy      string `json:"done_by,omitempty"`
+	Conclusion  string `json:"conclusion,omitempty"`
+	ConcludedBy string `json:"concluded_by,omitempty"`
+	Pending     bool   `json:"pending"`
+	Renamed     bool   `json:"renamed,omitempty"`
+	AutoTitle   string `json:"auto_title,omitempty"`
+	// QuietSince is when it went quiet (its last message, or a later Mark
+	// done or Reopen here); it is archived TopicArchiveAfter later.
+	QuietSince time.Time `json:"quiet_since"`
+	// AgentID is the thread's agent, when one is named (client.ThreadSummary).
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // Directory is who else the server (Hub) lists as enrolled, for finding
@@ -694,7 +753,7 @@ const ReasonSelfConsented = "self_consented"
 
 // ConvItem is a conversation item waiting for the person
 // (client.ConvReview); Reason is one of client.ReviewAwaiting,
-// ReviewNeedsHuman, ReviewInvite or ReviewHeldTurn, and Conv is the
+// ReviewNeedsHuman, ReviewInterrupted, ReviewInvite or ReviewHeldTurn, and Conv is the
 // conversation the page opens for it. Opening it, or clicking an alert
 // about it, decides nothing. Actions are the decisions available here: on
 // a request (ID) through /api/act, on an invitation (PID only) through
@@ -762,6 +821,8 @@ type Thread struct {
 	Approved  bool      `json:"approved"`   // questions from this peer are answered automatically
 	TaskGrant string    `json:"task_grant"` // "" none, "active", or why a grant does not hold
 	Messages  []Message `json:"messages"`
+	// Topic is this thread as a topic, archived or not (Topics providers).
+	Topic *ThreadSummary `json:"topic,omitempty"`
 }
 
 // PeerKey is what this installation knows about the peer's key.
@@ -1012,6 +1073,10 @@ func Next(dir, kind, state, peer string, answered bool) string {
 		switch state {
 		case "held", "awaiting", "needs_human":
 			return "you"
+		case "interrupted": // client reviewStates: a request is run again or closed by the person
+			if kind == KindQuestion || kind == KindTask {
+				return "you"
+			}
 		case "pending", "accepted", "running", "cancel_requested":
 			return "your responder"
 		}
@@ -1046,7 +1111,9 @@ func ActionsFor(kind, state string) []string {
 		return []string{DoReply, DoAccept, DoResolve}
 	case "running":
 		return []string{DoCancel}
-	case "interrupted", "failed", "cancelled":
+	case "interrupted": // run again, answered by hand, or closed without running (client.Resolve)
+		return []string{DoAccept, DoReply, DoResolve}
+	case "failed", "cancelled":
 		return []string{DoAccept, DoReply}
 	}
 	return nil

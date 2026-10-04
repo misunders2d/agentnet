@@ -12,6 +12,7 @@ import { IconDeviceMobile, IconUsersGroup } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { agentName, firstLine, when } from "../model";
+import { focusedIn } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -63,7 +64,7 @@ function useLanding(cards: string) {
     const w = want.current, box = root.current;
     if (!w || !box) return;
     if (Date.now() > w.until) { want.current = null; return; }
-    const a = document.activeElement as HTMLElement | null;
+    const a = focusedIn(box) as HTMLElement | null; // focus inside the skin's own tree
     const lost = !a || a === document.body || (a instanceof HTMLButtonElement && a.disabled);
     const card = (k: string) => box.querySelector<HTMLElement>("[data-card=\"" + CSS.escape(k) + "\"]");
     const target = (li: HTMLElement) => li.querySelector<HTMLElement>("[data-open]") || li.querySelector<HTMLElement>("button:not([disabled])") || li;

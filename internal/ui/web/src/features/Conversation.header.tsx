@@ -15,6 +15,7 @@ import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { Confirm } from "./Message.actions";
 import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } from "./Message.model";
+import { usePortal } from "../owned";
 
 // ---- who is helping -------------------------------------------------------------------
 
@@ -89,11 +90,13 @@ const presenceTitle = "Whether the server sees their AgentNet running now. It do
 // ---- header -------------------------------------------------------------------------------
 
 export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: boolean; helpers: Helper[]; canInvite: boolean }) {
+  const portal = usePortal();
   const store = useApp();
   const overview = ctx.overview;
   const t = ctx.dm, th = ctx.thread;
   const [del, setDel] = useState(false);
-  const unread = useStore(store, (s) => [...(s.overview?.dms || []), ...(s.overview?.threads || [])].reduce((n, c) => n + (c.id === ctx.conv ? 0 : c.unread), 0));
+  const unread = useStore(store, (s) => [...(s.overview?.dms || []), ...(s.overview?.threads || [])].reduce((n, c) => n + (c.id === ctx.conv || c.id === ctx.thread?.topic?.id ? 0 : c.unread), 0)
+    + (s.overview?.topics || []).reduce((n, c) => n + c.archived_unread, 0)); // archived topics are counted, not listed
 
   const me = overview?.person;
   let title = "", sub = "", online: boolean | null = null, avatar = null;
@@ -126,7 +129,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
 
   const notify = overview?.notify;
   const muted = !!t && !!notify && (notify.mutes || []).includes(t.id);
-  const remove = () => void store.run((a) => a.deleteConversation(t ? { conv: t.id } : { peer: th!.peer, thread: ctx.conv })).then((r) => {
+  const remove = () => void store.run((a) => a.deleteConversation(t ? { conv: t.id } : { peer: th!.peer, thread: th!.topic?.id || ctx.conv })).then((r) => {
     if (!r) return;
     store.close();
     if (r.note) store.toast(r.note, "ok");
@@ -163,11 +166,11 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
         ? <Button variant="act" icon={<IconUserPlus size={20} />} onClick={() => store.openInvite(ctx.conv)} className="shrink-0">Bring in</Button>
         : <IconButton label="Bring someone in" onClick={() => store.openInvite(ctx.conv)} className="shrink-0 bg-act text-act-ink stroke hover:bg-act"><IconUserPlus size={21} /></IconButton>)}
 
-      <Menu.Root>
+      <Menu.Root modal={false}>
         <Menu.Trigger aria-label="More" title="More" className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken data-[popup-open]:bg-sunken">
           <IconDotsVertical size={22} />
         </Menu.Trigger>
-        <Menu.Portal>
+        <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align="end" sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {t && <Menu.Item className={item} onClick={() => store.setPanel(true)}><IconUsers size={20} />In this chat</Menu.Item>}
@@ -177,14 +180,14 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
                 </Menu.Item>
               )}
               {(t || th) && <Menu.Separator className="mx-2 my-1 h-px bg-hairline" />}
-              {(t || th) && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />Delete conversation…</Menu.Item>}
+              {(t || th) && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />{th ? "Delete topic…" : "Delete conversation…"}</Menu.Item>}
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
 
       <Confirm open={del} onOpenChange={setDel} ok="Delete" onOk={remove}
-        title={th ? "Delete this thread from this device?" : "Delete this conversation from your devices?"}>
+        title={th ? "Delete this topic from this device?" : "Delete this conversation from your devices?"}>
         {th ? <p>It’s stored on this device only, so it’s deleted here and nowhere else. {title} keeps its copy.</p> : <>
           <p>The messages go from this device and, once they connect, from your other linked devices.</p>
           <p>Everyone else keeps their copies. Anything already running finishes first. Members and guests stay as they are; a new message brings the chat back.</p>

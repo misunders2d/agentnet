@@ -1,13 +1,16 @@
-// BUG-19 rendered check: the host's workspace bar (real loader.js, real
-// workspaces.mjs) over a synthetic program API. Disconnecting a joined
-// workspace points to Reconnect, not to joining again; Reconnect lists the
-// disconnected membership and routes that same one again under a new handle.
+// BUG-19 rendered check: the host's switcher (real loader.js, skinbar.mjs
+// and workspaces.mjs) over a skin from someone else, with a synthetic
+// program API. Leaving a joined workspace points to Reconnect, not to
+// joining again; Reconnect lists the disconnected membership and routes
+// that same one again under a new handle, and the skin is mounted again
+// over a host bound to it.
 // Uses an installed Playwright via AGENTNET_PLAYWRIGHT; no existing browser
 // is attached. Optional AGENTNET_SCREENSHOTS writes only to that directory.
 const fs = require('fs'), http = require('http'), path = require('path'), assert = require('node:assert/strict');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
 const base = path.resolve(__dirname, '../static') + '/';
-const other = 'c'.repeat(32), hostOf = (n) => n.toString(16).padStart(32, '0');
+const other = 'c'.repeat(32), hostOf = (n) => n.toString(16).padStart(32, '0'), digest = 'f'.repeat(64);
+const skin = `export async function mount(root,host){window.mounts=(window.mounts||0)+1;window.skinHost=host;const h=document.createElement('h1');h.textContent='Fixture skin in '+host.workspace.name;root.append(h);host.onOpen(()=>{});await host.api('/api/overview');}export function unmount(root){root.replaceChildren();}`;
 
 const world = () => {
   let generation = 1;
@@ -39,17 +42,15 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (u.pathname === '/') return send(200, 'text/html', '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/core.css"><div id="skin"></div><script src="/assets/loader.js"></script>');
-  if (u.pathname === '/assets/skins/index.json') return json([{ id: 'default', api: 1, name: 'AgentNet' }]);
-  if (u.pathname === '/assets/default.html') return send(200, 'text/html', '<body><h1>Default fixture</h1></body>');
-  if (['/assets/app.js', '/assets/lenses.js'].includes(u.pathname)) return send(200, 'text/javascript', '');
-  if (u.pathname === '/assets/app.css') return send(200, 'text/css', '');
-  if (['/assets/loader.js', '/assets/workspaces.mjs', '/assets/core.css', '/assets/workspaces.css'].includes(u.pathname)) {
+  if (u.pathname === '/assets/skins/index.json') return json([{ api: 1, id: 'comic', name: 'Comic', entry: 'entry.mjs', files: ['entry.mjs'], digest: 'e'.repeat(64) }, { api: 1, id: 'fixture', name: 'Fixture', entry: 'entry.mjs', files: ['entry.mjs'], digest }]);
+  if (u.pathname === '/assets/skins/fixture/entry.mjs') return send(200, 'text/javascript', skin);
+  if (['/assets/loader.js', '/assets/workspaces.mjs', '/assets/core.css', '/assets/skin-base.css', '/assets/skinbar.mjs', '/assets/skinbar.css', '/assets/skin-choice.mjs'].includes(u.pathname)) {
     return send(200, u.pathname.endsWith('.css') ? 'text/css' : 'text/javascript', fs.readFileSync(base + path.basename(u.pathname)));
   }
   if (u.pathname === '/api/workspaces') return json([state.def, ...(state.acme.state === 'enrolled' ? [state.acme] : [])]);
   if (u.pathname === '/api/workspaces/all') return json([state.def, state.acme]);
   const scoped = u.pathname.match(/^\/workspaces\/([^/]+)\/([^/]+)\/api\/overview$/);
-  if (scoped) return json({ me: { address: 'alice/laptop' } });
+  if (scoped) return scoped[2] === state.acme.handle || scoped[2] === state.def.handle ? json({ me: { address: 'alice/laptop', fingerprint: 'SHA256:fixture' } }) : send(409, 'text/plain', 'stale or disconnected workspace');
   send(404, 'text/plain', 'not found');
 });
 
@@ -64,55 +65,82 @@ const server = http.createServer((req, res) => {
       const page = await browser.newPage({ viewport: { width, height } }), errors = [];
       page.on('pageerror', (e) => errors.push(e.message));
       page.on('console', (m) => { if (['error', 'warning'].includes(m.type()) && !m.text().startsWith('Failed to load resource')) errors.push(m.type() + ': ' + m.text()); });
-      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && !['/favicon.ico', '/assets/local-skins.mjs'].includes(p)) errors.push(r.status() + ' ' + p); }); // optional files an older program lacks
-      page.on('dialog', (d) => d.accept());
-      await page.goto(origin + '/');
-      const select = page.getByLabel('Active workspace', { exact: true });
-      await select.waitFor();
-      const options = () => select.locator('option').evaluateAll((os) => os.map((o) => o.value));
-      assert.deepEqual(await options(), ['default', other]);
-      const tool = async (label) => {
-        if (width < 760 && !(await page.locator('.workspace-bar.open').count())) await page.getByRole('button', { name: 'Workspace options', exact: true }).click();
-        await page.getByRole('button', { name: label, exact: true }).click();
-      };
-      const note = page.locator('#workspace-shell .workspace-note');
+      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && r.status() !== 409 && !['/favicon.ico', '/assets/local-skins.mjs'].includes(p)) errors.push(r.status() + ' ' + p); }); // 409: the retired handle, asked on purpose // optional files a program may lack
+      await page.addInitScript((d) => localStorage.setItem('agentnet.skin.trusted.fixture', d), digest);
+      await page.goto(origin + '/?skin=fixture');
+      await page.getByRole('heading', { name: 'Fixture skin in This computer' }).waitFor();
+      const menu = async () => { await page.getByRole('button', { name: /^Workspace: / }).click(); await page.getByRole('menu', { name: 'Workspaces' }).waitFor(); };
+      const rows = () => page.getByRole('menu', { name: 'Workspaces' }).getByRole('menuitemradio').allInnerTexts();
+      const notice = page.locator('#skin-bar .notice .text');
 
-      await select.selectOption(other);
-      await tool('Disconnect…');
-      await page.waitForFunction(() => /Disconnected from Acme/.test(document.querySelector('#workspace-shell .workspace-note').textContent));
-      const said = await note.textContent();
-      assert.match(said, /Reconnect… connects it again/, name + ': disconnect note');
-      assert.doesNotMatch(said, /join again|new invitation/, name + ': disconnect note still says to join again');
-      assert.deepEqual(await options(), ['default']);
-
-      await tool('Reconnect…');
-      const pick = page.getByLabel('Disconnected workspace', { exact: true });
-      await pick.waitFor();
-      assert.deepEqual(await pick.locator('option').evaluateAll((os) => os.map((o) => [o.value, o.textContent])), [[other, 'Acme · acme.example · alice/laptop']]);
-      if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.AGENTNET_SCREENSHOTS, 'agentnet-workspace-reconnect-' + name + '.png'), fullPage: true });
+      await menu();
+      assert.equal((await rows()).length, 2, name + ': both workspaces listed');
+      await page.getByRole('menuitemradio', { name: /Acme/ }).click();
+      await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor(); // mounted again over Acme's host
+      await menu();
+      await page.getByRole('menuitem', { name: /Leave Acme/ }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Leave Acme', exact: true }).click();
+      await notice.filter({ hasText: 'You left Acme' }).waitFor();
+      await page.getByRole('heading', { name: 'Fixture skin in This computer' }).waitFor();
+      await menu();
+      assert.equal((await rows()).length, 1, name + ': Acme no longer listed as connected');
+      const reconnect = page.getByRole('menuitem', { name: /Reconnect Acme/ });
+      await reconnect.waitFor();
+      if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.AGENTNET_SCREENSHOTS, 'agentnet-workspace-reconnect-' + name + '.png') });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, name + ': horizontal overflow');
-      await tool('Join a workspace…'); // the reconnect form open does not block joining
-      assert.equal(await page.locator('.workspace-join:not(.workspace-reconnect)').count(), 1, name + ': join form beside the reconnect form');
-      await page.locator('.workspace-join:not(.workspace-reconnect)').getByRole('button', { name: 'Cancel', exact: true }).click();
-      await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
-      await page.waitForFunction(() => /Reconnected Acme as alice\/laptop/.test(document.querySelector('#workspace-shell .workspace-note').textContent));
-      assert.equal(await page.locator('.workspace-reconnect').count(), 0);
-      assert.deepEqual(await options(), ['default', other]);
+      await reconnect.click();
+      await notice.filter({ hasText: 'Reconnected Acme' }).waitFor();
       assert.deepEqual(state.posts.map((p) => p.path), ['/api/workspaces/disconnect', '/api/workspaces/reconnect']);
       assert.deepEqual(state.posts[1].body, { id: other });
-
-      await select.selectOption(other);
+      await menu();
+      await page.getByRole('menuitemradio', { name: /Acme/ }).click();
+      await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor();
       const bound = await page.evaluate(() => [window.agentnet.workspace.id, window.agentnet.workspace.handle]);
       assert.deepEqual(bound, [other, state.acme.handle]);
       assert.notEqual(state.acme.handle, state.handles[0]);
+      await menu();
+      await page.waitForTimeout(300);
+      assert.equal(await page.getByRole('menuitem', { name: /Reconnect/ }).count(), 0, name + ': nothing left to reconnect');
+      await page.keyboard.press('Escape');
 
-      await tool('Reconnect…');
-      await page.waitForFunction(() => document.querySelector('#workspace-shell .workspace-note').textContent === 'No disconnected workspace here.');
-      assert.equal(await page.locator('.workspace-reconnect').count(), 0);
+      // The host a skin gets: host.workspaces lists the memberships
+      // disconnected here (list() leaves them out) and reconnects one.
+      const before = state.acme.handle;
+      await menu();
+      await page.getByRole('menuitem', { name: /Leave Acme/ }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Leave Acme', exact: true }).click();
+      await notice.filter({ hasText: 'You left Acme' }).waitFor();
+      const viaHost = await page.evaluate(async (id) => {
+        const w = window.agentnet.workspaces, gone = await w.disconnected();
+        const listed = w.list().some((x) => x.id === id);
+        await w.reconnect(id);
+        return { gone: gone.map((x) => [x.id, x.state, x.name]), listed, has: w.has(id) };
+      }, other);
+      assert.deepEqual(viaHost, { gone: [[other, 'disconnected', 'Acme']], listed: false, has: true }, name + ': host.workspaces');
+      assert.deepEqual(state.posts.slice(2).map((p) => [p.path, p.body.id]), [['/api/workspaces/disconnect', other], ['/api/workspaces/reconnect', other]]);
+      assert.notEqual(state.acme.handle, before, name + ': the same membership under a new handle');
+
+      // The program restarted under Acme (a new handle, same membership):
+      // host.reconnect binds it again after checking the identity this
+      // membership proved, and mounts the skin again over the new binding.
+      await menu();
+      await page.getByRole('menuitemradio', { name: /Acme/ }).click();
+      await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor();
+      const restarted = state.reconnect().handle;
+      const rebound = await page.evaluate(async () => {
+        const host = window.skinHost, mounts = window.mounts;
+        const stale = await host.api('/api/overview').then(() => 'answered', (e) => e.message);
+        await host.reconnect();
+        return { stale, remounted: window.mounts === mounts + 1, handle: window.skinHost.workspace.handle, old: host.workspace.handle };
+      });
+      assert.equal(rebound.stale, 'stale or disconnected workspace', name + ': the old handle is retired');
+      assert.deepEqual([rebound.remounted, rebound.handle], [true, restarted], name + ': rebound and mounted again');
+      assert.notEqual(rebound.old, restarted);
+      await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor();
       assert.deepEqual(errors, [], name + ': page errors');
       await page.close();
     }
-    console.log('workspace reconnect check PASS: desktop/390, disconnect note points to Reconnect, same membership under a new handle, nothing left to reconnect');
+    console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect, host.workspaces disconnected()/reconnect(id), host.reconnect after a restart');
   } finally {
     if (browser) await browser.close();
     await new Promise((r) => server.close(r));

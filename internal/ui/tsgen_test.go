@@ -33,12 +33,12 @@ var tsRoots = []any{
 	GroupInvitationView{}, GroupChangeResult{}, ResponderView{}, AgentCatalogView{}, AgentCatalogChangeResult{},
 	ReplyReceiverBindingView{}, ReplySessionCatalogView{}, NotifyView{}, DeviceLink{}, AssistantSetupView{},
 	WorkspaceBinding{}, client.TeamsView{}, protocol.TeamState{}, protocol.TeamSnapshot{},
-	client.TypingView{}, client.TypingResult{}, client.StorageSummary{}, static.Skin{},
+	client.TypingView{}, client.TypingResult{}, client.StorageSummary{}, static.Skin{}, TopicPage{}, ApprovalsView{},
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
 	AgentCatalogChange{}, WorkspaceJoin{}, client.TeamChange{}, protocol.TypingScope{}, AssistantSetupRequest{},
-	ReplyReceiverSelection{},
+	ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{},
 }
 
 func TestTypeScriptViewTypes(t *testing.T) {
@@ -210,10 +210,13 @@ func (g *tsGen) elem(t reflect.Type) string {
 	return s
 }
 
-// The default interface is checked in as web/build.sh made it: the bundle,
-// its stylesheet, fonts and emoji data must match the digests the build
-// recorded, and the source's packages must be pinned exactly.
+// The Comic skin package is checked in as web/build.sh made it: every file
+// of static/skins/comic (manifest, entry, stylesheet, document rules, fonts
+// and emoji data) must match the digests the build recorded, the package
+// must hold exactly those files, its manifest must declare every one of
+// them, and the source's packages must be pinned exactly.
 func TestMessengerBundleMatchesBuild(t *testing.T) {
+	dir := filepath.Join("static", "skins", "comic")
 	sums, err := os.ReadFile(filepath.Join("web", "SHA256SUMS"))
 	if err != nil {
 		t.Fatal(err)
@@ -226,25 +229,47 @@ func TestMessengerBundleMatchesBuild(t *testing.T) {
 			t.Fatalf("bad SHA256SUMS line %q", l)
 		}
 		listed[name] = true
-		data, err := os.ReadFile(filepath.Join("static", name))
+		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
-			t.Errorf("static/%s does not match web/SHA256SUMS: run web/build.sh", name)
+			t.Errorf("%s/%s does not match web/SHA256SUMS: run web/build.sh", dir, name)
 		}
 	}
-	err = filepath.WalkDir(filepath.Join("static", "m"), func(path string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && !listed[strings.TrimPrefix(filepath.ToSlash(path), "static/")] {
+	err = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && !listed[strings.TrimPrefix(filepath.ToSlash(path), filepath.ToSlash(dir)+"/")] {
 			t.Errorf("%s is not produced by web/build.sh", path)
 		}
 		return err
 	})
-	if err != nil || !listed["messenger.mjs"] || !listed["messenger.css"] {
-		t.Fatalf("bundle listing incomplete: %v", err)
+	if err != nil || !listed["skin.json"] || !listed["entry.mjs"] || !listed["style.css"] || !listed["document.css"] {
+		t.Fatalf("package listing incomplete: %v", err)
+	}
+	var manifest struct {
+		API                    int
+		ID, Name, Entry, Style string
+		Document               string
+		Files                  []string
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "skin.json"))
+	if err != nil || json.Unmarshal(raw, &manifest) != nil {
+		t.Fatalf("skin.json: %v", err)
+	}
+	declared := map[string]bool{"skin.json": true}
+	for _, f := range manifest.Files {
+		declared[f] = true
+	}
+	for name := range listed {
+		if !declared[name] {
+			t.Errorf("skin.json does not declare %s", name)
+		}
+	}
+	if manifest.API != 1 || manifest.ID != "comic" || manifest.Entry != "entry.mjs" || manifest.Style != "style.css" || manifest.Document != "document.css" || len(declared) != len(listed) {
+		t.Errorf("skin.json: %+v", manifest)
 	}
 	var pkg struct{ Dependencies, DevDependencies map[string]string }
-	raw, err := os.ReadFile(filepath.Join("web", "package.json"))
+	raw, err = os.ReadFile(filepath.Join("web", "package.json"))
 	if err != nil || json.Unmarshal(raw, &pkg) != nil {
 		t.Fatalf("package.json: %v", err)
 	}

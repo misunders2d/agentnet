@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -89,6 +90,27 @@ func legacyAnswer(msgs []ConversationMessage, id string) (status string, at int6
 				at = m.At.Unix()
 			}
 			return m.Status, at
+		}
+	}
+	return "", 0
+}
+
+// convAnswer is legacyAnswer for a conversation request: the terminal
+// answer or result its target device sent for it, named by any copy of
+// the request (the executor's own) or its logical id, and its time here.
+func convAnswer(msgs []ConvMessage, request ConvMessage) (status string, at int64) {
+	if request.Target == nil {
+		return "", 0
+	}
+	ids := map[string]bool{request.ID: true, request.LID: true}
+	for _, c := range request.Copies {
+		ids[c.ID] = true
+	}
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Sub == "" && (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && ids[m.ReplyTo] && m.PID == request.PID &&
+			m.From == request.Target.Address && execTerminal(m.status) {
+			return m.status, m.At
 		}
 	}
 	return "", 0
@@ -201,56 +223,157 @@ func statusOf(state string) (public, detail string, ok bool) {
 	return "", "", false
 }
 
-// noteStatus tells the requester (and, in a conversation, its members)
-// where request id stands now, if the request is one whose state the
-// requester cannot see otherwise. Best effort, in the background: a
-// requester that cannot read statuses, or is out of reach, is told
-// nothing and nothing waits for it.
+// statusDueSchema keeps, with each request, that its requester must still
+// be told where it stands (status_due counts the changes not told yet), so
+// a status outlives the process that changed the request's state.
+const statusDueSchema = `
+ALTER TABLE inbox ADD COLUMN status_due INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX inbox_status_due ON inbox(status_due) WHERE status_due > 0;
+`
+
+// noteStatus marks that the requester (and, in a conversation, its
+// members) must be told where request id stands now. The mark is stored
+// with the request, so it outlives this process (a CLI accept or resolve,
+// a daemon stopping): the daemon tells it (tellStatuses), at once when it
+// runs, else when it next starts. It tells only a request whose state the
+// requester cannot see otherwise; a requester that cannot read statuses,
+// or is out of reach for good, is told nothing and nothing waits for it.
 func (a *Agent) noteStatus(id string) {
-	var selected int
-	if err := a.store.db.QueryRow(`SELECT count(*) FROM reply_receiver_inputs WHERE inbox_id=?`, id).Scan(&selected); err != nil || selected != 0 {
-		return // selected input is local continuation data, not a remote job
+	res, err := a.store.db.Exec(`UPDATE inbox SET status_due = status_due + 1 WHERE id = ? AND kind IN (?, ?)`,
+		id, envelope.KindQuestion, envelope.KindTask)
+	if err != nil {
+		a.Logf("status of %s not noted: %v", id, err)
+		return
 	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		a.wakeStatus()
+	}
+}
+
+// wakeStatus has the daemon tell the statuses due: this process's own
+// sender (statusLoop) when it runs here, else the daemon's, through the
+// local wake-up socket (a daemon that is not running tells them when it
+// starts).
+func (a *Agent) wakeStatus() {
+	if !a.statusLive.Load() {
+		notifyDaemon(a.home)
+		return
+	}
+	select {
+	case a.statusWake <- struct{}{}:
+	default: // a pass is already due
+	}
+}
+
+// statusLoop tells the statuses due, one pass at its start and one each
+// time it is woken (a state changed here or in another process, the Hub
+// connected or pinged), until ctx ends. It never polls: a status that
+// could not reach the Hub waits for the next wake-up.
+func (a *Agent) statusLoop(ctx context.Context) {
+	a.statusLive.Store(true)
+	defer a.statusLive.Store(false)
+	for {
+		a.tellStatuses(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.statusWake:
+		}
+	}
+}
+
+// tellStatuses tells every status due, oldest request first. It stops at
+// the first that cannot reach the Hub now; its mark, and the later ones,
+// stay for the next pass.
+func (a *Agent) tellStatuses(ctx context.Context) {
+	rows, err := a.store.db.Query(`SELECT id FROM inbox WHERE status_due > 0 ORDER BY received_ms, id`)
+	if err != nil {
+		a.Logf("statuses: %v", err)
+		return
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	for _, id := range ids {
+		if ctx.Err() != nil || !a.tellStatus(ctx, id) {
+			return
+		}
+	}
+}
+
+// tellStatus tells the requester where request id stands now, if it is
+// due, and clears what it told. It reports false when the Hub could not
+// be reached: the status is still due.
+func (a *Agent) tellStatus(ctx context.Context, id string) bool {
+	// One status of a request at a time, each with the state as it is
+	// when its turn comes: two quick changes then carry increasing
+	// counters, and the last one told is the latest state.
+	mu, _ := a.statusLocks.LoadOrStore(id, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	var due int64
 	var sender, key, kind, state string
 	var conv, lid sql.NullString
-	var local, replica bool
-	err := a.store.db.QueryRow(`SELECT sender, coalesce(verified_by, ''), kind, state, conv, lid, local, replica FROM inbox WHERE id = ?`, id).
-		Scan(&sender, &key, &kind, &state, &conv, &lid, &local, &replica)
-	if err != nil || local || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {
-		return
+	var local, replica, selected bool
+	err := a.store.db.QueryRow(`SELECT status_due, sender, coalesce(verified_by, ''), kind, state, conv, lid, local, replica,
+		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id) FROM inbox WHERE id = ?`, id).
+		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &selected)
+	if err != nil || due == 0 {
+		return true
 	}
-	if _, _, ok := statusOf(state); !ok {
-		return
+	// Told, or never to be told: cleared unless the state changed again
+	// meanwhile (a later mark is told on its own).
+	told := func() {
+		if _, err := a.store.db.Exec(`UPDATE inbox SET status_due = 0 WHERE id = ? AND status_due = ?`, id, due); err != nil {
+			a.Logf("status of %s: %v", id, err)
+		}
+	}
+	public, detail, ok := statusOf(state)
+	// Selected input is local continuation data, and a request asked here,
+	// a replica or one without a verified key has no remote requester.
+	if !ok || selected || local || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {
+		told()
+		return true
 	}
 	ref := ControlRef{ID: id, Fingerprint: key}
 	if conv.Valid {
 		ref = ControlRef{Conv: conv.String, ID: lid.String, Fingerprint: key}
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		// One status of a request at a time, each with the state as it is
-		// when its turn comes: two quick changes then carry increasing
-		// counters, and the last one told is the latest state.
-		mu, _ := a.statusLocks.LoadOrStore(id, &sync.Mutex{})
-		mu.(*sync.Mutex).Lock()
-		defer mu.(*sync.Mutex).Unlock()
-		if err := a.store.db.QueryRow(`SELECT state FROM inbox WHERE id = ?`, id).Scan(&state); err != nil {
-			return
-		}
-		public, detail, ok := statusOf(state)
-		if !ok {
-			return
-		}
-		n, err := a.store.nextCounter(ref, envelope.SubStatus, "")
-		if err != nil {
-			return
-		}
-		body, _ := json.Marshal(envelope.Status{State: public, N: n, At: time.Now().Unix(), Detail: detail})
-		if _, err := a.sendControlAs(ctx, ref, envelope.SubStatus, string(body), protocol.CapHeadless); err != nil && !errors.Is(err, ErrNoControls) {
-			a.Logf("status of %s not told to %s: %v", id, sender, err)
-		}
-	}()
+	n, err := a.store.nextCounter(ref, envelope.SubStatus, "")
+	if err != nil {
+		a.Logf("status of %s: %v", id, err)
+		return true
+	}
+	body, _ := json.Marshal(envelope.Status{State: public, N: n, At: time.Now().Unix(), Detail: detail})
+	sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	res, err := a.sendControlAs(sctx, ref, envelope.SubStatus, string(body), protocol.CapHeadless)
+	if err != nil && res.ID == "" && !errors.Is(err, ErrNoControls) && unreachableNow(err) {
+		a.Logf("status of %s not told to %s yet: %v", id, sender, err)
+		return false // still due: told on a later pass
+	}
+	if err != nil && res.ID == "" && !errors.Is(err, ErrNoControls) {
+		a.Logf("status of %s not told to %s: %v", id, sender, err)
+	}
+	told() // stored for sending (the outbox retries it), or never to be told
+	return true
+}
+
+// unreachableNow reports an error from not reaching the Hub (no
+// connection, a timeout, the Hub failing): trying again later may work.
+// An answer that refuses is not one.
+func unreachableNow(err error) bool {
+	var he *HubError
+	if errors.As(err, &he) {
+		return he.Status >= 500
+	}
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // endJob is finishJob with the requester told where the request stands.
@@ -278,6 +401,10 @@ func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, s
 	if st.Decision != "" {
 		// An answer to a decision: only the very decision this device sent
 		// there, about that very request, naming the same report and attempt.
+		// Decisions are made on device-thread requests only.
+		if in.Conv != "" {
+			return false, "a conversation request takes no remote decision"
+		}
 		var body string
 		err := a.store.db.QueryRow(`SELECT body FROM outbox WHERE id = ? AND recipient = ? AND sub = ? AND conv IS NULL AND ref_id = ? AND ref_fp = ?`,
 			st.Decision, from, envelope.SubDecision, in.Ref.ID, in.Ref.Fingerprint).Scan(&body)
@@ -309,6 +436,16 @@ func (a *Agent) statusAllowed(in envelope.Inner, from, senderFP string) (bool, s
 		return false, "the sender is not the device that request (from that key) is for"
 	}
 	return true, ""
+}
+
+// convRowHere reports whether conv holds a message of logical id ref.ID
+// sent under key ref.Fingerprint (received, or sent from this device).
+func (a *Agent) convRowHere(conv string, ref *envelope.Ref) (bool, error) {
+	var n int
+	err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE conv = ? AND lid = ? AND coalesce(verified_by, claimed_fp, '') = ?)
+		+ (SELECT count(*) FROM outbox WHERE conv = ? AND lid = ? AND ? = ?)`,
+		conv, ref.ID, ref.Fingerprint, conv, ref.ID, ref.Fingerprint, a.Self().Fingerprint()).Scan(&n)
+	return n > 0, err
 }
 
 // ---- decisions: an operator deciding on a host ----

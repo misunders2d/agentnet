@@ -91,6 +91,20 @@ export interface AgentView {
   can_ask: boolean;
 }
 
+export interface ApprovalRevoke {
+  kind: string;
+  address?: string;
+  pid?: string;
+}
+
+export interface ApprovalsView {
+  questions: QuestionApproval[] | null;
+  tasks: TaskGrantView[] | null;
+  participations: ParticipationGrant[] | null;
+  read_only: boolean;
+  unresolved?: string[];
+}
+
 export interface AssistantSetupHarness {
   id: string;
   label: string;
@@ -210,6 +224,8 @@ export interface DMMessage {
   exec?: ExecView;
   actions?: string[];
   job_detail?: string;
+  event_type?: string;
+  event_by?: string;
 }
 
 export interface DMSummary {
@@ -228,6 +244,9 @@ export interface DMSummary {
   unread: number;
   held: number;
   waiting: number;
+  guests: number;
+  decide: number;
+  last_event?: LastEvent;
 }
 
 export interface DMThread {
@@ -450,6 +469,12 @@ export interface HubStoragePolicy {
   manual_unattached_age_default_seconds: number;
 }
 
+export interface LastEvent {
+  kind: string;
+  pid: string;
+  by: string;
+}
+
 export interface LinkRequest {
   id: string;
   address: string;
@@ -537,6 +562,8 @@ export interface Overview {
   demo: boolean;
   me: Me;
   threads: ThreadSummary[] | null;
+  topics?: PeerTopics[];
+  topic_list: boolean;
   review: ReviewItem[] | null;
   quarantine: QuarantineItem[] | null;
   release?: string;
@@ -560,9 +587,26 @@ export interface Overview {
   history?: HistoryCopy[];
 }
 
+export interface ParticipationGrant {
+  conv: string;
+  pid: string;
+  agent_id?: string;
+  keys: string[] | null;
+  tasks_from: PersonView[] | null;
+  external?: boolean;
+}
+
 export interface PeerKey {
   pinned?: string;
   pending?: string;
+}
+
+export interface PeerTopics {
+  peer: string;
+  total: number;
+  archived: number;
+  archived_unread: number;
+  latest: ThreadSummary;
 }
 
 export interface PersonRef {
@@ -592,6 +636,10 @@ export interface QuarantineItem {
   peer: string;
   reason: string;
   at: string;
+}
+
+export interface QuestionApproval {
+  address: string;
 }
 
 export interface ReactionView {
@@ -739,6 +787,7 @@ export interface Skin {
   name: string;
   entry?: string;
   style?: string;
+  document?: string;
   files?: string[];
   digest?: string;
 }
@@ -774,6 +823,12 @@ export interface Target {
   fingerprint: string;
   agent_id?: string;
   group_admission?: string;
+}
+
+export interface TaskGrantView {
+  address: string;
+  fingerprint: string;
+  status: string;
 }
 
 export interface TeamChange {
@@ -839,6 +894,7 @@ export interface Thread {
   approved: boolean;
   task_grant: string;
   messages: Message[] | null;
+  topic?: ThreadSummary;
 }
 
 export interface ThreadSummary {
@@ -855,6 +911,28 @@ export interface ThreadSummary {
   key_changed: boolean;
   notices: number;
   notice_only: boolean;
+  state: string;
+  done_by?: string;
+  conclusion?: string;
+  concluded_by?: string;
+  pending: boolean;
+  renamed?: boolean;
+  auto_title?: string;
+  quiet_since: string;
+  agent_id?: string;
+}
+
+export interface TopicChange {
+  peer: string;
+  id: string;
+  title?: string;
+  count?: number;
+}
+
+export interface TopicPage {
+  topics: ThreadSummary[] | null;
+  next?: string;
+  matched: number;
 }
 
 export interface TypingEntry {

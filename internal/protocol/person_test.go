@@ -315,6 +315,61 @@ func TestProfileSupports(t *testing.T) {
 	}
 }
 
+// ROOM_V1 §2.1: rm1 implies the capabilities it lists and nothing else, in
+// every session as Supports already requires; a record parses with up to
+// MaxCaps names (headroom over the MaxAdvertisedCaps a device lists), so a
+// 17-name record from a later program parses, and a 33-name one does not.
+func TestCapsRoomImplicationAndHeadroom(t *testing.T) {
+	key := vecKey()
+	pub := key.Public().(ed25519.PublicKey)
+	rec := func(session string, caps ...string) json.RawMessage {
+		k := CapsRecord{Address: "vitalii/desk", Session: session, Caps: caps, TS: 5}
+		k.Sign(key)
+		data, _ := json.Marshal(k)
+		return data
+	}
+	s1, s2 := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	room := Profile{Sessions: []string{s1}, Caps: []json.RawMessage{rec(s1, CapEnv2, CapRoom)}}
+	for _, name := range []string{CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear, CapRoom, CapEnv2} {
+		if !room.Supports("vitalii/desk", pub, name) {
+			t.Errorf("rm1 does not imply %s", name)
+		}
+	}
+	for _, name := range []string{CapPerson, CapControl, CapHeadless, CapDriveSpace, CapNotify, CapTyping} {
+		if room.Supports("vitalii/desk", pub, name) {
+			t.Errorf("rm1 implies %s, which it does not list", name)
+		}
+	}
+	if (Profile{Sessions: []string{s1, s2}, Caps: []json.RawMessage{rec(s1, CapRoom), rec(s2, CapEnv2)}}).Supports("vitalii/desk", pub, CapHumanParticipation) {
+		t.Error("one session's rm1 spoke for another session")
+	}
+	if (Profile{Sessions: []string{s1}, Caps: []json.RawMessage{rec(s1, CapHumanParticipation)}}).Supports("vitalii/desk", pub, CapRoom) {
+		t.Error("an implied capability implied rm1")
+	}
+	names := func(n int) []string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("c%02d", i))
+		}
+		return out
+	}
+	for _, c := range []struct {
+		n  int
+		ok bool
+	}{{17, true}, {32, true}, {33, false}} {
+		n, ok := c.n, c.ok
+		k := CapsRecord{Address: "vitalii/desk", Session: s1, Caps: names(n), TS: 5}
+		k.Sign(key)
+		data, _ := json.Marshal(k)
+		if _, err := ParseCapsRecord(data); (err == nil) != ok {
+			t.Errorf("a %d-name record: parse error %v, want parsed %v", n, err, ok)
+		}
+	}
+	if MaxCaps != 2*MaxAdvertisedCaps || MaxAdvertisedCaps != 16 {
+		t.Fatalf("parse %d, advertise %d", MaxCaps, MaxAdvertisedCaps)
+	}
+}
+
 // A full member list stays within one push event: members carry only a
 // reference to their person's roster, never the record.
 func TestMembersWithPersonsFitOneEvent(t *testing.T) {

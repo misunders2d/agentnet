@@ -28,7 +28,7 @@ func TestNamedAgentOfflineQueueRechecksCapability(t *testing.T) {
 			// Explicitly model either generation; the current program reads agi1.
 			caps := slices.Clone(ownCaps)
 			if !capable {
-				caps = slices.DeleteFunc(caps, func(c string) bool { return c == protocol.CapAgentIdentity })
+				caps = without(caps, protocol.CapAgentIdentity)
 			}
 			record := protocol.CapsRecord{Address: w.bob.Address, Session: prof.Sessions[0], Caps: caps, TS: time.Now().Unix() + 100}
 			record.Sign(w.bob.id.Sign)
@@ -158,7 +158,7 @@ func TestNamedConversationWaitsForRequiredCapability(t *testing.T) {
 	if err := w.alice.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); err != nil || len(profile.Sessions) != 1 {
 		t.Fatalf("synthetic session: %+v %v", profile.Sessions, err)
 	}
-	oldCaps := slices.DeleteFunc(slices.Clone(ownCaps), func(c string) bool { return c == protocol.CapAgentIdentity })
+	oldCaps := without(ownCaps, protocol.CapAgentIdentity)
 	oldRecord := protocol.CapsRecord{Address: w.bob.Address, Session: profile.Sessions[0], Caps: oldCaps, TS: time.Now().Unix() + 100}
 	oldRecord.Sign(w.bob.id.Sign)
 	if err := w.bob.hub.do(tctx(t), "PUT", "/v1/caps", oldRecord, nil); err != nil {

@@ -69,7 +69,7 @@ func runPublished(t *testing.T, a *Agent) func() {
 func dropCapSuccessor(t *testing.T, a *Agent, cap string) {
 	t.Helper()
 	for session, latest := range sessionRecords(t, a) {
-		caps := slices.DeleteFunc(slices.Clone(latest.Caps), func(c string) bool { return c == cap })
+		caps := without(latest.Caps, cap) // an older reader: no rm1 either
 		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: caps, TS: max(latest.TS+1, time.Now().Unix())}
 		rec.Sign(a.id.Sign)
 		if err := a.hub.do(tctx(t), "PUT", "/v1/caps", rec, nil); err != nil {
@@ -81,9 +81,9 @@ func dropCapSuccessor(t *testing.T, a *Agent, cap string) {
 type reactionCopy struct {
 	state  string
 	detail string
-	pids  []string // the captured audience's scopes
-	human *envelope.HumanTurn
-	env   envelope.Envelope
+	pids   []string // the captured audience's scopes
+	human  *envelope.HumanTurn
+	env    envelope.Envelope
 }
 
 // reactionCopies are a's copies of its assistant's reaction emoji in conv,
@@ -366,8 +366,8 @@ func TestHumanReactionWireVectors(t *testing.T) {
 		{"a device thread's assistant reaction", change(func(in *envelope.Inner) {
 			in.Conv, in.LID, in.Fan, in.PID, in.Origin = "", "", nil, "", envelope.OriginAgentPrefix+"claude"
 		}), true},
-		{"a revision", change(func(in *envelope.Inner) { in.Sub, in.PID, in.Body = envelope.SubRevision, "", `{"rev":1,"text":"edited"}` }), true},
-		{"a retraction", change(func(in *envelope.Inner) { in.Sub, in.PID, in.Body = envelope.SubRetraction, "", `{}` }), true},
+		{"a revision naming a participation", change(func(in *envelope.Inner) { in.Sub, in.Body = envelope.SubRevision, `{"rev":1,"text":"edited"}` }), false},
+		{"a retraction naming a participation", change(func(in *envelope.Inner) { in.Sub, in.Body = envelope.SubRetraction, `{}` }), false},
 		{"an author", change(func(in *envelope.Inner) { in.Human = human }), true},
 		{"a root", change(func(in *envelope.Inner) { in.Root = []byte(`{}`) }), false},
 		{"another conversation's proof", change(func(in *envelope.Inner) { in.Conv = strings.Repeat("c", 64) }), true},
@@ -386,6 +386,16 @@ func TestHumanReactionWireVectors(t *testing.T) {
 			}
 		}
 		vectors[c.name] = c.in
+	}
+	// An edit carries its turn's captured audience (ROOM_V1 §2.3): it names
+	// no participation, and its reader checks it against the edited turn.
+	for _, sub := range []string{envelope.SubRevision, envelope.SubRetraction} {
+		edit := change(func(in *envelope.Inner) {
+			in.Sub, in.PID, in.Body = sub, "", map[string]string{envelope.SubRevision: `{"rev":1,"text":"edited"}`, envelope.SubRetraction: `{}`}[sub]
+		})
+		if _, err := envelope.Seal(edit, sender.Sign, r); err != nil {
+			t.Errorf("an edit (%s) carrying its turn's audience: %v", sub, err)
+		}
 	}
 	data, _ := json.Marshal(map[string]any{"human": audience, "human_json": humanJSON(&audience), "valid": valid, "invalid": vectors})
 	t.Log("HUMAN_REACTION_VECTOR_JSON " + string(data))

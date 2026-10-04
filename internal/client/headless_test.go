@@ -408,7 +408,7 @@ func TestNewOperatorGetsExistingWaitingItems(t *testing.T) {
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)
 	runAgent(t, dave)
-	if err := w.bob.SetReviewTo(dave.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), dave.Address); err != nil {
 		t.Fatal(err)
 	}
 	task, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "waiting before any grant", Kind: envelope.KindTask})
@@ -485,7 +485,7 @@ func TestCountOnlyReportsStayQuiet(t *testing.T) {
 	n := fakeNotify(w.alice)
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)
-	if err := w.bob.SetReviewTo(w.alice.Address); err != nil {
+	if err := w.bob.SetReviewTo(tctx(t), w.alice.Address); err != nil {
 		t.Fatal(err)
 	}
 	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "held question", Kind: envelope.KindQuestion})

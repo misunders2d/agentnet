@@ -2,7 +2,6 @@ package client
 
 import (
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -35,6 +34,29 @@ type ThreadSummary struct {
 	// requests wait for a person there. They are not decisions here.
 	Notices    int  `json:"notices"`
 	NoticeOnly bool `json:"notice_only"` // every message in the thread is a review notice
+
+	// The thread as a topic (topics.go): active, done or archived; who made
+	// it done; the first line of the agent's final reply and which device
+	// sent it, when the agent did; whether anything in it is still open
+	// (then it is never archived); and the person's own name for it here,
+	// with the automatic one (its first line) kept beside it.
+	State       string `json:"state"`
+	DoneBy      string `json:"done_by,omitempty"`
+	Conclusion  string `json:"conclusion,omitempty"`
+	ConcludedBy string `json:"concluded_by,omitempty"`
+	Pending     bool   `json:"pending"`
+	Renamed     bool   `json:"renamed,omitempty"`
+	AutoTitle   string `json:"auto_title,omitempty"`
+	// QuietSince is when it went quiet: its last message, or a later Mark
+	// done or Reopen here. Archived counts from it.
+	QuietSince time.Time `json:"quiet_since"`
+
+	// AgentID is the thread's agent when one is named: the latest a request
+	// names as its target, or an answer, result or progress as its author
+	// (as admission bound them); never a received request's local executor.
+	AgentID string `json:"agent_id,omitempty"`
+
+	lastID, conclusionID, custom string // what topicText reads, and the name set here
 }
 
 // threadRow is what a summary needs to know about one message.
@@ -43,73 +65,21 @@ type threadRow struct {
 	in       bool
 	kind     string
 	state    string
+	status   string // the outcome an answer or result carries
 	unread   bool
 	notice   bool // in only: a review notice (see envelope.StatusReviewNotice)
 	replied  bool // out only: a received message replies to it
 	selected bool // in only: local receiver input, not a remote execution job
+	// agent is the agent it names: a request's target, an output's author.
+	agent string
 }
 
-// Threads lists every thread with every peer, most recent first.
+// Threads lists every thread with every peer, archived topics included,
+// most recent first: the overview's threads as a page that knows nothing
+// of topics reads them (TopicOverview).
 func (a *Agent) Threads() ([]ThreadSummary, error) {
-	peers, err := a.store.conversationPeers()
-	if err != nil {
-		return nil, err
-	}
-	var out []ThreadSummary
-	for _, peer := range peers {
-		ts, err := a.peerThreads(peer)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ts...)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].LastAt.Equal(out[j].LastAt) {
-			return out[i].LastAt.After(out[j].LastAt)
-		}
-		return out[i].ID > out[j].ID
-	})
-	return out, nil
-}
-
-func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
-	groups, rows, err := a.peerThreadGroups(peer)
-	if err != nil || len(groups) == 0 {
-		return nil, err
-	}
-	var out []ThreadSummary
-	for _, g := range groups {
-		first, last := rows[g[0]], rows[g[len(g)-1]]
-		t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true}
-		for _, id := range g {
-			r := rows[id]
-			t.NoticeOnly = t.NoticeOnly && r.notice
-			switch {
-			case r.notice:
-				if r.state == stateNeedHuman {
-					t.Notices++
-				}
-				continue
-			case r.in && !r.selected && (r.state == stateHeld || r.state == stateAwaiting || r.state == stateNeedHuman):
-				t.Review++
-			case r.in && !r.selected && (r.state == stateRunning || r.state == stateCancelReq):
-				t.Running++
-			}
-			if r.in && r.unread {
-				t.Unread++
-			}
-			if !r.in && (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !r.replied {
-				t.Waiting = true
-			}
-		}
-		full, err := a.store.peerMessages(peer, []string{first.id, last.id})
-		if err != nil {
-			return nil, err
-		}
-		t.Title, t.Last = firstLine(full[first.id].Body), firstLine(full[last.id].Body)
-		out = append(out, t)
-	}
-	return out, nil
+	ts, _, err := a.TopicOverview(true)
+	return ts, err
 }
 
 // peerThreadGroups unions the device-history messages with peer into
@@ -192,13 +162,17 @@ func (s *store) conversationPeers() ([]string, error) {
 }
 
 // threadRows reads direction, kind, state and read state for every
-// device-history message exchanged with peer, and which sent questions or
-// tasks have a reply.
+// device-history message exchanged with peer, which sent questions or
+// tasks have a reply, and the agent each names: a request's target agent,
+// or an output's author (a received request's agent_id is its local
+// executor, never its sender's word).
 func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	out := map[string]threadRow{}
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
-	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedInFor("inbox"),
+	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id),
+		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END
+		FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedInFor("inbox"),
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
@@ -207,11 +181,11 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	for rows.Next() {
 		var r threadRow
 		var status string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		r.in = true
+		r.in, r.status = true, status
 		out[r.id] = r
 		if r.replyTo != "" && status != envelope.StatusProgress {
 			replies[r.replyTo] = true
@@ -221,14 +195,15 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
+	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, '')
+		FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent); err != nil {
 			return nil, err
 		}
 		r.replied = replies[r.id]
@@ -239,10 +214,11 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 
 // Why a conversation item waits for the person here (ConvReview.Reason).
 const (
-	ReviewAwaiting   = "agent_awaiting"    // a request to this device's agent waits for a one-time accept (Accept)
-	ReviewNeedsHuman = "agent_needs_human" // this device's agent said the person must decide (Accept reruns it, Resolve closes it)
-	ReviewInvite     = "agent_invite"      // an invitation for this device's agent waits for its person (AcceptParticipation, DeclineParticipation)
-	ReviewHeldTurn   = "person_turn"       // a question or task for the person, held in its conversation: answered there, never run
+	ReviewAwaiting    = "agent_awaiting"    // a request to this device's agent waits for a one-time accept (Accept)
+	ReviewNeedsHuman  = "agent_needs_human" // this device's agent said the person must decide (Accept reruns it, Resolve closes it)
+	ReviewInterrupted = "agent_interrupted" // this device's agent's run was interrupted (the daemon stopped): Accept reruns it, Resolve closes it
+	ReviewInvite      = "agent_invite"      // an invitation for this device's agent waits for its person (AcceptParticipation, DeclineParticipation)
+	ReviewHeldTurn    = "person_turn"       // a question or task for the person, held in its conversation: answered there, never run
 )
 
 // ConvReview is a conversation item waiting for the person here, with the
@@ -288,8 +264,8 @@ func (a *Agent) PageReview() (ReviewPage, error) {
 	}
 	// A request to this device's agent, as Accept and Resolve take it. One
 	// whose turn is erased here still waits: it is kept until its work ends.
-	requests, err := a.store.convReview(`i.pid IS NOT NULL AND i.replica = 0 AND i.kind IN (?, ?) AND i.state IN (?, ?)`,
-		envelope.KindQuestion, envelope.KindTask, stateAwaiting, stateNeedHuman)
+	requests, err := a.store.convReview(`i.pid IS NOT NULL AND i.replica = 0 AND i.kind IN (?, ?) AND i.state IN (?, ?, ?)`,
+		envelope.KindQuestion, envelope.KindTask, stateAwaiting, stateNeedHuman, stateInterrupt)
 	if err != nil {
 		return p, err
 	}
@@ -365,6 +341,8 @@ func (s *store) convReview(where string, args ...any) ([]ConvReview, error) {
 			r.Reason = ReviewAwaiting
 		case stateNeedHuman:
 			r.Reason = ReviewNeedsHuman
+		case stateInterrupt:
+			r.Reason = ReviewInterrupted
 		default:
 			r.Reason = ReviewHeldTurn
 		}

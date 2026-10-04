@@ -20,9 +20,10 @@ type Item =
 const RUN = 5 * 60e3;
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function Timeline({ ctx, messages, focus, selected, onSelect, empty, footer }: {
+export function Timeline({ ctx, messages, focus, selected, onSelect, empty, footer, end }: {
   ctx: Ctx; messages: AnyMsg[]; focus?: string; selected: string[] | null; onSelect: (id: string) => void; empty: ReactNode;
   footer?: ReactNode;      // a snackbar over the timeline's end (Bring back): the last lines stay clear of it
+  end?: ReactNode;         // after the last message (a topic that is done or archived says so)
 }) {
   const box = useRef<HTMLDivElement>(null);
   const inner = useRef<HTMLDivElement>(null);
@@ -98,6 +99,7 @@ export function Timeline({ ctx, messages, focus, selected, onSelect, empty, foot
               : it.type === "new" ? <NewLine key={it.key} />
                 : <MessageView key={it.key} m={it.m} ctx={ctx} all={messages} first={it.first} last={it.last} status={it.status} onJump={jump}
                     selecting={!!selected} selected={!!selected?.includes(it.m.id)} onSelect={onSelect} />)}
+          {items.length > 0 && end}
           <Activity ctx={ctx} messages={messages} />
         </div>
       </div>
