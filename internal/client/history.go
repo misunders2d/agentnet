@@ -206,7 +206,11 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			if err := json.Unmarshal([]byte(c.in.Body), &item); err != nil {
 				return err
 			}
-			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); item.ReceiverRoute != nil || assistant { // delivery reads the item's own requirement
+			room, err := roomCopy(tx, c.in.Conv, c.in.Sub, c.in.Body, "")
+			if err != nil {
+				return err
+			}
+			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); item.ReceiverRoute != nil || assistant || room { // delivery reads the item's own requirement
 				body = c.in.Body
 			}
 		}

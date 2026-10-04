@@ -2,11 +2,14 @@ package ui
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
@@ -233,6 +236,154 @@ func TestBrowserRoomEventsMatchGo(t *testing.T) {
 	}
 }
 
+// ROOM_V1 §2.3, Go and the browser both ways: a captured audience on group
+// turns, an agent room participant's labelled request, and edits carrying
+// their turn's audience open on either side as the other sealed them; what
+// Go refuses to seal (an agent origin for a person, an agent's unlabelled
+// request or ordinary turn, an assistant's conversation scope as audience,
+// an edit naming a participation) the device refuses too.
+func TestBrowserRoomTurnsMatchGo(t *testing.T) {
+	r := startRoomWire(t)
+	w := r.w
+	danaRecipient, _ := r.dana.Recipient()
+	members := []protocol.ConvMember{{Person: r.author.Person, Roster: r.author.Roster}, {Person: r.danaHost.Person, Roster: strings.Repeat("d", 64)}}
+	if members[0].Person > members[1].Person {
+		members[0], members[1] = members[1], members[0]
+	}
+	creator := protocol.ConvCreator{Person: r.author.Person, Roster: r.author.Roster, Address: r.bob.Address, Fingerprint: r.bob.Fingerprint()}
+	dm := protocol.ConvRoot{V: protocol.ConvRootVersion, Kind: protocol.ConvKindDM, Creator: creator, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix()}
+	dm.Sign(r.bobID.Sign)
+	group := protocol.ConvRoot{V: protocol.GroupRootVersion, Kind: protocol.ConvKindGroup, Creator: creator, Members: members, Nonce: protocol.NewID(), Created: time.Now().Unix(),
+		Realm: protocol.NewID(), Title: "Room <&>", Admins: []string{r.author.Person}}
+	group.Sign(r.bobID.Sign)
+	scope := func(conv, role, audience string) (envelope.HumanScope, []protocol.ParticipationEvent) {
+		h := protocol.ParticipationHost{Person: protocol.NewID(), Address: "carol/desk", Fingerprint: r.bob.Fingerprint()}
+		inv := protocol.ParticipationEvent{V: 1, Conv: conv, PID: protocol.NewID(), Type: protocol.EventInvite, Author: r.author, TS: time.Now().Unix(), Host: &h, Audience: audience, Role: role}
+		inv.Sign(r.bobID.Sign)
+		s := protocol.ScopeOf(inv, time.Now().Unix())
+		s.Sign(r.bobID.Sign)
+		acc := protocol.ParticipationEvent{V: 1, Conv: conv, PID: inv.PID, Type: protocol.EventAccept, Prev: inv.Hash(), TS: time.Now().Unix(),
+			Author: protocol.EventAuthor{Person: h.Person, Roster: strings.Repeat("e", 64), Address: h.Address, Fingerprint: h.Fingerprint}}
+		acc.Sign(r.bobID.Sign)
+		return envelope.HumanScope{PID: inv.PID, Invite: inv.Hash(), Decision: acc.Hash()}, []protocol.ParticipationEvent{s, acc}
+	}
+	turn := func(author string, parts ...func() (envelope.HumanScope, []protocol.ParticipationEvent)) *envelope.HumanTurn {
+		h := &envelope.HumanTurn{AuthorPID: author}
+		for _, p := range parts {
+			s, proof := p()
+			h.Audience, h.Proof = append(h.Audience, s), append(h.Proof, proof...)
+		}
+		return h
+	}
+	// inner, as each side's seal takes it: the root as its JSON text.
+	asMessage := func(in envelope.Inner) map[string]any {
+		var m map[string]any
+		strictJSON([]byte(marshal(t, in)), &m)
+		if len(in.Root) != 0 {
+			m["root"] = string(in.Root)
+		}
+		delete(m, "from")
+		return m
+	}
+	for _, root := range []protocol.ConvRoot{dm, group} {
+		conv, raw := root.ID(), json.RawMessage(marshal(t, root))
+		guestAudience := protocol.AudienceConversation
+		if root.Kind == protocol.ConvKindGroup {
+			guestAudience = protocol.AudienceRoom
+		}
+		gs, gp := scope(conv, protocol.RoleHuman, guestAudience)
+		as, ap := scope(conv, "", protocol.AudienceRoom)
+		guest := func() (envelope.HumanScope, []protocol.ParticipationEvent) { return gs, gp }
+		agent := func() (envelope.HumanScope, []protocol.ParticipationEvent) { return as, ap }
+		assistant := func() (envelope.HumanScope, []protocol.ParticipationEvent) {
+			return scope(conv, "", protocol.AudienceConversation)
+		}
+		base := envelope.Inner{V: envelope.Version2, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: "room <&>", Conv: conv, LID: protocol.NewID(), Root: raw, Origin: envelope.OriginUI}
+		target := &envelope.Target{Address: "erin/desk", Fingerprint: r.bob.Fingerprint()}
+		cases := map[string]struct {
+			in envelope.Inner
+			ok bool
+		}{}
+		add := func(what string, ok bool, change func(*envelope.Inner)) {
+			in := base
+			in.LID = protocol.NewID()
+			change(&in)
+			cases[root.Kind+": "+what] = struct {
+				in envelope.Inner
+				ok bool
+			}{in, ok}
+		}
+		add("a member's turn", true, func(in *envelope.Inner) { in.Human = turn("", guest, agent) })
+		add("a guest's turn", true, func(in *envelope.Inner) { in.PID, in.Human = gs.PID, turn(gs.PID, guest, agent) })
+		add("an agent participant's request", true, func(in *envelope.Inner) {
+			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindTask, target, protocol.NewID(), "agent:claude", "curious", turn(as.PID, guest, agent)
+		})
+		add("an agent origin for a person", false, func(in *envelope.Inner) {
+			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindTask, target, protocol.NewID(), "agent:claude", "curious", turn(gs.PID, guest, agent)
+		})
+		add("an agent's unlabelled request", false, func(in *envelope.Inner) {
+			in.Kind, in.Target, in.PID, in.Human = envelope.KindQuestion, target, protocol.NewID(), turn(as.PID, guest, agent)
+		})
+		add("an agent's ordinary turn", false, func(in *envelope.Inner) { in.PID, in.Human = as.PID, turn(as.PID, guest, agent) })
+		add("an assistant's conversation scope as audience", false, func(in *envelope.Inner) { in.Human = turn("", guest, assistant) })
+		add("a guest's edit", true, func(in *envelope.Inner) {
+			in.V, in.Sub, in.Body, in.Root, in.Origin, in.Ref = envelope.Version3, envelope.SubRevision, `{"rev":1,"text":"fixed"}`, nil, "", &envelope.Ref{ID: protocol.NewID(), Fingerprint: r.bob.Fingerprint()}
+			in.Human = turn(gs.PID, guest, agent)
+		})
+		add("a member's retraction", true, func(in *envelope.Inner) {
+			in.V, in.Sub, in.Body, in.Root, in.Origin, in.Ref = envelope.Version3, envelope.SubRetraction, `{}`, nil, "", &envelope.Ref{ID: protocol.NewID(), Fingerprint: r.bob.Fingerprint()}
+			in.Human = turn("", guest)
+		})
+		add("an edit naming a participation", false, func(in *envelope.Inner) {
+			in.V, in.Sub, in.Body, in.Root, in.Origin, in.Ref = envelope.Version3, envelope.SubRevision, `{"rev":1,"text":"fixed"}`, nil, "", &envelope.Ref{ID: protocol.NewID(), Fingerprint: r.bob.Fingerprint()}
+			in.PID, in.Human = gs.PID, turn(gs.PID, guest)
+		})
+		// As history items (the same shapes as a live turn, wire.parseHistory):
+		// an agent's request and edits are kept; an agent origin for a person,
+		// an agent's unlabelled request or ordinary turn are refused.
+		for what, ok := range map[string]bool{"a guest's turn": true, "an agent participant's request": true, "a guest's edit": true, "a member's retraction": true,
+			"an agent origin for a person": false, "an agent's unlabelled request": false, "an agent's ordinary turn": false} {
+			in := cases[root.Kind+": "+what].in
+			item := client.HistoryItem{V: 1, From: r.bob.Address, FromKey: r.bob.Fingerprint(), ID: protocol.NewID(), LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body,
+				Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, Ref: in.Ref, Human: in.Human, At: 1}
+			v := w.call(map[string]any{"op": "history", "json": marshal(t, item)})
+			if (v["error"] == nil) != ok || ok && v["json"] != marshal(t, item) {
+				t.Errorf("%s: %s as history: %v, want kept %v", root.Kind, what, v, ok)
+			}
+		}
+		for what, c := range cases {
+			// Go to the device.
+			in := c.in
+			in.ID, in.From, in.To = protocol.NewID(), r.bob.Address, r.dana.Address
+			env, goErr := envelope.Seal(in, r.bobID.Sign, danaRecipient)
+			if (goErr == nil) != c.ok {
+				t.Fatalf("%s: Go seal error %v, want ok %v", what, goErr, c.ok)
+			}
+			if goErr == nil {
+				if v := w.call(map[string]any{"op": "open", "envelope": marshal(t, env), "from": publicJSON(t, r.bob)}); v["error"] != nil {
+					t.Errorf("%s: the device cannot open Go's: %v", what, v["error"])
+				}
+			}
+			// The device to Go.
+			in.ID, in.From, in.To = protocol.NewID(), r.dana.Address, r.bob.Address
+			v := w.call(map[string]any{"op": "seal", "to": publicJSON(t, r.bob), "message": asMessage(in)})
+			if (v["error"] == nil) != c.ok {
+				t.Errorf("%s: the device's seal error %v, want ok %v", what, v["error"], c.ok)
+				continue
+			}
+			if c.ok {
+				var env envelope.Envelope
+				if err := strictJSON([]byte(v["envelope"].(string)), &env); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := envelope.Open(env, r.bobID, r.bob.Address, r.dana); err != nil {
+					t.Errorf("%s: Go cannot open the device's: %v", what, err)
+				}
+			}
+		}
+	}
+}
+
 // The browser engine resolves room participations as the core does
 // (testdata/room_engine_check.mjs; client TestRoomEvents*).
 func TestBrowserRoomEngine(t *testing.T) {
@@ -242,6 +393,21 @@ func TestBrowserRoomEngine(t *testing.T) {
 	}
 	out, err := exec.Command(node, "testdata/room_engine_check.mjs").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "PASS room engine") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
+
+// The browser engine reads room turns as the core does
+// (testdata/room_receiver_engine_check.mjs; client TestRoom*InADM,
+// TestRoomGroupTurns).
+func TestBrowserRoomReceiverEngine(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	out, err := exec.Command(node, "testdata/room_receiver_engine_check.mjs").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "PASS room receiver engine") {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	t.Logf("%s", out)

@@ -548,15 +548,19 @@ async function checkV2(n) {
   if (n.human && n.v === Version3) {
     // An assistant's reaction to an addressed request, to that request's
     // captured audience (envelope/human.go): its host is the author and a
-    // control carries no root. No other control carries an audience.
-    if (!assistantReaction(n) || !n.conv || !n.pid || n.human.author_pid || n.root || n.kind !== "message") throw new Error("human: on a control, only an assistant's reaction to its captured audience");
+    // control carries no root. An edit names its turn's author, no
+    // participation. No other control carries an audience.
+    if (humanEdit(n)) {
+      if (!n.conv || n.pid || n.root || n.kind !== "message") throw new Error("human: an edit carries its turn's captured audience in its conversation only");
+    } else if (!assistantReaction(n) || !n.conv || !n.pid || n.human.author_pid || n.root || n.kind !== "message") throw new Error("human: on a control, only an assistant's reaction or an edit to its captured audience");
     await validateHumanTurn(n.human, n.conv);
   } else if (n.human) {
-    const root = parseRoot(n.root);
-    if (await rootID(root) !== n.conv || root.kind !== "dm" || root.members.length !== 2 || n.v !== Version2 || n.sub) throw new Error("human: ordinary non-executing DM turn only");
-    const h = n.human, author = h.author_pid || "";
-    const ordinary = n.kind === "message" && !n.status && !n.target && !n.agent_id && !agentOrigin(n.origin) && !n.emotion && n.pid === author;
-    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && !agentOrigin(n.origin) && !n.status && !n.receiver_route;
+    const root = parseConvRoot(n.root), dm = root.kind === "dm" && root.members.length === 2, group = root.kind === "group" && root.v === GroupRootVersion;
+    if (await rootID(root) !== n.conv || !dm && !group || n.v !== Version2 || n.sub) throw new Error("human: ordinary non-executing DM or group turn only");
+    // An agent author (a room participant) only asks, labelled as an agent (ROOM_V1 §2.3).
+    const h = n.human, author = h.author_pid || "", agent = agentAuthor(h);
+    const ordinary = n.kind === "message" && !n.status && !n.target && !n.agent_id && !agentOrigin(n.origin) && !n.emotion && n.pid === author && !agent;
+    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && agentOrigin(n.origin) === agent && !n.status && !n.receiver_route;
     const output = (["answer", "result"].includes(n.kind) || n.kind === "message" && n.status === StatusProgress) && !n.target && n.pid && !author && !n.receiver_route;
     if (!ordinary && !request && !output) throw new Error("human: ordinary turn, addressed request or assistant output only");
     await validateHumanTurn(n.human, n.conv);
@@ -1128,13 +1132,14 @@ export function parseHistory(json) {
   if (ref && !isControl(f.sub || "")) throw new Error("a malformed history item");
   const receiver = f.receiver_route ? parseReceiverRoute(f.receiver_route) : null;
   const human = f.human ? parseHumanTurn(f.human) : null;
-  if (human) { // the same three shapes as a live human turn (envelope/human.go)
-    const pid = f.pid || "", author = human.author_pid || "";
-    const ordinary = f.kind === "message" && !target && !f.agent_id && !agentOrigin(f.origin) && !f.emotion && !f.status && pid === author;
-    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && !agentOrigin(f.origin) && !f.status && !receiver;
+  if (human) { // the same shapes as a live human turn (envelope/human.go)
+    const pid = f.pid || "", author = human.author_pid || "", agent = agentAuthor(human);
+    const ordinary = f.kind === "message" && !target && !f.agent_id && !agentOrigin(f.origin) && !f.emotion && !f.status && pid === author && !agent;
+    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && agentOrigin(f.origin) === agent && !f.status && !receiver;
     const output = (["answer", "result"].includes(f.kind) || f.kind === "message" && f.status === StatusProgress) && !target && pid && !author && !receiver;
     const reaction = f.sub === SubReaction && historyAssistantReaction(f) && f.kind === "message" && pid && !author && !target && !receiver; // an assistant's reaction to its captured audience
-    if (!reaction && (f.sub || !ordinary && !request && !output)) throw new Error("human: malformed history turn");
+    const edit = [SubRevision, SubRetraction].includes(f.sub) && ref && f.kind === "message" && !pid && !target && !receiver && !f.agent_id && !f.origin; // an edit to its turn's captured audience
+    if (!reaction && !edit && (f.sub || !ordinary && !request && !output)) throw new Error("human: malformed history turn");
   }
   if (receiver && (receiver.op !== "request" || receiver.request_ref !== f.lid || f.sub || f.agent_id || ref || !["message", "question", "task"].includes(f.kind))) throw Error("receiver: history retains only original inert request routes");
   return { v: f.v, from: f.from, from_key: f.from_key, id: f.id, lid: f.lid, ts: f.ts || 0, at: f.at || 0, kind: f.kind || "", body: f.body || "",
@@ -1550,8 +1555,11 @@ export async function verifyAgent(r, host) {
   if (host.address !== r.host || await fingerprint(host) !== r.host_key || !await verifyBytes(host.sign_key, agentCanonical(r), r.sig)) throw new Error("agent: identity is not signed by its exact host device");
 }
 // The durable outbox keeps this requirement even when ciphertext cannot be reopened.
+// A room shape keeps its conversation's primary (a group's grp1, a DM's
+// hgp1); delivery adds rm1 to it (engine roomCopy, ROOM_V1 §2.5).
 export function agentRequirement(n) {
   try {
+    if (n.human && n.root && parseConvRoot(n.root).kind === "group") return CapGroup; // a captured audience in a group: a group copy
     if (n.sub === "excerpt" && n.pid) return CapExternalParticipation;
     if (n.sub === "history") n = parseHistory(n.body);
     if (assistantReaction(n) || historyAssistantReaction(n)) return CapAgentReaction; // as history too: never stored by an older reader as its host's mark
@@ -1560,7 +1568,7 @@ export function agentRequirement(n) {
     if (n.agent_id || n.target?.agent_id) return CapAgentIdentity;
     if (n.sub === "event") {
       const e = parseEvent(n.body);
-      if (e.role === "human" || e.type === "scope") return CapHumanParticipation; // a scope exists only for human audiences
+      if (e.role === "human" || e.type === "scope" || e.audience === "room") return CapHumanParticipation; // a scope exists only for human and room audiences
       if (e.host?.agent_id) return CapAgentIdentity;
     }
   } catch (e) { /* malformed bodies are rejected by their existing admission path */ }
@@ -1798,6 +1806,16 @@ export async function verifyEvent(e, authorKey) {
 }
 
 // ---- scoped ordinary human turns (envelope/human.go) -----------------------------------------
+// agentAuthor is HumanTurn.AgentAuthor: the author is an agent room
+// participant (its proof scope has no role, and none says otherwise);
+// humanEdit is envelope.HumanEdit: a revision or retraction carrying its
+// turn's captured audience.
+export function agentAuthor(h) {
+  let agent = false;
+  for (const e of h.proof || []) if (h.author_pid && e.type === "scope" && e.pid === h.author_pid) { if (e.role) return false; agent = true; }
+  return agent;
+}
+export const humanEdit = (n) => n.v === Version3 && !!n.human && [SubRevision, SubRetraction].includes(n.sub);
 // Shape/hash validation only. Admission must also verify every signature against
 // the pinned current roster and the sender/recipient's exact accepted scope.
 export function humanJSON(h) {
@@ -1824,7 +1842,7 @@ export async function validateHumanTurn(h, conv) {
   for (const e of h.proof || []) {
     validateEvent(e);
     const scope = scopes.get(e.pid);
-    if (!scope || e.sig?.length !== 64 || utf8.encode(eventJSON(e)).length > MaxParticipationEvent || e.conv !== conv || !["scope", "accept"].includes(e.type) || (e.type === "scope" && e.role !== "human")) throw new Error("human: proof outside audience");
+    if (!scope || e.sig?.length !== 64 || utf8.encode(eventJSON(e)).length > MaxParticipationEvent || e.conv !== conv || !["scope", "accept"].includes(e.type) || (e.type === "scope" && e.role !== "human" && e.audience !== "room")) throw new Error("human: proof outside audience"); // an agent only as a room participant
     const hash = await eventHash(e);
     if (events.has(hash) || e.prev !== scope.invite || (e.type === "accept" && hash !== scope.decision)) throw new Error("human: duplicate or unrelated proof");
     events.add(hash);

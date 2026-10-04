@@ -774,9 +774,18 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 		to := w.to
 		progress := w.status == envelope.StatusProgress
 		item, assistant := historyAssistant(w.body, w.conv) // as delivery decides it: agr1 besides the copy's own requirement
+		// rm1 besides the copy's own requirement, for a room shape (ROOM_V1 §2.5)
+		room, err := roomCopy(a.store.db, w.conv, w.sub, w.body, w.humanRaw)
+		if err != nil {
+			a.Logf("conversation message %s: %v", id, err)
+			continue
+		}
 		cacheKey := to + "\x00" + w.sub + "\x00" + w.required + "\x00" + w.status + "\x00" + w.agentID + "\x00" + w.conv + "\x00" + w.pid + "\x00" + item.PID + "\x00" + item.AgentID
 		if w.human {
 			cacheKey += "\x00human"
+		}
+		if room {
+			cacheKey += "\x00room"
 		}
 		ok, seen := checked[cacheKey]
 		if !seen {
@@ -808,6 +817,9 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 				}
 				if ok && w.required == protocol.CapAgentReaction && w.human { // to a captured audience: as a human-audience turn
 					ok = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation) == nil
+				}
+				if ok && room && w.required != protocol.CapRoom {
+					ok = a.requireParticipationCaps(ctx, key, protocol.CapRoom) == nil
 				}
 				if ok && w.sub == envelope.SubHistory && assistant {
 					ok = (w.required == protocol.CapAgentReaction || a.requireParticipationCaps(ctx, key, protocol.CapAgentReaction) == nil) &&
@@ -921,6 +933,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if in.Sub == envelope.SubGroupProof || in.Sub == envelope.SubGroupContext {
 		return a.admitGroupCarrier(ctx, env, in, root, sender, fromQuarantine, hold)
+	}
+	if root.Kind == protocol.ConvKindGroup && roomGroupTurn(in) { // a person guest's turn: its PID names its author, not an agent
+		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
 	}
 	if root.Kind == protocol.ConvKindGroup && in.PID != "" {
 		if handled, e := a.admitGroupVisitorInvite(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {

@@ -14,8 +14,38 @@ import (
 // program does once it advertises it, so room copies may reach it.
 func roomReader(t *testing.T, a *Agent) {
 	t.Helper()
+	signCapsAfter(t, a, withCap(ownCaps, protocol.CapRoom))
+}
+
+// signCapsAfter replaces a's live sessions' signed capabilities with caps:
+// at the current time after the session's own record (signCapsNow), or
+// right after a record an earlier fixture (humanTestCaps,
+// publishGroupFixtureCaps) dated ahead of the clock.
+func signCapsAfter(t *testing.T, a *Agent, caps []string) {
+	t.Helper()
 	waitNamedAgentCaps(t, a)
-	signCapsNow(t, a, withCap(ownCaps, protocol.CapRoom))
+	label, name, _ := protocol.SplitAddress(a.Address)
+	var prof protocol.Profile
+	if err := a.hub.do(tctx(t), "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
+		t.Fatal(err)
+	}
+	var last int64
+	for _, raw := range prof.Caps {
+		if r, err := protocol.ParseCapsRecord(raw); err == nil && r.TS > last {
+			last = r.TS
+		}
+	}
+	if last > time.Now().Unix()+1 {
+		for _, session := range prof.Sessions {
+			rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: caps, TS: last + 1}
+			rec.Sign(a.id.Sign)
+			if err := a.hub.do(tctx(t), "PUT", "/v1/caps", rec, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
+	}
+	signCapsNow(t, a, caps)
 }
 
 // roomInvite is a's signed room invitation in conv for an agent (role "")

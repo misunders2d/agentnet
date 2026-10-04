@@ -70,8 +70,8 @@ func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to,
 	if err != nil {
 		return err
 	}
-	if !externalDM(m.root) {
-		return errors.New("human: not a two-person DM")
+	if !humanRoom(m) {
+		return errors.New("human: not a two-person DM or a group with verified context")
 	}
 	sender := h.AuthorPID == "" && (m.device(from, fromFP) || hostAuthor)
 	reader := m.device(to, toFP) || hostReader
@@ -83,14 +83,17 @@ func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to,
 		if err != nil {
 			return err
 		}
-		if p.Role != protocol.RoleHuman || p.Invite != scope.Invite || p.Decision != scope.Decision {
+		if !p.follows() || p.Invite != scope.Invite || p.Decision != scope.Decision {
 			return errors.New("human: captured consent differs from local proof")
+		}
+		if scope.PID == h.AuthorPID && (p.Role == "") != h.AgentAuthor() {
+			return errors.New("human: the author's role differs from its captured scope")
 		}
 		exactSender := scope.PID == h.AuthorPID && p.Host.Address == from && p.Host.Fingerprint == fromFP
 		exactReader := p.Host.Address == to && p.Host.Fingerprint == toFP
 		if exactSender || exactReader {
 			retained := historical && exactSender && p.Held == 0 && p.State == PartDismissed
-			if !p.HumanActive() && !retained {
+			if !p.Following() && !retained {
 				return errors.New("human: author or reader participation ended or is held")
 			}
 		}
@@ -103,8 +106,14 @@ func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to,
 	return nil
 }
 
-// A lifecycle end may reach another exact accepted human host. This only
-// shares signed lifecycle evidence; no text, files, membership or jobs.
+// humanRoom reports whether m's conversation carries a captured audience
+// (ROOM_V1 §3): an unchanged two-person DM, or a group whose current
+// context is verified here.
+func humanRoom(m dmMembers) bool { return externalDM(m.root) || m.group != nil }
+
+// A lifecycle end may reach another exact following host (an accepted human
+// guest or room participant). This only shares signed lifecycle evidence;
+// no text, files, membership or jobs.
 func humanEndReader(q dbq, conv, address, fp string) (bool, error) {
 	m, err := membersIn(q, conv)
 	if err != nil {
@@ -136,7 +145,7 @@ func humanEndReader(q dbq, conv, address, fp string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if p.HumanActive() && p.Host.Address == address && p.Host.Fingerprint == fp {
+		if p.Following() && p.Host.Address == address && p.Host.Fingerprint == fp {
 			return true, nil
 		}
 	}
@@ -222,6 +231,9 @@ func (a *Agent) verifyHumanProof(ctx context.Context, root protocol.ConvRoot, h 
 		return err
 	}
 	for _, member := range root.Members {
+		if root.Kind == protocol.ConvKindGroup {
+			break // a group's members are its current verified context's (dmMembers), not its root's
+		}
 		if ok, err := a.boundIn(ctx, member.Person, member.Roster); err != nil {
 			return err
 		} else if !ok {
