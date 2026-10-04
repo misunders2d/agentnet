@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -44,8 +45,10 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
-	humanMu        sync.RWMutex // local human end commits serialize with ordinary copy/file delivery
-	statusLocks    sync.Map     // request id → *sync.Mutex: one status of a request at a time (headless.go)
+	humanMu        sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
+	statusLocks    sync.Map      // request id → *sync.Mutex: one status of a request at a time (headless.go)
+	statusWake     chan struct{} // wakes this process's status sender (statusLoop)
+	statusLive     atomic.Bool   // statusLoop runs in this process
 	home           string
 	id             *identity.Identity
 	store          *store
@@ -218,7 +221,7 @@ func Open(home string) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify,
-		changes: newChangeFeed(), alertWake: make(chan struct{}, 1)}
+		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bump
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {

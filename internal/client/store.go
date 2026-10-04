@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -1201,9 +1201,10 @@ func (s *store) markNotified(ids []string) error {
 }
 
 // interruptRunning marks jobs a previous daemon left running. They are not
-// rerun automatically: a task may already have had effects.
+// rerun automatically: a task may already have had effects. Their
+// requesters are told (status_due; noteStatus).
 func (s *store) interruptRunning() error {
-	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running'
+	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running', status_due = status_due + 1
 		WHERE state IN (?, ?)`, stateInterrupt, stateRunning, stateCancelReq)
 	return s.done(err)
 }

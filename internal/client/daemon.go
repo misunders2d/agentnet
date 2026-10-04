@@ -73,6 +73,10 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); a.alertLoop(alertCtx, a.alertWake) }()
 	defer func() { stopAlerts(); <-alertsDone }()
+	statusCtx, stopStatuses := context.WithCancel(ctx)
+	statusDone := make(chan struct{})
+	go func() { defer close(statusDone); a.statusLoop(statusCtx) }() // statuses due, from this run or an earlier process (headless.go)
+	defer func() { stopStatuses(); <-statusDone }()
 	remindCtx, stopRemind := context.WithCancel(ctx)
 	remindDone := make(chan struct{})
 	go func() { defer close(remindDone); a.remindLoop(remindCtx) }()
@@ -173,6 +177,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	a.typingConnected(resp.Header)
 	defer a.typingDisconnected()
 	a.convWork.due(convPublish | convRetry | convRelease | convHistory | convServe | convFetch) // a new connection: publish, then look again
+	a.wakeStatus()                                                                              // statuses that could not reach the Hub before
 	a.groupWork.recover.Store(true)                                                             // and replay group journal records not yet published (groups.go)
 
 	// Three missed pings mean the connection is dead even if TCP has not noticed.
@@ -320,6 +325,7 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		a.onLinkEvent([]byte(data)) // a device asks to join this person (link.go)
 	case "ping":
 		a.wakeWorker()
+		a.wakeStatus()
 		// Prove this connection is alive; the Hub drops unanswered streams.
 		var ping protocol.PingAck
 		if err := json.Unmarshal([]byte(data), &ping); err == nil && ping.Conn != "" {
@@ -498,6 +504,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	// requests) and sends it now.
 	stopKicks, err := listenKicks(a.home, func() {
 		a.wakeWorker()
+		a.wakeStatus() // a status another process noted (noteStatus)
 		a.changes.bump()
 		a.convWork.due(convHistory | convServe | convFetch | convRetry) // convRetry: a local participation record shares its public scope with guests now
 		a.kickNow()

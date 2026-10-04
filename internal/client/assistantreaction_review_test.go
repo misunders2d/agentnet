@@ -52,6 +52,9 @@ func TestAssistantReactionExactKeys(t *testing.T) {
 	})
 
 	// Queued for the old requester key, the copy is not sent once it changes.
+	// The requests' statuses are told first: their capability reads must not
+	// take the fault meant for the reaction's.
+	eventually(t, "statuses told", func() bool { return inboxCount(t, w.bob, "status_due > 0") == 0 })
 	f := injectFaults(w.bob)
 	f.addAfter("GET", "/profile", 1, 1, false) // the send-time control check passes; delivery's capability read is lost
 	queued, err := w.bob.reactAsAssistant(tctx(t), q1, "claude", "🎉", false)

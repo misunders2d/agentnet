@@ -149,6 +149,7 @@ func (a *Agent) AcceptAlways(id string) (sender, fp string, err error) {
 		return "", "", err
 	}
 	notifyDaemon(a.home)
+	a.noteStatus(id) // the requester learns it is queued (told by the daemon)
 	return sender, fp, nil
 }
 
