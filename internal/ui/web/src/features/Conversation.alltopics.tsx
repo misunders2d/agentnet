@@ -105,6 +105,9 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-2 lg:px-3" aria-busy={loading}>
+            <p role="status" className={q && !loading && !failed && items.length ? "px-3 pb-1 text-[13px] font-semibold text-text-2" : "sr-only"}>
+              {q && !loading && !failed ? (matched === 1 ? "1 " + f.label.toLowerCase() + " topic matches" : matched + " " + f.label.toLowerCase() + " topics match") : ""}
+            </p>
             {failed && (
               <div role="alert" className="mx-2 mt-2 rounded-2xl bg-danger-bg p-3 text-[14px] text-danger stroke">Topics didn’t load: {failed}</div>
             )}
