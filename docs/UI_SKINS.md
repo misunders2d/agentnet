@@ -148,6 +148,20 @@ in `unmount`. An operation started before the switch keeps its host: a
 send under way goes where it was written, a staged file belongs to the
 workspace it was staged in (the host refuses it elsewhere).
 
+Disconnected memberships (BUG-19): `GET /api/workspaces` lists the mounted
+memberships only, each with its `handle`. This computer's program lists
+every membership with its `state` at `GET /api/workspaces/all` (a
+disconnected one has `state: "disconnected"` and no handle) and routes one
+again with `POST /api/workspaces/reconnect` and body `{"id": "<its id>"}`
+(JSON, same origin, at the page's root, never under a membership's
+`/workspaces/<id>/<handle>/` prefix). The answer is the membership bound again
+under a new handle (`state: "enrolled"`); 404 says no disconnected
+membership has that id. `host.api` is bound to one membership's prefix and
+`host.workspaces` does not offer these two yet, so an interface reaches them
+only through the host (`WorkspaceShell.disconnected()` and `reconnect(id)`
+implement both); the host's own bar shows Reconnect… over interfaces other
+than the default one, which draws its own switcher.
+
 A notification fragment is `#conv=<hash>&workspace=<id>`: the host
 verifies the id against its registrations, selects that workspace, then
 calls `onOpen`'s handler; an unknown id opens nothing (never the current
