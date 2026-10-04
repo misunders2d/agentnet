@@ -252,6 +252,7 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 		IdleTimeout:       2 * time.Minute,
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{h.cert}, MinVersion: tls.VersionTLS13},
 		ErrorLog:          log.New(logWriter{h.cfg.Logf}, "", 0),
+		ConnState:         (&lateConns{stopping: h.done, starting: map[net.Conn]bool{}}).state,
 	}
 	defer ln.Close()
 	notifyCtx, stopNotify := context.WithCancel(ctx)
@@ -277,6 +278,41 @@ func (h *Hub) Serve(ctx context.Context, ln net.Listener) error {
 	err := srv.Shutdown(shutdownCtx)
 	<-errc // ServeTLS has returned, so the listener is closed
 	return err
+}
+
+// lateConns closes an HTTP/2 connection that begins serving only after the
+// Hub started to stop. Shutdown tells the HTTP/2 connections being served to
+// finish, but one whose TLS handshake was still running at that moment joins
+// afterwards, is never told, and keeps Shutdown waiting until its deadline
+// fails it. No request on it has been read yet, so closing it cuts no
+// answer short. Shutdown closes HTTP/1 connections itself.
+type lateConns struct {
+	stopping <-chan struct{}
+	mu       sync.Mutex
+	starting map[net.Conn]bool // accepted, not yet serving
+}
+
+func (l *lateConns) state(c net.Conn, s http.ConnState) {
+	l.mu.Lock()
+	if s == http.StateNew {
+		l.starting[c] = true
+		l.mu.Unlock()
+		return
+	}
+	first := l.starting[c]
+	delete(l.starting, c)
+	l.mu.Unlock()
+	if !first || s != http.StateActive {
+		return
+	}
+	select {
+	case <-l.stopping:
+	default:
+		return
+	}
+	if tc, ok := c.(*tls.Conn); ok && tc.ConnectionState().NegotiatedProtocol == "h2" {
+		c.Close()
+	}
 }
 
 // Close releases the database. Call after Serve returns.

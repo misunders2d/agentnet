@@ -142,6 +142,7 @@ func join(ctx context.Context, home, code, agentName string, link func(identity.
 	if err != nil {
 		return nil, err
 	}
+	defer conn.release() // the enrolled agent opens its own
 	var v protocol.VersionInfo
 	if err := conn.do(ctx, "GET", "/v1/version", nil, &v); err != nil {
 		return nil, fmt.Errorf("cannot reach the Hub at %s: %w", inv.Hub, err)
@@ -241,9 +242,10 @@ func Open(home string) (*Agent, error) {
 	return a, nil
 }
 
-// Close releases local storage.
+// Close releases local storage and the agent's unused Hub connections.
 func (a *Agent) Close() error {
 	a.typingDisconnected()
+	a.hub.release()
 	return a.store.db.Close()
 }
 

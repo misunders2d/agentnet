@@ -89,6 +89,16 @@ func newHubConn(base, certPEM, agent string, key ed25519.PrivateKey) (*hubConn, 
 	return &hubConn{base: base, agent: agent, key: key, http: &http.Client{Transport: rt}, timeout: requestTimeout}, nil
 }
 
+// release closes the idle connections to the Hub and stops dials that no
+// request waits for any more: net/http keeps dialing after the request that
+// started a dial has ended, so the connection would otherwise reach the Hub
+// after its owner was closed.
+func (c *hubConn) release() {
+	if c != nil {
+		c.http.CloseIdleConnections()
+	}
+}
+
 // request builds a request with a raw body, signed unless the connection
 // has no agent yet.
 func (c *hubConn) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
