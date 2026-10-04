@@ -54,6 +54,16 @@ const CapExternalParticipation = "apx1"
 const CapHumanParticipation = "hgp1"
 const RoleHuman = "human"
 
+// CapRoom means the device reads room participation (ROOM_V1 §2): the room
+// audience on participation events and their Until, a captured audience
+// (envelope.HumanTurn) on group turns and on turns an agent participant
+// authors, and edits carrying it. A session that lists it also reads every
+// capability RoomImplies names, so later programs may stop listing those.
+const CapRoom = "rm1"
+
+// RoomImplies are the capabilities CapRoom implies (CapsRecord.Reads).
+var RoomImplies = []string{CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear}
+
 // Participation event types.
 const (
 	EventInvite  = "invite"

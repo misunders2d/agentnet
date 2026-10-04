@@ -21,6 +21,7 @@ export const SubStatus = "status", SubDecision = "decision"; // headless: a host
 export const CapHeadless = "hdl1";        // protocol cap: reads status controls and version 2 reports, sends decisions
 export const CapExternalParticipation = "apx1"; // selected DM excerpts and exact outside-host participation
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
+export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
 export const SubGroupProof = "group-proof", SubGroupContext = "group-context"; // bounded quiet carriers; no capability advertisement
 export const SubGroupInvite = "group-invite", SubGroupConsent = "group-consent", SubGroupWithdrawal = "group-withdrawal";
@@ -843,7 +844,7 @@ export const MaxGroupHistory = 64, MaxGroupState = 256 << 10, MaxGroupCiphertext
 const groupRootDomain = "agentnet-conv-root-v3\n";
 export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot : MaxConvRoot;
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
-export const MaxCaps = 16;
+export const MaxCaps = 32, MaxAdvertisedCaps = 16; // protocol: a record parses with up to 32 names; a device lists at most 16
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1583,9 +1584,11 @@ export function validateCaps(c) {
   });
 }
 
-// newCaps is this device session's signed record (for PUT /v1/caps).
+// newCaps is this device session's signed record (for PUT /v1/caps): at
+// most MaxAdvertisedCaps names, so readers parsing MaxCaps keep headroom.
 export async function newCaps(keys, address, session, caps = [CapEnv2, CapPerson]) {
   const c = { address, session, caps: [...caps].sort(), ts: Math.floor(Date.now() / 1000) };
+  if (c.caps.length > MaxAdvertisedCaps) throw new Error("caps: a device advertises at most " + MaxAdvertisedCaps);
   validateCaps(c);
   c.sig = await signBytes(keys, capsCanonical(c));
   return c;
@@ -1605,10 +1608,16 @@ export async function verifyCaps(c, signKey) {
   if (!(await verifyBytes(signKey, capsCanonical(c), c.sig))) throw new Error("caps: signature invalid");
 }
 
+// RoomImplies are the capabilities CapRoom implies (protocol.RoomImplies);
+// capsReads is protocol.CapsRecord.Reads: a record lists name, or rm1 when
+// rm1 implies it.
+export const RoomImplies = [CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear];
+export const capsReads = (c, name) => (c.caps || []).includes(name) || (c.caps || []).includes(CapRoom) && RoomImplies.includes(name);
+
 // profileSupports is protocol.Profile.Supports for a profile as the relay
 // sends it ({person, sessions, live, caps}): there are sessions, and each
 // has a record that verifies with signKey, names address and that session,
-// and lists name. Sessions are the relay's statement, not signed.
+// and reads name (capsReads). Sessions are the relay's statement, not signed.
 export async function profileSupports(profile, address, signKey, name) {
   const sessions = (profile && profile.sessions) || [];
   if (!sessions.length) return false;
@@ -1621,7 +1630,7 @@ export async function profileSupports(profile, address, signKey, name) {
     } catch (e) {
       continue;
     }
-    if (c.address === address && (c.caps || []).includes(name)) has.add(c.session);
+    if (c.address === address && capsReads(c, name)) has.add(c.session);
   }
   return sessions.every((s) => has.has(s));
 }

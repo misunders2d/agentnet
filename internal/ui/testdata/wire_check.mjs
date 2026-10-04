@@ -95,7 +95,7 @@ async function handle(req) {
     return { id: await wire.rootID(c) };
   }
   case "caps": {
-    const c = await wire.newCaps(keys, address, req.session);
+    const c = await wire.newCaps(keys, address, req.session, ...(req.names ? [req.names] : []));
     return { json: wire.capsJSON(c) };
   }
   case "parseCaps": {

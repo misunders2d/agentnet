@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -377,7 +378,7 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			"unsorted":  mk(bobID, bob.Address, session, []string{"env2", "a"}),
 			"duplicate": mk(bobID, bob.Address, session, []string{"env2", "env2"}),
 			"bad name":  mk(bobID, bob.Address, session, []string{"Env2"}),
-			"too many":  mk(bobID, bob.Address, session, strings.Split("a b c d e f g h i j k l m n o p q", " ")),
+			"too many":  mk(bobID, bob.Address, session, strings.Split("c00 c01 c02 c03 c04 c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29 c30 c31 c32", " ")),
 			"no time": func() protocol.CapsRecord {
 				c := mk(bobID, bob.Address, session, nil)
 				c.TS = 0
@@ -408,6 +409,31 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			got := w.ok(map[string]any{"op": "supports", "profile": marshal(t, p), "address": bob.Address, "key": b64(bob.SignKey), "name": protocol.CapEnv2})
 			if got["supports"] != want {
 				t.Errorf("%s: Go %v, device %v", what, want, got["supports"])
+			}
+		}
+		// ROOM_V1 §2.1: a later program's 17-name record parses on both
+		// sides (headroom up to 32), and rm1 implies what Go says it does.
+		many := strings.Split("a b c d e f g h i j k l m n o p env2", " ")
+		slices.Sort(many)
+		if _, err := protocol.ParseCapsRecord([]byte(marshal(t, mk(bobID, bob.Address, session, many)))); err != nil {
+			t.Fatalf("Go refuses a 17-name record: %v", err)
+		}
+		if v := w.call(map[string]any{"op": "parseCaps", "json": marshal(t, mk(bobID, bob.Address, session, many)), "key": b64(bob.SignKey)}); v["error"] != nil {
+			t.Fatalf("the device refuses a 17-name record: %v", v["error"])
+		}
+		w.refuses("advertising 17 names", w.call(map[string]any{"op": "caps", "session": session, "names": many}), "at most 16")
+		if v := w.ok(map[string]any{"op": "caps", "session": session, "names": many[1:]}); v["json"] == nil {
+			t.Fatal("the device cannot advertise 16 names")
+		}
+		for what, caps := range map[string][]string{"rm1": {protocol.CapEnv2, protocol.CapRoom}, "17 names": many, "hgp1 only": {protocol.CapHumanParticipation}} {
+			p := protocol.Profile{Sessions: []string{s1}, Caps: []json.RawMessage{raw(mk(bobID, bob.Address, s1, caps))}}
+			for _, name := range []string{protocol.CapEnv2, protocol.CapPerson, protocol.CapRoom, protocol.CapHumanParticipation, protocol.CapExternalParticipation, protocol.CapAgentIdentity, protocol.CapAgentReaction,
+				protocol.CapProgress, protocol.CapGroup, protocol.CapReplyReceiver, protocol.CapConvClear, protocol.CapControl, protocol.CapHeadless, protocol.CapDriveSpace, protocol.CapNotify, protocol.CapTyping, "p"} {
+				want := p.Supports(bob.Address, bob.SignKey, name)
+				got := w.ok(map[string]any{"op": "supports", "profile": marshal(t, p), "address": bob.Address, "key": b64(bob.SignKey), "name": name})
+				if got["supports"] != want {
+					t.Errorf("%s reads %s: Go %v, device %v", what, name, want, got["supports"])
+				}
 			}
 		}
 	})
