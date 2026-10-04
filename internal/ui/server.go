@@ -91,6 +91,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/file/request", s.requestFile)
 	mux.HandleFunc("POST /api/message/{what}", s.control)
 	mux.HandleFunc("POST /api/conversation/delete", s.deleteConversation) // livedelete.go
+	mux.HandleFunc("GET /api/topics", s.topics)                           // livetopics.go: one page of topics
+	mux.HandleFunc("POST /api/topic/{what}", s.changeTopic)               // rename, done, reopen (this device only)
 	mux.HandleFunc("POST /api/operator/decide", s.decide)
 	mux.HandleFunc("GET /api/drive", s.drive) // drivespace.go: a conversation's shared Drive space
 	mux.HandleFunc("POST /api/drive", s.drive)
@@ -275,6 +277,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	_, o.Agents = s.p.(Participants)
 	_, o.ReplyReceivers = s.p.(ReplyReceivers)
 	_, o.ReplySessions = s.p.(ReplySessionCatalogProvider)
+	_, o.TopicList = s.p.(Topics)
 	writeJSON(w, o)
 }
 

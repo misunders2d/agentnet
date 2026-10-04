@@ -537,6 +537,8 @@ export interface Overview {
   demo: boolean;
   me: Me;
   threads: ThreadSummary[] | null;
+  topics?: PeerTopics[];
+  topic_list: boolean;
   review: ReviewItem[] | null;
   quarantine: QuarantineItem[] | null;
   release?: string;
@@ -563,6 +565,14 @@ export interface Overview {
 export interface PeerKey {
   pinned?: string;
   pending?: string;
+}
+
+export interface PeerTopics {
+  peer: string;
+  total: number;
+  archived: number;
+  archived_unread: number;
+  latest: ThreadSummary;
 }
 
 export interface PersonRef {
@@ -839,6 +849,7 @@ export interface Thread {
   approved: boolean;
   task_grant: string;
   messages: Message[] | null;
+  topic?: ThreadSummary;
 }
 
 export interface ThreadSummary {
@@ -855,6 +866,25 @@ export interface ThreadSummary {
   key_changed: boolean;
   notices: number;
   notice_only: boolean;
+  state: string;
+  done_by?: string;
+  conclusion?: string;
+  concluded_by?: string;
+  pending: boolean;
+  renamed?: boolean;
+  auto_title?: string;
+}
+
+export interface TopicChange {
+  peer: string;
+  id: string;
+  title?: string;
+}
+
+export interface TopicPage {
+  topics: ThreadSummary[] | null;
+  next?: string;
+  matched: number;
 }
 
 export interface TypingEntry {

@@ -69,22 +69,32 @@ func (l *Live) Overview() (Overview, error) {
 	if err := l.identityOverview(&o); err != nil {
 		return o, err
 	}
-	threads, err := l.a.Threads()
+	threads, peers, err := l.a.TopicOverview() // archived topics are counted, not listed (livetopics.go)
 	if err != nil {
 		return o, err
 	}
 	changedKeys := map[string]bool{}
-	for _, t := range threads {
-		if _, seen := changedKeys[t.Peer]; !seen {
-			k, err := l.a.PeerKeyOf(t.Peer)
-			if err != nil {
-				return o, err
-			}
-			changedKeys[t.Peer] = k.Pending != ""
+	changed := func(peer string) (bool, error) {
+		if v, seen := changedKeys[peer]; seen {
+			return v, nil
 		}
-		o.Threads = append(o.Threads, ThreadSummary{ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
-			Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: changedKeys[t.Peer],
-			Notices: t.Notices, NoticeOnly: t.NoticeOnly})
+		k, err := l.a.PeerKeyOf(peer)
+		changedKeys[peer] = k.Pending != ""
+		return changedKeys[peer], err
+	}
+	for _, t := range threads {
+		kc, err := changed(t.Peer)
+		if err != nil {
+			return o, err
+		}
+		o.Threads = append(o.Threads, threadSummary(t, kc))
+	}
+	for _, p := range peers {
+		kc, err := changed(p.Peer)
+		if err != nil {
+			return o, err
+		}
+		o.Topics = append(o.Topics, PeerTopics{Peer: p.Peer, Total: p.Total, Archived: p.Archived, ArchivedUnread: p.ArchivedUnread, Latest: threadSummary(p.Latest, kc)})
 	}
 	review, err := l.a.PageReview()
 	if err != nil {
@@ -195,6 +205,12 @@ func (l *Live) Thread(id string) (Thread, error) {
 		return t, err
 	}
 	t.Key = PeerKey{Pinned: k.Pinned, Pending: k.Pending}
+	topic, err := l.a.TopicOf(id)
+	if err != nil {
+		return t, err
+	}
+	ts := threadSummary(topic, k.Pending != "")
+	t.Topic = &ts
 	if approved, err := l.a.QuestionApprovals(); err == nil {
 		for _, a := range approved {
 			if a == c.Peer {

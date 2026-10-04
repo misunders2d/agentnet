@@ -243,6 +243,53 @@ const firstLine = (s) => {
   const l = (s || "").split("\n")[0];
   return [...l].length > 120 ? [...l].slice(0, 119).join("") + "…" : l;
 };
+// ---- topics (client topics.go, docs/plans/TOPICS.md) ---------------------------------------
+// Topic tunables: the Go client's (topics.go), the one place to change them
+// there; the same values here, pinned by internal/ui topics_browser_test.go.
+// Times are seconds.
+export const TOPICS = Object.freeze({
+  archiveAfter: 7 * 24 * 3600, // quiet this long with nothing pending: archived (TopicArchiveAfter)
+  pageDefault: 50,             // topics in one page of the All topics list (TopicPageDefault)
+  pageMax: 200,                // the most a page may ask for (TopicPageMax)
+  titleMax: 120,               // characters in a name the person gives a topic (TopicTitleMax)
+});
+const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting"]);
+const topicUndelivered = new Set(["failed", "expired", "quarantined"]);
+const topicRequest = (k) => k === "question" || k === "task";
+// topicOpen: one message keeps its topic pending (client topicOpen).
+const topicOpen = (r, replied) => r.notice ? r.state === "needs_human"
+  : r.in ? !r.selected && topicOpenIn.has(r.state)
+  : topicRequest(r.kind) && !replied && !topicUndelivered.has(r.state);
+// deriveTopic is a topic's state from its messages (thread order, oldest
+// first; facts {id, reply_to, at (seconds), in, kind, state, status,
+// notice, selected}), what the person set on it here ({mark, mark_at,
+// mark_count}) and now (seconds): client topics.go deriveTopic exactly.
+export function deriveTopic(g, local, now) {
+  const l = local || {}, v = { state: "active", pending: false, quiet_since: 0 };
+  const replied = new Set(g.filter((r) => r.in && r.reply_to && r.status !== "progress").map((r) => r.reply_to));
+  let request = "";
+  for (const r of g) {
+    if (topicRequest(r.kind)) request = r.id;
+    if (topicOpen(r, replied.has(r.id))) v.pending = true;
+  }
+  const last = g[g.length - 1];
+  v.quiet_since = last.at;
+  const live = !!l.mark && g.length <= (l.mark_count || 0); // a later message ends the mark
+  if (live && (l.mark_at || 0) > v.quiet_since) v.quiet_since = l.mark_at;
+  if (live && l.mark === "done") v.done_by = "you";
+  else if (live && l.mark === "open") { /* reopened: active */ }
+  else if (request && !v.pending && last.reply_to === request && last.status === "done" && (last.kind === "answer" || last.kind === "result")) { v.done_by = "agent"; v.conclusion = last.id; }
+  if (v.done_by) v.state = "done";
+  if (!v.pending && now - v.quiet_since >= TOPICS.archiveAfter) v.state = "archived";
+  return v;
+}
+// newerTopic orders topics most recently active first (client newer).
+const topicAt = (t) => Date.parse(t.last_at);
+const newerTopic = (a, b) => topicAt(a) !== topicAt(b) ? topicAt(a) > topicAt(b) : a.id !== b.id ? a.id > b.id : a.peer < b.peer;
+const byNewest = (a, b) => (newerTopic(a, b) ? -1 : newerTopic(b, a) ? 1 : 0);
+const topicCursor = (t) => topicAt(t) + "|" + t.peer + "|" + t.id;
+const topicQueryError = "That topic list request is not valid.";
+
 const loopback = (host) => host === "127.0.0.1" || host === "localhost" || host === "[::1]";
 
 // sameOrigin checks that an invitation is for the server this page came
@@ -1919,23 +1966,112 @@ export class Engine {
     return [...groups.values()].map((g) => g.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1)));
   }
 
+  // threadSummaries summarizes every device thread, archived topics
+  // included, as topics (client peerTopics, topicText), newest first.
   async threadSummaries() {
-    const out = [];
-    for (const g of await this.v1Threads()) {
-      const first = g[0], last = g[g.length - 1];
-      const pin = await this.store.get("pins", first.peer);
-      const replied = new Set(g.filter((m) => m.status !== wire.StatusProgress).map((m) => m.reply_to).filter(Boolean)); // a progress update never settles Waiting (client.ThreadSummary)
-      // A review notice is a report from that machine (client.ThreadSummary):
-      // counted while open, and a thread of nothing but reports is not a
-      // conversation (the page lists it under reports).
-      const notice = (m) => m.dir === "in" && m.kind === "message" && m.status === "review_notice" && !m.reply_to && !(m.attachments || []).length;
-      const line = (m) => (notice(m) ? this.noticeLine(m) : firstLine(m.body));
-      out.push({ id: first.id, peer: first.peer, title: line(first), last: line(last), last_at: iso(last.at), count: g.length,
-        review: g.filter((m) => m.dir === "in" && m.state === "held").length, unread: g.filter((m) => m.dir === "in" && !m.read).length, running: 0,
-        waiting: g.some((m) => m.dir === "out" && (m.kind === "question" || m.kind === "task") && !replied.has(m.id)),
-        key_changed: !!(pin && pin.pending), notices: g.filter((m) => notice(m) && !m.resolved).length, notice_only: g.every(notice) });
-    }
+    const out = [], now = Math.floor(this.now() / 1000), locals = await this.topicLocals();
+    for (const g of await this.v1Threads()) out.push(await this.topicSummary(g, locals, now));
+    return out.sort(byNewest);
+  }
+
+  async topicSummary(g, locals, now) {
+    const first = g[0], last = g[g.length - 1];
+    const pin = await this.store.get("pins", first.peer);
+    const replied = new Set(g.filter((m) => m.status !== wire.StatusProgress).map((m) => m.reply_to).filter(Boolean)); // a progress update never settles Waiting (client.ThreadSummary)
+    // A review notice is a report from that machine (client.ThreadSummary):
+    // counted while open, and a thread of nothing but reports is not a
+    // conversation (the page lists it under reports).
+    const notice = (m) => m.dir === "in" && m.kind === "message" && m.status === "review_notice" && !m.reply_to && !(m.attachments || []).length;
+    const line = (m) => (notice(m) ? this.noticeLine(m) : firstLine(m.body));
+    const local = this.topicLocalOf(locals, first.peer, g);
+    const facts = g.map((m) => ({ id: m.id, reply_to: m.reply_to || "", at: Math.floor(m.at / 1000), in: m.dir === "in", kind: m.kind,
+      state: notice(m) ? (m.resolved ? "resolved" : "needs_human") : m.state || "", status: m.status || "", notice: notice(m), selected: false }));
+    const v = deriveTopic(facts, local, now), concluded = v.conclusion ? g.find((m) => m.id === v.conclusion) : null;
+    const t = { id: first.id, peer: first.peer, title: line(first), last: line(last), last_at: iso(last.at), count: g.length,
+      review: g.filter((m) => m.dir === "in" && m.state === "held").length, unread: g.filter((m) => m.dir === "in" && !m.read).length, running: 0,
+      waiting: g.some((m) => m.dir === "out" && (m.kind === "question" || m.kind === "task") && !replied.has(m.id)),
+      key_changed: !!(pin && pin.pending), notices: g.filter((m) => notice(m) && !m.resolved).length, notice_only: g.every(notice),
+      state: v.state, pending: v.pending, ...(v.done_by ? { done_by: v.done_by } : {}),
+      ...(concluded ? { conclusion: firstLine(concluded.body), concluded_by: concluded.dir === "in" ? first.peer : this.address } : {}) };
+    if (local.title) Object.assign(t, { auto_title: t.title, title: local.title, renamed: true });
+    return t;
+  }
+
+  // ---- topics: what the person set here, and the All topics list -------------------------------
+  // Kept in this device's IndexedDB (kv "topic/<peer>/<id>", type
+  // "topic-state"), like read marks: never sent to another device.
+
+  async topicLocals() {
+    const out = new Map();
+    for (const v of await this.store.all("kv")) if (v?.type === "topic-state") out.set(v.peer + "/" + v.topic, v);
     return out;
+  }
+
+  // topicLocalOf: the row naming the topic's earliest message, else one naming any of its messages (client localOf).
+  topicLocalOf(locals, peer, g) {
+    for (const m of g) { const l = locals.get(peer + "/" + m.id); if (l) return l; }
+    return {};
+  }
+
+  // topicOverview: the overview's device threads (archived topics left out)
+  // and each peer's topic counts (client TopicOverview).
+  async topicOverview() {
+    const all = await this.threadSummaries(), threads = [], counts = new Map();
+    for (const t of all) {
+      if (t.state !== "archived" || t.notice_only) threads.push(t);
+      if (t.notice_only) continue;
+      const c = counts.get(t.peer) || { peer: t.peer, total: 0, archived: 0, archived_unread: 0, latest: t }; // all is newest first
+      c.total++;
+      if (t.state === "archived") { c.archived++; c.archived_unread += t.unread; }
+      counts.set(t.peer, c);
+    }
+    return { threads, topics: [...counts.values()].sort((a, b) => (a.peer < b.peer ? -1 : 1)) };
+  }
+
+  // topicList is GET /api/topics (ui livetopics.go, client Topics).
+  async topicList(q) {
+    const state = q.get("state") || "", peer = q.get("peer") || "", before = q.get("before") || "", raw = q.get("limit");
+    const limit = raw === null || raw === "" ? 0 : /^-?\d+$/.test(raw) ? Number(raw) : NaN;
+    if (!["", "active", "done", "archived"].includes(state) || !(limit >= 0 && limit <= TOPICS.pageMax)) throw new Error(topicQueryError);
+    let after = null;
+    if (before) {
+      const [at, p, id, ...rest] = before.split("|");
+      if (rest.length || !/^\d+$/.test(at || "") || p === undefined || !id) throw new Error(topicQueryError);
+      after = { last_at: iso(Number(at)), peer: p, id };
+    }
+    const words = (q.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
+    const matched = (await this.threadSummaries()).filter((t) => !t.notice_only && (!peer || t.peer === peer) && (!state || t.state === state)
+      && words.every((w) => (t.title + "\n" + (t.auto_title || "") + "\n" + t.last).toLowerCase().includes(w)));
+    const start = after ? matched.findIndex((t) => newerTopic(after, t)) : 0;
+    const from = start < 0 ? matched.length : start, page = matched.slice(from, from + (limit || TOPICS.pageDefault));
+    const end = from + page.length;
+    return { topics: page, ...(end < matched.length && page.length ? { next: topicCursor(page[page.length - 1]) } : {}), matched: matched.length };
+  }
+
+  // changeTopic is POST /api/topic/{rename,done,reopen} (ui livetopics.go, client setTopic).
+  async changeTopic(what, body) {
+    if (!["rename", "done", "reopen"].includes(what)) throw new Error("No such topic change.");
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["peer", "id", "title"].includes(k))) throw new Error("Bad request.");
+    const peer = String(body.peer || ""), id = String(body.id || "");
+    const g = (await this.v1Threads()).find((x) => x[0].id === id && x[0].peer === peer);
+    if (!g) throw new Error("No such topic here.");
+    const locals = await this.topicLocals(), was = g.find((m) => locals.has(peer + "/" + m.id));
+    const l = { ...(was ? locals.get(peer + "/" + was.id) : {}), type: "topic-state", peer, topic: id, updated_at: Math.floor(this.now() / 1000) };
+    let note;
+    if (what === "rename") {
+      const title = String(body.title || "").split(/\s+/).filter(Boolean).join(" ");
+      if ([...title].length > TOPICS.titleMax) throw new Error("A topic's name is at most " + TOPICS.titleMax + " characters.");
+      if (title) l.title = title; else delete l.title;
+      note = title ? "Topic renamed on this device." : "Topic named after its first message again.";
+    } else {
+      Object.assign(l, { mark: what === "done" ? "done" : "open", mark_at: Math.floor(this.now() / 1000), mark_count: g.length });
+      note = what === "done" ? "Marked done on this device. A new message makes it active again." : "Reopened on this device.";
+    }
+    const ops = [{ s: "kv", k: "topic/" + peer + "/" + id, v: l }];
+    if (was && was.id !== id) ops.push({ s: "kv", k: "topic/" + peer + "/" + was.id, v: undefined });
+    await this.store.write(ops);
+    this.changed();
+    return { note };
   }
 
   // ---- quiet group proof/current-context carriers (grp1 remains off) ---------------------------
@@ -4749,6 +4885,7 @@ export class Engine {
     }
     const ops = [];
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv: "", key: n.key, lid: n.lid, deletion, shared: true } }); this.erased.add(k); }
+    for (const m of thread) if (await this.store.get("kv", "topic/" + peer + "/" + m.id)) ops.push({ s: "kv", k: "topic/" + peer + "/" + m.id, v: undefined }); // its name and marks go with it
     let kept = 0;
     try {
       const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox");
@@ -5132,7 +5269,7 @@ export class Engine {
       dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:visible.length?firstLine(visible.at(-1).body):"",last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length});
     }
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
-    const threads = await this.threadSummaries();
+    const { threads, topics } = await this.topicOverview(); // archived topics are counted, not listed
     const held = await this.store.all("held");
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
@@ -5143,7 +5280,7 @@ export class Engine {
       demo: false, seq: this.seq, version: this.version, release: "",
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true },
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
-      threads, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), needs_you: needsYou, held: heldTurns, quarantine: held.map((h) => ({ id: h.id, peer: h.from, reason: holdText(h.reason, h.from), at: iso(h.at) })),
+      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), needs_you: needsYou, held: heldTurns, quarantine: held.map((h) => ({ id: h.id, peer: h.from, reason: holdText(h.reason, h.from), at: iso(h.at) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
@@ -6462,7 +6599,8 @@ export class Engine {
       return view;
     };
     const heldText = "Held for you: nothing runs in this browser. Answer it here if you want to.";
-    return { id: g[0].id, peer, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
+    const topic = await this.topicSummary(g, await this.topicLocals(), Math.floor(this.now() / 1000));
+    return { id: g[0].id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
       messages: await Promise.all(g.map(async (m) => {
         const inbound = m.dir === "in";
         return { id: m.id, dir: m.dir, from: inbound ? m.from : this.address, to: inbound ? this.address : m.to, kind: m.kind, body: m.body,
@@ -6575,6 +6713,8 @@ export class Engine {
     case "/api/dm/new": return { id: await this.newDM(body.address) };
     case "/api/dm/send": return this.sendDM(body);
     case "/api/conversation/delete": return this.deleteConversation(body);
+    case "/api/topics": return this.topicList(u.searchParams);
+    case "/api/topic/rename": case "/api/topic/done": case "/api/topic/reopen": return this.changeTopic(u.pathname.split("/").pop(), body);
     case "/api/dm/guest/invite": return this.changeHuman("invite", body);
     case "/api/dm/guest/decide": return this.changeHuman("decide", body);
     case "/api/dm/guest/end": return this.changeHuman("end", body);

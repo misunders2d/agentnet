@@ -63,13 +63,18 @@ type Overview struct {
 	ReplySessions    bool                  `json:"reply_sessions"`  // safe native registration catalog, not process liveness
 	Demo             bool                  `json:"demo"`
 	Me               Me                    `json:"me"`
-	Threads          []ThreadSummary       `json:"threads"`
-	Review           []ReviewItem          `json:"review"`
-	Quarantine       []QuarantineItem      `json:"quarantine"`
-	Release          string                `json:"release,omitempty"` // a recommended build other than this one
-	Seq              uint64                `json:"seq"`
-	Version          string                `json:"version"` // the program serving the page (an update changes it)
-	Directory        Directory             `json:"directory"`
+	// Threads are the device threads, archived topics left out: those are
+	// counted per peer in Topics and listed through GET /api/topics
+	// (TopicList says that route is served here).
+	Threads    []ThreadSummary  `json:"threads"`
+	Topics     []PeerTopics     `json:"topics,omitempty"`
+	TopicList  bool             `json:"topic_list"`
+	Review     []ReviewItem     `json:"review"`
+	Quarantine []QuarantineItem `json:"quarantine"`
+	Release    string           `json:"release,omitempty"` // a recommended build other than this one
+	Seq        uint64           `json:"seq"`
+	Version    string           `json:"version"` // the program serving the page (an update changes it)
+	Directory  Directory        `json:"directory"`
 	// NeedsYou are the conversation items waiting for the person's decision
 	// (requests to the agent here, invitations for it); Held are the person
 	// turns held in conversations, answered there. Neither is in Review,
@@ -623,6 +628,21 @@ type ThreadSummary struct {
 	KeyChanged bool      `json:"key_changed"`
 	Notices    int       `json:"notices"`     // open review notices (reports from another machine)
 	NoticeOnly bool      `json:"notice_only"` // the thread is only review notices: not a conversation
+	// The thread as a topic (client topics.go, docs/plans/TOPICS.md):
+	// State is active, done or archived (TopicActive...); DoneBy agent or
+	// you while done (kept once archived); Conclusion is the first line of
+	// the agent's final reply and ConcludedBy the device that sent it;
+	// Pending says something in it is still open (it is never archived
+	// then); Renamed says Title is the person's own name for it here, and
+	// AutoTitle is then the automatic one (its first line). A name and
+	// Mark done / Reopen are kept on this device only.
+	State       string `json:"state"`
+	DoneBy      string `json:"done_by,omitempty"`
+	Conclusion  string `json:"conclusion,omitempty"`
+	ConcludedBy string `json:"concluded_by,omitempty"`
+	Pending     bool   `json:"pending"`
+	Renamed     bool   `json:"renamed,omitempty"`
+	AutoTitle   string `json:"auto_title,omitempty"`
 }
 
 // Directory is who else the server (Hub) lists as enrolled, for finding
@@ -762,6 +782,8 @@ type Thread struct {
 	Approved  bool      `json:"approved"`   // questions from this peer are answered automatically
 	TaskGrant string    `json:"task_grant"` // "" none, "active", or why a grant does not hold
 	Messages  []Message `json:"messages"`
+	// Topic is this thread as a topic, archived or not (Topics providers).
+	Topic *ThreadSummary `json:"topic,omitempty"`
 }
 
 // PeerKey is what this installation knows about the peer's key.
