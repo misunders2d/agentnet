@@ -22,7 +22,7 @@ async function listen(){
   const url=new URL(req.url,'http://127.0.0.1'),name=url.pathname;let raw='';for await(const chunk of req)raw+=chunk;
   const body=raw&&req.headers['content-type']?.includes('application/json')?JSON.parse(raw):null;
   if(name==='/events'){res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(': fixture stream\n\n');return;}
-  if(name==='/assets/skins/index.json')return json(res,[{id:'default',api:1,name:'AgentNet'}]);
+  if(name==='/assets/skins/index.json')return json(res,[JSON.parse(fs.readFileSync(path.join(__dirname,'../static/skins/comic/skin.json'),'utf8'))]);
   if(name==='/assets/icon-192.png'&&process.env.AGENTNET_REMOTE_RECEIVER_ICON){const bytes=fs.readFileSync(process.env.AGENTNET_REMOTE_RECEIVER_ICON);served['icon-192.png']=sha(bytes);res.writeHead(200,{'Content-Type':'image/png'});res.end(bytes);return;}
   if(name==='/'||name.startsWith('/assets/')){
    const file=name==='/'?'index.html':name.slice('/assets/'.length);if(file.includes('..'))return json(res,{},403);

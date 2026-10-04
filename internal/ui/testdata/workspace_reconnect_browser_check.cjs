@@ -10,7 +10,7 @@ const fs = require('fs'), http = require('http'), path = require('path'), assert
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
 const base = path.resolve(__dirname, '../static') + '/';
 const other = 'c'.repeat(32), hostOf = (n) => n.toString(16).padStart(32, '0'), digest = 'f'.repeat(64);
-const skin = `export function mount(root,host){const h=document.createElement('h1');h.textContent='Fixture skin in '+host.workspace.name;root.append(h);host.onOpen(()=>{});}export function unmount(root){root.replaceChildren();}`;
+const skin = `export async function mount(root,host){window.mounts=(window.mounts||0)+1;window.skinHost=host;const h=document.createElement('h1');h.textContent='Fixture skin in '+host.workspace.name;root.append(h);host.onOpen(()=>{});await host.api('/api/overview');}export function unmount(root){root.replaceChildren();}`;
 
 const world = () => {
   let generation = 1;
@@ -50,7 +50,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/workspaces') return json([state.def, ...(state.acme.state === 'enrolled' ? [state.acme] : [])]);
   if (u.pathname === '/api/workspaces/all') return json([state.def, state.acme]);
   const scoped = u.pathname.match(/^\/workspaces\/([^/]+)\/([^/]+)\/api\/overview$/);
-  if (scoped) return json({ me: { address: 'alice/laptop' } });
+  if (scoped) return scoped[2] === state.acme.handle || scoped[2] === state.def.handle ? json({ me: { address: 'alice/laptop', fingerprint: 'SHA256:fixture' } }) : send(409, 'text/plain', 'stale or disconnected workspace');
   send(404, 'text/plain', 'not found');
 });
 
@@ -65,7 +65,7 @@ const server = http.createServer((req, res) => {
       const page = await browser.newPage({ viewport: { width, height } }), errors = [];
       page.on('pageerror', (e) => errors.push(e.message));
       page.on('console', (m) => { if (['error', 'warning'].includes(m.type()) && !m.text().startsWith('Failed to load resource')) errors.push(m.type() + ': ' + m.text()); });
-      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && !['/favicon.ico', '/assets/local-skins.mjs'].includes(p)) errors.push(r.status() + ' ' + p); }); // optional files a program may lack
+      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && r.status() !== 409 && !['/favicon.ico', '/assets/local-skins.mjs'].includes(p)) errors.push(r.status() + ' ' + p); }); // 409: the retired handle, asked on purpose // optional files a program may lack
       await page.addInitScript((d) => localStorage.setItem('agentnet.skin.trusted.fixture', d), digest);
       await page.goto(origin + '/?skin=fixture');
       await page.getByRole('heading', { name: 'Fixture skin in This computer' }).waitFor();
@@ -119,10 +119,28 @@ const server = http.createServer((req, res) => {
       assert.deepEqual(viaHost, { gone: [[other, 'disconnected', 'Acme']], listed: false, has: true }, name + ': host.workspaces');
       assert.deepEqual(state.posts.slice(2).map((p) => [p.path, p.body.id]), [['/api/workspaces/disconnect', other], ['/api/workspaces/reconnect', other]]);
       assert.notEqual(state.acme.handle, before, name + ': the same membership under a new handle');
+
+      // The program restarted under Acme (a new handle, same membership):
+      // host.reconnect binds it again after checking the identity this
+      // membership proved, and mounts the skin again over the new binding.
+      await menu();
+      await page.getByRole('menuitemradio', { name: /Acme/ }).click();
+      await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor();
+      const restarted = state.reconnect().handle;
+      const rebound = await page.evaluate(async () => {
+        const host = window.skinHost, mounts = window.mounts;
+        const stale = await host.api('/api/overview').then(() => 'answered', (e) => e.message);
+        await host.reconnect();
+        return { stale, remounted: window.mounts === mounts + 1, handle: window.skinHost.workspace.handle, old: host.workspace.handle };
+      });
+      assert.equal(rebound.stale, 'stale or disconnected workspace', name + ': the old handle is retired');
+      assert.deepEqual([rebound.remounted, rebound.handle], [true, restarted], name + ': rebound and mounted again');
+      assert.notEqual(rebound.old, restarted);
+      await page.getByRole('heading', { name: 'Fixture skin in Acme' }).waitFor();
       assert.deepEqual(errors, [], name + ': page errors');
       await page.close();
     }
-    console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect, host.workspaces disconnected()/reconnect(id)');
+    console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect, host.workspaces disconnected()/reconnect(id), host.reconnect after a restart');
   } finally {
     if (browser) await browser.close();
     await new Promise((r) => server.close(r));

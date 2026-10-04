@@ -27,7 +27,7 @@ const bootstrap="if(new URL(location.href).searchParams.get('runtime')==='browse
 async function listen(){server=http.createServer(async(req,res)=>{const u=new URL(req.url,'http://fixture'),p=u.pathname,actor=new URL(req.headers.referer||'http://fixture').searchParams.get('actor');let raw=Buffer.alloc(0);for await(const part of req)raw=Buffer.concat([raw,part]);const b=raw.length&&req.headers['content-type']?.includes('application/json')?JSON.parse(raw):undefined;
  if(p==='/fixture-bootstrap.js'){res.writeHead(200,{'Content-Type':'text/javascript'}).end(bootstrap);return;}
  if(p==='/events'){res.writeHead(200,{'Content-Type':'text/event-stream'});res.write(': fixture stream\n\n');streams.add(res);req.on('close',()=>streams.delete(res));return;}
- if(p==='/assets/skins/index.json')return json(res,[{id:'default',api:1,name:'AgentNet'}]);
+ if(p==='/assets/skins/index.json')return json(res,[JSON.parse(fs.readFileSync(path.join(__dirname,'../static/skins/comic/skin.json'),'utf8'))]);
  if(p==='/'||p.startsWith('/assets/')){const name=p==='/'?'index.html':p.slice(8);if(name.includes('..'))return json(res,{},403);const file=path.join(assets,name==='icon-192.png'?'ant.png':name);if(!fs.existsSync(file))return json(res,{},404);let bytes=fs.readFileSync(file);served[name]=crypto.createHash('sha256').update(bytes).digest('hex');if(name==='index.html')bytes=Buffer.from(bytes.toString().replace('<script src="/assets/loader.js"','<script src="/fixture-bootstrap.js"></script><script src="/assets/loader.js"'));res.writeHead(200,{'Content-Type':mime(name)}).end(bytes);return;}
  if(p==='/api/workspaces')return json(res,{error:'One-workspace legacy fixture'},404);
  if(p==='/api/overview'){reads.overview++;return json(res,overview(actor));}
