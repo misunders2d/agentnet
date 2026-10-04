@@ -24,7 +24,7 @@ type CleanupResult struct {
 }
 
 // Cleanup frees local storage the running system no longer needs: spooled
-// ciphertext not belonging to a message still queued for sending, and
+// ciphertext not belonging to a message still queued or waiting to be sent, and
 // directly received uploads never attached to a message (after a day). With
 // saved, it also removes directly received ciphertext of attachments already
 // saved as files. It refuses to run while the daemon is running.
@@ -48,8 +48,10 @@ func (a *Agent) Cleanup(saved bool) (CleanupResult, error) {
 	defer releaseSpool()
 
 	keep := map[string]bool{}
-	// A frozen request awaiting receiver setup still owns its exact ciphertext.
-	rows, err := a.store.db.Query(`SELECT u.blob_id FROM uploads u JOIN outbox o ON o.id = u.message_id WHERE o.state IN (?, ?)`, stateQueued, stateReceiverWaiting)
+	// A frozen request awaiting receiver setup, and a conversation message
+	// waiting until its recipient can read it, still own their exact
+	// ciphertext: it is uploaded once they are released, never spooled again.
+	rows, err := a.store.db.Query(`SELECT u.blob_id FROM uploads u JOIN outbox o ON o.id = u.message_id WHERE o.state IN (?, ?, ?)`, stateQueued, stateReceiverWaiting, stateConvWaiting)
 	if err != nil {
 		return res, err
 	}
@@ -71,7 +73,7 @@ func (a *Agent) Cleanup(saved bool) (CleanupResult, error) {
 		}
 		res.SpoolFiles++
 	}
-	if _, err := a.store.db.Exec(`DELETE FROM uploads WHERE message_id IN (SELECT id FROM outbox WHERE state NOT IN (?, ?))`, stateQueued, stateReceiverWaiting); err != nil {
+	if _, err := a.store.db.Exec(`DELETE FROM uploads WHERE message_id IN (SELECT id FROM outbox WHERE state NOT IN (?, ?, ?))`, stateQueued, stateReceiverWaiting, stateConvWaiting); err != nil {
 		return res, err
 	}
 

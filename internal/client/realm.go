@@ -37,7 +37,9 @@ func (a *Agent) CheckRealm(ctx context.Context) (string, error) {
 		return "", err
 	}
 	var v protocol.VersionInfo
-	if err := a.hub.do(ctx, http.MethodGet, "/v1/version", nil, &v); err != nil {
+	if err := a.hub.do(ctx, http.MethodGet, "/v1/version", nil, &v); hubUnreachable(err) {
+		return "", err // never reached: the cause is the connection, not the identity
+	} else if err != nil {
 		return "", fmt.Errorf("check workspace identity: %w", err)
 	}
 	if v.Protocol != protocol.ProtocolVersion {

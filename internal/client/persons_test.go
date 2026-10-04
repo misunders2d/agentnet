@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -235,6 +236,85 @@ func TestServiceStaysStandalone(t *testing.T) {
 	}
 	if err := w.alice.SetService(); err == nil {
 		t.Fatal("a person's device became a service")
+	}
+}
+
+// A device waiting for its link approval is set up by that approval only:
+// it creates no second person (its daemon then froze on the approval, for
+// good) and does not become a service; approved, it is its person's device.
+func TestPendingDeviceCreatesNoPersonOrService(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	persons(t, w.alice)
+	watch, awaited, _ := linkPhone(t, w.alice, "watch")
+	if _, err := watch.CreatePerson(tctx(t), "Watch"); !errors.Is(err, ErrLinkWaiting) {
+		t.Fatalf("a pending device created a person: %v", err)
+	}
+	if err := watch.SetService(); !errors.Is(err, ErrLinkWaiting) {
+		t.Fatalf("a pending device became a service: %v", err)
+	}
+	if _, ok, err := watch.Person(); err != nil || ok {
+		t.Fatalf("pending device's person: %v %v", ok, err)
+	}
+	if role, err := watch.Role(); err != nil || role != "" {
+		t.Fatalf("pending device's role %q %v", role, err)
+	}
+	req := pendingLink(t, w.alice)
+	if err := w.alice.DecideLink(tctx(t), req.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-awaited; out.err != nil || out.s.State != LinkLinked {
+		t.Fatalf("link %+v %v", out.s, out.err)
+	}
+	mine, _, _ := w.alice.Person()
+	if p, ok, err := watch.Person(); err != nil || !ok || p.Person != mine.Person {
+		t.Fatalf("linked device's person %+v %v %v", p, ok, err)
+	}
+}
+
+// A link that completes between the two checks of CreatePerson or
+// SetService still refuses them: the daemon pins the person before it marks
+// the link linked, so the link is read first and a device that no longer
+// waits already shows its person.
+func TestPendingDeviceSetupRacesLinkCompletion(t *testing.T) {
+	for _, what := range []string{"person", "service"} {
+		t.Run(what, func(t *testing.T) {
+			w := newWorld(t, "")
+			runAgent(t, w.alice)
+			persons(t, w.alice)
+			watch, awaited, _ := linkPhone(t, w.alice, "watch")
+			var once sync.Once
+			approve := func() {
+				once.Do(func() {
+					req := pendingLink(t, w.alice)
+					if err := w.alice.DecideLink(tctx(t), req.ID, true); err != nil {
+						t.Error(err)
+						return
+					}
+					if out := <-awaited; out.err != nil || out.s.State != LinkLinked {
+						t.Errorf("link %+v %v", out.s, out.err)
+					}
+				})
+			}
+			betweenSetupChecks = approve // the device's daemon finishes the link right then
+			t.Cleanup(func() { betweenSetupChecks = func() {} })
+			var err error
+			if what == "person" {
+				_, err = watch.CreatePerson(tctx(t), "Watch")
+			} else {
+				err = watch.SetService()
+			}
+			betweenSetupChecks = func() {}
+			approve()
+			mine, _, _ := w.alice.Person()
+			if p, ok, err := watch.Person(); err != nil || !ok || p.Person != mine.Person {
+				t.Fatalf("linked device's person %+v %v %v", p, ok, err)
+			}
+			role, _ := watch.store.config("role")
+			if !errors.Is(err, ErrLinkWaiting) || role == "service" {
+				t.Fatalf("set up as a %s while its link completed: %v (role %q)", what, err, role)
+			}
+		})
 	}
 }
 

@@ -39,6 +39,9 @@ var (
 	ErrLinkCrossPerson = errors.New("this device already belongs to a person (or the code is for another person)")
 	ErrLinkRefused     = errors.New("the device link was refused on the other device")
 	ErrRosterStale     = errors.New("your person's devices changed meanwhile: try again")
+	// ErrLinkWaiting refuses setting this device up otherwise (a person of
+	// its own, or a service) while it waits to be linked to its person.
+	ErrLinkWaiting = errors.New("this device waits for approval on its person's other device: approve it there; it gets its person from that approval")
 )
 
 // Link states (device_links.state, and LinkStatus.State on the new device).

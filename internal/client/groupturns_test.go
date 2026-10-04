@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -318,6 +320,276 @@ func TestGroupTurnsT3FilesResumeAcrossSenderRestart(t *testing.T) {
 	if files, _ := filepath.Glob(filepath.Join(home, "staging", "upload-*")); len(files) != 0 {
 		t.Fatal("leftover plaintext staging")
 	}
+}
+
+// With the Hub out of reach a group message is kept, as a DM is: its copies
+// wait, files spooled, with the true cause, and go out once the Hub is back
+// and each recipient's current record shows it may read them.
+func TestGroupTurnWaitsWhileHubUnreachable(t *testing.T) {
+	w, carol, p, stops := groupTurnsFixture(t)
+	stops[w.alice]()
+	home := w.alice.home
+	w.alice.Close()
+	alice, err := Open(home) // a new command: its first request checks the workspace identity
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+	base := alice.hub.http.Transport
+	alice.hub.http.Transport = failingHub(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	})
+	path, data := writeFile(t, t.TempDir(), "tiny.csv", 2000)
+	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "while the Hub is down", Files: []OutgoingFile{{Path: path, Name: "tiny.csv"}}})
+	if err != nil || sent.State != stateConvWaiting || len(sent.Copies) != 2 || !strings.HasPrefix(sent.Detail, "cannot reach the Hub") || strings.Contains(sent.Detail, "workspace identity") {
+		t.Fatalf("group send without the Hub: %+v %v", sent, err)
+	}
+	if r, err := alice.Cleanup(false); err != nil || r.SpoolFiles != 0 {
+		t.Fatalf("cleanup = %+v, %v", r, err)
+	}
+	alice.hub.http.Transport = base
+	runAgent(t, alice)
+	publishGroupFixtureCaps(t, alice, true)
+	for _, a := range []*Agent{w.bob, carol} {
+		eventually(t, "the kept group turn", func() bool { return len(groupTurns(t, a, p.State.Conv)) == 1 })
+		row := groupTurns(t, a, p.State.Conv)[0]
+		if row.Body != "while the Hub is down" || row.LID != sent.LID {
+			t.Fatalf("received %+v", row)
+		}
+		paths, err := a.Download(tctx(t), row.ID, t.TempDir(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(paths[0]); err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("file differs %v", err)
+		}
+	}
+}
+
+// A group message kept while the Hub was out of reach was made for the
+// devices pinned then; a device its person removed meanwhile never gets its
+// copy: the copy is released and sent only on current evidence.
+func TestGroupTurnKeptOfflineNotSentToRemovedDevice(t *testing.T) {
+	w, carol, p, stops := groupTurnsFixture(t)
+	phone, await, _ := linkPhone(t, w.bob, "phone")
+	request := pendingLink(t, w.bob)
+	if err := w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-await; out.err != nil {
+		t.Fatal(out.err)
+	}
+	runAgent(t, phone)
+	publishGroupFixtureCaps(t, phone, true)
+	bob, _, _ := w.bob.Person()
+	if _, err := w.alice.refreshPerson(tctx(t), bob.Person, false); err != nil { // alice knows the phone
+		t.Fatal(err)
+	}
+	if _, err := w.alice.sendKey(tctx(t), phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.RemoveDevice(tctx(t), phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	stops[w.alice]()
+	home := w.alice.home
+	w.alice.Close()
+	alice, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+	base := alice.hub.http.Transport
+	alice.hub.http.Transport = failingHub(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	})
+	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "kept while offline"})
+	if err != nil || sent.State != stateConvWaiting || len(sent.Copies) != 3 {
+		t.Fatalf("group send without the Hub: %+v %v", sent, err)
+	}
+	removed := ""
+	for _, c := range sent.Copies {
+		if c.To == phone.Address {
+			removed = c.ID
+		}
+	}
+	if removed == "" {
+		t.Fatalf("no copy for the device pinned here: %+v", sent.Copies)
+	}
+	alice.hub.http.Transport = base
+	runAgent(t, alice)
+	publishGroupFixtureCaps(t, alice, true)
+	for _, a := range []*Agent{w.bob, carol} {
+		eventually(t, "the kept group turn", func() bool { return len(groupTurns(t, a, p.State.Conv)) == 1 })
+	}
+	if err := alice.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	var state, why string
+	alice.store.db.QueryRow(`SELECT state, coalesce(error, '') FROM outbox WHERE id = ?`, removed).Scan(&state, &why)
+	if state != stateConvWaiting && state != stateNotDelivered {
+		t.Fatalf("the removed device's copy is %s (%s)", state, why)
+	}
+	t.Logf("the removed device's copy: %s (%s)", state, why)
+}
+
+// A group turn without the Hub is kept only for devices whose keys are known
+// here. A member's device whose key this installation never fetched (his
+// person linked it meanwhile; the roster pinned here lists it) fails the
+// send with that cause, and nothing is kept: no part of the group gets it.
+func TestGroupTurnOfflineUnknownKeyNamesCause(t *testing.T) {
+	w, _, p, stops := groupTurnsFixture(t)
+	phone, await, _ := linkPhone(t, w.bob, "phone")
+	request := pendingLink(t, w.bob)
+	if err := w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-await; out.err != nil {
+		t.Fatal(out.err)
+	}
+	bob, _, _ := w.bob.Person()
+	if _, err := w.alice.refreshPerson(tctx(t), bob.Person, false); err != nil { // lists the phone; its key is not fetched
+		t.Fatal(err)
+	}
+	stops[w.alice]()
+	home := w.alice.home
+	w.alice.Close()
+	alice, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+	alice.hub.http.Transport = failingHub(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	})
+	outbox := count(t, alice, "outbox")
+	path, _ := writeFile(t, t.TempDir(), "tiny.csv", 2000)
+	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "offline", Files: []OutgoingFile{{Path: path, Name: "tiny.csv"}}})
+	if err == nil || !hubUnreachable(err) || !strings.Contains(err.Error(), "the key of "+phone.Address+" is not known here yet") {
+		t.Fatalf("group send without the Hub or a member device's key: %+v %v", sent, err)
+	}
+	if n := count(t, alice, "outbox"); n != outbox {
+		t.Fatalf("outbox %d -> %d after a refused send", outbox, n)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(alice.home, "spool")); len(entries) != 0 {
+		t.Fatalf("spool after a refused send: %d files", len(entries))
+	}
+}
+
+// removedWhileOffline: alice pins bob's laptop and his linked phone, then
+// is away; bob links a tablet from the phone and removes both from it. The
+// Hub revokes the phone (it joined by a link) but not the laptop (it joined
+// by invitation): the laptop stays a member, with no person. alice comes
+// back as a new command that cannot reach the Hub; online gives it the Hub
+// back and runs its daemon.
+func removedWhileOffline(t *testing.T) (w *world, carol *Agent, p GroupContext, dm string, alice, tablet *Agent, online func()) {
+	t.Helper()
+	w, carol, p, stops := groupTurnsFixture(t)
+	dm = newDM(t, w.alice, w.bob)
+	phone, await, _ := linkPhone(t, w.bob, "phone")
+	request := pendingLink(t, w.bob)
+	if err := w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-await; out.err != nil {
+		t.Fatal(out.err)
+	}
+	runAgent(t, phone)
+	publishGroupFixtureCaps(t, phone, true)
+	bob, _, _ := w.bob.Person()
+	if _, err := w.alice.refreshPerson(tctx(t), bob.Person, false); err != nil { // alice pins the phone
+		t.Fatal(err)
+	}
+	if _, err := w.alice.sendKey(tctx(t), phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	stops[w.alice]() // away before the removals: she never sees them
+	home := w.alice.home
+	w.alice.Close()
+	tablet, await, _ = linkPhone(t, phone, "tablet")
+	request = pendingLink(t, phone)
+	if err := phone.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := <-await; out.err != nil {
+		t.Fatal(out.err)
+	}
+	for _, removed := range []string{w.bob.Address, phone.Address} {
+		if err := tablet.RemoveDevice(tctx(t), removed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alice, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	base := alice.hub.http.Transport
+	alice.hub.http.Transport = failingHub(func(*http.Request) (*http.Response, error) {
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}
+	})
+	online = func() {
+		alice.hub.http.Transport = base
+		runAgent(t, alice)
+		publishGroupFixtureCaps(t, alice, true)
+	}
+	return w, carol, p, dm, alice, tablet, online
+}
+
+// keptCopyTo returns the ID of the copy for address a send kept waiting.
+func keptCopyTo(t *testing.T, sent ConvSent, err error, address string) string {
+	t.Helper()
+	if err != nil || sent.State != stateConvWaiting {
+		t.Fatalf("send without the Hub: %+v %v", sent, err)
+	}
+	for _, c := range sent.Copies {
+		if c.To == address {
+			return c.ID
+		}
+	}
+	t.Fatalf("no copy for %s, a device pinned here: %+v", address, sent.Copies)
+	return ""
+}
+
+// notHandedOver fails unless the copy id is still waiting or not delivered.
+func notHandedOver(t *testing.T, a *Agent, id string) {
+	t.Helper()
+	if err := a.FlushOutbox(tctx(t)); err != nil {
+		t.Logf("flush: %v", err)
+	}
+	var state, why string
+	a.store.db.QueryRow(`SELECT state, coalesce(error, '') FROM outbox WHERE id = ?`, id).Scan(&state, &why)
+	if state != stateConvWaiting && state != stateNotDelivered {
+		t.Fatalf("a removed device's copy was handed over: %s (%s)", state, why)
+	}
+	t.Logf("the removed device's copy: %s (%s)", state, why)
+}
+
+// A group turn kept while the Hub was out of reach goes to a device only if
+// its person's current roster lists it: an invite-joined device removed
+// meanwhile, which the Hub does not revoke, never gets its copy, though the
+// roster pinned when the copy was made listed it.
+func TestGroupTurnKeptOfflineNotSentToUnrevokedRemovedDevice(t *testing.T) {
+	w, carol, p, _, alice, _, online := removedWhileOffline(t)
+	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "after both removals"})
+	laptop := keptCopyTo(t, sent, err, w.bob.Address)
+	online()
+	eventually(t, "carol gets the kept group turn", func() bool { return len(groupTurns(t, carol, p.State.Conv)) == 1 })
+	notHandedOver(t, alice, laptop)
+}
+
+// The same for a DM kept while the Hub was out of reach.
+func TestDMKeptOfflineNotSentToUnrevokedRemovedDevice(t *testing.T) {
+	w, _, _, dm, alice, tablet, online := removedWhileOffline(t)
+	sent, err := alice.SendConv(tctx(t), dm, ConvOutgoing{Body: "after both removals"})
+	laptop := keptCopyTo(t, sent, err, w.bob.Address)
+	bob, _, _ := tablet.Person()
+	online()
+	eventually(t, "alice reads bob's current roster", func() bool {
+		p, ok, err := alice.store.personByID(bob.Person)
+		return err == nil && ok && p.info.Roster == bob.Roster
+	})
+	notHandedOver(t, alice, laptop)
 }
 
 func TestGroupTurnsT4AtomicHeadsRemovalWithdrawalAndExactKey(t *testing.T) {

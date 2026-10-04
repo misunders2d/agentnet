@@ -699,6 +699,21 @@ func (a *Agent) personSendable(address, roster string) bool {
 	return err == nil && ok && (p.info.State == personPinned || p.info.State == personSelf) && (roster == "" || p.info.Roster == roster)
 }
 
+// refreshRecipientPerson brings the person pinned for the device at address
+// up to the Hub's current roster, once per person in done.
+func (a *Agent) refreshRecipientPerson(ctx context.Context, address string, done map[string]error) error {
+	p, pinned, err := a.store.personByAddress(address)
+	if err != nil || !pinned {
+		return err // not pinned: personSendable refuses it
+	}
+	err, seen := done[p.info.Person]
+	if !seen {
+		_, err = a.refreshPerson(ctx, p.info.Person, false)
+		done[p.info.Person] = err
+	}
+	return err
+}
+
 // releaseConv queues waiting conversation messages whose recipient can now
 // read them; the sync's outbox flush sends them. Agent outputs that may no
 // longer go out are held back first.
@@ -712,6 +727,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 		return
 	}
 	checked := map[string]bool{}
+	refreshed := map[string]error{} // each recipient's person, read fresh once per pass
 	for id, w := range waiting {
 		to := w.to
 		progress := w.status == envelope.StatusProgress
@@ -755,8 +771,15 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 					ok = (w.required == protocol.CapAgentReaction || a.requireParticipationCaps(ctx, key, protocol.CapAgentReaction) == nil) &&
 						a.assistantReactionCaps(ctx, key, w.conv, item.PID, item.AgentID) == nil
 				}
-				// Support alone is not enough: the profile just read may have
-				// frozen the person, and a frozen person gets nothing.
+				// Support alone is not enough: the roster pinned when the copy
+				// was made may list a device its person removed since (the Hub
+				// revokes only linked devices, so an invite-joined one still
+				// answers), and the profile just read may have frozen the
+				// person, who then gets nothing. The person's current roster
+				// decides; without it, nothing is released.
+				if ok {
+					ok = a.refreshRecipientPerson(ctx, to, refreshed) == nil
+				}
 				ok = ok && a.personSendable(to, "")
 			}
 			checked[cacheKey] = ok

@@ -93,18 +93,11 @@ func (a *Agent) spoolNamed(f OutgoingFile, recipient age.Recipient) (envelope.At
 		return envelope.Attachment{}, fmt.Errorf("file name %q: at most %d bytes of text, no control characters", name, maxFileName)
 	}
 	var att envelope.Attachment
-	src, err := os.Open(path)
+	src, info, err := openRegular(path)
 	if err != nil {
 		return att, err
 	}
 	defer src.Close()
-	info, err := src.Stat()
-	if err != nil {
-		return att, err
-	}
-	if !info.Mode().IsRegular() {
-		return att, fmt.Errorf("%s is not a regular file", path)
-	}
 	if info.Size() > MaxFileSize {
 		return att, fmt.Errorf("%s is larger than the %d byte limit", path, MaxFileSize)
 	}
@@ -147,6 +140,30 @@ func (a *Agent) spoolNamed(f OutgoingFile, recipient age.Recipient) (envelope.At
 		return att, err
 	}
 	return att, syncDir(dir) // the outbox row will point at this file
+}
+
+// openRegular opens a file to attach, only if it is a regular file: a named
+// pipe or device is refused before it is opened, as opening one can wait
+// for a writer forever. It is checked again once open, in case it changed.
+func openRegular(path string) (*os.File, os.FileInfo, error) {
+	if info, err := os.Stat(path); err != nil {
+		return nil, nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err == nil && !info.Mode().IsRegular() {
+		err = fmt.Errorf("%s is not a regular file", path)
+	}
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	return f, info, nil
 }
 
 // uploadAll sends every attachment of env the Hub does not hold yet.
