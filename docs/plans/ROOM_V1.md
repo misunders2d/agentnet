@@ -11,7 +11,9 @@ Owner decisions (Sergey, 2026-10-03, via Telegram; all approved, D2 refined, D6 
 - **D6** The default interface hides reply-receiver routing and the Message/Question/Task picker; @mention asks, @mention + "Do it" gives a task; answers return to the same chat. The CLI keeps the options.
 - **D7** The previous interface stays selectable until the skins work.
 - **D8** Mesh-ready: a workspace is an organization (membership and permission context), a relay is a transport endpoint; nothing is hard-wired to one relay.
-- No release or deploy without the owner's OK.
+- No release or deploy without the owner's OK. (2026-10-04: OK given for this work: once it is finished and every test passes, publish a release and update the relay and the owner's machines.)
+- **D9** (2026-10-04) When one of the owner's own agents asks another of the same person's agents to act, it runs without asking (questions and tasks); agents of other people still need their owner's OK or a standing grant.
+- Deferred by the owner (2026-10-04): joiner characters and non-ASCII spaces in names and titles; a workspace switch that blocks outside guests.
 
 **Basis:**
 - Wire: from design:minimal. Reuse `HumanTurn`, add one audience value, add no new `Inner` fields.
@@ -458,7 +460,7 @@ Every phase runs `go vet ./...` and `go test -race -count=1 -timeout 600s ./...`
 1. **D3 trust set.** Chosen: the host plus own native devices the person added. The literal D3 reading ("any linked device") would let a browser key enable execution.
 2. **Follower context.** Chosen: an agent run withholds turns from unapproved guests and agents (with a count); people still see everything.
 3. **May question runs ask other agents?** Chosen: no.
-4. **Own agent asking own agent on the same device.** Chosen for now: ask.
+4. **Own agent asking own agent.** Owner decision D9: runs without asking, for any two agents of the same person.
 5. **Outbox review.** Chosen: no extra review for files from an approved task.
 6. **`Until` default.** Chosen: none; guests stay until dismissed.
 7. **Outside guests.** Chosen: no workspace-wide ban yet. Group guests learn the member list; the invite sheet says so.
