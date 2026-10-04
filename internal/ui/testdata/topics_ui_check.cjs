@@ -43,7 +43,8 @@ const shots = process.env.AGENTNET_SCREENSHOTS || '';
         const open = await bar.locator('[aria-current="true"]').boundingBox();
         assert.ok(open && open.width >= 180, name + ': the open topic chip keeps room for its name: ' + JSON.stringify(open));
         const label = await bar.getByRole('button', { name: /^All topics/ }).getAttribute('aria-label');
-        assert.match(label, /\b4 need you\b/, name + ': the All topics chip says what needs you: ' + label);
+        const openNeeds = /Needs you/.test(await bar.locator('[aria-current="true"]').getAttribute('aria-label')); // the newest topic opens first: it may be one of the four questions
+        assert.match(label, new RegExp('\\b' + (4 - openNeeds) + ' need you\\b'), name + ': the All topics chip says what needs you: ' + label);
         assert.match(await bar.getByRole('button', { name: /^All topics/ }).innerText(), new RegExp('^All ' + total + '$'), name + ': the short phone label');
       }
       // All topics: opened from the keyboard, focus in its search; lists, filters, searches, opens.
