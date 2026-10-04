@@ -183,7 +183,9 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
 - Standing grants: GET `/api/approvals` lists what `agentnet approvals` does:
   `{questions[{address}], tasks[{address, fingerprint, status}],
   participations[{conv, pid, agent_id?, keys[], tasks_from[], external?}],
-  read_only}`; `POST /api/approvals/revoke` `{kind: "question"|"task",
+  read_only, unresolved?[]}` (`unresolved`: conversations whose agents
+  cannot be resolved here now, such as a group whose context is pending;
+  their grants are listed once they can be); `POST /api/approvals/revoke` `{kind: "question"|"task",
   address}` or `{kind: "participation", pid}` ends that one grant (as
   `unapprove`, `unapprove --tasks`, `dm dismiss-agent`; an `external` one is
   ended by a member only). A browser keeps none: its list is empty and

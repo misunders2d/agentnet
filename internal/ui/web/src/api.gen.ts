@@ -102,6 +102,7 @@ export interface ApprovalsView {
   tasks: TaskGrantView[] | null;
   participations: ParticipationGrant[] | null;
   read_only: boolean;
+  unresolved?: string[];
 }
 
 export interface AssistantSetupHarness {

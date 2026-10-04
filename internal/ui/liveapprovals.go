@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -33,6 +34,10 @@ type ApprovalsView struct {
 	Tasks          []TaskGrantView      `json:"tasks"`
 	Participations []ParticipationGrant `json:"participations"`
 	ReadOnly       bool                 `json:"read_only"`
+	// Unresolved: conversations whose agents cannot be resolved here now
+	// (a group whose context is pending). Their grants are not listed, so
+	// not revocable here, until they can be.
+	Unresolved []string `json:"unresolved,omitempty"`
 }
 
 // QuestionApproval is a device whose questions are answered automatically.
@@ -97,6 +102,10 @@ func (l *Live) Approvals() (ApprovalsView, error) {
 	}
 	for _, c := range convs {
 		parts, err := l.a.Participations(c.ID)
+		if errors.Is(err, client.ErrGroupContextPending) { // listed again once its context is here
+			v.Unresolved = append(v.Unresolved, c.ID)
+			continue
+		}
 		if err != nil {
 			return v, err
 		}
@@ -126,15 +135,16 @@ func participationGrant(p client.ParticipationInfo, people dmPeople) (Participat
 }
 
 // RevokeApproval implements ApprovalsProvider: only a grant listed now is
-// revoked, through its own operation.
+// revoked, through its own operation. A question approval or task grant
+// is looked up by itself, so no conversation can stand in its way.
 func (l *Live) RevokeApproval(r ApprovalRevoke) (string, error) {
-	v, err := l.Approvals()
-	if err != nil {
-		return "", err
-	}
 	switch r.Kind {
 	case "question":
-		if !slices.Contains(v.Questions, QuestionApproval{Address: r.Address}) {
+		qs, err := l.a.QuestionApprovals()
+		if err != nil {
+			return "", err
+		}
+		if !slices.Contains(qs, r.Address) {
 			return "", NotFound("No standing approval of questions from " + r.Address + ".")
 		}
 		if err := l.a.Unapprove(r.Address); err != nil {
@@ -143,7 +153,11 @@ func (l *Live) RevokeApproval(r ApprovalRevoke) (string, error) {
 		l.a.NoteChange()
 		return r.Address + "'s questions wait for you again.", nil
 	case "task":
-		if !slices.ContainsFunc(v.Tasks, func(g TaskGrantView) bool { return g.Address == r.Address }) {
+		ts, err := l.a.TaskGrants()
+		if err != nil {
+			return "", err
+		}
+		if !slices.ContainsFunc(ts, func(g client.Grant) bool { return g.Address == r.Address }) {
 			return "", NotFound("No standing task grant for " + r.Address + ".")
 		}
 		running, err := l.a.RevokeTasks(r.Address)
@@ -156,6 +170,10 @@ func (l *Live) RevokeApproval(r ApprovalRevoke) (string, error) {
 		}
 		return "Tasks from " + r.Address + " wait for you again.", nil
 	case "participation":
+		v, err := l.Approvals()
+		if err != nil {
+			return "", err
+		}
 		i := slices.IndexFunc(v.Participations, func(g ParticipationGrant) bool { return g.PID == r.PID })
 		if i < 0 {
 			return "", NotFound("No standing task grant of your agent with that id.")

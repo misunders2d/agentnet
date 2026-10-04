@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
@@ -143,5 +146,72 @@ func TestLiveApprovalsListAndRevoke(t *testing.T) {
 	}
 	if v := list(); len(v.Questions)+len(v.Tasks)+len(v.Participations) != 0 {
 		t.Fatalf("after revoking: %+v", v)
+	}
+}
+
+// A conversation whose agents cannot be resolved here now (a group whose
+// context is pending) blocks no other grant: the page still lists the rest,
+// names that conversation as unresolved, and revokes a question approval.
+func TestLiveApprovalsWithAPendingGroup(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, dir, "127.0.0.1:0", "")
+	home := filepath.Join(t.TempDir(), "alice")
+	alice, err := client.Join(ctx, home, testhub.BootstrapCode(t, dir), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { alice.Close() })
+	if _, err := alice.CreatePerson(ctx, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	packet, err := alice.CreateGroup(ctx, "Stuck")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv := packet.State.Conv
+	if err := alice.Approve("bob/desk"); err != nil {
+		t.Fatal(err)
+	}
+	// The group has a participation, and its context goes pending: a
+	// member's withdrawal waits.
+	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	member := packet.State.Members[0]
+	if _, err := db.Exec(`INSERT INTO group_pending_withdrawals(conv, person, admission, record) VALUES(?, ?, ?, ?)`, conv, member.Person, member.Admission.Hash(), []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO participation_events(hash, conv, pid, type, author, event, received_at) VALUES(?, ?, ?, 'invite', '{}', '{}', ?)`,
+		strings.Repeat("e", 64), conv, protocol.NewID(), time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.Participations(conv); !errors.Is(err, client.ErrGroupContextPending) {
+		t.Fatalf("the group's agents resolve here: %v", err)
+	}
+
+	var s *Server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
+	t.Cleanup(ts.Close)
+	s = New(NewLive(alice), strings.TrimPrefix(ts.URL, "http://"), testToken)
+	resp := do(t, ts, "GET", "/api/approvals", "", authed(ts, nil))
+	var v ApprovalsView
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&v) != nil {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /api/approvals: %d %s", resp.StatusCode, body)
+	}
+	if len(v.Questions) != 1 || v.Questions[0].Address != "bob/desk" || len(v.Participations) != 0 || len(v.Unresolved) != 1 || v.Unresolved[0] != conv {
+		t.Fatalf("with a pending group: %+v", v)
+	}
+	if resp := do(t, ts, "POST", "/api/approvals/revoke", `{"kind":"question","address":"bob/desk"}`, post(ts)); resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("revoking a question approval: %d %s", resp.StatusCode, body)
+	}
+	if approved, err := alice.QuestionApprovals(); err != nil || len(approved) != 0 {
+		t.Fatalf("questions still approved: %v %v", approved, err)
 	}
 }
