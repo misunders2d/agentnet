@@ -150,7 +150,7 @@ func run(args []string) error {
 			fmt.Println("review notices off")
 			return nil
 		case len(rest) == 1 && !strings.HasPrefix(rest[0], "-"):
-			if err := a.SetReviewTo(rest[0]); err != nil {
+			if err := a.SetReviewTo(ctx, rest[0]); err != nil {
 				return err
 			}
 			fmt.Printf("review notices go to %s\n", rest[0])
@@ -525,6 +525,15 @@ func runInbox(a *client.Agent, args []string) error {
 		return err
 	}
 	if *f.asJSON {
+		if *f.review {
+			// Reports from other machines too, as the text lists them: each
+			// is a message with status review_notice, decided THERE.
+			notices, err := a.Notices()
+			if err != nil {
+				return err
+			}
+			msgs = append(msgs, notices...)
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if msgs == nil {
@@ -596,8 +605,58 @@ func runInbox(a *client.Agent, args []string) error {
 			}
 			fmt.Printf("  %s  %s in %s, invited from %s  %s\n", n.PID, agent, n.Conv, n.Inviter, time.Unix(n.At, 0).Format(time.DateTime))
 		}
+		// What else waits here: each is decided where its line says.
+		w, err := a.Waiting()
+		if err != nil {
+			return err
+		}
+		printWaiting(w)
 	}
 	return nil
+}
+
+// printWaiting lists what waits here besides review items (client.Waiting),
+// one section each, without the senders' text.
+func printWaiting(w client.Waiting) {
+	for i, r := range w.AgentRequests {
+		if i == 0 {
+			fmt.Println("requests to your agent that have not run:")
+		}
+		fmt.Printf("  %s  %s %s from %s in %s: %s\n", r.ID, r.Kind, r.At.Format(time.DateTime), r.From, r.Conv, termText(r.Why, "    "))
+	}
+	for i, r := range w.AgentInvites {
+		if i == 0 {
+			fmt.Println("invitations for your agent (agentnet dm accept-agent PID, or dm decline-agent PID; nothing runs unless you accept):")
+		}
+		fmt.Printf("  %s  from %s in %s  %s\n", r.PID, r.From, r.Conv, r.At.Format(time.DateTime))
+	}
+	for i, g := range w.GroupInvites {
+		if i == 0 {
+			fmt.Println("group invitations for you (agentnet group accept ID, or group decline ID):")
+		}
+		fmt.Printf("  %s  from %s\n", g.ID, g.Inviter)
+	}
+	for i, l := range w.Links {
+		if i == 0 {
+			fmt.Println("devices asking to be linked to your person (agentnet person approve ID, or person refuse ID):")
+		}
+		fmt.Printf("  %s  %s  key %s  decide before %s\n", l.ID, l.Address, l.Fingerprint, time.Unix(l.Expires, 0).Format(time.DateTime))
+	}
+	for i, q := range w.Held {
+		if i == 0 {
+			fmt.Println("messages held here, not shown (nothing runs them):")
+		}
+		why := "it did not verify (it may have been tampered with), so it is refused"
+		switch q.Reason {
+		case "key_changed":
+			why = q.Sender + "'s key changed: run agentnet trust " + q.Sender + " once you verified the new key with them"
+		case "identity_conflict":
+			why = "it disagrees with the person record kept here for " + q.Sender
+		case "conflicting_duplicate":
+			why = q.Sender + " sent different content under a message it already sent"
+		}
+		fmt.Printf("  %s  %s  %s: %s\n", termText(q.ID, ""), termText(q.Sender, ""), q.ReceivedAt.Format(time.DateTime), termText(why, "    ")) // a held envelope's fields are not verified
+	}
 }
 
 // detailLabel names what an inbox item's detail text is.

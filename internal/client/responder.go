@@ -95,6 +95,10 @@ var Harnesses = map[string]harness{
 		// extension tool off, which is not the recipient's setup).
 		question: []string{"-p", "--no-session", "--exclude-tools", "bash,edit,write,powershell"},
 		task:     []string{"-p", "--no-session"},
+		// The request on stdin, never in its arguments, which any local
+		// user may read (/proc/PID/cmdline): Pi 0.87.1 reads a piped stdin
+		// as its first message (dist/main.js readPipedStdin).
+		stdin: true,
 		limits: "pi questions use your Pi settings, skills and extensions with their tools; only bash, edit, write and powershell are off " +
 			"(Pi cannot run its shell read-only or ask), and extension tools keep whatever effects your setup gives them; " +
 			"an AgentNet lookup tool runs only the installed agentnet program's fixed read-only lookups (version, whoami, inbox without marking read, approvals, status of a message this device sent); " +

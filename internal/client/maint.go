@@ -196,5 +196,37 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 	} else {
 		add("review", true, "nothing waits for your decision")
 	}
+	// What else waits here, apart from review: each says where it is
+	// decided (agentnet inbox --review lists them all).
+	if w, err := a.Waiting(); err != nil {
+		add("waiting", false, "%v", err)
+	} else {
+		if n := len(w.AgentRequests); n > 0 {
+			why, stuck := w.AgentRequests[0].Why, false
+			for _, r := range w.AgentRequests {
+				if r.Stuck { // nothing here would run it: that first
+					why, stuck = r.Why, true
+					break
+				}
+			}
+			add("agent requests", !stuck, "%d request(s) to your agent have not run: %s (agentnet inbox --review)", n, why)
+		}
+		if n := len(w.AgentInvites) + len(w.GroupInvites); n > 0 {
+			add("invitations", true, "%d invitation(s) wait for your decision (agentnet inbox --review)", n)
+		}
+		if n := len(w.Links); n > 0 {
+			add("device links", true, "%d device(s) ask to be linked to your person: agentnet person links", n)
+		}
+		if n := len(w.Held); n > 0 {
+			add("held messages", true, "%d message(s) held here, not shown (agentnet inbox --review says why)", n)
+		}
+	}
+	if why, err := a.ReviewToHealth(); err != nil {
+		add("review-to", false, "%v", err)
+	} else if why != "" {
+		add("review-to", false, "%s", why)
+	} else if to, _ := a.ReviewTo(); to != "" {
+		add("review-to", true, "notices go to %s; none failed", to)
+	}
 	return out
 }
