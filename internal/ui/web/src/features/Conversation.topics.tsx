@@ -86,6 +86,7 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
+    if (allRef.current) ro.observe(allRef.current); // its count and unread mark change its width
     return () => ro.disconnect();
   }, [total, listed, wide]);
 
