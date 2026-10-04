@@ -156,7 +156,7 @@ func TestLiveNeedsYou(t *testing.T) {
 	eventually("the task in needs-you", func() bool { _, ok := needsYouItem(overview(), client.ReviewAwaiting, sent.ID); return ok })
 	it, _ = needsYouItem(overview(), client.ReviewAwaiting, sent.ID)
 	if it.Conv != conv || it.PID != inv.PID || it.Peer != bob.Address || it.Kind != envelope.KindTask || it.Excerpt != "rotate the key" ||
-		strings.Join(it.Actions, ",") != DoAccept || it.Why == "" {
+		strings.Join(it.Actions, ",") != DoAccept+","+DoDecline || it.Why == "" {
 		t.Fatalf("the waiting task: %+v", it)
 	}
 	if ob, err := pb.Overview(); err != nil || len(ob.NeedsYou) != 0 || len(ob.Held) != 0 {
@@ -188,6 +188,53 @@ func TestLiveNeedsYou(t *testing.T) {
 	}
 	if m := goMessage(alice, conv, "rotate the key"); m.State != "resolved" || runs() != 1 {
 		t.Fatalf("resolved: state %q, %d run(s)", m.State, runs())
+	}
+
+	// Declined through /api/act instead: it leaves needs-you and never
+	// runs; Bob's page shows the request declined by Alice's device (its
+	// status), with no reply in the DM: the reason stays with Alice.
+	other, err := pb.AskAgent(AgentAsk{PID: inv.PID, Kind: "task", Body: "drop the table"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually("the second task in needs-you", func() bool { _, ok := needsYouItem(overview(), client.ReviewAwaiting, other.ID); return ok })
+	var d DMThread
+	get("/api/dm?id="+conv, &d)
+	for _, m := range d.Messages {
+		if m.ID == other.ID && strings.Join(m.Actions, ",") != DoAccept+","+DoDecline {
+			t.Fatalf("the waiting task's actions in the DM: %+v", m)
+		}
+	}
+	decide("/api/act", `{"do":"decline","id":"`+other.ID+`","reason":"not that one"}`)
+	if _, ok := needsYouItem(overview(), client.ReviewAwaiting, other.ID); ok {
+		t.Fatal("a declined task still waits")
+	}
+	if m := goMessage(alice, conv, "drop the table"); m.State != "declined" || m.Detail != "not that one" || runs() != 1 {
+		t.Fatalf("declined: state %q (%q), %d run(s)", m.State, m.Detail, runs())
+	}
+	eventually("bob's page to show it declined", func() bool {
+		d, err := pb.DM(conv)
+		if err != nil {
+			return false
+		}
+		for _, m := range d.Messages {
+			if m.ID == other.ID {
+				return m.Exec != nil && m.Exec.State == envelope.StatusDeclined && m.Exec.Host == alice.Address
+			}
+		}
+		return false
+	})
+	d, err = pb.DM(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range d.Messages {
+		if m.ReplyTo == other.ID {
+			t.Fatalf("a reply to the declined task in the DM: %+v", m)
+		}
+	}
+	if runs() != 1 {
+		t.Fatalf("a declined task ran: %d run(s)", runs())
 	}
 }
 

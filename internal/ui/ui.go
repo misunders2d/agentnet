@@ -309,12 +309,13 @@ type DMMessage struct {
 
 // AgentActions are the decisions this device's person can take on a
 // request to its agent in state: run a task that needs their accept (or
-// run one again), stop a run, or close what the agent handed back.
+// run one again) or decline it (the requester is told, nothing runs it),
+// stop a run, or close what the agent handed back.
 func AgentActions(kind, state string) []string {
 	switch state {
 	case "awaiting": // a task, or a guest's question, waiting for this host's one-time acceptance
 		if kind == KindTask || kind == KindQuestion {
-			return []string{DoAccept}
+			return []string{DoAccept, DoDecline}
 		}
 	case "running":
 		return []string{DoCancel}
