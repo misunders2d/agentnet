@@ -134,7 +134,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
 
       <Picker.Viewport ref={viewport} onScroll={scrolled} className="relative min-h-0 flex-1 outline-none">
         <Picker.Loading className="absolute inset-0 grid place-items-center text-[13px] text-muted">
-          <span className="flex items-center gap-1.5">Loading emoji<span className="working-dot">.</span><span className="working-dot">.</span><span className="working-dot">.</span></span>
+          <span className="an-late flex items-center gap-1.5">Loading emoji<span className="working-dot">.</span><span className="working-dot">.</span><span className="working-dot">.</span></span>
         </Picker.Loading>
         <Picker.Empty className="absolute inset-0 grid place-items-center px-6 text-center text-[13px] text-muted">
           {({ search }) => failed ? "Emoji couldn’t be loaded here. You can still type them with your keyboard." : <>No emoji for “{search}”.</>}

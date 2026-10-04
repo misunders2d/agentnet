@@ -42,11 +42,11 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
   const subtitle = guestHere ? "You’re a guest here" : item.kind === "agent" ? item.subtitle || "" : "";
 
   // Phones show one screen at a time: only the desktop column marks the open chat; a
-  // phone lights up the chat being opened while it loads.
+  // phone outlines the chat being opened, at once, while it loads.
   return (
     <button type="button" onClick={onOpen} aria-current={selected && wide ? "true" : undefined}
       className={"relative flex w-full items-center gap-3 text-left transition-colors duration-200 "
-        + (!wide ? "px-4 py-3 hover:bg-sunken " + (selected ? "bg-sunken" : "")
+        + (!wide ? "px-4 py-3 hover:bg-sunken active:bg-sunken " + (selected ? "z-[1] bg-surface [box-shadow:inset_0_0_0_1.5px_var(--an-outline)]" : "")
           : "rounded-2xl border px-2.5 py-2.5 " + (selected ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken"))}>
       {avatar}
       <span className="min-w-0 flex-1">

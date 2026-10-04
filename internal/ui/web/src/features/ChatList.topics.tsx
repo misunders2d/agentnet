@@ -60,7 +60,7 @@ export function TopicResults({ query, onCount }: { query: string; onCount: (n: n
       <ul aria-label="Matching topics" className="px-2">
         {(hits?.topics || []).map((t) => (
           <li key={t.peer + "/" + t.id}>
-            <button type="button" onClick={() => void store.open({ kind: "thread", id: t.id })} aria-label={topicLabel(t) + ", with " + (agents.get(t.peer) || t.peer) + ", " + when(t.lastAt)}
+            <button type="button" onClick={() => void store.open({ kind: "thread", id: t.id, peer: t.peer })} aria-label={topicLabel(t) + ", with " + (agents.get(t.peer) || t.peer) + ", " + when(t.lastAt)}
               className="flex min-h-11 w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-sunken">
               <AgentAvatar seed={t.peer} size={36} device={deviceKind(t.peer)} />
               <span className="min-w-0 flex-1">

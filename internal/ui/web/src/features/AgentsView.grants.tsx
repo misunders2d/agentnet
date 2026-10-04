@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
-import { useStore } from "../store";
+import { useStore, type Store } from "../store";
 import { Button } from "../ui/Button";
 import { capital, deviceWords } from "./Approvals.words";
 
@@ -21,18 +21,32 @@ export function latestThreads(o: T.Overview | null) {
   return [...out.values()];
 }
 
-/** useGrants reads each peer's newest device conversation once per change (null while reading). */
+// The last grants read per store: a screen showing them again draws them at
+// once (nothing moves in) while they are read again.
+const lastGrants = new WeakMap<object, Grant[]>();
+
+function readGrants(store: Store, o: T.Overview): Promise<Grant[]> {
+  return Promise.all(latestThreads(o).map((t) => store.api.thread(t.id).then((x) => ({ peer: t.peer, thread: t.id, approved: x.approved, tasks: x.task_grant }), () => null)))
+    .then((rows) => rows.filter((r): r is Grant => !!r));
+}
+
+/** warmGrants reads the grants once ahead of the first screen that shows them. */
+export function warmGrants(store: Store) {
+  const o = store.get().overview;
+  if (store.host.platform === "browser" || !o || lastGrants.has(store)) return;
+  void readGrants(store, o).then((g) => { if (!lastGrants.has(store)) lastGrants.set(store, g); });
+}
+
+/** useGrants reads each peer's newest device conversation once per change (null while first reading). */
 export function useGrants(): Grant[] | null {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
-  const [grants, setGrants] = useState<Grant[] | null>(null);
+  const [grants, setGrants] = useState<Grant[] | null>(() => lastGrants.get(store) ?? null);
   const browser = store.host.platform === "browser";
-  const peers = latestThreads(o);
   useEffect(() => {
     if (browser || !o) return;
     let alive = true;
-    Promise.all(peers.map((t) => store.api.thread(t.id).then((x) => ({ peer: t.peer, thread: t.id, approved: x.approved, tasks: x.task_grant }), () => null)))
-      .then((rows) => { if (alive) setGrants(rows.filter((r): r is Grant => !!r)); });
+    void readGrants(store, o).then((g) => { lastGrants.set(store, g); if (alive) setGrants(g); });
     return () => { alive = false; };
   }, [o?.seq, browser]);
   return grants;

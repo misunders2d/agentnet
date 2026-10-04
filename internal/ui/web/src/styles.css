@@ -120,7 +120,9 @@
 @layer components {
   .an-swap-gone { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: var(--an-canvas); }
   .an-pane-in { animation: an-nudge-in 220ms var(--ease-out-soft) both; }
-  .an-pane-out { animation: an-fade-left 170ms cubic-bezier(0, 0, .2, 1) both; }
+  /* What leaves is gone quickly (90-100 ms) so the two never sit muddled
+     over each other; what arrives keeps moving a little longer. */
+  .an-pane-out { animation: an-fade-left 100ms cubic-bezier(.4, 0, 1, 1) both; }
   .an-tab-in { animation: an-rise-in 220ms var(--ease-out-soft) both; }
   .an-tab-out { animation: an-fade 150ms cubic-bezier(0, 0, .2, 1) both; }
   /* Tabs are pages side by side: the next one slides in from the side of
@@ -130,7 +132,13 @@
   .an-page-in-prev { animation: an-from-left 240ms var(--ease-out-soft) both; }
   .an-page-out-prev { animation: an-to-right 240ms var(--ease-out-soft) both; }
   .an-topic-in { animation: an-rise-in 200ms var(--ease-out-soft) both; }
-  .an-topic-out { animation: an-fade-up 120ms cubic-bezier(0, 0, .2, 1) both; }
+  .an-topic-out { animation: an-fade-up 90ms cubic-bezier(.4, 0, 1, 1) both; }
+  /* A conversation that was opening: its sketch fades into the messages. */
+  .an-ready-out { animation: an-fade 160ms cubic-bezier(.4, 0, .2, 1) both; }
+  /* The sketch of messages while a conversation opens: a slow breath, never gone. */
+  .an-sketch { animation: an-sketch 1.4s ease-in-out infinite both; }
+  /* Words that only matter when waiting is long (Loading emoji…) appear late. */
+  .an-late { animation: fade-in 160ms linear 350ms both; }
   .an-push-in { animation: an-push-in 280ms cubic-bezier(.22, .9, .3, 1) both; }
   .an-push-out { animation: an-push-out 240ms cubic-bezier(.4, 0, .2, 1) both; }
   .an-under-in { animation: an-under-in 280ms cubic-bezier(.22, .9, .3, 1) both; }
@@ -139,8 +147,9 @@
   .an-card-edge { box-shadow: -1.5px 0 0 0 var(--an-outline), -6px 0 0 0 rgb(27 21 48 / .12); }
   @media (prefers-reduced-motion: reduce) {
     .an-pane-in, .an-tab-in, .an-topic-in, .an-under-in, .an-under-out, .an-page-in-next, .an-page-in-prev { animation: none; }
-    .an-pane-out, .an-tab-out, .an-topic-out, .an-page-out-next, .an-page-out-prev { animation: an-fade 140ms linear both; }
+    .an-pane-out, .an-tab-out, .an-topic-out, .an-page-out-next, .an-page-out-prev, .an-ready-out { animation: an-fade 140ms linear both; }
     .an-push-in { animation: fade-in 140ms linear both; }
+    .an-sketch { animation: none; }
     .an-push-out { animation: an-fade 140ms linear both; }
   }
 }
@@ -155,6 +164,7 @@
   .an-sheet[data-starting-style], .an-sheet[data-ending-style] { --tw-translate-y: -50%; }
 }
 
+@keyframes an-sketch { 50% { opacity: .6; } }
 @keyframes an-nudge-in { from { transform: translateX(14px); } }
 @keyframes an-rise-in { from { transform: translateY(10px); } }
 @keyframes an-fade { to { opacity: 0; } }

@@ -92,4 +92,4 @@ export function useSettled(key: string, ms: number): boolean {
 
 /** Durations (ms) of the CSS motion in styles.css; leaving content is
  *  removed when its animation has run. */
-export const MOTION = { push: 280, pop: 240, pane: 220, page: 240, topic: 200 } as const;
+export const MOTION = { push: 280, pop: 240, pane: 220, page: 240, topic: 200, ready: 160 } as const;

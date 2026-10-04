@@ -2,17 +2,17 @@
 // list, the open conversation and, when it has guests or a pending OK, the
 // "In this chat" panel. Phones show one of these at a time: a conversation
 // is a card pushed over the tabs. How each change moves: ui/Motion.tsx.
-import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { IconMessageCircle, IconRobot, IconCircleCheck, IconSettings } from "@tabler/icons-react";
 import type { T } from "./api";
 import { useApp, useWide } from "./context";
-import { useStore, type Store, type Tab } from "./store";
+import { useStore, type Open, type Store, type Tab } from "./store";
 import { ChatList } from "./features/ChatList";
 import { Conversation, NothingOpen, convKey } from "./features/Conversation";
 import { Leaving, MOTION, Swap, usePresence, useSettled } from "./ui/Motion";
 import { RoomPanel } from "./features/RoomPanel";
 import { OksView, useNeedsYou } from "./features/Approvals";
-import { AgentsView } from "./features/AgentsView";
+import { AgentsView, warmAgentData } from "./features/AgentsView";
 import { Settings, SettingsPane } from "./features/Settings";
 import { WorkspaceCoin } from "./features/WorkspaceSwitcher";
 import { Toasts, ConnectionBanner } from "./features/Status";
@@ -33,16 +33,27 @@ export function App() {
   const oks = useNeedsYou();
   const views = useStore(store, (s) => s.views);
 
+  // What the Agents tab shows is read once, as soon as there is an overview,
+  // so even its first visit draws complete.
+  const ready = !!overview;
+  useEffect(() => { if (ready) warmAgentData(store); }, [ready]);
+
   const main = tab === "agents" ? <AgentsView /> : tab === "oks" ? <OksView /> : tab === "settings" ? <Settings /> : <ChatList />;
   // Phone: an open conversation is a card pushed over the tabs from the
   // right; Back pulls it away. The tabs stay drawn under it only while it
-  // moves. Another topic of the same agent is the same card.
+  // moves. Another topic of the same agent is the same card; another
+  // conversation (a notification, a link) is a new card pushed over the
+  // one that was open, which stays under it until it has arrived.
   const card = usePresence(wide ? null : open, MOTION.pop);
-  const arrived = useSettled(card.shown && !card.leaving ? convKey(card.shown, views) : "", MOTION.push);
+  const cardKey = card.shown ? convKey(card.shown, views) : "";
+  const below = useBelow(card.shown, cardKey, card.leaving);
+  const arrived = useSettled(card.shown && !card.leaving ? cardKey : "", MOTION.push);
   const listScroll = useRef(0);
 
   if (!wide) {
-    const under = !card.shown || card.leaving || !arrived;
+    const under = !card.shown || card.leaving || (!arrived && !below);
+    // Cards are keyed by conversation and the one below comes first, so the
+    // card that was open keeps its elements (and scroll) as it goes under.
     return (
       <div className="relative h-dvh overflow-hidden bg-canvas">
         {under && (
@@ -50,10 +61,10 @@ export function App() {
             <PhoneTabs tab={tab} oks={oks} overview={overview} store={store} main={main} scroll={listScroll} />
           </div>
         )}
+        {below && <Card key={below.key} o={below.o} leaving className="an-under-in" />}
         {card.shown && (
-          <div inert={card.leaving} className={"absolute inset-0 flex flex-col bg-canvas " + (card.leaving ? "an-push-out an-card-edge" : arrived ? "" : "an-push-in an-card-edge")}>
-            <Leaving.Provider value={card.leaving}><ConnectionBanner /><Conversation o={card.shown} /></Leaving.Provider>
-          </div>
+          <Card key={cardKey} o={card.shown} leaving={card.leaving}
+            className={card.leaving ? "an-push-out an-card-edge" : arrived ? "" : "an-push-in an-card-edge"} />
         )}
         <Toasts />
       </div>
@@ -61,6 +72,30 @@ export function App() {
   }
 
   return <Desktop tab={tab} oks={oks} overview={overview} store={store} main={main} />;
+}
+
+/** Card: a phone's open conversation, over the tabs. */
+function Card({ o, leaving, className }: { o: NonNullable<Open>; leaving: boolean; className: string }) {
+  return (
+    <div inert={leaving} aria-hidden={leaving || undefined} data-card className={"absolute inset-0 flex flex-col bg-canvas " + className}>
+      <Leaving.Provider value={leaving}><ConnectionBanner /><Conversation o={o} /></Leaving.Provider>
+    </div>
+  );
+}
+
+/** useBelow: when one open conversation's card replaces another's, the
+ *  card that was open, kept under the new one while it pushes in. */
+function useBelow(o: Open, key: string, leaving: boolean): { key: string; o: NonNullable<Open> } | null {
+  const [st, setSt] = useState<{ key: string; o: Open; below: { key: string; o: NonNullable<Open> } | null }>({ key, o, below: null });
+  if (st.key !== key) setSt({ key, o, below: st.key && key && st.o && !leaving ? { key: st.key, o: st.o } : null });
+  else if (st.o !== o) setSt({ ...st, o });
+  useEffect(() => {
+    const b = st.below;
+    if (!b) return;
+    const t = setTimeout(() => setSt((s) => (s.below === b ? { ...s, below: null } : s)), MOTION.push);
+    return () => clearTimeout(t);
+  }, [st.below]);
+  return st.key === key ? st.below : null;
 }
 
 // usePages: the tabs are pages in their order (Chats, Agents, OKs,

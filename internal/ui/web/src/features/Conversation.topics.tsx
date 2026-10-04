@@ -36,6 +36,41 @@ export function barTopics(topics: Topic[], open: Topic | null, room: number): To
   return pick;
 }
 
+/** steadyBar keeps the chips where they were across changes: barTopics says
+ *  which topics belong in the bar, but a chip that may stay keeps its slot
+ *  (so the bar never reorders under the pointer), and the topic just left
+ *  keeps its chip (switching back is one click). A topic that must show
+ *  (the open one, then ones that need you, the one just left, ones with
+ *  news) takes the last slot of one that need not. prev: the bar's last chips; left: the topic just left. */
+export function steadyBar(prev: string[], topics: Topic[], open: Topic | null, left: string, room: number): Topic[] {
+  const ranked = barTopics(topics, open, room);
+  if (!prev.length) return ranked;
+  const by = new Map(topics.map((t) => [t.id, t]));
+  if (open) by.set(open.id, open);
+  const may = (id: string) => { const t = by.get(id); return !!t && (id === open?.id || id === left || t.needsYou > 0 || t.unread > 0 || t.state === "active"); };
+  const must: string[] = [];
+  const was = by.get(left);
+  for (const t of [...(open ? [open] : []), ...ranked.filter((t) => t.needsYou > 0), ...(was ? [was] : []), ...ranked.filter((t) => t.unread > 0)]) {
+    if (must.length < room && !must.includes(t.id)) must.push(t.id);
+  }
+  const slots = prev.filter(may);
+  // The slot a must-show topic may take: the last one that need not show, sparing the topic just left.
+  const free = () => {
+    for (const spare of [true, false]) {
+      for (let i = slots.length - 1; i >= 0; i--) if (!must.includes(slots[i]) && !(spare && slots[i] === left)) return i;
+    }
+    return -1;
+  };
+  while (slots.length > room) { const i = free(); slots.splice(i >= 0 ? i : slots.length - 1, 1); }
+  for (const id of must) {
+    if (slots.includes(id)) continue;
+    if (slots.length < room) slots.push(id);
+    else { const i = free(); if (i >= 0) slots[i] = id; }
+  }
+  for (const t of ranked) if (slots.length < room && !slots.includes(t.id)) slots.push(t.id);
+  return slots.map((id) => by.get(id)!);
+}
+
 const markIcon = { needs: IconAlertCircle, archived: IconArchive, done: IconCircleCheck, waiting: IconClock } as const;
 const markTone = { needs: "act", archived: "muted", done: "ok", waiting: "agent" } as const;
 
@@ -110,7 +145,11 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
     else if (r > el.scrollLeft + el.clientWidth) el.scrollTo({ left: r - el.clientWidth + 12, behavior: "smooth" });
   }, [going, open?.id]);
 
-  const pick = barTopics(topics, open, room);
+  // The chips stay in their slots across a topic switch (steadyBar).
+  const shown = useRef<{ ids: string[]; open: string; left: string }>({ ids: [], open: open?.id || "", left: "" });
+  if ((open?.id || "") !== shown.current.open) shown.current = { ...shown.current, open: open?.id || "", left: shown.current.open };
+  const pick = steadyBar(shown.current.ids, topics, open, shown.current.left, room);
+  shown.current.ids = pick.map((t) => t.id);
   const hidden = topics.filter((t) => !pick.some((p) => p.id === t.id));
   const hiddenUnread = hidden.reduce((n, t) => n + t.unread, 0) + ((overview?.topics || []).find((c) => c.peer === thread.peer)?.archived_unread || 0);
   const hiddenNeeds = hidden.filter((t) => t.needsYou > 0).length; // never archived: what needs you is pending
@@ -141,7 +180,7 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
         }
         return (
           <button key={t.id} data-topic={t.id} type="button" aria-current={current ? "true" : undefined} aria-label={topicLabel(t)} title={t.title + " · " + dayLabel(t.lastAt) + " " + timeOf(t.lastAt)}
-            onClick={() => { leaveNew(); refocus.current = t.id; if (!open || t.id !== open.id) void store.open({ kind: "thread", id: t.id }); }}
+            onClick={() => { leaveNew(); refocus.current = t.id; if (!open || t.id !== open.id) void store.open({ kind: "thread", id: t.id, peer: thread.peer }); }}
             style={width} className={chip + "flex-1 basis-0 " + (lit ? "bg-ink text-canvas" : "bg-surface stroke text-ink hover:bg-sunken")}>
             {body}
           </button>

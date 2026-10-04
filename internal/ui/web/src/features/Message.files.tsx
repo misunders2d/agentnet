@@ -5,7 +5,7 @@
 // so nothing here claims where the file went. HTML and SVG never render.
 import { useEffect, useRef, useState } from "react";
 import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload } from "@tabler/icons-react";
-import { errorText } from "../api";
+import { errorText, type Api } from "../api";
 import { useApp } from "../context";
 import { usePortal } from "../owned";
 import { niceDevice, size as bytes } from "../model";
@@ -82,24 +82,59 @@ function save(url: string, name: string, into: HTMLElement) {
 
 // Pictures already fetched, by message, file and direction: a conversation
 // opened again (or a topic switched back to) shows them at once instead of
-// fetching and decrypting them again. The most recent PICTURES_KEPT stay;
-// older object URLs are freed. clearPictures frees them all (unmount).
+// fetching and decrypting them again. The most recent PICTURES_KEPT stay,
+// and any picture on screen: an object URL is freed only once no mounted
+// Picture uses it. clearPictures frees them all (unmount). warmPictures
+// fetches the newest pictures of a conversation about to open.
 const PICTURES_KEPT = 48;
-const pictures = new Map<string, { url: string; picture: boolean }>();
+type Pic = { url: string; picture: boolean };
+const pictures = new Map<string, Pic>();
+const fetchingPics = new Map<string, Promise<Pic>>();
+const inUse = new Map<string, number>(); // mounted Pictures per key
 const pictureKey = (m: AnyMsg, f: FileItem) => m.id + "\n" + f.index + "\n" + m.dir;
 
 export function clearPictures() {
   for (const p of pictures.values()) URL.revokeObjectURL(p.url);
   pictures.clear();
+  fetchingPics.clear();
 }
 
-function rememberPicture(key: string, p: { url: string; picture: boolean }) {
+function rememberPicture(key: string, p: Pic) {
   pictures.set(key, p);
   for (const [k, old] of pictures) {
     if (pictures.size <= PICTURES_KEPT) break;
+    if (inUse.get(k)) continue; // on screen: kept until it is not
     pictures.delete(k);
     URL.revokeObjectURL(old.url);
   }
+}
+
+function fetchPicture(api: Api, m: AnyMsg, f: FileItem): Promise<Pic> {
+  const key = pictureKey(m, f);
+  const have = pictures.get(key);
+  if (have) return Promise.resolve(have);
+  let p = fetchingPics.get(key);
+  if (!p) {
+    p = api.file(m.id, f.index, m.dir).then(({ bytes: b }) => {
+      const type = sniff(b);
+      const pic = { url: URL.createObjectURL(new Blob([b as BlobPart], { type: type || "application/octet-stream" })), picture: !!type };
+      if (fetchingPics.get(key) === p) rememberPicture(key, pic);
+      return pic;
+    }).finally(() => fetchingPics.delete(key));
+    fetchingPics.set(key, p);
+  }
+  return p;
+}
+
+/** warmPictures fetches the newest few pictures of a conversation (the ones
+ *  its first screen shows), so they are there when it opens. */
+export function warmPictures(api: Api, messages: AnyMsg[] | null | undefined, n = 4) {
+  const want: [AnyMsg, FileItem][] = [];
+  for (const m of [...(messages || [])].reverse()) {
+    for (const f of filesOf(m)) if (want.length < n && standing(m, f) === "open" && pictureName.test(f.name)) want.push([m, f]);
+    if (want.length >= n) break;
+  }
+  for (const [m, f] of want) fetchPicture(api, m, f).catch(() => {});
 }
 
 function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
@@ -113,16 +148,17 @@ function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
   const [failed, setFailed] = useState(!!known && !known.picture);
   const [big, setBig] = useState(false);
   useEffect(() => {
+    inUse.set(key, (inUse.get(key) || 0) + 1);
+    return () => { const n = (inUse.get(key) || 1) - 1; if (n) inUse.set(key, n); else inUse.delete(key); };
+  }, [key]);
+  useEffect(() => {
     const el = box.current;
     if (!el || url || failed) return;
     let alive = true;
     const io = new IntersectionObserver((seen) => {
       if (!seen.some((s) => s.isIntersecting)) return;
       io.disconnect();
-      store.api.file(m.id, f.index, m.dir).then(({ bytes: b }) => {
-        const type = sniff(b);
-        const p = { url: URL.createObjectURL(new Blob([b as BlobPart], { type: type || "application/octet-stream" })), picture: !!type };
-        rememberPicture(key, p);
+      fetchPicture(store.api, m, f).then((p) => {
         if (!alive) return;
         if (p.picture) setUrl(p.url); else setFailed(true);
       }).catch(() => { if (alive) setFailed(true); });

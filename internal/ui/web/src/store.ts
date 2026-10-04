@@ -10,7 +10,10 @@ import { api, errorText, type Api, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
 
 export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
-export type Open = null | { kind: "dm"; id: string; focus?: string } | { kind: "thread"; id: string; focus?: string };
+// A thread names its agent's device (peer) whenever that is known: an
+// agent's topics are one conversation on screen, and what is on screen must
+// not change identity when the messages arrive (store.open fills it in).
+export type Open = null | { kind: "dm"; id: string; focus?: string } | { kind: "thread"; id: string; focus?: string; peer?: string };
 
 export interface Draft {
   text: string;
@@ -177,6 +180,11 @@ export class Store {
   // one agent never shows it: the open topic stays until the next is ready.
   async open(o: Open) {
     if (!o) { this.close(); return; }
+    if (o.kind === "thread" && !o.peer) {
+      const id = o.id;
+      const peer = (this.state.views[id] as T.Thread | undefined)?.peer || (this.state.overview?.threads || []).find((t) => t.id === id)?.peer;
+      if (peer) o = { ...o, peer };
+    }
     const cur = this.state.open;
     const cached = this.state.views[o.id];
     if ((cur && cur.kind === o.kind && cur.id === o.id) || cached) {
@@ -205,16 +213,21 @@ export class Store {
   }
 
   // prefetch loads a conversation the person is about to open (a press or a
-  // pause over its row), so that opening it shows it at once. A read only:
-  // nothing is marked read by it.
-  private fetching = new Set<string>();
-  prefetch(o: Open) {
-    if (!o || this.state.views[o.id] || this.fetching.has(o.id) || this.state.open?.id === o.id) return;
-    this.fetching.add(o.id);
-    (o.kind === "dm" ? this.api.dm(o.id) : this.api.thread(o.id))
-      .then((v) => { if (!this.state.views[o.id]) this.keep(o.id, v); })
-      .catch(() => {})
-      .finally(() => this.fetching.delete(o.id));
+  // pause over its row), so that opening it shows it at once; an open that
+  // follows uses the same request. A read only: nothing is marked read by
+  // it. It answers the view (loaded before, or now), or null.
+  private fetching = new Map<string, Promise<View>>();
+  prefetch(o: Open): Promise<View | null> {
+    if (!o) return Promise.resolve(null);
+    const have = this.state.views[o.id];
+    if (have) return Promise.resolve(have);
+    let f = this.fetching.get(o.id);
+    if (!f) {
+      f = (o.kind === "dm" ? this.api.dm(o.id) : this.api.thread(o.id)) as Promise<View>;
+      this.fetching.set(o.id, f);
+      f.then((v) => { if (!this.state.views[o.id]) this.keep(o.id, v); }, () => {}).finally(() => this.fetching.delete(o.id));
+    }
+    return f.catch(() => null);
   }
 
   // keep remembers a loaded view (the most recent VIEWS_KEPT, and the open one).
@@ -284,7 +297,9 @@ export class Store {
     if (!o) return;
     const wanted = () => this.state.open === o || this.state.pending === o;
     try {
-      const v: View = o.kind === "dm" ? await this.api.dm(o.id) : await this.api.thread(o.id);
+      // Being opened: a prefetch already under way for it is that load.
+      const ahead = this.state.pending === o ? this.fetching.get(o.id) : undefined;
+      const v: View = ahead ? await ahead : o.kind === "dm" ? await this.api.dm(o.id) : await this.api.thread(o.id);
       this.keep(o.id, v);
       if (!wanted()) return; // another conversation was opened meanwhile
       const first = this.state.pending === o;

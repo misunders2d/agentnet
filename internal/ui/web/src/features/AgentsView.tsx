@@ -8,7 +8,7 @@ import { IconChevronRight, IconDevices, IconPlus, IconSettings } from "@tabler/i
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
 import { agentName, agentWhere, deviceKind, niceDevice, personName } from "../model";
-import { useStore } from "../store";
+import { useStore, type Store } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
@@ -16,7 +16,7 @@ import { ScreenTitle } from "./Approvals.title";
 import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { capital, deviceWords, isMine } from "./Approvals.words";
 import { AgentSheet, type AgentSetup } from "./AgentsView.forms";
-import { latestThreads, Permissions, useGrants } from "./AgentsView.grants";
+import { latestThreads, Permissions, useGrants, warmGrants } from "./AgentsView.grants";
 import { eventKind } from "./Message.model";
 
 type Load<V> = { v?: V; error?: string };
@@ -24,6 +24,20 @@ type Load<V> = { v?: V; error?: string };
 // The last answers per store: coming back to the tab shows them at once
 // (no placeholder, nothing moving) while they are asked for again.
 const lastData = new WeakMap<object, { responder: Load<T.ResponderView>; catalog: Load<T.AgentCatalogView> }>();
+
+/** warmAgentData asks once, early, for what the Agents tab shows, so even
+ *  its first visit draws complete (nothing moves in after it). */
+export function warmAgentData(store: Store) {
+  warmGrants(store);
+  if (store.host.platform === "browser" || lastData.has(store)) return;
+  Promise.allSettled([store.api.responder(), store.api.agents()]).then(([r, c]) => {
+    if (lastData.has(store)) return; // the tab answered first
+    lastData.set(store, {
+      responder: r.status === "fulfilled" ? { v: r.value } : { error: errorText(r.reason) },
+      catalog: c.status === "fulfilled" ? { v: c.value } : { error: errorText(c.reason) },
+    });
+  });
+}
 
 function useAgentData(o: T.Overview | null) {
   const store = useApp();
@@ -229,7 +243,7 @@ function OtherDevices({ o }: { o: T.Overview }) {
     <ul className="flex flex-col gap-2">
       {mine.map((t) => (
         <li key={t.peer}>
-          <LinkRow onOpen={() => void store.open({ kind: "thread", id: t.id })} seed={t.peer} device={deviceKind(t.peer)}
+          <LinkRow onOpen={() => void store.open({ kind: "thread", id: t.id, peer: t.peer })} seed={t.peer} device={deviceKind(t.peer)}
             title="Your agent" sub={"On " + niceDevice(t.peer)} />
         </li>
       ))}
@@ -283,7 +297,7 @@ function Others({ o }: { o: T.Overview }) {
   }
   for (const t of latestThreads(o).filter((t) => !t.notice_only && !isMine(t.peer, o) && !rows.some((r) => r.address === t.peer && !r.agentId))) {
     const p = (o.people || []).find((x) => x.address === t.peer || (x.devices || []).some((d) => d.address === t.peer)) || null;
-    rows.push({ key: t.peer, seed: t.peer, address: t.peer, owner: p, open: () => void store.open({ kind: "thread", id: t.id }), where: "Talks with your agent directly", state: "active", conv: "", pid: "" });
+    rows.push({ key: t.peer, seed: t.peer, address: t.peer, owner: p, open: () => void store.open({ kind: "thread", id: t.id, peer: t.peer }), where: "Talks with your agent directly", state: "active", conv: "", pid: "" });
   }
   const joined = useEverJoined(rows.filter((r) => r.state === "dismissed"));
   if (!rows.length) {

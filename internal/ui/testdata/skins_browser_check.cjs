@@ -31,7 +31,7 @@ const local = (version) => {
       const page = await ctx.newPage(), errors = [];
       page.on('pageerror', (e) => errors.push(e.message));
       page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
-      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && !['/api/workspaces', '/api/agents', '/api/dm', '/api/refresh', '/favicon.ico'].includes(p)) errors.push(r.status() + ' ' + p); }); // the demo has no workspaces, agent catalog or DMs (the synthetic notification names one)
+      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && !['/api/workspaces', '/api/agents', '/api/responder', '/api/dm', '/api/refresh', '/favicon.ico'].includes(p)) errors.push(r.status() + ' ' + p); }); // the demo has no workspaces, agent catalog, responder or DMs (the Agents tab's data is read ahead at start) (the synthetic notification names one)
       const snap = (n) => shots && page.screenshot({ path: path.join(shots, 'skins-' + tag + '-' + n + '.png') });
       const origin = new URL(target).origin;
       // Comic is up: its root is mounted and has drawn (the chat list, or the conversation a destination opened).

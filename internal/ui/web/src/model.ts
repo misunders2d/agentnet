@@ -8,7 +8,7 @@ import type { T } from "./api";
 /** One chat in the list: a person (DM), a group, or an agent's own device thread. */
 export interface ChatItem {
   key: string;                 // "dm:<id>" | "thread:<id>"
-  open: { kind: "dm" | "thread"; id: string };
+  open: { kind: "dm"; id: string } | { kind: "thread"; id: string; peer?: string };
   kind: "person" | "group" | "agent";
   title: string;
   subtitle?: string;           // e.g. "Vitalii's agent · ZenBook"
@@ -162,7 +162,7 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
     const person = deviceOwner(peer, o);
     items.push({
       key: "agent:" + peer,
-      open: { kind: "thread", id: latest.id },
+      open: { kind: "thread", id: latest.id, peer },
       kind: "agent",
       title: person ? agentName(undefined, agentNames, person, o.person) : niceDevice(peer),
       subtitle: person ? "on " + niceDevice(peer) : "Agent · no person linked",

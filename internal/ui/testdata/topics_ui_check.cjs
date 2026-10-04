@@ -6,6 +6,93 @@ const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT);
 const assert = require('node:assert/strict');
 const url = process.env.TOPICS_URL, total = Number(process.env.TOPICS_TOTAL);
 const shots = process.env.AGENTNET_SCREENSHOTS || '';
+// slowly: the same conversation over a slow connection (every conversation
+// load takes 700 ms). Opening it never shows an empty frame: what was there
+// stays, then (after 400 ms) its header with who it is and a visible sketch
+// of messages, then the messages, faded in place; the card or pane moves in
+// once. Switching topic keeps the last topic's messages until the next's are there.
+async function slowly(browser, w, h, scheme, name) {
+  name += ' slow';
+  const ctx = await browser.newContext({ viewport: { width: w, height: h }, colorScheme: scheme });
+  await ctx.route(/\/api\/(thread|dm)\?/, async (r) => { await new Promise((z) => setTimeout(z, 700)); await r.continue(); });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on('pageerror', (e) => errors.push(String(e)));
+  await p.goto(url);
+  await p.waitForSelector('section[aria-label="Chats"]', { timeout: 20000 });
+  const watch = (ms) => p.evaluate((ms) => {
+    const sr = document.getElementById('skin').shadowRoot;
+    const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.right > 0 && r.left < innerWidth; };
+    const ids = new WeakMap(); let next = 0;
+    const id = (e) => (e ? (ids.get(e) ?? (ids.set(e, ++next), next)) : 0);
+    const moves = (window.__moves = []);
+    const onAnim = (e) => { if (/^an-(push-in|nudge-in)$/.test(e.animationName)) moves.push(e.animationName); };
+    sr.addEventListener('animationstart', onAnim);
+    const bar = sr.querySelector('nav[aria-label^="Topics with"]'), head = bar?.parentElement?.firstElementChild || null;
+    const frames = (window.__frames = []), t0 = performance.now();
+    const look = () => {
+      const logs = [...sr.querySelectorAll('[role="log"]')].filter(vis);
+      const busy = [...sr.querySelectorAll('[aria-busy="true"]')].filter((b) => b.tagName === 'SECTION' && vis(b));
+      // A sketch bubble is visible: outlined, and filled unlike the page under it.
+      const sketch = busy.flatMap((b) => [...b.querySelectorAll('[data-skeleton]')].filter((e) => {
+        const c = getComputedStyle(e);
+        return vis(e) && parseFloat(c.borderTopWidth) >= 1 && !/, 0\)$/.test(c.borderTopColor) && c.backgroundColor !== getComputedStyle(b).backgroundColor && +c.opacity >= 0.5;
+      })).length;
+      frames.push({ t: Math.round(performance.now() - t0), busy: busy.length, sketch, title: busy.map((b) => b.querySelector('header')?.textContent || '').join('|'),
+        logs: logs.length, msgs: Math.max(0, ...logs.map((l) => l.querySelectorAll('[data-mid]').length)),
+        list: [...sr.querySelectorAll('section[aria-label="Chats"]')].some(vis),
+        pick: [...sr.querySelectorAll('main p')].some((e) => e.textContent === 'Pick a chat' && vis(e)),
+        card: id(sr.querySelector('[data-card]:not([aria-hidden])')),
+        bar: !!bar && bar.isConnected && vis(bar) && sr.querySelector('nav[aria-label^="Topics with"]') === bar, head: !!head && head.isConnected });
+      if (performance.now() - t0 < ms) requestAnimationFrame(look); else sr.removeEventListener('animationstart', onAnim);
+    };
+    requestAnimationFrame(look);
+  }, ms);
+  const frames = async (ms) => { await p.waitForTimeout(ms + 50); return p.evaluate(() => ({ frames: window.__frames, moves: window.__moves })); };
+
+  await watch(1500);
+  await p.getByRole('button', { name: /no person linked/ }).first().click();
+  const { frames: opened, moves } = await frames(1500);
+  const shownAt = opened.findIndex((f) => f.msgs > 0);
+  assert.ok(shownAt >= 0, name + ': the conversation opened: ' + JSON.stringify(opened.slice(-3)));
+  assert.ok(opened.some((f) => f.busy), name + ': a 700 ms load shows the opening header and sketch');
+  for (const f of opened) {
+    const sketched = f.busy && f.sketch >= 3 && /\S/.test(f.title);
+    assert.ok((w >= 1000 ? f.pick : f.list) || f.msgs > 0 || sketched, name + ': open chat: a frame with nothing (or nothing visible) in it at ' + f.t + ' ms: ' + JSON.stringify(f));
+  }
+  assert.ok(opened.slice(shownAt).every((f) => f.msgs > 0), name + ': open chat: the messages never went away: ' + JSON.stringify(opened));
+  assert.equal(moves.length, 1, name + ': the conversation moved in once: ' + JSON.stringify(moves));
+  if (w < 1000) {
+    const cards = new Set(opened.map((f) => f.card).filter(Boolean));
+    assert.equal(cards.size, 1, name + ': one card from the placeholder to the messages: ' + JSON.stringify([...cards]));
+  }
+
+  // A topic switch over the same slow connection.
+  const bar = p.locator('nav[aria-label^="Topics with"]');
+  await bar.waitFor();
+  await p.waitForTimeout(400);
+  const other = bar.locator('button[data-topic]:not([aria-current])').first();
+  if (await other.count()) {
+    const chips = () => p.evaluate(() => [...document.getElementById('skin').shadowRoot.querySelectorAll('nav[aria-label^="Topics with"] [data-topic]')].map((c) => c.getAttribute('data-topic')));
+    const order = await chips(), chosen = await other.getAttribute('data-topic');
+    await watch(1200);
+    await other.click();
+    const { frames: switched } = await frames(1200);
+    for (const f of switched) {
+      assert.ok(f.bar && f.head && f.msgs > 0 && !f.busy, name + ': topic switch: a blank or redrawn frame at ' + f.t + ' ms: ' + JSON.stringify(f));
+    }
+    // The bar keeps its order: the chosen chip stays where it was clicked,
+    // and chips that stay keep their places.
+    const after = await chips();
+    assert.equal(after.indexOf(chosen), order.indexOf(chosen), name + ': the chosen chip stays in its slot: ' + JSON.stringify([order, after]));
+    const kept = order.filter((id) => after.includes(id));
+    assert.deepEqual(after.filter((id) => kept.includes(id)), kept, name + ': chips that stay keep their order');
+  }
+  assert.deepEqual(errors, [], name + ': page errors');
+  await ctx.close();
+  console.log('ok', name);
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium' });
   try {
@@ -145,6 +232,7 @@ const shots = process.env.AGENTNET_SCREENSHOTS || '';
       assert.equal(unnamed, 0, name + ': unnamed controls');
       assert.deepEqual(errors, [], name + ': page errors');
       await ctx.close();
+      await slowly(browser, w, h, scheme, name);
       console.log('ok', name);
     }
     console.log('topics ui check PASS');

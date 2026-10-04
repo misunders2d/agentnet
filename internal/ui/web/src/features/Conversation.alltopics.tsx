@@ -71,7 +71,7 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
       setItems((had) => [...had, ...(p.topics || []).map(topicOf).filter((t) => !had.some((h) => h.id === t.id))]); setNext(p.next || ""); setMatched(p.matched);
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
   };
-  const go = (t: Topic) => { onOpenChange(false); void store.open({ kind: "thread", id: t.id }); };
+  const go = (t: Topic) => { onOpenChange(false); void store.open({ kind: "thread", id: t.id, peer: t.peer }); };
   const f = filters.find((x) => x.id === filter)!;
 
   return (

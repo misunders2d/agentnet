@@ -3,7 +3,7 @@
 // screens. Base UI's Dialog gives Escape, labelling and focus return;
 // useModal keeps focus inside it and the app behind it inert.
 import { Dialog } from "@base-ui/react/dialog";
-import { useEffect, useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { IconX } from "@tabler/icons-react";
 import { useModal, usePortal } from "../owned";
 
@@ -12,10 +12,11 @@ export function Sheet({ open, onOpenChange, title, description, children, footer
 }) {
   const portal = usePortal();
   // A sheet mounted already open (InviteSheet draws itself when asked for)
-  // opens one commit later, so it slides up exactly as it slides down
-  // when closed: Base UI only animates a change of open.
+  // opens in a second commit before the first paint, so it slides up
+  // exactly as it slides down when closed (Base UI only animates a change
+  // of open), starting in the same frame as the click.
   const [armed, setArmed] = useState(false);
-  useEffect(() => setArmed(true), []);
+  useLayoutEffect(() => setArmed(true), []);
   const shown = open && armed;
   const modal = useModal(shown);
   return (

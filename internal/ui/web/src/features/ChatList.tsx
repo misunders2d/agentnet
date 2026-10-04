@@ -11,6 +11,7 @@ import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
+import { warmPictures } from "./Message.files";
 import { TopicResults } from "./ChatList.topics";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
 import { WorkspacePill } from "./WorkspaceSwitcher";
@@ -39,12 +40,14 @@ export function ChatList() {
   // The chosen row lights up at once (on a phone too, while its chat loads).
   const lit = wide ? pending ?? open : pending;
   const agentNames = useAgentNames();
-  // A press, or a mouse resting on a row, loads that chat ahead: it then opens at once.
+  // A press, or a mouse resting on a row, loads that chat ahead, and its
+  // newest pictures: it then opens at once, pictures and all.
   const hover = useRef(0);
   const ahead = (o: Open, e: ReactPointerEvent) => {
     clearTimeout(hover.current);
-    if (e.type === "pointerdown") store.prefetch(o);
-    else if (e.pointerType === "mouse") hover.current = window.setTimeout(() => store.prefetch(o), 120);
+    const load = () => void store.prefetch(o).then((v) => { if (v) warmPictures(store.api, v.messages); });
+    if (e.type === "pointerdown") load();
+    else if (e.pointerType === "mouse") hover.current = window.setTimeout(load, 120);
   };
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
