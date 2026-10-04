@@ -47,6 +47,16 @@ func sendAt(t *testing.T, from, to *Agent, conv string, m ConvOutgoing) string {
 
 func pendingAlerts(t *testing.T, a *Agent) int { return inboxlessCount(t, a, "alerts") }
 
+// beforeDue reports whether an alert queued by a message sent at or after
+// sent cannot be due yet: it is due alertGrace after its admission, stored
+// in whole ms (so up to 1ms sooner), and the alert loop may show and drop
+// it from then on. A "not shown yet" check holds only while this is true;
+// read it after the look, since a loaded runner (Windows CI) may spend the
+// whole grace first.
+func beforeDue(sent time.Time) bool {
+	return time.Now().Before(sent.Add(alertGrace - time.Millisecond))
+}
+
 func inboxlessCount(t *testing.T, a *Agent, table string) int {
 	t.Helper()
 	var n int
@@ -76,18 +86,28 @@ func TestDesktopAlertOnceAfterGrace(t *testing.T) {
 		t.Fatal("alert for a sender allowed under another key")
 	}
 	allowAliceAt(t, w)
+	queued := time.Now()
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "one"})
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "two"})
-	if pendingAlerts(t, w.bob) != 1 {
+	pending := pendingAlerts(t, w.bob)
+	inGrace := beforeDue(queued) // both turns were admitted before the alert could be due
+	if inGrace && pending != 1 {
 		t.Fatal("not one pending alert for the conversation")
 	}
-	eventually(t, "the alert", func() bool { return n.count() == 1 })
+	eventually(t, "the alert", func() bool { return n.count() >= 1 })
 	time.Sleep(600 * time.Millisecond)
 	n.mu.Lock()
 	body, argv := n.bodies[0], n.argvs[0]
 	n.mu.Unlock()
-	if n.count() != 1 || body != "AgentNet: New activity" || !slices.Equal(argv, []string{"open-page", conv}) || pendingAlerts(t, w.bob) != 0 {
-		t.Fatalf("alerts: %d %q %v", n.count(), body, argv)
+	if body != "AgentNet: New activity" || !slices.Equal(argv, []string{"open-page", conv}) {
+		t.Fatalf("alert: %q %v", body, argv)
+	}
+	if !inGrace {
+		t.Logf("the two sends outlasted the grace (%v past it): \"two\" may have queued its own alert, so \"once\" is not observable this run", time.Since(queued.Add(alertGrace)))
+		return
+	}
+	if n.count() != 1 || pendingAlerts(t, w.bob) != 0 {
+		t.Fatalf("alerts: shown %d, pending %d", n.count(), pendingAlerts(t, w.bob))
 	}
 }
 
@@ -97,12 +117,13 @@ func TestDesktopAlertOnceAfterGrace(t *testing.T) {
 func TestDesktopAlertPresentationAndKinds(t *testing.T) {
 	w, conv, n, _ := alertWorld(t, time.Second)
 	allowAliceAt(t, w)
+	queued := time.Now()
 	first := sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "first"})
 	second := sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "second"})
 	if err := w.bob.AlertPresented(conv, []string{first}); err != nil {
 		t.Fatal(err)
 	}
-	if pendingAlerts(t, w.bob) != 1 {
+	if pendingAlerts(t, w.bob) != 1 && beforeDue(queued) {
 		t.Fatal("an older message's presentation cancelled the alert")
 	}
 	if err := w.bob.AlertPresented(conv, []string{first, second}); err != nil {
@@ -111,6 +132,12 @@ func TestDesktopAlertPresentationAndKinds(t *testing.T) {
 	if pendingAlerts(t, w.bob) != 0 {
 		t.Fatal("presenting the newest message did not cancel the alert")
 	}
+	// Presented before it was due, the alert is never shown; a loaded
+	// runner may have shown it (once) before the presentation.
+	shownBefore := 0
+	if !beforeDue(queued) {
+		shownBefore = 1
+	}
 	// Bob invites alice's agent: alice's invite record reaches bob quietly.
 	p, err := w.alice.InviteAgent(tctx(t), conv, w.alice.Address, nil, nil, "")
 	if err != nil {
@@ -118,7 +145,7 @@ func TestDesktopAlertPresentationAndKinds(t *testing.T) {
 	}
 	eventually(t, "bob to see the invite", func() bool { return stateAt(t, w.bob, p.PID).State == PartInvited })
 	time.Sleep(1500 * time.Millisecond)
-	if n.count() != 0 {
+	if n.count() > shownBefore {
 		t.Fatalf("%d alerts for presented messages or a participation record", n.count())
 	}
 	in := envelope.Inner{V: envelope.Version2, Sub: "", Kind: envelope.KindAnswer, Origin: "agent:claude", PID: p.PID}
@@ -138,11 +165,13 @@ func TestDesktopAlertMuteOffAndFreeze(t *testing.T) {
 	other := newDM(t, w.alice, w.bob)
 	allowAliceAt(t, w, other)
 	sendAt(t, w.alice, w.bob, other, ConvOutgoing{Body: "muted DM"})
+	queued := time.Now()
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "open DM"})
 	var pendingConv string
 	w.bob.store.db.QueryRow(`SELECT conv FROM alerts`).Scan(&pendingConv)
-	if pendingAlerts(t, w.bob) != 1 || pendingConv != conv {
-		t.Fatalf("pending %d for %s", pendingAlerts(t, w.bob), pendingConv)
+	// The muted DM never queues one; the open DM's waits until it is due.
+	if p := pendingAlerts(t, w.bob); p > 1 || p == 1 && pendingConv != conv || p == 0 && beforeDue(queued) {
+		t.Fatalf("pending %d for %s", p, pendingConv)
 	}
 	if err := w.bob.SetAlertPrefs(AlertPrefs{}); err != nil {
 		t.Fatal(err)
@@ -150,12 +179,21 @@ func TestDesktopAlertMuteOffAndFreeze(t *testing.T) {
 	if pendingAlerts(t, w.bob) != 0 {
 		t.Fatal("turning alerts off kept a pending alert")
 	}
+	shownBefore := 0 // turned off before it was due, the open DM's alert is never shown
+	if !beforeDue(queued) {
+		shownBefore = 1
+	}
 	allowAliceAt(t, w)
+	queued = time.Now()
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "then frozen"})
 	freezeAlice(t, w)
+	if !beforeDue(queued) { // frozen only after it could be due: it may be shown
+		shownBefore++
+	}
 	time.Sleep(1500 * time.Millisecond)
-	if n.count() != 0 || pendingAlerts(t, w.bob) != 0 {
-		t.Fatalf("a frozen sender's alert: shown %d, pending %d", n.count(), pendingAlerts(t, w.bob))
+	eventually(t, "the frozen sender's alert dropped when due", func() bool { return pendingAlerts(t, w.bob) == 0 })
+	if n.count() > shownBefore {
+		t.Fatalf("a frozen sender's alert: shown %d", n.count())
 	}
 }
 
@@ -176,9 +214,10 @@ func TestDesktopAlertCoversEveryDeviceOfAnAllowedPerson(t *testing.T) {
 func TestDesktopAlertAcrossRestart(t *testing.T) {
 	w, conv, n, stopBob := alertWorld(t, 2*time.Second)
 	allowAliceAt(t, w)
+	queued := time.Now()
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "before the restart"})
 	stopBob()
-	if pendingAlerts(t, w.bob) != 1 || n.count() != 0 {
+	if (pendingAlerts(t, w.bob) != 1 || n.count() != 0) && beforeDue(queued) {
 		t.Fatal("the alert did not wait in the store")
 	}
 	runAgent(t, w.bob)

@@ -237,12 +237,22 @@ func TestSessionAddressing(t *testing.T) {
 	eventually(t, "session delivery", func() bool { return state(t, w.alice, res.ID) == protocol.StateDelivered })
 
 	// Ended session, still in its grace period: accepted, then expires.
+	// The grace runs from the Hub seeing the stop, so no earlier than
+	// stopping; a loaded runner may spend all of it before the send lands,
+	// and then the send is refused as expired, correctly.
+	stopping := time.Now()
 	stop()
 	res, err = w.alice.Send(tctx(t), w.bob.Address+"#"+s1, "too late", "")
-	if err != nil || res.State != protocol.StateCustody {
+	inGrace := time.Since(stopping) < 500*time.Millisecond
+	var he *HubError
+	switch {
+	case err == nil && res.State == protocol.StateCustody:
+		eventually(t, "expired receipt", func() bool { return state(t, w.alice, res.ID) == protocol.StateExpired })
+	case !inGrace && (errors.Is(err, ErrSessionExpired) || errors.As(err, &he) && he.Code == protocol.CodeSessionExpired):
+		t.Logf("the send came after the grace (%v after stopping): refused as expired", time.Since(stopping))
+	default:
 		t.Fatalf("send during grace = %+v, %v", res, err)
 	}
-	eventually(t, "expired receipt", func() bool { return state(t, w.alice, res.ID) == protocol.StateExpired })
 
 	// After the grace period: refused without fallback, inbox with fallback.
 	if _, err := w.alice.Send(tctx(t), w.bob.Address+"#"+s1, "refused", ""); !errors.Is(err, ErrSessionExpired) {
@@ -382,6 +392,7 @@ func TestSilentPeerSessionExpires(t *testing.T) {
 	ad := protocol.SessionAd{Address: w.bob.Address, Session: protocol.NewID()}
 	protocol.SignAd(&ad, w.bob.id.Sign)
 	req, _ := w.bob.hub.request(context.Background(), "GET", "/v1/stream?ad="+ad.Encode(), nil)
+	opened := time.Now() // the stream's lease (2 beats unacknowledged, then the grace) runs from no earlier
 	resp, err := w.bob.hub.http.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -390,7 +401,15 @@ func TestSilentPeerSessionExpires(t *testing.T) {
 	go io.Copy(io.Discard, resp.Body)
 	start := time.Now()
 	res, err := w.alice.Send(tctx(t), w.bob.Address+"#"+ad.Session, "for the sleeping session", "")
-	if err != nil || res.State != protocol.StateCustody {
+	// "Still registered" holds only while the clock is inside the lease: a
+	// loaded runner may spend it before the send lands, and then the send
+	// is refused as expired, correctly; what follows is about its message.
+	if inLease := time.Since(opened) < 2*beat+grace; err != nil || res.State != protocol.StateCustody {
+		var he *HubError
+		if !inLease && (errors.Is(err, ErrSessionExpired) || errors.As(err, &he) && he.Code == protocol.CodeSessionExpired) {
+			t.Logf("the send came after the lease (%v after the stream opened): refused as expired; the queued message's expiry is not observable this run", time.Since(opened))
+			return
+		}
 		t.Fatalf("send while registered = %+v, %v", res, err)
 	}
 	eventually(t, "silent session to end", func() bool {

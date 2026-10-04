@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -143,13 +142,17 @@ func TestSlowReleaseNoticeDoesNotBlockDelivery(t *testing.T) {
 	running(t, "v0.3.0")
 	w := newWorld(t, "")
 	var showing atomic.Bool
+	// A notifier that hangs until the test is done: "still showing" then
+	// does not depend on delivery beating a fixed hang on a loaded runner.
+	hang := make(chan struct{})
 	w.bob.notify = func(title, body string, _ []string, _ func()) error {
 		showing.Store(true)
-		time.Sleep(3 * time.Second) // a notifier that hangs for a while
+		<-hang
 		showing.Store(false)
 		return nil
 	}
 	runWith(t, w, w.bob, RunOptions{})
+	t.Cleanup(func() { close(hang) }) // runs before the daemon's stop (cleanups run last-in first-out)
 	recommend(t, w.alice, "v8.0.0", "https://example.test/")
 	eventually(t, "slow notice started", showing.Load)
 	w.alice.Send(tctx(t), w.bob.Address, "still flowing", "")

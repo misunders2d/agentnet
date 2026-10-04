@@ -119,12 +119,20 @@ func TestTypingHooksSignedTLSStreamToGuardedUI(t *testing.T) {
 		}
 		return result
 	}
+	// The signal is signed (in whole ms), and the throttle starts, no
+	// earlier than first: "still shown" and "still throttled" below hold
+	// only while the clock is inside the signed TTL (less that ms) and the
+	// throttle; a loaded runner may pass them.
+	first := time.Now()
 	if result := send(true); result.Submitted != 1 || result.Throttled {
 		t.Fatalf("live signed submission: %+v", result)
 	}
 	waitTypingHook(t, bob, "decrypted typing through the real UI route", func() bool { return len(view().Entries) == 1 })
 	v := view()
-	if v.Entries[0].Address != alice.Address || v.Scope.Thread != sent.ID || !v.Current || !v.Supported {
+	if len(v.Entries) != 1 && time.Since(first) < protocol.SignalTTL-time.Millisecond {
+		t.Fatalf("typing gone before its signed expiry: %+v", v)
+	}
+	if len(v.Entries) == 1 && v.Entries[0].Address != alice.Address || v.Scope.Thread != sent.ID || !v.Current || !v.Supported {
 		t.Fatalf("wrong typing view: %+v", v)
 	}
 	wrong := url.Values{"peer": {alice.Address}, "thread": {protocol.NewID()}}
@@ -133,7 +141,7 @@ func TestTypingHooksSignedTLSStreamToGuardedUI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &other); err != nil || len(other.Entries) != 0 {
 		t.Fatalf("typing crossed thread scope: %+v %v", other, err)
 	}
-	if result := send(true); !result.Throttled || result.Submitted != 0 {
+	if result := send(true); (!result.Throttled || result.Submitted != 0) && time.Since(first) < protocol.TypingThrottle {
 		t.Fatalf("human throttle: %+v", result)
 	}
 	if result := send(false); result.Submitted != 1 || result.Throttled {

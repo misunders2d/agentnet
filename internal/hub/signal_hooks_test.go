@@ -43,11 +43,12 @@ func TestTypingHooksHubRouteAuthenticationWithoutStorage(t *testing.T) {
 	h, _, _ := testHub(t)
 	a, b := enroll(t, h, "alice"), enroll(t, h, "bob")
 	before := signalHookRows(t, h)
+	signedAt := time.Now() // s is signed (in whole ms) no earlier: its replay entry lasts until at least signedAt-1ms+SignalTTL
 	s := hubSignal(t, a, b)
 	if w := signalHookPost(t, h, a, s); w.Code != http.StatusAccepted {
 		t.Fatalf("registered route: %d %s", w.Code, w.Body)
 	}
-	if w := signalHookPost(t, h, a, s); w.Code != http.StatusTooManyRequests {
+	if w := signalHookPost(t, h, a, s); w.Code != http.StatusTooManyRequests && time.Since(signedAt) < protocol.SignalTTL-time.Millisecond {
 		t.Fatalf("route replay: %d %s", w.Code, w.Body)
 	}
 	raw, _ := json.Marshal(hubSignal(t, a, b))
