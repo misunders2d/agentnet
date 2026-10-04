@@ -64,7 +64,7 @@ func TestCLIGroupSelectedHistoryFile(t *testing.T) {
 	unselected := c.writeRandom("unselected.bin", 8193)
 	_ = unselected
 	c.run("--home", "alice", "dm", "send", "--file", "unselected.bin", conv, "UNSELECTED earlier private turn")
-	waitFor(t, "Bob receives parent", func() bool { return strings.Contains(dmShow(c, "bob", conv), "UNSELECTED earlier private turn") })
+	waitFor(t, "Bob receives parent", func() bool { return strings.Contains(dmShowArriving(c, "bob", conv), "UNSELECTED earlier private turn") })
 	data := c.writeRandom("selected.bin", 45001)
 	c.run("--home", "bob", "dm", "send", "--file", "selected.bin", conv, "SELECTED exact historical turn")
 	waitFor(t, "Alice receives selected source", func() bool { return strings.Contains(dmShow(c, "alice", conv), "SELECTED exact historical turn") })

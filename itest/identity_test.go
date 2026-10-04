@@ -30,7 +30,7 @@ func TestCLILinkedDeviceGetsHistory(t *testing.T) {
 		return err == nil
 	})
 	c.run("--home", "alice", "dm", "send", conv, "before the phone")
-	waitFor(t, "bob to have it", func() bool { return strings.Contains(dmShow(c, "bob", conv), "before the phone") })
+	waitFor(t, "bob to have it", func() bool { return strings.Contains(dmShowArriving(c, "bob", conv), "before the phone") })
 
 	var link string
 	for _, line := range strings.Split(c.run("--home", "alice", "person", "link"), "\n") {
