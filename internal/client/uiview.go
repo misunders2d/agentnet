@@ -214,10 +214,11 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 
 // Why a conversation item waits for the person here (ConvReview.Reason).
 const (
-	ReviewAwaiting   = "agent_awaiting"    // a request to this device's agent waits for a one-time accept (Accept)
-	ReviewNeedsHuman = "agent_needs_human" // this device's agent said the person must decide (Accept reruns it, Resolve closes it)
-	ReviewInvite     = "agent_invite"      // an invitation for this device's agent waits for its person (AcceptParticipation, DeclineParticipation)
-	ReviewHeldTurn   = "person_turn"       // a question or task for the person, held in its conversation: answered there, never run
+	ReviewAwaiting    = "agent_awaiting"    // a request to this device's agent waits for a one-time accept (Accept)
+	ReviewNeedsHuman  = "agent_needs_human" // this device's agent said the person must decide (Accept reruns it, Resolve closes it)
+	ReviewInterrupted = "agent_interrupted" // this device's agent's run was interrupted (the daemon stopped): Accept reruns it, Resolve closes it
+	ReviewInvite      = "agent_invite"      // an invitation for this device's agent waits for its person (AcceptParticipation, DeclineParticipation)
+	ReviewHeldTurn    = "person_turn"       // a question or task for the person, held in its conversation: answered there, never run
 )
 
 // ConvReview is a conversation item waiting for the person here, with the
@@ -263,8 +264,8 @@ func (a *Agent) PageReview() (ReviewPage, error) {
 	}
 	// A request to this device's agent, as Accept and Resolve take it. One
 	// whose turn is erased here still waits: it is kept until its work ends.
-	requests, err := a.store.convReview(`i.pid IS NOT NULL AND i.replica = 0 AND i.kind IN (?, ?) AND i.state IN (?, ?)`,
-		envelope.KindQuestion, envelope.KindTask, stateAwaiting, stateNeedHuman)
+	requests, err := a.store.convReview(`i.pid IS NOT NULL AND i.replica = 0 AND i.kind IN (?, ?) AND i.state IN (?, ?, ?)`,
+		envelope.KindQuestion, envelope.KindTask, stateAwaiting, stateNeedHuman, stateInterrupt)
 	if err != nil {
 		return p, err
 	}
@@ -340,6 +341,8 @@ func (s *store) convReview(where string, args ...any) ([]ConvReview, error) {
 			r.Reason = ReviewAwaiting
 		case stateNeedHuman:
 			r.Reason = ReviewNeedsHuman
+		case stateInterrupt:
+			r.Reason = ReviewInterrupted
 		default:
 			r.Reason = ReviewHeldTurn
 		}

@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -208,10 +209,15 @@ func TestRoomAgentAskWaitsForTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "Bob observes the end", func() bool { return stateAt(t, w.bob, own.PID).State == PartDismissed })
-	if err := w.bob.Accept(task.ID); err != nil {
-		t.Fatal(err)
+	// Once the asking agent's participation ended nothing here would run
+	// its task: accept is refused with that reason and the task stays as it
+	// was, for the person to decline or resolve.
+	if err := w.bob.Accept(task.ID); !errors.Is(err, ErrNothingRuns) {
+		t.Fatalf("accept of an ended agent's task: %v", err)
 	}
-	eventually(t, "an ended agent's accepted task not run", func() bool { return jobState(t, w.bob, task.ID) == stateNotRun })
+	if s := jobState(t, w.bob, task.ID); s != stateAwaiting {
+		t.Fatalf("an ended agent's refused task is %s, want %s", s, stateAwaiting)
+	}
 }
 
 // ROOM_V1 §2.3 in a DM: an edit carrying its turn's captured audience is

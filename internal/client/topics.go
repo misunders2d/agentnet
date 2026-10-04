@@ -123,7 +123,9 @@ func topicOpen(r threadRow, replied bool) bool {
 	case r.notice:
 		return r.state == stateNeedHuman // an open review notice
 	case r.in:
-		return !r.selected && topicOpenIn[r.state]
+		// An interrupted request waits for the person to run it again or
+		// close it (reviewStates): open, like one held for them.
+		return !r.selected && (topicOpenIn[r.state] || r.state == stateInterrupt && (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask))
 	}
 	return (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !replied && !topicUndelivered[r.state]
 }
@@ -232,7 +234,8 @@ func summarize(self, peer string, g []string, rows map[string]threadRow, l topic
 				t.Notices++
 			}
 			continue
-		case r.in && !r.selected && (r.state == stateHeld || r.state == stateAwaiting || r.state == stateNeedHuman):
+		case r.in && !r.selected && (r.state == stateHeld || r.state == stateAwaiting || r.state == stateNeedHuman ||
+			r.state == stateInterrupt && (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask)): // reviewStates
 			t.Review++
 		case r.in && !r.selected && (r.state == stateRunning || r.state == stateCancelReq):
 			t.Running++

@@ -173,9 +173,19 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 		pins, e := host.groupWithdrawals(packet.State.Conv)
 		return e == nil && groupWithdrawalPinned(pins, *leave.Withdrawal)
 	})
-	if err = host.Accept(task.ID); err != nil {
+	// Accepting it is refused, saying why (BUG-23): nothing would run it.
+	if err = host.Accept(task.ID); !errors.Is(err, ErrNothingRuns) {
+		t.Fatalf("accept of a task after its inviter's departure: %v", err)
+	}
+	if s, _ := host.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
+		t.Fatalf("a refused accept left the task %s", s)
+	}
+	// Accepted before the departure: the worker does not run it either.
+	if _, err = host.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateAccepted, task.ID); err != nil {
 		t.Fatal(err)
 	}
+	host.NoteChange() // as a stored change does: the worker looks again from the start
+	host.wakeWorker()
 	waitState(t, host, task.ID, stateNotRun)
 	if stub.runs() != 0 {
 		t.Fatal("received departure allowed queued task claim")
@@ -348,9 +358,19 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	if !stateAt(t, w.bob, stablePID.PID).Claimable() {
 		t.Fatal("unrelated requester change ended stable invite")
 	}
-	if err = w.bob.Accept(task.ID); err != nil {
+	// Accepting it is refused, saying why (BUG-23): nothing would run it.
+	if err = w.bob.Accept(task.ID); !errors.Is(err, ErrNothingRuns) || !strings.Contains(err.Error(), "group admission changed") {
+		t.Fatalf("accept of a task whose requester's admission changed: %v", err)
+	}
+	if s, _ := w.bob.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
+		t.Fatalf("a refused accept left the task %s", s)
+	}
+	// Accepted before the admission changed: the worker does not run it either.
+	if _, err = w.bob.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateAccepted, task.ID); err != nil {
 		t.Fatal(err)
 	}
+	w.bob.NoteChange() // as a stored change does: the worker looks again from the start
+	w.bob.wakeWorker()
 	waitState(t, w.bob, task.ID, stateNotRun)
 	if stub.runs() != 0 {
 		t.Fatal("same-key requester rejoin revived queued task")

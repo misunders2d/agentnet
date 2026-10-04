@@ -39,6 +39,10 @@
      "messages": [
        {"id": "t1", "dir": "in", "kind": "task", "state": "running", "at": 1780000000}],
      "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
+    {"name": "a received request interrupted here waits for the person to run it again or close it: pending, never archived",
+     "messages": [
+       {"id": "t1", "dir": "in", "kind": "task", "state": "interrupted", "at": 1780000000}],
+     "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
     {"name": "this device's responder answered a received question: done by the agent",
      "messages": [
        {"id": "q1", "dir": "in", "kind": "question", "state": "answered", "at": 1789990000},

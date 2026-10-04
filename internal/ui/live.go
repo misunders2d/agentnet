@@ -426,7 +426,7 @@ func (l *Live) Act(x Action) (string, error) {
 		note = "Declined."
 	case DoResolve:
 		err = l.a.Resolve(x.ID)
-		note = "Closed. Nothing was sent."
+		note = "Closed. No reply was sent."
 	case DoCancel:
 		err = l.a.Cancel(x.ID)
 		note = "Stopping your responder."

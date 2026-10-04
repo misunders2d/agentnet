@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, topicStateSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -618,10 +618,14 @@ const (
 	stateNotDelivered = "not_delivered" // it ran, but its output was held back (also an outbox state); kept here
 )
 
-// reviewStates are the states that wait for the local human's decision.
-var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld}
+// reviewStates are the states that wait for the local human's decision
+// (the arguments of inReview). An interrupted question or task is one:
+// nothing reruns it on its own (a task may already have had effects), so
+// the person runs it again (Accept) or closes it (Resolve, Reply, Decline).
+// An interrupted follow-up is no request: nobody waits on it.
+var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inReview = `state IN (?, ?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // alertReviewStates are the review states that ask for attention by the
 // legacy desktop review notification and the review notice to another
@@ -629,10 +633,11 @@ const inReview = `state IN (?, ?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_rece
 // them, as it is a person's DM turn, which follows the DM's own opt-in
 // alerts (alerts.go). It stays in review (reviewStates) all the same. A
 // request to this device's agent that needs the person (awaiting,
-// needs_human) keeps them.
-var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
+// needs_human, interrupted) keeps them. They are the arguments of
+// inAlertReview.
+var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inAlertReview = `state IN (?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inAlertReview = `(state IN (?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // inboxArgs are insertInbox's arguments. The arrival is kept to the
 // millisecond too, as a conversation message's is, so that the inbox lists
@@ -1196,11 +1201,26 @@ func (s *store) markNotified(ids []string) error {
 }
 
 // interruptRunning marks jobs a previous daemon left running. They are not
-// rerun automatically: a task may already have had effects.
+// rerun automatically: a task may already have had effects. Their
+// requesters are told (status_due; noteStatus).
 func (s *store) interruptRunning() error {
-	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running'
-		WHERE state IN (?, ?)`, stateInterrupt, stateRunning, stateCancelReq)
+	_, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = 'the daemon stopped while this was running', status_due = status_due + 1,
+		run_pgid = NULL, run_start = NULL WHERE state IN (?, ?)`, stateInterrupt, stateRunning, stateCancelReq)
 	return s.done(err)
+}
+
+// runGroupSchema keeps the process group of a running job's harness, and
+// its leader's start (procStart), so a daemon starting after one that died
+// can stop what is left of the run before marking it interrupted.
+const runGroupSchema = `
+ALTER TABLE inbox ADD COLUMN run_pgid INTEGER;
+ALTER TABLE inbox ADD COLUMN run_start TEXT;
+`
+
+// setRunGroup records job id's harness process group (pgid 0: it ended).
+func (s *store) setRunGroup(id string, pgid int, start string) error {
+	_, err := s.db.Exec(`UPDATE inbox SET run_pgid = nullif(?, 0), run_start = nullif(?, '') WHERE id = ?`, pgid, start, id)
+	return err
 }
 
 // threadText returns up to max earlier messages of the conversation with
