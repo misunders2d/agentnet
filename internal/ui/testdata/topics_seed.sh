@@ -13,7 +13,8 @@
 #   go build -tags agentnet_testclock -o "$BIN" ./cmd/agentnet
 #   export AGENTNET_TEST_CLOCK_FILE=$(mktemp) STANDIN_DELAY=0.1
 #   AGENTNET_COMPANY_BINARY=$BIN AGENTNET_COMPANY_RUN="topics_seed.sh" company_world.sh
-#   (or by hand against a running world: topics_seed.sh WORLD BINARY)
+#   (or by hand against a running world: topics_seed.sh WORLD BINARY;
+#   AGENTNET_COMPANY_SEED=1 adds the company's other conversations too)
 #
 # Writes <world>/topics.json with ids of a few topics a journey opens.
 set -eu
@@ -25,6 +26,10 @@ an(){ who=$1; shift; env -i PATH="$W/bin:/usr/bin:/bin" HOME="$W/cli-home" SSL_C
 first(){ cut -d' ' -f1; }
 stocky=vitalii/desk
 laptop=$(an sergey whoami | head -1 | cut -d' ' -f1)
+# Stocky answers Sergey's laptop by itself only once Vitalii's desk has
+# approved it (as company_seed.sh does; approving again changes nothing),
+# so this runs on a world started with or without AGENTNET_COMPANY_SEED=1.
+an vitalii approve "$laptop" > /dev/null
 # answered N: wait until Sergey holds N answers from Stocky.
 answered(){
 	for _ in $(seq 1 600); do

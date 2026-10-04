@@ -214,15 +214,19 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   and files and recalls nothing already read, saved or given to an agent.
 - Reminders: `/api/remind` and existing `/api/remind/{action}`.
 - Topics (an agent's device threads, docs/plans/TOPICS.md): `overview.threads`
-  leaves archived topics out; `overview.topics[]` counts each peer's topics
-  (`total`, `archived`, `archived_unread`, `latest`) and `overview.topic_list`
-  says the routes below exist. A thread summary carries `state` (active, done,
-  archived), `done_by` (agent, you), `conclusion` (the agent's words, label it
-  as theirs), `concluded_by`, `pending`, `renamed`, `auto_title`;
-  `/api/thread` adds `topic`. GET `/api/topics?peer=&state=&q=&before=&limit=`
-  pages `{topics, next, matched}`; POST `/api/topic/rename` `{peer,id,title}`,
-  `/api/topic/done` and `/api/topic/reopen` `{peer,id}`. A name and the
-  Done/Reopen marks are this device's only; say so.
+  lists every thread, archived topics too; a skin that pages topics itself
+  asks `/api/overview?topics=1` and gets them without archived topics.
+  `overview.topics[]` counts each peer's topics (`total`, `archived`,
+  `archived_unread`, `latest`) and `overview.topic_list` says the routes
+  below exist. A thread summary carries `state` (active, done, archived),
+  `done_by` (agent, you), `conclusion` (the final reply's first line: the
+  agent's words when `done_by` is agent, label it as theirs; the person's
+  own when `done_by` is you), `concluded_by`, `pending`, `renamed`,
+  `auto_title`, `quiet_since`; `/api/thread` adds `topic`. GET
+  `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
+  matched}`; POST `/api/topic/rename` `{peer,id,title}`, `/api/topic/done`
+  and `/api/topic/reopen` `{peer,id,count}` (`count`: the messages shown).
+  A name and the Done/Reopen marks are this device's only; say so.
 - Headless: a request message may carry `exec` `{state, at, host, stale, attempt?, detail}`,
   the executing host's own signed word (never delivery, presence or a timer);
   show it apart from delivery and say when it is stale. A review notice may carry

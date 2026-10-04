@@ -144,10 +144,13 @@ the chat list; each of its topics is a separate reply chain.
 - **Bar** under the header: at most 6 chips (`TOPICS.barMax`), as many as
   fit: what needs you, then unread, then the open topic, then the most recent
   active; the open topic always keeps its chip. The last chip is **All
-  topics (N)**, with a red count (a dot on phones) when topics not shown have
-  unread messages. No scrollbar: chips share the width and truncate (title in
-  full on hover); phones fit one topic chip. "+ New topic" sits at the end (an
-  icon with a label for screen readers on phones).
+  topics (N)** (on phones **All N**, so a second topic chip fits), with a
+  yellow "needs you" badge (its count on desktops, an alert icon on phones)
+  when topics that need you are not shown, and a red count (a dot on phones)
+  when topics not shown have unread messages; its label says both. No
+  scrollbar: chips share the width and truncate (title in full on hover).
+  "+ New topic" sits at the end (an icon with a label for screen readers on
+  phones).
 - **State in words:** Needs you (yellow), Waiting (agent violet), Done (green),
   Archived (muted), each with an icon. Bar chips show the icon with the word
   for screen readers and on hover; lists show the word.
@@ -157,15 +160,19 @@ the chat list; each of its topics is a separate reply chain.
 - **All topics:** desktop a 440px side panel from the right edge, phone a
   full-screen sheet with Back. Search field, then Active / Done / Archived
   as three equal pill buttons with counts, then rows: title, time, state,
-  the last line (or "Agent: <conclusion>" when the agent finished it),
-  unread count; Show more pages on. Footer: "Names you give topics and Done
+  the last line (or "Agent: <conclusion>" when the agent finished it, "You:
+  <answer>" when you answered it by hand here), unread count; Show more
+  pages on. Focus starts in the search field (not on touch, where the
+  keyboard would cover the list). Footer: "Names you give topics and Done
   marks are kept on this device only."
 - **End of a done topic:** a card after the last message: Done, who finished
-  it, "<Agent>'s conclusion: …" in the agent's words, and Reopen. An archived
-  topic says Archived, how long it has been quiet, and that nothing was
-  deleted and a new message makes it active again.
+  it, "<Agent>'s conclusion: …" in the agent's words (or "Your answer: …"
+  when you answered it by hand on this device), and Reopen. An archived
+  topic says Archived, the date it went quiet (its last message or your
+  last Mark done / Reopen), and that nothing was deleted and a new message
+  makes it active again.
 - **Chat search** lists matching topics (archived too) under "Topics", each
-  opening that topic.
+  opening that topic; "Show more topics (N)" pages on.
 
 ## Invite → guest → dismiss
 1. **Open the sheet** from "+" → "Bring someone in", the header icon, or the panel. The sheet says: "They join as a guest and see only what you share. Anyone here can dismiss them."

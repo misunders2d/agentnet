@@ -25,6 +25,13 @@ thousands of topics.
   its final answer or result with status `done`, that reply is the topic's
   last message, and nothing in the topic is pending. Its conclusion is the
   first line of that reply, always shown labelled as the agent's words.
+- **Answered by the person:** on the device that answered, a final reply
+  the person wrote by hand (`Reply` takes the request over: state `manual`;
+  in the browser device, which runs no agent, every reply) makes the topic
+  done by the person (`done_by` you), and the reply is shown as *their*
+  answer, never the agent's. **Known limit:** the device that asked cannot
+  tell: a v1 reply does not say whether a person or the agent wrote it, so
+  there it reads as the agent's conclusion.
 - **Done by the person:** "Mark done". "Reopen" makes a done (or archived)
   topic active again.
 - **Not done:** a failed result, a result that needs a person, a progress
@@ -32,12 +39,16 @@ thousands of topics.
   final answer.
 - **Archived (derived):** quiet for `TopicArchiveAfter` (7 days) with nothing
   pending: never while anything waits for the person, the agent or the
-  peer. Quiet means no message, and no Mark done / Reopen, in that time.
+  peer. Quiet means no message, and no Mark done / Reopen, in that time
+  (`quiet_since`; an archived topic says "Quiet since" that date).
   Archived topics leave the overview and the bar; they are listed under All
   topics → Archived and open normally, saying they are archived. **Nothing
   is ever deleted by archiving.**
 - **Any new message makes a topic active again** (it ends any Mark done or
-  Reopen); the agent's next final answer can make it done again.
+  Reopen); the agent's next final answer can make it done again. A mark
+  covers only the messages the page showed when the person chose it
+  (`count`): one that arrived meanwhile keeps the topic active, and the
+  page says so.
 - **Pending** means: a received request held, awaiting, needing a person or
   being run here; a sent question or task without a reply (a request the
   Hub refused, or that expired, waits on nobody); an open review notice.
@@ -65,13 +76,17 @@ Deleting a topic (this device only) also forgets what was set on it.
   **All topics (N)**. As many chips as fit are shown (phones fit fewer);
   chips truncate and the rest are under All topics, never in a scrollbar.
   The open topic's chip is its menu: Rename…, Mark done or Reopen, All
-  topics. New topic stays beside the bar.
+  topics. New topic stays beside the bar. On a phone the last chip reads
+  **All N** so a second topic chip fits. When topics that need the person
+  are not in the bar, the All topics chip carries a "needs you" mark (and
+  says how many in its label); unread messages in other topics give it a
+  red mark.
 - **All topics (N)**: a searchable list (title, last line or the agent's
   conclusion, time, state, unread) with Active / Done / Archived filters,
   paged from the server; it opens a topic on click. Desktop: a side panel;
   phone: a full-screen sheet.
 - The chat list's search also finds topics by name or last line, archived
-  ones too, through the same paged route.
+  ones too, through the same paged route; "Show more topics" pages on.
 
 ## Changing it
 
@@ -80,11 +95,12 @@ code" (owner). Every tunable is one named, commented constant block per
 language, and there is no user setting:
 
 - Go: `internal/client/topics.go` (`TopicArchiveAfter`, `TopicPageDefault`,
-  `TopicPageMax`, `TopicTitleMax`).
+  `TopicPageMax`, `TopicTitleMax`, and the store's read sizes).
 - Browser device: `TOPICS` in `internal/ui/static/engine.mjs`, which must
   equal the Go block; `TestBrowserTopicsMatchGo` fails until it does.
-- Screens: `TOPICS` in `internal/ui/web/src/model.ts` (bar size, chip width,
-  page size, search delay).
+- Screens: `TOPICS` in `internal/ui/web/src/model.ts` (bar size, chip
+  widths, page sizes, search delay). Its `titleMax` and `pageMax` repeat the
+  server's limits; `TestMessengerTopicLimitsMatchGo` fails until they match.
 
 The derivation is one function on each side (`deriveTopic` in Go and in
 engine.mjs), held to the same vectors
@@ -92,20 +108,26 @@ engine.mjs), held to the same vectors
 
 ## API
 
-- Overview: `threads` lists every device thread except archived topics;
-  `topics[]` gives each peer's `total`, `archived`, `archived_unread` and
-  `latest` topic (so an agent whose topics are all archived keeps its row);
-  `topic_list` says the routes below are served. Each `ThreadSummary` has
-  `state` (active, done, archived), `done_by` (agent, you), `conclusion`,
-  `concluded_by`, `pending`, `renamed` and `auto_title`.
+- Overview: `GET /api/overview?topics=1` (the messenger) lists every
+  device thread except archived topics; plain `GET /api/overview` (the
+  previous interface, installed skins: pages that know nothing of topics)
+  lists every thread, archived ones too, so none becomes unreachable there.
+  Both carry `topics[]`: each peer's `total`, `archived`, `archived_unread`
+  and `latest` topic (so an agent whose topics are all archived keeps its
+  row); `topic_list` says the routes below are served. Each `ThreadSummary`
+  has `state` (active, done, archived), `done_by` (agent, you),
+  `conclusion`, `concluded_by`, `pending`, `renamed`, `auto_title` and
+  `quiet_since`.
 - `GET /api/thread` adds `topic`: the open thread as a topic, archived or not.
 - `GET /api/topics?peer=&state=&q=&before=&limit=`: one page, most recently
-  active first; `next` is the `before` of the next page; `matched` counts
-  every page. Review-notice threads are never listed.
-- `POST /api/topic/rename` `{peer, id, title}` (empty title: automatic
-  again), `/api/topic/done` and `/api/topic/reopen` `{peer, id}`: the same
-  guarded action path as every POST (cookie, same origin, JSON); `id` is the
-  topic's id.
+  active first; `next` (`<seconds>|<peer>|<id>`, opaque to pages) is the
+  `before` of the next page; `matched` counts every page. Review-notice
+  threads are never listed.
+- `POST /api/topic/rename` `{peer, id, title}` (empty or blank title:
+  automatic again), `/api/topic/done` and `/api/topic/reopen`
+  `{peer, id, count}` (`count`: the messages the page showed; omitted, all):
+  the same guarded action path as every POST (cookie, same origin, JSON);
+  `id` is the topic's id.
 
 ## Testing a world with old history
 
