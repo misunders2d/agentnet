@@ -2,15 +2,72 @@ package client
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+// staleCapsKey marks a request context whose profile reads staleCapsRT
+// answers without capability records.
+type staleCapsKey struct{}
+
+// staleCapsRT answers a profile read made with a staleCapsKey context as the
+// Hub answered it before the device's live session published its record:
+// the same profile, without records.
+type staleCapsRT struct{ base http.RoundTripper }
+
+func (rt staleCapsRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := rt.base.RoundTrip(r)
+	if err != nil || r.Context().Value(staleCapsKey{}) == nil || r.Method != "GET" || !strings.HasSuffix(r.URL.Path, "/profile") {
+		return resp, err
+	}
+	var prof protocol.Profile
+	err = json.NewDecoder(resp.Body).Decode(&prof)
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	prof.Caps = nil
+	data, _ := json.Marshal(prof)
+	resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(data)), int64(len(data))
+	resp.Header.Del("Content-Length")
+	return resp, nil
+}
+
+// A copy kept waiting goes out once its recipient can read it, also when
+// the Hub's news of that came before the copy was stored: the send read the
+// profile in the window after the recipient's new session connected and
+// before it published its record (here that read is answered without
+// records), and the members push announcing the record was spent on a
+// release pass that found nothing waiting yet. No Hub event follows; the
+// sender's own wake after storing it looks again. (A linked device's
+// invite of its person's agent to the just-restarted host stayed waiting
+// for good: TestSelfConsentLinkedDevices.)
+func TestWaitingCopyLooksAgainOnceStored(t *testing.T) {
+	w := newWorld(t, "")
+	w.alice.hub.http.Transport = staleCapsRT{w.alice.hub.http.Transport}
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.alice, w.bob)
+	sent, err := w.alice.SendConv(context.WithValue(tctx(t), staleCapsKey{}, true), conv, ConvOutgoing{Body: "decided on an older read"})
+	if err != nil || sent.State != stateConvWaiting || !strings.Contains(sent.Detail, "needs to update AgentNet") {
+		t.Fatalf("setup: %+v %v", sent, err)
+	}
+	eventually(t, "the waiting copy to go out", func() bool {
+		return strings.Join(convBodies(t, w.bob, conv), "|") == "in:decided on an older read"
+	})
+}
 
 // A message kept as waiting is not released to a person who, by the time
 // the device can read conversations again, has published a different

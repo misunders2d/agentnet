@@ -495,11 +495,15 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	// A wake from another agentnet process means it changed local state:
 	// the worker looks again, and so does a messenger page; the stream's
 	// worker picks up what it queued (history for a device it linked, file
-	// requests) and sends it now.
+	// requests) and sends it now. That includes copies a send kept waiting:
+	// it read the recipient's profile before storing them, and the members
+	// push that announced newer support may have come in between, spent on
+	// a release pass that found nothing waiting yet; nothing else would
+	// look at them again (convRelease).
 	stopKicks, err := listenKicks(a.home, func() {
 		a.wakeWorker()
 		a.changes.bump()
-		a.convWork.due(convHistory | convServe | convFetch | convRetry) // convRetry: a local participation record shares its public scope with guests now
+		a.convWork.due(convHistory | convServe | convFetch | convRetry | convRelease) // convRetry: a local participation record shares its public scope with guests now
 		a.kickNow()
 	})
 	if err != nil {
