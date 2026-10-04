@@ -220,25 +220,7 @@ func run(args []string) error {
 	case "download":
 		return runDownload(ctx, a, rest)
 	case "status":
-		fs := flag.NewFlagSet("status", flag.ContinueOnError)
-		wait := fs.Duration("wait", 0, "wait up to this long for a message still held by the Hub to be delivered")
-		if err := fs.Parse(rest); err != nil {
-			return err
-		}
-		if fs.NArg() != 1 {
-			return errors.New("usage: status [--wait D] ID")
-		}
-		r, err := a.Status(ctx, fs.Arg(0), *wait)
-		var local *client.LocalStatus
-		if errors.As(err, &local) { // this device's own record, marked as such
-			fmt.Printf("%s %s %s (local record; Hub not reachable)\n", r.ID, r.State, r.Path)
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Printf("%s %s %s\n", r.ID, r.State, r.Path)
-		return nil
+		return runStatus(ctx, a, rest, os.Stdout)
 	case "daemon":
 		fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 		var opts client.RunOptions
@@ -454,6 +436,52 @@ func printResult(r client.SendResult, wait time.Duration) {
 	}
 }
 
+// runStatus shows what is known about a message sent from here: one copy
+// by its id, or, by the logical id of a conversation message, each copy
+// (one per device), all within one --wait.
+func runStatus(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	wait := fs.Duration("wait", 0, "wait up to this long for a message still held by the Hub to be delivered")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: status [--wait D] ID")
+	}
+	copies, err := a.SentCopies(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if len(copies) == 0 || len(copies) == 1 && copies[0].ID == fs.Arg(0) {
+		copies = []client.ConvCopy{{ID: fs.Arg(0)}} // a copy's (or a device message's) own id
+	}
+	deadline := time.Now().Add(*wait)
+	for _, c := range copies {
+		to := ""
+		if len(copies) > 1 || c.ID != fs.Arg(0) {
+			to = " to " + c.To
+		}
+		r, err := a.Status(ctx, c.ID, max(time.Until(deadline), 0))
+		var local *client.LocalStatus
+		if errors.As(err, &local) { // this device's own record, marked as such
+			why := "Hub not reachable"
+			if local.Cause == nil {
+				why = "not at the Hub"
+				if local.Detail != "" {
+					why += ": " + local.Detail
+				}
+			}
+			fmt.Fprintf(stdout, "%s %s %s%s (local record; %s)\n", r.ID, r.State, r.Path, to, why)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "%s %s %s%s\n", r.ID, r.State, r.Path, to)
+	}
+	return nil
+}
+
 func runDownload(ctx context.Context, a *client.Agent, args []string) error {
 	fs := flag.NewFlagSet("download", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "directory to save into")
@@ -515,6 +543,9 @@ func runInbox(a *client.Agent, args []string) error {
 			mark = "*"
 		}
 		kind := m.Kind
+		if m.Sub != "" {
+			kind += " " + m.Sub
+		}
 		if m.State != "" {
 			kind += " [" + m.State + "]"
 		}
@@ -525,7 +556,11 @@ func runInbox(a *client.Agent, args []string) error {
 		if m.ReplyTo != "" {
 			fmt.Printf("  (reply to %s)\n", termText(m.ReplyTo, "")) // a sender's field, never checked as an id
 		}
-		fmt.Printf("  %s\n", termText(m.Body, "  "))
+		body := m.Body
+		if m.Sub == envelope.SubEvent {
+			body = eventLine(m.Body)
+		}
+		fmt.Printf("  %s\n", termText(body, "  "))
 		if m.Detail != "" {
 			fmt.Printf("  [%s] %s\n", detailLabel(m.State), termText(m.Detail, "  "))
 		}

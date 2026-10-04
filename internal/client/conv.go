@@ -360,6 +360,28 @@ type ConvCopy struct {
 	To     string `json:"to"`
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
+	Own    bool   `json:"own,omitempty"` // in a conversation's view: to another device of this person
+}
+
+// SentCopies lists the copies this device sent of the conversation message
+// with logical id lid, as stored (none: no such message sent here).
+func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
+	own := a.ownDevices() // before the rows: the store has one connection
+	rows, err := a.store.db.Query(`SELECT id, recipient, state, coalesce(error, '') FROM outbox WHERE lid = ? AND conv IS NOT NULL ORDER BY rowid`, lid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConvCopy
+	for rows.Next() {
+		var c ConvCopy
+		if err := rows.Scan(&c.ID, &c.To, &c.State, &c.Detail); err != nil {
+			return nil, err
+		}
+		c.Own = own[c.To]
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // outCopy is one device's copy being stored.
@@ -563,13 +585,25 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}()
 		m.stored = func() { stored = true; release() } // idempotent release, before delivery
 	}
+	// A turn is for the other member: it fails, as a device send does, when
+	// a key changed (until trusted) or none of their devices can get a copy.
+	// Records go to the devices that can take them.
+	turn := m.sub == "" && !m.selfJob
+	var peerErr error // why a device of the other member got no copy
 	for _, dev := range devices {
 		key, err := a.sendKey(ctx, dev.Address)
+		var changed *KeyChangedError
+		if turn && errors.As(err, &changed) {
+			return ConvSent{}, err
+		}
 		if err == nil && key.Fingerprint() != dev.Fingerprint() {
 			err = fmt.Errorf("%s's key is not the one its person's roster names", dev.Address)
 		}
 		if err != nil {
 			a.Logf("conversation copy for %s not sent: %v", dev.Address, err)
+			if !own[dev.Address] && peerErr == nil {
+				peerErr = fmt.Errorf("%s: %w", dev.Address, err)
+			}
 			continue
 		}
 		recipient, err := key.Recipient()
@@ -616,6 +650,12 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		if !supported {
 			c.state, c.why = stateConvWaiting, why
 		}
+	}
+	if turn && !slices.ContainsFunc(copies, func(c outCopy) bool { return !own[c.in.To] }) {
+		if peerErr == nil {
+			peerErr = errors.New("the other member has no current device")
+		}
+		return ConvSent{}, fmt.Errorf("not sent: no device of the other member can get a copy: %w", peerErr)
 	}
 	if len(copies) == 0 && !m.selfJob {
 		return ConvSent{}, errors.New("no device of the conversation can be sent a copy now")
@@ -1087,6 +1127,20 @@ func (a *Agent) verifyRoot(ctx context.Context, root protocol.ConvRoot, sender p
 
 // errRootInvalid means a conversation root does not verify.
 var errRootInvalid = errors.New("conversation root invalid")
+
+// sentElsewhere reports whether id names no message sent from this device
+// but a conversation message received here from another device of this
+// person: views show it as sent (Dir "out", Via), and it is stored here as
+// received.
+func (a *Agent) sentElsewhere(id string) (bool, error) {
+	var sent int
+	var sender string
+	if err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM outbox WHERE id = ?),
+		coalesce((SELECT sender FROM inbox WHERE id = ? AND local = 0 AND conv IS NOT NULL), '')`, id, id).Scan(&sent, &sender); err != nil {
+		return false, err
+	}
+	return sent == 0 && sender != "" && a.ownDevices()[sender], nil
+}
 
 // ownDevices names every device of this installation's person, in any
 // step of its pinned chain.

@@ -392,12 +392,13 @@ func (l *Live) refreshDM(id string) (Presence, bool, error) {
 		// A message shows its least advanced copy's state, so every copy
 		// still held is asked about, not only the first one (often the other
 		// person's, long delivered, while a copy to one of this person's own
-		// devices stays shown as held forever).
+		// devices stays shown as held forever), and also the held copies of
+		// a message shown by a less advanced one (failed, or kept here).
 		const maxReceipts = 20
 		asked := 0
 		for i := len(msgs) - 1; i >= 0 && asked < maxReceipts; i-- {
 			m := msgs[i]
-			if m.Dir != "out" || m.State != protocol.StateCustody {
+			if m.Dir != "out" {
 				continue
 			}
 			for _, copy := range m.Copies { // none: sent from another device of this person

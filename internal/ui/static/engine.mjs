@@ -179,7 +179,7 @@ function outText(state, peer, detail) {
   case "receiver_waiting": return detail || "Waiting for the selected reply receiver to accept this exact request.";
   case "waiting": return "Kept here, not sent yet: " + (detail || peer + " cannot read conversations now");
   case "queued": return "Waiting to send; retries automatically";
-  case "custody": return "Waiting on the server until " + peer + " connects";
+  case "custody": return "On the server; delivery to " + peer + " not confirmed yet";
   case "delivered": return "Delivered to " + peer;
   case "expired": return "Not delivered: that session ended first";
   case "failed": return "Not sent" + (detail ? ": " + detail : "");
@@ -1380,8 +1380,12 @@ export class Engine {
     for (const f of files) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
     const prepared = await this.prepareReceiverRequest(receiver, { id: target ? lid : firstID, lid, conv: c.id, root: c.root, ts: Math.floor(at/1000), kind, body, reply_to: replyTo, origin, target, pid }, plain, checks);
     const recs = [];
+    // A turn is for the other person (as client.SendConv): a changed key
+    // refuses it until trusted, and so does no device of theirs taking a copy.
+    const turn = sub === "";
     for (const dev of devices) {
       const pin = await this.store.get("pins", dev.address);
+      if (turn && pin && (pin.pending || pin.fingerprint !== dev.fingerprint)) throw new Error(dev.address + "'s key changed: nothing is sent until the new key is trusted (on a computer with agentnet trust).");
       if (!pin || pin.fingerprint !== dev.fingerprint || pin.pending) continue; // a changed key is never used
       let ok = false, why = "", notify = false;
       try {
@@ -1407,6 +1411,7 @@ export class Engine {
       recs.push({ id, conv: c.id, lid, body, reply_to: replyTo, kind, origin, sub, pid, target, ...(required_cap ? { required_cap } : {}), ...(prepared ? { receiver_route: prepared.route, recipient_fp: dev.fingerprint } : {}), at, to: dev.address, own: dev.own, envelope,
         attachments: sealed.map((f) => f.attachment), files: sealed.length ? sealed : undefined, state: ok ? "queued" : "waiting", detail: why });
     }
+    if (turn && !recs.some((r) => !r.own)) throw new Error("Not sent: no device of the other person can get a copy now.");
     if (!recs.length) throw new Error("No device of this conversation can be sent a copy now.");
     const final = (await this.gate(c)).why; // a profile just read may have frozen the person
     if (final) throw new Error(final);

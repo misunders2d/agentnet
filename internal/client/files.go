@@ -269,7 +269,18 @@ func (a *Agent) Download(ctx context.Context, id, dir string, overwrite bool) ([
 		return nil, err
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("message %s has no attachments", id)
+		var received, sent int
+		if err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE id = ? AND local = 0), (SELECT count(*) FROM outbox WHERE id = ?)`,
+			id, id).Scan(&received, &sent); err != nil {
+			return nil, err
+		}
+		switch {
+		case received > 0:
+			return nil, fmt.Errorf("message %s has no attachments", id)
+		case sent > 0:
+			return nil, fmt.Errorf("message %s was sent from here: download saves files received here (yours are where you attached them from)", id)
+		}
+		return nil, fmt.Errorf("message %s is not received here (yet): the daemon stores it when it arrives; or the id is wrong", id)
 	}
 	if retracted, err := a.store.retracted(id); err != nil {
 		return nil, err

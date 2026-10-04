@@ -145,6 +145,13 @@ func (a *Agent) RefOf(conv, id, dir string) (ControlRef, error) {
 		return ControlRef{ID: id, Fingerprint: fp}, nil
 	}
 	var lid, fp string
+	if dir == "out" { // shown as sent, but sent from another device of this person: received here
+		if via, err := a.sentElsewhere(id); err != nil {
+			return ControlRef{}, err
+		} else if via {
+			dir = "in"
+		}
+	}
 	var err error
 	if dir == "out" {
 		err = a.store.db.QueryRow(`SELECT lid FROM outbox WHERE id = ? AND conv = ? AND ref_id IS NULL`, id, conv).Scan(&lid)

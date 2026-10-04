@@ -161,16 +161,22 @@ func copyViews(cs []client.ConvCopy) []CopyView {
 	return out
 }
 
-// laggingCopy is the device whose copy of m is the least advanced (the
-// one its state is about): the other person's, or one of your own; peer
-// when m has no copies.
+// laggingCopy names whom m's state (its least advanced copy's) is about:
+// the other person's device whose copy that is, or "all devices" when only
+// copies to your own other devices are that far behind (one of them is
+// never named as if it were the recipient); peer when m has no copies.
 func laggingCopy(m client.ConvMessage, peer string) string {
+	who := peer
 	for _, c := range m.Copies {
-		if c.State == m.State {
+		if c.State != m.State {
+			continue
+		}
+		if !c.Own {
 			return c.To
 		}
+		who = "all devices"
 	}
-	return peer
+	return who
 }
 
 // syncedFrom is the device m came from as history, or "".

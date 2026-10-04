@@ -589,8 +589,8 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id)
-	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''))`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id, received_ms)
+	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?)`
 
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
@@ -634,8 +634,12 @@ var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman}
 
 const inAlertReview = `state IN (?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
+// inboxArgs are insertInbox's arguments. The arrival is kept to the
+// millisecond too, as a conversation message's is, so that the inbox lists
+// both kinds in the order they arrived.
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, time.Now().Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID}
+	now := time.Now()
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID, now.UnixMilli()}
 }
 
 // initialState decides whether a new message waits for anything.
@@ -868,6 +872,7 @@ type Message struct {
 	AgentID     string           `json:"agent_id,omitempty"`
 	Target      *envelope.Target `json:"target,omitempty"`
 	Detail      string           `json:"detail,omitempty"`
+	Sub         string           `json:"sub,omitempty"` // a conversation record's subtype: "event" is a participation event (its signed JSON is the body)
 	Body        string           `json:"body"`
 	ReplyTo     string           `json:"reply_to,omitempty"`
 	SentAt      time.Time        `json:"sent_at"`
@@ -897,10 +902,15 @@ type FileInfo struct {
 	ctSHA256 string
 }
 
+// recordSubs are the received records between devices that are never a
+// message: group proofs, contexts, invitations, consents and withdrawals,
+// and Drive space records (a conversation's view leaves them out too).
+const recordSubs = `('drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+
 // inbox lists received messages; a local request to this device's own
-// agent (agentjob.go) is not one.
+// agent (agentjob.go) is not one, nor is a record between devices.
 func (s *store) inbox(unreadOnly bool) ([]Message, error) {
-	where := ` WHERE local = 0 AND ref_id IS NULL`
+	where := ` WHERE local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN ` + recordSubs
 	if unreadOnly {
 		where += ` AND read_at IS NULL`
 	}
@@ -918,8 +928,10 @@ func (s *store) inboxMessage(id string) (*Message, error) {
 
 func (s *store) messages(where string, args ...any) ([]Message, error) {
 	q := `SELECT id, sender, kind, body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
-		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, ''), coalesce(agent_id, ''), coalesce(target, '') FROM inbox`
-	rows, err := s.db.Query(q+where+` ORDER BY received_at, id`, args...)
+		state, coalesce(status, ''), coalesce(responder, ''), coalesce(detail, ''), coalesce(agent_id, ''), coalesce(target, ''), coalesce(sub, '') FROM inbox`
+	// In arrival order: to the millisecond where it is known, then as
+	// stored (an id is random, so it never orders one second's arrivals).
+	rows, err := s.db.Query(q+where+` ORDER BY coalesce(received_ms, received_at * 1000), rowid`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -929,7 +941,7 @@ func (s *store) messages(where string, args ...any) ([]Message, error) {
 		var ts, recv int64
 		var target string
 		if err := rows.Scan(&m.ID, &m.From, &m.Kind, &m.Body, &m.ReplyTo, &ts, &recv, &m.Read,
-			&m.State, &m.Status, &m.Responder, &m.Detail, &m.AgentID, &target); err != nil {
+			&m.State, &m.Status, &m.Responder, &m.Detail, &m.AgentID, &target, &m.Sub); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -984,6 +996,14 @@ func (s *store) markRead(ids []string) error {
 		}
 	}
 	return s.done(nil)
+}
+
+// markRecordsRead marks read the records between devices that the inbox
+// leaves out (recordSubs): none is a message to read, and listing the
+// inbox cleared them when it still listed them.
+func (s *store) markRecordsRead() error {
+	_, err := s.db.Exec(`UPDATE inbox SET read_at = ? WHERE read_at IS NULL AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') IN `+recordSubs, time.Now().Unix())
+	return s.done(err)
 }
 
 func (s *store) inboxKind(id string) (sender, kind string, err error) {

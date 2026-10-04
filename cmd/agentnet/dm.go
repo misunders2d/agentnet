@@ -336,7 +336,11 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 			kind += " pid " + m.PID
 		}
 		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
-		fmt.Fprintf(stdout, "%s\n  %s\n", termText(header, "  "), termText(shownText(m.Body, m.Controls), "  "))
+		text := shownText(m.Body, m.Controls)
+		if m.Sub == envelope.SubEvent {
+			text = eventLine(m.Body) // the record in words, not its signed JSON
+		}
+		fmt.Fprintf(stdout, "%s\n  %s\n", termText(header, "  "), termText(text, "  "))
 		if m.Deleted {
 			continue // its files went with it
 		}
@@ -360,6 +364,32 @@ func shownText(body string, c client.Controls) string {
 		return c.Shown(body) + " (edited)"
 	}
 	return body
+}
+
+// eventLine says what a participation event records, in place of its
+// signed JSON (the messenger page words it with the people's names).
+func eventLine(body string) string {
+	ev, err := protocol.ParseParticipationEvent([]byte(body))
+	if err != nil {
+		return "(a participation record that cannot be read here)"
+	}
+	switch ev.Type {
+	case protocol.EventInvite, protocol.EventScope:
+		invited := "an agent"
+		if ev.Host != nil && ev.Role == protocol.RoleHuman {
+			invited = "the person on " + ev.Host.Address + " as a guest"
+		} else if ev.Host != nil {
+			invited = "the agent on " + ev.Host.Address
+		}
+		return fmt.Sprintf("%s invited %s (participation %s)", ev.Author.Address, invited, ev.PID)
+	case protocol.EventAccept:
+		return fmt.Sprintf("%s accepted (participation %s)", ev.Author.Address, ev.PID)
+	case protocol.EventDecline:
+		return fmt.Sprintf("%s declined (participation %s)", ev.Author.Address, ev.PID)
+	case protocol.EventDismiss:
+		return fmt.Sprintf("%s ended it (participation %s)", ev.Author.Address, ev.PID)
+	}
+	return fmt.Sprintf("%s recorded %q (participation %s)", ev.Author.Address, ev.Type, ev.PID)
 }
 
 func splitList(s string) []string {

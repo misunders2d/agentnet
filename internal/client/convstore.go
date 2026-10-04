@@ -616,7 +616,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
 		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, '')
-		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN ('drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal')
+		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
 		   AND NOT `+erasedIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
@@ -648,11 +648,17 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		}
 		switch {
 		case m.Dir == "out":
-			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail}
+			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to]}
 			if i, ok := sent[m.LID]; ok {
 				out[i].Copies = append(out[i].Copies, c)
 				if rank(c.State) < rank(out[i].State) {
 					out[i].State, out[i].Detail = c.State, c.Detail
+				}
+				// Its id is a copy to someone else when there is one, so a
+				// status of the id shown is about them, never about one of
+				// this person's own devices.
+				if !c.Own && out[i].Copies[0].Own && out[i].ID == out[i].Copies[0].ID {
+					out[i].ID = c.ID
 				}
 				continue
 			}

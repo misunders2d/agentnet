@@ -917,8 +917,8 @@ func StateText(dir, kind, state, peer string) string {
 		switch state {
 		case "queued":
 			return "Waiting to send; retries automatically"
-		case "custody":
-			return "Waiting on the server until " + peer + " connects"
+		case "custody": // the server has it; whether peer is connected is not known from this
+			return "On the server; delivery to " + peer + " not confirmed yet"
 		case "delivered":
 			return "Delivered to " + peer
 		case "expired":

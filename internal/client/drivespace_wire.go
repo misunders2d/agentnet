@@ -8,6 +8,7 @@ import (
 
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/gdrive"
@@ -84,7 +85,13 @@ func (a *Agent) admitDriveControl(ctx context.Context, env envelope.Envelope, in
 		return e
 	}
 	forward := a.forwardStale(me, in, sender.Fingerprint(), raw)
-	res, e := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error { return insertCopies(tx, forward) })
+	res, e := a.store.addConvInbox(in, sender.Fingerprint(), "", fromQuarantine, func(tx *sql.Tx) error {
+		// A record, never a message to read: stored read, as group records are.
+		if _, e := tx.Exec(`UPDATE inbox SET read_at=? WHERE id=?`, time.Now().Unix(), in.ID); e != nil {
+			return e
+		}
+		return insertCopies(tx, forward)
+	})
 	if e == nil && res == admitted {
 		a.NoteChange()
 		if len(forward) > 0 {

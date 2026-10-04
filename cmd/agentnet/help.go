@@ -325,7 +325,9 @@ request, woken by the recipient's receipt). Show what is known about a
 message you sent: queued (not yet at the Hub),
 custody (the Hub has it), delivered (the recipient stored it), quarantined
 (the recipient could not verify it), expired (its session ended), and the
-path (relay or direct).`,
+path (relay or direct). For a conversation message, ID may be its logical
+id (the lid dm show prints): each copy, one per device, is shown with the
+device it went to.`,
 
 	"sessions": `Usage: agentnet sessions ADDRESS
 
