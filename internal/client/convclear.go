@@ -211,6 +211,9 @@ func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 	if err := eraseCoveredIn(tx, "", selfFP); err != nil {
 		return out, err
 	}
+	if err := forgetTopics(tx, peer, thread); err != nil { // its name and marks go with it (topics.go)
+		return out, err
+	}
 	if out.Kept, err = retainedCount(tx, "", selfFP); err != nil {
 		return out, err
 	}

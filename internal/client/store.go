@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, topicStateSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -475,7 +475,7 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 	}
 	if _, err := tx.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, reply_to, follow_up, status, target, agent_id, required_cap, recipient_fp)
 		VALUES(?, ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''), nullif(?, ''))`,
-		env.ID, env.To, in.Body, string(data), stateQueued, time.Now().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in), recipientKey); err != nil {
+		env.ID, env.To, in.Body, string(data), stateQueued, storeNow().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in), recipientKey); err != nil {
 		return err
 	}
 	if len(selected) > 0 && selected[0].binding != nil {
@@ -638,7 +638,7 @@ const inAlertReview = `state IN (?, ?, ?) AND NOT EXISTS (SELECT 1 FROM reply_re
 // millisecond too, as a conversation message's is, so that the inbox lists
 // both kinds in the order they arrived.
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
-	now := time.Now()
+	now := storeNow() // the clock of stored device-thread times (topics.go)
 	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID, now.UnixMilli()}
 }
 

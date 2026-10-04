@@ -2,7 +2,6 @@ package client
 
 import (
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -35,6 +34,21 @@ type ThreadSummary struct {
 	// requests wait for a person there. They are not decisions here.
 	Notices    int  `json:"notices"`
 	NoticeOnly bool `json:"notice_only"` // every message in the thread is a review notice
+
+	// The thread as a topic (topics.go): active, done or archived; who made
+	// it done; the first line of the agent's final reply and which device
+	// sent it, when the agent did; whether anything in it is still open
+	// (then it is never archived); and the person's own name for it here,
+	// with the automatic one (its first line) kept beside it.
+	State       string `json:"state"`
+	DoneBy      string `json:"done_by,omitempty"`
+	Conclusion  string `json:"conclusion,omitempty"`
+	ConcludedBy string `json:"concluded_by,omitempty"`
+	Pending     bool   `json:"pending"`
+	Renamed     bool   `json:"renamed,omitempty"`
+	AutoTitle   string `json:"auto_title,omitempty"`
+
+	lastID, conclusionID, custom string // what topicText reads, and the name set here
 }
 
 // threadRow is what a summary needs to know about one message.
@@ -43,13 +57,15 @@ type threadRow struct {
 	in       bool
 	kind     string
 	state    string
+	status   string // the outcome an answer or result carries
 	unread   bool
 	notice   bool // in only: a review notice (see envelope.StatusReviewNotice)
 	replied  bool // out only: a received message replies to it
 	selected bool // in only: local receiver input, not a remote execution job
 }
 
-// Threads lists every thread with every peer, most recent first.
+// Threads lists every thread with every peer, archived topics included,
+// most recent first.
 func (a *Agent) Threads() ([]ThreadSummary, error) {
 	peers, err := a.store.conversationPeers()
 	if err != nil {
@@ -63,53 +79,21 @@ func (a *Agent) Threads() ([]ThreadSummary, error) {
 		}
 		out = append(out, ts...)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].LastAt.Equal(out[j].LastAt) {
-			return out[i].LastAt.After(out[j].LastAt)
-		}
-		return out[i].ID > out[j].ID
-	})
+	sortTopics(out)
 	return out, nil
 }
 
+// peerThreads summarizes every thread with peer, with its text.
 func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
-	groups, rows, err := a.peerThreadGroups(peer)
-	if err != nil || len(groups) == 0 {
+	ts, err := a.peerTopics(peer, storeNow().Unix())
+	if err != nil {
 		return nil, err
 	}
-	var out []ThreadSummary
-	for _, g := range groups {
-		first, last := rows[g[0]], rows[g[len(g)-1]]
-		t := ThreadSummary{ID: first.id, Peer: peer, Count: len(g), LastAt: time.Unix(last.at, 0), NoticeOnly: true}
-		for _, id := range g {
-			r := rows[id]
-			t.NoticeOnly = t.NoticeOnly && r.notice
-			switch {
-			case r.notice:
-				if r.state == stateNeedHuman {
-					t.Notices++
-				}
-				continue
-			case r.in && !r.selected && (r.state == stateHeld || r.state == stateAwaiting || r.state == stateNeedHuman):
-				t.Review++
-			case r.in && !r.selected && (r.state == stateRunning || r.state == stateCancelReq):
-				t.Running++
-			}
-			if r.in && r.unread {
-				t.Unread++
-			}
-			if !r.in && (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !r.replied {
-				t.Waiting = true
-			}
-		}
-		full, err := a.store.peerMessages(peer, []string{first.id, last.id})
-		if err != nil {
-			return nil, err
-		}
-		t.Title, t.Last = firstLine(full[first.id].Body), firstLine(full[last.id].Body)
-		out = append(out, t)
+	all := make([]*ThreadSummary, len(ts))
+	for i := range ts {
+		all[i] = &ts[i]
 	}
-	return out, nil
+	return ts, a.topicText(peer, all)
 }
 
 // peerThreadGroups unions the device-history messages with peer into
@@ -211,7 +195,7 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 			rows.Close()
 			return nil, err
 		}
-		r.in = true
+		r.in, r.status = true, status
 		out[r.id] = r
 		if r.replyTo != "" && status != envelope.StatusProgress {
 			replies[r.replyTo] = true
@@ -221,14 +205,14 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), '') FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
+	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, '') FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status); err != nil {
 			return nil, err
 		}
 		r.replied = replies[r.id]

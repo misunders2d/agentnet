@@ -169,7 +169,7 @@ func (a *Agent) typingScopeAllows(scope protocol.TypingScope, address string, p 
 		if scope.Peer != address {
 			return false
 		}
-		threads, err := a.peerThreads(address)
+		threads, err := a.peerTopics(address, storeNow().Unix()) // ids only: no text is read
 		if err != nil {
 			return false
 		}
