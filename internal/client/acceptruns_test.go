@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // BUG-23: accept refuses, saying why, when nothing here would run what it
@@ -82,5 +83,32 @@ func TestAcceptRefusesEndedParticipation(t *testing.T) {
 	}
 	if s, _ := w.bob.store.jobState(id); s != stateAwaiting || stub.runs() != 0 {
 		t.Fatalf("refused accept: state %s, runs %d", s, stub.runs())
+	}
+}
+
+// A request taken in under a reply session is run by that session's own
+// worker (claimReplyReceiverJob), not the default responder: with none
+// chosen here, accepting one that was interrupted is not refused as if
+// nothing would run it (review finding 9).
+func TestAcceptReplySessionInputWithoutResponder(t *testing.T) {
+	w := newWorld(t, "") // bob chose no responder
+	id, binding := protocol.NewID(), protocol.NewID()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO inbox(id, sender, ts, kind, body, received_at, state) VALUES(?, ?, 1, ?, 'which region?', 1, ?)`, []any{id, w.alice.Address, envelope.KindQuestion, stateInterrupt}},
+		{`INSERT INTO reply_receivers(id, conv, request_ref, receiver, created_at) VALUES(?, ?, ?, '{"kind":"managed_agent"}', 1)`, []any{binding, protocol.NewID(), protocol.NewID()}},
+		{`INSERT INTO reply_receiver_inputs(binding, inbox_id) VALUES(?, ?)`, []any{binding, id}},
+	} {
+		if _, err := w.bob.store.db.Exec(q.sql, q.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.bob.Accept(id); err != nil {
+		t.Fatalf("accept of an interrupted reply-session request: %v", err)
+	}
+	if s, _ := w.bob.store.jobState(id); s != stateAccepted {
+		t.Fatalf("accepted, it is %s", s)
 	}
 }

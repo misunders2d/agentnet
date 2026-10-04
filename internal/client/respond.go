@@ -162,14 +162,18 @@ func (a *Agent) Accept(id string) error {
 // accepted ("" when something would, or when id is no such request, which
 // Accept refuses on its own): a request to this device's agent whose
 // participation ended (or whose asking guest left), or one no responder
-// or local agent here would take (NothingRuns).
+// or local agent here would take (NothingRuns). A request taken in under a
+// reply session is its session worker's (claimReplyReceiverJob), which
+// needs no responder here: never refused here.
 func (a *Agent) acceptBlocked(id string) (string, error) {
 	var j job
 	var target string
 	var pid sql.NullString
-	err := a.store.db.QueryRow(`SELECT sender, coalesce(verified_by, ''), kind, coalesce(conv, ''), pid, coalesce(target, ''), local FROM inbox WHERE id = ?`, id).
-		Scan(&j.From, &j.Key, &j.Kind, &j.Conv, &pid, &target, &j.Local)
-	if errors.Is(err, sql.ErrNoRows) {
+	var session bool
+	err := a.store.db.QueryRow(`SELECT sender, coalesce(verified_by, ''), kind, coalesce(conv, ''), pid, coalesce(target, ''), local,
+		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id) FROM inbox WHERE id = ?`, id).
+		Scan(&j.From, &j.Key, &j.Kind, &j.Conv, &pid, &target, &j.Local, &session)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && session {
 		return "", nil
 	}
 	if err != nil {
