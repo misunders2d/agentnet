@@ -1,6 +1,27 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-> **Current release — v0.6.2:** [published](https://github.com/misunders2d/agentnet/releases/tag/v0.6.2)
+> **Current release — v0.7.0:** [published](https://github.com/misunders2d/agentnet/releases/tag/v0.7.0)
+> from `ad52546310776e04697217e1004539093880a7b2` on 2026-10-04. All six
+> binaries and SHA256SUMS were downloaded back and match the build. CI run
+> 37223612752 passed native Linux, macOS and Windows, the seven parallel
+> Linux race shards and the container journey. Scope: Comic, the new default
+> skin, as a standalone package loaded through the same path as any skin
+> (contract additions in docs/UI_SKINS.md); topics with a short bar, All
+> topics, done and 7-day archive (docs/plans/TOPICS.md); job lifecycle fixes;
+> messenger fields; the rm1 reader; Comic motion; the old built-in interface
+> removed (Classic and Zoom follow as standalone packages from branch
+> `skins/modules`, not yet merged). Production: the relay runs image
+> `agentnet-revived:v0.7.0-ad52546` (stopped-state backup
+> `/opt/agentnet-revived/backups/v0.7.0-20261004T183531Z`), public HTTPS
+> reports v0.7.0; hub/bezos's client and admin/laptop updated with the
+> official updater after stopped-state home backups, both `doctor` checks
+> exit 0; the Hub recommends v0.7.0. A read-only browser check of the
+> laptop page at 1440 light and 390 dark loaded Comic in its shadow root
+> with its fonts and no page errors. Not updated yet: zenbook (owner tests
+> it next). Not claimed: physical phone, Safari, macOS/Windows desktop runs
+> beyond CI.
+
+> **Previous release — v0.6.2 (historical):** [published](https://github.com/misunders2d/agentnet/releases/tag/v0.6.2)
 > from `5342aa3a1207a95f04c888360b7937b72d8e627d`. Relay and both managed
 > clients run this clean revision; both client doctor checks passed. All seven
 > uploaded digests and the changed hosted UI assets match. Fixes: searchable
