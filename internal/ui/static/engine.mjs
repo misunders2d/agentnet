@@ -5120,7 +5120,7 @@ export class Engine {
       dms.push({ id: c.id, peer: this.personView(peer), ...(member ? {} : { members: originals.map(p => this.personView(p)) }), role: member ? "member" : participations.some(p => p.role === "human" && p.host?.address === this.address && p.host.fingerprint === this.fp) ? "human_guest" : "visitor", created: iso(c.created * 1000), mine: c.creator === this.address, count: msgs.length,
         title: msgs[0] ? line(msgs[0]) : "", last: msgs.length ? line(msgs[msgs.length - 1]) : "",
         last_at: iso(msgs.length ? msgs[msgs.length - 1].at : c.created * 1000),
-        unread: msgs.filter((m) => m.fp && !m.own && !m.read).length, held: msgs.filter((m) => m.state === "conv_held").length,
+        unread: msgs.filter((m) => m.fp && !m.own && !m.read).length, held: msgs.filter((m) => this.heldOpen(m, msgs)).length,
         waiting: msgs.filter((m) => m.state === "waiting").length });
     }
     dms.sort((a, b) => b.last_at.localeCompare(a.last_at));
@@ -5203,17 +5203,18 @@ export class Engine {
       agents: (await this.agentsOf(c)).map((info) => { const view = this.agentView(info, msgs, peer); if (!member) { view.can_ask = guestActive && view.can_ask; view.can_dismiss = false; if (view.can_ask) view.state_text = "In this conversation, on " + info.host.address + ". Ask it with @mention; its owner's permissions decide whether it runs."; } return view; }), // an accepted guest addresses active assistants under their owners' permissions
       messages: await Promise.all(msgs.map(async (m) => {
         const here = !m.fp && !m.excerpt_pid, out = here || !!m.own; // claimed excerpts have no verified original author key
+        const state = m.state === "conv_held" && !this.heldOpen(m, msgs) ? "manual" : m.state; // answered here (client.turnClosesHeld)
         const event = m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
         return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: m.reply_to || "",
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
-          state: m.state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
+          state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? m.copies : undefined,
           ...(m.excerpt_pid ? { excerpt_pid: m.excerpt_pid, claimed_key: m.claimed_key } : {}),
           synced_from: m.history ? m.synced_from : "",
           attachments: await Promise.all((m.attachments || []).map(async (a, i) => ({ index: i, name: wire.safeName(a.name), size: a.size, ...(here ? await this.sentState(a) : this.fileState(a)) }))),
           ...(event ? {} : m.excerpt_pid ? { can: [], reactions: [] } : await ctlView(m, here)), ...(event || m.excerpt_pid ? {} : execView(m, here)),
-          state_text: event ? "" : here ? outText(m.state, m.lagging || (peer ? peer.address : ""), m.detail) : m.state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : "" };
+          state_text: event ? "" : here ? outText(m.state, m.lagging || (peer ? peer.address : ""), m.detail) : state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : state === "manual" ? "Replied by hand" : "" };
       })) };
   }
 
@@ -6043,6 +6044,16 @@ export class Engine {
   }
   async agentsOf(c) { return (await this.participationsOf(c)).filter(p => p.role !== "human"); }
 
+  // heldOpen: whether turn m, held for the person (conv_held: nothing runs
+  // it), still waits for them. The person's own later turn in the same
+  // conversation, from this browser or another device of theirs, answers
+  // it, as client.turnClosesHeld closes it there (state manual); a request
+  // to an agent, an agent's output, a control or a record does not.
+  heldOpen(m, msgs) {
+    return m.state === "conv_held" && !msgs.some((x) => x !== m && (x.own || !x.fp && !x.excerpt_pid) && !x.sub && !x.target &&
+      !String(x.origin || "").startsWith("agent:") && x.at >= m.at);
+  }
+
   // needsYouOf adds what waits for this person in conversation conv
   // (ui.ConvItem; reasons as client.Review*): an invitation for, or a
   // request to, an agent on another device of this person, as its
@@ -6062,7 +6073,7 @@ export class Engine {
     }
     for (const m of msgs) {
       if (m.state === "conv_held") {
-        held.push({ reason: "person_turn", conv, ...(m.pid ? { pid: m.pid } : {}), id: m.id, peer: m.from, kind: m.kind, why: "Held for you: nothing runs it. Answer here if you want to.", excerpt: firstLine(m.body), at: iso(m.at), ...(m.read ? {} : { unread: true }) });
+        if (this.heldOpen(m, msgs)) held.push({ reason: "person_turn", conv, ...(m.pid ? { pid: m.pid } : {}), id: m.id, peer: m.from, kind: m.kind, why: "Held for you: nothing runs it. Answer here if you want to.", excerpt: firstLine(m.body), at: iso(m.at), ...(m.read ? {} : { unread: true }) });
         continue;
       }
       const info = m.pid && m.target && ["question", "task"].includes(m.kind) ? infos.find((p) => p.pid === m.pid) : null;

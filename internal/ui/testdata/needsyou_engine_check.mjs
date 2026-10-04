@@ -44,4 +44,18 @@ for (const [state, reason] of [["awaiting", "agent_awaiting"], ["needs_human", "
   assert.deepEqual(needs.map((n) => n.reason), reason ? [reason] : [], "a request the laptop reports " + state);
   if (reason) assert.equal(needs[0].decide_on, "admin/laptop", "decided on the laptop");
 }
-console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out; requests listed as their host reports them, interrupted included");
+// A turn held for the person (conv_held: nothing runs it) is answered by
+// the person's own later turn in that conversation, as
+// client.turnClosesHeld closes it: one sent from this browser (no key of
+// another device) or from another device of theirs (own). A request to an
+// agent, an agent's output or an earlier turn answers nothing.
+const heldTurn = { id: "5".repeat(32), lid: "6".repeat(32), kind: "question", body: "decide please", at: received, fp: "b".repeat(8), from: "bob/desk", state: "conv_held", read: true };
+const turn = (n, extra) => ({ id: String(n).repeat(32), lid: String(n + 1).repeat(32), kind: "message", body: "yes", at: received + 1000, ...extra });
+const heldIds = (msgs) => { const needs = [], held = []; e.needsYouOf(conv, [], msgs, [], needs, held); return held.map((h) => h.id); };
+assert.deepEqual(heldIds([heldTurn]), [heldTurn.id], "held until answered");
+assert.deepEqual(heldIds([heldTurn, turn(7)]), [], "answered from this browser");
+assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8) })]), [], "answered from another device of the person");
+assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8), origin: "agent:claude", kind: "answer" })]), [heldTurn.id], "an agent's output answers nothing");
+assert.deepEqual(heldIds([heldTurn, turn(7, { kind: "question", target: { address: "admin/laptop", fingerprint: "a".repeat(8) } })]), [heldTurn.id], "a request to an agent answers nothing");
+assert.deepEqual(heldIds([turn(7, { at: received - 1000 }), heldTurn]), [heldTurn.id], "an earlier turn answers nothing");
+console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out; requests listed as their host reports them, interrupted included; held turns answered by the person's later turn");

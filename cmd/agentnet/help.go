@@ -240,6 +240,13 @@ Items waiting for your decision (--review):
                reruns it on its own (a task may already have had effects):
                accept ID runs it again afresh, reply ID TEXT or decline ID
                answers it, resolve ID closes it without sending anything
+  conv_held    a question or task for you in a conversation: nothing runs
+               it; your next turn there answers it (agentnet dm send),
+               resolve ID closes it without one
+Then, apart, what else waits here, each with where it is decided: requests
+to your agent that have not run (and why), invitations for your agent or to a
+group, devices asking to be linked to your person, and messages held back
+(e.g. until you trust a sender's changed key). doctor counts them too.
 While the daemon runs, a desktop notification with only a count (no content)
 tells you when new items wait (Linux: notify-send; macOS: osascript;
 Windows: a notification-area balloon, whose icon stays while the daemon
@@ -562,10 +569,11 @@ record.`,
 
 Close an item your responder marked needs_human after you have dealt with it,
 or one that was interrupted (the daemon stopped while it ran) that you do not
-want run again. It sends nothing and runs nothing; to answer the sender, use
-reply or decline instead. With the PID of your agent that joined without your
-accept (inbox --review), it dismisses that notice; the agent stays (dm
-dismiss-agent PID ends it).`,
+want run again, or a question or task held for you in a conversation that you
+do not want to answer there (replying there closes it too). It sends nothing
+and runs nothing; to answer the sender, use reply or decline instead. With the
+PID of your agent that joined without your accept (inbox --review), it
+dismisses that notice; the agent stays (dm dismiss-agent PID ends it).`,
 
 	"review-to": `Usage: agentnet review-to               (show)
        agentnet review-to ADDRESS

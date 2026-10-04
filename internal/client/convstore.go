@@ -470,6 +470,9 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
 				return err
 			}
+			if err := turnClosesHeld(tx, in); err != nil {
+				return err
+			}
 		}
 		if in.Human != nil {
 			if _, err := tx.Exec(`UPDATE outbox SET human=? WHERE id=?`, humanJSON(in.Human), env.ID); err != nil {
@@ -508,6 +511,20 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 		}
 	}
 	return s.done(tx.Commit())
+}
+
+// turnClosesHeld closes the questions and tasks held for the person
+// (stateConvHeld: nothing runs them) in the conversation of turn in, a turn
+// the person sent, here or from another of their devices: they answered
+// there. The turn's own copy is left as it is; a request to an agent, an
+// agent's output, a control or a record closes nothing.
+func turnClosesHeld(tx *sql.Tx, in envelope.Inner) error {
+	if in.Conv == "" || in.Sub != "" || in.Target != nil || strings.HasPrefix(in.Origin, envelope.OriginAgentPrefix) {
+		return nil
+	}
+	_, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ? WHERE conv = ? AND state = ? AND id != ?`,
+		stateManual, "answered in the conversation", in.Conv, stateConvHeld, in.ID)
+	return err
 }
 
 // waitingCopy is a waiting conversation copy: its recipient and sub (a

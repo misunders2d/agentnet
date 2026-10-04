@@ -221,9 +221,10 @@ func (a *Agent) NothingRuns(agentID string) string {
 }
 
 // Resolve records that the local human dealt with an item the responder
-// marked as needing their decision, or with a question or task whose run
-// was interrupted (it is not run again), or dismisses the notice of an
-// agent participation accepted without a click (id: its PID;
+// marked as needing their decision, with a question or task whose run was
+// interrupted (it is not run again), or with one held for them in a
+// conversation (closed without answering there), or dismisses the notice
+// of an agent participation accepted without a click (id: its PID;
 // selfconsent.go). It sends nothing; to answer the sender, use Reply or
 // Decline instead.
 func (a *Agent) Resolve(id string) error {
@@ -233,10 +234,19 @@ func (a *Agent) Resolve(id string) error {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
+		// A question or task held for the person in a conversation, closed
+		// without answering it there: nothing is sent (no status either: a
+		// person's turn has no executing device to speak for it).
+		if res, err := a.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ? AND state = ?`, stateResolved, id, stateConvHeld); err != nil {
+			return err
+		} else if n, _ := res.RowsAffected(); n == 1 {
+			a.NoteChange()
+			return nil
+		}
 		if dismissed, err := a.dismissSelfConsentNotice(id); err != nil || dismissed {
 			return err
 		}
-		return errors.New("nothing to resolve: not marked needs_human or interrupted")
+		return errors.New("nothing to resolve: not marked needs_human or interrupted, nor held for you in a conversation")
 	}
 	notifyDaemon(a.home)
 	a.noteStatus(id)
