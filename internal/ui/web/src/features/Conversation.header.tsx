@@ -15,6 +15,7 @@ import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { Confirm } from "./Message.actions";
 import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } from "./Message.model";
+import { usePortal } from "../owned";
 
 // ---- who is helping -------------------------------------------------------------------
 
@@ -89,6 +90,7 @@ const presenceTitle = "Whether the server sees their AgentNet running now. It do
 // ---- header -------------------------------------------------------------------------------
 
 export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: boolean; helpers: Helper[]; canInvite: boolean }) {
+  const portal = usePortal();
   const store = useApp();
   const overview = ctx.overview;
   const t = ctx.dm, th = ctx.thread;
@@ -164,11 +166,11 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
         ? <Button variant="act" icon={<IconUserPlus size={20} />} onClick={() => store.openInvite(ctx.conv)} className="shrink-0">Bring in</Button>
         : <IconButton label="Bring someone in" onClick={() => store.openInvite(ctx.conv)} className="shrink-0 bg-act text-act-ink stroke hover:bg-act"><IconUserPlus size={21} /></IconButton>)}
 
-      <Menu.Root>
+      <Menu.Root modal={false}>
         <Menu.Trigger aria-label="More" title="More" className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken data-[popup-open]:bg-sunken">
           <IconDotsVertical size={22} />
         </Menu.Trigger>
-        <Menu.Portal>
+        <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align="end" sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {t && <Menu.Item className={item} onClick={() => store.setPanel(true)}><IconUsers size={20} />In this chat</Menu.Item>}

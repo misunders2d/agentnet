@@ -787,6 +787,7 @@ export interface Skin {
   name: string;
   entry?: string;
   style?: string;
+  document?: string;
   files?: string[];
   digest?: string;
 }

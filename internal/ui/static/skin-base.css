@@ -1,0 +1,5 @@
+/* The host's base sheet in every skin's shadow tree (loader.js, before the
+   package's own stylesheet): core.css's semantic classes and the box of the
+   skin's root, in the lowest cascade layer, so the package's own rules
+   always win. Semantic colors such as --surface inherit from the page. */
+@import url("core.css") layer(agentnet-host);

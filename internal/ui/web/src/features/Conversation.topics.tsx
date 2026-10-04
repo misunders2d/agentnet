@@ -17,6 +17,7 @@ import { useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
+import { usePortal } from "../owned";
 import { AllTopics } from "./Conversation.alltopics";
 import { threadAgentName, type Ctx } from "./Message.model";
 
@@ -157,13 +158,14 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
 /** TopicMenu: the open topic's menu (its chip): rename, mark done or reopen, all topics. */
 function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: ReactNode; onAll: () => void }) {
   const store = useApp();
+  const portal = usePortal();
   const [rename, setRename] = useState(false);
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
   return (
     <>
-      <Menu.Root>
+      <Menu.Root modal={false}>
         {trigger}
-        <Menu.Portal>
+        <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align="start" sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               <Menu.Item className={item} onClick={() => setRename(true)}><IconPencil size={20} aria-hidden="true" />Rename…</Menu.Item>

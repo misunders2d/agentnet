@@ -142,6 +142,7 @@ document.querySelector('#composer').hidden=false;document.body.classList.add('sh
 window.scope={conv:config.conv};window.remount=async()=>{window.ui=mountTyping({api,input:document.querySelector('#body'),line:document.querySelector('#typing-line'),settings:document.querySelector('#typing-settings')});await ui.setScope(scope);};await remount();
 if(!sender){window.events=new EventSource('/native/events');events.addEventListener('change',()=>ui.refresh());}
 window.ready=true;`, config)
+			case serveBundledApp(w, r):
 			case strings.HasPrefix(r.URL.Path, "/assets/"):
 				server.Handler().ServeHTTP(w, r)
 			case strings.HasPrefix(r.URL.Path, "/native/"):

@@ -1,20 +1,14 @@
 @import "tailwindcss";
 
-/* Pop Huddle: the messenger's design tokens (docs/plans/MESSENGER_DESIGN.md).
-   Light follows the system by default; data-theme on <html> forces one. */
-
-@font-face { font-family: "Onest"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(m/fonts/onest-cyrillic-ext-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
-@font-face { font-family: "Onest"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(m/fonts/onest-cyrillic-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
-@font-face { font-family: "Onest"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(m/fonts/onest-latin-ext-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Onest"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(m/fonts/onest-latin-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Rubik"; font-style: normal; font-display: swap; font-weight: 300 900; src: url(m/fonts/rubik-cyrillic-ext-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
-@font-face { font-family: "Rubik"; font-style: normal; font-display: swap; font-weight: 300 900; src: url(m/fonts/rubik-cyrillic-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
-@font-face { font-family: "Rubik"; font-style: normal; font-display: swap; font-weight: 300 900; src: url(m/fonts/rubik-latin-ext-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Rubik"; font-style: normal; font-display: swap; font-weight: 300 900; src: url(m/fonts/rubik-latin-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+/* Pop Huddle: the Comic skin's design tokens (docs/plans/MESSENGER_DESIGN.md).
+   The skin runs in a shadow tree the host gives it, so tokens, theme and
+   the base reset belong to the skin's own root (.an-root, set by main.tsx),
+   never to the page. The theme is resolved to light or dark on that root
+   (data-theme), following the device unless one is chosen in Settings. */
 
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
-:root {
+.an-root {
   --an-canvas: #FFF8EC;
   --an-surface: #FFFFFF;
   --an-sunken: #FBF1DE;
@@ -44,17 +38,7 @@
   --an-shadow: #1B1530;
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme=light]) {
-    --an-canvas: #15111E; --an-surface: #1F1A2B; --an-sunken: #191422; --an-ink: #F5F0FF; --an-outline: #5A5075; --an-hairline: #2E2740;
-    --an-text-2: #CFC6E3; --an-muted: #A69DBD; --an-mine: #3B3317; --an-mine-ink: #FFF4CF; --an-theirs: #241E33; --an-agent: #2B2452;
-    --an-agent-ink: #B8A8FF; --an-agent-fill: #5B47C9; --an-act: #FFD43B; --an-act-ink: #1B1530; --an-approval-ink: #FFD86B;
-    --an-guest: #FF8A65; --an-guest-ink: #FFB49C; --an-guest-bg: #3A2019; --an-ok-ink: #6FD9A3; --an-ok-bg: #11301F; --an-online: #34C77B;
-    --an-danger: #FF8A80; --an-danger-bg: #3A1614; --an-dots: rgb(245 240 255 / 0.035); --an-shadow: #000000;
-    color-scheme: dark;
-  }
-}
-:root[data-theme=dark] {
+.an-root[data-theme=dark] {
   --an-canvas: #15111E; --an-surface: #1F1A2B; --an-sunken: #191422; --an-ink: #F5F0FF; --an-outline: #5A5075; --an-hairline: #2E2740;
   --an-text-2: #CFC6E3; --an-muted: #A69DBD; --an-mine: #3B3317; --an-mine-ink: #FFF4CF; --an-theirs: #241E33; --an-agent: #2B2452;
   --an-agent-ink: #B8A8FF; --an-agent-fill: #5B47C9; --an-act: #FFD43B; --an-act-ink: #1B1530; --an-approval-ink: #FFD86B;
@@ -63,7 +47,7 @@
   color-scheme: dark;
 }
 
-@theme {
+@theme inline {
   --font-sans: "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-display: "Rubik", "Onest", ui-sans-serif, system-ui, sans-serif;
   --color-canvas: var(--an-canvas);
@@ -98,11 +82,9 @@
 }
 
 @layer base {
-  html { font-size: 16px; }
-  html, body { background: var(--an-canvas); color: var(--an-ink); }
-  body { margin: 0; font-family: var(--font-sans); font-size: 16px; line-height: 1.45; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-  @media (min-width: 1024px) { body { font-size: 15px; } }
-  #skin.messenger-root, #messenger { min-height: 100dvh; }
+  .an-root { min-height: 100%; background: var(--an-canvas); color: var(--an-ink); font-family: "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; -webkit-text-size-adjust: 100%; }
+  @media (min-width: 1024px) { .an-root { font-size: 15px; } }
   :focus-visible { outline: 3px solid var(--an-agent-ink); outline-offset: 2px; border-radius: 6px; }
   ::selection { background: var(--an-act); color: var(--an-act-ink); }
   button, [role=button] { cursor: pointer; }

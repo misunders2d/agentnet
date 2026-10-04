@@ -8,6 +8,7 @@ import { IconChevronLeft, IconSearch, IconX } from "@tabler/icons-react";
 import { errorText } from "../api";
 import { useApp, useWide } from "../context";
 import { TOPICS, firstLine, topicOf, when, type Topic, type TopicState } from "../model";
+import { useModal, usePortal } from "../owned";
 import { useStore } from "../store";
 import { Button, IconButton } from "../ui/Button";
 import { TopicMark, topicLabel } from "./Conversation.topics";
@@ -35,6 +36,8 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
   const [failed, setFailed] = useState("");
   const asked = useRef(0);
   const search = useRef<HTMLInputElement>(null);
+  const portal = usePortal();
+  const modal = useModal(open);
 
   // Counts per filter, from the overview: it lists active and done topics and counts archived ones.
   const shown = (overview?.threads || []).filter((t) => t.peer === peer && !t.notice_only).map(topicOf);
@@ -71,11 +74,11 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
   const f = filters.find((x) => x.id === filter)!;
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
+    <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus">
+      <Dialog.Portal container={portal}>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-[#1B1530]/30 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-none" />
         {/* Focus starts in the search box, except on touch, where that would cover the list with the keyboard. */}
-        <Dialog.Popup initialFocus={(how) => (how === "touch" ? true : search.current)} className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none transition-transform duration-[280ms] ease-out-soft motion-reduce:transition-none "
+        <Dialog.Popup {...modal} initialFocus={(how) => (how === "touch" ? true : search.current)} className={"fixed z-50 flex flex-col bg-canvas text-ink outline-none transition-transform duration-[280ms] ease-out-soft motion-reduce:transition-none "
           + (wide ? "inset-y-0 right-0 w-[440px] border-l-[1.5px] border-outline shadow-pop data-[starting-style]:translate-x-full data-[ending-style]:translate-x-full"
             : "inset-0 data-[starting-style]:translate-y-full data-[ending-style]:translate-y-full")}>
           <div className={"flex shrink-0 items-center gap-2 border-b-[1.5px] border-outline bg-surface " + (wide ? "h-[76px] px-5" : "h-16 pl-1 pr-3")}>

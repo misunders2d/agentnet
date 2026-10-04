@@ -2,7 +2,7 @@
   "private": true,
   "name": "agentnet-messenger",
   "version": "0.0.0",
-  "description": "Source of the default messenger interface: static/messenger.mjs and static/messenger.css; see build.sh. Never installed at run time.",
+  "description": "Source of Comic, the default skin package: static/skins/comic/; see build.sh. Never installed at run time.",
   "type": "module",
   "dependencies": {
     "@base-ui/react": "1.8.0",

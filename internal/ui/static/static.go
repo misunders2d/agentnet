@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html default.html loader.js core.css app.js lenses.js app.css messenger.mjs messenger.css m device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
+//go:embed index.html loader.js core.css skin-base.css skinbar.mjs skinbar.css skin-choice.mjs skins device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -37,12 +37,10 @@ var relayFiles = map[string]string{
 	"/workspaces-sw.js":            "workspaces-sw.js", // the workspace switcher's worker: registered per local workspace id (workspaces.mjs)
 	"/assets/core.css":             "core.css",
 	"/assets/loader.js":            "loader.js",
-	"/assets/default.html":         "default.html",
-	"/assets/app.css":              "app.css",
-	"/assets/app.js":               "app.js",
-	"/assets/lenses.js":            "lenses.js",
-	"/assets/messenger.mjs":        "messenger.mjs", // the default interface (web/build.sh)
-	"/assets/messenger.css":        "messenger.css",
+	"/assets/skin-base.css":        "skin-base.css", // the host's base sheet in every skin's shadow tree
+	"/assets/skinbar.mjs":          "skinbar.mjs",   // the switcher over every skin but the default
+	"/assets/skinbar.css":          "skinbar.css",
+	"/assets/skin-choice.mjs":      "skin-choice.mjs", // which skin opens and its trust (loader.js, local-skins.mjs)
 	"/assets/device.mjs":           "device.mjs",
 	"/assets/engine.mjs":           "engine.mjs",
 	"/assets/wire.mjs":             "wire.mjs",
@@ -224,16 +222,6 @@ var relayContent = sync.OnceValue(func() map[string][2]string {
 		}
 		out[p] = [2]string{string(data), contentType(name)}
 	}
-	// The default interface's fonts and emoji data (web/build.sh), each
-	// under its own path.
-	fs.WalkDir(files, "m", func(name string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		data, _ := fs.ReadFile(files, name)
-		out["/assets/"+name] = [2]string{string(data), contentType(name)}
-		return nil
-	})
 	for p, size := range relayIcons {
 		out[p] = [2]string{string(AppIcon(size)), "image/png"}
 	}

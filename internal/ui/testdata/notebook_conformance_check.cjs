@@ -124,7 +124,8 @@ async function preparePackage() {
         assert.equal(await page.evaluate(() => leaveListenerCount()), 1, 'one leave guard across remount');
       };
       const message = page.getByLabel('Message', { exact: true });
-      const choose = peer => page.getByRole('button', { name: peer + ' — Hello' }).click();
+      // On a phone the notebook shows its contents or one page: back to the contents first.
+      const choose = async peer => { const back = page.getByRole('button', { name: '← Contents', exact: true }); if (await back.isVisible()) await back.click(); await page.getByRole('button', { name: peer + ' — Hello' }).click(); };
       const files = () => page.locator('input[type="file"]');
       const removeFiles = async () => { while (await page.getByRole('button', { name: 'Remove', exact: true }).count()) await page.getByRole('button', { name: 'Remove', exact: true }).first().click(); };
       await page.goto(origin); await page.waitForFunction(() => window.ready);

@@ -1,4 +1,4 @@
-Licenses of the packages bundled into static/messenger.mjs, messenger.css and static/m/ (package-lock.json).
+Licenses of the packages bundled into the Comic skin package (static/skins/comic: entry.mjs, style.css, document.css and m/), from package-lock.json.
 
 ==== @babel/runtime 7.29.7 (MIT)
 

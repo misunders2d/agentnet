@@ -15,21 +15,44 @@ import (
 	"strings"
 )
 
-// A skin is explicitly installed, trusted UI code, not a sandboxed plugin.
-// Packages are snapshotted on server start: replacing files cannot swap code
-// underneath a user's selection. Restart to install or update a package.
+// A skin is a complete interface package: a manifest (skin.json), its entry
+// module and every file it uses. AgentNet is the core (the daemon and the
+// documented skin contract, docs/UI_SKINS.md); every interface is a skin
+// on top of it, loaded the same way. The built-in ones are embedded in this
+// program (skins/<id>/); installed ones are explicitly installed, trusted
+// UI code, not sandboxed plugins. Installed packages are snapshotted on
+// server start: replacing files cannot swap code underneath a user's
+// selection. Restart to install or update a package.
 type Skin struct {
-	API    int      `json:"api"`
-	ID     string   `json:"id"`
-	Name   string   `json:"name"`
-	Entry  string   `json:"entry,omitempty"`
-	Style  string   `json:"style,omitempty"`
-	Files  []string `json:"files,omitempty"`
-	Digest string   `json:"digest,omitempty"`
+	API      int      `json:"api"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Entry    string   `json:"entry,omitempty"`
+	Style    string   `json:"style,omitempty"`
+	Document string   `json:"document,omitempty"` // document-level rules (@font-face, @property), adopted by the host
+	Files    []string `json:"files,omitempty"`
+	Digest   string   `json:"digest,omitempty"`
 }
 type skinAsset struct {
 	data       []byte
 	mime, etag string
+}
+
+// BuiltinSkins are the packages embedded in this program, in the order the
+// catalog offers them; the first is the default. Their trust comes from
+// this fixed list (and loader.js's copy of it), never from a manifest.
+var BuiltinSkins = []string{"comic"}
+
+// ReservedSkinIDs are the ids no installed or browser-local package may
+// use: the built-in skins, those to come, and the old name of the default.
+var ReservedSkinIDs = []string{"comic", "classic", "zoom", "default"}
+
+// ReservedSkinName reports whether name is a built-in skin's (present or
+// to come), ignoring case and spacing: no installed or browser-local
+// package may show as Comic, Classic or Zoom (skin-choice.mjs takenName).
+func ReservedSkinName(name string) bool {
+	n := strings.ToLower(strings.Join(strings.Fields(name), " "))
+	return n != "default" && slices.Contains(ReservedSkinIDs, n)
 }
 
 var skinID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
@@ -39,14 +62,27 @@ var skinTypes = map[string]string{
 	".webp": "image/webp", ".svg": "image/svg+xml", ".woff2": "font/woff2",
 }
 
-// Skins serves only files declared by valid packages under directory. Missing
-// or unsafe packages are omitted; the built-in UI always remains available.
-// The caller must put this handler behind its normal origin/authentication gate.
+// Skins serves the built-in packages and the files declared by valid
+// installed packages under directory, at /assets/skins/<id>/, with the
+// catalog at /assets/skins/index.json. Missing or unsafe installed packages
+// are omitted; the built-in ones are always there. The caller must put this
+// handler behind its normal origin/authentication gate.
 func Skins(directory string) http.Handler {
-	// The built-in interfaces: the messenger, and the previous one with its
-	// Classic, Comic and Zoom views.
-	catalog := []Skin{{API: 1, ID: "default", Name: "AgentNet"}, {API: 1, ID: "classic", Name: "Previous interface"}}
+	var catalog []Skin
 	assets := map[string]skinAsset{}
+	add := func(skin Skin, files map[string]skinAsset) {
+		catalog = append(catalog, skin)
+		for name, a := range files {
+			assets["/assets/skins/"+skin.ID+"/"+name] = a
+		}
+	}
+	for _, id := range BuiltinSkins {
+		skin, files, err := builtinSkin(id)
+		if err != nil {
+			panic("static: built-in skin " + id + ": " + err.Error()) // a build error
+		}
+		add(skin, files)
+	}
 	totalBytes := 0
 	if directory != "" {
 		root, err := os.OpenRoot(directory)
@@ -55,11 +91,12 @@ func Skins(directory string) http.Handler {
 			info, e := root.Stat(".")
 			if e == nil && skinOwned(info) {
 				entries, _ := fs.ReadDir(root.FS(), ".")
+				installed := 0
 				for _, entry := range entries {
-					if len(catalog) >= 34 { // the built-in interfaces and at most 32 packages
+					if installed >= 32 {
 						break
 					}
-					if !entry.IsDir() || entry.Name() == "default" || entry.Name() == "classic" || !skinID.MatchString(entry.Name()) {
+					if !entry.IsDir() || slices.Contains(ReservedSkinIDs, entry.Name()) || !skinID.MatchString(entry.Name()) {
 						continue
 					}
 					dir, err := root.OpenRoot(entry.Name())
@@ -68,7 +105,7 @@ func Skins(directory string) http.Handler {
 					}
 					skin, files, err := readSkin(dir, entry.Name())
 					dir.Close()
-					if err != nil {
+					if err != nil || ReservedSkinName(skin.Name) {
 						continue
 					}
 					size := 0
@@ -79,10 +116,8 @@ func Skins(directory string) http.Handler {
 						continue
 					}
 					totalBytes += size
-					catalog = append(catalog, skin)
-					for name, a := range files {
-						assets["/assets/skins/"+skin.ID+"/"+name] = a
-					}
+					installed++
+					add(skin, files)
 				}
 			}
 		}
@@ -116,13 +151,34 @@ func makeSkinAsset(data []byte, mime string) skinAsset {
 	sum := sha256.Sum256(data)
 	return skinAsset{data: data, mime: mime, etag: `"` + hex.EncodeToString(sum[:]) + `"`}
 }
+
+// builtinSkin reads an embedded package (skins/<id>/) through the same
+// validation as an installed one.
+func builtinSkin(id string) (Skin, map[string]skinAsset, error) {
+	pkg, err := fs.Sub(files, "skins/"+id)
+	if err != nil {
+		return Skin{}, nil, err
+	}
+	return parseSkin(func(name string, limit int64) ([]byte, error) {
+		if !fs.ValidPath(name) || strings.ContainsAny(name, `\:%`) {
+			return nil, errors.New("invalid path")
+		}
+		b, err := fs.ReadFile(pkg, name)
+		if err == nil && int64(len(b)) > limit {
+			return nil, errors.New("file too large")
+		}
+		return b, err
+	}, id)
+}
+
+// readSkin reads an installed package from root: every path component must
+// belong to the serving user, be unwritable by others and not be a link.
 func readSkin(root *os.Root, id string) (Skin, map[string]skinAsset, error) {
-	var m Skin
 	info, err := root.Stat(".")
 	if err != nil || !skinOwned(info) {
-		return m, nil, errors.New("unsafe directory")
+		return Skin{}, nil, errors.New("unsafe directory")
 	}
-	read := func(name string, limit int64) ([]byte, error) {
+	return parseSkin(func(name string, limit int64) ([]byte, error) {
 		if !fs.ValidPath(name) || strings.ContainsAny(name, `\:%`) {
 			return nil, errors.New("invalid path")
 		}
@@ -148,7 +204,14 @@ func readSkin(root *os.Root, id string) (Skin, map[string]skinAsset, error) {
 			return nil, errors.New("file too large")
 		}
 		return b, e
-	}
+	}, id)
+}
+
+// parseSkin validates a package's manifest and files, read through read,
+// and computes its consent digest: the manifest's bytes, then each declared
+// file's name and SHA-256 (local-skins.mjs computes the same).
+func parseSkin(read func(name string, limit int64) ([]byte, error), id string) (Skin, map[string]skinAsset, error) {
+	var m Skin
 	raw, err := read("skin.json", 16<<10)
 	if err != nil {
 		return m, nil, err
@@ -156,18 +219,25 @@ func readSkin(root *os.Root, id string) (Skin, map[string]skinAsset, error) {
 	if err = json.Unmarshal(raw, &m); err != nil {
 		return m, nil, err
 	}
-	if m.API != 1 || m.ID != id || strings.TrimSpace(m.Name) == "" || len(m.Name) > 80 || len(m.Files) == 0 || len(m.Files) > 32 || !slices.Contains(m.Files, m.Entry) || (path.Ext(m.Entry) != ".js" && path.Ext(m.Entry) != ".mjs") || (m.Style != "" && (!slices.Contains(m.Files, m.Style) || path.Ext(m.Style) != ".css")) {
+	m.Digest = "" // computed here, never taken from the manifest
+	css := func(name string) bool {
+		return name == "" || (slices.Contains(m.Files, name) && path.Ext(name) == ".css")
+	}
+	if m.API != 1 || m.ID != id || strings.TrimSpace(m.Name) == "" || len(m.Name) > 80 || len(m.Files) == 0 || len(m.Files) > 32 ||
+		!slices.Contains(m.Files, m.Entry) || (path.Ext(m.Entry) != ".js" && path.Ext(m.Entry) != ".mjs") || !css(m.Style) || !css(m.Document) {
 		return m, nil, errors.New("invalid manifest")
 	}
 	files := map[string]skinAsset{}
 	hash := sha256.New()
 	hash.Write(raw)
 	total := 0
+	seen := map[string]bool{}
 	for _, name := range m.Files {
 		mime := skinTypes[path.Ext(name)]
-		if mime == "" || name == "skin.json" {
+		if mime == "" || name == "skin.json" || seen[name] {
 			return m, nil, errors.New("unsupported file")
 		}
+		seen[name] = true
 		data, e := read(name, 4<<20)
 		if e != nil {
 			return m, nil, e

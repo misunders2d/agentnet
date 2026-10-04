@@ -5,7 +5,7 @@
 import { forwardRef } from "react";
 
 const stripe = "relative z-0 after:absolute after:-left-1 after:-right-1.5 after:bottom-0.5 after:-z-10 after:h-[38%] after:-rotate-[1.5deg] after:rounded after:bg-act after:content-[''] "
-  + "dark:after:bg-act/35 [@media(prefers-color-scheme:dark)]:[:root:not([data-theme=light])_&]:after:bg-act/35";
+  + "dark:after:bg-act/35";
 
 export const ScreenTitle = forwardRef<HTMLHeadingElement, { children: string }>(function ScreenTitle({ children }, ref) {
   return <h1 ref={ref} tabIndex={-1} className="font-display text-[28px] font-extrabold leading-none tracking-[-0.02em]"><span className={stripe}>{children}</span></h1>;
