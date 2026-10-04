@@ -47,6 +47,9 @@ type ThreadSummary struct {
 	Pending     bool   `json:"pending"`
 	Renamed     bool   `json:"renamed,omitempty"`
 	AutoTitle   string `json:"auto_title,omitempty"`
+	// QuietSince is when it went quiet: its last message, or a later Mark
+	// done or Reopen here. Archived counts from it.
+	QuietSince time.Time `json:"quiet_since"`
 
 	// AgentID is the thread's agent when one is named: the latest a request
 	// names as its target, or an answer, result or progress as its author
@@ -72,35 +75,11 @@ type threadRow struct {
 }
 
 // Threads lists every thread with every peer, archived topics included,
-// most recent first.
+// most recent first: the overview's threads as a page that knows nothing
+// of topics reads them (TopicOverview).
 func (a *Agent) Threads() ([]ThreadSummary, error) {
-	peers, err := a.store.conversationPeers()
-	if err != nil {
-		return nil, err
-	}
-	var out []ThreadSummary
-	for _, peer := range peers {
-		ts, err := a.peerThreads(peer)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ts...)
-	}
-	sortTopics(out)
-	return out, nil
-}
-
-// peerThreads summarizes every thread with peer, with its text.
-func (a *Agent) peerThreads(peer string) ([]ThreadSummary, error) {
-	ts, err := a.peerTopics(peer, storeNow().Unix())
-	if err != nil {
-		return nil, err
-	}
-	all := make([]*ThreadSummary, len(ts))
-	for i := range ts {
-		all[i] = &ts[i]
-	}
-	return ts, a.topicText(peer, all)
+	ts, _, err := a.TopicOverview(true)
+	return ts, err
 }
 
 // peerThreadGroups unions the device-history messages with peer into

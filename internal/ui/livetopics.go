@@ -4,14 +4,17 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/misunders2d/agentnet/internal/client"
 )
 
 // Topics (client topics.go, docs/plans/TOPICS.md): an agent's separate
-// conversations. The overview lists the active and done ones; archived
-// topics are counted per peer (PeerTopics) and listed a page at a time
-// through GET /api/topics. A name and Mark done / Reopen are set through
+// conversations. GET /api/overview?topics=1 lists the active and done
+// ones; archived topics are counted per peer (PeerTopics) and listed a page
+// at a time through GET /api/topics. Without the flag the overview lists
+// every thread, archived topics too (a page that knows nothing of topics
+// still reaches them all). A name and Mark done / Reopen are set through
 // POST /api/topic/{rename,done,reopen} and kept on this device only.
 
 // Topic states (ThreadSummary.State).
@@ -24,6 +27,7 @@ const (
 // Topics is implemented by providers that keep topic state: the paged list
 // and the person's own changes.
 type Topics interface {
+	TopicOverview() (Overview, error) // Overview with archived topics counted, not listed
 	TopicList(TopicQuery) (TopicPage, error)
 	ChangeTopic(what string, c TopicChange) (string, error)
 }
@@ -62,12 +66,19 @@ type TopicPage struct {
 
 // TopicChange names a topic (its peer and ThreadSummary.ID) for POST
 // /api/topic/rename (Title; "" gives back the automatic name), /done and
-// /reopen.
+// /reopen. Count is how many of its messages the page showed (its
+// ThreadSummary.Count; 0: all it has): a mark never covers a message the
+// person has not seen.
 type TopicChange struct {
 	Peer  string `json:"peer"`
 	ID    string `json:"id"`
 	Title string `json:"title,omitempty"`
+	Count int    `json:"count,omitempty"`
 }
+
+// topicNewer is the note when a message came after what the page showed
+// Mark done on: the mark is kept but does not hold, that message is newer.
+const topicNewer = "A newer message came in, so the topic stays active. Read it, then mark it done again."
 
 // Topic changes (POST /api/topic/{what}).
 const (
@@ -117,7 +128,7 @@ func threadSummary(t client.ThreadSummary, keyChanged bool) ThreadSummary {
 	return ThreadSummary{ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
 		Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: keyChanged,
 		Notices: t.Notices, NoticeOnly: t.NoticeOnly, State: t.State, DoneBy: t.DoneBy, Conclusion: t.Conclusion,
-		ConcludedBy: t.ConcludedBy, Pending: t.Pending, Renamed: t.Renamed, AutoTitle: t.AutoTitle, AgentID: t.AgentID}
+		ConcludedBy: t.ConcludedBy, Pending: t.Pending, Renamed: t.Renamed, AutoTitle: t.AutoTitle, QuietSince: t.QuietSince, AgentID: t.AgentID}
 }
 
 // TopicList implements Topics.
@@ -149,19 +160,19 @@ func (l *Live) TopicList(q TopicQuery) (TopicPage, error) {
 // ChangeTopic implements Topics.
 func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 	var err error
-	note := ""
+	note, covered := "", true
 	switch what {
 	case TopicRename:
 		err = l.a.RenameTopic(c.Peer, c.ID, c.Title)
 		note = "Topic renamed on this device."
-		if c.Title == "" {
+		if strings.Join(strings.Fields(c.Title), " ") == "" { // as RenameTopic reads it
 			note = "Topic named after its first message again."
 		}
 	case TopicMark:
-		err = l.a.MarkTopicDone(c.Peer, c.ID)
+		covered, err = l.a.MarkTopicDone(c.Peer, c.ID, c.Count)
 		note = "Marked done on this device. A new message makes it active again."
 	case TopicReopen:
-		err = l.a.ReopenTopic(c.Peer, c.ID)
+		covered, err = l.a.ReopenTopic(c.Peer, c.ID, c.Count)
 		note = "Reopened on this device."
 	default:
 		return "", NotFound("no such topic change")
@@ -173,6 +184,9 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 		return "", Refuse(sentence(err) + ".")
 	case err != nil:
 		return "", err
+	}
+	if !covered && what == TopicMark { // Reopen: active either way
+		note = topicNewer
 	}
 	l.a.NoteChange()
 	return note, nil

@@ -49,6 +49,10 @@ inn({ kind: 'result', status: 'failed', body: 'could not ship', reply_to: failed
 const held = inn({ kind: 'question', state: 'held', body: 'May I order tape?', read: false, at: now - 20 * day });
 // An old question nobody answered: still waits, never archived.
 const waits = out({ kind: 'question', body: 'Is the truck here?', at: now - 30 * day });
+// A task bob gave this browser, answered here by hand (replyV1 marks it
+// answered): done by the person, the result is their words.
+const given = inn({ kind: 'task', state: 'answered', body: 'Label the shelf', at: now - 3200_000 });
+const mine = out({ kind: 'result', status: 'done', body: 'Labelled A to F\ndone', reply_to: given.id, at: now - 3100_000 });
 // An old, unread message: archived, and its unread count kept.
 inn({ body: 'old unread', read: false, at: now - 12 * day });
 // Another agent's topic.
@@ -56,14 +60,22 @@ ops.push({ s: 'outbox', k: 'e'.repeat(32), v: { v: 1, id: 'e'.repeat(32), to: ot
 await store.write(ops);
 await engine.loadErased();
 
-const { threads, topics } = await engine.topicOverview();
+const { threads, topics } = await engine.topicOverview(false);
 const tb = topics.find((t) => t.peer === bob);
-check(tb.total === 155 && tb.archived === 41 && tb.archived_unread === 1, 'counts: 155 topics with bob, 41 archived (one unread message among them): ' + JSON.stringify({ ...tb, latest: undefined }));
-check(threads.filter((t) => t.peer === bob).length === 114 && !threads.some((t) => t.state === 'archived'), 'the overview lists the 114 not archived');
+check(tb.total === 156 && tb.archived === 41 && tb.archived_unread === 1, 'counts: 156 topics with bob, 41 archived (one unread message among them): ' + JSON.stringify({ ...tb, latest: undefined }));
+check(threads.filter((t) => t.peer === bob).length === 115 && !threads.some((t) => t.state === 'archived'), 'the overview lists the 115 not archived');
+// Without topics=1 (the previous interface, installed skins) every thread
+// is listed, archived ones with their state; the counts are the same.
+const full = await engine.topicOverview(true);
+check(full.threads.filter((t) => t.peer === bob).length === 156 && full.threads.filter((t) => t.state === 'archived').length === 41, 'every thread without topics=1');
+same(full.topics.map((c) => ({ ...c, latest: c.latest.id })), topics.map((c) => ({ ...c, latest: c.latest.id })), 'the same counts either way');
 check(tb.latest.id === task.id || tb.latest.last_at >= threads[0].last_at, 'latest is the most recently active topic');
 const topicOf = async (mid) => (await engine.api('/api/thread?id=' + mid)).topic;
 let t = await topicOf(result.id);
 check(t.id === task.id && t.state === 'done' && t.done_by === 'agent' && t.conclusion === '412 boxes' && t.concluded_by === bob && !t.pending && t.title === 'Count the boxes', 'agent-done topic: ' + JSON.stringify(t));
+check(t.quiet_since === new Date(Math.floor(result.at / 1000) * 1000).toISOString(), 'quiet since its last message, in whole seconds: ' + t.quiet_since);
+t = await topicOf(mine.id);
+check(t.id === given.id && t.state === 'done' && t.done_by === 'you' && t.conclusion === 'Labelled A to F' && t.concluded_by === me, 'answered by hand here: done by you, your words: ' + JSON.stringify(t));
 t = await topicOf(failed.id);
 check(t.state === 'active' && !t.done_by && !t.pending, 'a failed result is not done');
 t = await topicOf(held.id);
@@ -84,9 +96,11 @@ do {
   before = page.next || '';
 } while (before);
 same(sizes, [15, 15, 11], 'archived topics in pages of 15');
+page = await list({ peer: bob, state: 'archived', limit: '15' });
+check(/^\d{10}\|bob\/desk\|[0-9a-f]{32}$/.test(page.next), 'the cursor is the Go client\'s: seconds|peer|id: ' + page.next);
 check(page.matched === 41, 'matched counts every page');
 page = await list({ peer: bob });
-check(page.topics.length === TOPICS.pageDefault && page.next && page.matched === 155, 'a default page');
+check(page.topics.length === TOPICS.pageDefault && page.next && page.matched === 156, 'a default page');
 check(page.topics.every((x, i) => i === 0 || Date.parse(x.last_at) <= Date.parse(page.topics[i - 1].last_at)), 'newest first');
 page = await list({ q: 'BETA note' });
 check(page.matched === 50 && page.topics.every((x) => x.peer === bob), 'search in any case over every peer: ' + page.matched);
@@ -95,7 +109,7 @@ check(page.matched === 51 && page.topics.some((x) => x.peer === other), 'search 
 page = await list({ q: 'second line' });
 check(page.matched === 0, 'only the first line is searched');
 page = await list({ peer: bob, state: 'done' });
-check(page.matched === 1 && page.topics[0].id === task.id, 'done filter');
+check(page.matched === 2 && page.topics.some((x) => x.id === task.id) && page.topics.some((x) => x.id === given.id), 'done filter');
 for (const q of [{ state: 'deleted' }, { limit: String(TOPICS.pageMax + 1) }, { limit: '-1' }, { limit: 'many' }, { before: 'yesterday' }]) {
   await refuses(() => list(q), /not valid/, 'refuses ' + JSON.stringify(q));
 }
@@ -122,6 +136,7 @@ t = await topicOf(task.id);
 check(t.state === 'active' && !t.done_by, 'Reopen after the agent finished');
 await engine.api('/api/topic/reopen', { peer: bob, id: plain[0].id });
 check((await topicOf(plain[0].id)).state === 'active', 'Reopen brings an archived topic back');
+check((await engine.api('/api/topic/rename', { peer: bob, id: a.id, title: ' \n ' })).note === 'Topic named after its first message again.', 'a blank name says it gives back the automatic one');
 await engine.api('/api/topic/rename', { peer: bob, id: a.id, title: '' });
 t = await topicOf(a.id);
 check(t.title === 'Alpha note 121' && !t.renamed && t.state === 'done', 'an empty name gives back the automatic one');
@@ -129,6 +144,11 @@ check(t.title === 'Alpha note 121' && !t.renamed && t.state === 'done', 'an empt
 await store.write([{ s: 'inbox', k: 'c'.repeat(32), v: { v: 1, id: 'c'.repeat(32), from: bob, fp: 'b'.repeat(16), kind: 'message', body: 'one more', state: '', status: '', reply_to: a.id, read: false, at: now + 1000 } }]);
 t = await topicOf(a.id);
 check(t.state === 'active' && !t.done_by && t.unread === 1, 'a new message makes it active again');
+// Mark done covers only what the page showed (count): with the new message unseen it does not hold.
+check(/newer message/.test((await engine.api('/api/topic/done', { peer: bob, id: a.id, count: 1 })).note), 'a mark with a message unseen says so');
+check((await topicOf(a.id)).state === 'active', 'and the topic stays active');
+check(/Marked done/.test((await engine.api('/api/topic/done', { peer: bob, id: a.id, count: 2 })).note) && (await topicOf(a.id)).state === 'done', 'with every message seen it holds');
+await engine.api('/api/topic/reopen', { peer: bob, id: a.id });
 // A week later, untouched topics are archived; pending ones are not.
 clock = now + 8 * day;
 check((await topicOf(a.id)).state === 'archived' && (await topicOf(held.id)).state === 'active', 'eight days later');

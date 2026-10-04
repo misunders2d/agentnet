@@ -917,6 +917,7 @@ export interface ThreadSummary {
   pending: boolean;
   renamed?: boolean;
   auto_title?: string;
+  quiet_since: string;
   agent_id?: string;
 }
 
@@ -924,6 +925,7 @@ export interface TopicChange {
   peer: string;
   id: string;
   title?: string;
+  count?: number;
 }
 
 export interface TopicPage {

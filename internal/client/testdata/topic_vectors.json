@@ -44,6 +44,16 @@
        {"id": "q1", "dir": "in", "kind": "question", "state": "answered", "at": 1789990000},
        {"id": "a1", "dir": "out", "kind": "answer", "status": "done", "reply_to": "q1", "state": "delivered", "at": 1789990030}],
      "want": {"state": "done", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1789990030}},
+    {"name": "the person here answered a received task by hand (state manual): done by you, the result is their words",
+     "messages": [
+       {"id": "t1", "dir": "in", "kind": "task", "state": "manual", "at": 1789990000},
+       {"id": "r1", "dir": "out", "kind": "result", "status": "done", "reply_to": "t1", "state": "delivered", "at": 1789990030}],
+     "want": {"state": "done", "done_by": "you", "conclusion": "r1", "pending": false, "quiet_since": 1789990030}},
+    {"name": "the person here answered a received question by hand: no status, not done",
+     "messages": [
+       {"id": "q1", "dir": "in", "kind": "question", "state": "manual", "at": 1789990000},
+       {"id": "a1", "dir": "out", "kind": "answer", "status": "", "reply_to": "q1", "state": "delivered", "at": 1789990030}],
+     "want": {"state": "active", "pending": false, "quiet_since": 1789990030}},
     {"name": "done and quiet for more than seven days: archived, still saying the agent finished it",
      "messages": [
        {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789300000},

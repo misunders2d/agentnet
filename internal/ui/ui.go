@@ -63,9 +63,12 @@ type Overview struct {
 	ReplySessions    bool                  `json:"reply_sessions"`  // safe native registration catalog, not process liveness
 	Demo             bool                  `json:"demo"`
 	Me               Me                    `json:"me"`
-	// Threads are the device threads, archived topics left out: those are
-	// counted per peer in Topics and listed through GET /api/topics
-	// (TopicList says that route is served here).
+	// Threads are the device threads, each with its topic state. A page
+	// that lists topics itself asks GET /api/overview?topics=1 and gets
+	// them without archived topics: those are counted per peer in Topics
+	// and listed through GET /api/topics (TopicList says that route is
+	// served here). Without the flag every thread is listed, archived
+	// topics too, as a page that knows nothing of topics needs.
 	Threads    []ThreadSummary  `json:"threads"`
 	Topics     []PeerTopics     `json:"topics,omitempty"`
 	TopicList  bool             `json:"topic_list"`
@@ -668,6 +671,9 @@ type ThreadSummary struct {
 	Pending     bool   `json:"pending"`
 	Renamed     bool   `json:"renamed,omitempty"`
 	AutoTitle   string `json:"auto_title,omitempty"`
+	// QuietSince is when it went quiet (its last message, or a later Mark
+	// done or Reopen here); it is archived TopicArchiveAfter later.
+	QuietSince time.Time `json:"quiet_since"`
 	// AgentID is the thread's agent, when one is named (client.ThreadSummary).
 	AgentID string `json:"agent_id,omitempty"`
 }

@@ -71,6 +71,8 @@ export async function openIDB(name = "agentnet") {
     all: (s) => db.getAll(s),
     // after returns up to n values whose keys follow k, in key order ("" is the start).
     after: (s, k, n) => db.getAll(s, k === "" ? null : IDBKeyRange.lowerBound(k, true), n),
+    // prefix returns the values whose keys start with p, in key order.
+    prefix: (s, p) => db.getAll(s, IDBKeyRange.bound(p, p + "\uffff")),
     async write(ops, checks = []) {
       const tx = db.transaction([...new Set([...ops, ...checks].map((o) => o.s))], "readwrite", { durability: "strict" });
       try {
@@ -111,6 +113,7 @@ export function memoryStore() {
     get: async (s, k) => (data[s].has(k) ? structuredClone(data[s].get(k)) : undefined),
     all: async (s) => [...data[s].values()].map((v) => structuredClone(v)),
     after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
+    prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
     async write(ops, checks = []) {
       for (const c of checks) {
         const actual = c.scope ? [...data[c.s].entries()].filter(([, v]) => scopeRow(v, c.scope)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => ({ k, v })) : data[c.s].get(c.k);
@@ -293,9 +296,9 @@ const topicOpen = (r, replied) => r.notice ? r.state === "needs_human"
 export function deriveTopic(g, local, now) {
   const l = local || {}, v = { state: "active", pending: false, quiet_since: 0 };
   const replied = new Set(g.filter((r) => r.in && r.reply_to && r.status !== "progress").map((r) => r.reply_to));
-  let request = "";
+  let request = null; // the topic's latest request
   for (const r of g) {
-    if (topicRequest(r.kind)) request = r.id;
+    if (topicRequest(r.kind)) request = r;
     if (topicOpen(r, replied.has(r.id))) v.pending = true;
   }
   const last = g[g.length - 1];
@@ -304,17 +307,25 @@ export function deriveTopic(g, local, now) {
   if (live && (l.mark_at || 0) > v.quiet_since) v.quiet_since = l.mark_at;
   if (live && l.mark === "done") v.done_by = "you";
   else if (live && l.mark === "open") { /* reopened: active */ }
-  else if (request && !v.pending && last.reply_to === request && last.status === "done" && (last.kind === "answer" || last.kind === "result")) { v.done_by = "agent"; v.conclusion = last.id; }
+  else if (request && !v.pending && last.reply_to === request.id && last.status === "done" && (last.kind === "answer" || last.kind === "result")) {
+    // Sent from here to a request the person here answered by hand (state
+    // manual): their own words, not the agent's.
+    v.done_by = !last.in && request.in && request.state === "manual" ? "you" : "agent";
+    v.conclusion = last.id;
+  }
   if (v.done_by) v.state = "done";
   if (!v.pending && now - v.quiet_since >= TOPICS.archiveAfter) v.state = "archived";
   return v;
 }
-// newerTopic orders topics most recently active first (client newer).
-const topicAt = (t) => Date.parse(t.last_at);
+// newerTopic orders topics most recently active first (client newer): by
+// whole seconds, as the Go client stores times, then id, then peer. The
+// page cursor is "<seconds>|<peer>|<id>", as the Go client's.
+const topicAt = (t) => Math.floor(Date.parse(t.last_at) / 1000);
 const newerTopic = (a, b) => topicAt(a) !== topicAt(b) ? topicAt(a) > topicAt(b) : a.id !== b.id ? a.id > b.id : a.peer < b.peer;
 const byNewest = (a, b) => (newerTopic(a, b) ? -1 : newerTopic(b, a) ? 1 : 0);
 const topicCursor = (t) => topicAt(t) + "|" + t.peer + "|" + t.id;
 const topicQueryError = "That topic list request is not valid.";
+const topicNewer = "A newer message came in, so the topic stays active. Read it, then mark it done again."; // ui topicNewer
 
 const loopback = (host) => host === "127.0.0.1" || host === "localhost" || host === "[::1]";
 
@@ -2000,14 +2011,17 @@ export class Engine {
   // threadSummaries summarizes every device thread, archived topics
   // included, as topics (client peerTopics, topicText), newest first.
   async threadSummaries() {
-    const out = [], now = Math.floor(this.now() / 1000), locals = await this.topicLocals();
-    for (const g of await this.v1Threads()) out.push(await this.topicSummary(g, locals, now));
+    const out = [], now = Math.floor(this.now() / 1000), locals = await this.topicLocals(), pins = new Map();
+    for (const g of await this.v1Threads()) {
+      const peer = g[0].peer;
+      if (!pins.has(peer)) pins.set(peer, await this.store.get("pins", peer)); // one read per peer, not per topic
+      out.push(this.topicSummary(g, locals, now, pins.get(peer)));
+    }
     return out.sort(byNewest);
   }
 
-  async topicSummary(g, locals, now) {
+  topicSummary(g, locals, now, pin) {
     const first = g[0], last = g[g.length - 1];
-    const pin = await this.store.get("pins", first.peer);
     const replied = new Set(g.filter((m) => m.status !== wire.StatusProgress).map((m) => m.reply_to).filter(Boolean)); // a progress update never settles Waiting (client.ThreadSummary)
     // A review notice is a report from that machine (client.ThreadSummary):
     // counted while open, and a thread of nothing but reports is not a
@@ -2015,8 +2029,11 @@ export class Engine {
     const notice = (m) => m.dir === "in" && m.kind === "message" && m.status === "review_notice" && !m.reply_to && !(m.attachments || []).length;
     const line = (m) => (notice(m) ? this.noticeLine(m) : firstLine(m.body));
     const local = this.topicLocalOf(locals, first.peer, g);
+    // A browser device runs no agent: a received request it answered
+    // (replyV1: "answered") was answered by hand, the Go client's "manual".
+    const state = (m) => notice(m) ? (m.resolved ? "resolved" : "needs_human") : m.dir === "in" && topicRequest(m.kind) && m.state === "answered" ? "manual" : m.state || "";
     const facts = g.map((m) => ({ id: m.id, reply_to: m.reply_to || "", at: Math.floor(m.at / 1000), in: m.dir === "in", kind: m.kind,
-      state: notice(m) ? (m.resolved ? "resolved" : "needs_human") : m.state || "", status: m.status || "", notice: notice(m), selected: false }));
+      state: state(m), status: m.status || "", notice: notice(m), selected: false }));
     const v = deriveTopic(facts, local, now), concluded = v.conclusion ? g.find((m) => m.id === v.conclusion) : null;
     // The thread's agent (client.ThreadSummary.AgentID): the latest one a
     // request names as its target, or an answer, result or progress names
@@ -2026,7 +2043,7 @@ export class Engine {
       review: g.filter((m) => m.dir === "in" && m.state === "held").length, unread: g.filter((m) => m.dir === "in" && !m.read).length, running: 0,
       waiting: g.some((m) => m.dir === "out" && (m.kind === "question" || m.kind === "task") && !replied.has(m.id)),
       key_changed: !!(pin && pin.pending), notices: g.filter((m) => notice(m) && !m.resolved).length, notice_only: g.every(notice),
-      state: v.state, pending: v.pending, ...(v.done_by ? { done_by: v.done_by } : {}),
+      state: v.state, pending: v.pending, quiet_since: iso(v.quiet_since * 1000), ...(v.done_by ? { done_by: v.done_by } : {}),
       ...(concluded ? { conclusion: firstLine(concluded.body), concluded_by: concluded.dir === "in" ? first.peer : this.address } : {}) };
     if (local.title) Object.assign(t, { auto_title: t.title, title: local.title, renamed: true });
     return t;
@@ -2038,7 +2055,7 @@ export class Engine {
 
   async topicLocals() {
     const out = new Map();
-    for (const v of await this.store.all("kv")) if (v?.type === "topic-state") out.set(v.peer + "/" + v.topic, v);
+    for (const v of await this.store.prefix("kv", "topic/")) if (v?.type === "topic-state") out.set(v.peer + "/" + v.topic, v);
     return out;
   }
 
@@ -2048,12 +2065,14 @@ export class Engine {
     return {};
   }
 
-  // topicOverview: the overview's device threads (archived topics left out)
-  // and each peer's topic counts (client TopicOverview).
-  async topicOverview() {
+  // topicOverview: the overview's device threads and each peer's topic
+  // counts (client TopicOverview): archived topics only counted unless
+  // listArchived (GET /api/overview without topics=1: a page that knows
+  // nothing of topics still reaches every thread).
+  async topicOverview(listArchived) {
     const all = await this.threadSummaries(), threads = [], counts = new Map();
     for (const t of all) {
-      if (t.state !== "archived" || t.notice_only) threads.push(t);
+      if (listArchived || t.state !== "archived" || t.notice_only) threads.push(t);
       if (t.notice_only) continue;
       const c = counts.get(t.peer) || { peer: t.peer, total: 0, archived: 0, archived_unread: 0, latest: t }; // all is newest first
       c.total++;
@@ -2072,7 +2091,7 @@ export class Engine {
     if (before) {
       const [at, p, id, ...rest] = before.split("|");
       if (rest.length || !/^\d+$/.test(at || "") || p === undefined || !id) throw new Error(topicQueryError);
-      after = { last_at: iso(Number(at)), peer: p, id };
+      after = { last_at: iso(Number(at) * 1000), peer: p, id };
     }
     const words = (q.get("q") || "").toLowerCase().split(/\s+/).filter(Boolean);
     const matched = (await this.threadSummaries()).filter((t) => !t.notice_only && (!peer || t.peer === peer) && (!state || t.state === state)
@@ -2086,7 +2105,8 @@ export class Engine {
   // changeTopic is POST /api/topic/{rename,done,reopen} (ui livetopics.go, client setTopic).
   async changeTopic(what, body) {
     if (!["rename", "done", "reopen"].includes(what)) throw new Error("No such topic change.");
-    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["peer", "id", "title"].includes(k))) throw new Error("Bad request.");
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["peer", "id", "title", "count"].includes(k))
+      || body.count != null && !Number.isInteger(body.count)) throw new Error("Bad request.");
     const peer = String(body.peer || ""), id = String(body.id || "");
     const g = (await this.v1Threads()).find((x) => x[0].id === id && x[0].peer === peer);
     if (!g) throw new Error("No such topic here.");
@@ -2099,8 +2119,10 @@ export class Engine {
       if (title) l.title = title; else delete l.title;
       note = title ? "Topic renamed on this device." : "Topic named after its first message again.";
     } else {
-      Object.assign(l, { mark: what === "done" ? "done" : "open", mark_at: Math.floor(this.now() / 1000), mark_count: g.length });
-      note = what === "done" ? "Marked done on this device. A new message makes it active again." : "Reopened on this device.";
+      // count: how many messages the page showed; a mark never covers one the person has not seen (client mark).
+      const seen = body.count > 0 && body.count < g.length ? body.count : g.length;
+      Object.assign(l, { mark: what === "done" ? "done" : "open", mark_at: Math.floor(this.now() / 1000), mark_count: seen });
+      note = what === "done" ? (seen === g.length ? "Marked done on this device. A new message makes it active again." : topicNewer) : "Reopened on this device.";
     }
     const ops = [{ s: "kv", k: "topic/" + peer + "/" + id, v: l }];
     if (was && was.id !== id) ops.push({ s: "kv", k: "topic/" + peer + "/" + was.id, v: undefined });
@@ -5294,7 +5316,7 @@ export class Engine {
 
   // ---- what the page reads (the daemon page API's shapes)
 
-  async overview() {
+  async overview(listArchived = true) {
     const persons = await this.store.all("persons");
     const people = persons.map((p) => this.personView(p));
     const listedSeen = new Set();
@@ -5353,7 +5375,7 @@ export class Engine {
     // countDecisions); a browser runs no agent, so its items carry none.
     for (const d of dms) d.decide = needsYou.filter((x) => x.conv === d.id && x.id && (x.actions || []).length).length;
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
-    const { threads, topics } = await this.topicOverview(); // archived topics are counted, not listed
+    const { threads, topics } = await this.topicOverview(listArchived); // ?topics=1: archived topics counted, not listed
     const held = await this.store.all("held");
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
@@ -6764,7 +6786,7 @@ export class Engine {
       return view;
     };
     const heldText = "Held for you: nothing runs in this browser. Answer it here if you want to.";
-    const topic = await this.topicSummary(g, await this.topicLocals(), Math.floor(this.now() / 1000));
+    const topic = this.topicSummary(g, await this.topicLocals(), Math.floor(this.now() / 1000), pin);
     return { id: g[0].id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
       messages: await Promise.all(g.map(async (m) => {
         const inbound = m.dir === "in";
@@ -6872,7 +6894,7 @@ export class Engine {
       return this.sendTyping(scope, !!body.active);
     }
     case "/api/typing/preferences": return this.setTypingPreferences(body);
-    case "/api/overview": return this.overview();
+    case "/api/overview": return this.overview(u.searchParams.get("topics") !== "1");
     case "/api/dm": return this.dm(u.searchParams.get("id"));
     case "/api/thread": return this.thread(u.searchParams.get("id"));
     case "/api/dm/new": return { id: await this.newDM(body.address) };

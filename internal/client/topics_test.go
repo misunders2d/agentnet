@@ -105,7 +105,9 @@ func TestTopicLifecycle(t *testing.T) {
 	if ta.State != TopicDone || ta.DoneBy != DoneByAgent || ta.Conclusion != "412 boxes" || ta.ConcludedBy != bob || ta.Pending || ta.Title != "Count the boxes" || ta.ID != a {
 		t.Fatalf("finished task's topic: %+v", ta)
 	}
-	if tb := topicOf(t, w.bob, res.ID); tb.State != TopicDone || tb.DoneBy != DoneByAgent || tb.ConcludedBy != bob {
+	// Bob wrote that result by hand (Reply): on his device it is done by
+	// him, his own words; alice cannot tell (a v1 reply does not say).
+	if tb := topicOf(t, w.bob, res.ID); tb.State != TopicDone || tb.DoneBy != DoneByYou || tb.ConcludedBy != bob || tb.Conclusion != "412 boxes" {
 		t.Fatalf("bob's copy: %+v", tb)
 	}
 
@@ -126,8 +128,16 @@ func TestTopicLifecycle(t *testing.T) {
 	}
 
 	// Mark done, kept here: another process on alice's home reads it.
-	if err := w.alice.MarkTopicDone(bob, b); err != nil {
-		t.Fatal(err)
+	// A mark covers only what the page showed: with one message of two
+	// seen it does not hold (a message came after); with both, it does.
+	if covered, err := w.alice.MarkTopicDone(bob, b, 1); err != nil || covered {
+		t.Fatalf("mark with a message unseen: %v %v", covered, err)
+	}
+	if tb := topicOf(t, w.alice, b); tb.State != TopicActive || tb.DoneBy != "" {
+		t.Fatalf("a mark covered a message the page did not show: %+v", tb)
+	}
+	if covered, err := w.alice.MarkTopicDone(bob, b, 2); err != nil || !covered {
+		t.Fatalf("mark done: %v %v", covered, err)
 	}
 	other, err := Open(w.alice.home)
 	if err != nil {
@@ -137,10 +147,10 @@ func TestTopicLifecycle(t *testing.T) {
 		t.Fatalf("Mark done not kept: %+v", tb)
 	}
 	other.Close()
-	if err := w.alice.MarkTopicDone(bob, "no-such-topic"); !errors.Is(err, ErrNoMessage) {
+	if _, err := w.alice.MarkTopicDone(bob, "no-such-topic", 0); !errors.Is(err, ErrNoMessage) {
 		t.Fatalf("mark an unknown topic: %v", err)
 	}
-	if err := w.alice.MarkTopicDone(bob, res.ID); !errors.Is(err, ErrNoMessage) { // a topic is named by its earliest message only
+	if _, err := w.alice.MarkTopicDone(bob, res.ID, 0); !errors.Is(err, ErrNoMessage) { // a topic is named by its earliest message only
 		t.Fatalf("mark by a later message: %v", err)
 	}
 	// Bob writes into B: active again.
@@ -154,7 +164,7 @@ func TestTopicLifecycle(t *testing.T) {
 	}
 
 	// Reopen A (done by the agent): active. A name of the person's own.
-	if err := w.alice.ReopenTopic(bob, a); err != nil {
+	if _, err := w.alice.ReopenTopic(bob, a, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.alice.RenameTopic(bob, a, "  Aisle 4\ncount  "); err != nil {
@@ -181,12 +191,31 @@ func TestTopicLifecycle(t *testing.T) {
 			t.Fatalf("after 8 days %s: %+v", id, got)
 		}
 	}
-	threads, counts, err := w.alice.TopicOverview()
+	threads, counts, err := w.alice.TopicOverview(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(threads) != 1 || threads[0].ID != c || len(counts) != 1 || counts[0].Total != 3 || counts[0].Archived != 2 || counts[0].Latest.ID == "" {
 		t.Fatalf("overview after 8 days: %+v %+v", threads, counts)
+	}
+	// A page that knows nothing of topics still gets every thread, each
+	// with its state and text, and the same counts.
+	all, counts, err := w.alice.TopicOverview(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]string{}
+	for _, x := range all {
+		if x.Title == "" {
+			t.Fatalf("listed without text: %+v", x)
+		}
+		states[x.ID] = x.State
+	}
+	if len(all) != 3 || states[a] != TopicArchived || states[b] != TopicArchived || states[c] != TopicActive || counts[0].Archived != 2 {
+		t.Fatalf("full overview after 8 days: %v %+v", states, counts)
+	}
+	if ta := topicOf(t, w.alice, a); ta.QuietSince.Before(ta.LastAt) { // its last message, or the later Reopen
+		t.Fatalf("quiet since: %+v", ta)
 	}
 	page, err := w.alice.Topics(TopicQuery{Peer: bob, State: TopicArchived})
 	if err != nil || page.Matched != 2 || len(page.Topics) != 2 || page.Topics[0].Title == "" {
@@ -202,15 +231,16 @@ func TestTopicLifecycle(t *testing.T) {
 		t.Fatalf("a new message did not bring it back: %+v", ta)
 	}
 	// Reopen brings an archived one back too, until it is quiet again.
-	if err := w.alice.ReopenTopic(bob, b); err != nil {
+	if _, err := w.alice.ReopenTopic(bob, b, 0); err != nil {
 		t.Fatal(err)
 	}
-	if tb := topicOf(t, w.alice, b); tb.State != TopicActive {
+	// It is quiet from the Reopen, days after its last message.
+	if tb := topicOf(t, w.alice, b); tb.State != TopicActive || tb.QuietSince.Sub(tb.LastAt) < 7*24*time.Hour {
 		t.Fatalf("reopened archived topic: %+v", tb)
 	}
 
 	// Deleting a topic forgets what was set on it.
-	if err := w.alice.MarkTopicDone(bob, c); err != nil {
+	if _, err := w.alice.MarkTopicDone(bob, c, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.alice.DeleteThread(bob, c); err != nil {
@@ -262,6 +292,12 @@ func TestTopicPagesAndSearch(t *testing.T) {
 		}
 		pages = append(pages, len(p.Topics))
 		if len(pages) == 1 { // a topic starts between pages: it is newer than the cursor, so it is not on the later pages
+			// Times are whole seconds and ids random: one sent in the
+			// cursor's second could sort either side of it, so this one
+			// is sent a few seconds later (on a fast machine all 60 above
+			// share one second).
+			testShift.Store(5)
+			t.Cleanup(func() { testShift.Store(0) })
 			if _, err := w.alice.SendMessage(tctx(t), Outgoing{To: bob, Kind: envelope.KindMessage, Body: "late arrival"}); err != nil {
 				t.Fatal(err)
 			}
@@ -289,7 +325,7 @@ func TestTopicPagesAndSearch(t *testing.T) {
 	if p, err := w.alice.Topics(TopicQuery{Peer: bob, Query: "alpha report 5"}); err != nil || p.Matched < 1 {
 		t.Fatalf("search the automatic name of a renamed topic: %+v %v", p, err)
 	}
-	if err := w.alice.MarkTopicDone(bob, ids[7]); err != nil {
+	if _, err := w.alice.MarkTopicDone(bob, ids[7], 0); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := w.alice.Topics(TopicQuery{Peer: bob, State: TopicDone}); err != nil || p.Matched != 1 || p.Topics[0].ID != ids[7] || p.Topics[0].DoneBy != DoneByYou {

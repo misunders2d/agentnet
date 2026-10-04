@@ -271,7 +271,11 @@ func (s *Server) qrModule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
-	o, err := s.p.Overview()
+	get := s.p.Overview
+	if t, ok := s.p.(Topics); ok && r.URL.Query().Get("topics") == "1" { // archived topics counted, not listed (livetopics.go)
+		get = t.TopicOverview
+	}
+	o, err := get()
 	if err != nil {
 		writeErr(w, err)
 		return

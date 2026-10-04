@@ -62,6 +62,12 @@ func TestLiveTopicRoutes(t *testing.T) {
 			t.Fatalf("thread state: %+v", th)
 		}
 	}
+	// The messenger's overview (topics=1) leaves archived topics out and
+	// carries the same counts; nothing is archived yet, so it lists the same.
+	var compact Overview
+	if read("/api/overview?topics=1", &compact) != 200 || !compact.TopicList || len(compact.Topics) != 1 || compact.Topics[0].Total != 3 || len(compact.Threads) != len(o.Threads) {
+		t.Fatalf("overview?topics=1: %+v", compact.Topics)
+	}
 	var page TopicPage
 	if read("/api/topics?"+url.Values{"peer": {alice.Address}, "limit": {"2"}}.Encode(), &page) != 200 || len(page.Topics) != 2 || page.Next == "" || page.Matched != 3 {
 		t.Fatalf("first page: %+v", page)
@@ -118,10 +124,47 @@ func TestLiveTopicRoutes(t *testing.T) {
 	if read("/api/thread?id="+ids[1], &th) != 200 || th.Topic.Title != "Dock question" || !th.Topic.Renamed || th.Topic.AutoTitle != "Which dock?" {
 		t.Fatalf("thread topic after rename: %+v", th.Topic)
 	}
+	topic := func(id string) *ThreadSummary { // a fresh decode: omitted fields must not keep an earlier read's values
+		t.Helper()
+		var th Thread
+		if read("/api/thread?id="+id, &th) != 200 || th.Topic == nil {
+			t.Fatalf("thread %s has no topic", id)
+		}
+		return th.Topic
+	}
+	// A blank name gives back the automatic one, and says so.
+	if code, body := change("rename", TopicChange{Peer: alice.Address, ID: ids[1], Title: " \n "}, post(ts)); code != 200 || !strings.Contains(body, "first message again") {
+		t.Fatalf("blank rename: %d %s", code, body)
+	}
+	if tp := topic(ids[1]); tp.Title != "Which dock?" || tp.Renamed {
+		t.Fatalf("thread topic after a blank rename: %+v", tp)
+	}
+	// Mark done covers only the messages the page showed (Count): one that
+	// came after keeps the topic active, and the note says why.
+	if _, err := alice.SendMessage(t.Context(), client.Outgoing{To: bob.Address, Kind: envelope.KindMessage, Body: "Truck is late", ReplyTo: ids[2]}); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if topic(ids[2]).Count == 2 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if code, body := change("done", TopicChange{Peer: alice.Address, ID: ids[2], Count: 1}, post(ts)); code != 200 || !strings.Contains(body, "newer message") {
+		t.Fatalf("mark done with a message unseen: %d %s", code, body)
+	}
+	if tp := topic(ids[2]); tp.State != TopicActive {
+		t.Fatalf("a mark covered an unseen message: %+v", tp)
+	}
+	if code, body := change("done", TopicChange{Peer: alice.Address, ID: ids[2], Count: 2}, post(ts)); code != 200 || strings.Contains(body, "newer message") {
+		t.Fatalf("mark done with every message seen: %d %s", code, body)
+	}
+	if tp := topic(ids[2]); tp.State != TopicDone {
+		t.Fatalf("mark done with every message seen: %+v", tp)
+	}
 	if code, _ := change("reopen", TopicChange{Peer: alice.Address, ID: ids[0]}, post(ts)); code != 200 {
 		t.Fatalf("reopen: %d", code)
 	}
-	if read("/api/topics?state=done", &page) != 200 || page.Matched != 0 {
+	if read("/api/topics?state=done", &page) != 200 || page.Matched != 1 || page.Topics[0].ID != ids[2] {
 		t.Fatalf("done after reopen: %+v", page)
 	}
 

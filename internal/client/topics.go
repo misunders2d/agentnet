@@ -41,6 +41,7 @@ const (
 	TopicPageMax      = 200                // the most a page may ask for
 	TopicTitleMax     = 120                // characters in a name the person gives a topic
 	topicLineScan     = 200                // characters of a first line read from the store (firstLine keeps 120)
+	topicLineChunk    = 500                // message ids in one query for first lines (SQLite's bound-parameter limit is far above)
 )
 
 // Topic states (ThreadSummary.State) and who made a topic done (DoneBy).
@@ -138,10 +139,10 @@ func deriveTopic(g []threadRow, l topicLocal, now int64) topicVerdict {
 			replied[r.replyTo] = true
 		}
 	}
-	request := "" // the topic's latest request
-	for _, r := range g {
+	var request *threadRow // the topic's latest request
+	for i, r := range g {
 		if r.kind == envelope.KindQuestion || r.kind == envelope.KindTask {
-			request = r.id
+			request = &g[i]
 		}
 		if topicOpen(r, replied[r.id]) {
 			v.Pending = true
@@ -157,9 +158,16 @@ func deriveTopic(g []threadRow, l topicLocal, now int64) topicVerdict {
 	case live && l.Mark == topicMarkDone:
 		v.DoneBy = DoneByYou
 	case live && l.Mark == topicMarkOpen:
-	case request != "" && !v.Pending && last.replyTo == request && last.status == envelope.StatusDone &&
+	case request != nil && !v.Pending && last.replyTo == request.id && last.status == envelope.StatusDone &&
 		(last.kind == envelope.KindAnswer || last.kind == envelope.KindResult):
 		v.DoneBy, v.Conclusion = DoneByAgent, last.id
+		// Sent from here to a request received here that the person took
+		// over (Reply: state manual): their own words, not the agent's.
+		// A requester cannot tell (a v1 reply does not say who wrote it),
+		// so there it stays the agent's (docs/plans/TOPICS.md).
+		if !last.in && request.in && request.state == stateManual {
+			v.DoneBy = DoneByYou
+		}
 	}
 	v.State = TopicActive
 	if v.DoneBy != "" {
@@ -237,7 +245,7 @@ func summarize(self, peer string, g []string, rows map[string]threadRow, l topic
 		}
 	}
 	v := deriveTopic(facts, l, now)
-	t.State, t.DoneBy, t.Pending, t.conclusionID = v.State, v.DoneBy, v.Pending, v.Conclusion
+	t.State, t.DoneBy, t.Pending, t.conclusionID, t.QuietSince = v.State, v.DoneBy, v.Pending, v.Conclusion, time.Unix(v.QuietSince, 0)
 	if v.Conclusion != "" {
 		t.ConcludedBy = peer
 		if !rows[v.Conclusion].in {
@@ -266,7 +274,7 @@ func (a *Agent) peerTopics(peer string, now int64) ([]ThreadSummary, error) {
 }
 
 // topicText fills the titles, last lines and conclusions of ts, all with
-// peer, with one read of first lines (per 500 messages).
+// peer, with one read of first lines (per topicLineChunk messages).
 func (a *Agent) topicText(peer string, ts []*ThreadSummary) error {
 	var ids []string
 	for _, t := range ts {
@@ -305,7 +313,7 @@ func (s *store) firstLines(peer string, ids []string) (map[string]string, error)
 	}
 	line := `substr(body, 1, min(coalesce(nullif(instr(body, char(10)), 0) - 1, ` + strconv.Itoa(topicLineScan) + `), ` + strconv.Itoa(topicLineScan) + `))`
 	for len(unique) > 0 {
-		chunk := unique[:min(len(unique), 500)]
+		chunk := unique[:min(len(unique), topicLineChunk)]
 		unique = unique[len(chunk):]
 		marks := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
 		args := []any{peer}
@@ -347,10 +355,14 @@ type PeerTopics struct {
 	Latest         ThreadSummary `json:"latest"`          // the most recently active topic, whatever its state
 }
 
-// TopicOverview is what the overview shows of device threads: every
-// thread that is not an archived topic (review-notice threads included,
-// as before), newest first, and each peer's topic counts.
-func (a *Agent) TopicOverview() ([]ThreadSummary, []PeerTopics, error) {
+// TopicOverview is what the overview shows of device threads, newest
+// first, and each peer's topic counts. A page that lists topics itself
+// (the messenger: GET /api/overview?topics=1) asks without archived
+// topics (listArchived false): they are only counted, and listed a page at
+// a time by Topics. Every other page (the previous interface, installed
+// skins) gets every thread, archived topics included, each with its state.
+// Review-notice threads are always listed.
+func (a *Agent) TopicOverview(listArchived bool) ([]ThreadSummary, []PeerTopics, error) {
 	peers, err := a.store.conversationPeers()
 	if err != nil {
 		return nil, nil, err
@@ -377,12 +389,14 @@ func (a *Agent) TopicOverview() ([]ThreadSummary, []PeerTopics, error) {
 			if t.State == TopicArchived && !t.NoticeOnly {
 				c.Archived++
 				c.ArchivedUnread += t.Unread
-				continue
+				if !listArchived {
+					continue
+				}
 			}
 			shown = append(shown, t)
 		}
 		text := shown
-		if latest >= 0 && all[latest].State == TopicArchived {
+		if latest >= 0 && all[latest].State == TopicArchived && !listArchived {
 			text = append(text, &all[latest])
 		}
 		if err := a.topicText(peer, text); err != nil {
@@ -576,19 +590,31 @@ func (a *Agent) RenameTopic(peer, id, title string) error {
 }
 
 // MarkTopicDone marks topic id with peer done by the person, here, until
-// a new message comes.
-func (a *Agent) MarkTopicDone(peer, id string) error {
-	return a.setTopic(peer, id, func(l *topicLocal, count int) {
-		l.Mark, l.MarkAt, l.MarkCount = topicMarkDone, storeNow().Unix(), count
-	})
+// a new message comes. seen is how many of its messages the person's
+// screen showed (0: all it has now): a mark never covers a message the
+// person has not seen, so one that came after does not let it hold, and
+// covered says whether it holds now.
+func (a *Agent) MarkTopicDone(peer, id string, seen int) (covered bool, err error) {
+	return a.mark(peer, id, topicMarkDone, seen)
 }
 
 // ReopenTopic makes topic id with peer active again, here, until a new
 // message comes: a done or archived topic goes back among the active ones.
-func (a *Agent) ReopenTopic(peer, id string) error {
-	return a.setTopic(peer, id, func(l *topicLocal, count int) {
-		l.Mark, l.MarkAt, l.MarkCount = topicMarkOpen, storeNow().Unix(), count
+// seen and covered are as for MarkTopicDone.
+func (a *Agent) ReopenTopic(peer, id string, seen int) (covered bool, err error) {
+	return a.mark(peer, id, topicMarkOpen, seen)
+}
+
+func (a *Agent) mark(peer, id, mark string, seen int) (covered bool, err error) {
+	err = a.setTopic(peer, id, func(l *topicLocal, have int) {
+		count := have
+		if seen > 0 && seen < have {
+			count = seen
+		}
+		covered = count == have
+		l.Mark, l.MarkAt, l.MarkCount = mark, storeNow().Unix(), count
 	})
+	return covered, err
 }
 
 // setTopic changes what the person set on topic id (its earliest message)

@@ -46,8 +46,13 @@ func NewLive(a *client.Agent) *Live {
 // Changed implements Provider.
 func (l *Live) Changed() (uint64, <-chan struct{}) { return l.a.Changed() }
 
-// Overview implements Provider.
-func (l *Live) Overview() (Overview, error) {
+// Overview implements Provider: every thread, archived topics included.
+func (l *Live) Overview() (Overview, error) { return l.overview(true) }
+
+// TopicOverview implements Topics: archived topics counted, not listed.
+func (l *Live) TopicOverview() (Overview, error) { return l.overview(false) }
+
+func (l *Live) overview(listArchived bool) (Overview, error) {
 	seq, _ := l.a.Changed()
 	o := Overview{Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
 		Threads: []ThreadSummary{}, Review: []ReviewItem{}, NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: []QuarantineItem{}}
@@ -69,7 +74,7 @@ func (l *Live) Overview() (Overview, error) {
 	if err := l.identityOverview(&o); err != nil {
 		return o, err
 	}
-	threads, peers, err := l.a.TopicOverview() // archived topics are counted, not listed (livetopics.go)
+	threads, peers, err := l.a.TopicOverview(listArchived) // livetopics.go
 	if err != nil {
 		return o, err
 	}
