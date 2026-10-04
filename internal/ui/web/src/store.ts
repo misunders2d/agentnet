@@ -35,10 +35,17 @@ export interface Toast { id: number; text: string; tone?: "ok" | "error" }
 
 export type Tab = "chats" | "agents" | "oks" | "settings";
 
+/** A conversation as last loaded: a DM or group, or a device thread (one topic). */
+export type View = T.DMThread | T.Thread;
+const VIEWS_KEPT = 24; // conversations kept for an instant reopen (loaded again when opened)
+const OPEN_SLOW = 400; // ms a conversation may take to load before its placeholder shows
+
 export interface State {
   tab: Tab;
   overview: T.Overview | null;
   open: Open;
+  pending: Open;               // being opened: shown once its messages are here (what is shown stays until then)
+  views: Record<string, View>; // the last loaded view of recently opened conversations, by id
   dm: T.DMThread | null;
   thread: T.Thread | null;
   typing: T.TypingView | null;
@@ -74,7 +81,7 @@ export class Store {
   constructor(readonly host: Host) {
     this.api = api(host);
     this.state = {
-      tab: "chats", overview: null, open: null, dm: null, thread: null, typing: null, invitations: [],
+      tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [],
       conn: "loading", version: "", newVersion: "", drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, panel: false, section: "", agentNames: {},
     };
   }
@@ -163,15 +170,61 @@ export class Store {
   retryNow() { void this.recover([0]); }
 
   // ---- the open conversation
+  // open shows a conversation without a blank in between: one loaded
+  // before shows at once (and is loaded again behind it); otherwise what is
+  // on screen stays until the new one's messages are here, and only a slow
+  // load (OPEN_SLOW) shows the opening placeholder. Switching topics with
+  // one agent never shows it: the open topic stays until the next is ready.
   async open(o: Open) {
-    const same = JSON.stringify(o) === JSON.stringify(this.state.open);
-    this.set({ open: o, ...(same ? {} : { dm: null, thread: null, typing: null }) });
-    if (!o) return;
-    await this.loadOpen();
-    if (!this.refreshed.has(o.id)) { // once per open: receipts the server still holds
+    if (!o) { this.close(); return; }
+    const cur = this.state.open;
+    const cached = this.state.views[o.id];
+    if ((cur && cur.kind === o.kind && cur.id === o.id) || cached) {
+      this.set({ open: o, pending: null, ...this.viewPatch(o, cached ?? null, cur?.id === o.id) });
+      await this.loadOpen(o);
+    } else {
+      this.set({ pending: o });
+      const topicSwitch = cur?.kind === "thread" && o.kind === "thread";
+      const slow = topicSwitch ? undefined : setTimeout(() => {
+        if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
+      }, OPEN_SLOW);
+      await this.loadOpen(o);
+      clearTimeout(slow);
+    }
+    if (this.state.open === o && !this.refreshed.has(o.id)) { // once per open: receipts the server still holds
       this.refreshed.add(o.id);
       this.api.refresh(o.id).catch(() => {});
     }
+  }
+
+  // viewPatch: the state that shows o with view v (null: not loaded yet).
+  private viewPatch(o: NonNullable<Open>, v: View | null, same: boolean): Partial<State> {
+    if (same && !v) return {};
+    const typing = same ? {} : { typing: null };
+    return o.kind === "dm" ? { dm: (v as T.DMThread | null), thread: null, ...typing } : { thread: (v as T.Thread | null), dm: null, ...typing };
+  }
+
+  // prefetch loads a conversation the person is about to open (a press or a
+  // pause over its row), so that opening it shows it at once. A read only:
+  // nothing is marked read by it.
+  private fetching = new Set<string>();
+  prefetch(o: Open) {
+    if (!o || this.state.views[o.id] || this.fetching.has(o.id) || this.state.open?.id === o.id) return;
+    this.fetching.add(o.id);
+    (o.kind === "dm" ? this.api.dm(o.id) : this.api.thread(o.id))
+      .then((v) => { if (!this.state.views[o.id]) this.keep(o.id, v); })
+      .catch(() => {})
+      .finally(() => this.fetching.delete(o.id));
+  }
+
+  // keep remembers a loaded view (the most recent VIEWS_KEPT, and the open one).
+  private keep(id: string, v: View) {
+    const views: Record<string, View> = { ...this.state.views };
+    delete views[id];
+    views[id] = v;
+    const ids = Object.keys(views);
+    for (const old of ids.slice(0, Math.max(0, ids.length - VIEWS_KEPT))) if (old !== this.state.open?.id) delete views[old];
+    this.set({ views });
   }
 
   showTab(tab: Tab, section = "") { this.set({ tab, section }); }
@@ -217,33 +270,35 @@ export class Store {
     this.toast("The conversation of that notification is not on this device.");
   }
 
+  // close leaves the conversation; its view stays remembered (a phone
+  // slides it away, and opening it again is instant).
   close() {
     if (this.state.open) this.refreshed.delete(this.state.open.id);
-    this.set({ open: null, dm: null, thread: null, typing: null });
+    this.set({ open: null, pending: null, dm: null, thread: null, typing: null });
   }
 
-  private async loadOpen() {
-    const o = this.state.open;
+  // loadOpen loads o (the open conversation, or the one being opened) and
+  // shows it while it is still the one wanted; a load that lost the race is
+  // only remembered.
+  private async loadOpen(o: Open = this.state.open) {
     if (!o) return;
+    const wanted = () => this.state.open === o || this.state.pending === o;
     try {
-      if (o.kind === "dm") {
-        const t = await this.api.dm(o.id);
-        if (this.state.open !== o) return; // another conversation was opened meanwhile
-        const newHost = (t.agents || []).some((a) => !(this.state.dm?.agents || []).some((b) => b.host.address === a.host.address));
-        this.set({ dm: t });
-        if (newHost) void this.loadAgentNames();
-        const unread = (t.messages || []).filter((m) => m.unread).map((m) => m.id);
-        if (unread.length) this.api.markRead(unread).catch(() => {});
-        this.api.typing({ conv: o.id }).then((v) => { if (this.state.open === o) this.set({ typing: v }); }).catch(() => {});
-      } else {
-        const t = await this.api.thread(o.id);
-        if (this.state.open !== o) return;
-        this.set({ thread: t });
-        const unread = (t.messages || []).filter((m) => m.unread).map((m) => m.id);
-        if (unread.length) this.api.markRead(unread).catch(() => {});
-      }
+      const v: View = o.kind === "dm" ? await this.api.dm(o.id) : await this.api.thread(o.id);
+      this.keep(o.id, v);
+      if (!wanted()) return; // another conversation was opened meanwhile
+      const first = this.state.pending === o;
+      const newHost = o.kind === "dm" && ((v as T.DMThread).agents || []).some((a) => !(this.state.dm?.agents || []).some((b) => b.host.address === a.host.address));
+      this.set({ ...(first ? { open: o, pending: null } : {}), ...this.viewPatch(o, v, this.state.open?.id === o.id) });
+      if (newHost) void this.loadAgentNames();
+      const unread = (v.messages || []).filter((m) => m.unread).map((m) => m.id);
+      if (unread.length) this.api.markRead(unread).catch(() => {});
+      if (o.kind === "dm") this.api.typing({ conv: o.id }).then((t) => { if (this.state.open === o) this.set({ typing: t }); }).catch(() => {});
     } catch (e) {
-      if (this.state.open === o) this.toast(errorText(e), "error");
+      if (!wanted()) return;
+      // Its placeholder then says it is still opening, with Try again.
+      if (this.state.pending === o) this.set({ open: o, pending: null, dm: null, thread: null, typing: null });
+      this.toast(errorText(e), "error");
     }
   }
 

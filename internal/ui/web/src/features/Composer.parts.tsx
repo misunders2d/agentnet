@@ -21,7 +21,9 @@ export const menuIcons = {
   emoji: <IconMoodSmile size={20} stroke={2} />,
 };
 
-export function PlusMenu({ actions, disabled, onOpenChange, onClosed }: { actions: MenuAction[]; disabled?: boolean; onOpenChange?: (open: boolean) => void; onClosed?: () => void }) {
+/** PlusMenu: the composer's "+" menu. finalFocus says whether closing it
+ *  returns focus to "+" (not when an action hands focus to what it opened). */
+export function PlusMenu({ actions, disabled, onOpenChange, onClosed, finalFocus }: { actions: MenuAction[]; disabled?: boolean; onOpenChange?: (open: boolean) => void; onClosed?: () => void; finalFocus?: () => boolean }) {
   const portal = usePortal();
   return (
     <Menu.Root modal={false} onOpenChange={(o) => onOpenChange?.(o)} onOpenChangeComplete={(o) => { if (!o) onClosed?.(); }}>
@@ -31,7 +33,7 @@ export function PlusMenu({ actions, disabled, onOpenChange, onClosed }: { action
       </Menu.Trigger>
       <Menu.Portal container={portal}>
         <Menu.Positioner side="top" align="start" sideOffset={10} collisionPadding={12} className="z-40 outline-none">
-          <Menu.Popup className="w-72 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
+          <Menu.Popup finalFocus={finalFocus} className="w-72 origin-[var(--transform-origin)] rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[transform,opacity] duration-200 ease-out-soft data-[ending-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 motion-reduce:transition-opacity">
             {actions.map((a) => (
               <Menu.Item key={a.label} disabled={a.disabled} onClick={a.run}
                 className="flex min-h-14 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-1.5 outline-none select-none data-[highlighted]:bg-sunken data-[disabled]:cursor-default data-[disabled]:opacity-50">

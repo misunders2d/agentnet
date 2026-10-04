@@ -21,11 +21,17 @@ import { eventKind } from "./Message.model";
 
 type Load<V> = { v?: V; error?: string };
 
+// The last answers per store: coming back to the tab shows them at once
+// (no placeholder, nothing moving) while they are asked for again.
+const lastData = new WeakMap<object, { responder: Load<T.ResponderView>; catalog: Load<T.AgentCatalogView> }>();
+
 function useAgentData(o: T.Overview | null) {
   const store = useApp();
   const browser = store.host.platform === "browser";
-  const [responder, setResponder] = useState<Load<T.ResponderView>>({});
-  const [catalog, setCatalog] = useState<Load<T.AgentCatalogView>>({});
+  const last = lastData.get(store);
+  const [responder, setResponder] = useState<Load<T.ResponderView>>(last?.responder ?? {});
+  const [catalog, setCatalog] = useState<Load<T.AgentCatalogView>>(last?.catalog ?? {});
+  useEffect(() => { lastData.set(store, { responder, catalog }); }, [responder, catalog]);
   const seq = o?.seq;
   useEffect(() => {
     if (browser || !o) return;

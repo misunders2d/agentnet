@@ -60,7 +60,8 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
       setItems((p.topics || []).map(topicOf)); setNext(p.next || ""); setMatched(p.matched); setFailed("");
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
   }, [open, peer, filter, q, seq]);
-  useEffect(() => { if (!open) { setItems([]); setNext(""); setQuery(""); setQ(""); shownFor.current = ""; } }, [open]);
+  // Emptied once it has slid away, not while it does (it would flash "No topics").
+  const reset = () => { setItems([]); setNext(""); setQuery(""); setQ(""); shownFor.current = ""; };
 
   const more = () => {
     const ask = ++asked.current;
@@ -74,7 +75,7 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
   const f = filters.find((x) => x.id === filter)!;
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus">
+    <Dialog.Root open={open} onOpenChange={onOpenChange} onOpenChangeComplete={(o) => { if (!o && !open) reset(); }} modal="trap-focus">
       <Dialog.Portal container={portal}>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-[#1B1530]/30 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-none" />
         {/* Focus starts in the search box, except on touch, where that would cover the list with the keyboard. */}

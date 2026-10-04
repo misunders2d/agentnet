@@ -1,11 +1,15 @@
 // The messenger's frame: a rail (desktop) or bottom tabs (phone), the chat
 // list, the open conversation and, when it has guests or a pending OK, the
-// "In this chat" panel. Phones show one of these at a time.
+// "In this chat" panel. Phones show one of these at a time: a conversation
+// is a card pushed over the tabs. How each change moves: ui/Motion.tsx.
+import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { IconMessageCircle, IconRobot, IconCircleCheck, IconSettings } from "@tabler/icons-react";
+import type { T } from "./api";
 import { useApp, useWide } from "./context";
-import { useStore, type Tab } from "./store";
+import { useStore, type Store, type Tab } from "./store";
 import { ChatList } from "./features/ChatList";
-import { Conversation } from "./features/Conversation";
+import { Conversation, NothingOpen, convKey } from "./features/Conversation";
+import { Leaving, MOTION, Swap, usePresence, useSettled } from "./ui/Motion";
 import { RoomPanel } from "./features/RoomPanel";
 import { OksView, useNeedsYou } from "./features/Approvals";
 import { AgentsView } from "./features/AgentsView";
@@ -27,17 +31,58 @@ export function App() {
   const open = useStore(store, (s) => s.open);
   const overview = useStore(store, (s) => s.overview);
   const oks = useNeedsYou();
-
+  const views = useStore(store, (s) => s.views);
 
   const main = tab === "agents" ? <AgentsView /> : tab === "oks" ? <OksView /> : tab === "settings" ? <Settings /> : <ChatList />;
+  // Phone: an open conversation is a card pushed over the tabs from the
+  // right; Back pulls it away. The tabs stay drawn under it only while it
+  // moves. Another topic of the same agent is the same card.
+  const card = usePresence(wide ? null : open, MOTION.pop);
+  const arrived = useSettled(card.shown && !card.leaving ? convKey(card.shown, views) : "", MOTION.push);
+  const listScroll = useRef(0);
 
   if (!wide) {
-    // Phone: one screen at a time. An open conversation covers the tabs.
-    if (open) return (<div className="flex h-dvh flex-col bg-canvas"><ConnectionBanner /><Conversation /><Toasts /></div>);
+    const under = !card.shown || card.leaving || !arrived;
     return (
-      <div className="flex h-dvh flex-col bg-canvas">
+      <div className="relative h-dvh overflow-hidden bg-canvas">
+        {under && (
+          <div inert={!!card.shown && !card.leaving} className={"flex h-full flex-col bg-canvas " + (card.leaving ? "an-under-out" : card.shown ? "an-under-in" : "")}>
+            <PhoneTabs tab={tab} oks={oks} overview={overview} store={store} main={main} scroll={listScroll} />
+          </div>
+        )}
+        {card.shown && (
+          <div inert={card.leaving} className={"absolute inset-0 flex flex-col bg-canvas " + (card.leaving ? "an-push-out an-card-edge" : arrived ? "" : "an-push-in an-card-edge")}>
+            <Leaving.Provider value={card.leaving}><ConnectionBanner /><Conversation o={card.shown} /></Leaving.Provider>
+          </div>
+        )}
+        <Toasts />
+      </div>
+    );
+  }
+
+  return <Desktop tab={tab} oks={oks} overview={overview} store={store} main={main} />;
+}
+
+// usePages: the tabs are pages in their order (Chats, Agents, OKs,
+// Settings): a later tab slides in from the right, an earlier one from the left.
+const order: Record<Tab, number> = { chats: 0, agents: 1, oks: 2, settings: 3 };
+function usePages(tab: Tab): { enter: string; leave: string } {
+  const [st, setSt] = useState({ tab, next: true });
+  if (st.tab !== tab) setSt({ tab, next: order[tab] > order[st.tab] });
+  return st.next ? { enter: "an-page-in-next", leave: "an-page-out-next" } : { enter: "an-page-in-prev", leave: "an-page-out-prev" };
+}
+
+function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks: number; overview: T.Overview | null; store: Store; main: ReactNode; scroll: RefObject<number> }) {
+  // The tab's own scroll position comes back with it (it was unmounted under the open conversation).
+  const box = useRef<HTMLDivElement>(null);
+  const pages = usePages(tab);
+  useLayoutEffect(() => { if (box.current && tab === "chats") box.current.scrollTop = scroll.current; }, []);
+  return (
+      <>
         <ConnectionBanner />
-        <div className="min-h-0 flex-1 overflow-y-auto">{main}</div>
+        <Swap id={tab} className="min-h-0 flex-1 overflow-hidden" side="h-full" {...pages} ms={MOTION.page} label="tab">
+          <div ref={box} className="h-full overflow-y-auto" onScroll={(e) => { if (tab === "chats") scroll.current = e.currentTarget.scrollTop; }}>{main}</div>
+        </Swap>
         <nav aria-label="Main" className="grid grid-cols-4 border-t-[1.5px] border-outline bg-surface pb-[env(safe-area-inset-bottom)]">
           {tabs.map((t) => (
             <button key={t.id} type="button" onClick={() => store.showTab(t.id)} aria-current={tab === t.id ? "page" : undefined}
@@ -53,11 +98,18 @@ export function App() {
             You
           </button>
         </nav>
-        <Toasts />
-      </div>
-    );
-  }
+      </>
+  );
+}
 
+function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; overview: T.Overview | null; store: Store; main: ReactNode }) {
+  const open = useStore(store, (s) => s.open);
+  const views = useStore(store, (s) => s.views);
+  const settings = tab === "settings";
+  const pages = usePages(tab);
+  // The right pane moves only when what it shows changes: another
+  // conversation, or Settings. Topics of one agent are one pane.
+  const pane = settings ? "settings" : open ? convKey(open, views) : "none";
   return (
     <div className="grid h-dvh grid-cols-[76px_minmax(300px,360px)_1fr] bg-canvas">
       <nav aria-label="Main" className="flex flex-col items-center gap-2 border-r-[1.5px] border-outline bg-[#1B1530] py-3 text-white">
@@ -76,10 +128,17 @@ export function App() {
         </button>
         <button type="button" aria-label="You: profile and devices" onClick={() => store.showTab("settings", "profile")} className="grid size-11 place-items-center rounded-full"><PersonAvatar name={overview?.person?.label || "Me"} seed={overview?.person?.person || "me"} size={40} /></button>
       </nav>
-      <aside className="min-h-0 overflow-y-auto border-r-[1.5px] border-outline bg-canvas">{main}</aside>
+      <aside className="min-h-0 border-r-[1.5px] border-outline bg-canvas">
+        <Swap id={tab} className="h-full overflow-hidden" side="h-full overflow-y-auto" {...pages} ms={MOTION.page} label="list">{main}</Swap>
+      </aside>
       <main className="flex min-h-0 min-w-0">
-        <div className="flex min-w-0 flex-1 flex-col"><ConnectionBanner />{tab === "settings" ? <SettingsPane /> : <Conversation />}</div>
-        {tab !== "settings" && <RoomPanel />}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <ConnectionBanner />
+          <Swap id={pane} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-pane-in" leave="an-pane-out" ms={MOTION.pane} label="pane">
+            {settings ? <SettingsPane /> : open ? <Conversation o={open} /> : <NothingOpen />}
+          </Swap>
+        </div>
+        {!settings && <RoomPanel />}
       </main>
       <Toasts />
     </div>

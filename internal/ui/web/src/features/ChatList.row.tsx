@@ -41,11 +41,12 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
     : <PersonAvatar name={item.title} seed={item.avatarSeed} size={48} online={presence(overview, peerDevices)} />;
   const subtitle = guestHere ? "You’re a guest here" : item.kind === "agent" ? item.subtitle || "" : "";
 
-  // Phones show one screen at a time, so only the desktop column marks the open chat.
+  // Phones show one screen at a time: only the desktop column marks the open chat; a
+  // phone lights up the chat being opened while it loads.
   return (
-    <button type="button" onClick={onOpen} aria-current={selected ? "true" : undefined}
+    <button type="button" onClick={onOpen} aria-current={selected && wide ? "true" : undefined}
       className={"relative flex w-full items-center gap-3 text-left transition-colors duration-200 "
-        + (!wide ? "px-4 py-3 hover:bg-sunken"
+        + (!wide ? "px-4 py-3 hover:bg-sunken " + (selected ? "bg-sunken" : "")
           : "rounded-2xl border px-2.5 py-2.5 " + (selected ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken"))}>
       {avatar}
       <span className="min-w-0 flex-1">

@@ -1,11 +1,14 @@
 // The open conversation: a DM, a group, or an agent's own device thread.
 // Header and (phones) guest bar on top, the timeline, then the composer, or
 // while messages are being chosen to share, the selection bar. Everything
-// shown comes from store.dm / store.thread; actions go through the store.
+// shown comes from the conversation's loaded view (store.views); actions
+// go through the store.
 import { useEffect, useMemo, useState } from "react";
 import { IconMessages, IconX, IconUserPlus } from "@tabler/icons-react";
 import { useAgentNames, useApp, useWide } from "../context";
-import { useStore } from "../store";
+import type { T } from "../api";
+import { useStore, type Open, type View } from "../store";
+import { MOTION, Swap, useLeaving } from "../ui/Motion";
 import { Button } from "../ui/Button";
 import { Composer } from "./Composer";
 import { InviteSheet } from "./InviteSheet";
@@ -15,27 +18,34 @@ import { TopicBar, TopicEnd } from "./Conversation.topics";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
 
-export function Conversation() {
-  const store = useApp();
-  const wide = useWide();
-  const open = useStore(store, (s) => s.open);
-  if (!open) return wide ? <NothingOpen /> : null;
-  return <Open key={open.kind + ":" + open.id} />;
+/** convKey names what a conversation pane shows: a DM or group by its id,
+ *  and an agent's device thread by the agent, so that its topics are one
+ *  pane (switching topics swaps only the messages). */
+export function convKey(o: NonNullable<Open>, views: Record<string, View>): string {
+  if (o.kind === "dm") return "dm:" + o.id;
+  const v = views[o.id] as T.Thread | undefined;
+  return "thread:" + (v?.peer || o.id);
 }
 
-function Open() {
+/** Conversation shows conversation o from its loaded view (store.views):
+ *  the open one, or, while it slides or fades away, the one just left. */
+export function Conversation({ o }: { o: NonNullable<Open> }) {
+  const views = useStore(useApp(), (s) => s.views);
+  return <OpenView key={convKey(o, views)} open={o} />;
+}
+
+function OpenView({ open }: { open: NonNullable<Open> }) {
   const store = useApp();
   const wide = useWide();
-  const open = useStore(store, (s) => s.open)!;
-  const dm = useStore(store, (s) => s.dm);
-  const thread = useStore(store, (s) => s.thread);
+  const leaving = useLeaving();
+  const view = useStore(store, (s) => s.views[open.id]);
   const overview = useStore(store, (s) => s.overview);
   const names = useAgentNames();
   const [selected, setSelected] = useState<string[] | null>(null);
   const [left, setLeft] = useState<Helper | null>(null);
 
-  const t = open.kind === "dm" && dm?.id === open.id ? dm : null;
-  const th = open.kind === "thread" ? thread : null;
+  const t = open.kind === "dm" && view && view.id === open.id ? view as T.DMThread : null;
+  const th = open.kind === "thread" && view ? view as T.Thread : null;
   const ctx: Ctx = useMemo(() => ({
     conv: t?.id ?? th?.id ?? open.id, dm: t, thread: th, overview, names, // the Composer's draft key
     canReply: t ? !t.frozen : th ? !th.key?.pending : false,
@@ -51,6 +61,7 @@ function Open() {
     return () => removeEventListener("keydown", esc);
   }, [!!selected]);
   useEffect(() => { if (!left) return; const x = setTimeout(() => setLeft(null), 9000); return () => clearTimeout(x); }, [left]);
+  useEffect(() => setSelected(null), [open.id]); // another topic: nothing chosen in it yet
 
   if (!t && !th) return <Loading wide={wide} />;
 
@@ -62,6 +73,8 @@ function Open() {
       <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
       {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
       {ctx.thread && <TopicBar thread={ctx.thread} />}
+      {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
+      <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
       <Timeline ctx={ctx} messages={messages} focus={open.focus} selected={selected} onSelect={toggle} end={th ? <TopicEnd ctx={ctx} /> : undefined}
         footer={left && (
           // The room panel's words; the timeline keeps its last lines clear of it.
@@ -75,12 +88,13 @@ function Open() {
         )}
         empty={<EmptyTimeline title={th ? "Nothing here yet" : "Say hello"}
           to={t ? "What you write here goes to " + (t.kind === "group" ? "the members of " + title : title) + " only." : "Messages with " + title + " show up here."} />} />
+      </Swap>
       {selected
         ? <SelectBar count={selected.length} onCancel={() => setSelected(null)}
             onBringIn={() => { store.openInvite(ctx.conv, selected); setSelected(null); }} />
         : <Composer dm={t ?? undefined} thread={th ?? undefined} />}
-      {!wide && <RoomSheet />}
-      <InviteSheet />
+      {!wide && !leaving && <RoomSheet />}
+      {!leaving && <InviteSheet />}
     </section>
   );
 }
@@ -122,7 +136,7 @@ function Loading({ wide }: { wide: boolean }) {
   );
 }
 
-function NothingOpen() {
+export function NothingOpen() {
   return (
     <section className="dots flex min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-canvas p-8 text-center">
       <span className="grid size-20 place-items-center rounded-3xl bg-mine text-mine-ink stroke"><IconMessages size={40} /></span>

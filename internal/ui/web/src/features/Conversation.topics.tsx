@@ -17,7 +17,7 @@ import { useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
-import { usePortal } from "../owned";
+import { focusedIn, usePortal } from "../owned";
 import { AllTopics } from "./Conversation.alltopics";
 import { threadAgentName, type Ctx } from "./Message.model";
 
@@ -81,8 +81,10 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
     if (!el) return;
     const fit = () => {
       const cs = getComputedStyle(el), gap = parseFloat(cs.columnGap) || 8;
-      const free = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - (allRef.current?.offsetWidth || 0) - (newRef.current?.offsetWidth || 0) - 2 * gap;
-      setRoom(Math.max(1, Math.min(TOPICS.barMax - (listed ? 1 : 0), Math.floor((free + gap) / (TOPICS.chipMinWidth + gap)))));
+      // Every chip brings one gap: the next item is the spacer, which has one gap to
+      // All topics (when listed) and one to New topic.
+      const free = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - (allRef.current?.offsetWidth || 0) - (newRef.current?.offsetWidth || 0) - (listed ? 2 : 1) * gap;
+      setRoom(Math.max(1, Math.min(TOPICS.barMax - (listed ? 1 : 0), Math.floor(free / (TOPICS.chipMinWidth + gap)))));
     };
     fit();
     const ro = new ResizeObserver(fit);
@@ -90,6 +92,23 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
     if (allRef.current) ro.observe(allRef.current); // its count and unread mark change its width
     return () => ro.disconnect();
   }, [total, listed, wide]);
+
+  // The topic being opened (its messages are on their way): its chip lights up at once.
+  const pending = useStore(store, (s) => s.pending);
+  const going = pending?.kind === "thread" && topics.some((t) => t.id === pending.id) ? pending.id : "";
+  // The bar stays as it is across topics: the chosen chip keeps focus when
+  // it becomes the open topic's menu, and is kept in view without moving the row.
+  const refocus = useRef("");
+  useLayoutEffect(() => {
+    const el = nav.current, id = going || open?.id;
+    if (!el || !id) return;
+    const c = el.querySelector<HTMLElement>("[data-topic=\"" + CSS.escape(id) + "\"]");
+    if (!c) return;
+    if (refocus.current === id && !going && !c.contains(focusedIn(el))) { c.focus({ preventScroll: true }); refocus.current = ""; }
+    const l = c.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft, r = l + c.offsetWidth;
+    if (l < el.scrollLeft) el.scrollTo({ left: l - 12, behavior: "smooth" });
+    else if (r > el.scrollLeft + el.clientWidth) el.scrollTo({ left: r - el.clientWidth + 12, behavior: "smooth" });
+  }, [going, open?.id]);
 
   const pick = barTopics(topics, open, room);
   const hidden = topics.filter((t) => !pick.some((p) => p.id === t.id));
@@ -102,9 +121,10 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
     <nav ref={nav} aria-label={"Topics with " + agent} className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-canvas px-3 py-1.5 lg:px-5">
       {pick.map((t) => {
         const current = !!open && t.id === open.id && !fresh;
+        const lit = going ? t.id === going : current;
         const body = (
           <>
-            <TopicMark t={t} compact onInk={!!open && t.id === open.id && !fresh} />
+            <TopicMark t={t} compact onInk={lit} />
             <span className="min-w-0 truncate">{firstLine(t.title, TOPICS.barTitle) || "Untitled"}</span>
             {t.unread > 0 && <span aria-hidden="true" className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white tnum">{t.unread}</span>}
           </>
@@ -113,16 +133,16 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
         if (current && listed) {
           return (
             <TopicMenu key={t.id} topic={t} onAll={() => setAll(true)}
-              trigger={<Menu.Trigger aria-current="true" aria-label={topicLabel(t) + ", open topic, menu"} title={t.title}
-                style={width} className={chip + "flex-1 basis-0 bg-ink text-canvas data-[popup-open]:ring-2 data-[popup-open]:ring-act"}>
+              trigger={<Menu.Trigger data-topic={t.id} aria-current="true" aria-label={topicLabel(t) + ", open topic, menu"} title={t.title}
+                style={width} className={chip + "flex-1 basis-0 " + (lit ? "bg-ink text-canvas" : "bg-surface stroke text-ink") + " data-[popup-open]:ring-2 data-[popup-open]:ring-act"}>
                 {body}<IconChevronDown size={16} stroke={2.4} aria-hidden="true" className="shrink-0" />
               </Menu.Trigger>} />
           );
         }
         return (
-          <button key={t.id} type="button" aria-current={current ? "true" : undefined} aria-label={topicLabel(t)} title={t.title + " · " + dayLabel(t.lastAt) + " " + timeOf(t.lastAt)}
-            onClick={() => { leaveNew(); if (!open || t.id !== open.id) void store.open({ kind: "thread", id: t.id }); }}
-            style={width} className={chip + "flex-1 basis-0 " + (current ? "bg-ink text-canvas" : "bg-surface stroke text-ink hover:bg-sunken")}>
+          <button key={t.id} data-topic={t.id} type="button" aria-current={current ? "true" : undefined} aria-label={topicLabel(t)} title={t.title + " · " + dayLabel(t.lastAt) + " " + timeOf(t.lastAt)}
+            onClick={() => { leaveNew(); refocus.current = t.id; if (!open || t.id !== open.id) void store.open({ kind: "thread", id: t.id }); }}
+            style={width} className={chip + "flex-1 basis-0 " + (lit ? "bg-ink text-canvas" : "bg-surface stroke text-ink hover:bg-sunken")}>
             {body}
           </button>
         );

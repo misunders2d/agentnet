@@ -1,10 +1,10 @@
 // The chat list: the people, groups and agents this person talks with,
 // newest first, with what waits for them on top. Phones show it as the
 // Chats tab; desktops keep it as the middle column beside the open chat.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { IconChevronRight, IconRobot, IconSearch, IconX } from "@tabler/icons-react";
 import { useAgentNames, useApp, useWide } from "../context";
-import { useStore } from "../store";
+import { useStore, type Open } from "../store";
 import type { T } from "../api";
 import { Reason, agentName, convTitle, decidable, firstLine, personOf, senderOf, type ChatItem } from "../model";
 import { useNeedsYou } from "./Approvals";
@@ -35,7 +35,17 @@ export function ChatList() {
   const overview = useStore(store, (s) => s.overview);
   const loadError = useStore(store, (s) => s.loadError);
   const open = useStore(store, (s) => s.open);
+  const pending = useStore(store, (s) => s.pending);
+  // The chosen row lights up at once (on a phone too, while its chat loads).
+  const lit = wide ? pending ?? open : pending;
   const agentNames = useAgentNames();
+  // A press, or a mouse resting on a row, loads that chat ahead: it then opens at once.
+  const hover = useRef(0);
+  const ahead = (o: Open, e: ReactPointerEvent) => {
+    clearTimeout(hover.current);
+    if (e.type === "pointerdown") store.prefetch(o);
+    else if (e.pointerType === "mouse") hover.current = window.setTimeout(() => store.prefetch(o), 120);
+  };
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [searching, setSearching] = useState(false);
@@ -126,9 +136,9 @@ export function ChatList() {
           {shown.length > 0 && (
             <ul className={"pt-2 " + (wide ? "flex flex-col gap-0.5 px-2" : "")} aria-label={q ? "Matching chats" : "Chats"}>
               {shown.map((i) => (
-                <li key={i.key} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
+                <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => clearTimeout(hover.current)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
                   <ChatRow item={i} summary={summaries.get(i.open.id)} overview={overview} wide={wide}
-                    selected={wide && !!open && open.id === i.open.id} onOpen={() => void store.open(i.open)} />
+                    selected={!!lit && lit.id === i.open.id} onOpen={() => void store.open(i.open)} />
                 </li>
               ))}
             </ul>

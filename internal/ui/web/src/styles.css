@@ -110,6 +110,65 @@
   }
 }
 
+/* Motion (ui/Motion.tsx): Comic moves like paper on a desk. On a phone a
+   chat is a card pushed in from the right over the list (which slides a
+   little left and dims), and Back pulls it away again. On a desktop only
+   the pane that changes moves: the new one slides in a few pixels while
+   the old one, laid over it, fades away; a topic swaps only its messages,
+   rising a little. Durations match MOTION in ui/Motion.tsx. With reduced
+   motion everything is a short crossfade. Nothing here delays content. */
+@layer components {
+  .an-swap-gone { position: absolute; inset: 0; z-index: 1; pointer-events: none; background: var(--an-canvas); }
+  .an-pane-in { animation: an-nudge-in 220ms var(--ease-out-soft) both; }
+  .an-pane-out { animation: an-fade-left 170ms cubic-bezier(0, 0, .2, 1) both; }
+  .an-tab-in { animation: an-rise-in 220ms var(--ease-out-soft) both; }
+  .an-tab-out { animation: an-fade 150ms cubic-bezier(0, 0, .2, 1) both; }
+  /* Tabs are pages side by side: the next one slides in from the side of
+     its tab while the last one slides away, edge to edge (no overlap). */
+  .an-page-in-next { animation: an-from-right 240ms var(--ease-out-soft) both; }
+  .an-page-out-next { animation: an-to-left 240ms var(--ease-out-soft) both; }
+  .an-page-in-prev { animation: an-from-left 240ms var(--ease-out-soft) both; }
+  .an-page-out-prev { animation: an-to-right 240ms var(--ease-out-soft) both; }
+  .an-topic-in { animation: an-rise-in 200ms var(--ease-out-soft) both; }
+  .an-topic-out { animation: an-fade-up 120ms cubic-bezier(0, 0, .2, 1) both; }
+  .an-push-in { animation: an-push-in 280ms cubic-bezier(.22, .9, .3, 1) both; }
+  .an-push-out { animation: an-push-out 240ms cubic-bezier(.4, 0, .2, 1) both; }
+  .an-under-in { animation: an-under-in 280ms cubic-bezier(.22, .9, .3, 1) both; }
+  .an-under-out { animation: an-under-out 240ms cubic-bezier(.4, 0, .2, 1) both; }
+  /* The card's edge while it moves: a comic outline and hard shadow. */
+  .an-card-edge { box-shadow: -1.5px 0 0 0 var(--an-outline), -6px 0 0 0 rgb(27 21 48 / .12); }
+  @media (prefers-reduced-motion: reduce) {
+    .an-pane-in, .an-tab-in, .an-topic-in, .an-under-in, .an-under-out, .an-page-in-next, .an-page-in-prev { animation: none; }
+    .an-pane-out, .an-tab-out, .an-topic-out, .an-page-out-next, .an-page-out-prev { animation: an-fade 140ms linear both; }
+    .an-push-in { animation: fade-in 140ms linear both; }
+    .an-push-out { animation: an-fade 140ms linear both; }
+  }
+}
+
+/* Sheets (ui/Sheet.tsx) slide up and back down; with reduced motion they
+   fade in place. Unlayered, so it wins over the sheet's own utilities. */
+@media (prefers-reduced-motion: reduce) {
+  .an-sheet { transition-property: opacity; }
+  .an-sheet[data-starting-style], .an-sheet[data-ending-style] { opacity: 0; --tw-translate-y: 0px; }
+}
+@media (prefers-reduced-motion: reduce) and (min-width: 1024px) {
+  .an-sheet[data-starting-style], .an-sheet[data-ending-style] { --tw-translate-y: -50%; }
+}
+
+@keyframes an-nudge-in { from { transform: translateX(14px); } }
+@keyframes an-rise-in { from { transform: translateY(10px); } }
+@keyframes an-fade { to { opacity: 0; } }
+@keyframes an-fade-left { to { opacity: 0; transform: translateX(-10px); } }
+@keyframes an-fade-up { to { opacity: 0; transform: translateY(-8px); } }
+@keyframes an-from-right { from { transform: translateX(100%); } }
+@keyframes an-from-left { from { transform: translateX(-100%); } }
+@keyframes an-to-left { to { transform: translateX(-100%); } }
+@keyframes an-to-right { to { transform: translateX(100%); } }
+@keyframes an-push-in { from { transform: translateX(100%); } }
+@keyframes an-push-out { to { transform: translateX(100%); } }
+@keyframes an-under-in { to { transform: translateX(-24%); filter: brightness(.86); } }
+@keyframes an-under-out { from { transform: translateX(-24%); filter: brightness(.86); } }
+
 @keyframes pop-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: scale(1); } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes working { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }

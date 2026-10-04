@@ -80,31 +80,66 @@ function save(url: string, name: string, into: HTMLElement) {
   a.remove();
 }
 
+// Pictures already fetched, by message, file and direction: a conversation
+// opened again (or a topic switched back to) shows them at once instead of
+// fetching and decrypting them again. The most recent PICTURES_KEPT stay;
+// older object URLs are freed. clearPictures frees them all (unmount).
+const PICTURES_KEPT = 48;
+const pictures = new Map<string, { url: string; picture: boolean }>();
+const pictureKey = (m: AnyMsg, f: FileItem) => m.id + "\n" + f.index + "\n" + m.dir;
+
+export function clearPictures() {
+  for (const p of pictures.values()) URL.revokeObjectURL(p.url);
+  pictures.clear();
+}
+
+function rememberPicture(key: string, p: { url: string; picture: boolean }) {
+  pictures.set(key, p);
+  for (const [k, old] of pictures) {
+    if (pictures.size <= PICTURES_KEPT) break;
+    pictures.delete(k);
+    URL.revokeObjectURL(old.url);
+  }
+}
+
 function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
-  const load = useFileBytes();
+  const store = useApp();
   const portal = usePortal();
   const box = useRef<HTMLButtonElement>(null);
-  const [url, setUrl] = useState("");
-  const [failed, setFailed] = useState(false);
+  const key = pictureKey(m, f);
+  const known = pictures.get(key);
+  const [url, setUrl] = useState(known?.picture ? known.url : "");
+  const [shown, setShown] = useState(!!url); // a picture seen before shows at once; a new one fades in
+  const [failed, setFailed] = useState(!!known && !known.picture);
   const [big, setBig] = useState(false);
   useEffect(() => {
     const el = box.current;
     if (!el || url || failed) return;
+    let alive = true;
     const io = new IntersectionObserver((seen) => {
       if (!seen.some((s) => s.isIntersecting)) return;
       io.disconnect();
-      load(m, f).then((r) => (r.picture ? setUrl(r.url) : setFailed(true))).catch(() => setFailed(true));
+      store.api.file(m.id, f.index, m.dir).then(({ bytes: b }) => {
+        const type = sniff(b);
+        const p = { url: URL.createObjectURL(new Blob([b as BlobPart], { type: type || "application/octet-stream" })), picture: !!type };
+        rememberPicture(key, p);
+        if (!alive) return;
+        if (p.picture) setUrl(p.url); else setFailed(true);
+      }).catch(() => { if (alive) setFailed(true); });
     }, { rootMargin: "200px" });
     io.observe(el);
-    return () => io.disconnect();
-  }, [m.id, f.index]);
+    return () => { alive = false; io.disconnect(); };
+  }, [key]);
   if (failed) return <FileChip m={m} f={f} />;
+  // The box keeps its size from the first frame (4:3, the picture cropped to
+  // fill it): nothing below it moves when the picture arrives.
   return (
     <>
       <button ref={box} type="button" onClick={() => url && setBig(true)} aria-label={"Open picture " + f.name}
-        className="relative block overflow-hidden rounded-xl border border-outline/30 bg-sunken" style={{ width: "min(240px, 100%)", aspectRatio: url ? undefined : "4 / 3" }}>
-        {url ? <img src={url} alt={f.name} className="block max-h-72 w-full object-cover" />
-          : <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
+        className="relative block overflow-hidden rounded-xl border border-outline/30 bg-sunken" style={{ width: "min(240px, 100%)", aspectRatio: "4 / 3" }}>
+        {url && <img src={url} alt={f.name} onLoad={() => setShown(true)} decoding="async"
+          className={"absolute inset-0 block h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none " + (shown ? "opacity-100" : "opacity-0")} />}
+        {!shown && <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
       </button>
       <Sheet open={big} onOpenChange={setBig} title={f.name} description={bytes(f.size)} wide
         footer={<Button variant="act" size="lg" icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>}>

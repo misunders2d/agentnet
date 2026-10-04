@@ -94,7 +94,7 @@ export function Settings() {
   if (open) {
     const View = VIEWS[open];
     return (
-      <div className="fade-in min-h-full">
+      <div className="an-tab-in min-h-full">
         <div className="sticky top-0 z-10 border-b-[1.5px] border-outline bg-canvas px-2 py-1.5 lg:border-b">
           <button type="button" onClick={() => { back.current = open; setOpen(null); }} className="inline-flex min-h-11 items-center gap-0.5 rounded-full pl-1 pr-3 font-semibold hover:bg-sunken">
             <IconChevronLeft size={22} aria-hidden="true" />{wide ? "Settings" : "You"}
@@ -117,7 +117,7 @@ export function SettingsPane() {
   const View = VIEWS[id];
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div key={id} className="@container fade-in mx-auto w-full max-w-[720px] px-8 pb-16 pt-8"><View titleRef={title} /></div>
+      <div key={id} className="@container an-tab-in mx-auto w-full max-w-[720px] px-8 pb-16 pt-8"><View titleRef={title} /></div>
     </div>
   );
 }

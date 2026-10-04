@@ -11,7 +11,9 @@ import type { Host } from "./host";
 import { OwnedContext, ownTheme } from "./owned";
 import { Store } from "./store";
 import { applySavedTheme } from "./features/Settings";
+import { clearPictures } from "./features/Message.files";
 
+let live = 0; // mounted roots
 const mounted = new WeakMap<Element, { root: Root; store: Store; stopTheme: () => void; parts: HTMLElement[] }>();
 
 export async function mount(root: HTMLElement, host: Host): Promise<void> {
@@ -33,6 +35,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
     else if (target) void store.openChannel(target); // a browser notification's channel
     else store.showTab("chats"); // news in more than one conversation
   }, ["conversation", "message", "review"]);
+  live++;
   const r = createRoot(app);
   mounted.set(root, { root: r, store, stopTheme, parts: [app, portals] });
   r.render(
@@ -54,5 +57,6 @@ export async function unmount(root: HTMLElement): Promise<void> {
   m.store.stop();
   m.root.unmount();
   m.stopTheme();
+  if (--live === 0) clearPictures(); // the pictures fetched (object URLs) go with the last mount
   for (const p of m.parts) p.remove();
 }

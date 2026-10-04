@@ -363,7 +363,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
     { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
-    { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; } },
+    { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; setEmojiOpen(true); } }, // opens as the menu leaves: no gap between them
   ];
 
   if (closed) return (
@@ -403,7 +403,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
       <div ref={row} className="flex items-end gap-2">
         <PlusMenu actions={actions} disabled={sending} onOpenChange={setMenuOpen}
-          onClosed={() => { if (emojiAfterMenu.current) { emojiAfterMenu.current = false; setEmojiOpen(true); } }} />
+          finalFocus={() => !emojiAfterMenu.current} onClosed={() => { emojiAfterMenu.current = false; }} />
         <Field ref={field} mirror={mirror} wide={wide} text={text} spans={spans} agent={draft.agent} value={text} placeholder={placeholder} aria-label={placeholder}
           enterKeyHint={wide ? "send" : "enter"} autoComplete="off" spellCheck
           aria-autocomplete="list" aria-controls={open && offered.length ? listId : undefined}
