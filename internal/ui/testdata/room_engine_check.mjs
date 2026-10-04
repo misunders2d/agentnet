@@ -4,7 +4,8 @@
 // participation carries its audience and end time; scopes standing for an
 // invitation not held must agree on audience, end time and group binding;
 // with the invitation held only its exact projection counts; in a group a
-// room scope counts once its binding verifies (dmMembers' groupInvites);
+// room scope counts once its binding verifies (dmMembers' groupInvites),
+// never for an invitation held here;
 // past its end time, by this device's clock, it counts as ended.
 import assert from "node:assert/strict";
 import * as wire from "../static/wire.mjs";
@@ -72,4 +73,10 @@ info = e.resolveAgent(ginv.pid, [await rec(gscope), await rec(gacc)], m);
 assert.equal(info.state, "active");
 assert.equal(info.scope, await wire.eventHash(gscope));
 assert.equal(info.external, false);
-console.log("PASS room engine: room audience and end time resolved, exact projection only, agreeing scopes, end time by this clock, group scope counted once its binding verifies");
+// The invitation itself held here (its binding does not verify): its
+// verified scope does not stand in for it (client resolve).
+info = e.resolveAgent(ginv.pid, [await rec(ginv), await rec(gscope), await rec(gacc)], m);
+assert.equal(info.invite, "", "a scope does not stand in for an invitation held here");
+assert.notEqual(info.state, "active");
+assert.ok(info.held > 0);
+console.log("PASS room engine: room audience and end time resolved, exact projection only, agreeing scopes, end time by this clock, group scope counted once its binding verifies, never for an invitation held here");

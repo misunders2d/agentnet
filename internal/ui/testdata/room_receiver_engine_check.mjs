@@ -160,7 +160,25 @@ for (const [what, rec, want] of [
   await assert.rejects(e.admitGroupTurn(memberTurn, { id: memberTurn.id, from: bob.address }, await e.store.get('pins', bob.address), { id: memberTurn.id }), /Sender is not a current group device|outside captured authority/); checks++;
   evidenceOK = false;
   await assert.rejects(e.admitGroupTurn({ ...n, id: id(), lid: id() }, env, pin, { id: id() }), /pending/); checks++;
+  evidenceOK = true;
+  // A group request or output carrying a captured audience is not read yet
+  // (client admitConv, ROOM_V1 P3/P4), live or as history.
+  const memberHuman = { audience: [G.entry], proof: [G.scope, G.acc] }, bobPin = await e.store.get('pins', bob.address);
+  const request = { ...n, id: id(), lid: id(), from: bob.address, kind: 'question', pid: B.pid, target: { address: bob.address, fingerprint: bob.fp }, human: memberHuman };
+  await assert.rejects(e.admitGroupTurn(request, { id: request.id, from: bob.address }, bobPin, { id: request.id }), /not read yet/); checks++;
+  const alicePin = await e.store.get('pins', alice.address);
+  const hist = { ...n, id: id(), lid: id(), from: alice.address, pid: '', human: undefined, sub: 'history', replica: true, attachments: [],
+    body: historyOf({ from: alice.address, from_key: alice.fp, kind: 'question', origin: 'ui', pid: B.pid, target: { address: bob.address, fingerprint: bob.fp }, human: memberHuman }) };
+  await assert.rejects(e.admitGroupTurn(hist, { id: hist.id, from: alice.address }, alicePin, { id: hist.id }), /not read yet/); checks++;
+  // Selected group history keeps to ordinary member turns (client
+  // groupHistorySources: no PID): a guest's turn held here is not offered.
+  await e.store.write(ops.filter((o) => o.s === 'inbox'));
+  e.groupCurrent = async () => packet;
+  const refs = await e.selectGroupHistory(gconv, { last: 8 });
+  check(!refs.some((r) => r.lid === n.lid), "a guest's group turn is not offered as selected history");
+  check((await e.groupSelectedItems(gconv, refs)).length === refs.length, 'and the offered history publishes');
   Object.assign(e, saved);
+  delete e.groupCurrent;
 }
 
 // ---- X8: a browser never decides a group guest invitation (yet).
@@ -170,4 +188,4 @@ for (const [what, rec, want] of [
   await assert.rejects(e.changeHuman('decide', { pid: G.pid, accept: true }), /group as its guest/); checks++;
   e.agentConv = saved;
 }
-console.log('PASS room receiver engine: ' + checks + ' checks (followers and agent authors of a captured audience, guest edits from their author only, group guest turns, no group guest decision here)');
+console.log('PASS room receiver engine: ' + checks + ' checks (followers and agent authors of a captured audience, guest edits from their author only, group guest turns, group requests carrying an audience not read yet, no group guest decision here)');

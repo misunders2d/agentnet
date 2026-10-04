@@ -1,6 +1,7 @@
 package client
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -76,5 +77,83 @@ func TestRoomGroupTurns(t *testing.T) {
 	eventually(t, "a turn under an unverified group binding held", func() bool { return quarantined(t, w.bob, env.ID) })
 	if inboxHas(t, w.bob, env.ID) {
 		t.Fatal("a guest's turn under an unverified group binding was read")
+	}
+}
+
+// ROOM_V1 §2.4 at a P1 reader: a group request or output (a PID turn that is
+// not a person guest's own) carrying a captured audience is not read yet,
+// so it is held, whatever its proof; the same request without one is read.
+func TestRoomGroupRequestCarryingHumanHeld(t *testing.T) {
+	w, _, packet, _ := groupTurnsFixture(t)
+	conv := packet.State.Conv
+	dave := proofReader(t, w, "guest")
+	runAgent(t, dave)
+	publishGroupFixtureCaps(t, dave, true)
+	for _, a := range []*Agent{w.alice, w.bob, dave} {
+		roomReader(t, a)
+	}
+	visitor, err := w.alice.InviteAgent(tctx(t), conv, dave.Address, nil, nil, "visitor agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the visitor invited at its host", func() bool {
+		p, e := dave.Participation(visitor.PID)
+		return e == nil && p.State == PartInvited && p.External
+	})
+	if _, err := dave.AcceptParticipation(tctx(t), visitor.PID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the visitor active at its host", func() bool {
+		p, e := dave.Participation(visitor.PID)
+		return e == nil && p.Claimable()
+	})
+	m, err := w.alice.dmMembers(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(packet.Root)
+	request := func(h *envelope.HumanTurn) envelope.Inner {
+		return envelope.Inner{V: envelope.Version2, Kind: envelope.KindQuestion, Body: "q " + protocol.NewID(), Conv: conv, LID: protocol.NewID(), Root: raw, Origin: envelope.OriginUI, PID: visitor.PID,
+			Target: &envelope.Target{Address: dave.Address, Fingerprint: dave.Self().Fingerprint(), GroupAdmission: m.keyEpoch(w.alice.Self().Fingerprint())}, Human: h}
+	}
+	plain := sealTo(t, w.alice, dave, request(nil))
+	eventually(t, "the plain request read at its host", func() bool { return inboxHas(t, dave, plain.ID) })
+
+	// A captured audience for an invented guest, its signatures random.
+	guest := protocol.NewID()
+	host, _, _ := dave.store.selfPerson(dave.Address)
+	me, _, _ := w.alice.store.selfPerson(w.alice.Address)
+	scope := protocol.ParticipationEvent{V: 1, Conv: conv, PID: guest, Type: protocol.EventScope, Prev: strings.Repeat("ab", 32), TS: time.Now().Unix(),
+		Author:   protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: w.alice.Address, Fingerprint: me.info.Fingerprint},
+		Host:     &protocol.ParticipationHost{Person: host.info.Person, Address: dave.Address, Fingerprint: dave.Self().Fingerprint()},
+		Audience: protocol.AudienceConversation, Role: protocol.RoleHuman, Sig: make([]byte, 64)}
+	accept := protocol.ParticipationEvent{V: 1, Conv: conv, PID: guest, Type: protocol.EventAccept, Prev: scope.Prev, TS: time.Now().Unix(),
+		Author: protocol.EventAuthor{Person: host.info.Person, Roster: host.info.Roster, Address: dave.Address, Fingerprint: dave.Self().Fingerprint()}, Sig: make([]byte, 64)}
+	rand.Read(scope.Sig)
+	rand.Read(accept.Sig)
+	h := &envelope.HumanTurn{Audience: []envelope.HumanScope{{PID: guest, Invite: scope.Prev, Decision: accept.Hash()}}, Proof: []protocol.ParticipationEvent{scope, accept}}
+	if err := h.Validate(conv); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	env := sealTo(t, w.alice, dave, request(h))
+	eventually(t, "the request carrying an audience decided", func() bool { return inboxHas(t, dave, env.ID) || quarantined(t, dave, env.ID) })
+	if inboxHas(t, dave, env.ID) {
+		t.Fatal("a group request carrying a captured audience was read")
+	}
+
+	// The same request as history from an own device is not read either.
+	item := itemOf(request(h), w.alice.Self().Fingerprint(), time.Now().UnixMilli())
+	item.ID, item.From, item.TS = protocol.NewID(), w.alice.Address, time.Now().Unix()
+	item.GroupAdmission = m.keyEpoch(w.alice.Self().Fingerprint())
+	body, _ := json.Marshal(item)
+	history := envelope.Inner{V: envelope.Version2, Kind: envelope.KindMessage, Sub: envelope.SubHistory, Conv: conv, Root: raw, LID: protocol.NewID(), Replica: true, Body: string(body)}
+	var why string
+	err = w.alice.admitGroupHistory(tctx(t), envelope.Envelope{ID: protocol.NewID(), From: w.alice.Address}, history, packet.Root, w.alice.Self(), false,
+		func(reason, s string) error { why = reason + ": " + s; return nil })
+	if inboxHas(t, w.alice, item.ID) {
+		t.Fatal("history of a group request carrying a captured audience was read")
+	}
+	if err != nil || why != reasonInvalid+": group: history of a participation turn carrying a captured audience is not read yet" {
+		t.Fatalf("history carrying an audience: %q %v", why, err)
 	}
 }

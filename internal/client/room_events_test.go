@@ -202,7 +202,8 @@ func TestRoomEventsInADM(t *testing.T) {
 // ROOM_V1 §2.2 in a group: a room scope carries its invitation's group
 // binding and counts at a member who never held the invitation once that
 // binding verifies (verifyInviteEpoch); with a binding that does not, it
-// does not count. A person guest of a group is a room visitor.
+// does not count, nor while the invitation it names is held here. A person
+// guest of a group is a room visitor.
 func TestRoomEventsGroupScopeCounts(t *testing.T) {
 	w, carol, packet, _ := groupTurnsFixture(t)
 	conv := packet.State.Conv
@@ -223,6 +224,15 @@ func TestRoomEventsGroupScopeCounts(t *testing.T) {
 	storeEvents(t, carol, signedAs(w.alice, protocol.ScopeOf(forged, time.Now().Unix())), acceptOf(t, w.bob, forged))
 	if p := stateAt(t, carol, forged.PID); p.Invite != "" || p.State == PartActive || p.Held == 0 {
 		t.Fatalf("an unverified group binding counted: %+v", p)
+	}
+	// An invitation held here (its task-key admission no longer verifies):
+	// its verified scope does not stand in for it.
+	held := roomInvite(t, w.alice, conv, w.bob, "", 0)
+	held.TaskKeys, held.Group.TaskAdmissions = []string{w.bob.Self().Fingerprint()}, []string{strings.Repeat("f", 64)}
+	held = signedAs(w.alice, held)
+	storeEvents(t, carol, held, signedAs(w.alice, protocol.ScopeOf(held, time.Now().Unix())), acceptOf(t, w.bob, held))
+	if p := stateAt(t, carol, held.PID); p.Invite != "" || p.State == PartActive || p.Held == 0 {
+		t.Fatalf("a scope stood in for an invitation held here: %+v", p)
 	}
 	// A person guest (a visitor outside the group) as a room participant.
 	guest := roomInvite(t, w.alice, conv, guestHost, protocol.RoleHuman, 0)

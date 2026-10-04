@@ -939,6 +939,11 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	if root.Kind == protocol.ConvKindGroup && roomGroupTurn(in) { // a person guest's turn: its PID names its author, not an agent
 		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
 	}
+	if root.Kind == protocol.ConvKindGroup && in.PID != "" && in.Human != nil {
+		// A request or output to a group's captured audience: the group
+		// participation path does not read the audience (ROOM_V1 P3/P4).
+		return hold(reasonInvalid, "group: a request or output carrying a captured audience is not read yet")
+	}
 	if root.Kind == protocol.ConvKindGroup && in.PID != "" {
 		if handled, e := a.admitGroupVisitorInvite(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
 			return e

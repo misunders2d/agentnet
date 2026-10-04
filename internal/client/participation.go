@@ -240,7 +240,8 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 	}
 	// Without the invite itself (another guest, an outside assistant host), its
 	// author's scope stands for it: host, agent and role, never grant, task
-	// keys or note. Holding the invite, only its exact projection counts.
+	// keys or note. Holding the invite, only its exact projection counts; an
+	// invite held here that does not count is never stood in for.
 	if len(invites) == 0 && len(scopes) > 0 {
 		var s protocol.ParticipationEvent
 		for _, x := range scopes {
@@ -252,7 +253,11 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		for _, x := range scopes {
 			agree = agree && protocol.SameScope(x, s)
 		}
-		if _, ok := m.host(s.Host); ok && agree {
+		held := false
+		for _, ev := range events {
+			held = held || ev.Type == protocol.EventInvite && ev.Hash() == s.Prev
+		}
+		if _, ok := m.host(s.Host); ok && agree && !held {
 			invites[s.Prev] = protocol.ParticipationEvent{V: 1, Conv: s.Conv, PID: s.PID, Type: protocol.EventInvite, Author: s.Author, TS: s.TS, Host: s.Host, Audience: s.Audience, Group: s.Group, Role: s.Role, Until: s.Until}
 			info.Scope = s.Hash()
 		} else if !agree {

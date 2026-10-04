@@ -2384,7 +2384,10 @@ export class Engine {
 
   async admitGroupTurn(n,env,pin,base) {
     const room=!!n.human&&!n.sub&&!!n.pid&&n.pid===n.human.author_pid; // a person guest's turn (client roomGroupTurn): its PID is its author's
-    if(n.pid&&!room)return this.admitGroupParticipation(n,env,pin,base);
+    if(n.pid&&!room) {
+      if(n.human)throw new Hold("invalid","Group: a request or output carrying a captured audience is not read yet."); // the group participation path does not read it (client admitConv; ROOM_V1 P3/P4)
+      return this.admitGroupParticipation(n,env,pin,base);
+    }
     const root=wire.parseGroupRoot(n.root), checks=[], {packet,members}=await this.groupTurnEvidence(n.conv,checks);
     const currentPin=await this.groupRead(checks,"pins",env.from);
     if(!currentPin || currentPin.pending || currentPin.fingerprint!==pin.fingerprint)throw new StoreConflict();
@@ -2486,7 +2489,7 @@ export class Engine {
     const modes=[!!selection.last,!!selection.since,selection.refs!=null].filter(Boolean).length;
     if(modes>1 || selection.last!=null&&(!Number.isInteger(selection.last)||selection.last<0||selection.last>64) || selection.since!=null&&(!Number.isSafeInteger(selection.since)||selection.since<0))throw Error("Choose one history mode, up to64 messages.");
     if(!modes)return [];
-    const msgs=this.convMessages(conv,await this.store.all("inbox"),await this.store.all("outbox")).filter(m=>m.kind==="message"&&!m.sub&&!m.control&&!m.aside&&!m.deleted);
+    const msgs=this.convMessages(conv,await this.store.all("inbox"),await this.store.all("outbox")).filter(m=>m.kind==="message"&&!m.sub&&!m.pid&&!m.control&&!m.aside&&!m.deleted); // as the core's sources: no PID turn (a room guest's), D2
     const refs=[];
     for(const m of msgs)refs.push({lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)});
     if(selection.refs!=null) {
@@ -2683,6 +2686,7 @@ export class Engine {
     if(!sender || !n.replica || n.attachments.length)throw new Hold("invalid","Group history is not from a current device or carries unexpected bytes.");
     let h;try{h=wire.parseHistory(n.body);}catch(e){throw new Hold("invalid",e.message);}
     if((JSON.parse(n.body).attachments||[]).some(a=>a.blob?.id||a.blob?.size||a.blob?.sha256))throw new Hold("invalid","Historical group file is not a manifest.");
+    if(h.pid&&h.human)throw new Hold("invalid","Group: history of a participation turn carrying a captured audience is not read yet."); // as its live copy (admitGroupTurn)
     if(h.pid||h.ref)return this.admitGroupParticipationHistory(n,env,pin,h,checks,packet,members);
     if(h.kind!=="message"||h.sub||h.target||h.pid||h.agent_id||h.status||h.ref||h.origin&&h.origin!=="ui"||h.ts<=0||h.reply_to&&!wire.validID(h.reply_to))throw new Hold("invalid","Group history contains nonordinary input.");
     if(h.attachments.length>8 || (JSON.parse(n.body).attachments||[]).some(a=>!a.name || !Number.isSafeInteger(a.size) || a.size<0 || a.size>(100<<20) || !wire.validHash(a.sha256) || a.blob?.id || a.blob?.size || a.blob?.sha256))throw new Hold("invalid","Group history file is not an exact manifest.");
@@ -6093,12 +6097,13 @@ export class Engine {
     }
     // Without the invite itself (another guest, an outside assistant host), its
     // author's scope stands for it: host, agent and role, never grant, task
-    // keys or note. Holding the invite, only its exact projection counts.
+    // keys or note. Holding the invite, only its exact projection counts; an
+    // invite held here that does not count is never stood in for.
     if (!invites.size && scopes.length) {
       const s = scopes.reduce((a, b) => (b.hash < a.hash ? b : a));
       const agree = scopes.every(x => wire.sameScope(x.e, s.e)); // protocol.SameScope: audience, end time and group binding too
       if (!agree) return Object.assign(info, { state: "conflict", conflict: "different invitation scopes share this participation id" });
-      if (host(s.e.host)) {
+      if (host(s.e.host) && !evs.some((y) => y.e.pid === pid && y.e.type === "invite" && y.hash === s.e.prev)) {
         invites.set(s.e.prev, { e: { v: 1, conv: s.e.conv, pid, type: "invite", prev: "", author: s.e.author, ts: s.e.ts, host: s.e.host, grant: null, audience: s.e.audience, task_keys: null, note: "", ...(s.e.role ? { role: s.e.role } : {}), ...(s.e.until ? { until: s.e.until } : {}), ...(s.e.group ? { group: s.e.group } : {}) }, hash: s.e.prev });
         info.scope = s.hash;
       } else info.held++;
