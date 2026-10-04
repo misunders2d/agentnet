@@ -56,6 +56,12 @@ export function api(host: Host) {
     markRead: (ids: string[]) => post<{ note: string }>("/api/act", { do: "read", ids } satisfies T.Action),
     decide: (d: T.DecisionAction) => post<{ note: string }>("/api/operator/decide", d),
 
+    // Topics (an agent's separate conversations): one page of the All topics
+    // list, and the person's own changes, kept on this device only.
+    topics: (p: { peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
+      get<T.TopicPage>(q("/api/topics", Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])))),
+    changeTopic: (what: "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
+
     // Files
     stage: (file: File) => host.stage(file),
     discard: (ids: string[]) => post<unknown>("/api/upload/discard", { ids }),

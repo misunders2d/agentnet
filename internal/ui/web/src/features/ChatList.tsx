@@ -11,6 +11,7 @@ import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
+import { TopicResults } from "./ChatList.topics";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
 import { WorkspacePill } from "./WorkspaceSwitcher";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
@@ -38,6 +39,7 @@ export function ChatList() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [searching, setSearching] = useState(false);
+  const [topicHits, setTopicHits] = useState(0); // topics the search found (ChatList.topics.tsx)
   const search = useRef<HTMLInputElement>(null);
 
   const items = useMemo(() => chatItems(overview, agentNames), [overview, agentNames]);
@@ -48,7 +50,7 @@ export function ChatList() {
   const active: Filter = filter !== "all" && kinds.has(filter) ? filter : "all";
   const q = query.trim();
   const shown = items.filter((i) => (active === "all" || i.kind === active)
-    && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title));
+    && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title, ...(i.topics || []).map((t) => t.title)));
   const unread = items.reduce((n, i) => n + i.unread, 0);
   const showSearch = wide || searching || !!q;
 
@@ -132,7 +134,8 @@ export function ChatList() {
             </ul>
           )}
           {!q && !items.length && overview.person && <NoChats />}
-          {q && <SearchExtras query={q} overview={overview} none={!shown.length} />}
+          {q && overview.topic_list && <TopicResults query={q} onCount={setTopicHits} />}
+          {q && <SearchExtras query={q} overview={overview} none={!shown.length && !topicHits} />}
         </>
       )}
     </section>

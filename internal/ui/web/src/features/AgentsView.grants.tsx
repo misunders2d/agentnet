@@ -14,7 +14,7 @@ export interface Grant { peer: string; thread: string; approved: boolean; tasks:
 /** The newest device conversation with each other device. */
 export function latestThreads(o: T.Overview | null) {
   const out = new Map<string, T.ThreadSummary>();
-  for (const t of o?.threads || []) {
+  for (const t of [...(o?.threads || []), ...(o?.topics || []).map((c) => c.latest)]) { // an agent whose topics are all archived: its latest
     const had = out.get(t.peer);
     if (!had || (t.last_at || "") > (had.last_at || "")) out.set(t.peer, t);
   }
