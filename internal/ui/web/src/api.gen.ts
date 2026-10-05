@@ -92,6 +92,7 @@ export interface AgentView {
 }
 
 export interface ApprovalRevoke {
+  person?: string;
   kind: string;
   address?: string;
   pid?: string;
@@ -298,6 +299,7 @@ export interface DeleteConversationAction {
 export interface DeviceLink {
   url: string;
   expires: string;
+  app_url?: string;
 }
 
 export interface DeviceView {
@@ -305,6 +307,7 @@ export interface DeviceView {
   name: string;
   fingerprint: string;
   this?: boolean;
+  human?: boolean;
 }
 
 export interface DirMember {
@@ -364,6 +367,32 @@ export interface FileView {
   availability?: string;
   note?: string;
   openable: boolean;
+}
+
+export interface FolderView {
+  name: string;
+  path: string;
+}
+
+export interface FoldersView {
+  path: string;
+  parent?: string;
+  home: string;
+  roots?: string[];
+  dirs: FolderView[] | null;
+  truncated?: boolean;
+}
+
+export interface GetAppPlatform {
+  id: string;
+  label: string;
+  url: string;
+}
+
+export interface GetAppView {
+  version: string;
+  detected?: string;
+  platforms: GetAppPlatform[] | null;
 }
 
 export interface GroupChange {
@@ -495,6 +524,24 @@ export interface HubStoragePolicy {
   manual_unattached_age_default_seconds: number;
 }
 
+export interface InviteRequest {
+  name: string;
+  admin: boolean;
+  days: number;
+}
+
+export interface InviteView {
+  link: string;
+  label: string;
+  expires: string;
+  message: string;
+}
+
+export interface InvitesView {
+  can_invite: boolean;
+  invites: PendingInviteView[] | null;
+}
+
 export interface LastEvent {
   kind: string;
   pid: string;
@@ -589,6 +636,7 @@ export interface Overview {
   reply_receivers: boolean;
   reply_sessions: boolean;
   demo: boolean;
+  app?: boolean;
   me: Me;
   threads: ThreadSummary[] | null;
   topics?: PeerTopics[];
@@ -640,6 +688,16 @@ export interface PeerTopics {
   latest: ThreadSummary;
 }
 
+export interface PendingInviteView {
+  id: string;
+  name: string;
+  label: string;
+  admin: boolean;
+  by: string;
+  created?: string;
+  expires: string;
+}
+
 export interface PersonRef {
   id: string;
   seq: number;
@@ -671,7 +729,10 @@ export interface QuarantineItem {
 }
 
 export interface QuestionApproval {
-  address: string;
+  address?: string;
+  person?: string;
+  label?: string;
+  status?: string;
 }
 
 export interface ReactionView {
@@ -858,6 +919,8 @@ export interface Target {
 }
 
 export interface TaskGrantView {
+  person?: string;
+  label?: string;
   address: string;
   fingerprint: string;
   status: string;
@@ -924,6 +987,9 @@ export interface Thread {
   peer: string;
   key: PeerKey;
   approved: boolean;
+  permission_person?: PersonView;
+  question_target?: string;
+  task_target?: string;
   task_grant: string;
   messages: Message[] | null;
   topic?: ThreadSummary;
