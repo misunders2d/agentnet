@@ -87,10 +87,17 @@ func TestComicGroupParityRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")
 	}
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Fatal(err)
-	}
+	comicGroupParity(t, true)
+}
+
+// Catch fixture drift without a browser: the member's configured agent
+// must be explicitly advertised before the UI can offer that exact host.
+func TestComicGroupParityFixture(t *testing.T) {
+	comicGroupParity(t, false)
+}
+
+func comicGroupParity(t *testing.T, rendered bool) {
+	t.Helper()
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -102,6 +109,13 @@ func TestComicGroupParityRendered(t *testing.T) {
 		t.Fatal(err)
 	}
 	bob := personAgent(t, ctx, code, "desk", "Bob")
+	// A person's device is not an agent. This fixture invites Bob's default
+	// agent, so configure it and wait for the real signed member hint.
+	// No request is sent to the responder or model in this journey.
+	if err := bob.SetResponder(&client.Responder{Harness: "claude", Dir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "alice lists Bob's configured agent", func() bool { return slices.Contains(alice.AgentDevices(), bob.Address) })
 	bobPerson, ok, err := bob.Person()
 	if err != nil || !ok {
 		t.Fatalf("bob's person: %v %v", ok, err)
@@ -142,6 +156,17 @@ func TestComicGroupParityRendered(t *testing.T) {
 		keys = []string{bobPerson.Fingerprint}
 	}
 	live := NewLive(alice)
+	o, err := live.Overview()
+	if err != nil || !slices.Contains(o.AgentDevices, bob.Address) {
+		t.Fatalf("Bob's agent is absent from the rendered overview: %v", err)
+	}
+	if !rendered {
+		return
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var s *Server
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
 	t.Cleanup(ts.Close)
