@@ -7,7 +7,7 @@
 // stylesheet can hide or restyle it. Text from anywhere is inserted as text
 // nodes only.
 //
-// mountSkinBar(parent, options) draws it and returns { notify, element }:
+// mountSkinBar(parent, options) draws it and returns { ready, notify, element }:
 //   skins()          the catalog (host.skins), read each time the menu opens
 //   selected         the skin shown now ({ id, name, local?, builtin? })
 //   home             the default skin ({ id, name }): Comic
@@ -48,9 +48,14 @@ export const coinLetters = (label) => {
 export function mountSkinBar(parent, { skins, selected, home, choose, host, workspaces, manage }) {
   const holder = document.createElement("div");
   holder.id = "skin-bar";
+  holder.style.visibility = "hidden";
   const root = holder.attachShadow({ mode: "open" });
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
   const css = el("link"); css.rel = "stylesheet"; css.href = "/assets/skinbar.css";
+  const ready = new Promise((resolve, reject) => {
+    css.onload = () => { holder.style.removeProperty("visibility"); resolve(); };
+    css.onerror = () => reject(new Error("Could not load the skin switcher’s styles"));
+  });
 
   // Menus and dialogs follow the device's light or dark setting.
   const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -288,6 +293,7 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
   root.append(css, bar, notice, dialog);
   parent.prepend(holder);
   return {
+    ready,
     // notify shows a notification the skin cannot open, with the way to
     // open it (action: { label, run }), or clears it ("").
     notify(text, action) { say(text, action); },

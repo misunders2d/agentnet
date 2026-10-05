@@ -37,14 +37,15 @@ func browserCheck(t *testing.T, script string, args ...string) string {
 	return string(out)
 }
 
-// Comic and the Notebook example are standalone packages: mounted from
+// Comic, Classic, Zoom and the Notebook example are standalone packages: mounted from
 // copied package bytes at an unrelated path with only the public host,
 // neither reads a private page global, talks to the API or event stream
 // itself, loads an undeclared file or writes outside its root, and
 // mount/unmount A/B/A leaves nothing behind.
 func TestSkinPackagesContractOnly(t *testing.T) {
 	out := browserCheck(t, "testdata/skin_contract_check.cjs", demoPage(t, ""),
-		filepath.Join("static", "skins", "comic"), filepath.Join("..", "..", "examples", "skins", "notebook"))
+		filepath.Join("static", "skins", "comic"), filepath.Join("static", "skins", "classic"),
+		filepath.Join("static", "skins", "zoom"), filepath.Join("..", "..", "examples", "skins", "notebook"))
 	if !strings.Contains(out, "skin contract check PASS") {
 		t.Fatalf("no pass line:\n%s", out)
 	}

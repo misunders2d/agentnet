@@ -1,3 +1,4 @@
+import { daemonDriveProvider, boundDriveProvider } from "./drivespace.mjs";
 // One shell; immutable per-membership transports. Separate stores prevent
 // accidental routing, not access by fully trusted code executing this origin.
 const ID = /^(default|[a-f0-9]{32})$/;
@@ -55,7 +56,11 @@ export class WorkspaceShell {
   const thisShell=this;
   const check=()=>{if(entry.blockedError)throw entry.blockedError;if(!entry.connected||this.members.get(id)!==entry)throw new Error("Stale workspace handle");};
   const call=async(p,body)=>{check();route(p);if(body?.files?.some(f=>f&&typeof f==="object"&&f.workspace!==id))throw new Error("File belongs to another workspace");return entry.engine?entry.engine.api(p,body):json(this.fetch,prefix+p,body);};
+  const provider = entry.engine ? entry.engine.driveService?.() : daemonDriveProvider(call, (p, init) => {
+   check(); route(p); return thisShell.fetch(prefix + p, init);
+  });
   return Object.freeze({
+   ...(provider ? { drive: boundDriveProvider(provider, check) } : {}),
    workspace:entry.binding, platform:entry.engine?"browser":"daemon",api:call,
    listen:(fn)=>{check();if(entry.engine)return entry.engine.listen(seq=>{if(entry.connected)fn({type:"change",seq,workspace:id});});
     const es=this.eventSource(prefix+"/events");es.addEventListener("change",e=>{if(entry.connected)fn({type:"change",seq:Number(e.data),workspace:id});});

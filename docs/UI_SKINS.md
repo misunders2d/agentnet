@@ -13,8 +13,9 @@ exactly the same path; only trust differs (see [Trust](#trust)).
 - **Comic** (`comic`) is AgentNet's own skin and the default: the messenger,
   built from `internal/ui/web` into the package `internal/ui/static/skins/comic/`
   and embedded in the program.
-- **Classic** and **Zoom** (`classic`, `zoom`) come in a later update as
-  standalone packages on this same contract.
+- **Classic** and **Zoom** (`classic`, `zoom`) are standalone reference packages,
+  built from their own folders in `internal/ui/skins/` into embedded packages
+  under `internal/ui/static/skins/`. Each can be copied and built independently.
 - Installed skins: packages placed next to the program (below), and
   browser-local skins imported into one browser.
 
@@ -31,7 +32,8 @@ The UI host (`internal/ui/static/loader.js`) does the same for every skin:
    then installed ones) and the packages stored in this browser;
 2. picks the skin: `?skin=<id>`, else the one chosen before in this browser,
    else Comic. A saved `default` or `classic` (the names before skins were
-   packages) opens Comic and is rewritten once; `?skin=default` names Comic;
+   packages) opens Comic and is rewritten once; choices made through the package loader
+   are marked separately so selecting new Classic survives reload. `?skin=default` names Comic;
 3. asks for trust unless the skin is built in;
 4. adopts the package's [document rules](#document-rules-fonts) at document level;
 5. gives the skin a root in a shadow tree of the page's `#skin` element, links
@@ -210,6 +212,7 @@ still runs with the page's full trust.
 | `host.onOpen(fn, kinds?)` | Required. Registers notification routing: `fn(target, kind, context)`. Every skin gets `"channel"` (a browser notification's channel: resolve it with GET `/api/notify/resolve?chan=…`, which answers `{conv}` when this device has that conversation; an empty channel means news in more than one) and `"conversation"` (a DM id). Listing `"message"` in `kinds` adds `fn(messageID, "message", {conv?, dir?})` (the conversation and direction the notification names) and `"review"` adds `fn("", "review")`. A destination a skin does not take waits in the switcher with the way to open it in Comic. A missing destination opens the skin's list, never another arbitrary chat. |
 | `host.stage(file)` | Prepares a File for sending; resolves an opaque attachment value for `files` in a send. Keep that value only until that send consumes it. Browser encrypts through its engine; daemon stages locally. |
 | `host.file(messageID,index,dir)` | Opens an attachment this device holds: a received one, or a copy kept of one it sent. Pass the message's own `dir` (`in` or `out`): a received id is the sender's choice and can equal a sent one here. Resolves `{bytes:Uint8Array}` (browser may add name/size/image). Show Open only where the view says `openable: true`; a sent file without a kept copy says so in `note`. Validate magic bytes before inline display; never execute HTML or SVG. |
+| `host.drive` | Optional project-space provider bound to this host's membership: `drive({conv, action, ...})` resolves the existing Drive view/result; `driveUpload(conv, file, confirm)` uploads plaintext to Google only after explicit confirmation. It reuses the core's Drive actions, consent and permissions. Browser providers also expose `prepareGoogle()` and `beginGoogleConsent({conv, full?, confirm_account})`: prepare first, then call begin directly from the confirming click, with no intervening await, to retain the browser user gesture. Never stage this upload through `host.stage`; Google files are outside AgentNet encryption. Switching workspace never retargets a captured provider; retired/disconnected bindings reject new calls. No tokens or raw transport are exposed. Absence/configuration errors must be shown as unavailable. |
 | `host.skins` | The catalog: `{api, id, name, digest?, local?, builtin?}` for Comic, the other built-in, installed and browser-local skins. `builtin` is the host's word (its fixed list), never a manifest's. The array is updated in place. |
 | `host.onSkinsChange(fn)` | Calls `fn()` when `host.skins` changes (a browser-local skin imported or removed). Returns an unsubscribe function. |
 | `host.selectSkin(id)` | Reloads into a skin from `host.skins`. The current skin must preserve or explicitly resolve unsent drafts first. |

@@ -44,7 +44,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/') return send(200, 'text/html', '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/core.css"><div id="skin"></div><script src="/assets/loader.js"></script>');
   if (u.pathname === '/assets/skins/index.json') return json([{ api: 1, id: 'comic', name: 'Comic', entry: 'entry.mjs', files: ['entry.mjs'], digest: 'e'.repeat(64) }, { api: 1, id: 'fixture', name: 'Fixture', entry: 'entry.mjs', files: ['entry.mjs'], digest }]);
   if (u.pathname === '/assets/skins/fixture/entry.mjs') return send(200, 'text/javascript', skin);
-  if (['/assets/loader.js', '/assets/workspaces.mjs', '/assets/core.css', '/assets/skin-base.css', '/assets/skinbar.mjs', '/assets/skinbar.css', '/assets/skin-choice.mjs'].includes(u.pathname)) {
+  if (['/assets/loader.js', '/assets/drivespace.mjs', '/assets/workspaces.mjs', '/assets/core.css', '/assets/skin-base.css', '/assets/skinbar.mjs', '/assets/skinbar.css', '/assets/skin-choice.mjs'].includes(u.pathname)) {
     return send(200, u.pathname.endsWith('.css') ? 'text/css' : 'text/javascript', fs.readFileSync(base + path.basename(u.pathname)));
   }
   if (u.pathname === '/api/workspaces') return json([state.def, ...(state.acme.state === 'enrolled' ? [state.acme] : [])]);

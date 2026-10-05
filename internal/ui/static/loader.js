@@ -61,6 +61,9 @@
     },
   };
 
+  const { daemonDriveProvider, boundDriveProvider } = await import("/assets/drivespace.mjs");
+  single.drive = boundDriveProvider(browser ? browser.driveService() : daemonDriveProvider(json, (path, init) => fetch(path, init)));
+
   // ---- what every host carries: notification routing, the catalog
   //
   // onOpen(fn, kinds): fn(target, kind, context). Every skin gets "channel"
@@ -228,9 +231,9 @@
     await refreshSkins();
     // A choice saved before Comic was a package ("default", "classic")
     // opens Comic and is rewritten once; ?skin=default names Comic too.
-    let saved = null;
-    try { saved = localStorage.getItem("agentnet.skin"); } catch (_) { /* local preference */ }
-    const choice = choose(common.skins, { query: new URL(location.href).searchParams.get("skin"), saved });
+    let saved = null, packageChoice = false;
+    try { saved = localStorage.getItem("agentnet.skin"); packageChoice = localStorage.getItem("agentnet.skin.package") === saved; } catch (_) { /* local preference */ }
+    const choice = choose(common.skins, { query: new URL(location.href).searchParams.get("skin"), saved, packageChoice });
     const home = choice.home;
     if (!home) throw new Error("This program has no Comic skin");
     homeName = home.name;
@@ -246,6 +249,7 @@
         skins: () => common.skins, selected, home, choose: (id) => go(id), host: () => window.agentnet, workspaces,
         manage: common.manageLocalSkins || null,
       });
+      await bar.ready; // No unstyled host controls before the skin’s first paint.
     }
 
     let trusted = isTrusted(selected, null);
@@ -340,7 +344,7 @@
     };
     window.addEventListener("hashchange", route);
     route();
-    try { localStorage.setItem("agentnet.skin", selected.id); } catch (_) {}
+    try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
   } catch (e) {
     const box = text("div", "");
     box.className = "skin-root";

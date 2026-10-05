@@ -48,6 +48,17 @@ export function daemonDriveProvider(fetchJSON, fetchRaw) {
     drive, driveUpload
   };
 }
+// A public Drive facade retains its captured membership. Consent is forwarded
+// synchronously so a browser's click gesture reaches Google without an await.
+export function boundDriveProvider(provider, check = () => {}) {
+  const drive = {
+    drive(request) { check(); return provider.drive(request); },
+    driveUpload(conv, file, confirm) { check(); return provider.driveUpload(conv, file, confirm); },
+  };
+  if (provider.prepareGoogle) drive.prepareGoogle = () => { check(); return provider.prepareGoogle(); };
+  if (provider.beginGoogleConsent) drive.beginGoogleConsent = request => { check(); return provider.beginGoogleConsent(request); };
+  return Object.freeze(drive);
+}
 let gisLoading;
 async function loadGIS(){
   if(globalThis.google?.accounts?.oauth2)return;
