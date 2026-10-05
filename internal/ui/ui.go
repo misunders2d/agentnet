@@ -195,7 +195,7 @@ type PendingInviteView struct {
 	Label   string    `json:"label"`
 	Admin   bool      `json:"admin"`
 	By      string    `json:"by"`
-	Created time.Time `json:"created,omitempty"`
+	Created time.Time `json:"created,omitzero"` // zero (left out) for invitations made before the relay kept it
 	Expires time.Time `json:"expires"`
 }
 

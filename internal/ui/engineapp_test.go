@@ -2,9 +2,18 @@ package ui
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -98,6 +107,126 @@ func TestInviteDecodeParity(t *testing.T) {
 		js := w.ok(map[string]any{"op": "decodeInvite", "code": code})["v"].(map[string]any)
 		if js["name"] != goInv.Name || js["from"] != goInv.From || js["workspace"] != goInv.Workspace || js["label"] != goInv.Label {
 			t.Errorf("%+v: browser %v, Go %+v", inv, js, goInv)
+		}
+	}
+}
+
+// platformHub is a relay as a platform runs it: the Hub serves plain HTTP
+// behind HTTPS it does not hold (PlatformTLS, web on), so its invitations
+// carry no certificate pin and invitation links can be made. The front's
+// certificate is written to dir/tls.crt, where engine nodes take their
+// trust from; the Go admin pins it (its bootstrap invitation is given it).
+func platformHub(t *testing.T, ctx context.Context) (dir, base string, admin *client.Agent) {
+	t.Helper()
+	var proxy atomic.Pointer[httputil.ReverseProxy]
+	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxy.Load().ServeHTTP(w, r) }))
+	front.StartTLS()
+	t.Cleanup(front.Close)
+	base = front.URL
+	dir = filepath.Join(t.TempDir(), "hub")
+	h := testhub.StartConfig(t, hub.Config{DataDir: dir, PublicURL: base, PlatformTLS: true, Web: true}, "127.0.0.1:0")
+	proxy.Store(httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: h.Addr}))
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: front.Certificate().Raw}))
+	if err := os.WriteFile(filepath.Join(dir, "tls.crt"), []byte(certPEM), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := protocol.DecodeInvite(testhub.BootstrapCode(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv.CertPEM = certPEM
+	admin, err = client.Join(ctx, filepath.Join(t.TempDir(), "laptop"), inv.Encode(), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close() })
+	return dir, base, admin
+}
+
+// Invite people succeeds the same way from the app and from a browser on
+// a relay browsers trust: a link to the relay's page with the invitation
+// in its fragment, the label the relay made from the name, the expiry
+// chosen, and the message ready to send. The waiting invitations read the
+// same in both, an invitation made before the relay kept its date
+// included (no date, not year 1).
+func TestInviteLinkGoAndBrowser(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	dir, base, laptop := platformHub(t, ctx)
+	check := func(who string, v InviteView, name, label string) {
+		t.Helper()
+		code, ok := strings.CutPrefix(v.Link, base+"/#")
+		inv, err := protocol.DecodeInvite(code)
+		if !ok || err != nil || inv.Name != name || inv.Label != label || inv.CertPEM != "" || inv.Hub != base {
+			t.Fatalf("%s: link %q (%+v %v)", who, v.Link, inv, err)
+		}
+		if v.Label != label || v.Message != InviteMessage("", v.Link) {
+			t.Fatalf("%s: %+v", who, v)
+		}
+		if d := time.Until(v.Expires) - 7*24*time.Hour; d > time.Minute || d < -time.Minute {
+			t.Fatalf("%s: expires %s", who, v.Expires)
+		}
+	}
+	made, err := NewLive(laptop).Invite(InviteRequest{Name: "Bohdan K", Days: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("Go", made, "Bohdan K", "bohdan-k")
+	browserCode, err := laptop.Invite(ctx, "eve", time.Hour, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": base})
+	w.ok(map[string]any{"op": "join", "code": browserCode, "name": "phone"})
+	raw, _ := json.Marshal(w.api("/api/invite", map[string]any{"name": "Olena", "days": 7}))
+	var js InviteView
+	if err := json.Unmarshal(raw, &js); err != nil {
+		t.Fatal(err)
+	}
+	check("browser", js, "Olena", "olena")
+
+	// An invitation from before the relay kept invitation dates.
+	if _, err := laptop.Invite(ctx, "dana", time.Hour, false); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "hub.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`UPDATE invites SET created_at = NULL WHERE label = 'dana'`)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	goList, err := NewLive(laptop).Invites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	goRaw, _ := json.Marshal(goList)
+	var goView, jsView struct {
+		Invites []map[string]any `json:"invites"`
+	}
+	json.Unmarshal(goRaw, &goView)
+	jsRaw, _ := json.Marshal(w.api("/api/invites", nil))
+	json.Unmarshal(jsRaw, &jsView)
+	byLabel := func(list []map[string]any, label string) map[string]any {
+		for _, i := range list {
+			if i["label"] == label {
+				return i
+			}
+		}
+		return nil
+	}
+	for _, label := range []string{"bohdan-k", "olena", "dana"} {
+		g, b := byLabel(goView.Invites, label), byLabel(jsView.Invites, label)
+		if g == nil || b == nil {
+			t.Fatalf("%s: Go %v, browser %v", label, goView.Invites, jsView.Invites)
+		}
+		_, gc := g["created"]
+		_, bc := b["created"]
+		if gc != bc || gc != (label != "dana") {
+			t.Errorf("%s created: Go %v, browser %v", label, g["created"], b["created"])
 		}
 	}
 }
