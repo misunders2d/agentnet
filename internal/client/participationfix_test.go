@@ -47,7 +47,10 @@ func TestRefusedEventMessageHasNoEffect(t *testing.T) {
 // the same message and gets the new hash, and another participation under
 // the same logical id is a conflict.
 func TestParticipationIDInContentHash(t *testing.T) {
-	in := envelope.Inner{V: envelope.Version2, Kind: envelope.KindQuestion, Conv: protocol.NewID(), LID: protocol.NewID(), Body: "question", PID: protocol.NewID()}
+	// Room accounting requires an installed conversation even for these
+	// store-level hash checks. Use the verified DM receive fixture.
+	w, conv, _ := dmWithHistory(t)
+	in := envelope.Inner{V: envelope.Version2, Kind: envelope.KindQuestion, Conv: conv, LID: protocol.NewID(), Body: "question", PID: protocol.NewID()}
 	before := contentHash(in)
 	moved := in
 	moved.PID = protocol.NewID()
@@ -60,7 +63,6 @@ func TestParticipationIDInContentHash(t *testing.T) {
 		t.Fatal("the hash of a message without a participation changed")
 	}
 
-	w := newWorld(t, "")
 	fp := w.alice.id.Public(w.alice.Address).Fingerprint()
 	in.ID, in.From = protocol.NewID(), w.alice.Address
 	if _, err := w.bob.store.addConvInbox(in, fp, stateConvHeld, false, nil); err != nil {

@@ -54,9 +54,19 @@ func TestInterruptedWaitsForThePerson(t *testing.T) {
 	}
 	w.bob.wakeWorker()
 	eventually(t, "alice to be told an item waits on bob", func() bool {
-		n, _ := w.alice.Notices()
-		return len(n) == 1 && strings.HasPrefix(n[0].Body, "1 request(s) wait for a person's decision on "+w.bob.Address)
+		n, err := w.alice.Notices()
+		return err == nil && len(n) == 1 && n[0].From == w.bob.Address
 	})
+	// Current report-capable peers get a structured count/decider snapshot,
+	// not the legacy text notice. Naming Alice grants no item visibility or
+	// remote decision authority (headless.go's count-only report contract).
+	notice := mustNotices(t, w.alice)[0]
+	if report, ok := w.alice.NoticeReport(notice); !ok || report.Host != w.bob.Address || report.Count != 1 || len(report.Items) != 0 {
+		t.Fatalf("interrupted task count report: %+v %v", report, ok)
+	}
+	if strings.Contains(notice.Body, task.ID) || strings.Contains(notice.Body, "wrap the 400 cases") {
+		t.Fatal("count-only interrupted notice exposed the request")
+	}
 	// Closing it runs and sends nothing, and it leaves review.
 	if err := w.bob.Resolve(task.ID); err != nil {
 		t.Fatalf("resolve: %v", err)
