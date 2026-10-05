@@ -36,9 +36,7 @@ func (l *Live) Invite(r InviteRequest) (InviteView, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	// TODO(integrate:P2): pass the workspace's name (WorkspaceName) as the
-	// invitation's workspace hint once P2 is merged.
-	inv, err := l.a.CreateInvite(ctx, client.InviteOptions{Name: name, TTL: time.Duration(r.Days) * 24 * time.Hour, Admin: r.Admin})
+	inv, err := l.a.CreateInvite(ctx, client.InviteOptions{Name: name, TTL: time.Duration(r.Days) * 24 * time.Hour, Admin: r.Admin, Workspace: l.a.WorkspaceName()})
 	if err != nil {
 		return InviteView{}, Refuse(inviteWords(err))
 	}
@@ -64,7 +62,6 @@ func inviteWords(err error) string {
 
 // Invites implements Invitations. Whether this device may invite is the
 // Hub's answer for this device (an admin device).
-// TODO(integrate:P2): use P2's shared canAdmin helper here once merged.
 func (l *Live) Invites() (InvitesView, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()

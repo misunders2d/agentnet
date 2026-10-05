@@ -883,7 +883,7 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		if *link {
 			// The one invitation kind people get: refused before anything is
 			// created unless a browser and the app can use the link.
-			inv, err := a.CreateInvite(ctx, client.InviteOptions{Label: fs.Arg(0), Name: *name, TTL: *ttl, Admin: *admin})
+			inv, err := a.CreateInvite(ctx, client.InviteOptions{Label: fs.Arg(0), Name: *name, TTL: *ttl, Admin: *admin, Workspace: a.WorkspaceName()})
 			if err != nil {
 				return err
 			}

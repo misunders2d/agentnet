@@ -20,7 +20,6 @@ type InviteOptions struct {
 	TTL   time.Duration
 	Admin bool
 	// Workspace is the workspace's name written on the invitation.
-	// TODO(integrate:P2): fill from P2's WorkspaceName() once it is merged.
 	Workspace string
 }
 

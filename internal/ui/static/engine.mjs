@@ -7198,11 +7198,11 @@ export class Engine {
     if (!wire.validInviteHint(name, wire.MaxInviteHint)) throw new Error("Use a shorter name (up to 64 characters) without line breaks.");
     if (!inviteDays.includes(r.days)) throw new Error("Choose how long the link works: " + inviteDays.slice(0, -1).join(", ") + " or " + inviteDays.at(-1) + " days.");
     const from = this.me && wire.validInviteHint(this.me.label, wire.MaxInviteHint) ? this.me.label : "";
-    // TODO(integrate:P2): the workspace's name as the invitation's workspace hint.
+    const workspace = wire.validInviteHint(this.workspaceName, wire.MaxWorkspaceHint) ? this.workspaceName : "";
     const ttl = r.days * 24 * 3600 * 1e9; // nanoseconds, as Go's time.Duration
     let out;
     try {
-      out = await this.call("POST", "/v1/admin/invites", { name, from, ttl, admin: !!r.admin, browser: true });
+      out = await this.call("POST", "/v1/admin/invites", { name, from, workspace, ttl, admin: !!r.admin, browser: true });
     } catch (e) {
       if (e.status === 403) throw new Error("Only an admin of your server can invite people.");
       if (e.status === 409) throw new Error("Your server cannot make invitation links: it needs to serve its page over HTTPS that browsers trust.");
