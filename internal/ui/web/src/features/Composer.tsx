@@ -107,8 +107,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     }
     return { kind: "conversation" };
   }, [dm, thread, draft.agent, answerable?.id, answerable?.kind, overview, names]);
-  const asking = target.kind === "agent" || (target.kind === "device" && target.ask);
-  const doIt = asking && !!draft.doIt;
   const latest = (): Draft => store.get().drafts[conv] ?? EMPTY;
 
   // Why nothing can be written here now, in words.
@@ -183,7 +181,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const next: Draft = { ...d, text: encode(cur, kept) };
     if (dropped.some((s) => s.kind === "agent" && s.id === d.agent)) {
       next.agent = undefined;
-      next.doIt = undefined;
       announce((target.kind === "agent" ? target.name : "The agent") + " is no longer asked; this goes to everyone here.");
     }
     const plain = dropped.filter((s) => s.kind !== "agent");
@@ -201,18 +198,17 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const span: Span = { start: trig.start, name: c.name, kind: c.kind, id: c.id };
     write({
       ...d, text: encode(cur, [...kept, span]),
-      ...(c.kind === "agent" ? { agent: c.id, doIt: c.id === d.agent ? d.doIt : false, replyTo: undefined } : {}),
+      ...(c.kind === "agent" ? { agent: c.id, replyTo: undefined } : {}),
     }, trig.start + token.length);
-    if (c.kind === "agent") announce("Asking " + c.name + ". Alt+D switches between Answer and Do it.");
+    if (c.kind === "agent") announce("Asking " + c.name + ".");
   }
 
   function stopAsking() {
     const d = latest();
     const was = decode(d.text);
-    write({ ...d, text: encode(was.text, was.spans.filter((s) => s.kind !== "agent")), agent: undefined, doIt: undefined });
+    write({ ...d, text: encode(was.text, was.spans.filter((s) => s.kind !== "agent")), agent: undefined });
   }
 
-  const choose = (v: boolean) => write({ ...latest(), doIt: v || undefined });
 
   function insert(s: string) {
     const ta = field.current;
@@ -267,7 +263,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) });
     }
     store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
-      _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : d.doIt ? "task" : "question", body, at: new Date().toISOString(),
+      _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question", body, at: new Date().toISOString(),
       reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
       () => { store.sends.remove(id); void send({ id, c, d, to, here, device }); });
     setNotice(null);
@@ -292,11 +288,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       let r: T.Sent | undefined;
       try {
         if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, send_id: id, body })).note || "Answer sent.");
-        else if (to.kind === "agent") r = await store.api.askAgent({ id, pid: to.pid, kind: d.doIt ? "task" : "question", body, topic:d.topic, files: fileIds });
+        else if (to.kind === "agent") r = await store.api.askAgent({ id, pid: to.pid, kind: "question", body, topic:d.topic, files: fileIds });
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
-          r = await store.api.send({ id, to: device.peer, kind: to.kind === "device" && !to.ask ? "message" : d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
+          r = await store.api.send({ id, to: device.peer, kind: to.kind === "device" && !to.ask ? "message" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
           // Keep the preview in the visible conversation throughout saving;
           // once the new topic exists its loaded view takes over the same id.
           if (d.newTopic) store.sends.move(id, id);
@@ -347,7 +343,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (cur.text === d.text) {
       next.text = "";
       if (cur.agent === d.agent) next.agent = undefined;
-      if (cur.doIt === d.doIt) next.doIt = undefined;
     }
     if (cur.replyTo === d.replyTo) next.replyTo = undefined;
     store.setDraft(c, next);
@@ -378,9 +373,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (e.ctrlKey || e.metaKey || (wide && !e.shiftKey && !e.altKey)) { e.preventDefault(); void send(); }
     }
   }
-  function formKeys(e: KeyboardEvent) {
-    if (e.altKey && e.code === "KeyD" && asking && !gone) { e.preventDefault(); choose(!doIt); }
-  }
 
   if (!dm && !thread) return null;
 
@@ -388,7 +380,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const replyMsg = draft.replyTo && target.kind !== "agent" ? messageOf(draft.replyTo, words, dm, thread) : undefined;
   const placeholder = target.kind === "answer" ? (target.task ? "Write your reply" : "Write your answer")
     : target.kind === "device" && !target.ask ? "Message " + target.name
-    : target.kind === "agent" || target.kind === "device" ? (doIt ? "Tell " + target.name + " what to do" : "Ask " + target.name)
+    : target.kind === "agent" || target.kind === "device" ? "Ask " + target.name
     : visitor ? "Type @ to ask an agent"
     : humanGuest ? "Message everyone here"
     : dm?.kind === "group" ? "Message " + (dm.title || "the group")
@@ -402,7 +394,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     : null;
   const sendLabel = target.kind === "conversation" || target.kind === "none" || (target.kind === "device" && !target.ask) ? "Send"
     : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
-    : doIt ? "Do it: send " + target.name + " a task" : "Ask " + target.name;
+    : "Ask " + target.name;
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
     { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
@@ -422,7 +414,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   );
 
   return (
-    <form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} onKeyDown={formKeys} {...watch} aria-label="Write a message" data-conv={conv}
+    <form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} {...watch} aria-label="Write a message" data-conv={conv}
       className="relative border-t-[1.5px] border-outline bg-surface px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:pt-3 lg:pb-4">
       {open && <MentionList id={listId} items={offered} active={active} query={trig?.query || ""} onPick={pick} onHover={setActive} />}
       <p className="sr-only" aria-live="polite">{said}</p>
@@ -439,10 +431,10 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       )}
       <FilesTray files={files} lim={lim} busy={sending} onRemove={removeFile} />
       {(target.kind === "agent" || (target.kind === "device" && target.ask)) && !handled && (
-        <IntentRow name={target.name} seed={target.seed} doIt={doIt} disabled={gone} onChoose={(v) => { choose(v); focusField(); }}
+        <IntentRow name={target.name} seed={target.seed}
           onStop={target.kind === "agent" ? () => { stopAsking(); focusField(); } : undefined}
           note={gone && target.kind === "agent" ? target.name + " can’t be asked now" + (target.why ? " (" + target.why.replace(/\.$/, "") + ")" : "") + ". Remove the mention to write to everyone instead."
-            : doIt ? "Anything an owner must OK will wait for them." : undefined} />
+            : undefined} />
       )}
       {status && <StatusLine status={status} />}
 
@@ -458,7 +450,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           onBlur={() => { setCaret(null); typing.stop(); }}
           onScroll={(e) => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
           onKeyDown={keys} onPaste={paste} />
-        <SendButton doIt={doIt} ready={ready} busy={sending} label={sendLabel} />
+        <SendButton ready={ready} busy={sending} label={sendLabel} />
       </div>
 
       <input ref={picker} type="file" multiple hidden tabIndex={-1} onChange={(e) => { addFiles([...(e.target.files || [])]); e.target.value = ""; }} />

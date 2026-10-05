@@ -229,6 +229,18 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		return "", err
 	}
 	now := time.Now()
+	duplicate := ""
+	if proposal, err := proposalFor(tx, in, verifiedBy); err != nil {
+		return "", err
+	} else if proposal != "" {
+		duplicate, err = proposalConfirmedBy(tx, proposal, in.From, verifiedBy, in.ID)
+		if err != nil {
+			return "", err
+		}
+		if duplicate != "" {
+			state = stateNotRun
+		}
+	}
 	in = tombstoned(tx, in, verifiedBy) // deleted already (whatever order things arrive in): no text stored
 	refID, refFP := refCols(in.Ref)
 	res, err := tx.Exec(`INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by,
@@ -241,6 +253,11 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return admittedAgain, nil // this envelope id is stored already
+	}
+	if duplicate != "" {
+		if _, err := tx.Exec(`UPDATE inbox SET detail=? WHERE id=?`, "that proposal was confirmed already, as task "+duplicate+": not run twice", in.ID); err != nil {
+			return "", err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE inbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=? WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, in.ID); err != nil {
 		return "", err
@@ -659,6 +676,9 @@ type ConvMessage struct {
 	Controls             // reactions, edits and deletion applied to it (controls.go)
 	Exec       *ExecView `json:"exec,omitempty"` // a request: where its executor last said it stands (headless.go)
 }
+
+// Status is the original authenticated output status, independent of delivery.
+func (m ConvMessage) Status() string { return m.status }
 
 // convMessages lists conv's messages; a local request to this device's own
 // agent is listed once, as the message sent, with its job.

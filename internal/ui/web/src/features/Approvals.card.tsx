@@ -24,10 +24,27 @@ export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMT
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const names = useAgentNames();
+  if ((message.actions || []).includes("do_it")) return <ProposalConfirmation m={message}/>;
   const phase = phaseOf(message);
   if (phase) return <OwnerCard m={message} dm={dm} thread={thread} o={o} names={names} phase={phase} />;
   if (waitsElsewhere(message)) return <WaitingLine m={message} o={o} />;
   return null;
+}
+
+function ProposalConfirmation({m}: {m: Req}) {
+ const store=useApp(), pending=useRef(false);
+ const [busy,setBusy]=useState(false);
+ const confirm=async () => {
+  if (pending.current) return;
+  pending.current=true; setBusy(true);
+  try { await store.run(a=>a.act({do:"do_it",id:m.id}),"Task sent to the same agent."); }
+  finally { pending.current=false; setBusy(false); }
+ };
+ return <div className="rounded-2xl bg-agent px-4 py-3 text-agent-ink stroke" data-proposal-confirm>
+  <p className="font-semibold">Suggested task</p>
+  <p className="pt-1 text-[13px]">Send this exact suggestion to the same agent. Its owner’s task permissions apply.</p>
+  <Button variant="act" className="mt-3" disabled={busy} onClick={()=>void confirm()}>{busy ? "Sending…" : "Do it"}</Button>
+ </div>;
 }
 
 // ---- the requester's view ---------------------------------------------------
@@ -68,7 +85,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const notice = isThreadMsg(m) && m.kind === "message" && m.status === "review_notice";
   const conv = dm?.id || thread?.id || "";
 	const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
-	const proposal = isThreadMsg(m) ? m.proposal : null;
+	const proposal = m.proposal;
 
   const permissionPerson = thread?.permission_person;
   const permissionName = permissionPerson ? personName(permissionPerson) : asker.name;

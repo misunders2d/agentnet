@@ -595,7 +595,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		m.Quote = parent
 	}
-	if m.ReplyTo != "" && m.claim == nil && !envelope.AgentOrigin(m.Origin) { // human replies use a logical parent
+	if m.ReplyTo != "" && (m.claim == nil || m.Origin == envelope.OriginUI) && !envelope.AgentOrigin(m.Origin) { // human replies use a logical parent
 		parent, known, e := humanReplyParent(a.store.db, conv, m.ReplyTo)
 		if e != nil {
 			return ConvSent{}, e
@@ -606,7 +606,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		m.ReplyTo = parent
 	}
 
-	if m.ReplyTo != "" && (m.claim != nil || envelope.AgentOrigin(m.Origin)) {
+	if m.ReplyTo != "" && (m.claim != nil && m.Origin != envelope.OriginUI || envelope.AgentOrigin(m.Origin)) {
 		// Agent output authorization still names the held request's physical ID.
 		if c, e := a.store.convOf(m.ReplyTo); e != nil {
 			return ConvSent{}, e

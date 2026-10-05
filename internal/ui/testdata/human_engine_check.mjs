@@ -59,7 +59,15 @@ async function world() {
   catalogs.set(carol.address, [JSON.parse(wire.agentJSON(agent))]);
   const conv = await alice.newDM(bob.address), c = await alice.store.get('convs', conv);
   const receive = async (raw, e) => { const env = wire.parseEnvelope(raw); await e.admit(raw, env); return env.id; };
-  const drain = async (e, predicate = () => true) => { for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && predicate(env) && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); } };
+  // Sending saves first (P12); this isolated network posts the captured
+  // queued copies before delivering them. No real connection/polling runs.
+  const drain = async (e, predicate = () => true) => {
+    for (const sender of users) {
+      const rows=(await sender.store.all('outbox')).sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at));
+      for(const row of rows) if(row.to===e.address && ['queued','waiting'].includes(row.state)) await sender.post(row);
+    }
+    for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && predicate(env) && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); }
+  };
   const from = async (sender, receiver, fields) => wire.seal({ v: 2, id: id(), from: sender.address, to: receiver.address, ts: Math.floor(now / 1000), conv, root: c.root, lid: id(), kind: 'message', body: '', ...fields }, sender.keys, receiver.pub);
   const decision = async (sender, pid, type = 'accept', prev) => {
     const { info } = await alice.agentConv(pid);
@@ -114,6 +122,10 @@ for (const ending of ['member', 'guest']) {
   await refuses(() => stranger.changeHuman('decide', { pid: invited.pid, accept: true }), /No such/i);
   const message = await a.sendDM({ conv, body: 'HUMAN AUDIENCE', files: [{ name: 'during.txt', size: 6, bytes: new TextEncoder().encode('DURING') }] });
   await worldState.drain(b); await worldState.drain(c);
+  const firstCopy = (await a.store.all('outbox')).find(m => m.lid === message.lid && m.to === c.address);
+  const duplicateID = id(), opened = await wire.open(firstCopy.envelope, c.keys, c.address, a.pub);
+  await worldState.receive(await wire.seal({ ...opened, id: duplicateID }, a.keys, c.pub), c);
+  check(!await c.store.get('held', duplicateID), 'second physical copy with the same signed logical content is valid');
   check((await c.dm(conv)).messages.filter(m => m.body === 'HUMAN AUDIENCE').length === 1, 'one logical row for multiple encrypted copies');
   const received = (await c.dm(conv)).messages.find(m => m.body === 'HUMAN AUDIENCE');
   check(new TextDecoder().decode((await c.openFile(received.id, 0, 'in')).bytes) === 'DURING', 'ordinary guest file access');
@@ -188,10 +200,12 @@ for (const ending of ['member', 'guest']) {
 {
   const w = await world(), a = w.alice, invite = await a.changeHuman('invite', { conv: w.conv, host: w.carol.address });
   await w.drain(w.carol); await w.drain(w.bob); await w.carol.changeHuman('decide', { pid: invite.pid, accept: true }); await w.drain(a); await w.drain(w.bob);
-  const originalWrite = a.store.write.bind(a.store); let inserted = false;
-  a.store.write = async (ops, checks) => { if (!inserted && ops.some(o => o.s === 'outbox' && o.v?.human)) { inserted = true; await a.changeHuman('end', { pid: invite.pid }); } return originalWrite(ops, checks); };
+  // Inject while verifying the captured audience, before the serialized batch
+  // commit. Starting another local send inside store.write waits on itself.
+  const profile = a.profile.bind(a); let inserted = false;
+  a.profile = async address => { if (!inserted) { inserted = true; await a.changeHuman('end', { pid: invite.pid }); } return profile(address); };
   await refuses(() => a.sendDM({ conv: w.conv, body: 'RACING LOCAL END', files: [{ name: 'race.txt', size: 4, bytes: new TextEncoder().encode('RACE') }] }), /ended or is held/i);
-  check(!(await a.store.all('outbox')).some(m => m.body === 'RACING LOCAL END'), 'no captured ordinary copy after authority read-set race');
+  check(inserted && !(await a.store.all('outbox')).some(m => m.body === 'RACING LOCAL END'), 'no captured ordinary copy after authority read-set race');
 }
 // Other accepted senders learn only the signed end; their previously captured
 // turns stop unchanged, and subsequent text/files omit the ended host.
@@ -370,5 +384,27 @@ for (const ending of ['original', 'self']) {
   await w.drain(a); await w.drain(b);
   for (const e of [a, b]) check((await e.overview()).dms.find(d => d.id === conv).unread === 1, 'later unseen guest turn adds one unread');
   check((await c.overview()).dms.find(d => d.id === conv).unread === 0, 'own later guest turn stays read');
+}
+// MEL-521: an approved own phone, accepted as a human guest, sends the
+// executable question/task to its own assistant host rather than a replica.
+{
+ const w=await world(),{alice:a,bob:b,carol:c,conv}=w;
+ const phone=await w.sibling(c,'carol/phone');
+ const guest=await a.changeHuman('invite',{conv,host:phone.address});await w.drain(phone);await w.drain(b);
+ await phone.changeHuman('decide',{pid:guest.pid,accept:true});await w.drain(a);await w.drain(b);
+ const assistant=await a.inviteAgent({conv,host:c.address,agent_id:w.agent.id});
+ for(const e of [b,c,phone])await w.drain(e);
+ const invitation=(await a.store.all('outbox')).find(r=>r.pid===assistant.pid&&r.sub==='event'&&wire.parseEvent(r.body).type==='invite');
+ const scope=await wire.signEvent(a.keys,await wire.scopeOf(wire.parseEvent(invitation.body),Math.floor(now/1000)));
+ await w.receive(await w.from(a,phone,{sub:'event',pid:assistant.pid,body:wire.eventJSON(scope)}),phone);
+ const acceptance=await w.accept(assistant.pid);
+ await w.receive(await w.from(a,phone,{sub:'event',pid:assistant.pid,body:wire.eventJSON(acceptance)}),phone);
+ for(const kind of ['question','task']) {
+  const sent=await phone.askAgent({pid:assistant.pid,kind,body:'Exact own guest '+kind});
+  const task=(await phone.store.all('outbox')).find(r=>r.lid===sent.lid&&r.to===c.address);
+  check(task&&task.replica===false&&task.target.fingerprint===c.fp,'own human guest '+kind+' has executable exact-host copy');
+  const n=await wire.open(task.envelope,c.keys,c.address,phone.pub);
+  check(!n.replica&&n.human.author_pid===guest.pid&&n.pid===assistant.pid,'sealed own guest '+kind+' retains separate human author and assistant target');
+ }
 }
 console.log('human engine isolated lifecycle checks passed: ' + checks);

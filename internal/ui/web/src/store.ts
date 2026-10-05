@@ -20,7 +20,6 @@ export interface Draft {
   text: string;
   replyTo?: string;          // a message id in the open conversation
   agent?: string;            // the addressed assistant's participation id
-  doIt?: boolean;            // a task (Do it) rather than a question (Answer)
   topic?: string;
   newTopic?: boolean;        // in an agent's conversation: start a separate one with the next send
   files?: StagedFile[];
@@ -355,7 +354,7 @@ export class Store {
     try {
       const raw = JSON.parse(localStorage.getItem(draftsKey(this.host.workspace.id)) || "{}");
       const out: Record<string, Draft> = {};
-      for (const [k, v] of Object.entries(raw as Record<string, Draft>)) if (v && typeof v.text === "string") out[k] = { text: v.text, replyTo: v.replyTo, agent: v.agent, doIt: v.doIt };
+      for (const [k, v] of Object.entries(raw as Record<string, Draft>)) if (v && typeof v.text === "string") out[k] = { text: v.text, replyTo: v.replyTo, agent: v.agent };
       return out;
     } catch { return {}; }
   }
@@ -363,7 +362,7 @@ export class Store {
   private saveDrafts(drafts: Record<string, Draft>) {
     try {
       const keep: Record<string, Draft> = {};
-      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, doIt: d.doIt };
+      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent };
       localStorage.setItem(draftsKey(this.host.workspace.id), JSON.stringify(keep));
     } catch { /* a convenience only */ }
   }
@@ -372,7 +371,7 @@ export class Store {
 
   setDraft(conv: string, d: Draft) {
     const drafts = { ...this.state.drafts };
-    if (!d.text && !d.replyTo && !d.agent && !d.doIt && !d.newTopic && !d.topic && !(d.files && d.files.length)) delete drafts[conv];
+    if (!d.text && !d.replyTo && !d.agent && !d.newTopic && !d.topic && !(d.files && d.files.length)) delete drafts[conv];
     else drafts[conv] = d;
     this.set({ drafts });
     this.saveDrafts(drafts);

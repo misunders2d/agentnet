@@ -50,7 +50,7 @@ func taskGranted(q querier, address, verifiedBy string) (bool, error) {
 // keep (if set), back to awaiting the person, saying why.
 func demoteGranted(tx *sql.Tx, address, keep, why string) error {
 	_, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ?, notified = 0, review_sent = 0
-		WHERE sender = ? AND kind = ? AND state = ? AND (? = '' OR verified_by IS NOT ?) AND NOT (`+taskGrantHolds+`)`,
+		WHERE sender = ? AND kind = ? AND state = ? AND (? = '' OR verified_by IS NOT ?) AND NOT (`+taskGrantHolds+` OR `+ownProposalHolds+`)`,
 		stateAwaiting, "not run without asking: "+why+"; accept ID runs it once", address, envelope.KindTask, statePending, keep, keep)
 	if err == nil { // back in review: reported afresh to each recipient
 		_, err = tx.Exec(`DELETE FROM reported WHERE item IN (SELECT id FROM inbox WHERE sender = ? AND kind = ? AND state = ? AND review_sent = 0)`, address, envelope.KindTask, stateAwaiting)

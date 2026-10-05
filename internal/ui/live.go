@@ -334,6 +334,9 @@ func (l *Live) Thread(id string) (Thread, error) {
 		if m.AgentID != "" {
 			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}
 		}
+		if m.Kind == KindAnswer && m.Status == envelope.StatusProposal && l.a.CanConfirmProposal(m.ID) {
+			v.Actions = []string{DoIt}
+		}
 		v.StateText = StateText(m.Dir, m.Kind, m.State, peer)
 		if m.Dir == "in" && m.Kind == KindTask {
 			v.Proposal, _ = l.a.ProposalOf(m.ID)
@@ -463,6 +466,9 @@ func (l *Live) Act(x Action) (string, error) {
 		if res.State == protocol.StateCustody || res.State == protocol.StateDelivered {
 			note = "Reply sent."
 		}
+	case DoIt:
+		_, err = l.a.ConfirmProposal(client.WithQueuedSend(ctx, x.SendID), x.ID)
+		note = "Task saved; sending to the same agent."
 	case DoAccept:
 		err = l.a.Accept(x.ID)
 		note = "Accepted. Your responder takes it from here."
