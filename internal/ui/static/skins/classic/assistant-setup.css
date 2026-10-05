@@ -206,6 +206,74 @@
   margin-top: 5px;
 }
 
+.setup-folder {
+  margin: 12px 0;
+}
+
+.setup-folder-title {
+  font-weight: 600;
+  margin: 0!important;
+}
+
+.setup-folder .setup-button {
+  margin-top: 6px;
+}
+
+.setup-folders {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border,#e1e4e2);
+  border-radius: 8px;
+  background: var(--surface,#fff);
+}
+
+.setup-folders:focus-visible {
+  outline: 3px solid #147d73;
+  outline-offset: 3px;
+}
+
+.setup-folder-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.setup-folder-nav .setup-button {
+  margin-top: 6px;
+}
+
+.setup-folder-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border,#e1e4e2);
+  border-radius: 8px;
+}
+
+.setup-folder-list li+li {
+  border-top: 1px solid var(--border,#e1e4e2);
+}
+
+.setup-folder-list button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.setup-folder-list button:hover {
+  background: var(--canvas,#f5f5f2);
+}
+
 .workspace-name-dialog {
   max-width: min(460px,90vw);
   border: 1px solid var(--border,#e1e4e2);
