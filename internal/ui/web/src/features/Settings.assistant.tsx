@@ -11,8 +11,11 @@ import { useApp } from "../context";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
-import { Card, Command, Details, Fact, Failed, GroupLabel, Hint, input, PageHead, Skeleton, useLoad } from "./Settings.parts";
+import { Card, Command, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
 import { Permissions, useGrants } from "./AgentsView.grants";
+import { AssistantSetup } from "./AssistantSetup";
+import { FolderField } from "./AssistantSetup.folders";
+import { browserDevice as isBrowser } from "./AssistantSetup.model";
 
 const MANUAL = "manual";
 
@@ -26,19 +29,19 @@ const questionLimits: Record<string, string> = {
   pi: "For questions it uses your Pi setup, with its shell and file editing turned off.",
 };
 
-const isBrowser = (platform: string, o: T.Overview | null) => platform === "browser" || !!(o as { device?: unknown } | null)?.device;
-
 export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const browser = isBrowser(store.host.platform, o);
   const r = useLoad(() => store.api.responder(), [o?.me.responder, o?.me.responder_dir, browser]);
   const head = <PageHead title="Your agent" titleRef={titleRef} lead="The program on this computer that answers questions and does tasks for you, with your own setup." />;
+  // Connecting coding sessions is its own card below, whatever the agent's state.
+  const setup = <div className="mt-6"><AssistantSetup /></div>;
   // The server says "not available here" when this installation runs nothing.
-  if (browser || (r.error && !r.data && /not available here/i.test(r.error))) return <>{head}<Card className="p-4"><p>This {browser ? "browser" : "installation"} runs nothing, so questions and tasks wait for you. Set up your agent on a computer that runs AgentNet.</p></Card></>;
-  if (r.error && !r.data) return <>{head}<Failed text={r.error} retry={r.reload} /></>;
-  if (!r.data) return <>{head}<Skeleton lines={4} /></>;
-  return <>{head}<AssistantForm view={r.data} saved={r.reload} /></>;
+  if (browser || (r.error && !r.data && /not available here/i.test(r.error))) return <>{head}<Card className="p-4"><p>This {browser ? "browser" : "installation"} runs nothing, so questions and tasks wait for you. Set up your agent on a computer that runs AgentNet.</p></Card>{setup}</>;
+  if (r.error && !r.data) return <>{head}<Failed text={r.error} retry={r.reload} />{setup}</>;
+  if (!r.data) return <>{head}<Skeleton lines={4} />{setup}</>;
+  return <>{head}<AssistantForm view={r.data} saved={r.reload} />{setup}</>;
 }
 
 function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => void }) {
@@ -80,9 +83,7 @@ function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => vo
 
       {choice && choice !== MANUAL && (
         <section className="fade-in">
-          <label htmlFor="assistant-dir" className="mb-2 block px-1 text-[12px] font-bold uppercase tracking-[0.08em] text-muted">Works in</label>
-          <input id="assistant-dir" className={input + " font-mono text-[14px]"} value={dir} placeholder="/home/you/projects/…" spellCheck={false} autoCapitalize="none" onChange={(e) => setDir(e.target.value)} />
-          <Hint className="mt-1.5 px-1">The folder it starts in for every question and task, as a full path.</Hint>
+          <FolderField label="Works in" value={dir} onChange={setDir} hint="The folder it starts in for every question and task." />
         </section>
       )}
 

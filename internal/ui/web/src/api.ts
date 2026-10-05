@@ -6,6 +6,22 @@ import type { Host } from "./host";
 
 export type { T };
 
+// TODO(integrate:P1): GET /api/folders?path= is P1's route (livefolders.go,
+// MEL-534): an absolute folder (home by default), its parent, home, Windows
+// drive roots and its subfolders, read-only, at most MaxFolders of them
+// (truncated says some were left out). Replace these two types with the
+// generated T.FoldersView once P1 lands. Subfolders may come as names or
+// as {name, path}; features/AssistantSetup.model.ts folderEntries reads both.
+export interface FoldersView {
+  path: string;
+  parent?: string;
+  home?: string;
+  roots?: string[];
+  dirs: (string | FolderEntry)[] | null;
+  truncated?: boolean;
+}
+export interface FolderEntry { name: string; path: string }
+
 const q = (path: string, params: Record<string, string>) =>
   path + "?" + Object.entries(params).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
 
@@ -81,6 +97,10 @@ export function api(host: Host) {
     removeDevice: (address: string) => post<{ note: string }>("/api/device/remove", { address }),
     responder: () => get<T.ResponderView>("/api/responder"),
     setResponder: (c: T.ResponderChange) => post<T.ResponderView & { note?: string }>("/api/responder", c),
+    // Connecting coding sessions (hooks): read the tools, review a change, apply exactly that change.
+    assistantSetup: (r?: T.AssistantSetupRequest) => (r ? post<T.AssistantSetupView>("/api/assistant-setup", r) : get<T.AssistantSetupView>("/api/assistant-setup")),
+    // A folder on this computer and its subfolders, read-only: the folder browser (never a typed path).
+    folders: (path?: string) => get<FoldersView>(path ? q("/api/folders", { path }) : "/api/folders"),
 
     // Reminders and notifications
     remind: (id: string, due: Date) => post<unknown>("/api/remind", { id, due: Math.floor(due.getTime() / 1000) }), // unix seconds

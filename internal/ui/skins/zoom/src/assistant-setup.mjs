@@ -1,11 +1,44 @@
 // Native setup is explicit and uses the same installers as the CLI. Browser
 // devices never inspect/install host software. No session identity is rendered.
+// A working folder is chosen by browsing this computer's folders
+// (GET /api/folders, read-only), never typed.
+
+// folderEntries: the subfolders of a /api/folders view, each with its full
+// path; a bare name joins the path with the separator it already uses.
+export function folderEntries(v) {
+ const sep = v.path.includes('\\') && !v.path.includes('/') ? '\\' : '/';
+ const base = v.path.endsWith(sep) ? v.path : v.path + sep;
+ return (v.dirs || []).map(d => typeof d === 'string' ? { name: d, path: base + d } : d);
+}
+// parentFolder: the folder that holds path, from the path alone ('' at a
+// root), so a folder the server can't read still has a way up.
+export function parentFolder(path) {
+ const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/';
+ let p = path;
+ while (p.length > 1 && p.endsWith(sep)) p = p.slice(0, -1);
+ const i = p.lastIndexOf(sep);
+ if (i < 0) return '';
+ const head = p.slice(0, i);
+ if (/^[A-Za-z]:$/.test(head)) return head + sep;
+ if (/[^\\/]/.test(head)) return head;
+ return sep === '/' && i === 0 && p.length > 1 ? '/' : '';
+}
+// folderWayOut: where browsing can go when a folder can't be read (deleted,
+// or closed to this person): up from it, home (no path: the server's
+// default), and the drives last shown. Never only "Try again".
+export function folderWayOut(failed, last) {
+ const out = [], up = failed ? parentFolder(failed) : '';
+ if (up) out.push({ kind: 'up', label: 'Up', path: up });
+ if (failed && failed !== last?.home) out.push({ kind: 'home', label: 'Home' });
+ for (const r of last?.roots || []) if (r !== failed && r !== up) out.push({ kind: 'root', label: r, path: r });
+ return out;
+}
 export async function mountAssistantSetup({ root, api, isCurrent = () => true, isBrowser = false, onChanged = () => {} }) {
  if (!root || !isCurrent()) return;
  const doc = root.ownerDocument;
  const node = (tag, text, cls) => { const el = doc.createElement(tag); if (text) el.textContent = text; if (cls) el.className = cls; return el; };
  const button = (text, action, primary = false) => { const b = node('button', text, 'setup-button' + (primary ? ' primary' : '')); b.type = 'button'; b.onclick = action; return b; };
- let view, catalog, chosen = new Set(), review, busy = false, stage = 'home', outcomes = [];
+ let view, catalog, chosen = new Set(), review, busy = false, stage = 'home', outcomes = [], folders = null, folderGen = 0;
  const configs = new Map();
  const records = harness => (catalog?.agents || []).filter(a => a.enabled && a.responder?.harness === harness);
  const managed = harness => (catalog?.harnesses || []).some(h => h.name === harness && h.found);
@@ -21,7 +54,8 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  const selected = () => (view?.harnesses || []).filter(h => chosen.has(h.id));
  const choose = async () => {
   if (busy) return; busy = true; error.textContent = ''; draw();
-  try { [view, catalog] = await Promise.all([call(), agentAPI()]); configs.clear(); chosen = new Set((view.harnesses || []).filter(h => h.detected && h.supported && h.configured).map(h => h.id)); busy = false; stage = 'choose'; draw(true); } catch (e) { fail(e); }
+  // The tool list first; the agent list only where setup can run (a server that can't says so in its note).
+  try { view = await call(); if (view.local === false) { busy = false; draw(); return; } catalog = await agentAPI(); configs.clear(); folders = null; folderGen++; chosen = new Set((view.harnesses || []).filter(h => h.detected && h.supported && h.configured).map(h => h.id)); busy = false; stage = 'choose'; draw(true); } catch (e) { fail(e); }
  };
  const checkAll = () => {
   const eligible = (view.harnesses || []).filter(h => h.detected && h.supported);
@@ -58,13 +92,56 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
    stage = 'saved'; busy = false; review = null; draw(true); onChanged();
   } catch (e) { review = null; stage = 'choose'; fail(new Error('Setup did not finish: ' + e.message + ' Earlier reviewed changes may be saved. Reload the tool list before retrying.')); }
  };
- const close = () => { stage = 'home'; review = null; error.textContent = ''; draw(true); };
+ const close = () => { stage = 'home'; review = null; folders = null; folderGen++; error.textContent = ''; draw(true); };
+ // Browsing loads one folder at a time; an answer for a folder no longer asked for is dropped.
+ const browse = async (harness, path) => {
+  const last = folders?.harness === harness ? folders.view || folders.last : null;
+  const mine = ++folderGen; folders = { harness, path, view: null, error: '', last }; draw();
+  try { const v = await api(path ? '/api/folders?path=' + encodeURIComponent(path) : '/api/folders'); if (mine !== folderGen || !current()) return; folders.view = v; }
+  catch (e) { if (mine !== folderGen || !current()) return; folders.error = e.message || 'Folders could not be read.'; }
+  draw(); root.querySelector('.setup-folders')?.focus({ preventScroll: true });
+ };
+ const endBrowse = () => { const id = folders?.harness; folderGen++; folders = null; draw(); root.querySelector('#setup-folder-' + id)?.focus(); };
+ function folderField(h, c) {
+  const wrap = node('div', '', 'setup-folder');
+  const pick = button(c.dir ? 'Change folder…' : 'Choose folder…', () => browse(h.id, c.dir));
+  pick.id = 'setup-folder-' + h.id; pick.disabled = busy || c.requireChoice; pick.setAttribute('aria-label', (c.dir ? 'Change' : 'Choose') + ' working folder for ' + h.label);
+  wrap.append(node('p', 'Working folder', 'setup-folder-title'), node('p', c.dir || 'No folder chosen yet', c.dir ? 'setup-path' : 'setup-count'), pick);
+  if (folders?.harness === h.id) wrap.append(folderBrowser(c));
+  return wrap;
+ }
+ function folderBrowser(c) {
+  const box = node('div', '', 'setup-folders'); box.tabIndex = -1; box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'Choose a folder');
+  const actions = node('div', '', 'setup-actions'), harness = folders.harness;
+  if (folders.error) {
+   box.append(node('p', folders.error, 'setup-error'));
+   const steps = folderWayOut(folders.path, folders.last);
+   if (steps.length) { const nav = node('div', '', 'setup-folder-nav'); for (const s of steps) nav.append(button(s.label, () => browse(harness, s.path))); box.append(nav); }
+   actions.append(button('Cancel', endBrowse), button('Try again', () => browse(harness, folders.path), true));
+  }
+  else if (!folders.view) { box.append(node('p', 'Reading folders…', 'setup-count')); actions.append(button('Cancel', endBrowse)); }
+  else {
+   const v = folders.view, nav = node('div', '', 'setup-folder-nav');
+   box.append(node('p', v.path, 'setup-path'));
+   const up = button('Up', () => browse(harness, v.parent)); up.disabled = !v.parent; nav.append(up);
+   if (v.home) { const home = button('Home', () => browse(harness, v.home)); home.disabled = v.home === v.path; nav.append(home); }
+   for (const r of v.roots || []) { const b = button(r, () => browse(harness, r)); b.disabled = r === v.path; nav.append(b); }
+   box.append(nav);
+   const dirs = folderEntries(v);
+   if (dirs.length) { const list = node('ul', '', 'setup-folder-list'); list.setAttribute('aria-label', 'Folders in ' + v.path); for (const d of dirs) { const li = node('li'), b = node('button', d.name); b.type = 'button'; b.onclick = () => browse(harness, d.path); li.append(b); list.append(li); } box.append(list); }
+   else box.append(node('p', 'No folders inside this one.', 'setup-count'));
+   if (v.truncated) box.append(node('p', 'Some folders in here are not shown.', 'setup-count'));
+   actions.append(button('Cancel', endBrowse), button('Use this folder', () => { c.dir = v.path; endBrowse(); }, true));
+  }
+  box.append(actions);
+  return box;
+ }
  function draw(focus = false) {
   if (!current()) return;
   const card = node('section', '', 'assistant-setup-card'); card.setAttribute('aria-label', 'Set up harnesses');
   const heading = node('h3', stage === 'choose' ? 'Choose your tools' : stage === 'review' ? 'Review setup changes' : stage === 'saved' ? 'Setup result' : 'Connect your tools'); heading.tabIndex = -1; card.append(heading);
   if (isBrowser || view?.local === false) {
-   card.append(node('p', 'This browser cannot inspect or install software. Open Settings → Agent → Set up harnesses on your native AgentNet computer.', 'setup-description')); root.replaceChildren(card); return;
+   card.append(node('p', !isBrowser && view?.note || 'This browser cannot inspect or install software. Open Settings → Agent → Set up harnesses on your native AgentNet computer.', 'setup-description')); root.replaceChildren(card); return;
   }
   if (stage === 'home') {
    card.append(node('p', 'Set up AgentNet integration for Codex, Claude, Pi or OMP. Run this again when tools are installed or removed. Your default responder stays separate.', 'setup-description'));
@@ -93,7 +170,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
        for (const a of matches) { const option = node('option', a.record.label); option.value = a.record.id; option.selected = a.record.id === c.id; select.append(option); }
        if (!c.id) select.value = ''; select.disabled = busy; select.onchange = () => { const a = matches.find(x => x.record.id === select.value); if (a) { Object.assign(c, { id: a.record.id, label: a.record.label, dir: a.responder.dir, requireChoice: false }); draw(); } }; label.append(select); config.append(label);
       } else { const label = node('label', 'Assistant name'); const field = doc.createElement('input'); field.type = 'text'; field.value = c.label; field.maxLength = 64; field.setAttribute('aria-label', h.label + ' assistant name'); field.disabled = busy; field.oninput = () => c.label = field.value; label.append(field); config.append(label); }
-      const label = node('label', 'Working folder'); const field = doc.createElement('input'); field.type = 'text'; field.value = c.dir; field.placeholder = 'Choose an existing absolute folder'; field.setAttribute('aria-label', h.label + ' working folder'); field.disabled = busy; field.oninput = () => c.dir = field.value; label.append(field); config.append(label, node('p', c.id ? 'Reuse this exact assistant. Its other configuration and your default stay unchanged.' : 'A new named assistant runs in this folder with your existing harness configuration, subject to normal permissions.', 'setup-count'));
+      config.append(folderField(h, c), node('p', c.id ? 'Reuse this exact assistant. Its other configuration and your default stay unchanged.' : 'A new named assistant runs in this folder with your existing harness configuration, subject to normal permissions.', 'setup-count'));
      }
      list.append(config);
     }
