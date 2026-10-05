@@ -260,7 +260,7 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
       {h.review ? <Button size="sm" variant="act" onClick={() => store.setPanel(true)}>Review</Button>
         : h.dismiss && (
           <Button size="sm" variant="outline" icon={<IconHandStop size={18} />} disabled={busy} onClick={dismiss}
-            title="Stops new messages. What was already shared stays with them.">Dismiss</Button>
+            title="Stops new messages. What was already shared stays with them.">{h.member ? "Remove agent" : "Dismiss"}</Button>
         )}
     </div>
   );

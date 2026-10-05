@@ -585,6 +585,7 @@ type AgentAsk struct {
 // installation runs it, who invited it, what it may be shown and who may
 // give it tasks. The host's person decides; either person can end it.
 type AgentView struct {
+	PIDs       []string     `json:"pids,omitempty"`
 	Member     bool         `json:"member,omitempty"`
 	Inviters   []PersonView `json:"inviters,omitempty"`
 	External   bool         `json:"external,omitempty"` // exact invited host outside the DM member persons

@@ -96,6 +96,18 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const remove=(await w.st.all('inbox')).map(r=>({s:'inbox',k:r.id}));if(remove.length)await w.st.write(remove);
   }
   await w.close();
+  // A new reader receives the original signed membership records quietly,
+  // with no earlier message body and no host-local permission grants.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  await w.receive(c['p6-bad-memberships']);
+  check((await w.st.get('held',wire.parseEnvelope(c['p6-bad-memberships'].envelope).id))?.reason==='invalid','membership carrier rejects altered original signature');
+  check(!await w.st.get('kv','room-memberships/'+conv),'rejected carrier installs no membership metadata');
+  await w.receive(c['p6-memberships']);
+  for(const pid of [v.participations['p6-source'],v.participations['p6-target']])check((await w.e.agentConv(pid)).info.member&&(await w.e.agentConv(pid)).info.state==='active','quiet original membership carrier restores same accepted PID');
+  check((await w.e.groupThread(conv)).messages.length===0,'membership carrier supplies no earlier body');
+  await w.reload();
+  check((await w.e.agentConv(v.participations['p6-target'])).info.member,'membership proof survives reload');
+  await w.close();
   w=await world();await w.receive(c.proof);await w.receive(c.context);
   const pv=v.participations;
   for(const i of [0,1])for(const type of ['invite','scope','accept'])await w.receive(pv['p6-'+i+'-'+type]);

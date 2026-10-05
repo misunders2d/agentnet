@@ -199,7 +199,18 @@ func TestP6AgentQuestionTaskCorrelationAndOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitState(t, w.bob, child.LID, stateAwaiting)
+	last := ""
+	eventually(t, "unapproved original asker needs host OK", func() bool {
+		var state, detail string
+		if e := w.bob.store.db.QueryRow(`SELECT state,coalesce(detail,'') FROM inbox WHERE id=?`, child.LID).Scan(&state, &detail); e != nil {
+			return false
+		}
+		if state+detail != last {
+			t.Logf("nested request: state=%s detail=%s", state, detail)
+			last = state + detail
+		}
+		return state == stateAwaiting
+	})
 	if _, err = w.alice.SendRoomAsk(tctx(t), foreign.LID, to.PID, envelope.KindTask, "widen question"); err == nil {
 		t.Fatal("question widened to task")
 	}
@@ -290,6 +301,21 @@ func TestP6OriginAndTargetFences(t *testing.T) {
 	}
 	if _, e = roomCauseIn(w.bob.store.db, conv, ask.LID, w.bob.Address, w.bob.Self().Fingerprint()); e == nil {
 		t.Fatal("ambiguous signed origin counted")
+	}
+	request := agentReq{ID: childIDForP6(t, w.bob, ask.LID), Sender: original.from, Key: original.key, Conv: conv, PID: to.PID, Kind: original.kind, Target: original.target, State: stateAccepted}
+	members, e := w.bob.dmMembers(conv)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if v, _, err := roomChain(w.bob.store.db, request, members, stateAt(t, w.bob, to.PID), w.bob.Address, w.bob.Self().Fingerprint(), false); err != nil || v != verdictStop {
+		t.Fatalf("ambiguous request must stop only itself: verdict=%d err=%v", v, err)
+	}
+	// An unrelated ordinary turn with the same lid is not a second cause.
+	if _, e = w.bob.store.db.Exec(`UPDATE inbox SET kind='message',target=NULL WHERE id=?`, duplicate); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = roomCauseIn(w.bob.store.db, conv, ask.LID, w.bob.Address, w.bob.Self().Fingerprint()); e != nil {
+		t.Fatalf("ordinary collision stalled addressed request: %v", e)
 	}
 	if _, e = w.bob.store.db.Exec(`DELETE FROM inbox WHERE id=?`, duplicate); e != nil {
 		t.Fatal(e)

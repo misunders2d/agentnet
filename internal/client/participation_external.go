@@ -66,6 +66,35 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 			}
 		}
 	}
+	m.shareGrants = map[string][]protocol.GrantRef{}
+	for _, ev := range events {
+		if ev.Type != protocol.EventShare {
+			continue
+		}
+		for _, ref := range ev.Grant {
+			var n int
+			if err := q.QueryRow(`SELECT count(*) FROM room_turn_readers WHERE conv=? AND lid=? AND fingerprint=? AND person=? AND admission=?`, ev.Conv, ref.LID, ref.Fingerprint, ev.Author.Person, ev.Author.GroupAdmission).Scan(&n); err != nil {
+				return err
+			}
+			allowed := n > 0
+			if !allowed && m.group != nil {
+				member, ok := m.group.State.Member(ev.Author.Person)
+				if ok && member.Admission.Hash() == ev.Author.GroupAdmission {
+					for _, h := range member.Admission.History {
+						if h.LID == ref.LID && h.Author == ref.Fingerprint {
+							var hash string
+							if e := q.QueryRow(`SELECT content_hash FROM inbox WHERE conv=? AND lid=? AND coalesce(verified_by,claimed_fp)=?`, ev.Conv, ref.LID, ref.Fingerprint).Scan(&hash); e == nil && hash == h.Hash {
+								allowed = true
+							}
+						}
+					}
+				}
+			}
+			if allowed {
+				m.shareGrants[ev.Hash()] = append(m.shareGrants[ev.Hash()], ref)
+			}
+		}
+	}
 	m.groupInvites = map[string]bool{}
 	for _, ev := range events {
 		if (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope || ev.Type == protocol.EventShare) && m.group != nil { // a room scope carries its invite's binding
@@ -185,7 +214,7 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 			}
 		case protocol.EventDismiss:
 			_, author := m.author(ev.Author)
-			if (!member || !author) && !(info.Role == protocol.RoleHuman && host && ev.Hash() == info.Dismissal && info.Decision != "") {
+			if (!member || !author) && !((info.Role == protocol.RoleHuman || info.Member && info.External) && host && ev.Hash() == info.Dismissal) || !m.mayRemoveAgent(info, ev.Author) {
 				return errors.New("only a current DM member or exact accepted human host ends participation")
 			}
 			events := []string{info.Invite, info.Decision, info.Dismissal}
@@ -395,9 +424,17 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 				return ConvSent{}, e
 			}
 			if c.human != nil {
-				h := *c.human
-				h.AuthorPID = ""
-				out.human = &h
+				h, e := a.roomAudience(info.Conv, "")
+				if e != nil {
+					return ConvSent{}, e
+				}
+				captured := map[string]bool{}
+				for _, scope := range c.human.Audience {
+					captured[scope.PID] = true
+				}
+				h.Audience = slices.DeleteFunc(h.Audience, func(s envelope.HumanScope) bool { return !captured[s.PID] })
+				h.Proof = slices.DeleteFunc(h.Proof, func(e protocol.ParticipationEvent) bool { return !captured[e.PID] })
+				out.human = h
 			}
 		}
 		if out.human == nil {

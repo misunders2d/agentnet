@@ -10,7 +10,7 @@ import (
 )
 
 func TestP6RoomCLIRequiresRunningRequest(t *testing.T) {
-	t.Setenv(client.ProgressRequestEnv, "")
+	t.Setenv(client.RoomRequestEnv, "")
 	for _, args := range [][]string{{"ask", "--pid", "unused", "question"}, {"wait", "unused"}} {
 		err := runRoom(context.Background(), nil, args, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "running group agent request") {

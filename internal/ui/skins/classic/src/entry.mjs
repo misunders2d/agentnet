@@ -2044,7 +2044,7 @@ function dmMsg(m, t, prev) {
   const mine = m.dir === "out";
   const agent = !!m.agent_id || (m.origin || "").startsWith("agent:");
   const author = dmAuthor(m, t);
-  const to = m.target && m.target.agent_id ? namedAgentOn(m.target.agent_id, m.target.address, whoseAgent(m.pid && agentOf(m.agent_author_pid || m.pid))) : m.to && (agentOf(m.agent_author_pid || m.pid) ? agentName(agentOf(m.agent_author_pid || m.pid)) : "an agent on " + m.to);
+  const to = m.target && m.target.agent_id ? namedAgentLabel(m.target.agent_id, m.target.address, undefined, whoseAgent(m.pid && agentOf(m.pid))) : m.to && (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "an agent");
   const sharedWith = t.agents.filter((a) => (a.state === "invited" || a.state === "active") && a.shared.includes(m.id));
   const cont = prev && !prev.event && prev.dir === m.dir && prev.from === m.from && prev.origin === m.origin && prev.agent_id === m.agent_id && !kindTag[m.kind] && !kindTag[prev.kind] &&
     !to && !prev.to && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
@@ -2152,7 +2152,7 @@ const namedAgentOn = (id, host, whose = "") => {
 // whoseAgent: a participation's host as the owner of its agent ("Your", "Bob's").
 const whoseAgent = (a) => !a ? "" : a.host_here ? "Your" : a.host && a.host.label ? a.host.label + "'s" : "";
 const agentName = (a) => a.agent_id ? namedAgentLabel(a.agent_id, a.host.address, undefined, whoseAgent(a)) : (isMe(a.host) ? "Your agent" : a.host.label + "'s agent");
-const namedAuthor = (m) => namedAgentOn(m.agent_id, m.from, whoseAgent(m.pid && agentOf(m.agent_author_pid || m.pid)));
+const namedAuthor = (m) => namedAgentOn(m.agent_id, m.from, whoseAgent(m.pid && agentOf(m.pid)));
 // catalogLabel names a record in a picker: the same catalog name, plus a short
 // ID only where one host offers two agents of one name (to choose between).
 function catalogLabel(a, records) {
@@ -2193,7 +2193,7 @@ async function loadDMNames(t) {
       if (gen !== state.gen || host !== currentHost || conv !== state.dm) return;
       state.dmNames[address] = records;
       renderAgents(state.dmData); renderTarget();
-      if (state.dmData.messages.some((m) => (m.reactions || []).some((r) => (r.by || []).some((b) => b.assistant && b.host === address)))) renderDMBody(false); // assistant reactions take the catalog's names
+      renderDMBody(false); // Authors, requested targets and reactions use the verified catalog names.
     }).catch(() => {}); // exact ID remains visible when a catalog is unavailable
   }
 }
@@ -2494,16 +2494,17 @@ function agentCard(a, t) {
       : "tasks wait for " + (a.host_here ? "you" : a.host.label) + " to accept them"];
   return el("div", { class: "agent-card " + a.state },
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", { ...(a.agent_id ? { title: a.agent_id + " · " + a.host.address } : {}) }, agentName(a)),
-      el("details", {}, el("summary", {}, "Execution host"), el("span", { class: "hint" }, a.host.address))),
+      el("details", {}, el("summary", {}, "Runs on " + (a.host_here ? "your computer" : a.host.label + "’s computer")), el("span", { class: "hint" }, a.state_text))),
     el("p", { class: "agent-state" }, a.state_text),
     el("p", { class: "hint" }, facts.join(" · ")),
+    a.external && a.member && el("p", { class: "hint" }, "Runs outside this group on " + a.host.label + "’s computer; that computer receives every new message and file here until the agent is removed."),
     a.external && !a.member && el("p", { class: "hint" }, "External host · " + a.host.address + ". It is not a room member; it receives only selected context and requests addressed to this agent."),
     a.note && el("p", { class: "agent-note" }, "Note: " + a.note),
     (a.can_decide || a.can_ask || a.can_dismiss) && el("div", { class: "agent-actions" },
       a.can_decide && el("button", { type: "button", class: "btn primary", onclick: () => decideDialog(a, t, true) }, "Accept…"),
       a.can_decide && el("button", { type: "button", class: "btn", onclick: () => decideDialog(a, t, false) }, "Decline…"),
       a.can_ask && el("button", { type: "button", class: "btn", onclick: () => { setDMAgent(a); $("body").focus(); } }, "Ask"),
-      a.can_dismiss && el("button", { type: "button", class: "text-btn", onclick: () => dismissDialog(a) }, "Dismiss…")));
+      a.can_dismiss && el("button", { type: "button", class: "text-btn", onclick: () => dismissDialog(a) }, a.member ? "Remove agent…" : "Dismiss…")));
 }
 
 // choice is one labelled radio or checkbox of a dialog.
@@ -2632,11 +2633,11 @@ function dismissDialog(a) {
   const transport = currentHost, gen = state.gen, ws = wsNow(), conv = state.dm;
   const current = () => gen === state.gen && wsNow() === ws && state.dm === conv;
   dialog({
-    title: "Dismiss " + agentName(a).replace(/^Your/, "your") + "?",
+    title: (a.member ? "Remove " : "Dismiss ") + agentName(a).replace(/^Your/, "your") + "?",
     body: [el("p", {}, "It gets nothing more from this DM and nothing more can be asked of it. What was already said stays. To have it again, invite it again."),
       el("p", { class: "hint" }, a.host_here ? "If it is running something now, that stops, and its reply is kept here."
         : "Something it already started on " + a.host.address + " may still finish, and its reply arrive, before the dismissal reaches that computer.")],
-    ok: "Dismiss",
+    ok: a.member ? "Remove agent" : "Dismiss",
     run: async () => {
       if (!current()) throw new Error("Workspace or DM changed. Reopen this dismissal there.");
       await api("/api/dm/agent/dismiss", { pid: a.pid }, transport);
@@ -3464,7 +3465,7 @@ function decide(a, m, t) {
   if (a === "resolve" && isReport(m)) {
     return dialog({ title: "Dismiss this report?", body: [quote,
       el("p", {}, "It is cleared on this computer only. The requests it reported still wait for a person on " + m.from + "'s machine; nothing here can approve them.")],
-      ok: "Dismiss", run: () => act({ do: "resolve", id: m.id }) });
+      ok: a.member ? "Remove agent" : "Dismiss", run: () => act({ do: "resolve", id: m.id }) });
   }
   if (a === "resolve") {
     return dialog({ title: "Close without replying?", body: [quote, el("p", {}, "Nothing is sent to " + m.from + ".")],

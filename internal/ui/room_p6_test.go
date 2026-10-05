@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 func TestP6GroupAgentView(t *testing.T) {
@@ -15,6 +18,52 @@ func TestP6GroupAgentView(t *testing.T) {
 	view := agentView(info, dmPeople{group: true}, nil, true)
 	if !view.Member || len(view.Inviters) != 2 || !view.CanAsk || !view.CanDismiss {
 		t.Fatalf("group membership projection: %+v", view)
+	}
+}
+
+func TestP6FixOutsideAcceptanceDisclosureUsesPlainName(t *testing.T) {
+	owner := PersonView{Person: protocol.NewID(), Label: "Nora", Address: "nora/office", Fingerprint: "11111111-22222222-33333333-44444444"}
+	ev := protocol.ParticipationEvent{V: 1, Conv: strings.Repeat("a", 64), PID: protocol.NewID(), Type: protocol.EventAccept, Prev: strings.Repeat("b", 64), TS: 1,
+		Author: protocol.EventAuthor{Person: owner.Person, Roster: strings.Repeat("c", 64), Address: owner.Address, Fingerprint: owner.Fingerprint}}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, known := range []map[string]PersonView{nil, {owner.Person: owner}} {
+		text := eventText(string(raw), dmPeople{group: true, known: known})
+		if strings.Contains(text, owner.Address) || !strings.Contains(text, "receives every new message and file") {
+			t.Fatalf("outside disclosure: %q", text)
+		}
+		if known != nil && !strings.Contains(text, owner.Label) {
+			t.Fatalf("known outside owner unnamed: %q", text)
+		}
+	}
+}
+
+func TestP6FixGroupViewWarningsAndLegacy(t *testing.T) {
+	host := client.PersonInfo{Person: "owner", Label: "Sergey", Address: "sergey/laptop", Fingerprint: "host-key"}
+	for _, tc := range []struct {
+		name                    string
+		member, external, ready bool
+		held                    int
+		agent, want             string
+	}{
+		{"legacy", false, false, true, 0, "", "In this group"},
+		{"no responder", true, false, false, 0, "", "no responder is chosen"},
+		{"named not ready", true, false, false, 0, "named", "selected agent is not ready"},
+		{"held", true, false, true, 1, "", "do not count here yet"},
+		{"outside member", true, true, true, 0, "", "receives every new message and file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := client.ParticipationInfo{PID: "agent", Member: tc.member, External: tc.external, State: client.PartActive, Host: host, HostHere: !tc.external, Held: tc.held, AgentID: tc.agent}
+			v := agentView(info, dmPeople{group: true, role: "member"}, nil, tc.ready)
+			if !v.Member || !strings.Contains(v.StateText, tc.want) {
+				t.Fatalf("view: %+v", v)
+			}
+			if (!tc.member || tc.held > 0 || !tc.ready) && strings.Contains(v.StateText, "Stays until explicitly removed") {
+				t.Fatalf("false permanent-ready claim: %s", v.StateText)
+			}
+		})
 	}
 }
 func TestP6GroupAgentsRendered(t *testing.T) {

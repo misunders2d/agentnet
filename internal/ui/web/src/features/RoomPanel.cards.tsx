@@ -35,7 +35,8 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
           <div className={"truncate text-[13px] font-semibold " + (g.kind === "agent" ? "text-agent-ink" : "text-text-2")}>{line}</div>
         </div>
       </div>
-      {(g.kind === "agent" || g.state === "conflict") && <p className="mt-2 text-[13px] font-semibold text-danger">{g.stateText}</p>}
+      {g.kind === "agent" && g.member && <p className="mt-2 text-[13px] text-text-2">{g.online === false ? g.where + " is offline — requests wait" : "Runs on " + g.where}</p>}
+      {(g.kind === "agent" || g.state === "conflict") && <p className={"mt-2 text-[13px] " + (g.state === "conflict" || /Some of its records do not count|no responder|not ready|runs no agent/.test(g.stateText) ? "font-semibold text-danger" : "text-text-2")}>{g.stateText}</p>}
       <div className="mt-2.5 rounded-xl border border-outline/20 bg-surface px-2.5 py-2">
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-[13px] font-bold">{x.label}{!x.cells.length && x.range && <span className="whitespace-nowrap text-[12px] font-semibold text-muted tnum">{x.range}</span>}</div>
         {x.cells.length > 0 && (

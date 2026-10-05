@@ -92,3 +92,55 @@ assert.equal(e.resolveAgent(permanent.pid,pevents,pm).state,"active","accepted m
 const changed=structuredClone(alice);changed.devices[0].fingerprint=fp("f");pm.roomAuthors.set(alice.person,changed);
 assert.notEqual(e.resolveAgent(permanent.pid,pevents,pm).state,"active","cached consent does not bypass changed author keys");
 console.log("PASS P6 permanent membership: accepted consent persists after inviter leaves; changed keys stay held");
+
+// Record every hosted membership on an ordinary group turn, including another
+// PID than the event that just arrived. The reader fence uses the exact epoch.
+const second=invite({group:permanent.group}), secondEvents=[await rec(second),await rec(await wire.scopeOf(second,sec-50)),await rec(await accept(second))];
+const all=[...pevents,...secondEvents], cm=members(true);
+for(const x of all)cm.groupInvites.add(x.hash);
+const ops=await e.roomStoredOps(conv,[],{lid:id("d")},fp("a"),all,cm);
+assert.equal(ops.filter(o=>o.k.startsWith('room-event/')).length,6,'all permanent consents saved from ordinary turn');
+assert.equal(ops.filter(o=>o.k.startsWith('room-reader/')).length,2,'exact admissions saved for the turn');
+assert(ops.some(o=>o.k===e.roomReaderKey(conv,{lid:id("d"),fingerprint:fp("a")},bob.person,h64("2"))));
+cm.roomEvents=new Set(all.map(x=>x.hash));cm.roomAuthors=new Map([[alice.person,alice],[bob.person,bob]]);cm.delete(alice.person);cm.epochs.delete(fp("a"));
+for(const x of [permanent,second])assert.equal(e.resolveAgent(x.pid,all,cm).state,'active','every saved consent survives inviter departure');
+
+// A signed share is metadata, not authority to read unselected earlier turns.
+const grant={lid:id('e'),fingerprint:fp('a')},share={...permanent,type:'share',prev:await wire.eventHash(permanent),grant:[grant]}, sr=await rec(share), sm=members(true);
+for(const x of [...pevents,sr])sm.groupInvites.add(x.hash);
+sm.shareGrants=new Map();
+assert.deepEqual(e.resolveAgent(permanent.pid,[...pevents,sr],sm).grant,[],'unseen share has no granted body');
+sm.shareGrants.set(sr.hash,[grant]);
+assert.deepEqual(e.resolveAgent(permanent.pid,[...pevents,sr],sm).grant,[grant],'visible reference can be shared');
+assert.equal(permanent.grant,null,'resolving a share must not mutate the original signed invite');
+
+// Native/browser parity: legacy visual membership never claims permanence;
+// ordinary active member state is preserved separately from real warnings.
+e.me={...alice,label:'Alice'};e.address='alice/desk';e.fp=fp('a');
+const viewInfo={...pinfo,host:{...bob,address:'bob/laptop',fingerprint:fp('b'),label:'Bob'},inviter:{...alice,address:'alice/desk',label:'Alice'},inviters:[],grant:[],taskKeys:[],shares:[],held:0};
+const people=[{...alice,label:'Alice',admin:false},{...bob,label:'Bob'}];
+let view=e.agentView({...viewInfo,member:false,audience:'conversation',until:sec+60},[],null,people,'member');
+assert.equal(view.member,true);assert(!view.state_text.includes('Stays until explicitly removed'));
+view=e.agentView({...viewInfo,member:true,external:true},[],null,people,'member');
+assert(view.state_text.includes('receives every new message and file'));
+view=e.agentView({...viewInfo,member:true,host:{...alice,address:e.address,label:'Alice'}},[],null,people,'member');
+assert(view.state_text.includes('browser'));assert(!view.state_text.includes('Stays until explicitly removed'));
+view=e.agentView({...viewInfo,member:true,held:1},[],null,people,'member');
+assert(view.state_text.includes('do not count here yet'));assert(!view.state_text.includes('Stays until explicitly removed'));
+
+// Ordinary turns use the captured audience whenever members follow the room.
+const route=new Engine({store:memoryStore(),base:'https://synthetic.invalid',fetch:async()=>{throw Error('no network');}});
+route.convEvents=async()=>pevents;route.dmMembers=async()=>sm;
+route.roomPlan=async()=>({audience:[{pid:permanent.pid}],proof:[]});
+route.sendHumanTurn=async(c,n,h)=>{assert.equal(n.kind,'message');assert.equal(h.audience[0].pid,permanent.pid);return 'captured';};
+assert.equal(await route.sendGroupTurn({id:conv,kind:'group'},{body:'future ordinary turn'}),'captured');
+// Admission check rejects a non-admin before looking up the outside device.
+route.me={person:alice.person};route.address='alice/desk';
+route.groupRecord=async()=>({id:conv,kind:'group'});
+route.dmMembers=async()=>{const m=new Map([[alice.person,alice]]);m.group={state:{members:[{person:alice.person,admin:false}]}};return m;};
+await assert.rejects(()=>route.inviteAgent({conv,host:'outside/desk',agent_id:id('f')}),/administrator/);
+const outsideAccept=await accept(inv);
+const disclosure=e.eventText(wire.eventJSON(outsideAccept),null,[people[0]]);
+assert(disclosure.includes('receives every new message and file'));
+assert(!disclosure.includes(outsideAccept.author.address),'outside event has no raw host address');
+console.log('PASS P6 fixes engine: all-PID consent, reader epochs, share visibility, legacy/warning/disclosure parity, ordinary captured sends and outside admin gate');

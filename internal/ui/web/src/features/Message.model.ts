@@ -4,7 +4,7 @@
 // shape; everything here reads both. Nothing decides: states are the
 // server's, actions come from its can[] and actions[] lists.
 import type { T } from "../api";
-import { agentName, agentWhere, deliveryWord, deviceKind, jobWord, niceDevice, personName, type DeviceKind } from "../model";
+import { agentName, agentWhere, deliveryWord, deviceKind, jobWord, niceDevice, owner, personName, type DeviceKind } from "../model";
 
 export type AnyMsg = T.DMMessage | T.Message;
 
@@ -93,7 +93,7 @@ export function whoWrote(m: AnyMsg, ctx: Ctx): Who {
     if (a) {
       // A named agent says whose it is; "Your agent" already does, so it says where.
       const named = !!(a.agent_id && ctx.names[a.agent_id]);
-      const sub = a.member ? (named ? personName(a.host) + "’s agent" : undefined) : named ? agentWhere(a.host, a.host.address, me) : "on " + niceDevice(a.host.address);
+      const sub = a.member ? (named ? owner(a.host, me) + " agent" : undefined) : named ? agentWhere(a.host, a.host.address, me) : "on " + niceDevice(a.host.address);
       return { key: "a:" + a.pid, name: agentLabel(a, ctx), sub, agent: true, mine: false, guest: !a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address) };
     }
     const host = hostOf(m.from, o);

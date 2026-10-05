@@ -17,6 +17,9 @@ import (
 const roomSchema = `CREATE TABLE room_context(conv TEXT NOT NULL,pid TEXT NOT NULL,lid TEXT NOT NULL,fingerprint TEXT NOT NULL,PRIMARY KEY(conv,pid,lid,fingerprint));
 CREATE TABLE room_membership_events(hash TEXT PRIMARY KEY,conv TEXT NOT NULL,pid TEXT NOT NULL);`
 
+// Local admission evidence for selected shares, never sender-supplied authority.
+const roomReaderSchema = `CREATE TABLE room_turn_readers(conv TEXT NOT NULL,lid TEXT NOT NULL,fingerprint TEXT NOT NULL,person TEXT NOT NULL,admission TEXT NOT NULL,PRIMARY KEY(conv,lid,fingerprint,person,admission));`
+
 func recordRoomContext(tx *sql.Tx, in envelope.Inner, fp, self string) error {
 	if in.Conv == "" || in.Sub != "" && in.Sub != envelope.SubEvent || in.LID == "" {
 		return nil
@@ -30,6 +33,16 @@ func recordRoomContext(tx *sql.Tx, in envelope.Inner, fp, self string) error {
 	}
 	if m.group == nil {
 		return nil
+	}
+	if in.Sub == "" {
+		for person := range m.persons {
+			member, ok := m.group.State.Member(person)
+			if ok {
+				if _, err = tx.Exec(`INSERT OR IGNORE INTO room_turn_readers VALUES(?,?,?,?,?)`, in.Conv, in.LID, fp, person, member.Admission.Hash()); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	rows, err := tx.Query(`SELECT DISTINCT pid FROM participation_events WHERE conv=?`, in.Conv)
 	if err != nil {
@@ -71,7 +84,9 @@ func recordRoomContext(tx *sql.Tx, in envelope.Inner, fp, self string) error {
 		if in.Sub != "" {
 			continue
 		}
-		if p.Member && p.Claimable() && p.Host.Address == self {
+		if p.Member && p.Claimable() && p.Host.Address == self && in.Human != nil && slices.ContainsFunc(in.Human.Audience, func(scope envelope.HumanScope) bool {
+			return scope.PID == pid && scope.Invite == p.Invite && scope.Decision == p.Decision
+		}) {
 			if _, e = tx.Exec(`INSERT OR IGNORE INTO room_context VALUES(?,?,?,?)`, in.Conv, pid, in.LID, fp); e != nil {
 				return e
 			}
@@ -115,6 +130,8 @@ func (a *Agent) roomAudience(conv, author string) (*envelope.HumanTurn, error) {
 
 // roomCause reads only locally admitted originals/copies of this group. A
 // sender cannot replace an upstream origin by putting a name in its body.
+var errAmbiguousRoomCause = errors.New("agent request origin is ambiguous")
+
 type roomCause struct {
 	id, from, key, kind, pid, reply, state string
 	target                                 *envelope.Target
@@ -124,8 +141,8 @@ type roomCause struct {
 func roomCauseIn(q dbq, conv, ref, self, fp string) (roomCause, error) {
 	var c roomCause
 	var target, human string
-	rows, err := q.Query(`SELECT lid,sender,coalesce(verified_by,''),kind,coalesce(pid,''),coalesce(reply_to,''),state,coalesce(target,''),coalesce(human,'') FROM inbox WHERE conv=? AND (id=? OR lid=?) AND verified_by IS NOT NULL AND sub IS NULL
- UNION ALL SELECT lid,?, ?,kind,coalesce(pid,''),coalesce(reply_to,''),state,coalesce(target,''),coalesce(human,'') FROM outbox WHERE conv=? AND (id=? OR lid=?) AND sub IS NULL`, conv, ref, ref, self, fp, conv, ref, ref)
+	rows, err := q.Query(`SELECT lid,sender,coalesce(verified_by,''),kind,coalesce(pid,''),coalesce(reply_to,''),state,coalesce(target,''),coalesce(human,'') FROM inbox WHERE conv=? AND (id=? OR lid=?) AND verified_by IS NOT NULL AND sub IS NULL AND kind IN ('question','task') AND target IS NOT NULL
+ UNION ALL SELECT lid,?, ?,kind,coalesce(pid,''),coalesce(reply_to,''),state,coalesce(target,''),coalesce(human,'') FROM outbox WHERE conv=? AND (id=? OR lid=?) AND sub IS NULL AND kind IN ('question','task') AND target IS NOT NULL`, conv, ref, ref, self, fp, conv, ref, ref)
 	if err != nil {
 		return c, err
 	}
@@ -138,7 +155,7 @@ func roomCauseIn(q dbq, conv, ref, self, fp string) (roomCause, error) {
 			return c, err
 		}
 		if found && (c.id != next.id || c.from != next.from || c.key != next.key || c.kind != next.kind || c.pid != next.pid || c.reply != next.reply || target != t || human != h) {
-			return c, errors.New("room cause has conflicting signed origins")
+			return c, errAmbiguousRoomCause
 		}
 		if !found {
 			c, target, human = next, t, h
@@ -168,7 +185,7 @@ func roomCauseIn(q dbq, conv, ref, self, fp string) (roomCause, error) {
 func roomChain(q dbq, r agentReq, m dmMembers, info ParticipationInfo, self, fp string, output bool) (int, string, error) {
 	c, err := roomCauseIn(q, r.Conv, r.ID, self, fp)
 	if err != nil {
-		return verdictWait, "request origin evidence is pending", nil
+		return roomCauseFailure(err)
 	}
 	seen := map[string]bool{}
 	allowed := true
@@ -207,7 +224,7 @@ func roomChain(q dbq, r agentReq, m dmMembers, info ParticipationInfo, self, fp 
 				return verdictWait, "upstream request evidence is pending", nil
 			}
 			if e != nil {
-				return 0, "", e
+				return roomCauseFailure(e)
 			}
 			if cause.pid != p.PID || cause.target == nil || cause.target.Address != p.Host.Address || cause.target.Fingerprint != p.Host.Fingerprint || cause.target.AgentID != p.AgentID {
 				return verdictStop, "agent ask is not caused by a request to that exact agent", nil
@@ -224,7 +241,7 @@ func roomChain(q dbq, r agentReq, m dmMembers, info ParticipationInfo, self, fp 
 	// own grant. Traverse again without accepting absent proof.
 	c, err = roomCauseIn(q, r.Conv, r.ID, self, fp)
 	if err != nil {
-		return 0, "", err
+		return roomCauseFailure(err)
 	}
 	for {
 		own := false
@@ -251,13 +268,23 @@ func roomChain(q dbq, r agentReq, m dmMembers, info ParticipationInfo, self, fp 
 		}
 		c, err = roomCauseIn(q, r.Conv, c.reply, self, fp)
 		if err != nil {
-			return verdictWait, "upstream request evidence is pending", nil
+			return roomCauseFailure(err)
 		}
 	}
 	if output || r.State == stateAccepted || allowed {
 		return verdictRun, "", nil
 	}
-	return verdictAsk, "a group agent request needs your OK; upstream permissions do not pass through another person's agent", nil
+	return verdictAsk, "Someone in this request chain needs your OK before your agent can run it", nil
+}
+
+func roomCauseFailure(err error) (int, string, error) {
+	if errors.Is(err, errAmbiguousRoomCause) {
+		return verdictStop, errAmbiguousRoomCause.Error(), nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return verdictWait, "request origin evidence is pending", nil
+	}
+	return 0, "", err
 }
 
 // SendRoomAsk originates only from an exact currently running group job.
@@ -332,29 +359,55 @@ func (a *Agent) RoomReply(cause, request string) (*ConvMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	msgs, err := a.ConversationMessages(conv)
+	if err != nil {
+		return nil, err
+	}
+	permitted := func(m ConvMessage) (bool, error) {
+		if m.Human != nil && m.Human.AuthorPID == p.PID && m.From == p.Host.Address && m.Key == p.Host.Fingerprint {
+			return true, nil
+		}
+		var n int
+		e := a.store.db.QueryRow(`SELECT count(*) FROM room_context WHERE conv=? AND pid=? AND lid=? AND fingerprint=?`, conv, p.PID, m.LID, m.Key).Scan(&n)
+		return n > 0, e
+	}
+	for _, m := range msgs {
+		if m.ReplyTo != req.id || m.PID != req.pid || req.target == nil || m.From != req.target.Address || m.Key != req.target.Fingerprint || (m.Kind != envelope.KindAnswer && m.Kind != envelope.KindResult) || !m.VerifiedAgent {
+			continue
+		}
+		ok, e := permitted(m)
+		if e != nil {
+			return nil, e
+		}
+		if ok {
+			return &m, nil
+		}
+	}
+	for _, m := range msgs {
+		if m.LID != req.id || m.Exec == nil {
+			continue
+		}
+		ok, e := permitted(m)
+		if e != nil {
+			return nil, e
+		}
+		if !ok {
+			continue
+		}
+		switch m.Exec.State {
+		case stateDeclined, stateCancelled, stateFailed, "interrupted", stateNotRun, "needs_human":
+			return nil, fmt.Errorf("request %s from agent participation %s: %s: %s", req.id, req.pid, m.Exec.State, m.Exec.Detail)
+		}
+	}
 	target, err := a.Participation(req.pid)
 	if err != nil {
 		return nil, err
 	}
+	if target.Held > 0 {
+		return nil, nil
+	}
 	if !target.Claimable() {
-		return nil, errors.New("requested agent membership ended or is awaiting evidence")
-	}
-	context, err := a.agentContext(p, "", defaultContextBytes)
-	if err != nil {
-		return nil, err
-	}
-	for _, m := range context.Messages {
-		if m.ReplyTo == req.id && m.PID == req.pid && req.target != nil && m.From == req.target.Address && m.Key == req.target.Fingerprint && (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) && m.VerifiedAgent {
-			return &m, nil
-		}
-	}
-	for _, m := range context.Messages {
-		if m.LID == req.id && m.Exec != nil {
-			switch m.Exec.State {
-			case stateDeclined, stateCancelled, stateFailed, "interrupted", stateNotRun, "needs_human":
-				return nil, fmt.Errorf("request %s from agent participation %s: %s: %s", req.id, req.pid, m.Exec.State, m.Exec.Detail)
-			}
-		}
+		return nil, errors.New("requested agent membership ended")
 	}
 	return nil, nil
 }

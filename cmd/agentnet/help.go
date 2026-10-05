@@ -152,7 +152,7 @@ Hub does not report it. Address labels (including admin/) grant no role.`,
 	"room": `Usage: agentnet room ask --pid PID [--kind question|task] TEXT
        agentnet room wait REQUEST_ID
 
-Available inside a running group-agent request (AGENTNET_REQUEST_ID).
+Available inside a running group-agent request (AGENTNET_ROOM_REQUEST).
 Ask another active group agent and wait for its correlated answer/result.
 The recipient's owner decides permission for every upstream origin. A question
 cannot assign a task. No platform ask-count or depth limits; stopping the

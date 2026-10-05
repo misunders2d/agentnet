@@ -175,6 +175,10 @@ func groupDeliveryPayloads(q dbq, packet GroupContext) ([]groupDeliveryPayload, 
 	}
 	flush()
 	packet.Proof = nil
+	packet.Memberships, err = roomMembershipProof(q, packet)
+	if err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(packet)
 	if err != nil {
 		return nil, err
@@ -279,7 +283,16 @@ func (a *Agent) groupDeliveryCopies(ctx context.Context, packet GroupContext) (c
 		}
 		for _, p := range payloads {
 			var value any
-			if err = decodeGroupCarrierJSON(p.raw, &value); err != nil {
+			if p.sub == envelope.SubGroupContext {
+				var context GroupContext
+				if err = decodeGroupCarrierJSON(p.raw, &context); err != nil {
+					return copies, err
+				}
+				// Outside execution hosts receive only their PID's existing
+				// scopes, never other agents' private original invitations.
+				context.Memberships = nil
+				value = context
+			} else if err = decodeGroupCarrierJSON(p.raw, &value); err != nil {
 				return copies, err
 			}
 			copy, e := a.groupLifecycleCopy(packet.Root, p.sub, p.descriptor, value, target.key, target.pid)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"slices"
 )
 
 func (m dmMembers) authorEpoch(au protocol.EventAuthor) bool {
@@ -52,6 +53,9 @@ func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (boo
 	if c.Hash != scope.Hash || scope.Seq > m.group.State.Seq {
 		return false, nil
 	}
+	if scope.HostRole == "visitor" && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) && !slices.Contains(c.Admins, ev.Author.Person) {
+		return false, nil
+	}
 	_, member := m.persons[ev.Host.Person]
 	if scope.HostRole == "member" {
 		if !member || m.keyEpoch(ev.Host.Fingerprint) != scope.HostAdmission {
@@ -83,6 +87,8 @@ func (m dmMembers) bindGroupInvite(ev *protocol.ParticipationEvent) error {
 		if scope.HostAdmission == "" {
 			return ErrGroupContextPending
 		}
+	} else if ev.Type == protocol.EventInvite && !member.Admin {
+		return errors.New("only a group administrator can add an agent whose owner is outside this group")
 	}
 	for _, fp := range ev.TaskKeys {
 		epoch := m.keyEpoch(fp)
@@ -93,6 +99,17 @@ func (m dmMembers) bindGroupInvite(ev *protocol.ParticipationEvent) error {
 	}
 	ev.Group = scope
 	return nil
+}
+
+func (m dmMembers) mayRemoveAgent(info ParticipationInfo, author protocol.EventAuthor) bool {
+	if m.group == nil || !info.Member || !info.External {
+		return true
+	}
+	if author.Person == info.Host.Person || author.Person == info.Inviter.Person {
+		return true
+	}
+	member, ok := m.group.State.Member(author.Person)
+	return ok && member.Admin && m.authorEpoch(author)
 }
 func (m dmMembers) requestEpoch(sender, fp string, t *envelope.Target) bool {
 	if m.group == nil {
@@ -154,7 +171,7 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 	allowed := m.device(env.To, fp) && epoch != "" && epoch == m.keyEpoch(fp) || info.External && env.To == info.Host.Address && fp == info.Host.Fingerprint && epoch == ""
 	if in.Human != nil {
 		err = humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), env.To, fp, false)
-		allowed = err == nil
+		allowed = err == nil && (!m.device(env.To, fp) || epoch != "" && epoch == m.keyEpoch(fp))
 	}
 	if allowed && in.Human != nil && in.Human.AgentAuthor() && in.Target != nil {
 		var originState string

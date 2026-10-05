@@ -474,7 +474,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 				return ConvSent{}, e
 			}
 			for _, p := range infos {
-				if p.External && p.Following() {
+				if p.Following() {
 					h, e := a.roomAudience(conv, "")
 					if e != nil {
 						return ConvSent{}, e

@@ -80,6 +80,7 @@ type dmMembers struct {
 	group        *GroupContext        // verified current context; never ordinary visitor authority
 	groupInvites map[string]bool
 	roomEvents   map[string]bool
+	shareGrants  map[string][]protocol.GrantRef
 	roomAuthors  map[string]personRow
 	chains       map[string]map[string]bool
 }
@@ -214,10 +215,13 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 		}
 		if ev.Type == protocol.EventDismiss && !author {
 			for _, invite := range events {
-				if invite.Type != protocol.EventInvite && invite.Type != protocol.EventScope || invite.Role != protocol.RoleHuman || invite.Host == nil {
+				if invite.Type != protocol.EventInvite && invite.Type != protocol.EventScope || invite.Host == nil || invite.Role != protocol.RoleHuman && !(invite.Audience == protocol.AudienceRoom && invite.Group != nil && invite.Group.HostRole == "visitor") {
 					continue
 				}
 				_, inviter := m.author(invite.Author)
+				if !inviter && m.roomEvents[invite.Hash()] {
+					_, inviter = m.roomAuthor(invite.Author)
+				}
 				_, host := m.host(invite.Host)
 				author = author || inviter && host && ev.Author.Person == invite.Host.Person && ev.Author.Address == invite.Host.Address && ev.Author.Fingerprint == invite.Host.Fingerprint && m.chains[ev.Author.Person][ev.Author.Roster]
 			}
@@ -334,7 +338,7 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 			if !slices.ContainsFunc(info.Inviters, func(x PersonInfo) bool { return x.Person == p.info.Person }) {
 				info.Inviters = append(info.Inviters, p.info)
 			}
-			for _, g := range ev.Grant {
+			for _, g := range m.shareGrants[ev.Hash()] {
 				if !slices.Contains(info.Grant, g) {
 					info.Grant = append(info.Grant, g)
 				}
@@ -362,7 +366,8 @@ func resolve(conv, pid string, events []protocol.ParticipationEvent, m dmMembers
 	}
 	for _, ev := range dismisses {
 		_, memberAuthor := m.author(ev.Author)
-		if !memberAuthor && !m.roomEvents[ev.Hash()] && !(inv.Role == protocol.RoleHuman && len(decided) == 1 && decided[0].Type == protocol.EventAccept && ev.Author.Person == inv.Host.Person && ev.Author.Address == inv.Host.Address && ev.Author.Fingerprint == inv.Host.Fingerprint) {
+		hostEnd := (inv.Role == protocol.RoleHuman || info.Member && info.External) && ev.Author.Person == inv.Host.Person && ev.Author.Address == inv.Host.Address && ev.Author.Fingerprint == inv.Host.Fingerprint
+		if !memberAuthor && !m.roomEvents[ev.Hash()] && !hostEnd || !m.roomEvents[ev.Hash()] && !m.mayRemoveAgent(info, ev.Author) {
 			hold(ev)
 			continue
 		}
@@ -978,8 +983,11 @@ func (a *Agent) DismissParticipation(ctx context.Context, pid string) (Participa
 	if err != nil {
 		return info, err
 	}
-	if _, member := m.persons[me.info.Person]; !ok || !member && !(info.HumanActive() && info.HostHere) {
+	if _, member := m.persons[me.info.Person]; !ok || !member && !((info.HumanActive() || info.Member && info.External) && info.HostHere) {
 		return info, errors.New("only an original member or exact accepted human guest ends this participation")
+	}
+	if !m.mayRemoveAgent(info, protocol.EventAuthor{Person: me.info.Person, Address: a.Address, Fingerprint: me.info.Fingerprint, GroupAdmission: m.keyEpoch(me.info.Fingerprint)}) {
+		return info, errors.New("only a group administrator, the person who added this outside agent, or its owner can remove it")
 	}
 	prev := info.Decision
 	switch info.State {

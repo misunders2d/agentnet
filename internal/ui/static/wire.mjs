@@ -1483,7 +1483,7 @@ export async function verifyGroupProofPage(root, page, resolve, realm, { previou
   return head;
 }
 
-export const groupContextJSON = (p) => '{"root":' + rootJSON(p.root) + ',"proof":' + groupArray(p.proof, groupStateJSON) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals, groupWithdrawalJSON) + "}";
+export const groupContextJSON = (p) => '{"root":' + rootJSON(p.root) + ',"proof":' + groupArray(p.proof, groupStateJSON) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals, groupWithdrawalJSON) + (p.memberships?.length ? ',"memberships":' + groupArray(p.memberships, eventJSON) : '') + "}";
 // Exact json.Marshal field order from protocol.GroupInvitation/GroupConsent.
 export const groupInvitationJSON = p => '{"v":' + goInt(p.v,"version") + ',"root":' + rootJSON(p.root) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals,groupWithdrawalJSON) + ',"target":' + goString(p.target) + ',"roster":' + goString(p.roster) + ',"seq":' + goInt(p.seq,"seq") + ',"prev":' + goString(p.prev) + ',"history":' + groupArray(p.history,r => '{"lid":'+goString(r.lid)+',"author":'+goString(r.author)+',"hash":'+goString(r.hash)+'}') + '}';
 export const groupInvitationID = p => hashOf(utf8.encode("agentnet-group-invitation-v1\n" + groupInvitationJSON(p)));
@@ -1518,8 +1518,8 @@ export function parseGroupConsent(json) {
   if(c.admission) validateGroupAdmission(c.admission); return c;
 }
 export function parseGroupContext(json) {
-  const f = strictRecord(json, MaxGroupState, "group context", { root: "object", proof: "array", state: "object", withdrawals: "array" });
-  const p = { root: parseGroupRoot(f.root || {}), proof: f.proof ? f.proof.map(parseGroupState) : null, state: parseGroupState(f.state || {}), withdrawals: f.withdrawals ? f.withdrawals.map(parseGroupWithdrawal) : null };
+  const f = strictRecord(json, MaxGroupState, "group context", { root: "object", proof: "array", state: "object", withdrawals: "array", memberships: "array" });
+  const p = { root: parseGroupRoot(f.root || {}), proof: f.proof ? f.proof.map(parseGroupState) : null, state: parseGroupState(f.state || {}), withdrawals: f.withdrawals ? f.withdrawals.map(parseGroupWithdrawal) : null, ...(f.memberships?.length?{memberships:f.memberships.map(e=>parseEvent(JSON.stringify(e)))}:{}) };
   if ((p.proof?.length || 0) > 4096) throw new Error("group: authority proof exceeds bound"); fitsRecord(groupContextJSON(p), MaxGroupState, "group context"); return p;
 }
 export async function verifyGroupContext(p, resolve) {

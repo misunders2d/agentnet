@@ -240,7 +240,24 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 		}
 		carriers["withdrawn"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Withdrawals: []protocol.GroupWithdrawal{withdrawal}}, 0, s0.Hash())
 		carriers["promoted-leave"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: states[3], Withdrawals: []protocol.GroupWithdrawal{withdrawal}}, 3, states[3].Hash())
-		vectors["participations"] = groupParticipationEngineVectors(t, root, s0, alice, dana, ar, dr, browser)
+		participations := groupParticipationEngineVectors(t, root, s0, alice, dana, ar, dr, browser)
+		vectors["participations"] = participations
+		var membershipRecords []protocol.ParticipationEvent
+		for _, prefix := range []string{"p6-0", "p6-1"} {
+			for _, typ := range []string{"invite", "scope", "accept"} {
+				in := participations[prefix+"-"+typ].(map[string]any)["inner"].(envelope.Inner)
+				ev, err := protocol.ParseParticipationEvent([]byte(in.Body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				membershipRecords = append(membershipRecords, ev)
+			}
+		}
+		carriers["p6-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash())
+		bad := slices.Clone(membershipRecords)
+		bad[0].Sig = slices.Clone(bad[0].Sig)
+		bad[0].Sig[0] ^= 1
+		carriers["p6-bad-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: bad}, s0.Seq, s0.Hash())
 		vectors["outside_browser"] = groupOutsideBrowserVectors(t, root, alice, bob, ar, rr, browser, br)
 		return vectors
 	}

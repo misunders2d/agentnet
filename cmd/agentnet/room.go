@@ -17,7 +17,7 @@ func runRoom(ctx context.Context, a *client.Agent, args []string, out io.Writer)
 	if len(args) == 0 {
 		return errors.New("usage: room ask --pid PID [--kind question|task] TEXT | room wait REQUEST_ID")
 	}
-	cause := os.Getenv(client.ProgressRequestEnv)
+	cause := os.Getenv(client.RoomRequestEnv)
 	if cause == "" {
 		return errors.New("room asks and waits belong to a running group agent request")
 	}

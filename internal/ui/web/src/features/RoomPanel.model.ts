@@ -72,6 +72,7 @@ export interface Guest {
   line: string;                // "Your agent · Laptop" / "Invited by you"
   device?: DeviceKind;
   online: boolean | null;
+  where?: string;
   hostName: string;            // whose agent, or the person
   hostHere: boolean;           // this installation hosts it (it is me, or my agent)
   invitedBy: string;           // "you" or the inviter's name
@@ -145,6 +146,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
       who: "a:" + a.host.address + "#" + (a.agent_id || ""),
       member: a.member,
       line: a.member ? "Invited by " + (a.inviters?.length ? a.inviters : [a.inviter]).map(inviterWord).join(" and ") : agentWhere(a.host, a.host.address, me), device: a.member ? undefined : deviceKind(a.host.address),
+      where: a.host.person === me?.person ? "your computer" : niceDevice(a.host.address),
       online: online(o, a.host.address), hostName: a.host_here ? "you" : personName(a.host), hostHere: a.host_here,
       invitedBy: inviterWord(a.inviter), note: a.note?.trim() || undefined,
       state: a.state, stateText: a.state_text,
