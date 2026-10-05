@@ -398,6 +398,7 @@ export class Engine {
     this.fetching = new Map(); // "ct/" + blob id -> the one fetch of it under way
     this.erased = new Set(); // erased turn names (conv|key|lid), as the erased store holds them
     this.burst = { gap: 0, told: 0, pending: false, quiet: null }; // arrivals told to the page (changed)
+    this.keepQueue = []; this.keepScan = false; // received files to keep here (keepFiles)
     this.retractionCache = null; // { mark, rows }: the retractions held, as of the store's retractionMark
   }
 
@@ -1095,36 +1096,49 @@ export class Engine {
     return p;
   }
 
-  keepFiles() {
+  // keepFiles keeps received conversation files not kept here yet: atts,
+  // the files a message just brought, or without them every file the inbox
+  // holds (after each connection). A catch-up with files read every message
+  // held again for each file and told the page after each (MEL-546), so
+  // arrivals are queued, not looked for.
+  keepFiles(atts) {
+    if (atts) this.keepQueue.push(...atts);
+    else this.keepScan = true;
     if (!this.keeping) this.keeping = this.keepPass().finally(() => { this.keeping = null; });
     return this.keeping;
   }
 
-  // keepPass keeps received conversation files not kept yet, newest first,
-  // one at a time while connected; the server out of reach ends it (the
-  // next connection goes on), storage full too.
+  // keepPass keeps them newest first, one at a time while connected. The
+  // server out of reach ends it, and the next call reads the inbox again
+  // (the next connection goes on); storage full ends it too (the next
+  // arrival tries once more).
   async keepPass() {
     for (;;) {
-      if (!this.connected) return;
-      let todo = null;
-      for (const m of (await this.store.all("inbox")).filter((x) => x.conv).sort((a, b) => b.at - a.at)) {
-        for (const a of m.attachments || []) {
-          if (todo || !a.blob || this.notKept.has(a.blob.id)) continue;
-          if (a.size > wire.BrowserMaxFile) this.notKept.set(a.blob.id, "large");
-          else if (!(await this.store.get("files", "ct/" + a.blob.id))) todo = a;
-        }
-        if (todo) break;
+      if (!this.connected) return this.keepAgain();
+      if (this.keepScan) {
+        this.keepScan = false;
+        const held = (await this.store.all("inbox")).filter((x) => x.conv).sort((a, b) => a.at - b.at);
+        this.keepQueue = [...held.flatMap((m) => m.attachments || []), ...this.keepQueue]; // arrivals meanwhile stay newest
       }
-      if (!todo) return;
+      const a = this.keepQueue.pop();
+      if (!a) return;
+      if (!a.blob || this.notKept.has(a.blob.id)) continue;
+      if (a.size > wire.BrowserMaxFile) { this.notKept.set(a.blob.id, "large"); continue; }
+      if (await this.store.get("files", "ct/" + a.blob.id)) continue;
       try {
-        await this.cipherOf(todo);
+        await this.cipherOf(a);
       } catch (e) {
-        if (retryable(e)) return;
-        this.notKept.set(todo.blob.id, e.status === 404 ? "gone" : "failed");
+        if (retryable(e)) return this.keepAgain();
+        this.notKept.set(a.blob.id, e.status === 404 ? "gone" : "failed");
       }
-      this.changed();
-      if (this.notKept.get(todo.blob.id) === "full") return;
+      this.changed(true); // with the arrivals: a file kept is told in their bursts
+      if (this.notKept.get(a.blob.id) === "full") return;
     }
+  }
+
+  keepAgain() {
+    this.keepQueue = [];
+    this.keepScan = true;
   }
 
   // fileState is where a file of a message stands for the page: a history
@@ -3312,7 +3326,8 @@ export class Engine {
       if (ops.groupCarrier) this.recoverGroupIntents().catch(() => {});
       if (this.connected && ops.some((o) => o.s === "outbox")) this.flushOutbox().catch(() => {}); // history forwarded to your other devices
       if (ops.some((o) => o.s === "kv" && o.v && o.v.serve)) this.runServes().catch(() => {});
-      if (ops.some((o) => o.s === "inbox" && o.v && (o.v.attachments || []).some((a) => a.blob))) this.keepFiles().catch(() => {});
+      const atts = ops.flatMap((o) => (o.s === "inbox" && o.v && o.v.conv ? (o.v.attachments || []).filter((a) => a.blob) : []));
+      if (atts.length) this.keepFiles(atts).catch(() => {});
     } catch (e) {
       if (e instanceof StoreConflict) return this.admit(data, env, fromHeld); // reverify; nothing committed or acknowledged
       if (e instanceof Hold) {

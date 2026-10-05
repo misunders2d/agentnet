@@ -29,8 +29,18 @@ import (
 // AGENTNET_BACKLOG_PAGE=1 for a page open on the DM that reads its views
 // again on every change, as the skins do.
 func TestBrowserEngineBacklogCatchUp(t *testing.T) {
+	backlogCatchUp(t, envInt("AGENTNET_BACKLOG_N", 120), false)
+}
+
+// The same catch-up with a small file on every message (MEL-546 review):
+// keeping the files tells the page in the same bursts, and finds each file
+// without reading every message held again for it.
+func TestBrowserEngineBacklogCatchUpFiles(t *testing.T) {
+	backlogCatchUp(t, envInt("AGENTNET_BACKLOG_N", 60), true)
+}
+
+func backlogCatchUp(t *testing.T, n int, files bool) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
-	n := envInt("AGENTNET_BACKLOG_N", 120)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "hub")
@@ -84,8 +94,13 @@ func TestBrowserEngineBacklogCatchUp(t *testing.T) {
 	w.ok(map[string]any{"op": "stopStream"})
 	before := count("inbox")
 	history, _ := alice.ConversationMessages(conv)
+	keptBefore := count("files")
 	for i := 0; i < n; i++ {
-		if _, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Body: fmt.Sprintf("backlog %d", i)}); err != nil {
+		out := client.ConvOutgoing{Body: fmt.Sprintf("backlog %d", i)}
+		if files {
+			out.Files = []client.OutgoingFile{{Path: goFile(t, fmt.Sprintf("f%d.txt", i), []byte(fmt.Sprintf("file %d", i)))}}
+		}
+		if _, err := alice.SendConv(ctx, conv, out); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -95,6 +110,10 @@ func TestBrowserEngineBacklogCatchUp(t *testing.T) {
 	}
 	w.ok(map[string]any{"op": "stats", "reset": true, "latency": envInt("AGENTNET_BACKLOG_RTT", 0), "writeDelay": envInt("AGENTNET_BACKLOG_WRITE", 0), "page": page})
 	measure := os.Getenv("AGENTNET_BACKLOG_RTT") != ""
+	want := 0 // files the phone keeps
+	if files {
+		want = n
+	}
 	if !measure { // the receipts are held back: every message is stored all the same
 		w.ok(map[string]any{"op": "holdAcks", "on": true})
 	}
@@ -103,13 +122,13 @@ func TestBrowserEngineBacklogCatchUp(t *testing.T) {
 	var stored time.Duration
 	for deadline := time.Now().Add(8 * time.Minute); ; time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("catch-up did not finish\n%s", w.stderr)
+			t.Fatalf("catch-up did not finish: %d of %d stored, %d receipts left, %d of %d files kept\n%s", count("inbox")-before, n, count("receipts"), count("files")-keptBefore, want, w.stderr)
 		}
 		if stored == 0 && count("inbox") == before+n {
 			stored = time.Since(start)
 			w.ok(map[string]any{"op": "holdAcks", "on": false})
 		}
-		if stored != 0 && count("receipts") == 0 {
+		if stored != 0 && count("receipts") == 0 && count("files") == keptBefore+want {
 			break
 		}
 		if !measure && stored == 0 && time.Since(start) > 30*time.Second {
@@ -128,8 +147,8 @@ func TestBrowserEngineBacklogCatchUp(t *testing.T) {
 	}
 	sort.Strings(shapes)
 	scans := st["scans"].(map[string]any)
-	t.Logf("backlog %d over %d held: stored in %v, all acknowledged in %v; %d requests (%v receipts at once), %v store reads (%v rows: %v), %v writes, %v page changes, %v page reads, %v pushed\n%s",
-		n, before, stored.Round(time.Millisecond), acked.Round(time.Millisecond), total, st["acksAtOnce"], st["reads"], st["rows"], scans, st["writes"], st["changed"], st["renders"], st["pushed"], strings.Join(shapes, "\n"))
+	t.Logf("backlog %d (%d files) over %d held: stored in %v, all acknowledged and kept in %v; %d requests (%v receipts at once), %v store reads (%v rows: %v), %v writes, %v page changes, %v page reads, %v pushed\n%s",
+		n, want, before, stored.Round(time.Millisecond), acked.Round(time.Millisecond), total, st["acksAtOnce"], st["reads"], st["rows"], scans, st["writes"], st["changed"], st["renders"], st["pushed"], strings.Join(shapes, "\n"))
 	// Nothing lost or stored twice; the relay holds nothing more: Alice
 	// sees every message delivered.
 	if got := count("inbox"); got != before+n {
