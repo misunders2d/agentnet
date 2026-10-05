@@ -106,6 +106,9 @@ for (const oldAfterReload of [false, true]) {
   const f = await fixture(), { e } = f;
   f.profileLimit(1); // catalog proof succeeds, subsequent preflight/post profile reads lose network
   const r = await e.api("/api/send", { to: f.peerAddress, kind: "task", body: "offline", agent_id: f.agentB.id });
+  // MEL-547 saves before delivery. Finish that offline pass before making
+  // the transport available and changing the peer's signed capabilities.
+  await e.outboxPass;
   const queued = await f.store.get("outbox", r.id);
   check(queued.state === "queued" && queued.required_cap === "agi1" && !f.posts.length, "offline selected request queued with agi1");
   await e.load(); e.connected = true; f.profileLimit(Infinity);

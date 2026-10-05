@@ -169,7 +169,10 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 		t.Fatalf("needs-human in the browser: %v", it)
 	}
 	phoneTurn := dmMessage(w, conv, "deploy now?")
-	if phoneTurn == nil || phoneTurn["job_detail"] != agentText || phoneTurn["actions"] != nil {
+	// P23 message views expose action lists; an ordinary needs-human
+	// request has an empty list and still cannot be decided on the phone.
+	turnActions, hasActions := phoneTurn["actions"].([]any)
+	if phoneTurn == nil || phoneTurn["job_detail"] != agentText || !hasActions || len(turnActions) != 0 {
 		t.Fatalf("phone lost full agent turn or gained actions: %v", phoneTurn)
 	}
 	w.refuses("accepting in the browser", w.call(map[string]any{"op": "api", "path": "/api/act", "body": map[string]any{"do": "accept", "id": asked}}), "Nothing runs in this browser")
