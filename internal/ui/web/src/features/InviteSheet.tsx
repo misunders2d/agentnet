@@ -14,6 +14,7 @@ import { TASK_KEYS_MAX, capFor, catalogHosts, pool, readCatalog, routeFor, taskK
 import { Checklist, ContextChoice, Preview, sinceShared, type Mode } from "./InviteSheet.context";
 import { dueText, localInput } from "../model";
 import { callName, canBringIn, plural, shareable } from "./RoomPanel.model";
+import { TeamPeople } from "./Teams";
 
 export function InviteSheet() {
   const store = useApp();
@@ -86,13 +87,15 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [filesOk, setFilesOk] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [teamPeople, setTeamPeople] = useState<T.PersonRef[]>([]);
+  const [teamHistory, setTeamHistory] = useState(false);
 
   const route: Route | null = c && t ? routeFor(c, t) : null;
   const [guestCheck,setGuestCheck]=useState<T.GuestCheck|null>(null);
   const [checkError,setCheckError]=useState("");
   useEffect(()=>{let alive=true;setGuestCheck(null);setCheckError("");if(route==="guest"&&c?.person?.address&&t)store.api.checkGuest({conv:t.id,host:c.person.address}).then(v=>{if(alive)setGuestCheck(v);}).catch(e=>{if(alive)setCheckError(errorText(e));});return()=>{alive=false;};},[route,c?.key,t?.id]);
   const list = useMemo(() => (t ? shareable(t).filter((m) => (route === "group" || t.kind === "group" ? !!m.group_ref : true)) : []), [t, route]);
-  const cap = route ? capFor(route) : 200;
+  const cap = t?.kind === "group" && teamPeople.length > 0 && teamHistory ? capFor("group") : route ? capFor(route) : 200;
   const max = Math.min(cap, list.length);
   const count = Math.min(recent, max);
   const picked = list.filter((m) => selected.has(m.id));
@@ -178,12 +181,46 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     void store.refetch();
   }
 
+  async function bringTeamPeople() {
+    if (!t || t.kind !== "group" || !allowed || busy || offline || !teamPeople.length || teamHistory && (tooMany || needFiles)) return;
+    setBusy(true); setError("");
+    try {
+      for (const who of teamPeople) {
+        if (!store.isActive()) return;
+        await store.api.inviteToGroup({ conv: t.id, person: who.id, history: teamHistory && shared.length ? { refs: shared.map((m) => m.group_ref!) } : {} });
+        if (!store.isActive()) return;
+        setTeamPeople((ps) => ps.filter((x) => x.id !== who.id));
+        setSent((xs) => [...xs, { key: "p:" + who.id, name: o?.people?.find((p) => p.person === who.id)?.label || "Person " + who.id.slice(0, 8) }]);
+      }
+      store.toast("Invitations sent. Each person decides whether to join.", "ok");
+    } catch (e) { if (store.isActive()) setError(errorText(e) + " Only the remaining people will be invited when you retry."); }
+    finally { setBusy(false); void store.refetch(); }
+  }
+
   const body = !t ? (
     loadError ? <Problem text={loadError} onRetry={() => setAttempt((n) => n + 1)} /> : <Quiet>Opening this chat…</Quiet>
   ) : !allowed ? (
     <Quiet>{t.frozen ? "This chat can’t change right now, so no one can be brought in." : "Only the people in this chat can bring someone in."}</Quiet>
   ) : (
     <>
+      {t.kind === "group" && <section aria-label="Invite team people" className="mb-4 space-y-2">
+        <TeamPeople selected={teamPeople} onChange={setTeamPeople} disabled={busy || offline}
+          excluded={[...(t.members || []).map((p) => p.person!), ...sent.map((p) => p.key.slice(2)), ...(invitations || []).filter((i) => i.conv === t.id && i.direction === "out" && i.status === "pending").map((i) => i.target)]} />
+        {!!teamPeople.length && <>
+          <label className="flex min-h-11 items-center gap-2 font-semibold"><input type="checkbox" checked={teamHistory} onChange={(e) => setTeamHistory(e.target.checked)} />Share reviewed history with these people</label>
+          {teamHistory && <>
+            <ContextChoice mode={mode} onMode={setMode} recent={count} max={max} onRecent={setRecent} picked={picked.length} label={selection} available={list.length}
+              since={since} onSince={setSince} sinceCount={sinceSel.total} cap={cap} />
+            {mode === "selected" && <Checklist list={list} t={t} o={o} names={names} selected={selected} onClear={() => setSelected(new Set())} onToggle={(id) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; })} />}
+            <Preview who="These people" shared={shared} after="Once they accept, they see all new group messages." t={t} o={o} names={names} gapless={gapless}
+              limit={mode === "since" && sinceSel.over ? "Only the newest " + cap + " since " + dueText(since) + " are shared: that’s the most one invitation carries." : undefined} />
+            {files > 0 && <label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={!needFiles} onChange={(e) => setFilesOk(e.target.checked ? filesKey : "")} />Also share the files on these messages</label>}
+          </>}
+          <HintForTeams count={teamPeople.length} />
+          {teamHistory && tooMany && <p role="alert" className="text-sm text-danger">Choose at most {cap} history messages for each invitation.</p>}
+          <Button variant="act" disabled={busy || offline || teamHistory && (tooMany || needFiles)} onClick={() => void bringTeamPeople()}>Invite selected team people</Button>
+        </>}
+      </section>}
       <label className="relative mt-1 block">
         <span className="sr-only">Search people and agents</span>
         <IconSearch size={20} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-text-2" aria-hidden="true" />
@@ -280,6 +317,10 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       {body}
     </Sheet>
   );
+}
+
+function HintForTeams({ count }: { count: number }) {
+  return <p className="text-sm text-muted">{count} people selected. Each receives a separate invitation; none joins until they accept.</p>;
 }
 
 /** TaskChoice: who may give the invited agent tasks without asking, one row per
