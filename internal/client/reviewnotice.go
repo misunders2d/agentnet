@@ -173,7 +173,7 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	// marked needs_human, except review notices received from others and
 	// a person's DM turns (alertReviewStates: they follow the DM's alerts).
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, received_at, attempts, body, conv IS NOT NULL FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
+	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, CASE WHEN state='running' THEN last_attempt_at ELSE received_at END, attempts, body, conv IS NOT NULL, coalesce(detail,'') FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
 	if err != nil {
 		a.Logf("review notice: %v", err)
 		return
@@ -181,18 +181,28 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	var items []ReportItem
 	for rows.Next() {
 		var it ReportItem
-		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt, &it.Conv); err != nil {
+		var detail string
+		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt, &it.Conv, &detail); err != nil {
 			rows.Close()
 			a.Logf("review notice: %v", err)
 			return
 		}
 		it.Blocker, it.Excerpt = blockerOf(it.Kind, it.State), firstLine(it.Excerpt)
+		if it.State == stateRunning {
+			it.Excerpt = detail
+			if strings.HasPrefix(detail, "Seems stuck:") {
+				it.Blocker = BlockerStalled
+			}
+		}
 		items = append(items, it)
 	}
 	rows.Close()
 	for i := range items { // what a task carries out, for the operator approving it (MEL-521)
 		if items[i].Kind == envelope.KindTask && !items[i].Conv {
 			items[i].Proposal, _ = a.ProposalOf(items[i].ID)
+			if p := items[i].Proposal; p != nil {
+				p.Question, p.Proposal = firstLine(p.Question), firstLine(p.Proposal)
+			}
 		}
 	}
 	type plan struct {

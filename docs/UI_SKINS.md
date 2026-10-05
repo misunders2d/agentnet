@@ -338,9 +338,13 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   item with `conv` is a DM or group request: offer no Answer for it. A task
   carrying out an agent's proposal has `proposal` `{question_id, question,
   asker, proposal_id, proposal, confirmed_by}` (first lines; the engine
-  parses it for actionable items as Go does). Showing the question, the
-  proposal and who confirmed it on the OK card is pending P4's page slice
-  (with Do it); until then a skin may leave it out. The newest report from a
+  parses it for actionable items as Go does). Local device messages carry
+  the same `proposal` shape with the full original question and suggestion.
+  All skins show the three steps: the asker asked, your agent suggested,
+  the asker chose Do it. This uses only the asker's usual task approval;
+  model output adds no authority. Running items remain visible with their
+  start time and the existing Stop action. `blocker: seems_stuck` is a
+  once-per-run silence notice, never an automatic kill. The newest report from a
   host replaces the older ones (the host keeps one open card); a report
   with no items and no count says nothing waits any more and arrives
   already resolved, and so does a late, older report once a newer one was

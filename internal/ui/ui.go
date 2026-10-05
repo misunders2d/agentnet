@@ -872,7 +872,8 @@ type Message struct {
 	// stands (client.ExecView): from the executing device only, never from
 	// delivery or presence; absent when it never said. Stale: that device
 	// is not connected now.
-	Exec *client.ExecView `json:"exec,omitempty"`
+	Exec     *client.ExecView     `json:"exec,omitempty"`
+	Proposal *client.ProposalView `json:"proposal,omitempty"`
 }
 
 // Controls is what reactions, edits and deletion did to a message, as

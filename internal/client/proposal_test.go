@@ -189,7 +189,7 @@ func TestConfirmProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the run", func() bool {
-		return strings.Contains(mustRead(t, st.log+".stdin"), "carries out the action you proposed")
+		return strings.Contains(mustRead(t, st.log+".stdin"), "Authority is only this asker's ordinary task approval")
 	})
 }
 

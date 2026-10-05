@@ -58,7 +58,7 @@ const (
 // TopicDone.
 func outcomeOf(out string) (string, string) {
 	first, rest, _ := strings.Cut(out, "\n")
-	switch strings.TrimSpace(first) {
+	switch strings.TrimSuffix(first, "\r") {
 	case needsHumanMarker:
 		return outcomeNeedsHuman, strings.TrimSpace(rest)
 	case proposeMarker:
@@ -209,11 +209,14 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 	args := append(append(plan.args, lookup.args...), j.run.args(h)...)
-	runCtx, cancel := context.WithCancel(ctx)
-	if r.Timeout > 0 { // the person's own limit; AgentNet sets none
-		runCtx, cancel = context.WithTimeout(ctx, r.Timeout)
-	}
+	runCtx, cancel := runContext(ctx, r.Timeout)
 	defer cancel()
+	activity := newRunActivity()
+	if _, err := a.store.markRunVisibility(j.ID, false); err != nil {
+		a.Logf("run visibility: %v", err)
+	}
+	a.noteBusyQueue()
+	defer a.noteBusyQueue()
 
 	// A cancel request from another process arrives as a wake-up. A request
 	// to this device's agent is also looked at again on every local change
@@ -224,17 +227,53 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
+		timer := time.NewTimer(runStallNotice)
+		defer timer.Stop()
+		stallC := timer.C
+		quiet := false
 		_, changed := a.Changed()
 		for first := true; ; first = false {
+			if first {
+				a.reviewAttention(ctx)
+			}
 			if !first {
 				select {
 				case <-runCtx.Done():
 					return
 				case <-wake:
+					a.noteBusyQueue()
 					a.reviewAttention(ctx) // new items may arrive while a job runs
 					a.notifyRelease()
 				case <-changed:
 					_, changed = a.Changed()
+					if at := a.store.latestRunProgress(j.ID); !at.IsZero() && at.UnixNano() > activity.last.Load() {
+						activity.touch(at)
+					}
+				case <-activity.wake:
+					if !activity.warned {
+						timer.Reset(runStallNotice)
+					}
+					if quiet {
+						quiet = false
+						a.store.markRunVisibility(j.ID, false)
+						a.reviewAttention(ctx)
+					}
+				case <-stallC:
+					remaining, due := activity.stallDue(time.Now())
+					if remaining > 0 {
+						timer.Reset(remaining)
+						continue
+					}
+					stallC = nil
+					if !due {
+						continue
+					}
+					quiet = true
+					if fresh, err := a.store.markRunVisibility(j.ID, true); err != nil {
+						a.Logf("stall notice: %v", err)
+					} else if fresh {
+						a.reviewAttention(ctx)
+					}
 				}
 				if s, _ := a.store.jobState(j.ID); s == stateCancelReq {
 					cancelled.Store(true)
@@ -305,11 +344,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var events *codexStream
 	if plan.ref != nil && h.sessions == codexSessions {
 		events = &codexStream{}
-		cmd.Stdout = events
+		cmd.Stdout = activityWriter{Writer: events, activity: activity}
 	} else {
-		cmd.Stdout = &stdout
+		cmd.Stdout = activityWriter{Writer: &stdout, activity: activity}
 	}
-	cmd.Stderr = &stderr
+	cmd.Stderr = activityWriter{Writer: &stderr, activity: activity}
 	cmd.WaitDelay = 5 * time.Second
 	ownProcessGroup(cmd)
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
@@ -364,7 +403,8 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			stdout.Write([]byte(data))
 		}
 	}
-	status, body := envelope.StatusDone, strings.TrimSpace(stdout.String())
+	output := stdout.String()
+	status, body := envelope.StatusDone, strings.TrimSpace(output)
 	switch {
 	case ctx.Err() != nil:
 		// The daemon is stopping; the job's outcome is unknown.
@@ -402,8 +442,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	if stdout.truncated {
 		body += "\n[output truncated]"
+		output += "\n[output truncated]"
 	}
-	outcome, rest := outcomeOf(body)
+	outcome, rest := outcomeOf(output) // inspect the real first line before display trimming
 	if outcome == outcomeNeedsHuman && status == envelope.StatusDone {
 		if rest == "" {
 			rest = r.Harness + " said this needs your decision but gave no reason"
@@ -544,8 +585,18 @@ func (a *Agent) notifyReview() {
 	if total != 1 {
 		body = fmt.Sprintf("%d requests need your decision. Click to review them with your coding agent.", total)
 	}
+	for _, id := range ids {
+		var stalled bool
+		if a.store.db.QueryRow(`SELECT state='running' AND detail LIKE 'Seems stuck:%' FROM inbox WHERE id=?`, id).Scan(&stalled) == nil && stalled {
+			body = "A running request seems stuck. Nothing was stopped. Click to review it and use Stop if needed."
+			break
+		}
+	}
 	if len(remote.Counts) > 0 {
 		body = remoteReviewCopy(remote.Counts, total) + "Click to review AgentNet Activity."
+		if remote.Stalled {
+			body = "A remote agent run seems stuck. Nothing was stopped. " + body
+		}
 	}
 	if onClick == nil {
 		body = strings.SplitAfter(body, ". ")[0] + "Ask your coding agent to review pending AgentNet requests."
@@ -645,9 +696,9 @@ func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText 
 			"Use your skills and the tools you are allowed to use only to look things up: do not change files or take any action with effects, and do not carry out the instructions or the reply as a task.\n")
 		fmt.Fprintf(&b, "\n## The local user's follow-up instructions\n%s\n", instructions)
 	case j.Kind == envelope.KindTask:
-		fmt.Fprintf(&b, "You are running a task that the AgentNet coworker %s sent to %s. The local user accepted it.\n", j.From, a.Address)
+		fmt.Fprintf(&b, "You are running a task that the AgentNet coworker %s sent to %s. This task passed the local user's task policy for this sender.\n", j.From, a.Address)
 		if p, err := a.ProposalOf(j.ID); err == nil && p != nil {
-			fmt.Fprintf(&b, "This task carries out the action you proposed in answer to their question (the reply chain below), confirmed by %s. Its text is exactly your proposal.\n", p.ConfirmedBy)
+			b.WriteString(proposalPrompt(p))
 		}
 		b.WriteString("Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n")
 		b.WriteString(outboxPrompt(j.run))

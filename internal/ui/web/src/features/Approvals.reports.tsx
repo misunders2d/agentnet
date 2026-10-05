@@ -129,6 +129,13 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
     <li className="rounded-xl bg-sunken px-3 py-2.5">
       <p className="text-[15px] leading-snug"><b>{from}</b> {x.kind === "task" ? "gave it a task" : x.kind === "question" ? "asked it something" : "sent a " + kindWord(x.kind)} · {stateWords[x.state] || x.state}</p>
       <p className="pt-0.5 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]">{x.excerpt ? "“" + x.excerpt + "”" : "Its text isn’t shared with this device."}</p>
+      {x.state === "running" && <p role="status" className="pt-1 text-[13px] text-text-2">{x.blocker === "seems_stuck" ? "Seems stuck · " : "Running · "}since {new Date(typeof x.since === "number" ? x.since * 1000 : x.since).toLocaleString()}</p>}
+      {x.proposal && <details className="mt-2 text-[14px] [overflow-wrap:anywhere]">
+        <summary>How this task was chosen</summary>
+        <p>{deviceWords(x.proposal.asker, o)} asked: {x.proposal.question}</p>
+        <p>Your agent suggested: {x.proposal.proposal}</p>
+        <p>{deviceWords(x.proposal.confirmed_by, o)} chose Do it. This uses only their usual task approval.</p>
+      </details>}
       {x.result && (
         <p className={"mt-1 text-[13px] font-semibold " + (x.result.refused ? "text-danger" : "text-ok-ink")}>
           {x.result.refused ? "Not applied: " + x.result.refused : "Sent from here. Now it " + (stateWords[x.result.state] || "is " + x.result.state) + " there."}

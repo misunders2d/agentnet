@@ -278,6 +278,12 @@ func (l *Live) Thread(id string) (Thread, error) {
 			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}
 		}
 		v.StateText = StateText(m.Dir, m.Kind, m.State, c.Peer)
+		if m.Dir == "in" && m.Kind == KindTask {
+			v.Proposal, _ = l.a.ProposalOf(m.ID)
+		}
+		if m.Dir == "in" && (m.State == "running" || m.State == "cancel_requested") && m.Detail != "" {
+			v.StateText = m.Detail
+		}
 		switch Next(m.Dir, m.Kind, m.State, c.Peer, replied[m.ID]) {
 		case "you":
 			v.Next = "Needs you"

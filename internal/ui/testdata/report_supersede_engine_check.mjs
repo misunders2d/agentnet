@@ -53,4 +53,15 @@ assert.equal(got.result?.decision, decision);
 const proposal = { question_id: 'q'.repeat(32), question: 'is the changelog up to date?', asker: 'me/browser', proposal_id: 'p'.repeat(32), proposal: 'Update CHANGELOG.md for 1.4\nwith the fixes', confirmed_by: 'me/browser' };
 const carried = row({ from: 'bot/a', ts: 12, body: JSON.stringify({ v: 2, at: 12, host: 'bot/a', items: [{ id: '6'.repeat(32), from: 'me/browser', key, kind: 'task', state: 'awaiting', blocker: 'awaiting_acceptance', since: 1, attempt: 0, actionable: true, proposal }] }) }, 2);
 assert.deepEqual(e.reportItems([carried])[0].report.items[0].proposal, { ...proposal, proposal: 'Update CHANGELOG.md for 1.4' });
+// Runtime snapshots preserve the exact request/attempt and existing Stop
+// authority while exposing silence as a notice, never a terminal state.
+for (const blocker of ['running', 'seems_stuck']) {
+  const running = structuredClone(carried), r = JSON.parse(running.body);
+  Object.assign(r.items[0], { state: 'running', blocker, attempt: 1, since: 1759500000 });
+  running.body = JSON.stringify(r);
+  const shown = e.reportItems([running])[0].report.items[0];
+  assert.equal(shown.state, 'running'); assert.equal(shown.blocker, blocker);
+  assert.equal(shown.actionable, true); assert.equal(shown.attempt, 1);
+  assert.deepEqual(shown.proposal, { ...proposal, proposal: 'Update CHANGELOG.md for 1.4' });
+}
 console.log(JSON.stringify({ verdicts }));

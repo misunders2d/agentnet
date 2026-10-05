@@ -182,6 +182,8 @@ const (
 	BlockerApproval   = "question_not_approved"  // a question from a sender not approved for automatic answers
 	BlockerNeedsHuman = "needs_human"            // the responder said a person must decide
 	BlockerOther      = "waiting_for_the_person" // anything else in review
+	BlockerRunning    = "running"
+	BlockerStalled    = "seems_stuck"
 )
 
 func blockerOf(kind, state string) string {
@@ -192,6 +194,8 @@ func blockerOf(kind, state string) string {
 		return BlockerApproval
 	case state == stateNeedHuman:
 		return BlockerNeedsHuman
+	case state == stateRunning:
+		return BlockerRunning
 	}
 	return BlockerOther
 }
@@ -352,6 +356,11 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 		}
 	}
 	public, detail, ok := statusOf(state)
+	if public == "queued" {
+		if busy, err := a.store.busyDetail(id); err == nil && busy != "" {
+			detail = busy
+		}
+	}
 	// Selected input is local continuation data, and a request asked here,
 	// a replica or one without a verified key has no remote requester.
 	if !ok || selected || local || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {

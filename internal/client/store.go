@@ -626,7 +626,7 @@ const (
 // An interrupted follow-up is no request: nobody waits on it.
 var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?) OR state IN ('running', 'cancel_requested') AND kind IN ('question', 'task')) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // alertReviewStates are the review states that ask for attention by the
 // legacy desktop review notification and the review notice to another
@@ -638,7 +638,7 @@ const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NO
 // inAlertReview.
 var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inAlertReview = `(state IN (?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inAlertReview = `(state IN (?, ?, ?) OR state = ? AND kind IN (?, ?) OR state = 'running' AND kind IN ('question', 'task')) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // inboxArgs are insertInbox's arguments. The arrival is kept to the
 // millisecond too, as a conversation message's is, so that the inbox lists
@@ -738,10 +738,10 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	// retry) is not run twice (proposal.go); the requester learns it from
 	// the request's status.
 	duplicate := ""
-	if proposal, err := proposalFor(tx, in); err != nil {
+	if proposal, err := proposalFor(tx, in, verifiedBy); err != nil {
 		return err
 	} else if proposal != "" {
-		if duplicate, err = proposalConfirmedBy(tx, proposal, in.From, in.ID); err != nil {
+		if duplicate, err = proposalConfirmedBy(tx, proposal, in.From, verifiedBy, in.ID); err != nil {
 			return err
 		}
 		if duplicate != "" {
@@ -1198,7 +1198,7 @@ func (s *store) finishJob(id, state, detail string) error {
 // waiting here.
 func (s *store) unnotified() (ids []string, total int, err error) {
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`)`, args...)
+	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) AND (state != 'running' OR detail LIKE 'Seems stuck:%')`, args...)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -66,7 +66,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const named = mine.named;
   const notice = isThreadMsg(m) && m.kind === "message" && m.status === "review_notice";
   const conv = dm?.id || thread?.id || "";
-  const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
+	const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
+	const proposal = isThreadMsg(m) ? m.proposal : null;
 
   const act = async (a: T.Action, ok: string) => {
     setBusy(a.do);
@@ -127,6 +128,13 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {headlineOf(m) || (files ? "Files only" : "No text")}
           </h3>
         </div>
+
+        {phase === "running" && said && <p role="status" className="mx-4 mt-3 whitespace-pre-wrap text-[14px] text-text-2 [overflow-wrap:anywhere]">{said}</p>}
+        {proposal && <Details label="How this task was chosen" className="mx-4 mt-3">
+          <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{nameOf(proposal.asker, o)} asked: {proposal.question}</p>
+          <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">Your agent suggested: {proposal.proposal}</p>
+          <p className="mt-2">{nameOf(proposal.confirmed_by, o)} chose Do it. This uses only their usual task approval.</p>
+        </Details>}
 
         {phase === "needs_human" || (phase === "stopped" && said) ? (
           <div className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">

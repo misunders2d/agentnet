@@ -3227,7 +3227,16 @@ function execLine(m, t) {
 // A version 2 report: what a machine said about its own requests at that
 // time. Actions appear only for items core marked actionable (this device's
 // key holds that host's operator grant); everything else is read-only.
-const blockerWord = { awaiting_acceptance: "waits for acceptance", question_not_approved: "asks from a sender not approved for automatic answers", needs_human: "needs a person's decision" };
+const blockerWord = { awaiting_acceptance: "waits for acceptance", question_not_approved: "asks from a sender not approved for automatic answers", needs_human: "needs a person's decision", running: "running", seems_stuck: "seems stuck" };
+function proposalCard(p) {
+  if (!p || !p.proposal_id) return null;
+  const name = (address) => deviceOwner(address)?.label || String(address || 'Someone').split('/')[0].replaceAll('-', ' ');
+  return el("details", { class: "tech" }, el("summary", {}, "How this task was chosen"),
+    el("p", { style: "white-space:pre-wrap;overflow-wrap:anywhere" }, name(p.asker) + " asked: " + p.question),
+    el("p", { style: "white-space:pre-wrap;overflow-wrap:anywhere" }, "Your agent suggested: " + p.proposal),
+    el("p", {}, name(p.confirmed_by) + " chose Do it. This uses only their usual task approval."));
+}
+
 function reportItems(it) {
   const r = it.report;
   if (!r || !Array.isArray(r.items)) return null;
@@ -3243,6 +3252,7 @@ function reportItems(it) {
       el("div", { class: "report-head" }, el("strong", {}, kindTag[x.kind] || x.kind || "request"), " from ", who(x.from || "?"), " · ", (execWord[x.state] || x.state || "state unknown"),
         x.blocker && el("span", { class: "hint" }, " · " + (blockerWord[x.blocker] || x.blocker)), x.since && el("span", { class: "hint" }, " · since " + when(x.since))),
       x.excerpt ? el("p", { class: "report-excerpt" }, x.excerpt) : el("p", { class: "hint" }, "Its text is not shared with this device."),
+      proposalCard(x.proposal),
       el("p", { class: "hint mono" }, "Request " + x.id.slice(0, 8) + "… on " + r.host),
       res, acts);
   }));
@@ -3339,6 +3349,7 @@ function renderMsg(m, byId, prev, t) {
     panel = el("div", { class: "decide" },
       el("p", { class: "decide-why" }, (m.state_text || "").replace(/^Needs you: /, "Needs you · ")),
       m.detail && el("p", { class: "decide-detail" }, m.detail),
+      proposalCard(m.proposal),
       el("div", { class: "acts" }, actions.map((a, i) => actionButton(a, m, t, i === 0))));
   } else if (working) {
     panel = el("div", { class: "working" }, el("span", {}, m.state_text), actionButton("cancel", m, t, false));
