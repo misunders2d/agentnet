@@ -191,6 +191,13 @@ func TestAskAnswerWaitWords(t *testing.T) {
 	if !strings.Contains(b.String(), "proposes an action (not run)") || !strings.Contains(b.String(), "agentnet do P") {
 		t.Fatal(b.String())
 	}
+	// A conversation's proposal is not confirmed from the command line:
+	// no "agentnet do" that would only be refused.
+	b.Reset()
+	printAnswer(&b, &client.AwaitedAnswer{ID: "P", From: "hub/zen", Kind: envelope.KindAnswer, Status: envelope.StatusProposal, Body: "edit CHANGELOG.md", Conv: "c"})
+	if !strings.Contains(b.String(), "proposes an action (not run)") || strings.Contains(b.String(), "agentnet do") {
+		t.Fatal(b.String())
+	}
 }
 
 // agentnet do confirms only a proposal: anything else is refused and sends

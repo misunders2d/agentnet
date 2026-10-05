@@ -43,6 +43,7 @@ type AwaitedAnswer struct {
 	Status  string // its outcome (done, failed, proposal...)
 	Body    string
 	AgentID string
+	Conv    string // the conversation it answers in ("" a device thread): a proposal there is not confirmed from the command line
 }
 
 // ReplyWait is how a wait ended: with the answer, with a host status that
@@ -218,7 +219,7 @@ func (a *Agent) convReply(conv, lid string) (*AwaitedAnswer, *ExecView, error) {
 		} else if m.Dir != "in" || m.History {
 			continue
 		}
-		return &AwaitedAnswer{ID: m.ID, From: m.From, Kind: m.Kind, Status: m.status, Body: m.Body, AgentID: m.AgentID}, nil, nil
+		return &AwaitedAnswer{ID: m.ID, From: m.From, Kind: m.Kind, Status: m.status, Body: m.Body, AgentID: m.AgentID, Conv: conv}, nil, nil
 	}
 	if request.Exec != nil {
 		v := *request.Exec

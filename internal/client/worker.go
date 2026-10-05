@@ -73,10 +73,14 @@ func needsHuman(out string) (why string, ok bool) {
 }
 
 // proposalEligible reports whether j's run may answer with a proposal: a
-// question's own run for a requester (not a follow-up, a selected
-// receiver's continuation or this person's own local request).
+// device-thread question's own run for a requester (not a follow-up, a
+// selected receiver's continuation or this person's own local request).
+// TODO(integrate:P3/P5-519): a conversation's question (PID) proposes only
+// once a conversation proposal can be confirmed there (v2 ConfirmProposal
+// and the page's Do it); until then its run hands an action to the person
+// (needs_human), as before.
 func (j job) proposalEligible() bool {
-	return j.Kind == envelope.KindQuestion && !j.followUp() && j.Receiver == nil && !j.Local
+	return j.Kind == envelope.KindQuestion && j.PID == "" && !j.followUp() && j.Receiver == nil && !j.Local
 }
 
 func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
@@ -415,7 +419,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		why := ""
 		switch {
 		case !j.proposalEligible():
-			why = r.Harness + " proposed an action, which only a question's answer can carry. Its proposal:\n" + rest
+			why = r.Harness + " proposed an action, which only a device-thread question's answer can carry, so nothing was sent. Its proposal:\n" + rest
 		case stdout.truncated:
 			why = r.Harness + " proposed an action, but its text was cut off, so nothing was sent. What it wrote:\n" + rest
 		case strings.TrimSpace(rest) == "":
@@ -652,7 +656,9 @@ func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText 
 		b.WriteString("Answer in plain text, concisely. Use the context below, your own knowledge, and your skills and the tools you are allowed to use to look things up. " +
 			"Do not change files or take any action with effects for this question.\n")
 		b.WriteString("If you need information from the coworker to answer, reply with your question for them in plain text. They can reply to it to continue this conversation.\n")
-		b.WriteString(proposePrompt("the coworker"))
+		if j.proposalEligible() {
+			b.WriteString(proposePrompt("the coworker"))
+		}
 		b.WriteString(lookupText)
 	}
 	if j.progressEligible() {

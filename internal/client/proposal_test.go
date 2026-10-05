@@ -89,13 +89,16 @@ func TestProposalFromTaskNeedsHuman(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, w.bob, task.ID, stateNeedHuman)
-	if row := inboxRow(t, w.bob, task.ID); !strings.Contains(row.Detail, "only a question's answer can carry") || !strings.Contains(row.Detail, "CHANGELOG") {
+	if row := inboxRow(t, w.bob, task.ID); !strings.Contains(row.Detail, "only a device-thread question's answer can carry") || !strings.Contains(row.Detail, "CHANGELOG") {
 		t.Fatalf("detail %q", row.Detail)
 	}
 }
 
-// In a conversation, a participation's question run proposes the same way:
-// the proposal is its answer turn, the emotion trailer not part of the task.
+// In a conversation nobody can confirm a proposal yet (no conversation
+// ConfirmProposal, no Do it on the page): a participation's question run is
+// not offered proposals, and one that proposes anyway hands the action to
+// the host's person (needs_human, the proposal kept for them); nothing is
+// sent that nobody could act on.
 func TestAgentProposalInConversation(t *testing.T) {
 	st := installAgentStub(t)
 	w, conv, _, _ := agentWorld(t)
@@ -106,12 +109,22 @@ func TestAgentProposalInConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := replyAt(t, w.alice, conv, q.ID)
-	if res.Kind != envelope.KindAnswer || res.status != envelope.StatusProposal || res.Body != "Restart the deploy from step 3." || res.Emotion != "calm" {
-		t.Fatalf("conversation proposal %+v (status %q)", res, res.status)
+	var id string
+	eventually(t, "the run hands the action to bob", func() bool {
+		id = ""
+		w.bob.store.db.QueryRow(`SELECT id FROM inbox WHERE conv = ? AND lid = ? AND replica = 0`, conv, q.LID).Scan(&id)
+		return id != "" && jobState(t, w.bob, id) == stateNeedHuman
+	})
+	if m := inboxRow(t, w.bob, id); !strings.Contains(m.Detail, "Restart the deploy from step 3.") {
+		t.Fatalf("the proposal is not kept for bob: %+v", m)
 	}
-	if !strings.Contains(st.last(), proposeMarker) {
-		t.Fatalf("prompt:\n%s", st.last())
+	var proposals int
+	w.bob.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE status = ?`, envelope.StatusProposal).Scan(&proposals)
+	if proposals != 0 {
+		t.Fatalf("%d proposal(s) sent in the conversation", proposals)
+	}
+	if strings.Contains(st.last(), proposeMarker) {
+		t.Fatalf("a conversation run was offered proposals:\n%s", st.last())
 	}
 }
 

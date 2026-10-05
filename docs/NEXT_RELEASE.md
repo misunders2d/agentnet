@@ -284,9 +284,12 @@ block this release. See [DECISIONS §8](DECISIONS.md#8-terminal-messenger-reques
   stored as the default (default responder and named agents) is cleared
   once when the new build first opens the home; a person who wants exactly
   5m sets it again.
-- MEL-521 (backend, device threads): a question's run that needs an action
-  answers with the exact task it proposes (status `proposal`); `agentnet do
-  ID` confirms it as a task. A task from another computer of yours that this
+- MEL-521 (backend, device threads): a device-thread question's run that
+  needs an action answers with the exact task it proposes (status
+  `proposal`); `agentnet do ID` confirms it as a task. The app shows it as
+  "suggested, not run" (its Do it button comes with P4's page slice); a
+  conversation's run hands the action to its person as before, until
+  conversation proposals can be confirmed. A task from another computer of yours that this
   one trusts (`person approve --native`, the self-consent trust set) runs as
   yours (device threads); one from a browser or phone key waits for the OK
   here until the owner answers P4 question 1 (widening it is one predicate
