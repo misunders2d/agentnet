@@ -214,9 +214,15 @@ func TestStalledRequestIsBounded(t *testing.T) {
 		t.Fatalf("stalled request: err=%v after %s", err, time.Since(start))
 	}
 	// The push stream must not wait forever for response headers either.
-	a := &Agent{Address: "a/b", id: id, hub: conn, heartbeat: time.Hour, Logf: t.Logf}
+	// Receipt replay reads its durable cursor before opening the stream.
+	st, err := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.db.Close()
+	a := &Agent{Address: "a/b", id: id, store: st, hub: conn, heartbeat: time.Hour, Logf: t.Logf}
 	start = time.Now()
-	if _, err := a.streamOnce(context.Background()); err == nil || time.Since(start) > 5*time.Second {
+	if _, err := a.streamOnce(context.Background()); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
 		t.Fatalf("stalled stream: err=%v after %s", err, time.Since(start))
 	}
 }
