@@ -832,33 +832,39 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		ttl := fs.Duration("ttl", 7*24*time.Hour, "invite lifetime (max 720h)")
 		admin := fs.Bool("admin", false, "grant admin rights")
 		raw := fs.Bool("raw", false, "print only the invite code (for scripts)")
-		link := fs.Bool("link", false, "print a private browser invitation URL (Hub needs --web and browser-trusted HTTPS)")
+		link := fs.Bool("link", false, "print the invitation link a person opens to get the AgentNet app and join (Hub needs --web and browser-trusted HTTPS)")
+		name := fs.String("name", "", "with --link: the invited person's name, written on the invitation (LABEL is then made from it unless given)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if *raw && *link {
 			return errors.New("choose either --raw or --link")
 		}
-		if fs.NArg() != 1 {
-			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw | --link] LABEL\n" +
+		if *name != "" && !*link {
+			return errors.New("--name is for --link invitations")
+		}
+		if fs.NArg() > 1 || (fs.NArg() == 0 && (*name == "" || !*link)) {
+			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw] LABEL   or   admin invite [--ttl D] [--admin] --link (--name NAME [LABEL] | LABEL)\n" +
 				"LABEL is the invited person's AgentNet name (e.g. bob). Use the name your person gave for this invitation; if they have not, ask them who is being invited and what name to use. " +
 				"Do not infer it or reuse your own label, \"admin\", a user, host or model name unless your person chose it. It grants no rights; --admin does")
 		}
-		invite := a.Invite
 		if *link {
-			invite = a.BrowserInvite // refused before any invite is created unless a browser can use it
-		}
-		code, err := invite(ctx, fs.Arg(0), *ttl, *admin)
-		if err != nil {
-			return err
-		}
-		if *link {
-			address, err := inviteLink(code)
+			// The one invitation kind people get: refused before anything is
+			// created unless a browser and the app can use the link.
+			inv, err := a.CreateInvite(ctx, client.InviteOptions{Label: fs.Arg(0), Name: *name, TTL: *ttl, Admin: *admin})
+			if err != nil {
+				return err
+			}
+			address, err := inviteLink(inv.Code)
 			if err != nil {
 				return fmt.Errorf("invite created, but no browser link printed: %w", err)
 			}
 			fmt.Println(address)
 			return nil
+		}
+		code, err := a.Invite(ctx, fs.Arg(0), *ttl, *admin)
+		if err != nil {
+			return err
 		}
 		if *raw {
 			fmt.Println(code)

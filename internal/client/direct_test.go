@@ -331,10 +331,10 @@ func TestBrowserInvitePinnedOnlyHubRefuses(t *testing.T) {
 	w := newWorld(t, "")
 	rec := &requestLog{}
 	w.alice.hub.http.Transport = recordingRT{w.alice.hub.http.Transport, rec}
-	code, err := w.alice.BrowserInvite(tctx(t), "carol", time.Hour, false)
+	inv, err := w.alice.CreateInvite(tctx(t), InviteOptions{Label: "carol", TTL: time.Hour})
 	var he *HubError
-	if !errors.As(err, &he) || he.Status != http.StatusConflict || code != "" {
-		t.Fatalf("browser invite from a pinned Hub: %q %v", code, err)
+	if !errors.As(err, &he) || he.Status != http.StatusConflict || inv.Code != "" {
+		t.Fatalf("browser invite from a pinned Hub: %q %v", inv.Code, err)
 	}
 	if acks, others := rec.snapshot(); acks != 0 || len(others) != 1 || others[0] != "POST /v1/admin/invites" {
 		t.Fatalf("browser capability request: %v", others)

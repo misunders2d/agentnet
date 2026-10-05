@@ -81,6 +81,14 @@ type Invite struct {
 	Label   string `json:"label"`
 	Secret  string `json:"secret"`
 	CertPEM string `json:"cert,omitempty"`
+	// Name, From and Workspace are what the inviter wrote on the
+	// invitation (invitehints.go): the invited person's name, the inviter's
+	// name and the workspace's name. Nobody signs them: a page shows them
+	// as what the invitation says, next to the Hub's own address, and they
+	// grant nothing.
+	Name      string `json:"name,omitempty"`
+	From      string `json:"from,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
 }
 
 const invitePrefix = "agentnet-invite-v1:"
@@ -108,6 +116,9 @@ func DecodeInvite(code string) (Invite, error) {
 	if inv.Secret == "" || !ValidName(inv.Label) {
 		return inv, errors.New("incomplete invite code")
 	}
+	// A hint that is not readable text is dropped, never shown: it is only
+	// the inviter's words, and the invitation works without it.
+	inv.Name, inv.From, inv.Workspace = cleanHint(inv.Name, MaxInviteHint), cleanHint(inv.From, MaxInviteHint), cleanHint(inv.Workspace, MaxWorkspaceHint)
 	inv.Hub, err = NormalizeHubURL(inv.Hub)
 	return inv, err
 }
@@ -153,13 +164,54 @@ const MaxInviteTTL = 30 * 24 * time.Hour
 
 // InviteRequest asks the Hub (as admin) to mint an invite.
 type InviteRequest struct {
-	Label string        `json:"label"`
+	// Label is the invited person's label (the first half of their
+	// addresses). It may be left out when Name is given: the Hub then
+	// makes a free one from the name (hub/invites.go).
+	Label string        `json:"label,omitempty"`
 	TTL   time.Duration `json:"ttl"`
 	Admin bool          `json:"admin"`
 	// Browser asks for an invite a browser can use: the Hub refuses it,
 	// creating nothing, unless it serves the browser messenger over HTTPS
 	// that browsers trust (no certificate pin).
 	Browser bool `json:"browser,omitempty"`
+	// Name, From and Workspace are written on the invitation as its
+	// unsigned hints (Invite); each must pass ValidInviteHint.
+	Name      string `json:"name,omitempty"`
+	From      string `json:"from,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+}
+
+// InviteCreated is the Hub's answer to an InviteRequest: the code and the
+// label the invited person will have.
+type InviteCreated struct {
+	Code  string `json:"code"`
+	Label string `json:"label,omitempty"` // absent from older Hubs
+}
+
+// PendingInvite is one unused invitation an admin made (GET
+// /v1/admin/invites). ID is the stored secret hash, never the secret.
+type PendingInvite struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Name      string `json:"name,omitempty"`
+	Admin     bool   `json:"admin"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt int64  `json:"created_at,omitempty"` // unix seconds; 0 for invites made before it was kept
+	Expires   int64  `json:"expires"`              // unix seconds
+}
+
+// PendingInvites answers GET /v1/admin/invites for any member: whether the
+// caller may invite people (its device is an admin on this Hub), and, for
+// an admin only, the unused invitations admins made.
+type PendingInvites struct {
+	CanInvite bool            `json:"can_invite"`
+	Invites   []PendingInvite `json:"invites"`
+}
+
+// InviteRevokeRequest asks the Hub (as admin) to withdraw an unused
+// invitation by its ID.
+type InviteRevokeRequest struct {
+	ID string `json:"id"`
 }
 
 // RevokeRequest asks the Hub (as admin) to revoke an agent.

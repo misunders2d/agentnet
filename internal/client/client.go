@@ -998,26 +998,6 @@ func inviteTTL(ttl time.Duration) error {
 	return nil
 }
 
-// BrowserInvite creates an invite for a browser invitation link (admin
-// only). The Hub refuses before creating anything unless its advertised
-// endpoint serves the browser messenger over platform TLS. The admin may
-// still connect through an older pinned endpoint after that migration;
-// its connection's pin says nothing about the endpoint in the new invite.
-func (a *Agent) BrowserInvite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
-	if err := inviteTTL(ttl); err != nil {
-		return "", err
-	}
-	var out struct{ Code string }
-	if err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin, Browser: true}, &out); err != nil {
-		var he *HubError
-		if errors.As(err, &he) && he.Status == 400 { // an older Hub refuses the unknown field
-			return "", fmt.Errorf("%w (a Hub that cannot create browser invitations needs an update)", err)
-		}
-		return "", err
-	}
-	return out.Code, nil
-}
-
 // Revoke revokes address on the Hub (admin only).
 func (a *Agent) Revoke(ctx context.Context, address string) error {
 	return a.hub.do(ctx, "POST", "/v1/admin/revoke", protocol.RevokeRequest{Address: address}, nil)
