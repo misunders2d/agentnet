@@ -267,8 +267,9 @@ func promptLabel(label string) string {
 
 // PeerWords returns a namer of devices for people, as the page's sentences
 // use them (MEL-525: people never see addresses): "your Pixel" for another
-// device of this installation's own person, "Vitalii (Desk)" for a device a
-// verified person record here names, and the device in words otherwise
+// device of this installation's own person, `another person, who calls
+// themselves "Vitalii" (Desk)` for a device a verified person record here
+// names, and the device in words otherwise
 // ("Bezos"). When that person's name is also this person's own or another
 // known person's, the device key's first group follows the device, so a
 // look-alike name cannot pass as someone else. What is not an address
@@ -303,6 +304,6 @@ func (a *Agent) PeerWords() func(address string) string {
 		if labels[strings.ToLower(p.info.Label)] > 1 {
 			device += " · " + shortKey(p.info.Fingerprint)
 		}
-		return p.info.Label + " (" + device + ")"
+		return "another person, who calls themselves " + promptLabel(p.info.Label) + " (" + device + ")"
 	}
 }

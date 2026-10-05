@@ -228,8 +228,8 @@ func TestPeerWordsPersons(t *testing.T) {
 	words := w.bob.PeerWords()
 	for in, want := range map[string]string{
 		phone.Address:           "your Phone",
-		carol.Address:           "Vitalii (Desk)",
-		w.alice.Address:         "sergey (Alice · " + shortKey(w.alice.Self().Fingerprint()) + ")",
+		carol.Address:           `another person, who calls themselves "Vitalii" (Desk)`,
+		w.alice.Address:         `another person, who calls themselves "sergey" (Alice · ` + shortKey(w.alice.Self().Fingerprint()) + ")",
 		w.bob.Address:           "this device",
 		"nobody/windows-laptop": "Windows laptop",
 		"all devices":           "all devices",

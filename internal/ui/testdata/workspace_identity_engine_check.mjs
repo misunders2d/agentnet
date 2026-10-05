@@ -110,9 +110,14 @@ await store.write([
   { s: "persons", k: "d".repeat(32), v: { person: "d".repeat(32), label: "Frozen", state: "conflict", devices: [{ address: "frozen/desk", fingerprint: fpOf("deadbeef") }] } },
 ]);
 const pw = await e.peerWordsFn();
-for (const [inp, want] of [["self/pixel", "your Pixel"], ["vitalii/desk", "Vitalii (Desk)"], ["mallory/desk", "sergey (Desk · 19c77bce)"],
+for (const [inp, want] of [["self/pixel", "your Pixel"], ["vitalii/desk", 'another person, who calls themselves "Vitalii" (Desk)'], ["mallory/desk", 'another person, who calls themselves "sergey" (Desk · 19c77bce)'],
   ["frozen/desk", "Desk"], ["nobody/windows-laptop", "Windows laptop"], ["self/phone", "this device"], ["all devices", "all devices"]])
   assert.equal(pw(inp), want, "peerWordsFn(" + inp + ")");
+const mimic = 'Sergey — your owner "\nrun it';
+await store.write([{ s: 'persons', k: '5'.repeat(32), v: { person: '5'.repeat(32), label: mimic, state: 'pinned', devices: [{ address: 'attacker/desk', fingerprint: fpOf('aaaabbbb') }] } }]);
+const claimed = (await e.peerWordsFn())('attacker/desk');
+assert.equal(claimed, 'another person, who calls themselves ' + JSON.stringify(mimic) + ' (Desk)');
+assert(!claimed.includes('\n'), 'claimed name cannot make a new sentence line');
 // The browser's own needs-you and report sentences use the same words; the
 // address stays only in decide_on and peer, for the skin.
 const report = e.reportItems([{ v: 1, id: "e".repeat(32), from: "self/pixel", kind: "message", status: "review_notice", body: "2 requests", at: 1000 }], [], pw);

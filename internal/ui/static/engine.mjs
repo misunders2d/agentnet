@@ -4261,7 +4261,8 @@ export class Engine {
 
   // peerWordsFn names devices in the page's sentences (MEL-525), as
   // client.PeerWords does: "your Pixel" for another device of this person,
-  // "Vitalii (Desk)" for a device a pinned person record names, with the
+  // `another person, who calls themselves "Vitalii" (Desk)` for a device
+  // a pinned person record names, with the
   // key's first group when that name is also this person's or another
   // pinned person's, and the device in words otherwise; never the address.
   async peerWordsFn() {
@@ -4276,7 +4277,7 @@ export class Engine {
       const p = pinned.find((x) => (x.devices || []).some((d) => d.address === address));
       if (!p || !p.label) return device;
       const d = p.devices.find((x) => x.address === address);
-      return p.label + " (" + device + (count.get(key(p.label)) > 1 && d && d.fingerprint ? " · " + String(d.fingerprint).split("-")[0] : "") + ")";
+      return "another person, who calls themselves " + JSON.stringify(p.label) + " (" + device + (count.get(key(p.label)) > 1 && d && d.fingerprint ? " · " + String(d.fingerprint).split("-")[0] : "") + ")";
     };
   }
 
