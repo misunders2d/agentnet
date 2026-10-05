@@ -73,6 +73,8 @@ async function desktop(browser) {
   const you = tasks.getByRole('checkbox', { name: /You/ }), bob = tasks.getByRole('checkbox', { name: /Bob/ });
   assert.equal(await you.isChecked(), false, name + ': nobody is ticked for someone else’s agent');
   assert.equal(await bob.isChecked(), false, name + ': nobody is ticked for someone else’s agent');
+  const youFace = await tasks.locator('label').filter({ has: p.getByRole('checkbox', { name: /You/ }) }).locator('[data-size]').textContent();
+  assert.equal(youFace.trim(), 'A', name + ': your row shows your own initial (Alice), not the label “You”');
   await tasks.locator('label', { hasText: 'Bob' }).click();
   assert.equal(await bob.isChecked(), true, name + ': Bob is ticked');
   await snap('invite');

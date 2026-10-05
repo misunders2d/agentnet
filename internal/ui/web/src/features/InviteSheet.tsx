@@ -300,7 +300,7 @@ function TaskChoice({ people, chosen, onToggle, mine, owner, keys }: {
               + (none ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-sunken")}>
               <input type="checkbox" className="sr-only" checked={on} disabled={none} onChange={() => onToggle(p.key)} />
               <span aria-hidden="true" className={"grid size-[22px] shrink-0 place-items-center rounded-md border-[1.5px] border-outline " + (on ? "bg-act text-act-ink" : "bg-surface")}>{on && <IconCheck size={15} stroke={3} />}</span>
-              <PersonAvatar name={p.name} seed={p.seed} size={28} />
+              <PersonAvatar name={p.face} seed={p.seed} size={28} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-semibold">{p.name}</span>
                 <span className="block truncate text-[13px] text-text-2">

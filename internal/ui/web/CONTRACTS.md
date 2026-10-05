@@ -70,9 +70,10 @@ browser shows no reminders, trust or standing answers (it says "on your
 computer" in words).
 
 `model.ts` also holds the `REMIND` tunables (quick times, the list size at
-the top of Chats), `dueText`, `reminderOf`, `holdSentence(code, name)` and
-`holdVerified(code)`: a held message that didn't verify only claims its
-sender, so it is never drawn as that person.
+the top of Chats), `clock` (one way to write a time of day), `dueText`,
+`reminderOf`, `holdSentence(code, name)` and `holdVerified(code)`: a held
+message that didn't verify only claims its sender, so it is never drawn as
+that person.
 
 ## Rules
 

@@ -62,6 +62,8 @@ async function desktop(browser) {
   assert.match(await sheet.textContent(), /even with this window closed/, name + ': the sheet says it fires with the window closed');
   await snap('remind-sheet');
   await noAddresses(p, name, 'remind sheet');
+  const [morning, morningSub] = await sheet.locator('label', { hasText: 'Tomorrow at' }).locator('span.block').allTextContents();
+  assert.equal(morning.replace('Tomorrow at ', ''), morningSub.replace('tomorrow ', ''), name + ': the morning choice writes its time as its subtitle does');
   await sheet.getByText('In 2 hours').click();
   await sheet.getByRole('button', { name: 'Remind me' }).click();
   await msg.getByText(/^Reminder (today|tomorrow) /).waitFor(T);

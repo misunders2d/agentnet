@@ -180,8 +180,10 @@ export const capFor = (r: Route) => (r === "group" ? 64 : 200);
 export const TASK_KEYS_MAX = 16;
 
 /** One person who may be allowed to give the agent tasks without asking: their
- *  member keys in this conversation, the only keys the invitation may name. */
-export interface TaskPerson { key: string; name: string; seed: string; me: boolean; keys: string[] }
+ *  member keys in this conversation, the only keys the invitation may name.
+ *  name is the row's label ("You" for yourself); face is the person's own
+ *  name, for their avatar as drawn everywhere else. */
+export interface TaskPerson { key: string; name: string; face: string; seed: string; me: boolean; keys: string[] }
 
 /** taskPeople: the conversation's members, one row each (never a device): in a
  *  two-person chat you and them, in a group its members. Their keys are the
@@ -196,7 +198,7 @@ export function taskPeople(t: T.DMThread, o: T.Overview): TaskPerson[] {
     seen.add(p.person);
     const keys = [...new Set((p.devices?.length ? p.devices.map((d) => d.fingerprint) : [p.fingerprint || ""]).filter(Boolean))];
     const mine = !!me?.person && p.person === me.person;
-    out.push({ key: p.person, name: mine ? "You" : personName(p), seed: p.person, me: mine, keys });
+    out.push({ key: p.person, name: mine ? "You" : personName(p), face: personName(p), seed: p.person, me: mine, keys });
   }
   return out.sort((a, b) => Number(b.me) - Number(a.me));
 }

@@ -416,10 +416,13 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
 export const reminderOf = (o: T.Overview | null, id: string) =>
   (o?.remind && (o.reminders || []).find((r) => r.message === id)) || undefined;
 
-/** dueText says when, on this device's clock: "today 15:00", "tomorrow 09:00", "Tue 7 Oct 09:00". */
+/** clock says a time of day as this device writes it: "9:00 AM", "15:00". */
+export const clock = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+/** dueText says when, on this device's clock: "today 15:00", "tomorrow 9:00", "Tue 7 Oct 9:00". */
 export function dueText(when: string | Date, now = new Date()): string {
   const d = new Date(when);
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const time = clock(d);
   if (d.toDateString() === now.toDateString()) return "today " + time;
   const next = new Date(now);
   next.setDate(now.getDate() + 1);
@@ -437,7 +440,7 @@ export function timeZone(): string {
 export function reminderTimes(now = new Date()): { label: string; at: Date }[] {
   const soon = REMIND.soon.map((m) => ({ label: m < 60 ? "In " + m + " minutes" : "In " + m / 60 + (m === 60 ? " hour" : " hours"), at: new Date(now.getTime() + m * 60e3) }));
   const morning = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, REMIND.morning, 0);
-  return [...soon, { label: "Tomorrow at " + REMIND.morning + ":00", at: morning }];
+  return [...soon, { label: "Tomorrow at " + clock(morning), at: morning }];
 }
 
 /** localInput is d as a datetime-local field's value, in this device's time. */
