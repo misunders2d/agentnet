@@ -96,6 +96,30 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const remove=(await w.st.all('inbox')).map(r=>({s:'inbox',k:r.id}));if(remove.length)await w.st.write(remove);
   }
   await w.close();
+  // Current authority is independent of the sequence chosen by an inviter.
+  w=await world();for(let i=0;i<=4;i++)await w.receive(c['proof'+'x'.repeat(i)]);await w.receive(c.contextxxxx);
+  {
+   const forged=v.p6_backdated.map(wire.parseEvent),sender=await wire.parsePublic(v.challenge.rosters[1].devices[0]);
+   await wire.verifyEvent(forged[0],sender.sign_key);
+   const events=await Promise.all(forged.map(async e=>({e,hash:await wire.eventHash(e)}))),members=await w.e.dmMembers(await w.e.groupRecord(conv),events);
+   for(const {e,hash} of events.filter(x=>['invite','scope'].includes(x.e.type)))check(!members.groupInvites.has(hash),'demoted admin old '+e.type+' slot grants no outside authority');
+   await w.receive(c['p6-backdated-memberships']);
+   check((await w.st.get('held',wire.parseEnvelope(c['p6-backdated-memberships'].envelope).id))?.reason==='invalid','current admin carrier cannot import demoted admin backdated outside invite');
+   check(!await w.st.get('kv','room-memberships/'+conv),'rejected backdated carrier installs no membership proof');
+  }
+  await w.close();
+  // A non-admin or outside host cannot revive an agent by replaying its old
+  // signed lifecycle evidence. The independently signed state still installs.
+  for(const who of ['nonadmin','outsider']) {
+   w=await world();await w.receive(c.proof);await w.receive(c.context);
+   const carried=c['p6-'+who+'-memberships'];await w.receive(carried);
+   check(!await w.st.get('held',wire.parseEnvelope(carried.envelope).id),'untrusted '+who+' lifecycle claims do not block valid group state');
+   check(!await w.st.get('kv','room-memberships/'+conv),'untrusted '+who+' carrier installs no old lifecycle authority');
+   check((await w.e.groupThread(conv)).agents.length===0&&!(await w.e.groupCurrent(conv)).memberships?.length,'untrusted '+who+' replay creates no group agent or stored membership payload');
+   w.e.groupSupport=async()=>{};await w.e.sendDM({conv,body:'AFTER_REMOVED_OUTSIDE_HOST'});
+   check((await w.st.all('outbox')).every(r=>r.to!==v.invited_roster.devices[0].address),'untrusted '+who+' replay makes no copy to outside host');
+   await w.close();
+  }
   // A new reader receives the original signed membership records quietly,
   // with no earlier message body and no host-local permission grants.
   w=await world();await w.receive(c.proof);await w.receive(c.context);
@@ -107,6 +131,14 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check((await w.e.groupThread(conv)).messages.length===0,'membership carrier supplies no earlier body');
   await w.reload();
   check((await w.e.agentConv(v.participations['p6-target'])).info.member,'membership proof survives reload');
+  check((await w.e.groupCurrent(conv)).memberships.length>0,'departure fixture retains private membership payload before leave');
+  {
+   const contextPayloads=[],copy=w.e.groupCarrierCopy.bind(w.e);
+   w.e.groupCarrierCopy=async(...args)=>{if(args[1]===wire.SubGroupContext&&args[5]?.pid)contextPayloads.push(wire.parseGroupContext(args[3]));return copy(...args);};
+   await w.e.leaveGroup(conv);
+   check(contextPayloads.length>0&&contextPayloads.every(p=>!p.memberships?.length&&p.withdrawals.length>0),'departure visitor contexts strip every private original invite and retain signed withdrawal');
+   check((await w.st.all('outbox')).filter(r=>r.sub===wire.SubGroupContext&&r.pid).length===contextPayloads.length,'stripped visitor contexts produce real sealed outbox copies');
+  }
   await w.close();
   w=await world();await w.receive(c.proof);await w.receive(c.context);
   const pv=v.participations;

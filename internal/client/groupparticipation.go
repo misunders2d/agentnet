@@ -53,8 +53,10 @@ func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (boo
 	if c.Hash != scope.Hash || scope.Seq > m.group.State.Seq {
 		return false, nil
 	}
-	if scope.HostRole == "visitor" && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) && !slices.Contains(c.Admins, ev.Author.Person) {
-		return false, nil
+	if scope.HostRole == "visitor" && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) {
+		if now, ok := m.group.State.Member(ev.Author.Person); !ok || !now.Admin || !slices.Contains(c.Admins, ev.Author.Person) {
+			return false, nil
+		}
 	}
 	_, member := m.persons[ev.Host.Person]
 	if scope.HostRole == "member" {

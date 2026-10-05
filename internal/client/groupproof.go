@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -330,7 +331,7 @@ func (a *Agent) recoverGroupJoin(ctx context.Context, target, old GroupContext) 
 	if err != nil {
 		return GroupContext{}, err
 	}
-	if err = a.acceptGroupContext(ctx, packet, packet.State.Seq == target.State.Seq, check); err != nil {
+	if err = a.acceptGroupContext(ctx, packet, packet.State.Seq == target.State.Seq, nil, check); err != nil {
 		return GroupContext{}, err
 	}
 	return packet, nil
@@ -352,13 +353,19 @@ func (a *Agent) AcceptGroupCommit(ctx context.Context, c protocol.GroupCommit) e
 	if err != nil {
 		return err
 	}
-	return a.acceptGroupContext(ctx, packet, false)
+	return a.acceptGroupContext(ctx, packet, false, nil)
 }
 
 // AcceptGroupContext accepts a forwarded current signed snapshot only after
 // its complete original authority prefix is durable. It grants no historical
 // decryption key and does not accept plaintext historical membership proof.
 func (a *Agent) AcceptGroupContext(ctx context.Context, packet GroupContext) error {
+	return a.acceptGroupContextFrom(ctx, packet, identity.Public{})
+}
+
+// A forwarded state has authority of its original publisher. Its extra room
+// memberships require the exact authenticated carrier sender to vouch for them.
+func (a *Agent) acceptGroupContextFrom(ctx context.Context, packet GroupContext, sender identity.Public) error {
 	if len(packet.Proof) != 0 {
 		return errors.New("group: forwarded context must contain only current state")
 	}
@@ -406,10 +413,10 @@ func (a *Agent) AcceptGroupContext(ctx context.Context, packet GroupContext) err
 	if _, err = a.groupProofThrough(ctx, packet.Root, packet.State.Seq); err != nil {
 		return err
 	}
-	return a.acceptGroupContext(ctx, packet, true)
+	return a.acceptGroupContext(ctx, packet, true, &sender)
 }
 
-func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, forwarded bool, verifier ...func(context.Context, GroupContext, protocol.GroupRosterResolver) error) error {
+func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, forwarded bool, source *identity.Public, verifier ...func(context.Context, GroupContext, protocol.GroupRosterResolver) error) error {
 	raw, err := json.Marshal(packet)
 	if err != nil {
 		return err
@@ -451,6 +458,28 @@ func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, for
 	if err = check(ctx, packet, resolve); err != nil {
 		return err
 	}
+	// Original ciphertext is vouched by its verified signed publisher. A
+	// forwarded packet must instead name the independently verified sender.
+	if source == nil {
+		source = &identity.Public{}
+		if roster, ok := resolve(packet.State.Actor, packet.State.ActorRoster); ok {
+			if key, ok := roster.Device(packet.State.By); ok {
+				*source = key
+			}
+		}
+	}
+	withdrawals, err := a.groupPendingForState(ctx, packet.State, resolve)
+	if err != nil {
+		return err
+	}
+	withdrawals = append(withdrawals, packet.Withdrawals...)
+	vouched := packet
+	vouched.Withdrawals = withdrawals
+	if allowed, err := roomMembershipSender(a.store.db, vouched, *source); err != nil {
+		return err
+	} else if !allowed {
+		packet.Memberships = nil
+	}
 	// A fresh linked member has no outside host roster yet. Pin the exact
 	// host named by each original signed invitation before the atomic check.
 	for _, ev := range packet.Memberships {
@@ -484,11 +513,6 @@ func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, for
 			return err
 		}
 	}
-	withdrawals, err := a.groupPendingForState(ctx, packet.State, resolve)
-	if err != nil {
-		return err
-	}
-	withdrawals = append(withdrawals, packet.Withdrawals...)
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
@@ -498,6 +522,12 @@ func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, for
 		if err = a.forwardedGroupTarget(tx, packet, withdrawals); err != nil {
 			return err
 		}
+	}
+	// Recheck current key, role and withdrawal state in the installation tx.
+	if allowed, err := roomMembershipSender(tx, vouched, *source); err != nil {
+		return err
+	} else if !allowed {
+		packet.Memberships = nil
 	}
 	if err = installGroupMembership(tx, packet, withdrawals); err != nil {
 		return err

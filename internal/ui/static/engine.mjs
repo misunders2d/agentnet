@@ -2623,7 +2623,7 @@ export class Engine {
       copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupWithdrawal,{v:1,seq:packet.state.seq,hash},text,device,{group_withdrawal:text,recipient_admission:await wire.groupAdmissionHash(wire.groupMember(packet.state,current.person).admission)},true));
     }
     const next=structuredClone(g);if(!next.withdrawals.includes(text))next.withdrawals.push(text);
-    const records=g.records.map(wire.parseGroupCommit),update={...packet,withdrawals:[...packet.withdrawals,withdrawal]};
+    const records=g.records.map(wire.parseGroupCommit),update={...packet,memberships:undefined,withdrawals:[...packet.withdrawals,withdrawal]};
     for(const target of visitors) {
       await this.groupRead(checks,"pins",target.device.address);
       for(const page of this.groupProofPages(records)){const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),target.device,{pid:target.pid},true));}
@@ -3535,6 +3535,13 @@ export class Engine {
         const departure=sender&&pins.some(w=>w.person===sender.person&&w.by===pin.fingerprint&&w.roster===sender.hash);
         if(!member&&!actor&&!departure)throw new Hold("invalid","Visitor context sender has no current or signed departure authority.");
       } else await this.groupTarget(packet.state, pins, checks);
+      if(packet.memberships?.length) {
+        const sender=[...people.values()].find(p=>p.devices.some(d=>d.address===env.from&&d.fingerprint===pin.fingerprint));
+        const member=sender&&wire.groupMember(packet.state,sender.person);
+        // Extra lifecycle claims need a current admin or own linked member.
+        // Retain legitimate departing-publisher state without its memberships.
+        if(visitor || !member || !member.admin&&sender.person!==this.me.person || await wire.groupWithdrawn(packet.state,member,pins))packet.memberships=undefined;
+      }
       g.context = wire.groupContextJSON(packet);
       for (const w of pins) { const text = wire.groupWithdrawalJSON(w); if (!g.withdrawals.includes(text)) g.withdrawals.push(text); g.pending = g.pending.filter((x) => x !== text); }
     }
@@ -6134,7 +6141,8 @@ export class Engine {
       const invite=await wire.eventHash(inv);
       if(inv.group.host_role==="visitor") {
         const group=await this.groupRead(checks,"kv","group/"+conv);
-        if(!wire.parseGroupCommit(group.records[inv.group.seq]).admins.includes(inv.author.person))throw new Hold("invalid","Outside agent invitation needs a group administrator.");
+        const current=wire.groupMember(packet.state,inv.author.person);
+        if(!current?.admin || !wire.parseGroupCommit(group.records[inv.group.seq]).admins.includes(inv.author.person))throw new Hold("invalid","Outside agent invitation needs a group administrator.");
       }
       const exact=e=>e.prev===invite&&e.author.person===inv.host.person&&e.author.address===inv.host.address&&e.author.fingerprint===inv.host.fingerprint;
       if(!evs.some(e=>e.type==="accept"&&exact(e)))throw new Hold("invalid","Membership needs exact host consent.");
@@ -6972,7 +6980,7 @@ export class Engine {
         const host=out.get(e.host.person), isMember=!!host;
         if(scope.host_role==="member" ? !isMember || out.epochs.get(e.host.fingerprint)!==scope.host_admission : scope.host_role!=="visitor" || isMember || scope.host_admission)continue;
         if(!out.roomEvents.has(hash) && (e.task_keys || []).some((fp,i)=>!out.epochs.get(fp)||out.epochs.get(fp)!==scope.task_admissions?.[i]))continue;
-        if(scope.host_role==="visitor" && ["invite","scope"].includes(e.type) && !record.admins.includes(e.author.person))continue;
+        if(scope.host_role==="visitor" && ["invite","scope"].includes(e.type) && (!wire.groupMember(packet.state,e.author.person)?.admin || !record.admins.includes(e.author.person)))continue;
         out.groupInvites.add(hash);
       }
     }

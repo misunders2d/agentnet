@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -62,6 +63,20 @@ func roomMembershipProof(q dbq, packet GroupContext) ([]protocol.ParticipationEv
 		}
 	}
 	return proof, nil
+}
+
+// Memberships are extra lifecycle claims, not part of the signed group state.
+// Only an effective current admin, or a current own device, may vouch for them.
+func roomMembershipSender(q dbq, packet GroupContext, sender identity.Public) (bool, error) {
+	if sender.Address == "" || groupTurnCheck(q, packet, sender.Address, sender.Fingerprint()) != nil {
+		return false, nil
+	}
+	person, ok, err := scanPersonIn(q, "person IN (SELECT person FROM person_devices WHERE address=?)", sender.Address)
+	if err != nil || !ok {
+		return false, err
+	}
+	member, ok := packet.State.Member(person.info.Person)
+	return ok && (member.Admin || person.info.State == personSelf), nil
 }
 
 func admitRoomMembershipProof(tx *sql.Tx, packet GroupContext) error {
@@ -122,7 +137,7 @@ func admitRoomMembershipProof(tx *sql.Tx, packet GroupContext) error {
 			if err != nil {
 				return err
 			}
-			if !slices.Contains(c.Admins, invite.Author.Person) {
+			if now, ok := packet.State.Member(invite.Author.Person); !ok || !now.Admin || !slices.Contains(c.Admins, invite.Author.Person) {
 				return errors.New("group: outside agent invitation needs a group administrator")
 			}
 		}

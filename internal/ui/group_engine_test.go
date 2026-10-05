@@ -195,6 +195,9 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 			if len(signer) > 0 {
 				who = signer[0]
 				from = who.Public("dana/desk")
+				if who == bob {
+					from = bp
+				}
 			}
 			raw := []byte(marshal(t, payload))
 			ct := encrypt(raw)
@@ -254,6 +257,22 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 			}
 		}
 		carriers["p6-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash())
+		carriers["p6-nonadmin-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), bob)
+		carriers["p6-outsider-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), dana)
+		// Bob held admin at slot 3, then lost it at slot 4 without a new admission.
+		backdated := membershipRecords[3]
+		currentBob, _ := states[4].Member(rr.Person)
+		backdated.PID = protocol.NewID()
+		backdated.Author = protocol.EventAuthor{Person: rr.Person, Roster: rr.Hash(), Address: bp.Address, Fingerprint: bp.Fingerprint(), GroupAdmission: currentBob.Admission.Hash()}
+		backdated.Group = &protocol.ParticipationGroup{Seq: 3, Hash: states[3].Hash(), HostRole: "visitor"}
+		backdated.Sign(bob.Sign)
+		backdatedScope := protocol.ScopeOf(backdated, backdated.TS)
+		backdatedScope.Sign(bob.Sign)
+		backdatedAccept := membershipRecords[5]
+		backdatedAccept.PID, backdatedAccept.Prev = backdated.PID, backdated.Hash()
+		backdatedAccept.Sign(dana.Sign)
+		vectors["p6_backdated"] = []protocol.ParticipationEvent{backdated, backdatedScope, backdatedAccept}
+		carriers["p6-backdated-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: states[4], Memberships: []protocol.ParticipationEvent{backdated, backdatedScope, backdatedAccept}}, 4, states[4].Hash())
 		bad := slices.Clone(membershipRecords)
 		bad[0].Sig = slices.Clone(bad[0].Sig)
 		bad[0].Sig[0] ^= 1
