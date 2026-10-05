@@ -150,6 +150,9 @@
   // Reconnect routes a membership disconnected here again: this computer's
   // program only (a browser enrollment has no program to ask).
   const canReconnect = !!shell && !memberships && typeof shell.reconnect === "function";
+  // Rename sets this device's own label of a membership ("" clears it, and
+  // the workspace's own name shows): wherever the shell can keep it.
+  const canRename = !!shell && (!memberships || typeof shell.renameBrowser === "function");
   const workspaces = shell ? Object.freeze({
     list: () => shell.list(),
     active: () => shell.active,
@@ -163,6 +166,7 @@
       disconnected: () => shell.disconnected(), // memberships disconnected here, with their state
       reconnect: (id) => shell.reconnect(id),
     } : {}),
+    ...(canRename ? { rename: (id, name) => shell.rename(id, name) } : {}),
   }) : null;
   const switchTo = (id) => { if (id !== shell.active) shell.select(id); };
 
