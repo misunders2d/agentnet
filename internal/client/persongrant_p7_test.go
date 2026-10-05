@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,7 +73,7 @@ func p7Stored(t *testing.T, at *Agent, from, fp, kind, want string) string {
 func TestP7PersonGrantsCurrentFutureAndRemoval(t *testing.T) {
 	w, r := p7Person(t)
 	p7Stored(t, w.bob, w.alice.Address, w.alice.Self().Fingerprint(), envelope.KindQuestion, stateHeld)
-	if e := w.bob.Approve(r.Label); e != nil {
+	if e := w.bob.Approve(r.Person); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := w.bob.GrantTasks(r.Person); e != nil {
@@ -195,6 +196,14 @@ func TestP7AcceptAlwaysPersonAndExplicitDevice(t *testing.T) {
 
 func TestP7GrantNamesAndRestart(t *testing.T) {
 	w, r := p7Person(t)
+	// A name is the person's own claim: even a unique one picks no one, and
+	// the refusal names the IDs to choose from.
+	if e := w.bob.Approve(r.Label); e == nil || !strings.Contains(e.Error(), r.Person) {
+		t.Fatalf("a unique name picked a grant target: %v", e)
+	}
+	if _, e := w.bob.GrantTasks(r.Label); e == nil {
+		t.Fatal("a unique name picked a task grant target")
+	}
 	w.bob.Approve(r.Person)
 	w.bob.GrantTasks(r.Person)
 	other, _ := identity.Generate()

@@ -37,36 +37,43 @@ func questionApproved(q querier, address, key string) (bool, error) {
 	return ok, err
 }
 
-// PermissionTarget resolves a person's exact ID or unique pinned name. An
-// address remains an explicit device grant; names never establish membership.
+// PermissionTarget resolves a person's exact ID or an exact device
+// address. A name is only the person's own claim, so it never picks who a
+// permission covers: the answer lists the pinned people with that name and
+// their IDs to choose from.
 func (a *Agent) PermissionTarget(target string) (string, error) {
 	if _, _, err := protocol.SplitAddress(target); err == nil {
 		return target, nil
 	}
-	where, args := "label=?", []any{target}
 	if protocol.ValidID(target) {
-		where = "person=?"
+		var id string
+		err := a.store.db.QueryRow(`SELECT person FROM persons WHERE person=? AND state IN ('self','pinned')`, target).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", errors.New("no verified person has that ID here")
+		}
+		return id, err
 	}
-	rows, err := a.store.db.Query(`SELECT person FROM persons WHERE `+where+` AND state IN ('self','pinned')`, args...)
+	rows, err := a.store.db.Query(`SELECT p.person, group_concat(d.address, ', ') FROM persons p LEFT JOIN person_devices d ON d.person=p.person WHERE p.label=? AND p.state IN ('self','pinned') GROUP BY p.person`, target)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
-	var ids []string
+	var found []string
 	for rows.Next() {
 		var id string
-		if err = rows.Scan(&id); err != nil {
+		var devices sql.NullString
+		if err = rows.Scan(&id, &devices); err != nil {
 			return "", err
 		}
-		ids = append(ids, id)
+		found = append(found, id+" (on "+devices.String+")")
 	}
 	if err = rows.Err(); err != nil {
 		return "", err
 	}
-	if len(ids) != 1 {
-		return "", errors.New("choose one verified person ID (names may be shared), or an exact device address")
+	if len(found) == 0 {
+		return "", errors.New("names are the person's own claim and pick no one: use their verified person ID or an exact device address")
 	}
-	return ids[0], nil
+	return "", errors.New("names are the person's own claim and pick no one; choose by ID: " + strings.Join(found, "; "))
 }
 
 func setPersonGrant(tx *sql.Tx, person, kind string, allow bool) error {

@@ -629,9 +629,10 @@ default; only the local user sets it.`,
        agentnet approve --tasks PERSON-or-ADDRESS
        agentnet unapprove --tasks PERSON-or-ADDRESS
 
-Choose a verified person ID or their unique pinned name (quote a name with
-spaces). Approve Sergey covers all current and future devices in Sergey's
-current verified roster. A display/listed name never proves membership.
+Choose a verified person ID or an exact
+device address. A name is only the person's own claim, so it picks no one:
+given a name, the answer lists the IDs of the people using it. Approving
+Sergey's ID covers all current and future devices in that verified roster.
 Removing a device ends its person access; changed keys block until trusted,
 and a conflicting/frozen person cannot use the grant. Grants stay local.
 
