@@ -318,6 +318,16 @@ func TestBrowserRoomTurnsMatchGo(t *testing.T) {
 		add("an agent participant's request", true, func(in *envelope.Inner) {
 			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindTask, target, protocol.NewID(), "agent:claude", "curious", turn(as.PID, guest, agent)
 		})
+		for _, op := range []string{"request", "delegate"} {
+			add("a member's captured receiver "+op, op == "request", func(in *envelope.Inner) {
+				in.Kind, in.Target, in.PID, in.Human = envelope.KindQuestion, target, protocol.NewID(), turn("", guest, agent)
+				in.ReceiverRoute = &envelope.ReceiverRoute{Op: op, Host: "fixture/host", HostKey: r.bob.Fingerprint(), RequestRef: in.LID, RequestDigest: strings.Repeat("a", 64), DelegationID: protocol.NewID()}
+			})
+		}
+		add("an agent redirecting a captured request", false, func(in *envelope.Inner) {
+			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindQuestion, target, protocol.NewID(), "agent:claude", "curious", turn(as.PID, guest, agent)
+			in.ReceiverRoute = &envelope.ReceiverRoute{Op: "request", Host: "fixture/host", HostKey: r.bob.Fingerprint(), RequestRef: in.LID, RequestDigest: strings.Repeat("a", 64), DelegationID: protocol.NewID()}
+		})
 		add("an agent origin for a person", false, func(in *envelope.Inner) {
 			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindTask, target, protocol.NewID(), "agent:claude", "curious", turn(gs.PID, guest, agent)
 		})
@@ -342,10 +352,11 @@ func TestBrowserRoomTurnsMatchGo(t *testing.T) {
 		// an agent's request and edits are kept; an agent origin for a person,
 		// an agent's unlabelled request or ordinary turn are refused.
 		for what, ok := range map[string]bool{"a guest's turn": true, "an agent participant's request": true, "a guest's edit": true, "a member's retraction": true,
+			"a member's captured receiver request": true, "a member's captured receiver delegate": false, "an agent redirecting a captured request": false,
 			"an agent origin for a person": false, "an agent's unlabelled request": false, "an agent's ordinary turn": false} {
 			in := cases[root.Kind+": "+what].in
 			item := client.HistoryItem{V: 1, From: r.bob.Address, FromKey: r.bob.Fingerprint(), ID: protocol.NewID(), LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body,
-				Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, Ref: in.Ref, Human: in.Human, At: 1}
+				Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, Ref: in.Ref, ReceiverRoute: in.ReceiverRoute, Human: in.Human, At: 1}
 			v := w.call(map[string]any{"op": "history", "json": marshal(t, item)})
 			if (v["error"] == nil) != ok || ok && v["json"] != marshal(t, item) {
 				t.Errorf("%s: %s as history: %v, want kept %v", root.Kind, what, v, ok)

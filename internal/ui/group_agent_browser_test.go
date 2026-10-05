@@ -212,7 +212,7 @@ func groupParticipationEngineVectors(t *testing.T, root protocol.ConvRoot, state
 				for _, f := range in.Attachments {
 					manifests = append(manifests, envelope.Attachment{Name: f.Name, Size: f.Size, SHA256: f.SHA256})
 				}
-				result["history-"+name] = marshal(t, client.HistoryItem{V: 1, From: in.From, FromKey: sender.Fingerprint(), ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, Status: in.Status, Sub: in.Sub, Origin: in.Origin, Target: in.Target, PID: in.PID, AgentID: in.AgentID, Ref: in.Ref, At: in.TS * 1000, GroupAdmission: member.Admission.Hash(), Attachments: manifests})
+				result["history-"+name] = marshal(t, client.HistoryItem{V: 1, From: in.From, FromKey: sender.Fingerprint(), ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, AgentID: in.AgentID, Ref: in.Ref, Human: in.Human, At: in.TS * 1000, GroupAdmission: member.Admission.Hash(), Attachments: manifests})
 			}
 		}
 	}

@@ -89,7 +89,7 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 	if err = host.PublishAgentCatalog(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
-	p, err := carol.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, record.ID, nil, nil, "current membership disclosure only")
+	p, err := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, record.ID, nil, nil, "current membership disclosure only")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 	})
 	// Accepting it is refused, saying why (BUG-23): nothing would run it.
 	if err = host.Accept(task.ID); !errors.Is(err, ErrNothingRuns) {
-		t.Fatalf("accept of a task after its inviter's departure: %v", err)
+		t.Fatalf("accept of a task after its requester's departure: %v", err)
 	}
 	if s, _ := host.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
 		t.Fatalf("a refused accept left the task %s", s)
@@ -468,7 +468,11 @@ func TestGroupInteractionVisitorReorderedCarriers(t *testing.T) {
 	read := func(sub string) envelope.Envelope {
 		var raw []byte
 		var env envelope.Envelope
-		if e := w.alice.store.db.QueryRow(`SELECT envelope FROM outbox WHERE recipient=? AND pid=? AND sub=? ORDER BY rowid DESC LIMIT 1`, host.Address, p.PID, sub).Scan(&raw); e != nil {
+		query := `SELECT envelope FROM outbox WHERE recipient=? AND pid=? AND sub=?`
+		if sub == envelope.SubEvent { // P6 also stores a later public scope; replay the original invite
+			query += ` AND json_extract(body,'$.type')='invite'`
+		}
+		if e := w.alice.store.db.QueryRow(query+` ORDER BY rowid DESC LIMIT 1`, host.Address, p.PID, sub).Scan(&raw); e != nil {
 			t.Fatal(e)
 		}
 		if e := json.Unmarshal(raw, &env); e != nil {
@@ -1008,7 +1012,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if _, err = host.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Kind: envelope.KindAnswer, PID: p.PID, AgentID: visitor.ID, ReplyTo: q.ID, Body: "cross PID forged output"}); err == nil {
 		t.Fatal("cross PID output admitted")
 	}
-	if _, err = w.bob.DismissParticipation(tctx(t), v.PID); err != nil {
+	if _, err = w.alice.DismissParticipation(tctx(t), v.PID); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "visitor dismissed", func() bool { return stateAt(t, host, v.PID).State == PartDismissed })

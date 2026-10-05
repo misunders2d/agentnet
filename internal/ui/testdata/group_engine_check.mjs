@@ -180,6 +180,14 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check(linkedView.messages.filter(m=>m.kind==='answer').length===2&&linkedView.messages.every(m=>!m.unread&&!!m.synced_from),'late linked PID outputs retain source attribution and remain quiet');
   for(const role of ['member','visitor']){const lq=linkedView.messages.find(m=>m.id===pv[role+'-question'].inner.id),lb=lq?.reactions?.find(r=>r.emoji==='🎉')?.by||[];
    check(lb.length===1&&lb[0].id==='assistant:'+pv[role+'-pid']&&lb[0].assistant,'late linked browser restores the '+role+' assistant reactor from own history');}
+  for(const i of [0,1])for(const type of ['invite','scope','accept'])await w.receive(pv['p6-'+i+'-'+type]);
+  for(const name of ['p6-root','p6-ask','p6-answer']) {
+    const n=pv[name].inner,body=pv['history-'+name];
+    check(wire.historyJSON(wire.parseHistory(body))===body,'native captured '+name+' history exact bytes');
+    const env=await historyEnvelope(body);await w.receive({envelope:env});
+    const stored=await w.st.get('inbox',n.id);
+    check(!await w.st.get('held',wire.parseEnvelope(env).id)&&stored?.history&&stored.state===''&&wire.humanJSON(stored.human)===wire.humanJSON(wire.parseHumanTurn(n.human)),'captured '+name+' own history keeps signed audience and remains inert');
+  }
   const otherStamp=JSON.parse(pv['history-member-assistant-reaction']);otherStamp.group_admission='e'.repeat(64);const otherStampEnv=await historyEnvelope(JSON.stringify(otherStamp));await w.receive({envelope:otherStampEnv});
   check((await w.st.get('held',wire.parseEnvelope(otherStampEnv).id))?.reason==='invalid','assistant reaction history refuses a different own admission');
   // This browser's own history copy of an assistant reaction for its linked
@@ -239,7 +247,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check((await w.st.get('held',wire.parseEnvelope(wrongHistory).id))?.reason==='invalid','late linked history refuses different own admission');
   const alien=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000101,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:pv['history-member-answer']},aliceKeys,pub);
   await w.receive({envelope:alien});check((await w.st.get('held',wire.parseEnvelope(alien).id))?.reason==='invalid','other member cannot forward own linked PID history');
-  await w.reload();check((await w.e.groupThread(conv)).messages.filter(m=>m.kind==='answer').length===2,'late linked participation history survives durable reload');await w.close();
+  await w.reload();check((await w.e.groupThread(conv)).messages.filter(m=>m.kind==='answer').length===3,'late linked participation and captured history survive durable reload');await w.close();
   w=await world();const outside=v.outside_browser, outsideConv=outside.state.conv;
   for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
   await w.receive(outside['group-context']);check((await w.st.get('held',outside['group-context'].inner.id))?.reason==='proof_pending','outside browser context before exact signed invite stays held');
@@ -273,8 +281,12 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check(w.e.agentView(selectedInfo,[selectedSource],null,[w.e.me],"member").shared[0]===selectedSource.id,'group shared context projection retains verified own-linked original');
   // Tasks without asking (Comic's per-person choice, MEL-528): a member key is named with exactly the admission a receiver checks it against.
   const taskKey=selectedItem.from_key;await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:[taskKey]});
+  check(selectedInvite.type==='share'&&!selectedInvite.task_keys&&!selectedInvite.group.task_admissions,'sharing an existing membership never widens its accepted task permission');
+  const existingAgents=w.e.agentsOf.bind(w.e);w.e.agentsOf=async()=>[]; // fresh invitation vector
+  await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:[taskKey]});
   check(JSON.stringify(selectedInvite.task_keys)===JSON.stringify([taskKey])&&selectedInvite.group.task_admissions?.length===1&&!!selectedInvite.group.task_admissions[0]&&selectedInvite.group.task_admissions[0]===selectedMembers.epochs.get(taskKey),'group invite with tasks from a member names its key with that exact admission');
   let strangerRefused=false;try{await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:['f'.repeat(32)]});}catch(e){strangerRefused=/not the key of a member/.test(e.message);}check(strangerRefused,'group invite refuses tasks from a key that is not a member');
+  w.e.agentsOf=existingAgents;
   for(const change of [{fp:'f'.repeat(64)},{group_admission:'e'.repeat(64)},{pid:wire.newID()},{history:true},{excerpt_pid:wire.newID()}]) {let refused=false;try{await w.e.groupAgentSelection(outsideConv,{...selectedSource,...change},selectedMembers);}catch{refused=true;}check(refused,'group selected context refuses forged/PID/history/changed epoch '+Object.keys(change)[0]);}
   const retract=w.e.isRetracted.bind(w.e);w.e.isRetracted=async()=>true;let retractedRefused=false;try{await w.e.groupAgentSelection(outsideConv,selectedSource,selectedMembers);}catch{retractedRefused=true;}check(retractedRefused,'retracted original cannot become agent context');w.e.isRetracted=retract;w.e.sendConv=inviteSend;
   await w.receive(outside.ordinary);check((await w.st.get('held',outside.ordinary.inner.id))?.reason==='invalid','ordinary group own-copy replica rule remains strict');await w.close();
@@ -388,7 +400,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   w=await world();await w.receive(c.proof);
   const fresh=await wire.newKeys(),nextPub=await wire.publicEntry(fresh,'browser/other');
   const join=await wire.joinConsent(fresh,nextPub.address,roster.person,1,await wire.rosterHash(roster));
-  const next=await wire.nextRoster(keys,address,roster,[nextPub],join);await wire.verifyNext(next,roster);
+  const next=await wire.nextRoster(keys,address,roster,[nextPub],join,roster.label,[await wire.fingerprint(nextPub)]);await wire.verifyNext(next,roster);
   w.extraChains.set(roster.person,[JSON.parse(wire.rosterJSON(roster)),JSON.parse(wire.rosterJSON(next))]);
   w.e.me=await w.e.personRecord([roster,next],'self',w.e.me);await w.st.write([{s:'kv',k:'person',v:w.e.me}]);
   await w.receive(c.context);check(!(await w.st.get('kv','group/'+conv)).context&&(await w.st.get('held',wire.parseEnvelope(c.context.envelope).id)).reason==='invalid','removed exact own key cannot install');
@@ -403,7 +415,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    w=await world();await w.receive(c.proof);const original=w.st.write.bind(w.st);let fired=false;
    let nextSelf,leave,changedChain;
    if(race==='own-roster'){
-    const fresh=await wire.newKeys(),np=await wire.publicEntry(fresh,'browser/linked');const join=await wire.joinConsent(fresh,np.address,roster.person,1,await wire.rosterHash(roster));const next=await wire.nextRoster(keys,address,roster,[np],join);await wire.verifyNext(next,roster);
+    const fresh=await wire.newKeys(),np=await wire.publicEntry(fresh,'browser/linked');const join=await wire.joinConsent(fresh,np.address,roster.person,1,await wire.rosterHash(roster));const next=await wire.nextRoster(keys,address,roster,[np],join,roster.label,[await wire.fingerprint(np)]);await wire.verifyNext(next,roster);
     nextSelf=await w.e.personRecord([roster,next],'self',w.e.me);changedChain=[JSON.parse(wire.rosterJSON(roster)),JSON.parse(wire.rosterJSON(next))];
    }else{
     const m=wire.groupMember(states[0],roster.person);leave=await wire.signGroupWithdrawal(keys,{conv,realm:root.realm,person:roster.person,admission:await wire.groupAdmissionHash(m.admission),roster:await wire.rosterHash(roster),by:w.e.fp});

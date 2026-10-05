@@ -130,8 +130,8 @@ func validateHumanInner(in Inner) error {
 	switch h, agent := in.Human, in.Human.AgentAuthor(); {
 	case in.Kind == KindMessage && in.Status == "" && in.Target == nil && in.AgentID == "" && !AgentOrigin(in.Origin) && in.Emotion == "" && in.PID == h.AuthorPID && !agent:
 		// an ordinary turn of a member or a person guest
-	case (in.Kind == KindQuestion || in.Kind == KindTask) && in.Target != nil && in.PID != "" && in.PID != h.AuthorPID && in.AgentID == "" && AgentOrigin(in.Origin) == agent && in.Status == "" && in.ReceiverRoute == nil:
-		// a request addressed to the assistant participation PID
+	case (in.Kind == KindQuestion || in.Kind == KindTask) && in.Target != nil && in.PID != "" && in.PID != h.AuthorPID && in.AgentID == "" && AgentOrigin(in.Origin) == agent && in.Status == "" && (in.ReceiverRoute == nil || !agent && h.AuthorPID == "" && in.ReceiverRoute.Op == "request"):
+		// a request addressed to the assistant participation PID; a member may retain its original return route
 	case (in.Kind == KindAnswer || in.Kind == KindResult || in.Kind == KindMessage && in.Status == StatusProgress) && in.Target == nil && in.PID != "" && h.AuthorPID == "" && in.ReceiverRoute == nil:
 		// that assistant's output, to the captured audience
 	default:

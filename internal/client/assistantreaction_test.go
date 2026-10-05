@@ -333,7 +333,7 @@ func TestAssistantReactionGroupParticipation(t *testing.T) {
 		t.Fatal(err)
 	}
 	conv := packet.State.Conv
-	p, err := producer.InviteNamedAgent(tctx(t), conv, host.Address, record.ID, nil, nil, "")
+	p, err := w.alice.InviteNamedAgent(tctx(t), conv, host.Address, record.ID, nil, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,6 +342,9 @@ func TestAssistantReactionGroupParticipation(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "visitor active", func() bool { v, e := producer.Participation(p.PID); return e == nil && v.Claimable() })
+	if err = host.Approve(producer.Address); err != nil {
+		t.Fatal(err)
+	}
 	q, err := producer.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "group react")
 	if err != nil {
 		t.Fatal(err)

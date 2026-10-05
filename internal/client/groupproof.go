@@ -451,6 +451,39 @@ func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, for
 	if err = check(ctx, packet, resolve); err != nil {
 		return err
 	}
+	// A fresh linked member has no outside host roster yet. Pin the exact
+	// host named by each original signed invitation before the atomic check.
+	for _, ev := range packet.Memberships {
+		if ev.Type != protocol.EventInvite || ev.Host == nil {
+			continue
+		}
+		if ev.Conv != packet.State.Conv || ev.Validate() != nil {
+			return errors.New("group: malformed membership invitation")
+		}
+		author, ok, err := a.store.chainStep(ev.Author.Person, ev.Author.Roster)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if _, err = a.refreshPerson(ctx, ev.Author.Person, false); err != nil {
+				return err
+			}
+			author, ok, err = a.store.chainStep(ev.Author.Person, ev.Author.Roster)
+			if err != nil {
+				return err
+			}
+		}
+		if !ok {
+			return ErrGroupContextPending
+		}
+		key, ok := author.Device(ev.Author.Fingerprint)
+		if !ok || key.Address != ev.Author.Address || ev.Verify(key.SignKey) != nil {
+			return errors.New("group: membership invitation signature differs")
+		}
+		if _, err = a.externalHostProof(ctx, ev.Host); err != nil {
+			return err
+		}
+	}
 	withdrawals, err := a.groupPendingForState(ctx, packet.State, resolve)
 	if err != nil {
 		return err

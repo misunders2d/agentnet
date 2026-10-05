@@ -116,6 +116,11 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 	if info.Invite == "" {
 		return nil, ErrGroupContextPending
 	}
+	if item.Human != nil {
+		if err = humanTurnAuthorization(q, original, item.From, item.FromKey, a.Address, a.Self().Fingerprint(), true); err != nil {
+			return nil, err
+		}
+	}
 	if err = externalTurn(original, info, m, item.From, item.FromKey); err != nil {
 		if info.State == PartInvited && item.Sub == "" {
 			return nil, ErrGroupContextPending
@@ -180,6 +185,10 @@ func (a *Agent) groupParticipationSourceAdmission(q dbq, packet GroupContext, it
 		dir = "out"
 	}
 	stored.ReceiverRoute, err = receiverStoredRoute(q, dir, item.ID)
+	if err != nil {
+		return "", err
+	}
+	stored.Human, err = storedHuman(q, dir, item.ID)
 	if err != nil {
 		return "", err
 	}
@@ -255,6 +264,11 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 			}
 		}
 	}
+	if item.Human != nil {
+		if err = a.verifyHumanProof(ctx, root, item.Human); err != nil {
+			return hold(reasonProof, err.Error())
+		}
+	}
 	check := func(q dbq) (*protocol.ParticipationEvent, error) {
 		return a.groupParticipationHistoryCheck(q, root, sender, item)
 	}
@@ -265,6 +279,11 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 		return hold(reasonInvalid, err.Error())
 	}
 	result, err := a.store.addHistoryInbox(item.inner(in.Conv), item.At, item.FromKey, env.From, env.ID, fromQuarantine, func(tx *sql.Tx) error {
+		if item.Human != nil {
+			if err := insertHumanProof(tx, item.Human); err != nil {
+				return err
+			}
+		}
 		ev, e := check(tx)
 		if e != nil {
 			return e

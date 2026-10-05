@@ -645,7 +645,7 @@ async function checkV2(n) {
     // An agent author (a room participant) only asks, labelled as an agent (ROOM_V1 §2.3).
     const h = n.human, author = h.author_pid || "", agent = agentAuthor(h);
     const ordinary = n.kind === "message" && !n.status && !n.target && !n.agent_id && !agentOrigin(n.origin) && !n.emotion && n.pid === author && !agent;
-    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && agentOrigin(n.origin) === agent && !n.status && !n.receiver_route;
+    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && agentOrigin(n.origin) === agent && !n.status && (!n.receiver_route || !agent && !author && n.receiver_route.op === "request");
     const output = (["answer", "result"].includes(n.kind) || n.kind === "message" && n.status === StatusProgress) && !n.target && n.pid && !author && !n.receiver_route;
     if (!ordinary && !request && !output) throw new Error("human: ordinary turn, addressed request or assistant output only");
     await validateHumanTurn(n.human, n.conv);
@@ -1237,7 +1237,7 @@ export function parseHistory(json) {
   if (human) { // the same shapes as a live human turn (envelope/human.go)
     const pid = f.pid || "", author = human.author_pid || "", agent = agentAuthor(human);
     const ordinary = f.kind === "message" && !target && !f.agent_id && !agentOrigin(f.origin) && !f.emotion && !f.status && pid === author && !agent;
-    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && agentOrigin(f.origin) === agent && !f.status && !receiver;
+    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && agentOrigin(f.origin) === agent && !f.status && (!receiver || !agent && !author && receiver.op === "request");
     const output = (["answer", "result"].includes(f.kind) || f.kind === "message" && f.status === StatusProgress) && !target && pid && !author && !receiver;
     const reaction = f.sub === SubReaction && historyAssistantReaction(f) && f.kind === "message" && pid && !author && !target && !receiver; // an assistant's reaction to its captured audience
     const edit = [SubRevision, SubRetraction].includes(f.sub) && ref && f.kind === "message" && !pid && !target && !receiver && !f.agent_id && !f.origin; // an edit to its turn's captured audience

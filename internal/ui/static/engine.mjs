@@ -3185,6 +3185,10 @@ export class Engine {
     }
     const current=await this.dmMembers(c,events,checks),info=this.resolveAgent(h.pid,events,current);
     if(!info.invite)throw new Hold("proof_pending","Historical PID original invitation is missing.");
+    if(h.human) {
+      const evidence=await this.groupHumanEvidence(c,h.human,checks);
+      this.humanTurnAuthorization({...h,conv},evidence,info,h.from,h.from_key,this.address,this.fp);
+    }
     this.externalRole({...h,conv,replica:h.sub==="excerpt"},info,current,h.from,h.from_key);
     await this.checkExternalReply({...h,conv},info,current,checks);
     return info;
@@ -3192,6 +3196,10 @@ export class Engine {
 
   async admitGroupParticipationHistory(n,env,pin,h,checks,packet,members) {
     if(!n.replica||n.attachments.length||!members.some(p=>p.person===this.me.person&&p.devices.some(d=>d.address===env.from&&d.fingerprint===pin.fingerprint)))throw new Hold("invalid","Group PID history is only a current own linked replica.");
+    for(const e of h.human?.proof.filter(e=>e.type==="scope")||[]) {
+      const host=await this.sendKey(e.host.address);
+      if(host.fingerprint!==e.host.fingerprint||(await this.personOf(e.host.address,host)).person!==e.host.person)throw new Hold("invalid","Historical captured host proof differs.");
+    }
     await this.groupParticipationHistoryCheck(n.conv,h,{address:env.from,fingerprint:pin.fingerprint},checks);
     const key=h.from_key+"/"+h.lid,hash=h.ref?await this.groupControlHash(n.conv,h):await wire.groupHistoryContentHash(n.conv,h),seen=await this.groupRead(checks,"lids",key);
     if(seen&&(seen.conv!==n.conv||seen.hash!==hash))throw new Hold("conflicting_duplicate","Historical group PID logical content differs.");
@@ -3205,7 +3213,7 @@ export class Engine {
     if(!sender || !n.replica || n.attachments.length)throw new Hold("invalid","Group history is not from a current device or carries unexpected bytes.");
     let h;try{h=wire.parseHistory(n.body);}catch(e){throw new Hold("invalid",e.message);}
     if((JSON.parse(n.body).attachments||[]).some(a=>a.blob?.id||a.blob?.size||a.blob?.sha256))throw new Hold("invalid","Historical group file is not a manifest.");
-    if(h.pid&&h.human)throw new Hold("invalid","Group: history of a participation turn carrying a captured audience is not read yet."); // as its live copy (admitGroupTurn)
+    if(h.pid&&h.human?.proof.some(e=>e.role==="human"))throw new Hold("invalid","Group human guest execution audience is not enabled.");
     if(h.pid||h.ref)return this.admitGroupParticipationHistory(n,env,pin,h,checks,packet,members);
     if(h.kind!=="message"||h.sub||h.target||h.pid||h.agent_id||h.status||h.ref||h.origin&&h.origin!=="ui"||h.ts<=0||h.reply_to&&!wire.validID(h.reply_to))throw new Hold("invalid","Group history contains nonordinary input.");
     if(h.attachments.length>8 || (JSON.parse(n.body).attachments||[]).some(a=>!a.name || !Number.isSafeInteger(a.size) || a.size<0 || a.size>(100<<20) || !wire.validHash(a.sha256) || a.blob?.id || a.blob?.size || a.blob?.sha256))throw new Hold("invalid","Group history file is not an exact manifest.");
@@ -6385,6 +6393,7 @@ export class Engine {
     const forwards = !group && !own && wire.rootMember(root, this.me.person) ? await this.forwardStale(n, env, pin, c) : [];
     ops.push({ s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, conv: n.conv, hash } }, ...forwards.map(r => ({ s: "outbox", k: r.id, v: r })));
     if(group) {
+      rec.group_admission=evidence.members.epochs.get(this.fp)||undefined; // member receive epoch; outside followers have none
       const events=[...await this.convEvents(n.conv,checks),...await Promise.all(n.human.proof.map(async e=>({e,hash:await wire.eventHash(e)})))];
       ops.push(...await this.roomStoredOps(n.conv,checks,n,pin.fingerprint,events,evidence.members));
     }
