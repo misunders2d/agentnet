@@ -26,7 +26,19 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
   assert.equal(await composer.getByRole('button',{name:/Do it/}).count(),0,'no up-front execution');
   assert.ok(await root.getByText('Update CHANGELOG.md.',{exact:false}).count(),'proposal shown');
   await page.waitForTimeout(450);
-  const box=await doit.boundingBox();assert.ok(box && box.x>=0 && box.x+box.width<=width && box.y>=0 && box.y+box.height<=900,'Do it fits the viewport');
+  // Live Zoom redraws can detach a Playwright element between selection and
+  // measurement. Select and measure together, after navigation motion settles.
+  const measured=await page.waitForFunction(()=>{
+   const shadow=document.querySelector('#skin')?.shadowRoot;
+   if(!shadow)return false;
+   if(shadow.querySelector('#zoom')?.getAnimations({subtree:true}).some(a=>a.playState==='running'))return false;
+   const buttons=[...shadow.querySelectorAll('button')].filter(b=>b.textContent.trim()==='Do it' && b.getClientRects().length && getComputedStyle(b).visibility==='visible');
+   if(buttons.length!==1)return false;
+   const r=buttons[0].getBoundingClientRect();
+   return r.width>0 && r.height>0 ? {x:r.x,y:r.y,width:r.width,height:r.height} : false;
+  },undefined,{timeout:5000});
+  const box=await measured.jsonValue();await measured.dispose();
+  assert.ok(box && box.x>=0 && box.x+box.width<=width && box.y>=0 && box.y+box.height<=900,'Do it fits the viewport: '+JSON.stringify(box));
   if(shots){fs.mkdirSync(shots,{recursive:true,mode:0o700});await page.screenshot({path:path.join(shots,'p23-'+mode+'-'+skin+'-'+width+'-proposal.png')});}
   // Dispatch both clicks in the same turn; native persistence must dedup.
   await doit.evaluate(b=>{b.click();b.click()});
