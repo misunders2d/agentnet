@@ -662,6 +662,7 @@ export interface Presence {
 export interface QuarantineItem {
   id: string;
   peer: string;
+  code: string;
   reason: string;
   at: string;
 }

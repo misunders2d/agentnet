@@ -2771,13 +2771,27 @@ function clearSearch() {
   rerenderContacts();
 }
 
+// Why a received message is held back, worded from its code
+// (QuarantineItem.code) with the sender from who(), never from reason, which
+// names the address. One that didn't verify only claims who sent it.
+const heldWords = {
+  key_changed: (p) => [p, "'s key changed. It waits until you check and trust the new one."],
+  proof_pending: () => "It names a conversation or person this device can't check yet. It waits here; nothing runs it.",
+  identity_conflict: (p) => ["It disagrees with the person record kept here for ", p, ". It stays held; nothing runs it."],
+  conflicting_duplicate: (p) => [p, " sent different content under a message already received. It stays held; nothing runs it."],
+};
+
 function renderQuarantine(items) {
   const box = $("quarantine");
   box.hidden = !items.length;
   if (!items.length) return;
   $("quarantine-summary").textContent = items.length === 1 ? "1 message held back" : items.length + " messages held back";
-  fill($("quarantine-list"), ...items.map((q) => el("li", {},
-    el("span", {}, who(q.peer), " · ", when(q.at)), el("span", { class: "hint" }, q.reason))));
+  fill($("quarantine-list"), ...items.map((q) => {
+    const known = Object.hasOwn(heldWords, q.code || "");
+    return el("li", {},
+      el("span", {}, known ? who(q.peer) : ["Unverified, says it's from ", who(q.peer)], " · ", when(q.at)),
+      el("span", { class: "hint" }, known ? heldWords[q.code](who(q.peer)) : "It couldn't be verified, so it isn't shown."));
+  }));
 }
 
 // ---- thread -----------------------------------------------------------------
@@ -3286,8 +3300,7 @@ function approvalDialog(t) {
   return dialog({ title: "Answer " + t.peer + "'s questions automatically?",
     body: [el("p", {}, "From now on your responder answers questions from " + t.peer + " without asking you, with your harness's own setup minus editing tools and anything needing a new approval; tools you already allow keep their effects. " +
       (t.task_grant === "active" ? "Tasks are not affected: those from this key already run without asking, under the standing permission you gave." : "Tasks still wait for you.")),
-      el("p", {}, "Questions already waiting stay waiting: answer them or let your responder answer each one."),
-      el("p", { class: "hint" }, "In a terminal: agentnet approve " + t.peer)],
+      el("p", {}, "Questions already waiting stay waiting: answer them or let your responder answer each one.")],
     ok: "Answer automatically", run: () => act({ do: "approve", id: t.peer }) });
 }
 
@@ -3305,8 +3318,7 @@ function trustDialog(t) {
       el("p", {}, "Ask " + t.peer + " for their key fingerprint through another channel, in person or on a call, and compare."),
       el("dl", {}, el("dt", {}, "Pinned"), el("dd", { class: "mono" }, t.key.pinned || "none"),
         el("dt", {}, "New"), el("dd", { class: "mono" }, expect)),
-      el("label", { class: "check" }, check, el("span", {}, "The new fingerprint matches what they told me.")),
-      el("p", { class: "hint" }, "In a terminal: agentnet trust " + t.peer)],
+      el("label", { class: "check" }, check, el("span", {}, "The new fingerprint matches what they told me."))],
     ok: "Trust new key", gate: check, run: () => act({ do: "trust", id: t.peer, key: expect }),
   });
 }
