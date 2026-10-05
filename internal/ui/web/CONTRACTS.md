@@ -86,8 +86,10 @@ decide.
   buttons; `role="log"` for the timeline; works at 390px and 1440px, light
   and dark; reduced motion turns loops and slides into short fades.
 - **Phone keyboard:** the frame is sized from the root (`h-full`, never
-  `h-dvh`), bottom sheets sit on `--an-keyboard` (docs/UI_SKINS.md), and the
-  timeline keeps its newest message in view when the keyboard shrinks it.
+  `h-dvh`), bottom sheets and other fixed bottom popups (the phone emoji
+  picker) sit on `--an-keyboard` and are no taller than what it leaves
+  (docs/UI_SKINS.md), and the timeline keeps its newest message in view
+  when the keyboard shrinks it.
   On a touch screen a choice made around the message field (an intent, a
   chip's cancel) puts the cursor back only when the person was typing, and
   never with `preventScroll`; Reply always does, inside the tap's own

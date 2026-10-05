@@ -190,8 +190,9 @@ The entry exports `async function mount(root, host)` and optionally
   it covers. Both are absent while nothing covers the page. Size the skin
   from `root` (`height: 100%` down to the frame), never from `vh`, `dvh` or
   `svh`, so the message box stays above the keyboard; a fixed bottom popup
-  (a bottom sheet) sits at `bottom: var(--an-keyboard, 0px)`. Both names
-  are the host's own: a skin reads them and never sets them.
+  (a bottom sheet) sits at `bottom: var(--an-keyboard, 0px)` and is no
+  taller than `var(--an-viewport-h, 100dvh)`. Both names are the host's
+  own: a skin reads them and never sets them.
 - Put theme, tokens and resets on `root` (`:root` and `html`/`body` rules do
   not match in a shadow tree). Render popups (menus, dialogs, sheets) into a
   container inside `root`. Read focus from `root.getRootNode().activeElement`,

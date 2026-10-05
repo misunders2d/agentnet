@@ -103,7 +103,8 @@ export function ReactPopover({ m, ctx, trigger, wide, onDone }: { m: AnyMsg; ctx
   );
 }
 
-/** EmojiDialog: the whole picker on its own, for phones (opened from a message's sheet). */
+/** EmojiDialog: the whole picker on its own, for phones (opened from a message's sheet).
+ *  Like a sheet, it sits on the keyboard (--an-keyboard): its search opens one. */
 export function EmojiDialog({ open, onOpenChange, m, ctx }: { open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx }) {
   const portal = usePortal();
   const modal = useModal(open);
@@ -113,7 +114,7 @@ export function EmojiDialog({ open, onOpenChange, m, ctx }: { open: boolean; onO
     <Dialog.Root open={open} onOpenChange={onOpenChange} modal="trap-focus">
       <Dialog.Portal container={portal}>
         <Dialog.Backdrop className="fixed inset-0 z-40 bg-[#1B1530]/40 transition-opacity duration-200 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0" />
-        <Dialog.Popup {...modal} className="fixed bottom-3 left-1/2 z-50 -translate-x-1/2 outline-none transition-[opacity,translate] duration-[280ms] ease-out-soft data-[starting-style]:translate-y-8 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+        <Dialog.Popup {...modal} className="fixed bottom-[calc(var(--an-keyboard,0px)_+_12px)] left-1/2 z-50 -translate-x-1/2 outline-none transition-[opacity,translate] duration-[280ms] ease-out-soft data-[starting-style]:translate-y-8 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
           <Dialog.Title className="sr-only">Choose a reaction</Dialog.Title>
           <EmojiPicker onPick={(e) => { react(e, mine.includes(e)); onOpenChange(false); }} onClose={() => onOpenChange(false)} />
         </Dialog.Popup>
