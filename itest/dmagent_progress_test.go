@@ -89,7 +89,13 @@ func TestCLIDMAgentProgressThenAnswer(t *testing.T) {
 	if p.PID != pid || p.Origin != "agent:claude" || p.Kind != "message" || p.ReplyTo == "" {
 		t.Fatalf("progress provenance %+v", p)
 	}
-	if !strings.Contains(dmShow(c, "bob", conv), "question pid "+pid+" (running)") {
+	running := false
+	for _, m := range messages("bob") {
+		if m.ID == q && m.PID == pid && m.Kind == "question" && m.State == "running" {
+			running = true
+		}
+	}
+	if !running || !strings.Contains(dmShow(c, "bob", conv), "question pid "+pid+" (running: Running since ") {
 		t.Fatalf("progress ended the run:\n%s", dmShow(c, "bob", conv))
 	}
 	if n, _ := count("alice", "AGENT RESULT done"); n != 0 {

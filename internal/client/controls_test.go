@@ -678,7 +678,7 @@ func TestRetractionKeptAndCacheScope(t *testing.T) {
 		_, err := os.Stat(w.alice.downloadPath(m.Attachments[0].BlobID))
 		return err == nil
 	})
-	otherConv := strings.Repeat("b", 64)
+	otherConv := newDM(t, w.alice, w.bob) // room membership processing needs a pinned root, even for a synthetic row
 	otherKey := strings.Repeat("e", 64)
 	other := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: w.bob.Address, To: w.alice.Address, TS: time.Now().Unix(),
 		Kind: envelope.KindMessage, Body: "in B, same lid", Conv: otherConv, LID: turn.LID,
@@ -822,7 +822,7 @@ func TestRetractionSameIDOppositeDirection(t *testing.T) {
 	}
 	eventually(t, "alice holds bob's turn", func() bool { _, ok := findLID(t, w.alice, conv, turn.LID); return ok })
 	if _, err := w.alice.store.db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, created_at, conv, lid, kind, created_ms)
-		VALUES(?, ?, 'alice text under the same lid', '{}', 'custody', unixepoch(), ?, ?, 'message', ?)`,
+		VALUES(?, ?, 'alice text under the same lid', json_object('ts',unixepoch()), 'custody', unixepoch(), ?, ?, 'message', ?)`,
 		protocol.NewID(), w.bob.Address, conv, turn.LID, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
