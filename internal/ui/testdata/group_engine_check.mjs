@@ -418,7 +418,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check(w.e.agentView(selectedInfo,[selectedSource],null,[w.e.me],"member").shared[0]===selectedSource.id,'group shared context projection retains verified own-linked original');
   // Tasks without asking (Comic's per-person choice, MEL-528): a member key is named with exactly the admission a receiver checks it against.
   const taskKey=selectedItem.from_key;await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:[taskKey]});
-  check(selectedInvite.type==='share'&&!selectedInvite.task_keys&&!selectedInvite.group.task_admissions,'sharing an existing membership never widens its accepted task permission');
+  check(selectedInvite.type==='share'&&selectedInvite.pid===selectedPID&&!selectedInvite.task_keys&&!selectedInvite.group.task_admissions,'sharing an existing membership never widens its accepted task permission');
   const existingAgents=w.e.agentsOf.bind(w.e);w.e.agentsOf=async()=>[]; // fresh invitation vector
   await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:[taskKey]});
   check(JSON.stringify(selectedInvite.task_keys)===JSON.stringify([taskKey])&&selectedInvite.group.task_admissions?.length===1&&!!selectedInvite.group.task_admissions[0]&&selectedInvite.group.task_admissions[0]===selectedMembers.epochs.get(taskKey),'group invite with tasks from a member names its key with that exact admission');
