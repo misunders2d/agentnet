@@ -21,7 +21,11 @@ type Live struct {
 	// timeout bounds each network request an action makes.
 	timeout time.Duration
 	staged  staged // files the page handed over, not sent yet
+	app     bool   // served by the AgentNet app (SetApp)
 }
+
+// SetApp says the page is the AgentNet app's window (overview.app).
+func (l *Live) SetApp(app bool) { l.app = app }
 
 // recommended is the build the Hub's operator recommends, only when it is
 // newer than this one: a preview newer than the stable release is never
@@ -54,7 +58,7 @@ func (l *Live) TopicOverview() (Overview, error) { return l.overview(false) }
 
 func (l *Live) overview(listArchived bool) (Overview, error) {
 	seq, _ := l.a.Changed()
-	o := Overview{Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
+	o := Overview{App: l.app, Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
 		Threads: []ThreadSummary{}, Review: []ReviewItem{}, NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: []QuarantineItem{}}
 	if r, err := l.a.Responder(); err == nil && r != nil {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir

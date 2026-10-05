@@ -86,6 +86,33 @@ const recipientPattern = /^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/;
 export const validName = (s) => typeof s === "string" && namePattern.test(s);
 export const validID = (s) => typeof s === "string" && idPattern.test(s);
 
+// nameCandidates is cmd/agentnet's nameCandidates: the device names tried
+// in turn when the server says one is taken (base, base-2 … n in all),
+// each shortened to stay a valid name.
+export function nameCandidates(base, n) {
+  const out = [];
+  for (let i = 1; i <= n; i++) {
+    let c = base;
+    if (i > 1) {
+      const suffix = "-" + i, max = 32 - suffix.length;
+      if (c.length > max) c = c.slice(0, max).replace(/-+$/, "");
+      c += suffix;
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+// Invitation hints (protocol.ValidInviteHint): what the inviter wrote on an
+// invitation, short printable text without surrounding spaces, or nothing.
+export const MaxInviteHint = 64, MaxWorkspaceHint = 120;
+const hintPattern = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u;
+export function validInviteHint(s, max) {
+  if (s === "" ) return true;
+  return typeof s === "string" && [...s].length <= max && s.trim() === s && !s.startsWith(" ") && !s.endsWith(" ") && hintPattern.test(s);
+}
+const cleanHint = (s, max) => (typeof s === "string" && validInviteHint(s, max) ? s : "");
+
 // validAddress is protocol.SplitAddress: "label/agent", both valid names.
 export function validAddress(a) {
   if (typeof a !== "string") return false;
@@ -271,7 +298,10 @@ export function decodeInvite(code) {
   } catch (e) {
     throw new Error("damaged invite code");
   }
-  const inv = { hub: v.hub, label: v.label, secret: v.secret, cert: v.cert || "" };
+  // name, from and workspace are the inviter's words, unsigned: shown as
+  // what the invitation says, next to the server's own address.
+  const inv = { hub: v.hub, label: v.label, secret: v.secret, cert: v.cert || "",
+    name: cleanHint(v.name, MaxInviteHint), from: cleanHint(v.from, MaxInviteHint), workspace: cleanHint(v.workspace, MaxWorkspaceHint) };
   if (typeof inv.secret !== "string" || inv.secret === "" || !validName(inv.label)) throw new Error("incomplete invite code");
   inv.hub = hubOrigin(inv.hub);
   return inv;

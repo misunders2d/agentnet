@@ -62,7 +62,11 @@ type Overview struct {
 	ReplyReceivers   bool                  `json:"reply_receivers"` // native local continuation selection/read-only state
 	ReplySessions    bool                  `json:"reply_sessions"`  // safe native registration catalog, not process liveness
 	Demo             bool                  `json:"demo"`
-	Me               Me                    `json:"me"`
+	// App says the page is the AgentNet app's window (cmd/agentnet app.go):
+	// the app updates as a whole, and the page offers its new version
+	// rather than a terminal command.
+	App bool `json:"app,omitempty"`
+	Me  Me   `json:"me"`
 	// Threads are the device threads, each with its topic state. A page
 	// that lists topics itself asks GET /api/overview?topics=1 and gets
 	// them without archived topics: those are counted per peer in Topics
@@ -167,7 +171,106 @@ type Identity interface {
 type DeviceLink struct {
 	URL     string    `json:"url"`
 	Expires time.Time `json:"expires"`
+	// AppURL opens the same link in the AgentNet app on this computer
+	// (agentnet://open#code): a browser hands the link to the app it
+	// offers to install, so the app joins as this person.
+	AppURL string `json:"app_url,omitempty"`
 }
+
+// Invitations (MEL-533): an admin's device makes one invitation link per
+// new person, sees the unused ones and withdraws them. Live and the
+// browser engine serve the same routes (/api/invite, /api/invites,
+// /api/invite/revoke).
+type Invitations interface {
+	// Invite makes an invitation for a new person.
+	Invite(r InviteRequest) (InviteView, error)
+	// Invites says whether this device may invite people and lists the
+	// unused invitations (admins only).
+	Invites() (InvitesView, error)
+	// RevokeInvite withdraws an unused invitation by its id.
+	RevokeInvite(id string) error
+}
+
+// InviteRequest is the Invite people form: the person's name, whether they
+// become an admin, and how many days the link works (1, 7 or 30).
+type InviteRequest struct {
+	Name  string `json:"name"`
+	Admin bool   `json:"admin"`
+	Days  int    `json:"days"`
+}
+
+// InviteDays are the lifetimes an invitation can be given, in days.
+var InviteDays = []int{1, 7, 30}
+
+// InviteView is an invitation made: the link to share, the label the
+// person gets, when it stops working and a message ready to send.
+type InviteView struct {
+	Link    string    `json:"link"`
+	Label   string    `json:"label"`
+	Expires time.Time `json:"expires"`
+	Message string    `json:"message"`
+}
+
+// InvitesView answers GET /api/invites.
+type InvitesView struct {
+	CanInvite bool                `json:"can_invite"`
+	Invites   []PendingInviteView `json:"invites"`
+}
+
+// PendingInviteView is one unused invitation.
+type PendingInviteView struct {
+	ID      string    `json:"id"`
+	Name    string    `json:"name"`
+	Label   string    `json:"label"`
+	Admin   bool      `json:"admin"`
+	By      string    `json:"by"`
+	Created time.Time `json:"created,omitzero"` // zero (left out) for invitations made before the relay kept it
+	Expires time.Time `json:"expires"`
+}
+
+// GetAppView answers GET /api/get-app: where to download the AgentNet app
+// (static/getapp.json, one table for Go and the page) for this program's
+// version, and the platform this page runs on, if known.
+type GetAppView struct {
+	Version   string           `json:"version"`
+	Detected  string           `json:"detected,omitempty"`
+	Platforms []GetAppPlatform `json:"platforms"`
+}
+
+// GetAppPlatform is one download of the app.
+type GetAppPlatform struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// Folders is implemented where the page runs on the computer whose folders
+// it lists (the daemon, never a browser): the folder picker of Connect an
+// agent. Read-only.
+type Folders interface {
+	Folders(path string) (FoldersView, error)
+}
+
+// FoldersView is one folder's subfolders (hidden ones left out, at most
+// MaxFolders), with its parent and the person's home; Roots are the
+// drives on Windows.
+type FoldersView struct {
+	Path      string       `json:"path"`
+	Parent    string       `json:"parent,omitempty"`
+	Home      string       `json:"home"`
+	Roots     []string     `json:"roots,omitempty"`
+	Dirs      []FolderView `json:"dirs"`
+	Truncated bool         `json:"truncated,omitempty"`
+}
+
+// FolderView is one subfolder.
+type FolderView struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// MaxFolders bounds the subfolders one listing shows.
+const MaxFolders = 500
 
 // DeviceView is one device of a person.
 type DeviceView struct {

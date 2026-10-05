@@ -55,6 +55,8 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/groups/{id}/chain", h.handleGroupCommit) // hub/groups.go: encrypted signed group journal (admins)
 	mux.HandleFunc("GET /v1/groups/{id}/chain", h.handleGroupChain)
 	mux.HandleFunc("POST /v1/admin/invites", h.handleInvite)
+	mux.HandleFunc("GET /v1/admin/invites", h.handleInvites) // hub/invites.go: any member; the list for admins only
+	mux.HandleFunc("POST /v1/admin/invites/revoke", h.handleInviteRevoke)
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
 	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
@@ -327,8 +329,13 @@ func (h *Hub) handleInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req protocol.InviteRequest
-	if err := decodeStrict(body, &req); err != nil || !protocol.ValidName(req.Label) {
-		writeError(w, http.StatusBadRequest, "", "invite needs a valid person label")
+	if err := decodeStrict(body, &req); err != nil || (req.Label == "" && req.Name == "") || (req.Label != "" && !protocol.ValidName(req.Label)) {
+		writeError(w, http.StatusBadRequest, "", "invite needs a valid person label or the person's name")
+		return
+	}
+	if !protocol.ValidInviteHint(req.Name, protocol.MaxInviteHint) || !protocol.ValidInviteHint(req.From, protocol.MaxInviteHint) ||
+		!protocol.ValidInviteHint(req.Workspace, protocol.MaxWorkspaceHint) {
+		writeError(w, http.StatusBadRequest, "", "names on an invitation must be short readable text")
 		return
 	}
 	if req.Browser && (h.certPEM != "" || !h.cfg.Web) {
@@ -338,13 +345,23 @@ func (h *Hub) handleInvite(w http.ResponseWriter, r *http.Request) {
 	if req.TTL <= 0 || req.TTL > protocol.MaxInviteTTL {
 		req.TTL = 7 * 24 * time.Hour
 	}
+	now := time.Now()
+	label := req.Label
+	if label == "" { // made from the name, never shared with another person (hub/invites.go)
+		var err error
+		if label, err = h.store.freeInviteLabel(labelFromName(req.Name), now); err != nil {
+			writeError(w, http.StatusInternalServerError, "", "storage error")
+			return
+		}
+	}
 	secret := protocol.NewID() + protocol.NewID()
-	if err := h.store.createInvite(secret, req.Label, req.Admin, req.TTL, caller); err != nil {
+	if err := h.store.createNamedInvite(secret, label, req.Name, req.Admin, req.TTL, caller, now); err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
-	code := protocol.Invite{Hub: h.cfg.PublicURL, Label: req.Label, Secret: secret, CertPEM: h.certPEM}.Encode()
-	writeJSON(w, http.StatusCreated, map[string]string{"code": code})
+	code := protocol.Invite{Hub: h.cfg.PublicURL, Label: label, Secret: secret, CertPEM: h.certPEM,
+		Name: req.Name, From: req.From, Workspace: req.Workspace}.Encode()
+	writeJSON(w, http.StatusCreated, protocol.InviteCreated{Code: code, Label: label})
 }
 
 func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {

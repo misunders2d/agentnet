@@ -57,10 +57,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
-	mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
-		r.SetPathValue("name", "manifest.webmanifest")
-		s.asset(w, r)
-	})
 	mux.Handle("GET /assets/skins/", s.skins)
 	mux.HandleFunc("GET /assets/vendor/qr.mjs", s.qrModule)
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -127,6 +123,11 @@ func (s *Server) Handler() http.Handler {
 	// everyone is admin only.
 	mux.HandleFunc("GET /api/workspace", s.workspaceInfo)
 	mux.HandleFunc("POST /api/workspace/name", s.renameWorkspace)
+	mux.HandleFunc("POST /api/invite", s.invite) // livegetapp.go, liveinvites.go: Invite people (MEL-533)
+	mux.HandleFunc("GET /api/invites", s.invites)
+	mux.HandleFunc("POST /api/invite/revoke", s.revokeInvite)
+	mux.HandleFunc("GET /api/get-app", s.getApp)  // where to get the AgentNet app (static/getapp.json)
+	mux.HandleFunc("GET /api/folders", s.folders) // Connect an agent's folder picker (livefolders.go)
 	mux.HandleFunc("GET /events", s.events)
 	return s.guard(mux)
 }
@@ -151,7 +152,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			// A notification's click opens the page without its token and
 			// relies on this browser's session; when that is gone, say how
 			// to get in again.
-			http.Error(w, "This page needs its address from this computer: run agentnet ui and open the address it prints.", http.StatusUnauthorized)
+			http.Error(w, "This page opens in the AgentNet app: open AgentNet from your apps (advanced: agentnet ui prints this page's address).", http.StatusUnauthorized)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -192,20 +193,12 @@ func same(a, b string) bool {
 // page serves index.html. Arriving with the token sets the cookie and
 // redirects so the token leaves the address bar and history.
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Has("t") {
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.token, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
 	data, err := fs.ReadFile(static.Files, "index.html")
 	if err != nil {
 		http.Error(w, "missing page", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache") // an updated daemon serves a new page at the same address
-	w.Write(data)
+	s.serveHTML(w, r, data)
 }
 
 // asset serves one embedded file; there are no directory listings.
@@ -223,7 +216,8 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	}
 	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
 		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8", "skin-choice.mjs": "text/javascript; charset=utf-8",
-		"manifest.webmanifest": "application/manifest+json",
+		"setup.mjs":            "text/javascript; charset=utf-8", // the AgentNet app's first-run page (setup.go)
+		"landing.css":          "text/css; charset=utf-8",
 		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
 		"assistant-setup.mjs":  "text/javascript; charset=utf-8",
 		"assistant-setup.css":  "text/css; charset=utf-8",

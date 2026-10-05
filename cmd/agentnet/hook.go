@@ -202,7 +202,7 @@ func hookCommand(home, harness string) (string, error) {
 	if runtime.GOOS == "windows" {
 		return "", errors.New("hooks are not supported on Windows yet: how the harnesses run hook commands there is not verified")
 	}
-	exe, err := os.Executable()
+	exe, err := selfExe() // a stable copy when the app runs from a passing place (appexe.go)
 	if err != nil {
 		return "", err
 	}
@@ -235,6 +235,9 @@ func isAgentNetHook(handler any, harness string) bool {
 		return false
 	}
 	if exe, err := os.Executable(); err == nil && m[1] == exe {
+		return true
+	}
+	if exe, err := selfExe(); err == nil && m[1] == exe {
 		return true
 	}
 	base := filepath.Base(m[1])

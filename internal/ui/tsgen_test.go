@@ -35,11 +35,12 @@ var tsRoots = []any{
 	WorkspaceBinding{}, client.TeamsView{}, protocol.TeamState{}, protocol.TeamSnapshot{},
 	client.TypingView{}, client.TypingResult{}, client.StorageSummary{}, static.Skin{}, TopicPage{}, ApprovalsView{},
 	WorkspaceInfoView{},
+	InviteView{}, InvitesView{}, GetAppView{}, FoldersView{}, // the AgentNet app (MEL-533/534/536)
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
 	AgentCatalogChange{}, WorkspaceJoin{}, client.TeamChange{}, protocol.TypingScope{}, AssistantSetupRequest{},
-	ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{},
+	ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{}, InviteRequest{},
 }
 
 func TestTypeScriptViewTypes(t *testing.T) {

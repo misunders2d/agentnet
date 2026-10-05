@@ -78,6 +78,22 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 	// Local exact items land on their message; remote report snapshots land
 	// on Activity's actionable review surface, never their read-only message.
 	// A click only opens the page; it never accepts or sends anything.
+	// In the AgentNet app the click opens its window on the item (never a
+	// terminal); the workspace-bound OpenPage adds the workspace.
+	if a.openPage != nil {
+		fragment := "review"
+		if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
+			fragment = "msg=" + target + "&dir=in"
+		}
+		if argv = a.openPage(fragment); len(argv) == 0 {
+			return nil, nil
+		}
+		return argv, func() {
+			if err := a.launch(argv); err != nil {
+				a.Logf("notification click: %v; open the AgentNet app", err)
+			}
+		}
+	}
 	// Reuse the daemon's workspace-bound page command when provided. Extra
 	// workspace homes share the shell page and have no separate ui-url file.
 	if a.openConv != nil {

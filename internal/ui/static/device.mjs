@@ -1,8 +1,11 @@
 // The relay's page: this browser as an AgentNet device. It checks what the
-// browser can do, allows one tab only, proves storage works, joins only
-// when the person asks (with an invitation for this server), then starts
-// the engine and the UI host (loader.js), which mounts the chosen skin over it.
+// browser can do, allows one tab only, proves storage works, and starts the
+// engine and the UI host (loader.js), which mounts the chosen skin over it.
+// A device that has not joined gets "Get AgentNet" (landing.mjs): the app
+// on a computer, this page on a phone's home screen, which joins only when
+// the person taps Join, under an automatic device name.
 import { Engine, openIDB, probeStore, sameOrigin } from "./engine.mjs";
+import { addManifest, appBanner, installOffer, landing } from "./landing.mjs";
 import { decodeInvite, decodeOffer, newID, support, validName } from "./wire.mjs";
 import * as ws from "./workspaces.mjs";
 
@@ -108,6 +111,7 @@ async function workspaces(engine) {
     shell,
     async join({ name, invite, agent }) {
       if (!memberships) throw new Error("Joined workspaces cannot be kept in this browser.");
+      agent = agent || engine.address.split("/")[1]; // this device's own name: people never name devices
       if (!validName(agent || "")) throw new Error("Use lowercase letters, numbers and dashes for the device name, like phone or work-laptop.");
       let inv;
       try { inv = decodeInvite(invite); } catch (e) { throw new Error("That is not a complete invitation code. Copy all of it again, or ask the sender for a new link."); }
@@ -215,6 +219,8 @@ async function main() {
   });
   takeOpen();
   const link = takeInvite();
+  addManifest(); // phones only: a computer is never offered this page as an app
+  document.head.append(el("link", { rel: "stylesheet", href: "/assets/landing.css" }));
   document.getElementById("skin").hidden = true;
   panel = el("main", { id: "device-setup", class: "join" });
   document.body.prepend(panel);
@@ -254,103 +260,53 @@ async function run(link) {
   }
   const engine = new Engine({ store, base: location.origin, push });
   if (await engine.load()) start(engine);
-  else joinScreen(engine, link);
+  else showLanding(engine, link);
 }
 
-// joinScreen asks for a name for this browser, and for an invitation code
-// only when the link brought none that can be used here. Nothing is
-// enrolled or named until the person presses Join.
-function joinScreen(engine, link) {
-  onInvite = (inv) => joinScreen(engine, inv);
-  if (link && link.link) { linkScreen(engine, link); return; }
-  const fromLink = link && !link.damaged ? link.code : "";
-  const linkProblem = link && (link.damaged ? "damaged" : inviteProblem(fromLink));
-  const needCode = !fromLink || !!linkProblem;
-  const invite = el("textarea", { id: "join-code", rows: "3", autocomplete: "off", spellcheck: "false", placeholder: "agentnet-invite-v1:…" });
-  const name = el("input", { id: "join-name", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "32", placeholder: "phone", "aria-describedby": "join-name-hint" });
-  const error = el("p", { class: "error", role: "alert", id: "join-error" });
-  const button = el("button", { type: "submit", class: "btn primary join-go" }, "Join");
-  const form = el("form", { class: "join-form", novalidate: true },
-    needCode && [el("label", { for: "join-code" }, "Invitation code"), invite],
-    el("label", { for: "join-name" }, "Name this browser"), name,
-    el("p", { class: "hint", id: "join-name-hint" }, "So you can tell your devices apart. Lowercase, like phone or work-laptop."),
-    error, button);
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    if (button.disabled) return;
-    const code = needCode ? invite.value.trim() : fromLink;
-    const chosen = name.value.trim();
-    const problem = inviteProblem(code) ||
-      (!chosen ? "Choose a name for this browser." : !validName(chosen) ? "Use lowercase letters, numbers and dashes for the name, like phone or work-laptop." : "");
-    error.textContent = problem; // each try replaces what the last one said
-    if (problem) return;
-    button.disabled = true;
-    try {
-      // Asked for when the person acts; the answer is shown, not assumed.
-      let persisted = null;
-      try { persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : null; } catch (e) { persisted = null; }
-      await engine.join(code, chosen);
+// showLanding is "Get AgentNet" for a browser that has not joined
+// (landing.mjs). Only a phone joins here, when the person taps Join: this
+// browser's engine joins under an automatic name, then the person is
+// created with the name they gave.
+function showLanding(engine, link) {
+  const persist = async () => {
+    // Asked for when the person acts; the answer is shown, not assumed.
+    try { return navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : null; } catch (e) { return null; }
+  };
+  const ui = {
+    el, show, onCode: null,
+    notes: () => [storageNote(), privacy()],
+    async join(code, device, name) {
+      const problem = inviteProblem(code);
+      if (problem) throw new Error(problem);
+      const persisted = await persist();
+      await engine.joinAuto(code, device);
+      try { await engine.createPerson(name); } catch (e) { /* the messenger offers "Choose the name people see" again */ }
       engine.storage = { persisted };
       onInvite = null;
-      start(engine);
-    } catch (e) {
-      error.textContent = e.message;
-      button.disabled = false;
-    }
-  });
-  const recovery = linkProblem === "damaged" ? "This invite link could not be opened. Paste an invitation code below, or ask the sender for a new link."
-    : linkProblem || (!link ? "Open the invite link you were sent, or paste the invitation code below." : "");
-  show("Join AgentNet", el("p", { class: "join-intro" }, "Chat with people and their agents."),
-    recovery && el("p", { class: "join-recovery" }, recovery),
-    form, storageNote(), privacy());
-  (needCode ? invite : name).focus();
-}
-
-// linkScreen joins this browser as a new device of the person whose
-// other device made the link: a name for this browser, then that device's
-// approval. Nothing is joined until the person presses Add.
-function linkScreen(engine, link) {
-  const problem = link.damaged ? "This device link could not be opened. Make a new one on your other device." : linkProblem(link.code);
-  const name = el("input", { id: "join-name", type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "32", placeholder: "phone", "aria-describedby": "join-name-hint" });
-  const error = el("p", { class: "error", role: "alert", id: "join-error" });
-  const button = el("button", { type: "submit", class: "btn primary join-go", disabled: !!problem }, "Add this browser");
-  const form = el("form", { class: "join-form", novalidate: true },
-    el("label", { for: "join-name" }, "Name this browser"), name,
-    el("p", { class: "hint", id: "join-name-hint" }, "So you can tell your devices apart. Lowercase, like phone or work-laptop."),
-    error, button);
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    if (button.disabled) return;
-    const chosen = name.value.trim();
-    const why = !chosen ? "Choose a name for this browser." : !validName(chosen) ? "Use lowercase letters, numbers and dashes for the name, like phone or work-laptop." : "";
-    error.textContent = why;
-    if (why) return;
-    button.disabled = true;
-    try {
-      let persisted = null;
-      try { persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : null; } catch (e) { persisted = null; }
-      await engine.joinAndLink(link.code, chosen);
+      start(engine, true);
+    },
+    async link(code, device) {
+      const problem = linkProblem(code);
+      if (problem) throw new Error(problem);
+      const persisted = await persist();
+      await engine.joinAndLinkAuto(code, device);
       engine.storage = { persisted };
       onInvite = null;
-      start(engine);
-    } catch (e) {
-      error.textContent = e.message;
-      button.disabled = false;
-    }
-  });
-  show("Add this browser to you", el("p", { class: "join-intro" }, "This link comes from one of your devices. Name this browser, then approve it on that device: it becomes one more device of yours, with your chats."),
-    problem && el("p", { class: "join-recovery" }, problem),
-    form, storageNote(), privacy());
-  name.focus();
+      start(engine, true);
+    },
+  };
+  onInvite = (inv) => { if (!inv.damaged && ui.onCode) ui.onCode(inv.code); else landing(ui, inv); };
+  landing(ui, link).catch((e) => show("AgentNet", "AgentNet could not start here: " + e.message));
 }
 
-async function start(engine) {
+async function start(engine, joinedNow) {
   if (!engine.storage && navigator.storage && navigator.storage.persisted) {
     try { engine.storage = { persisted: await navigator.storage.persisted() }; } catch (e) { engine.storage = { persisted: null }; }
   }
   panel.hidden = true;
   document.getElementById("skin").hidden = false;
-  window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn) };
+  // loader.js binds the host's Drive provider to this engine's (driveService).
+  window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn), driveService: () => engine.driveService() };
   // The shell first: adopting this device installs the realm guard on its
   // transport, and the first stream must not outrun it.
   const problems = await workspaces(engine);
@@ -377,6 +333,10 @@ async function start(engine) {
   }
   if (pendingOpen !== null && window.agentnetOpen) { window.agentnetOpen(pendingOpen); pendingOpen = null; }
   openWorkspaceRoute();
+  // On a computer the app is the way to use AgentNet (MEL-536); a phone that
+  // just joined is offered its home screen.
+  const note = joinedNow ? installOffer({ el }) : await appBanner({ el });
+  if (note) document.getElementById("skin").before(note);
   if (problems.length) { // said once, on the page: a workspace that could not start here is not silently gone
     const note = el("p", { class: "workspace-problems", role: "status" }, "Not connected now: " + problems.join(" · "));
     document.body.prepend(note);

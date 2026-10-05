@@ -36,6 +36,7 @@ type Fixture struct {
 
 	workspace WorkspaceView // the demo workspace's own name and server
 	agents    []string      // devices that say they run an agent (overview.agent_devices)
+	invites   *fxInvites    // Invitations (fixtureapp.go)
 }
 
 type fxDM struct {
@@ -672,7 +673,8 @@ func (f *Fixture) NewDeviceLink() (DeviceLink, error) {
 			RequestedAt: now, Expires: now.Add(10 * time.Minute), State: "pending"})
 		f.bump()
 	}
-	return DeviceLink{URL: "https://agentnet.example/#agentnet-link-v2:demo-only-not-a-real-link", Expires: now.Add(10 * time.Minute)}, nil
+	return DeviceLink{URL: "https://agentnet.example/#agentnet-link-v2:demo-only-not-a-real-link", Expires: now.Add(10 * time.Minute),
+		AppURL: "agentnet://open#agentnet-link-v2:demo-only-not-a-real-link"}, nil
 }
 
 // DecideLink implements Identity: an approved device joins the person and

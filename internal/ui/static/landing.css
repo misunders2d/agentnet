@@ -1,0 +1,17 @@
+/* "Get AgentNet" (landing.mjs) and the app's first-run page (setup.mjs):
+   the join card from core.css, with steps, downloads and a note above the
+   messenger. The page itself never scrolls (core.css): the card does. */
+#device-setup, #app-setup { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.landing-h { font-size: 1.05rem; margin: 18px 0 4px; }
+.landing-steps { list-style: decimal; padding-left: 1.4em; margin: 14px 0; display: grid; gap: 14px; }
+.landing-step-title { display: block; margin-bottom: 6px; }
+.landing-downloads { display: grid; gap: 8px; justify-items: start; }
+.landing-downloads .btn { text-decoration: none; display: inline-block; }
+.landing-downloads .join-more { justify-self: stretch; }
+.landing-list { list-style: disc; padding-left: 1.2em; margin: 6px 0 0; display: grid; gap: 4px; }
+.landing-list a { color: var(--accent-text); overflow-wrap: anywhere; }
+.landing-copy { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.app-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px;
+  background: var(--accent-soft); color: var(--text); border-bottom: 1px solid var(--line); font-size: 14px; }
+.app-banner-text { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
+.app-banner .btn { text-decoration: none; padding: 6px 14px; }

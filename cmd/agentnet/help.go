@@ -89,8 +89,8 @@ Hub (on the server):
 Local A2A clients:
   a2a serve  let an A2A client on this machine talk to one peer
 
-Messenger page:
-  ui         the messenger page in a browser (daemon --ui; ui --demo to try it)
+The AgentNet app (how people use AgentNet; its installers are on the releases page):
+  ui         open the app (advanced: the daemon's page address; ui --demo to try it)
 
 Home directory: --home DIR, or AGENTNET_HOME, or "agentnet" in your user
 config directory. It holds your keys, inbox and history; keep it private.
@@ -770,7 +770,8 @@ With the daemon stopped, remove encrypted copies of messages that failed or
 were abandoned, and direct uploads never attached to a message.
   --saved   also remove directly received ciphertext of files already saved`,
 
-	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw | --link] LABEL
+	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw] LABEL
+       agentnet admin invite [--ttl 168h] [--admin] --link (--name NAME [LABEL] | LABEL)
        agentnet admin revoke ADDRESS
        agentnet admin release set --url URL [--note TEXT] VERSION
        agentnet admin release show | clear
@@ -813,10 +814,15 @@ after you grant them the role: agentnet help person, person admin.
   --ttl D    how long the invite is valid: more than 0, at most 720h (others are refused)
   --admin    the invited agent becomes an admin too
   --raw      print only the invite code (for scripts)
-  --link     print only a private, single-use browser invitation link (the
-             code travels in the link's #fragment); needs a Hub served with
+  --link     print only the private, single-use invitation link people get
+             (the code travels in the link's #fragment): it offers the
+             AgentNet app for their device and opens in it, as an invitation
+             made in the app (Invite people) does; needs a Hub served with
              --web and browser-trusted HTTPS (not a pinned certificate).
-             Share it privately, as you would the code`,
+             Share it privately, as you would the code
+  --name N   with --link: the invited person's name, written on the
+             invitation (shown as what it says); LABEL is then made from it
+             unless given`,
 
 	"hub": `Usage: agentnet hub serve|bootstrap-invite|storage|cleanup|backup|restore [flags]
 
@@ -912,8 +918,15 @@ listing are not supported. Keep agentnet daemon running for replies.`,
 	"ui": `Usage: agentnet ui
        agentnet ui --demo [--listen 127.0.0.1:0]
 
-The messenger page: your conversations with other agents in a browser on
-this computer. Start the daemon with --ui to serve it over your real inbox:
+People use AgentNet as the AgentNet app: installed like any app (Windows,
+macOS, Linux; https://github.com/misunders2d/agentnet/releases), opened from
+its icon, started with the computer and kept in the tray. The app runs this
+computer's AgentNet itself; agentnet ui opens it (a running one comes to the
+front). The command line stays for coding agents and advanced use, on the
+same home and identity.
+
+Without the app (advanced), the daemon serves the same page over your real
+inbox, and agentnet ui prints its address:
 
   agentnet daemon --ui 127.0.0.1:0
   agentnet ui          # prints the address to open
@@ -939,6 +952,17 @@ computer, not a relay for a phone or other devices.
                 touched; buttons in the demo banner stand in for a peer
                 writing and your responder finishing
   --listen A    loopback address for the demo (default 127.0.0.1:0)`,
+
+	"app": `Usage: agentnet app
+
+The AgentNet app's own program: the app starts it and shows the page it
+serves in its window. People open the app from their apps, never this
+command. It serves this home's page on one loopback address, kept across
+starts (in the home's ui-addr): a first-run page until this computer has
+joined, then the messenger. While another agentnet daemon runs for the home,
+the app shows that daemon's page and opens nothing itself; when that daemon
+stops for good, the app takes the home over. It reports to the app in JSON
+lines on its output and stops when its input says quit or closes.`,
 
 	"install": `Install agentnet
 
@@ -971,6 +995,12 @@ Next:  agentnet join --agent NAME 'agentnet-invite-v1:...' (ask the person for N
 Cross-building for other systems: scripts/build.sh (POSIX shell).`,
 
 	"startup": `Start agentnet daemon at login
+
+People do not need this: the AgentNet app starts with the computer by itself
+(tray: Start when I log in). These recipes are for servers, coding agents and
+advanced setups without the app. A computer runs one of the two for a home:
+while a daemon below runs, the app shows its page and starts none; once it
+is stopped and disabled, the app takes over by itself.
 
 The commands assume agentnet is installed as in agentnet help install and
 uses the default home. These are examples; the tests do not exercise them.

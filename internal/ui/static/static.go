@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed index.html loader.js core.css skin-base.css skinbar.mjs skinbar.css skin-choice.mjs skins device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css
+//go:embed index.html loader.js core.css skin-base.css skinbar.mjs skinbar.css skin-choice.mjs skins device.mjs engine.mjs wire.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css setup.mjs getapp.json getapp.mjs landing.mjs landing.css
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -58,6 +58,10 @@ var relayFiles = map[string]string{
 	"/assets/teams.mjs":            "teams.mjs",
 	"/assets/workspaces.mjs":       "workspaces.mjs",
 	"/assets/workspaces.css":       "workspaces.css",
+	"/assets/landing.mjs":          "landing.mjs", // "Get AgentNet" for a device that has not joined
+	"/assets/landing.css":          "landing.css",
+	"/assets/getapp.mjs":           "getapp.mjs", // the app's downloads, from getapp.json (shared with Go)
+	"/assets/getapp.json":          "getapp.json",
 }
 
 // relayIcons are the app icon's paths and sizes, named by the manifest.
@@ -78,6 +82,16 @@ func devicePage() []byte {
 		panic("static: index.html has no view scripts or style to replace") // a build error
 	}
 	return bytes.Replace(page, []byte(daemonScripts), []byte(`<script type="module" src="/assets/device.mjs"></script>`), 1)
+}
+
+// SetupPage is the AgentNet app's first-run page (setup.mjs): index.html's
+// metadata and core style, with its views replaced by the setup script.
+func SetupPage() []byte {
+	page, err := fs.ReadFile(files, "index.html")
+	if err != nil || !bytes.Contains(page, []byte(daemonScripts)) {
+		panic("static: index.html has no view scripts to replace") // a build error
+	}
+	return bytes.Replace(page, []byte(daemonScripts), []byte(`<script type="module" src="/assets/setup.mjs"></script>`), 1)
 }
 
 // The app icon is the logo (ant.png: a dark teal ant, the owner's choice)

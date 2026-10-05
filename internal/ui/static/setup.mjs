@@ -1,0 +1,202 @@
+// The AgentNet app's first-run page (internal/ui/setup.go): this computer
+// has not joined yet. The invitation (or a device link from another device
+// of yours) arrives in the address's fragment, when the app was opened from
+// an invitation link, or is pasted here. The page shows the server it is for
+// and what the invitation says (the inviter's words, not proof), and joins
+// only when the person presses Join. The device is named automatically.
+// A computer whose membership ended (its device link refused or not
+// approved in time, or removed by its server) says so and starts again
+// only when the person presses Start again.
+const invitePrefix = "agentnet-invite-v1:";
+const linkPrefix = "agentnet-link-v2:";
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k !== undefined && k !== null && k !== false && k !== "") e.append(typeof k === "string" ? document.createTextNode(k) : k);
+  return e;
+}
+
+async function call(path, body) {
+  const r = await fetch(path, body === undefined ? { cache: "no-store" } : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+  const t = await r.text();
+  if (!r.ok) throw new Error(t.trim() || "AgentNet could not do that.");
+  return t ? JSON.parse(t) : null;
+}
+
+// codeFrom finds an invitation or device link in what was pasted or opened:
+// the link itself (https://server/#…), an agentnet://open#… link, or the
+// bare code. "" when there is none.
+export function codeFrom(text) {
+  let s = String(text || "").trim();
+  const hash = s.indexOf("#");
+  if (hash >= 0 && !s.startsWith(invitePrefix) && !s.startsWith(linkPrefix)) s = s.slice(hash + 1);
+  try { s = decodeURIComponent(s); } catch (e) { return ""; }
+  s = s.trim();
+  return s.startsWith(invitePrefix) || s.startsWith(linkPrefix) ? s : "";
+}
+
+let panel, state = { state: "none", device: "", device_words: "" };
+let held = ""; // an invitation that arrived while the computer's membership had ended
+
+// endedWords is what an ended membership says: a title and why.
+export const endedWords = {
+  refused: ["Adding this computer was refused", "It was refused on your other device."],
+  expired: ["This computer was not added", "Nobody approved it on your other device in time."],
+  removed: ["This computer was removed", "Its AgentNet server removed it."],
+};
+
+function show(title, ...kids) {
+  panel.replaceChildren(el("div", { class: "join-card" }, el("h1", {}, title),
+    kids.flat().filter(Boolean).map((k) => (typeof k === "string" ? el("p", {}, k) : k))));
+}
+
+// welcome asks for the invitation when none came with the app's opening.
+function welcome(problem) {
+  const box = el("textarea", { id: "setup-code", rows: "3", autocomplete: "off", spellcheck: "false", placeholder: "Paste the invitation link here" });
+  const error = el("p", { class: "error", role: "alert", id: "setup-error" }, problem || "");
+  const go = el("button", { type: "submit", class: "btn primary join-go" }, "Continue");
+  const form = el("form", { class: "join-form", novalidate: true }, el("label", { for: "setup-code" }, "Your invitation"), box, error, go);
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const code = codeFrom(box.value);
+    if (!code) { error.textContent = "That is not an AgentNet invitation. Copy the whole link you were sent, or ask for a new one."; return; }
+    inspect(code);
+  });
+  show("Welcome to AgentNet",
+    el("p", { class: "join-intro" }, "Chat with people and their agents."),
+    state.state === "incomplete" && el("p", { class: "join-recovery" }, "Joining did not finish last time. Paste the same invitation again to finish it."),
+    "Open the invitation link you were sent, or paste it here.",
+    form);
+  box.focus();
+}
+
+// ended says how this computer's membership ended and starts again on the
+// person's click: what it had is kept aside, never deleted.
+function ended() {
+  const [title, why] = endedWords[state.state];
+  const error = el("p", { class: "error", role: "alert", id: "setup-error" });
+  const go = el("button", { type: "button", class: "btn primary join-go" }, "Start again");
+  go.addEventListener("click", async () => {
+    if (go.disabled) return;
+    go.disabled = true; error.textContent = "";
+    try {
+      state = await call("/api/setup/start-again", {});
+    } catch (e) {
+      error.textContent = e.message;
+      go.disabled = false;
+      return;
+    }
+    const code = held;
+    held = "";
+    if (code) inspect(code); else welcome("");
+  });
+  show(title, why,
+    held ? "Start again to use the invitation you opened." : "Start again with a new invitation, or with a new link from your other device.",
+    el("p", { class: "hint" }, "What this computer had is kept in a folder in AgentNet's data, not deleted."),
+    error, go);
+  go.focus();
+}
+
+async function inspect(code) {
+  let inv;
+  try { inv = await call("/api/setup/inspect", { code }); } catch (e) { welcome(e.message); return; }
+  if (inv.problem) { welcome(inv.problem); return; }
+  if (inv.kind === "link") linkCard(code, inv); else inviteCard(code, inv);
+}
+
+function serverLine(inv) {
+  return el("p", { class: "join-recovery" }, "Server: ", el("strong", {}, inv.host),
+    inv.workspace ? " · the invitation calls it “" + inv.workspace + "”" : "");
+}
+
+function inviteCard(code, inv) {
+  const name = el("input", { id: "setup-name", type: "text", autocomplete: "name", maxlength: "64", value: inv.name || "", "aria-describedby": "setup-name-hint" });
+  const error = el("p", { class: "error", role: "alert", id: "setup-error" });
+  const go = el("button", { type: "submit", class: "btn primary join-go" }, "Join");
+  const form = el("form", { class: "join-form", novalidate: true },
+    el("label", { for: "setup-name" }, "Your name"), name,
+    el("p", { class: "hint", id: "setup-name-hint" }, "The name people see. You can change it later."),
+    error, go);
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (go.disabled) return;
+    const chosen = name.value.trim();
+    if (!chosen) { error.textContent = "Write the name people will see."; return; }
+    go.disabled = true; error.textContent = "";
+    go.textContent = "Joining…";
+    try {
+      await call("/api/setup/join", { code, name: chosen });
+      location.replace("/"); // the messenger now serves this address
+    } catch (e) {
+      error.textContent = e.message;
+      go.disabled = false; go.textContent = "Join";
+    }
+  });
+  show(inv.from ? inv.from + " invited you" : "You're invited",
+    serverLine(inv),
+    inv.from && el("p", { class: "hint" }, "Who invited you and the names are what the invitation says; the server is where it leads."),
+    el("p", {}, "This computer joins as your " + (state.device_words || "computer") + "."),
+    form,
+    el("button", { type: "button", class: "text-btn", onclick: () => welcome("") }, "Use another invitation"));
+  name.focus();
+}
+
+function linkCard(code, inv) {
+  const error = el("p", { class: "error", role: "alert", id: "setup-error" });
+  const go = el("button", { type: "button", class: "btn primary join-go" }, "Add this computer");
+  const until = inv.expires ? new Date(inv.expires) : null;
+  go.addEventListener("click", async () => {
+    if (go.disabled) return;
+    go.disabled = true; error.textContent = "";
+    go.textContent = "Adding…";
+    try {
+      await call("/api/setup/join", { code, name: "" });
+      location.replace("/"); // waits there for the approval on your other device
+    } catch (e) {
+      error.textContent = e.message;
+      go.disabled = false; go.textContent = "Add this computer";
+    }
+  });
+  show("Add this computer to you",
+    serverLine(inv),
+    el("p", {}, "This link comes from one of your devices. This computer becomes one more device of yours, with your chats, once you approve it there with one tap."),
+    until && el("p", { class: "hint" }, "The link works until " + until.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + ". If it runs out, make a new one on your other device."),
+    error, go,
+    el("button", { type: "button", class: "text-btn", onclick: () => welcome("") }, "Use another invitation"));
+  go.focus();
+}
+
+// take removes an invitation from the address before anything is done with
+// it, so it is not kept in this window's history.
+function take() {
+  const h = location.hash.slice(1);
+  if (!h) return "";
+  history.replaceState(null, "", location.pathname + location.search);
+  return codeFrom("#" + h);
+}
+
+async function main() {
+  document.head.append(el("link", { rel: "stylesheet", href: "/assets/landing.css" }));
+  document.getElementById("skin").hidden = true;
+  panel = el("main", { id: "app-setup", class: "join" });
+  document.body.prepend(panel);
+  show("AgentNet", "Opening…");
+  try { state = await call("/api/setup"); } catch (e) { show("AgentNet", "AgentNet could not start: " + e.message); return; }
+  // The app opened again from another invitation link while this page is open.
+  window.addEventListener("hashchange", () => {
+    const c = take();
+    if (!c) return;
+    if (endedWords[state.state]) { held = c; ended(); } else inspect(c);
+  });
+  const code = take();
+  if (endedWords[state.state]) { held = code; ended(); } else if (code) inspect(code); else welcome("");
+}
+
+if (typeof document !== "undefined") main();

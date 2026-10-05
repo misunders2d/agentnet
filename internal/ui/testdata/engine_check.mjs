@@ -2,7 +2,7 @@
 // node against a real test Hub (trusted by its own certificate through
 // NODE_EXTRA_CA_CERTS), with an in-memory store, answering one JSON request
 // per line on stdin with one JSON line on stdout.
-import { Engine, memoryStore, probeStore, sameOrigin } from "../static/engine.mjs";
+import { Engine, memoryStore, probeStore, sameOrigin, autoNameTries, inviteDays } from "../static/engine.mjs";
 import * as wire from "../static/wire.mjs";
 import { createInterface } from "node:readline";
 
@@ -104,6 +104,14 @@ async function handle(req) {
     return { address: await engine.join(req.code, req.name) };
   case "joinLink": // a device link from another device of the person (its QR's text)
     return { address: await engine.joinAndLink(req.code, req.name) };
+  case "joinAuto": // under an automatic name: base, base-2 … while taken
+    return { address: await engine.joinAuto(req.code, req.base) };
+  case "joinLinkAuto": // a device link, under an automatic name
+    return { address: await engine.joinAndLinkAuto(req.code, req.base) };
+  case "tunables": // the engine's copies of Go's tunables, for parity tests
+    return { autoNameTries, inviteDays };
+  case "decodeInvite": // wire.decodeInvite, for parity with Go
+    return { v: wire.decodeInvite(req.code) };
   case "person":
     return await engine.createPerson(req.label);
   case "start":

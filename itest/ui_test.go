@@ -35,7 +35,8 @@ func (c *cli) openPage(t *testing.T, home string) *page {
 	p := &page{t: t, cl: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
 	waitFor(t, home+"'s page", func() bool {
 		out, err := c.try("--home", home, "ui")
-		url, ok := strings.CutPrefix(out, "Open: ")
+		first, _, _ := strings.Cut(out, "\n") // the address; then where to get the app
+		url, ok := strings.CutPrefix(strings.TrimSpace(first), "Open: ")
 		if err != nil || !ok {
 			return false
 		}

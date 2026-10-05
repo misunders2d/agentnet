@@ -347,17 +347,31 @@ func TestDaemonHearsRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tablet, err := JoinAndLink(tctx(t), t.TempDir(), o.Code, "tablet")
+	home := t.TempDir()
+	tablet, err := JoinAndLink(tctx(t), home, o.Code, "tablet")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { tablet.Close() })
-	runAgent(t, tablet)
+	stop := runAgent(t, tablet)
 	req := pendingLink(t, w.alice)
 	if err := w.alice.DecideLink(tctx(t), req.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the tablet refused", func() bool { return tablet.LinkState().State == LinkRefused })
+	stop()
+	// The home says so, and its daemon's next run ends at once with the
+	// refusal instead of reconnecting forever (the app then offers to
+	// start again).
+	if s, err := EnrollmentState(home); err != nil || s != EnrollRefused {
+		t.Fatalf("a refused device's home: %s %v", s, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tablet.Logf = t.Logf
+	if err := tablet.Run(ctx, RunOptions{}); !errors.Is(err, ErrLinkRefused) || ctx.Err() != nil {
+		t.Fatalf("a refused device's daemon: %v (ctx %v)", err, ctx.Err())
+	}
 }
 
 // HubRole is the relay's word on this installation's role, from its own

@@ -45,7 +45,7 @@ func renderNativeExtension(home, harness string) ([]byte, error) {
 	if runtime.GOOS == "windows" {
 		return nil, errors.New("hooks are not supported on Windows yet")
 	}
-	exe, err := os.Executable()
+	exe, err := selfExe() // a stable copy when the app runs from a passing place (appexe.go)
 	if err != nil {
 		return nil, err
 	}

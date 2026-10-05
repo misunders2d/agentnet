@@ -72,6 +72,8 @@ type Agent struct {
 	alertWake      chan struct{}              // wakes the desktop alert loop (alerts.go)
 	openConv       func(conv string) []string // RunOptions.OpenConv
 
+	openPage func(fragment string) []string // RunOptions.OpenPage (the AgentNet app's window)
+
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
 	reviewTried  map[string]bool                                               // review items a review notice was attempted for, this run
@@ -997,26 +999,6 @@ func inviteTTL(ttl time.Duration) error {
 		return fmt.Errorf("invite lifetime %s is out of range: choose more than 0 and at most %gh (30 days); nothing was created", ttl, protocol.MaxInviteTTL.Hours())
 	}
 	return nil
-}
-
-// BrowserInvite creates an invite for a browser invitation link (admin
-// only). The Hub refuses before creating anything unless its advertised
-// endpoint serves the browser messenger over platform TLS. The admin may
-// still connect through an older pinned endpoint after that migration;
-// its connection's pin says nothing about the endpoint in the new invite.
-func (a *Agent) BrowserInvite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
-	if err := inviteTTL(ttl); err != nil {
-		return "", err
-	}
-	var out struct{ Code string }
-	if err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin, Browser: true}, &out); err != nil {
-		var he *HubError
-		if errors.As(err, &he) && he.Status == 400 { // an older Hub refuses the unknown field
-			return "", fmt.Errorf("%w (a Hub that cannot create browser invitations needs an update)", err)
-		}
-		return "", err
-	}
-	return out.Code, nil
 }
 
 // Revoke revokes address on the Hub (admin only).

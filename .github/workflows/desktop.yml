@@ -1,0 +1,55 @@
+name: desktop
+# The AgentNet app for Windows, macOS and Linux (desktop/build.sh): the
+# shell's own tests, then the installers, kept as artifacts for a week.
+# Called by go.yml (every run) and release.yml (a release's version).
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version stamped into the app (vX.Y.Z); empty: git describe"
+        type: string
+        default: ""
+permissions:
+  contents: read
+jobs:
+  app:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux on the oldest supported Ubuntu, so the AppImage runs on
+        # older systems too.
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe names development builds
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: build the app
+        shell: bash
+        run: desktop/build.sh "${{ inputs.version }}"
+      - name: the shell's tests
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentnet-app-${{ runner.os }}
+          path: desktop/out/AgentNet-*
+          if-no-files-found: error
+          retention-days: 7

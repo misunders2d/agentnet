@@ -79,7 +79,7 @@ func (l *Live) NewDeviceLink() (DeviceLink, error) {
 	if err != nil {
 		return DeviceLink{}, Refuse(linkWords(err))
 	}
-	return DeviceLink{URL: linkURL(offer.Code), Expires: offer.Expires}, nil
+	return DeviceLink{URL: linkURL(offer.Code), Expires: offer.Expires, AppURL: protocol.AppOpenURL(offer.Code)}, nil
 }
 
 // linkURL puts code in the fragment of this server's page (never in a

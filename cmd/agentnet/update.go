@@ -122,6 +122,9 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	if *status {
 		return updateStatus(home)
 	}
+	if bundledWith == "app" { // this program, or its stable copy, came with the AgentNet app (appexe.go)
+		return errors.New("this agentnet came with the AgentNet app: get the new version of the app (" + getAppURL + "); it updates this program too")
+	}
 	if fs.NArg() > 1 {
 		return errors.New("usage: update [--check] [vX.Y.Z]")
 	}
