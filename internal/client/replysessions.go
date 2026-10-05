@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -688,17 +689,21 @@ func (a *Agent) AckReplyReceiverInput(in ReplyReceiverAck) (bool, error) {
 
 // releaseEndedInputs hands what a native session left undelivered to this
 // computer's inbox when its registration ends or starts a new generation
-// (MEL-537): its bound inputs still pending with no live claim leave their
-// binding and get a fresh arrival number, so the next session's hooks
-// announce them as ordinary arrivals (attention.go). They never enter
-// review. Claimed or accepted inputs stay bound and are never redelivered
-// silently (agentnet receivers lists them), and a binding with an explicit
-// closed-session handoff (--on-close-agent) keeps its inputs for it.
+// (MEL-537): its bound answers, results and messages still pending with no
+// live claim leave their binding and get a fresh arrival number, so the
+// next session's hooks announce them as ordinary arrivals (attention.go).
+// They never enter review. A question or task sent in reply to the
+// session's request stays bound (released, it would become the person's OK
+// item or be answered automatically: MEL-537 says it never does), as do
+// claimed or accepted inputs: never redelivered silently, agentnet
+// receivers lists them. A binding with an explicit closed-session handoff
+// (--on-close-agent) keeps its inputs for it.
 func releaseEndedInputs(tx *sql.Tx, handle string) error {
 	rows, err := tx.Query(`SELECT x.binding, x.inbox_id FROM reply_receiver_inputs x JOIN reply_receivers b ON b.id=x.binding JOIN inbox i ON i.id=x.inbox_id
 		WHERE x.state='pending' AND x.live_claim IS NULL AND json_extract(b.receiver,'$.kind')='live_session' AND json_extract(b.receiver,'$.session_handle')=?
 		  AND coalesce(json_type(b.receiver,'$.on_close'),'')!='object' AND coalesce(json_extract(b.receiver,'$.remote.role'),'')!='origin'
-		ORDER BY i.arrival`, handle)
+		  AND i.kind NOT IN (?, ?)
+		ORDER BY i.arrival`, handle, envelope.KindQuestion, envelope.KindTask)
 	if err != nil {
 		return err
 	}

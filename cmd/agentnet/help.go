@@ -114,9 +114,10 @@ on its app-server daemon, or a Claude Code session whose AgentNet Claude
 channel attached (optional: hooks install claude --channel). Otherwise it
 lands in this computer's inbox, where every session's hooks announce it and
 agentnet conversation ID shows it; one plain note says so. When the asking
-session ends (or starts anew), what it had not taken yet goes to this
-computer's inbox and the next session's hooks announce it; it never becomes
-an OK item. Input a session already claimed stays bound and is listed here.
+session ends (or starts anew), the answers it had not taken yet go to this
+computer's inbox and the next session's hooks announce them; they never
+become OK items. A question or task sent back in reply, and input a session
+already claimed, stay bound and are listed here.
 The asking command also waits for the answer and prints it (--answer-wait).
 A plain dm send message selects no receiver unless --on-close-agent is given,
 which needs that exact registered session. A background job uses only its own

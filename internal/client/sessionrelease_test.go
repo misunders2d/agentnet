@@ -49,6 +49,15 @@ func TestEndedSessionInputsReleasedToInbox(t *testing.T) {
 	if boundInputs(t, w.alice, pending) != 1 {
 		t.Fatal("the answer is not bound to the active session")
 	}
+	// A question bob sends back in reply: bound too, and it stays bound
+	// when the session ends, never the person's OK item.
+	back := receiverDirect(t, w.bob, w.alice, envelope.Inner{Kind: envelope.KindQuestion, Body: "which branch?", ReplyTo: sent.ID})
+	if err = w.alice.verifyAndStore(tctx(t), back); err != nil {
+		t.Fatal(err)
+	}
+	if boundInputs(t, w.alice, back.ID) != 1 {
+		t.Fatal("the question in reply is not bound to the active session")
+	}
 	before := arrivalOf(t, w.alice, pending)
 	// The one-receiver rule holds while the session is active.
 	if items, _ := w.alice.store.arrivalsAfter(0, 50); slices.ContainsFunc(items, func(it arrivalItem) bool { return it.id == pending }) {
@@ -57,7 +66,7 @@ func TestEndedSessionInputsReleasedToInbox(t *testing.T) {
 	if e := w.alice.CloseReplySession(call); e != nil {
 		t.Fatal(e)
 	}
-	if boundInputs(t, w.alice, pending) != 0 || boundInputs(t, w.alice, claimed) != 1 {
+	if boundInputs(t, w.alice, pending) != 0 || boundInputs(t, w.alice, claimed) != 1 || boundInputs(t, w.alice, back.ID) != 1 {
 		t.Fatal("released the wrong inputs")
 	}
 	top, _ := w.alice.store.arrivalTop()
@@ -70,8 +79,21 @@ func TestEndedSessionInputsReleasedToInbox(t *testing.T) {
 		t.Fatalf("hooks announce %+v %v", items, err)
 	}
 	for _, m := range mustReview(t, w.alice) {
-		if m.ID == pending {
-			t.Fatalf("a released answer became an OK item: %+v", m)
+		if m.ID == pending || m.ID == back.ID {
+			t.Fatalf("an input of the ended session became an OK item: %+v", m)
+		}
+	}
+	// One arriving after the end is kept bound the same way.
+	late := receiverDirect(t, w.bob, w.alice, envelope.Inner{Kind: envelope.KindTask, Body: "push the fix", ReplyTo: sent.ID})
+	if err = w.alice.verifyAndStore(tctx(t), late); err != nil {
+		t.Fatal(err)
+	}
+	if boundInputs(t, w.alice, late.ID) != 1 {
+		t.Fatal("a task in reply to an ended session's request was released")
+	}
+	for _, m := range mustReview(t, w.alice) {
+		if m.ID == late.ID {
+			t.Fatalf("a task in reply became an OK item: %+v", m)
 		}
 	}
 }
@@ -85,12 +107,31 @@ func mustReview(t *testing.T, a *Agent) []Message {
 	return review
 }
 
+// nativeAnswer has b answer a question a asked from the session handle; the
+// answer is bound to that session.
+func nativeAnswer(t *testing.T, a, b *Agent, handle string) string {
+	t.Helper()
+	r := ReplyReceiver{Kind: "live_session", SessionHandle: handle}
+	sent, err := a.SendMessage(tctx(t), Outgoing{To: b.Address, Kind: envelope.KindQuestion, Body: "asked from the session", ReplyReceiver: &r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := receiverDirect(t, b, a, envelope.Inner{Kind: envelope.KindAnswer, Status: envelope.StatusDone, Body: "an answer", ReplyTo: sent.ID})
+	if err = a.verifyAndStore(tctx(t), reply); err != nil {
+		t.Fatal(err)
+	}
+	if boundInputs(t, a, reply.ID) != 1 {
+		t.Fatal("the answer is not bound to the session")
+	}
+	return reply.ID
+}
+
 // A Claude session's end releases the same way; a new generation of the
 // same session (resume, clear) does too.
 func TestClaudeSessionEndReleasesInputs(t *testing.T) {
 	w := newWorld(t, "")
 	owner, route := claudeReceiverFixture(t, w.alice)
-	_, input := nativeInput(t, w.alice, w.bob, owner.Handle)
+	input := nativeAnswer(t, w.alice, w.bob, owner.Handle)
 	if _, e := w.alice.registerClaudeReplySession("SessionStart", owner.SessionID, owner.File, route); e != nil {
 		t.Fatal(e)
 	}
@@ -100,7 +141,7 @@ func TestClaudeSessionEndReleasesInputs(t *testing.T) {
 	if _, e := w.alice.claudeReplyChannelOwner(owner.SessionID, route); e != nil {
 		t.Fatal(e)
 	}
-	_, second := nativeInput(t, w.alice, w.bob, owner.Handle)
+	second := nativeAnswer(t, w.alice, w.bob, owner.Handle)
 	if _, e := w.alice.registerClaudeReplySession("SessionEnd", owner.SessionID, owner.File, route); e != nil {
 		t.Fatal(e)
 	}
