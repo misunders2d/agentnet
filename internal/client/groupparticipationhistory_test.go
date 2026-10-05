@@ -157,9 +157,9 @@ func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
 			if err = phone.accept(tctx(t), h.env); err != nil {
 				t.Fatal(err)
 			}
-			phone.retryProof(tctx(t))
 		}
 	}
+	// Replay the complete history batch before retrying held proof dependencies.
 	phone.retryProof(tctx(t))
 	view, err := phone.Participation(p.PID)
 	if err != nil || !view.Claimable() || view.Host.Fingerprint != host.Self().Fingerprint() || view.AgentID != record.ID {

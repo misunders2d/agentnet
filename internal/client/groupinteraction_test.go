@@ -561,7 +561,11 @@ func TestGroupInteractionVisitorReorderedCarriers(t *testing.T) {
 
 func TestGroupInteractionVisitorLargeCurrentContext(t *testing.T) {
 	stub := installAgentStub(t)
-	w, _, packet, _ := groupTurnsFixture(t)
+	w, carol, packet, stops := groupTurnsFixture(t)
+	// Only the sender's signed history is needed to build the large context.
+	// Leave unrelated recipient copies in normal offline custody.
+	stops[w.bob]()
+	stops[carol]()
 	for range 50 {
 		if _, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "PRIVATE_ROOM_CONTENT_NOT_DISCLOSED"}); err != nil {
 			t.Fatal(err)
