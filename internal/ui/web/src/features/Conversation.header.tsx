@@ -10,12 +10,11 @@ import {
 import type { Api, T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
-import { deviceKind, niceDevice, personName, timeOf, type DeviceKind } from "../model";
+import { deviceKind, niceDevice, personName, reminderOf, timeOf, type DeviceKind } from "../model";
 import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { Confirm } from "./Message.actions";
-import { reminderOf } from "../model";
 import { RemindSheet, latestReceived } from "./Reminders";
 import { groupRights, useGroupChange } from "./GroupAdmin";
 import { DeviceGrantConfirm, type GrantChange } from "./Trust";
