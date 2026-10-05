@@ -482,6 +482,14 @@ export class Engine {
       this.revoked = !!id.revoked;
     }
     this.me = (await this.store.get("kv", "person")) || null;
+    // Older DM control copies cached their recipient as the author.
+    // These locally signed rows belong to this person; retain their wire bytes.
+    if (id && this.me) {
+      const rows = (await this.store.all("outbox")).filter(r => r.control && r.conv && r.to && r.fp === this.fp && r.person !== this.me.person);
+      if (rows.length) try {
+        await this.store.write(rows.map(r => ({s:"outbox",k:r.id,v:{...r,person:this.me.person}})), rows.map(r => ({s:"outbox",k:r.id,v:r})));
+      } catch (e) { if (e instanceof StoreConflict) return this.load(); throw e; }
+    }
     this.link = (await this.store.get("kv", "link")) || null; // this device's own request to join a person, if it joined with a link
     this.workspaceName = wire.validWorkspaceName(await this.store.get("kv", "workspace"));
     const agents = await this.store.get("kv", "agent_devices");
@@ -1924,7 +1932,9 @@ export class Engine {
     const rows = (await this.store.all("outbox")).sort((a,b) => (a.send_order ?? a.at) - (b.send_order ?? b.at));
     for (const rec of rows) {
       if (!this.connected || this.closing) return;
-      const key = (rec.conv || "") + "\0" + rec.to;
+      // FIFO is for readable turns. Auxiliary copies must pass their own
+      // gates without blocking turns or unrelated history/deletion copies.
+      const key = (rec.aside || rec.control || rec.sub === "history" ? "aux\0" + rec.id : "turn\0" + (rec.conv || "")) + "\0" + rec.to;
       if (blocked.has(key)) continue;
       if (rec.state === "receiver_waiting") { blocked.add(key); continue; }
       if (rec.state !== "queued" && rec.state !== "waiting") continue;
@@ -5959,7 +5969,7 @@ export class Engine {
       const id = wire.newID();
       const envelope = await wire.seal({ v: wire.Version3, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind: "message",
         sub, body, ref, conv: c.id, lid, replica: dev.own, fan }, this.keys, recipient);
-      recs.push({ v: 3, control: true, id, conv: c.id, lid, to: dev.address, fp: this.fp, own: dev.own, person: dev.own ? me.person : peer.person, kind: "message", sub, body, ref, at, aside: true, state: "queued", detail: "", envelope });
+      recs.push({ v: 3, control: true, id, conv: c.id, lid, to: dev.address, fp: this.fp, own: dev.own, person: me.person, kind: "message", sub, body, ref, at, aside: true, state: "queued", detail: "", envelope });
     }
     if (!recs.length) throw new Error("No device of this conversation can read reactions, edits or deletions yet" + (skipped.length ? ": " + skipped.join("; ") : "."));
     await this.store.write(recs.map((r) => ({ s: "outbox", k: r.id, v: r })));

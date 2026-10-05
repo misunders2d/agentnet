@@ -45,7 +45,7 @@ async function world() {
     e.keys = await wire.newKeys(); e.address = name + '/desk'; e.pub = await wire.publicEntry(e.keys, e.address); e.fp = await wire.fingerprint(e.pub);
     e.roster = await wire.newRoster(e.keys, e.address, name); e.me = await e.personRecord([e.roster], 'self', null);
     await e.store.write([{ s: 'kv', k: 'identity', v: { keys: e.keys, address: e.address, fingerprint: e.fp } }, { s: 'kv', k: 'person', v: e.me }]);
-    e.connected = false; pubs.set(e.address, e.pub); rosters.set(e.me.person, [JSON.parse(wire.rosterJSON(e.roster))]); users.push(e);
+    e.connected = true; pubs.set(e.address, e.pub); rosters.set(e.me.person, [JSON.parse(wire.rosterJSON(e.roster))]); users.push(e);
   }
   const caps = async (e, names = [wire.CapEnv2, wire.CapPerson, wire.CapAgentIdentity, wire.CapExternalParticipation]) => {
     const session = id(); profiles.set(e.address, { person: JSON.parse(wire.rosterJSON(e.roster)), live: true, sessions: [session], caps: [JSON.parse(wire.capsJSON(await wire.newCaps(e.keys, e.address, session, names)))] });
@@ -59,7 +59,7 @@ async function world() {
   catalogs.set(charlie.address, [JSON.parse(wire.agentJSON(agent))]);
   const conv = await alice.newDM(bob.address), c = await alice.store.get('convs', conv);
   const receive = async (raw, e) => { const env = wire.parseEnvelope(raw); await e.admit(raw, env); return env.id; };
-  const drain = async (e, predicate = () => true) => { for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && predicate(env) && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); } };
+  const drain = async (e, predicate = () => true) => { await Promise.all(users.map(user => user.outboxPass)); for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && predicate(env) && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); } };
   const from = async (sender, receiver, fields) => wire.seal({ v: 2, id: id(), from: sender.address, to: receiver.address, ts: Math.floor(now / 1000), conv, root: c.root, lid: id(), kind: 'message', body: '', ...fields }, sender.keys, receiver.pub);
   const decision = async (sender, pid, type = 'accept', prev) => {
     const { info } = await alice.agentConv(pid);
@@ -209,6 +209,7 @@ async function world() {
   check((await c.store.get('held', denied)).reason === 'invalid', 'unsigned additional selection refused');
   w.offline(true);
   const queued = await a.askAgent({ pid: inv.pid, body: 'retry', files: [{ name: 'offline.txt', size: 7, bytes: new TextEncoder().encode('OFFLINE') }] });
+  await a.outboxPass;
   const q = await a.store.get('outbox', queued.id);
   check(q.state === 'waiting' && q.files[0].ct.length > 7, 'offline files persist encrypted before any send');
   w.offline(false);

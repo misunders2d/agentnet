@@ -26,7 +26,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
  const liveHistory=wire.parseHistory(v.live_history_json);
  check(wire.historyJSON(liveHistory)===v.live_history_json,'native linked-live history admission stamp exact bytes');
  check(await wire.groupHistoryContentHash('1'.repeat(32),liveHistory)===v.history_hash,'native exact ordered selected file content hash');
- const alicePub=await wire.parsePublic(v.challenge.rosters[0].devices[0]);
+ const alicePub=await wire.parsePublic(v.challenge.rosters[0].devices[0]), bobPub=await wire.parsePublic(v.challenge.rosters[1].devices[0]);
  const aliceKeys={sign:await crypto.subtle.importKey('pkcs8',bytes(v.challenge.alice_private),{name:'Ed25519'},false,['sign'])};
  const names=[];
  const world=async()=>{
@@ -308,6 +308,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   const selectedFile=await w.e.openFile(selectedSource.id,0,'in');check(new TextDecoder().decode(selectedFile.bytes)===outside['own-ordinary-file'].bytes,'native ordinary own-linked selected file exact bytes');
   const inviteSend=w.e.sendConv.bind(w.e);let selectedInvite;w.e.sendConv=async(c,n)=>{const ev=wire.parseEvent(n.body);if(ev.type==="invite"||ev.type==="share")selectedInvite=ev;const id=wire.newID();await w.st.write([{s:"outbox",k:id,v:{...n,id,conv:c.id,to:alicePub.address,at:1700000100000}}]);return {id};};
   await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,share:[selectedSource.id]});
+  const selectedPID=selectedInvite.pid;
   check(selectedInvite.grant.length===1&&selectedInvite.grant[0].lid===selectedSource.lid&&selectedInvite.grant[0].fingerprint===selectedItem.from_key,'production invite retains native own-linked selected logical ID and original author');
   const selectedInfo={...(await w.e.agentConv(outside['own-pid'])).info,grant:selectedInvite.grant};
   check(w.e.agentView(selectedInfo,[selectedSource],null,[w.e.me],"member").shared[0]===selectedSource.id,'group shared context projection retains verified own-linked original');

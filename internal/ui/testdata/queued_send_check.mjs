@@ -23,6 +23,25 @@ await Promise.all([e.flushOutbox(),e.flushOutbox()]);assert.equal(calls.length,2
 let attempts=0;e.postStored=async rec=>{attempts++;await store.write([{s:'outbox',k:rec.id,v:{...rec,state:attempts===1?'queued':'custody'}}]);};
 const failed=await e.sendV1({queued:true,to:'bob/desk',kind:'message',body:'retry',files:[]});await e.outboxPass;
 assert.equal((await store.get('outbox',failed.id)).state,'queued');await e.flushOutbox();await e.flushOutbox();assert.equal(attempts,2);
+// A waiting legacy history copy, and a newly queued clear copy without
+// send_order, each keep their own gate without starving a readable turn.
+for (const sub of ['history', wire.SubClear]) {
+  const store=memoryStore(), engine=new Engine({store,base:'https://isolated.invalid'}), calls=[];
+  const conv='c'.repeat(64), aux={id:'a'.repeat(32),conv,to:'bob/desk',sub,aside:true,state:sub==='history'?'queued':'waiting',at:1};
+  if(sub===wire.SubClear)Object.assign(aux,{control:true,required_cap:wire.CapConvClear});
+  const turn={id:'b'.repeat(32),conv,to:aux.to,kind:'message',body:'later readable turn',state:'queued',at:1,send_order:2};
+  engine.connected=true;engine.gate=async()=>({why:'',pin:{}});
+  let clearChecks=0;engine.ctlSupport=async()=>{clearChecks++;return [false,'peer_update'];};
+  engine.postStored=async rec=>{calls.push(rec.id);await store.write([{s:'outbox',k:rec.id,v:{...rec,state:rec.id===aux.id?'waiting':'custody'}}]);};
+  await store.write([{s:'convs',k:conv,v:{id:conv}},...[aux,turn].map(v=>({s:'outbox',k:v.id,v}))]);
+  assert.equal(aux.send_order,undefined,sub+' auxiliary has no new-send order');
+  await engine.flushOutbox();
+  assert.equal((await store.get('outbox',aux.id)).state,'waiting',sub+' delivery gate stays closed');
+  assert.equal((await store.get('outbox',turn.id)).state,'custody',sub+' does not starve later readable turn');
+  assert.deepEqual(calls,sub==='history'?[aux.id,turn.id]:[turn.id]);
+  if(sub===wire.SubClear)assert.equal(clearChecks,1,'clear capability gate still checked');
+  engine.stop();
+}
 // Close waits for the current post while leaving restart recovery in the outbox.
 const closing=deferred(), began=deferred();e.postStored=async rec=>{began.resolve();await closing.promise;await store.write([{s:'outbox',k:rec.id,v:{...rec,state:'custody'}}]);};
 await e.sendV1({queued:true,to:'bob/desk',kind:'message',body:'close',files:[]});await began.promise;

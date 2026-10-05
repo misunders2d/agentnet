@@ -800,23 +800,32 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 		return err
 	}
 	blocked := map[string]bool{}
+	// Readable turns share a FIFO. Controls, history, context carriers and
+	// private receiver operations pass their existing gates independently.
+	const turn = `ref_id IS NULL AND coalesce(sub,'') NOT IN ('history','file','drive-space','group-proof','group-context','group-invite','group-consent','group-withdrawal')
+		AND NOT (conv IS NULL AND reply_receiver IS NULL AND (coalesce(required_cap,'')='rcv1' OR coalesce(required_cap,'')='hpm1' AND human IS NULL))`
 	for _, env := range envs {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		var conv string
-		if err := a.store.db.QueryRow(`SELECT coalesce(conv, '') FROM outbox WHERE id=?`, env.ID).Scan(&conv); err != nil {
+		var ordered bool
+		if err := a.store.db.QueryRow(`SELECT coalesce(conv, ''), `+turn+` FROM outbox WHERE id=?`, env.ID).Scan(&conv, &ordered); err != nil {
 			return err
 		}
 		key := conv + "\x00" + env.To
-		// An older waiting copy is also a FIFO barrier, until its normal
-		// capability/receiver release makes it sendable.
-		var older int
-		if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND coalesce(conv,'')=? AND rowid<(SELECT rowid FROM outbox WHERE id=?) AND state IN (?,?,?)`, env.To, conv, env.ID, stateQueued, stateConvWaiting, stateReceiverWaiting).Scan(&older); err != nil {
-			return err
-		}
-		if older > 0 {
-			blocked[key] = true
+		if ordered {
+			// An older waiting turn stays a barrier until its normal
+			// capability/receiver release makes it sendable.
+			var older int
+			if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE `+turn+` AND recipient=? AND coalesce(conv,'')=? AND rowid<(SELECT rowid FROM outbox WHERE id=?) AND state IN (?,?,?)`, env.To, conv, env.ID, stateQueued, stateConvWaiting, stateReceiverWaiting).Scan(&older); err != nil {
+				return err
+			}
+			if older > 0 {
+				blocked[key] = true
+			}
+		} else {
+			key = "aux\x00" + env.ID
 		}
 		if blocked[key] {
 			continue

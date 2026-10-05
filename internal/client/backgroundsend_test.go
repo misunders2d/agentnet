@@ -116,6 +116,33 @@ func TestQueuedSendReturnsBeforePostAndOrdersTwoTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Pending auxiliary copies keep their own delivery gate closed without
+// starving a readable turn to the same recipient in the same conversation.
+func TestQueuedSendAuxiliaryCopiesDoNotStarveTurns(t *testing.T) {
+	for _, sub := range []string{envelope.SubHistory, envelope.SubClear} {
+		t.Run(sub, func(t *testing.T) {
+			w, conv := queuedDMWorld(t)
+			id := protocol.NewID()
+			raw, _ := json.Marshal(envelope.Envelope{V: 3, ID: id, From: w.alice.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage})
+			ref, cap := "", ""
+			if sub == envelope.SubClear {
+				ref, cap = protocol.NewID(), protocol.CapConvClear
+			}
+			// A legacy waiting history copy has no control ref. A clear
+			// copy has its normal ref/capability; neither has a send order.
+			if _, err := w.alice.store.db.Exec(`INSERT INTO outbox(id,recipient,body,envelope,state,created_at,conv,lid,kind,sub,ref_id,required_cap)
+				VALUES(?,?,'',?,?,1,?,?,'message',?,nullif(?,''),nullif(?,''))`, id, w.bob.Address, string(raw), stateConvWaiting, conv, protocol.NewID(), sub, ref, cap); err != nil {
+				t.Fatal(err)
+			}
+			sent := queuedTurn(t, w.alice, conv, "readable after "+sub)
+			eventually(t, "turn after pending "+sub, func() bool { return inboxCount(t, w.bob, "id=?", sent.ID) == 1 })
+			if got := outboxState(t, w.alice, id); got != stateConvWaiting {
+				t.Fatalf("auxiliary gate changed: %s", got)
+			}
+		})
+	}
+}
 func TestQueuedSendLostReceiptRetryIsOneDelivery(t *testing.T) {
 	w, conv := queuedDMWorld(t)
 	f := injectFaults(w.alice)

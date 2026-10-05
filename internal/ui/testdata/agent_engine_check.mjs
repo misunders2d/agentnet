@@ -96,7 +96,7 @@ async function fixture() {
   check(shown.agent_id === f.agentA.id && shown.from === f.peerAddress && shown.author.label === "Agent " + f.agentA.id, "named author preserved in device view");
   await f.caps([wire.CapEnv2, wire.CapPerson]);
   const before = (await f.store.all("outbox")).length;
-  await refuses(() => e.api("/api/send", { to: f.peerAddress, kind: "task", body: "t", agent_id: f.agentB.id }), /cannot read named agents/);
+  await refuses(() => e.api("/api/send", { to: f.peerAddress, kind: "task", body: "t", agent_id: f.agentB.id }), { code: "agent_identity_unsupported", message: "Peer’s app needs an update first." });
   check((await f.store.all("outbox")).length === before, "known older peer explicitly refused before persistence");
   e.stop();
 }

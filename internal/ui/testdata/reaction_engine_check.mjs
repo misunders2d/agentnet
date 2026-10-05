@@ -50,7 +50,7 @@ async function world() {
     e.keys = await wire.newKeys(); e.address = name + '/desk'; e.pub = await wire.publicEntry(e.keys, e.address); e.fp = await wire.fingerprint(e.pub);
     e.roster = await wire.newRoster(e.keys, e.address, name); e.me = await e.personRecord([e.roster], 'self', null);
     await e.store.write([{ s: 'kv', k: 'identity', v: { keys: e.keys, address: e.address, fingerprint: e.fp } }, { s: 'kv', k: 'person', v: e.me }]);
-    e.connected = false; pubs.set(e.address, e.pub); rosters.set(e.me.person, [JSON.parse(wire.rosterJSON(e.roster))]); users.push(e);
+    e.connected = true; pubs.set(e.address, e.pub); rosters.set(e.me.person, [JSON.parse(wire.rosterJSON(e.roster))]); users.push(e);
   }
   const caps = async (e, names = [wire.CapEnv2, wire.CapPerson, wire.CapControl, wire.CapAgentIdentity, wire.CapExternalParticipation]) => {
     const session = id(); profiles.set(e.address, { person: JSON.parse(wire.rosterJSON(e.roster)), live: true, sessions: [session], caps: [JSON.parse(wire.capsJSON(await wire.newCaps(e.keys, e.address, session, names)))] });
@@ -64,7 +64,7 @@ async function world() {
   catalogs.set(charlie.address, [JSON.parse(wire.agentJSON(agent))]);
   const conv = await alice.newDM(bob.address), c = await alice.store.get('convs', conv);
   const receive = async (raw, e) => { const env = wire.parseEnvelope(raw); await e.admit(raw, env); return env.id; };
-  const drain = async (e, predicate = () => true) => { for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && predicate(env) && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); } };
+  const drain = async (e, predicate = () => true) => { await Promise.all(users.map(user => user.outboxPass)); for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && predicate(env) && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); } };
   const from = async (sender, receiver, fields) => wire.seal({ v: 2, id: id(), from: sender.address, to: receiver.address, ts: Math.floor(now / 1000), conv, root: c.root, lid: id(), kind: 'message', body: '', ...fields }, sender.keys, receiver.pub);
   const decision = async (sender, pid, type = 'accept', prev) => {
     const { info } = await alice.agentConv(pid);
@@ -131,7 +131,9 @@ for (const { name, inner } of vectors) {
     const rid = await w.receive(raw, a);
     check(await held(a, rid) === 'invalid' && !await a.store.get('inbox', rid), what + ' refused');
   }
-  const unrecorded = await a.api('/api/send', { to: c.address, kind: 'question', body: 'legacy row' }), row = await a.store.get('outbox', unrecorded.id);
+  const unrecorded = await a.api('/api/send', { to: c.address, kind: 'question', body: 'legacy row' });
+  await a.outboxPass;
+  const row = await a.store.get('outbox', unrecorded.id);
   delete row.fp; await a.store.write([{ s: 'outbox', k: row.id, v: row }]);
   const legacy = await w.receive(await control(c, a, { ref: { id: unrecorded.id, fingerprint: a.fp }, origin: 'agent:claude' }), a);
   check(await held(a, legacy) === 'invalid', 'a request without its recorded key proves nothing');
@@ -160,9 +162,21 @@ for (const { name, inner } of vectors) {
   }
   await a.api('/api/message/react', { conv: w.conv, id: q.id, dir: 'out', emoji: '🎉' });
   const am = (await a.dm(w.conv)).messages.find((x) => x.lid === q.lid), aby = byOf(am, '🎉');
-  check(aby.length === 2 && aby.some((x) => x.id === a.me.person && !x.assistant) && (am.reactions.find((r) => r.emoji === '🎉').mine === true), 'member own mark kept and mine');
+  check(aby.length === 2 && aby.some((x) => x.id === a.me.person && !x.assistant) && (am.reactions.find((r) => r.emoji === '🎉').mine === true), 'member own mark kept and mine: '+JSON.stringify({reactions:am.reactions,person:a.me.person}));
   check(JSON.stringify(aby.find((x) => x.assistant)) === JSON.stringify({ id: 'assistant:' + invite.pid, label: 'charlie assistant ' + w.agent.id.slice(0, 8), assistant: true, host: c.address, agent_id: w.agent.id, pid: invite.pid }), 'participation Reactor equals the native JSON (label: the host person, as client.assistantLabel): ' + JSON.stringify(aby));
   check(byOf((await b.dm(w.conv)).messages.find((x) => x.lid === q.lid), '🎉').some((x) => x.id === 'assistant:' + invite.pid), 'the other member sees the same assistant actor');
+  const localMarks=(await a.store.all('outbox')).filter(r=>r.control&&r.conv===w.conv&&r.fp===a.fp&&r.sub===wire.SubReaction);
+  check(localMarks.length>0&&localMarks.every(r=>r.person===a.me.person),'new control copies retain their author, apart from the recipient');
+  // The previous P3 rows survive an upgrade. Correct their local author
+  // cache, preserving exact ciphertext, and allow removing the own mark.
+  await a.store.write(localMarks.map(r=>({s:'outbox',k:r.id,v:{...r,person:b.me.person}})));
+  await a.load();
+  for(const r of localMarks){const kept=await a.store.get('outbox',r.id);check(kept.person===a.me.person&&kept.envelope===r.envelope,'old recipient-as-author row repaired without changing ciphertext');}
+  const restored=(await a.dm(w.conv)).messages.find(x=>x.lid===q.lid);
+  check(restored.reactions.find(r=>r.emoji==='🎉').mine&&byOf(restored,'🎉').some(x=>x.id===a.me.person&&!x.assistant),'old own mark projects as mine after reload');
+  await a.api('/api/message/react',{conv:w.conv,id:q.id,dir:'out',emoji:'🎉',remove:true});
+  const removed=(await a.dm(w.conv)).messages.find(x=>x.lid===q.lid);
+  check(!removed.reactions.find(r=>r.emoji==='🎉').mine&&byOf(removed,'🎉').length===1&&byOf(removed,'🎉')[0].assistant,'old own mark removable without changing the assistant mark');
   for (const [what, extra, sender] of [['another PID', { pid: id() }, c], ['another agent', { agent_id: id() }, c], ['another device', {}, m],
     ['a non-request', { ref: { id: selected.lid, fingerprint: a.fp } }, c], ['another request key', { ref: { id: q.lid, fingerprint: b.fp } }, c]]) {
     const rid = await w.receive(await control(sender, a, { ...fields, lid: id(), ...extra }), a);

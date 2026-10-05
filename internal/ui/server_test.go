@@ -148,7 +148,7 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	}
 }
 
-func TestNativeManifestRequiresSession(t *testing.T) {
+func TestNativeManifestAbsentAndIconsRequireSession(t *testing.T) {
 	const host = "127.0.0.1:12345"
 	s := New(NewFixture(time.Now), host, testToken)
 	for _, tc := range []struct {
@@ -159,7 +159,7 @@ func TestNativeManifestRequiresSession(t *testing.T) {
 		{"/manifest.webmanifest?t=" + testToken, "", host, 401},
 		{"/manifest.webmanifest", cookieName + "=wrong", host, 401},
 		{"/manifest.webmanifest", cookieName + "=" + testToken, "foreign.example", 421},
-		{"/manifest.webmanifest", cookieName + "=" + testToken, host, 200},
+		{"/manifest.webmanifest", cookieName + "=" + testToken, host, 404},
 		{"/assets/icon-512.png", "", host, 401},
 		{"/assets/icon-512.png", cookieName + "=" + testToken, host, 200},
 	} {
@@ -179,13 +179,6 @@ func TestNativeManifestRequiresSession(t *testing.T) {
 				t.Fatal("install icon differs from shared app icon")
 			}
 			continue
-		}
-		data, err := fs.ReadFile(static.Files, "manifest.webmanifest")
-		if err != nil || w.Body.String() != string(data) || w.Header().Get("Content-Type") != "application/manifest+json" || w.Header().Get("Cache-Control") != "no-cache" {
-			t.Fatalf("native shared manifest: %v %s", err, w.Header())
-		}
-		if strings.Contains(w.Body.String(), testToken) || !strings.Contains(w.Header().Get("Content-Security-Policy"), "manifest-src 'self'") {
-			t.Fatal("manifest leaked bootstrap token or lacks same-origin CSP")
 		}
 	}
 }
@@ -355,7 +348,7 @@ func TestAlertClickAndControls(t *testing.T) {
 	ts, _ := newTestServer(t)
 	resp := do(t, ts, "GET", "/", "", nil)
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(string(body), "run agentnet ui") {
+	if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(string(body), "open AgentNet from your apps") {
 		t.Fatalf("no session: %d %q", resp.StatusCode, body)
 	}
 	for _, what := range []string{"enable", "disable", "mute", "allow", "seen"} {

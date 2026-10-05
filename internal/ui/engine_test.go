@@ -752,7 +752,7 @@ func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
 	// profile read) stops the message before the relay is given it: it
 	// stays queued, saying why.
 	w.ok(map[string]any{"op": "holdUploads"})
-	w.ok(map[string]any{"op": "sendFilesLater", "conv": toErin, "files": []any{map[string]any{"name": "late.txt", "b64": base64.StdEncoding.EncodeToString([]byte("late"))}}})
+	w.ok(map[string]any{"op": "sendFilesLater", "connected": true, "conv": toErin, "files": []any{map[string]any{"name": "late.txt", "b64": base64.StdEncoding.EncodeToString([]byte("late"))}}})
 	_, erinP := aliceRaw.peer(erinRaw.addr)
 	w.forge(erinRaw, erinP, "Erin again")
 	w.refuses("a send that reads Erin's new person", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": toErin, "body": "y"}}), "conflicts")

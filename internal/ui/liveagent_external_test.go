@@ -14,6 +14,7 @@ func TestExternalAgentProviderRolesAndExcerptClaims(t *testing.T) {
 	info := client.ParticipationInfo{PID: protocol.NewID(), State: client.PartActive, External: true, HostHere: true,
 		Host:    client.PersonInfo{Person: protocol.NewID(), Address: "charlie/host", Label: "Charlie"},
 		Inviter: client.PersonInfo{Person: protocol.NewID(), Address: "alice/desk", Label: "Alice"}, Grant: []protocol.GrantRef{ref}}
+	info.Inviters = []client.PersonInfo{info.Inviter}
 	claimed := client.ConvMessage{ID: protocol.NewID(), LID: ref.LID, History: true, Replica: true, Claimed: ref.Fingerprint, SyncedFrom: info.Inviter.Address, ExcerptPID: info.PID}
 	people := dmPeople{me: personView(info.Host), peer: personView(info.Inviter), role: "visitor"}
 	view := agentView(info, people, []client.ConvMessage{claimed}, true)

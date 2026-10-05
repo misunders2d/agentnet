@@ -495,7 +495,7 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 			return err
 		}
 	}
-	if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
+	if err := replyEndsReminder(tx, in.Conv, in.ReplyTo, in.Status); err != nil {
 		return err
 	}
 	for _, a := range in.Attachments {

@@ -147,7 +147,7 @@ const ctl = (id, sub, body, ref, from = "peer/desk") => ({ id, v: 3, control: tr
   e.profile = async () => ({ sessions: ["s1"], caps: [] });
   why = "";
   try { await e.messageControl("react", { id: ID, dir: "in", emoji: "👍" }); } catch (err) { why = err.message; }
-  check(why.startsWith("peer/desk cannot read reactions, edits or deletions yet"), "a peer without ctl3 is refused by name: " + why);
+  check(why.startsWith("peer_update: peer/desk cannot read reactions, edits or deletions yet"), "a peer without ctl3 is refused by name with an update cause: " + why);
   check((await store.all("outbox")).length === 0, "nothing was queued for the older peer");
   why = "";
   try { await e.messageControl("edit", { id: ID, dir: "in", text: "x" }); } catch (err) { why = err.message; }
