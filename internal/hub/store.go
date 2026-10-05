@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -227,7 +227,7 @@ func openStore(path string) (*store, error) {
 
 type agent struct {
 	Public        identity.Public
-	Admin         bool
+	Admin         bool // its own, or its person's (agentIn)
 	Revoked       bool
 	RevokedReason string // "refused" or "expired" for a device link nobody approved; "removed" from its person
 	Pending       bool   // joined with a device invite, waiting for its person's approval: not a member
@@ -245,7 +245,14 @@ func agentIn(q interface {
 	var revoked sql.NullInt64
 	var reason, pending, person sql.NullString
 	var until sql.NullInt64
-	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
+	// A device of a person holds that person's admin role: its own invite
+	// made it admin, or another active device of its person is. Only the
+	// Hub's own records count (person_id is set by the device's own first
+	// roster step or by a link its person's device signed), and it ends
+	// with the link: removed from the person, or that device revoked.
+	err := q.QueryRow(`SELECT public, admin OR (person_id IS NOT NULL AND pending_person IS NULL AND EXISTS (
+		SELECT 1 FROM agents b WHERE b.person_id = agents.person_id AND b.admin = 1 AND b.revoked_at IS NULL AND b.pending_person IS NULL)),
+		revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
 		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, errNotFound
@@ -262,12 +269,18 @@ type enrolledMember struct {
 	address string
 	joined  int64               // unix seconds
 	person  *protocol.PersonRef // the newest roster step of its person, if any
+	agent   bool                // its newest caps record lists protocol.CapAgent (a hint)
 }
 
 // members lists up to limit unrevoked agents, most recently enrolled first,
 // and whether more exist.
 func (s *store) members(limit int) ([]enrolledMember, bool, error) {
-	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash FROM agents a LEFT JOIN persons p ON p.person = a.person_id
+	// The agent hint comes from the device's newest signed caps record,
+	// not its last session's: a stream sets last_session on connect, before
+	// that session publishes, and the hint must not flicker on reconnect.
+	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash,
+		(SELECT c.record FROM caps c WHERE c.address = a.address ORDER BY c.ts DESC, c.session LIMIT 1)
+		FROM agents a LEFT JOIN persons p ON p.person = a.person_id
 		WHERE a.revoked_at IS NULL AND a.pending_person IS NULL ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`, limit+1)
 	if err != nil {
 		return nil, false, err
@@ -276,10 +289,14 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	var out []enrolledMember
 	for rows.Next() {
 		var m enrolledMember
-		var person, hash sql.NullString
+		var person, hash, caps sql.NullString
 		var seq sql.NullInt64
-		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash); err != nil {
+		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash, &caps); err != nil {
 			return nil, false, err
+		}
+		if caps.Valid {
+			rec, err := protocol.ParseCapsRecord([]byte(caps.String))
+			m.agent = err == nil && rec.Has(protocol.CapAgent) // unreadable: no hint
 		}
 		if person.Valid {
 			m.person = &protocol.PersonRef{ID: person.String, Seq: seq.Int64, Hash: hash.String}

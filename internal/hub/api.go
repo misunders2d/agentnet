@@ -57,6 +57,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
 	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
+	mux.HandleFunc("PUT /v1/admin/workspace", h.handleWorkspacePut) // hub/workspace.go; the name rides the member list
 	mux.HandleFunc("GET /v1/notify", h.handleNotifyInfo)
 	mux.HandleFunc("GET /v1/notify/prefs", h.handleNotifyPrefsGet)
 	mux.HandleFunc("PUT /v1/notify/prefs", h.handleNotifyPrefsPut)
