@@ -2715,7 +2715,8 @@ function renderReview(items) {
   const security = items.filter((it) => it.reason === "device_admin");
   const reports = items.filter((it) => it.notice && it.reason !== "device_admin");
   const btn = $("review-btn");
-  const n = decisions.length;
+  const conversations = (state.overview.needs_you || []).filter(c => c.reason === "agent_needs_human");
+  const n = decisions.length + conversations.length;
   const total = n + reports.length + security.length + (state.overview.links || []).filter((l) => l.state === "pending").length;
   $("review-count").textContent = total;
   $("review-count").hidden = !total;
@@ -2725,11 +2726,18 @@ function renderReview(items) {
   btn.dataset.n = n;
   btn.setAttribute("aria-label", (n === 1 ? "1 item needs your decision" : n + " items need your decision") +
     (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : "") + (security.length ? ", " + plural(security.length, "company settings notice", "company settings notices") : ""));
-  fill($("review-list"), ...(n ? decisions.map((it) => el("li", {},
+  fill($("review-list"), ...conversations.map(c => {
+    const chat = (state.overview.dms || []).find(d => d.id === c.conv);
+    return el("li", {}, el("button", {type:"button", onclick:()=>{ toggleReview(false); openMessage({id:c.id,conv:c.conv}); }},
+      el("strong", {}, "Your agent couldn’t finish — it needs your answer"),
+      el("span", {class:"review-why"}, "In " + (chat?.title || (chat?.peer ? "your chat with " + (chat.peer.label || "this person") : "a chat")))),
+      c.why && el("details", {}, el("summary", {}, "Read the agent’s whole message"), el("p", {class:"agent-detail"}, c.why)),
+      c.decide_on && el("p", {class:"hint"}, "Open it on " + deviceWords(c.decide_on)));
+  }), ...(decisions.length ? decisions.map((it) => el("li", {},
     el("button", { type: "button", onclick: () => { toggleReview(false); openThread(it.id, it.id); } },
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
-      el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
+      el("span", { class: "review-text" }, it.excerpt)))) : conversations.length ? [] : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
   fill($("activity-extra"), remindersSection(), ...security.map(it => el("li", {}, el("p", {}, it.why), el("time", {datetime:it.at}, when(it.at)), el("button", {type:"button", onclick:async()=>{ await api("/api/act",{do:"resolve",id:it.id}); await loadOverview(); }}, "Hide notice"))), ...linkNotices().map((n) => el("li", {}, n)));
   const senders = [...new Set(reports.map((it) => it.peer))];
   const contacts = contactsOf(state.overview.threads);
@@ -3227,7 +3235,7 @@ function reportItems(it) {
     return el("li", { class: "report-request" + (x.actionable ? " actionable" : "") },
       el("div", { class: "report-head" }, el("strong", {}, kindTag[x.kind] || x.kind || "request"), " from ", who(x.from || "?"), " · ", (execWord[x.state] || x.state || "state unknown"),
         x.blocker && el("span", { class: "hint" }, " · " + (blockerWord[x.blocker] || x.blocker)), x.since && el("span", { class: "hint" }, " · since " + when(x.since))),
-      x.excerpt ? el("p", { class: "report-excerpt" }, x.excerpt) : el("p", { class: "hint" }, "Its text is not shared with this device."),
+      x.excerpt ? (x.state === "needs_human" ? el("details", {}, el("summary", {}, "Read all available detail"), el("p", {class:"agent-detail"}, x.excerpt)) : el("p", { class: "report-excerpt" }, x.excerpt)) : el("p", { class: "hint" }, "Its text is not shared with this device."),
       proposalCard(x.proposal),
       el("p", { class: "hint mono" }, "Request " + x.id.slice(0, 8) + "… on " + r.host),
       res, acts);
@@ -3324,11 +3332,20 @@ const isReport = (m) => m.dir === "in" && m.kind === "message" && m.status === "
 
 function actionButton(a, m, t, primary) {
   let label = actionLabel[a];
-  if (a === "resolve" && isReport(m)) label = "Dismiss report…";
+  if (a === "resolve") label = isReport(m) ? "Dismiss report…" : "Mark as handled";
   if (a === "approve" && t.permission_person) label="Approve " + t.permission_person.label + "…";
   if (a === "accept" && m.kind === "question") label = "Let your responder answer…";
   if (a === "accept" && ["needs_human", "interrupted", "failed", "cancelled"].includes(m.state)) label = "Run your responder again…";
+  if (a === "accept" && (m.actions || []).includes("resolve")) label = "Ask again";
   return el("button", { type: "button", class: "act" + (primary ? " go" : ""), onclick: () => decide(a, m, t) }, label);
+}
+
+function agentNeedsYouTurn(m, t) {
+  return el("section", {class:"agent-turn", "aria-label":"Your agent says"},
+    el("strong", {}, "Your agent couldn’t finish — it needs your answer"),
+    el("p", {class:"agent-detail"}, m.job_detail),
+    (m.actions || []).length ? el("div", {class:"acts"}, m.actions.map((a,i)=>actionButton(a,m,t,i===0)))
+      : m.target && el("p", {class:"hint"}, "Open it on " + deviceWords(m.target.address)));
 }
 
 // ---- decisions ---------------------------------------------------------------
@@ -3380,8 +3397,8 @@ function decide(a, m, t) {
       ok: a.member ? "Remove agent" : "Dismiss", run: () => act({ do: "resolve", id: m.id }) });
   }
   if (a === "resolve") {
-    return dialog({ title: "Close without replying?", body: [quote, el("p", {}, "Nothing is sent to " + m.from + ".")],
-      ok: "Close", run: () => act({ do: "resolve", id: m.id }) });
+    return dialog({ title: "Mark as handled?", body: [quote, el("p", {}, "Nothing is sent to " + m.from + ".")],
+      ok: "Mark as handled", run: () => act({ do: "resolve", id: m.id }) });
   }
   if (a === "cancel") {
     return dialog({ title: "Stop your responder?", body: [quote, el("p", {}, "Work already done on your computer is not undone.")],
@@ -5155,6 +5172,7 @@ const Zoom = {
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, m.verified_agent ? el("span", {class:"avatar sm", "aria-hidden":"true"}, "🤖") : avatar(mine ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,d),bubble),
+          m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
           (m.delivery || m.state_text) && el("p", { class: "narr" }, m.dir === "out" && m.delivery ? deliveryText(m) : m.state_text));
       })),
       el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen || state.sending, onclick: () => dmWriteDialog(d) },
@@ -5171,6 +5189,7 @@ const Zoom = {
       el("div", { class: "meta" }, avatar(m.dir === "out" ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("span", { class: "who" }, dmAuthor(m, d)),
         kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.sent_at || m.at }, sentWhen(m))),
       messageReference(m,state.dmData?.messages.includes(m)?state.dmData:state.data),
+      m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
       bodyOf(m),
       !m.deleted && fileChips(m, m.attachments),
       reactionsRow(m, d.id), messageMenu(m, d.id, { querySelector: () => null }),
