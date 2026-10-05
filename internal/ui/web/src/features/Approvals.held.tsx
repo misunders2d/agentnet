@@ -2,11 +2,13 @@
 // not let in, by who sent them and why, in plain words. Their content is
 // never shown, and they are not decisions: the OKs count leaves them out.
 // One held for a changed identity can be checked and trusted from here on
-// a computer, the same way as from the paused chat.
+// a computer, the same way as from the paused chat. One that didn't verify
+// proves nothing about who sent it: it only says who it claims to be from.
 import { useState } from "react";
+import { IconShieldQuestion } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useApp } from "../context";
-import { holdSentence, nameOf, niceDevice, personOf, when } from "../model";
+import { holdSentence, holdVerified, nameOf, niceDevice, personOf, when } from "../model";
 import { PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { latestThreads } from "./AgentsView.grants";
@@ -32,7 +34,8 @@ function HeldRow({ q, o }: { q: T.QuarantineItem; o: T.Overview }) {
   const [thread, setThread] = useState<T.Thread | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const p = personOf(q.peer, o);
+  const verified = holdVerified(q.code || "");
+  const p = verified ? personOf(q.peer, o) : undefined;
   const name = nameOf(q.peer, o);
   // The device conversation with that device, where its changed key is kept.
   const conv = latestThreads(o).find((t) => t.peer === q.peer);
@@ -51,10 +54,11 @@ function HeldRow({ q, o }: { q: T.QuarantineItem; o: T.Overview }) {
   };
   return (
     <li className="flex gap-3 rounded-2xl bg-surface p-3.5 stroke">
-      <PersonAvatar name={name} seed={p?.person || q.peer} size={40} />
+      {verified ? <PersonAvatar name={name} seed={p?.person || q.peer} size={40} />
+        : <span className="grid size-10 shrink-0 place-items-center rounded-full bg-sunken text-text-2 stroke" aria-hidden="true"><IconShieldQuestion size={20} /></span>}
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-baseline gap-x-2">
-          <b className="font-bold">{name}</b>
+          <b className="font-bold">{verified ? name : "A message that couldn’t be verified"}</b>
           <span className="text-[13px] text-muted">{p ? "on " + niceDevice(q.peer) + " · " : ""}<time dateTime={q.at}>{when(q.at)}</time></span>
         </p>
         <p className="mt-0.5 text-[14px] text-text-2">{holdSentence(q.code || "", name, browser)}</p>

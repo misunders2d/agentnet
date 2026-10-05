@@ -445,6 +445,12 @@ export const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffse
 
 // ---- held back (overview.quarantine) ----------------------------------------
 
+/** holdVerified: whether a held message's sender is known (QuarantineItem.code).
+ *  One that didn't verify ("unverified", or a code this page doesn't know)
+ *  only claims who sent it, so it is never shown as that person. */
+export const holdVerified = (code: string) =>
+  ["key_changed", "proof_pending", "identity_conflict", "conflicting_duplicate"].includes(code);
+
 /** holdSentence says why a received message is held back (QuarantineItem.code),
  *  naming its sender; its content is never shown. browser: this device can't trust keys. */
 export function holdSentence(code: string, name: string, browser = false): string {
@@ -453,6 +459,6 @@ export function holdSentence(code: string, name: string, browser = false): strin
     case "proof_pending": return "It names a chat or a person this device can’t check yet. It waits here; nothing runs it.";
     case "identity_conflict": return "It disagrees with what this device knows about " + name + ". It stays held; nothing runs it.";
     case "conflicting_duplicate": return name + " sent different words under a message already received. It stays held; nothing runs it.";
-    default: return "It couldn’t be verified, so it isn’t shown.";
+    default: return "It says it’s from " + name + ", but that couldn’t be checked, so it isn’t shown.";
   }
 }

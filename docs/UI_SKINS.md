@@ -337,8 +337,10 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
 - Held back: `overview.quarantine[]` `{id, peer, code, reason, at}`; `code` is
   `key_changed`, `proof_pending`, `identity_conflict`,
   `conflicting_duplicate` or `unverified`: write your own sentence from it
-  with the sender's name (`reason` names their address). Content is never
-  shown, and these are not decisions to count.
+  with the sender's name (`reason` names their address). An `unverified`
+  one (or a code you don't know) only claims its sender: say who it says it
+  is from, never draw it as that person. Content is never shown, and these
+  are not decisions to count.
 - Agent invitation: `/api/dm/agent/invite` `tasks_from` lists the member key
   fingerprints (at most 16) that may give the agent tasks without asking:
   offer it per person (their devices now), never per address.

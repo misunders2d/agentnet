@@ -47,6 +47,10 @@ const address = /\b[a-z0-9._-]+\/[a-z0-9._-]+\b/;
     await held.waitFor(T);
     const words = await held.textContent();
     assert.match(words, /couldn’t be verified/, name + ': the reason is in words');
+    // The demo's unverified message only claims a sender: it isn't drawn as that person.
+    const unverified = held.locator('li', { hasText: 'A message that couldn’t be verified' });
+    assert.match(await unverified.textContent(), /says it’s from /, name + ': an unverified message says who it claims to be from');
+    assert.equal(await unverified.locator('[data-size]').count(), 0, name + ': an unverified message has no person’s avatar');
     assert.ok(!address.test(words), name + ': the held-back list shows an address: ' + words);
     await held.scrollIntoViewIfNeeded();
     await snap('held');

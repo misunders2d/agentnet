@@ -190,8 +190,10 @@ const holdWords = {
   identity_conflict: (p) => "Held: it disagrees with the person record kept here for " + p + ". Nothing runs it.",
   conflicting_duplicate: (p) => "Held: " + p + " sent different content under a message it already sent. Nothing runs it.",
 };
-const holdText = (reason, peer) => (holdWords[reason] ? holdWords[reason](peer) : "It did not verify, so its content is not shown.");
 export const holdCode = (reason) => (Object.hasOwn(holdWords, reason) ? reason : "unverified");
+const holdText = (reason, peer) => (holdCode(reason) !== "unverified" ? holdWords[reason](peer) : "It did not verify, so its content is not shown.");
+// quarantineItem is one held message as the overview lists it (ui.QuarantineItem, live.go quarantineItems).
+export const quarantineItem = (h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at) });
 
 export function outText(state, peer, detail = "") {
   switch (state) {
@@ -5418,7 +5420,7 @@ export class Engine {
       demo: false, seq: this.seq, version: this.version, release: "",
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true },
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
-      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), needs_you: needsYou, held: heldTurns, quarantine: held.map((h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at) })),
+      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), needs_you: needsYou, held: heldTurns, quarantine: held.map(quarantineItem),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
