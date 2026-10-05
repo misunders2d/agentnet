@@ -536,6 +536,7 @@ export interface Me {
   fingerprint: string;
   responder: string;
   responder_dir: string;
+  agent: boolean;
 }
 
 export interface Message {
@@ -613,6 +614,8 @@ export interface Overview {
   link?: LinkState;
   links?: LinkRequest[];
   history?: HistoryCopy[];
+  workspace?: WorkspaceView;
+  agent_devices: string[] | null;
 }
 
 export interface ParticipationGrant {
@@ -1004,6 +1007,13 @@ export interface WorkspaceBinding {
   realm?: string;
   state: string;
   handle: string;
+  hub_name?: string;
+}
+
+export interface WorkspaceInfoView {
+  name: string;
+  server: string;
+  can_rename: boolean;
 }
 
 export interface WorkspaceJoin {
@@ -1011,4 +1021,13 @@ export interface WorkspaceJoin {
   name: string;
   invite: string;
   agent: string;
+}
+
+export interface WorkspaceNameChange {
+  name: string;
+}
+
+export interface WorkspaceView {
+  name: string;
+  server: string;
 }
