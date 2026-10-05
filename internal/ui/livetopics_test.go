@@ -114,7 +114,7 @@ func TestLiveTopicRoutes(t *testing.T) {
 	if code, _ := change("done", TopicChange{Peer: alice.Address, ID: "0123"}, post(ts)); code != http.StatusNotFound {
 		t.Fatalf("an unknown topic: %d", code)
 	}
-	if code, _ := change("archive", TopicChange{Peer: alice.Address, ID: ids[0]}, post(ts)); code != http.StatusNotFound {
+	if code, _ := change("bogus", TopicChange{Peer: alice.Address, ID: ids[0]}, post(ts)); code != http.StatusNotFound {
 		t.Fatalf("an unknown change: %d", code)
 	}
 	var th Thread

@@ -35,4 +35,849 @@
     {"name": "close flag on progress is ignored", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "message", "status": "progress", "reply_to": "q1", "state": "", "at": 1789990060, "topic_done": true}], "want": {"state": "active", "pending": true, "quiet_since": 1789990060}},
     {"name": "close while another request pending stays active", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "pending", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990010}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060, "topic_done": true}], "want": {"state": "active", "pending": true, "quiet_since": 1789990060}}
   ]
+,
+  "chat_cases": [
+    {
+      "name": "Main and replies stay main",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        }
+      ],
+      "assigned": {},
+      "want": [],
+      "local": {}
+    },
+    {
+      "name": "Promotion moves seed and descendants",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Promotion arrives first",
+      "messages": [
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Shared done covers exact logical turns",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "d",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "d",
+          "sent": 1789999930,
+          "topic": "a",
+          "topic_event": {
+            "action": "done",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "d": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "done",
+          "Count": 2,
+          "DoneBy": "person",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Unseen old turn ends shared done",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "d",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "d",
+          "sent": 1789999930,
+          "topic": "a",
+          "topic_event": {
+            "action": "done",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        {
+          "lid": "c",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "c",
+          "sent": 1789999905,
+          "topic": "a"
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "d": "a",
+        "c": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 3,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Anyone reopens",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "d",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "d",
+          "sent": 1789999930,
+          "topic": "a",
+          "topic_event": {
+            "action": "done",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        {
+          "lid": "r",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "r",
+          "sent": 1789999940,
+          "topic": "a",
+          "topic_event": {
+            "action": "open",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "d": "a",
+        "r": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Explicit topics do not consume main",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "x",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "x",
+          "sent": 1789999990,
+          "topic": "x"
+        },
+        {
+          "lid": "y",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "y",
+          "sent": 1789999995,
+          "reply_to": "x"
+        }
+      ],
+      "assigned": {
+        "x": "x",
+        "y": "x"
+      },
+      "want": [
+        {
+          "ID": "x",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Cycle stays main",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900,
+          "reply_to": "b"
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        }
+      ],
+      "assigned": {},
+      "want": [],
+      "local": {}
+    },
+    {
+      "name": "Quiet topics archive",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789300000,
+          "topic": "a"
+        }
+      ],
+      "assigned": {
+        "a": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "archived",
+          "Count": 1,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Pending topic never archives",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "question",
+          "body": "a",
+          "sent": 1789300000,
+          "topic": "a",
+          "state": "delivered"
+        }
+      ],
+      "assigned": {
+        "a": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 1,
+          "DoneBy": "",
+          "Pending": true
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Answer does not close without trailer",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "question",
+          "body": "a",
+          "sent": 1789999900,
+          "topic": "a"
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "answer",
+          "body": "b",
+          "sent": 1789999910,
+          "topic": "a",
+          "reply_to": "a",
+          "status": "done"
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Explicit agent close",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "question",
+          "body": "a",
+          "sent": 1789999900,
+          "topic": "a"
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "answer",
+          "body": "b",
+          "sent": 1789999910,
+          "topic": "a",
+          "reply_to": "a",
+          "status": "done",
+          "topic_done": true
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "done",
+          "Count": 2,
+          "DoneBy": "agent",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Explicit archive local",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "archived",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {
+        "a": {
+          "mark": "archived",
+          "mark_at": 1789999990,
+          "mark_count": 3
+        }
+      }
+    },
+    {
+      "name": "Shared reopen ends local archive",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "r",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "r",
+          "sent": 1789999940,
+          "topic": "a",
+          "topic_event": {
+            "action": "open",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "r": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {
+        "a": {
+          "mark": "archived",
+          "mark_at": 1789999930,
+          "mark_count": 2
+        }
+      }
+    },
+    {
+      "name": "Same-second shared reopen invalidates archive",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "open",
+          "dir": "in",
+          "from": "bob/desk",
+          "kind": "message",
+          "body": "Reopened this topic.",
+          "sent": 1789999990,
+          "topic": "a",
+          "reply_to": "p",
+          "topic_event": {
+            "action": "open",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "open": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {
+        "a": {
+          "mark": "archived",
+          "mark_at": 1789999990,
+          "mark_count": 3
+        }
+      }
+    },
+    {
+      "name": "Old main flow promotion starts a fresh quiet interval",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789308800
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789308800,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1790000000,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Same-second agent output keeps physical request authorization and logical topic ordering",
+      "messages": [
+        {
+          "id": "physical-request",
+          "lid": "z",
+          "kind": "question",
+          "dir": "out",
+          "body": "Please finish",
+          "sent": 1790000000,
+          "topic": "flow"
+        },
+        {
+          "id": "physical-answer",
+          "lid": "a",
+          "kind": "answer",
+          "dir": "in",
+          "body": "Finished",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "physical-request",
+          "status": "done",
+          "topic_done": true
+        }
+      ],
+      "local": {},
+      "assigned": {
+        "z": "flow",
+        "a": "flow"
+      },
+      "want": [
+        {
+          "ID": "flow",
+          "State": "done",
+          "DoneBy": "agent",
+          "Count": 2,
+          "Pending": false
+        }
+      ]
+    }
+  ]
 }

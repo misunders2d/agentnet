@@ -409,7 +409,7 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   set, and when a folder can't be read (deleted, or closed to the person)
   still offer Up and Home, not only a retry. Setup approves nobody, shares
   no history and keeps the default agent.
-- Topics (an agent's device threads, docs/plans/TOPICS.md): `overview.threads`
+- Topics (every chat, docs/plans/TOPICS.md): `overview.threads`
   lists every thread, archived topics too; a skin that pages topics itself
   asks `/api/overview?topics=1` and gets them without archived topics.
   `overview.topics[]` counts each peer's topics (`total`, `archived`,
@@ -422,7 +422,19 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
   matched}`; POST `/api/topic/rename` `{peer,id,title}`, `/api/topic/done`
   and `/api/topic/reopen` `{peer,id,count}` (`count`: the messages shown).
-  A name and the Done/Reopen marks are this device's only; say so.
+  Names and device-chat Done/Reopen are local; say so. People DMs/groups
+  keep a main flow and opt-in topics: `/api/dm` adds `topics[]`, messages
+  have derived `topic` and optional shared `topic_event`, and
+  `/api/topics?conv=...` pages the chat's topics. People-topic Done/Reopen
+  are shared and attributed (`done_by: person`, `concluded_by`); any member
+  may reopen. Send/ask accepts `topic` (`new` starts a topic), and
+  `/api/topic/create` `{conv,id}` promotes a held logical message and replies.
+  Topic changes use `{conv,id,count?,title?}`; bulk Done/Archive/Delete uses
+  `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}`. Offer one confirmation and a six-second
+  pending Undo before calling the host. Delete for me in people chats
+  affects only this person's devices; others keep their copies. Archive
+  stays local; new messages/shared actions clear it. Comic, Classic and
+  Zoom implement these controls through Host API v1 only.
 - Headless: a request message may carry `exec` `{state, at, host, stale, attempt?, detail}`,
   the executing host's own signed word (never delivery, presence or a timer);
   show it apart from delivery and say when it is stale. A review notice may carry

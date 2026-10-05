@@ -403,6 +403,7 @@ type LastEvent struct {
 
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
+	Topics          []ThreadSummary   `json:"topics,omitempty"`
 	Kind            string            `json:"kind,omitempty"`
 	Title           string            `json:"title,omitempty"`
 	Members         []GroupMemberView `json:"members,omitempty"`
@@ -420,6 +421,8 @@ type DMThread struct {
 
 // DMMessage is one message of a DM.
 type DMMessage struct {
+	Topic          string                    `json:"topic,omitempty"`
+	TopicEvent     *envelope.TopicEvent      `json:"topic_event,omitempty"`
 	AgentAuthorPID string                    `json:"agent_author_pid,omitempty"`
 	GroupRef       *protocol.GroupHistoryRef `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
 	ExcerptPID     string                    `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
@@ -708,6 +711,7 @@ type AgentInvite struct {
 
 // AgentAsk is a question (or task) for an active participation's agent.
 type AgentAsk struct {
+	Topic         string                  `json:"topic,omitempty"`
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	PID           string                  `json:"pid"`
 	Kind          string                  `json:"kind"`
@@ -745,6 +749,7 @@ type AgentView struct {
 // only: a DM's question or task would run nowhere yet. Files are the ids of
 // files the page handed over (Files.StageFile).
 type DMDraft struct {
+	Topic         string                  `json:"topic,omitempty"`
 	PID           string                  `json:"pid,omitempty"` // exact human author participation; not a receiver/executor
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	Conv          string                  `json:"conv"`
@@ -805,6 +810,7 @@ type Me struct {
 
 // ThreadSummary is one row of the thread list.
 type ThreadSummary struct {
+	Conv       string    `json:"conv,omitempty"`
 	ID         string    `json:"id"`
 	Peer       string    `json:"peer"`
 	Title      string    `json:"title"`
@@ -1105,6 +1111,7 @@ type Draft struct {
 
 // Sent is the outcome of Send.
 type Sent struct {
+	LID    string `json:"lid,omitempty"`
 	ID     string `json:"id"`
 	State  string `json:"state"`
 	Path   string `json:"path,omitempty"`

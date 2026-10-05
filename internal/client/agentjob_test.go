@@ -27,6 +27,7 @@ cat > "$AGENT_LOG.last"
 mode=$(cat "$AGENT_LOG.mode" 2>/dev/null || echo emotion)
 case "$mode" in
 emotion) printf 'the deploy failed at step 3\n\nemotion: concerned\n' ;;
+closed) printf 'Finished the work\ntopic: done\nemotion: calm\n' ;;
 bare) printf 'the deploy failed at step 3\n' ;;
 bad) printf 'the deploy failed at step 3\nemotion: Very Sad\n' ;;
 sleep) touch "$AGENT_LOG.started"; sleep 30 & wait; printf 'late reply\nemotion: calm\n' ;;
@@ -816,5 +817,39 @@ func TestAgentOutputRecheckedAtEachHandOver(t *testing.T) {
 				t.Fatalf("a later flush sent it (%d, %v)", len(outputs), err)
 			}
 		})
+	}
+}
+
+// A group's or DM's participant answers in the request's selected topic.
+// An ordinary answer leaves it active; only the explicit trailer closes it.
+func TestChatTopicAgentReply(t *testing.T) {
+	st := installAgentStub(t)
+	w, conv, lids, _ := agentWorld(t)
+	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
+	pid := participate(t, w, conv, lids[:2], nil)
+	q, err := w.alice.AskAgentInTopic(tctx(t), pid, envelope.KindQuestion, "What failed?", "new", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := replyAt(t, w.alice, conv, q.ID)
+	if answer.Topic == "" || answer.TopicDone {
+		t.Fatalf("ordinary answer: %+v", answer)
+	}
+	topics, err := w.alice.ChatTopics(conv)
+	if err != nil || len(topics) != 1 || topics[0].State != TopicActive || topics[0].Pending {
+		t.Fatalf("ordinary answer topics: %+v %v", topics, err)
+	}
+	st.mode("closed")
+	next, err := w.alice.AskAgentInTopic(tctx(t), pid, envelope.KindQuestion, "Please finish.", answer.Topic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := replyAt(t, w.alice, conv, next.ID)
+	if done.Topic != answer.Topic || !done.TopicDone || done.Body != "Finished the work" {
+		t.Fatalf("explicit close: %+v", done)
+	}
+	topics, err = w.alice.ChatTopics(conv)
+	if err != nil || len(topics) != 1 || topics[0].State != TopicDone || topics[0].DoneBy != DoneByAgent {
+		t.Fatalf("closed topics: %+v %v", topics, err)
 	}
 }

@@ -1160,6 +1160,10 @@ func (a *Agent) AskAgent(ctx context.Context, pid, kind, body string, files ...O
 // AskAgentWithReceiver retains AskAgent's own-host job/authority semantics
 // while capturing an independent local return delegation.
 func (a *Agent) AskAgentWithReceiver(ctx context.Context, pid, kind, body string, receiver *ReplyReceiver, files ...OutgoingFile) (ConvSent, error) {
+	return a.AskAgentInTopic(ctx, pid, kind, body, "", receiver, files...)
+}
+
+func (a *Agent) AskAgentInTopic(ctx context.Context, pid, kind, body, topic string, receiver *ReplyReceiver, files ...OutgoingFile) (ConvSent, error) {
 	info, err := a.Participation(pid)
 	if err != nil {
 		return ConvSent{}, err
@@ -1180,7 +1184,7 @@ func (a *Agent) AskAgentWithReceiver(ctx context.Context, pid, kind, body string
 		}
 		target.GroupAdmission = adm.Hash()
 	}
-	return a.SendConv(ctx, info.Conv, ConvOutgoing{Kind: kind, Body: body, Files: files, PID: pid, selfJob: info.HostHere, ReplyReceiver: receiver, Target: target})
+	return a.SendConv(ctx, info.Conv, ConvOutgoing{Kind: kind, Body: body, Topic: topic, Files: files, PID: pid, selfJob: info.HostHere, ReplyReceiver: receiver, Target: target})
 }
 
 // checkParticipationEvent checks an event received in a DM message from

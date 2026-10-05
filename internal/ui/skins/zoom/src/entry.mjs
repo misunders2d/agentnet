@@ -1,4 +1,5 @@
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
+import { topicControls } from './topics.mjs';
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
 const mounted = new WeakMap();
@@ -71,6 +72,7 @@ const setTimeout = (fn, ms) => { const timer = globalThis.setTimeout(() => { tim
 "use strict";
 
 const $ = (id) => root.querySelector("#" + CSS.escape(id));
+const topicSelections={},topicFresh={};
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {},
   drafts: {}, draftKey: null, replyReceiver: null, replyReceiverHost: null, receiverCatalog: null, receiverCatalogSeq: 0, receiverBindings: [], sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
   dm: null, dmData: null, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
@@ -126,6 +128,8 @@ function el(tag, attrs, ...kids) {
 
 // Every operation keeps the host it started with.
 async function api(path, body, host = currentHost) { return host.api(path, body); }
+const topicUI=topicControls(root,{api,announce:text=>announce(text),choose:id=>{if(state.dm){topicSelections[state.dm]=id;topicFresh[state.dm]=false;setDMReply(null);renderDMBody(false);if(Zoom.level===3)void Zoom.go(2,{});}else if(id!==state.thread)void openThread(id);},fresh:()=>{const id=state.dm||state.thread;topicFresh[id]=true;if(state.dm){topicSelections[id]='';renderDMBody(false);}announce('New topic: your next message starts a separate flow.');if(state.dm)dmWriteDialog(state.dmData);else writeDialog(state.data,null);},changed:async()=>{await loadOverview();state.dm?await loadDM(false):await loadThread(false);}});
+cleanups.push(()=>topicUI.stop());
 
 // A time is an RFC 3339 string, or unix seconds (a host's report and its
 // answers, client.Report, count in seconds).
@@ -1990,6 +1994,8 @@ async function loadDM(scrollToEnd) {
   renderAgents(t);
   loadDMNames(t);
   renderDrive(t);
+  if(topicSelections[t.id]&&!(t.topics||[]).some(x=>x.id===topicSelections[t.id]))topicSelections[t.id]="";
+  topicUI.update({conv:t.id},t.topics,topicSelections[t.id]);
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginDM)
@@ -2003,7 +2009,7 @@ async function loadDM(scrollToEnd) {
 }
 
 // Zoom owns its own conversation presentation.
-function renderDMBody() { /* Zoom renders after the bound load completes. */ }
+function renderDMBody() { if(state.dmData){topicUI.update({conv:state.dm},state.dmData.topics,topicSelections[state.dm]);Zoom.refresh();} }
 
 // A named agent's report refers to its host's request copy. Other audience
 // copies carry that same logical ID; resolve only in this conversation and
@@ -2669,9 +2675,11 @@ async function sendDM() {
     const receiver = humanAsk ? null : await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
-      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
-        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind,topic:topicFresh[t.id]?"new":topicSelections[t.id]||"", body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
+        : await api("/api/dm/send", { conv: t.id, topic:topicFresh[t.id]?"new":topicSelections[t.id]||"",...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
+    if(topicFresh[t.id]&&r.lid){const updated=await api('/api/dm?id='+encodeURIComponent(t.id),undefined,host);topicSelections[t.id]=updated.messages.find(m=>m.lid===r.lid)?.topic||'';topicFresh[t.id]=false;}
+    if(!state.dm)topicFresh[state.thread]=false;
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     if (alive && wsNow() === ws && state.draftKey === key) {
@@ -2942,6 +2950,9 @@ async function loadThread(scrollToEnd) {
   showPane("conv");
   $("composer").hidden = false;
   setHubBack();
+  const page=t.topic ? await api("/api/topics?peer="+encodeURIComponent(t.peer)+"&limit=200") : {topics:[]};
+  if(state.thread!==id||gen!==state.gen)return;
+  topicUI.update({peer:t.peer},page.topics,t.topic?.id||id);
   renderBody(scrollToEnd);
   const key = t.messages[0].id; // a conversation's first message names its draft
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginThread)
@@ -3085,6 +3096,7 @@ function messageMenu(m, conv, bubble) {
   const items = [];
   if (canDo(m, "edit")) items.push(el("button", { type: "button", onclick: (e) => { e.currentTarget.closest("details").open = false; editInPlace(m, conv, bubble); } }, "Edit"));
   if (canDo(m, "delete")) items.push(el("button", { type: "button", onclick: (e) => { e.currentTarget.closest("details").open = false; deleteDialog(m, conv); } }, "Delete…"));
+  if(conv&&!m.topic&&!m.topic_event&&state.dmData&&!state.dmData.frozen&&!dmVisitor(state.dmData)&&!m.excerpt_pid)items.push(el("button",{type:"button",onclick:async()=>{try{await api("/api/topic/create",{conv,peer:"",id:m.lid||m.id});topicSelections[conv]=m.lid||m.id;await loadDM(false);await Zoom.go(2,{});}catch(e){announce(e.message);}}},"Make a topic"));
   if (!items.length) return null;
   return el("details", { class: "msg-menu" }, el("summary", { "aria-label": "Message actions", title: "Message actions" }, "⋯"), el("div", { class: "menu-items" }, items));
 }
@@ -3969,7 +3981,7 @@ async function send(ev) {
   // refresh while it is on its way changes none of it.
   const key = state.draftKey, text = $("body").value, answering = state.answering, files = answering ? [] : state.files.slice();
   const last = t.messages[t.messages.length - 1];
-  const draft = { to: t.peer, kind: kindValue(), body: text, reply_to: last ? last.id : "" };
+  const draft = { to: t.peer, kind: kindValue(), body: text, reply_to: topicFresh[state.thread]?"":last ? last.id : "" };
   const agentID = !answering && draft.kind !== "message" ? state.deviceAgentID || "" : "";
   if (agentID) draft.agent_id = agentID;
   if (agentID && deviceAgentMissing()) { $("compose-error").textContent = "Selected agent unavailable. Refresh agents or choose the device default; your draft stays here."; return; }
@@ -4000,7 +4012,8 @@ async function send(ev) {
       if (files.length) draft.files = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
       let r;
       try { r = await api("/api/send", draft, host); } finally { sentStaged(files); }
-      announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
+      if(!state.dm)topicFresh[state.thread]=false;
+    announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     }
     // Clear only what was sent: text typed meanwhile, or in another
     // conversation, stays.
@@ -4808,7 +4821,7 @@ function writeDialog(t, m) {
     run: async () => {
       if (!alive || gen !== state.gen || host !== currentHost) throw Error("Workspace changed; reopen this draft there.");
       if (m) await act({ do: "reply", id: m.id, body: body.value }, host);
-      else await sendWithFiles("/api/send", { to: t.peer, kind: kind.value, body: body.value, reply_to: last ? last.id : "" }, canFiles, host);
+      else {const r=await sendWithFiles("/api/send", { to: t.peer, kind: kind.value, body: body.value, reply_to: topicFresh[state.thread]?"":last ? last.id : "" }, canFiles, host);if(topicFresh[state.thread]){topicFresh[state.thread]=false;await openThread(r.id);}}
       if (alive && gen === state.gen && host === currentHost) { await loadThread(); Zoom.revealEnd = true; Zoom.refresh(); }
     },
   });
@@ -4831,8 +4844,9 @@ function dmWriteDialog(d) {
     ok: "Send", focus: body,
     run: async () => {
       if (!alive || gen !== state.gen || host !== currentHost) throw Error("Workspace changed; reopen this draft there.");
-      const r = await sendWithFiles("/api/dm/send", { conv: d.id, body: body.value }, canFiles, host);
+      const r = await sendWithFiles("/api/dm/send", { conv: d.id,topic:topicFresh[d.id]?"new":topicSelections[d.id]||"", body: body.value }, canFiles, host);
       if (alive && gen === state.gen && host === currentHost) {
+        if(topicFresh[d.id]&&r.lid){const updated=await api("/api/dm?id="+encodeURIComponent(d.id));topicSelections[d.id]=updated.messages.find(m=>m.lid===r.lid)?.topic||"";topicFresh[d.id]=false;}
         await loadDM(); Zoom.revealEnd = true; Zoom.refresh();
       }
       announce(r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
@@ -4896,7 +4910,7 @@ const Zoom = {
     if (this.dm === state.dm && humanGroup()) return ["Everyone", "Group", state.dmData.title, "Message"];
     if (this.person) {
       const p = this.personOf(), d = state.dmData;
-      return ["Everyone", p ? p.label : "Person", d && this.level >= 2 && d.messages[0] ? firstLine(d.messages[0].body, 40) : "DM", "Message"];
+      return ["Everyone", p ? p.label : "Person", d && this.level >= 2 ? d.topics?.find(t=>t.id===topicSelections[d.id])?.title || "Main flow" : "DM", "Message"];
     }
     const t = state.data;
     return ["Everyone", this.level >= 1 ? this.peer : "Contact", t && this.level >= 2 ? firstLine(t.messages[0].body, 40) : "Conversation", "Message"];
@@ -4961,6 +4975,7 @@ const Zoom = {
   layer() {
     const views = this.person ? [() => this.everyone(), () => this.personLevel(), () => this.dmLevel(), () => this.dmMessage()]
       : [() => this.everyone(), () => this.person_(), () => this.thread(), () => this.message()];
+    topicUI.show(this.level>=2);
     const content = el("div", { class: "zoom-content" }, this.content(views));
     const search = el("input", { type: "search", class: "zoom-search", placeholder: "Search…",
       "aria-label": "Search people, agents and conversations", autocomplete: "off", spellcheck: "false", value: this.query,
@@ -5117,17 +5132,19 @@ const Zoom = {
   dmLevel() {
     const d = state.dmData;
     if (!d) return el("p", { class: "hint" }, "This DM could not be loaded.");
+    const messages=d.messages.filter(m=>(m.topic||'')===(topicSelections[d.id]||''));
+    const title=d.topics?.find(t=>t.id===topicSelections[d.id])?.title || (messages[0] ? firstLine(messages[0].body,80) : "No messages yet");
     const me = state.overview && state.overview.person ? state.overview.person.label : "You";
     return el("div", { class: "zoom-scene" },
       el("header", { class: "zoom-head" }, el("div", {},
         el("p", { class: "hint" }, humanGroup(d) ? "Group: " + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · " + devicesText(d.peer)),
-        el("h2", {}, d.messages[0] ? firstLine(d.messages[0].body, 80) : "No messages yet"))),
+        el("h2", {}, title))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
       humanGroup(d) && el("details", {class:"zoom-agents", "aria-label":"Agents in this group"},
         el("summary", {}, d.agents.filter(a=>!["dismissed","declined"].includes(a.state)).length + " agents in this group"),
         d.agents.filter(a=>!["dismissed","declined"].includes(a.state)).map(a=>agentCard(a,d)),
         inviteRights(d).assistants && el("button",{type:"button",class:"text-btn",onclick:()=>inviteDialog(d)},"Add agent or share more…")),
-      el("ol", { class: "mini-chat" }, d.messages.map((m) => {
+      el("ol", { class: "mini-chat" }, messages.map((m) => {
         if (m.event) return el("li", { class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
         const mine = m.dir === "out";
         const to = m.target && m.target.agent_id ? namedAgentLabel(m.target.agent_id, m.target.address, undefined, whoseAgent(m.pid && agentOf(m.pid))) : m.to && agentOf(m.pid) ? agentName(agentOf(m.pid)) : "";

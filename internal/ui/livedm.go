@@ -324,6 +324,14 @@ func (l *Live) DM(id string) (DMThread, error) {
 		} else {
 			t.Members = originalViews(c)
 		}
+		topics, err := l.a.ChatTopics(id)
+		if err != nil {
+			return DMThread{}, err
+		}
+		for _, topic := range topics {
+			t.Topics = append(t.Topics, threadSummary(topic, false))
+		}
+		assigned := client.ChatTopicAssignments(msgs)
 		var groupRefs []protocol.GroupHistoryRef
 		if c.Kind == protocol.ConvKindGroup && c.Role == "member" && c.Frozen == "" {
 			ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
@@ -363,7 +371,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 			labels[p.Person] = p.Label
 		}
 		for _, m := range shownRows(msgs, people) {
-			dm := DMMessage{ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
+			dm := DMMessage{Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
 				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: m.Dir == "in" && isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
 
@@ -441,11 +449,11 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	defer cleanup() // SendConv encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Origin: envelope.OriginUI, Files: files, ReplyReceiver: receiver, PID: d.PID})
+	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Topic: d.Topic, Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Origin: envelope.OriginUI, Files: files, ReplyReceiver: receiver, PID: d.PID})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}
-	return Sent{ID: res.ID, State: res.State, Detail: res.Detail}, nil
+	return Sent{LID: res.LID, ID: res.ID, State: res.State, Detail: res.Detail}, nil
 }
 
 // refreshDM is Refresh for a DM or group (ok false when id is not one): once

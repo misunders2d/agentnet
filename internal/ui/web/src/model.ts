@@ -35,6 +35,7 @@ export interface ChatItem {
  *  here; there is no setting. How topics are derived (when one is archived,
  *  page limits) is the server's: client/topics.go and engine.mjs. */
 export const TOPICS = {
+  undoDelay:6000,     // confirmation can be undone before applying the action
   barMax: 6,          // chips in a conversation's topic bar, "All topics (N)" included
   chipMinWidth: 104,  // px a topic chip keeps before the bar shows one fewer (the rest are under All topics)
   chipMaxWidth: "16rem", // the widest a topic chip grows on a wide screen
@@ -69,6 +70,7 @@ export type TopicState = "active" | "done" | "archived";
 /** Topic is one of an agent's separate conversations (a device thread): each
  *  is its own reply chain, so its own session on the agent's side. */
 export interface Topic {
+  conv?: string;
   id: string;
   peer: string;
   title: string;
@@ -81,7 +83,7 @@ export interface Topic {
   waiting: boolean;            // a request in it waits for the agent, or the agent is working
   pending: boolean;            // anything in it is still open: never archived
   state: TopicState;
-  doneBy?: "agent" | "you";
+  doneBy?: "agent" | "you" | "person";
   conclusion?: string;         // the final reply that made it done, first line: the agent's, or yours when you answered by hand here
   concludedBy?: string;        // the device that sent it
   count: number;               // its messages, as this view shows them (a Mark done covers no later one)
@@ -89,10 +91,10 @@ export interface Topic {
 }
 
 export const topicOf = (t: T.ThreadSummary): Topic => ({
-  id: t.id, peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
+  id: t.id, conv:t.conv,peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
   needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending,
   state: t.state === "done" || t.state === "archived" ? t.state : "active",
-  doneBy: t.done_by === "agent" || t.done_by === "you" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
+  doneBy: t.done_by === "agent" || t.done_by === "you" || t.done_by === "person" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
   count: t.count, quietSince: t.quiet_since || t.last_at,
 });
 

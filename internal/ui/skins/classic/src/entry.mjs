@@ -1,4 +1,5 @@
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
+import { topicControls } from './topics.mjs';
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
 const mounted = new WeakMap();
@@ -75,6 +76,7 @@ const setTimeout = (fn, ms) => { const timer = globalThis.setTimeout(() => { tim
 "use strict";
 
 const $ = (id) => root.querySelector("#" + CSS.escape(id));
+const topicSelections={},topicFresh={};
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {},
   drafts: {}, draftKey: null, replyReceiver: null, replyReceiverHost: null, receiverCatalog: null, receiverCatalogSeq: 0, receiverBindings: [], sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
   dm: null, dmData: null, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
@@ -130,6 +132,8 @@ function el(tag, attrs, ...kids) {
 
 // Every operation keeps the host it started with.
 async function api(path, body, host = currentHost) { return host.api(path, body); }
+const topicUI=topicControls(root,{api,announce:text=>announce(text),choose:id=>{if(state.dm){topicSelections[state.dm]=id;topicFresh[state.dm]=false;setDMReply(null);renderDMBody(false);}else if(id!==state.thread)void openThread(id);},fresh:()=>{const id=state.dm||state.thread;topicFresh[id]=true;if(state.dm){topicSelections[id]='';renderDMBody(false);}announce('New topic: your next message starts a separate flow.');$('body').focus();},changed:async()=>{await loadOverview();state.dm?await loadDM(false):await loadThread(false);}});
+cleanups.push(()=>topicUI.stop());
 
 // A time is an RFC 3339 string, or unix seconds (a host's report and its
 // answers, client.Report, count in seconds).
@@ -2033,6 +2037,8 @@ async function loadDM(scrollToEnd) {
   renderAgents(t);
   loadDMNames(t);
   renderDrive(t);
+  if(topicSelections[t.id]&&!(t.topics||[]).some(x=>x.id===topicSelections[t.id]))topicSelections[t.id]="";
+  topicUI.update({conv:t.id},t.topics,topicSelections[t.id]);
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginDM)
@@ -2052,7 +2058,10 @@ function renderDMBody(scrollToEnd) {
   if (!t) return;
   const tl = $("timeline");
   const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
-  fill(tl, t.messages.length ? t.messages.map((m, i) => dmMsg(m, t, t.messages[i - 1]))
+  const shown=t.messages.filter(m=>(m.topic||'')===(topicSelections[t.id]||''));
+  if(topicSelections[t.id]&&!(t.topics||[]).some(x=>x.id===topicSelections[t.id]))topicSelections[t.id]="";
+  topicUI.update({conv:t.id},t.topics,topicSelections[t.id]);
+  fill(tl, shown.length ? shown.map((m, i) => dmMsg(m, t, shown[i - 1]))
     : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + (humanGroup(t) ? "the current members of " + t.title : t.peer.label) + " only."));
   if (scrollToEnd || atEnd) tl.scrollTop = tl.scrollHeight;
   reportSeen();
@@ -2144,6 +2153,7 @@ function dmMsg(m, t, prev) {
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
       el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && (m.delivery||m.state_text) && el("span", {}, m.dir==="out"&&m.delivery?(deliveryText(m)):m.state_text),
         !t.frozen && !dmVisitor(t) && !m.excerpt_pid && !m.deleted && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
+        !t.frozen&&!dmVisitor(t)&&!m.topic&&!m.topic_event&&!m.excerpt_pid&&!m.deleted&&el("button",{type:"button",class:"text-btn",onclick:async()=>{try{await api("/api/topic/create",{conv:t.id,peer:"",id:m.lid||m.id});topicSelections[t.id]=m.lid||m.id;await loadDM(false);}catch(e){announce(e.message);}}},"Make a topic"),
         reminderLine(m),
         dmDetails(m),
         !t.frozen && messageMenu(m, t.id, bubble))));
@@ -2760,9 +2770,11 @@ async function sendDM() {
     const receiver = humanAsk ? null : await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
-      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
-        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind,topic:topicFresh[t.id]?"new":topicSelections[t.id]||"", body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
+        : await api("/api/dm/send", { conv: t.id, topic:topicFresh[t.id]?"new":topicSelections[t.id]||"",...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
+    if(topicFresh[t.id]&&r.lid){const updated=await api('/api/dm?id='+encodeURIComponent(t.id),undefined,host);topicSelections[t.id]=updated.messages.find(m=>m.lid===r.lid)?.topic||'';topicFresh[t.id]=false;}
+    if(!state.dm)topicFresh[state.thread]=false;
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     if (alive && wsNow() === ws && state.draftKey === key) {
@@ -3080,6 +3092,9 @@ async function loadThread(scrollToEnd) {
   showPane("conv");
   $("composer").hidden = false;
   setHubBack();
+  const page=t.topic ? await api("/api/topics?peer="+encodeURIComponent(t.peer)+"&limit=200") : {topics:[]};
+  if(state.thread!==id||gen!==state.gen)return;
+  topicUI.update({peer:t.peer},page.topics,t.topic?.id||id);
   renderBody(scrollToEnd);
   const key = t.messages[0].id; // a conversation's first message names its draft
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginThread)
@@ -4168,7 +4183,7 @@ async function send(ev) {
   // refresh while it is on its way changes none of it.
   const key = state.draftKey, text = $("body").value, answering = state.answering, files = answering ? [] : state.files.slice();
   const last = t.messages[t.messages.length - 1];
-  const draft = { to: t.peer, kind: kindValue(), body: text, reply_to: last ? last.id : "" };
+  const draft = { to: t.peer, kind: kindValue(), body: text, reply_to: topicFresh[state.thread]?"":last ? last.id : "" };
   const agentID = !answering && draft.kind !== "message" ? state.deviceAgentID || "" : "";
   if (agentID) draft.agent_id = agentID;
   if (agentID && deviceAgentMissing()) { $("compose-error").textContent = "Selected agent unavailable. Refresh agents or choose the device default; your draft stays here."; return; }
@@ -4199,6 +4214,7 @@ async function send(ev) {
       if (files.length) draft.files = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
       let r;
       try { r = await api("/api/send", draft, host); } finally { sentStaged(files); }
+      if(topicFresh[state.thread]){topicFresh[state.thread]=false;await openThread(r.id);}
       announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
     }
     // Clear only what was sent: text typed meanwhile, or in another

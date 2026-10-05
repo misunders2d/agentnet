@@ -63,7 +63,8 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   }), [open.id, t, th, overview, names]);
   const hs = useMemo(() => helpers(ctx, (fn) => store.run(fn)), [ctx]);
   const canInvite = !!t && !t.frozen && (!t.role || t.role === "member");
-  const messages: AnyMsg[] = (t ? t.messages : th ? th.messages : null) || [];
+  const draft=useStore(store,s=>s.drafts[open.id]);
+  const messages: AnyMsg[] = (t ? (t.messages||[]).filter(m=>draft?.newTopic ? !m.topic : (m.topic||"")===(draft?.topic||"")) : th ? th.messages : null) || [];
 
   useEffect(() => {
     if (!selected) return;
@@ -83,10 +84,10 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
     <section aria-label={title} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
       {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
-      {ctx.thread && <TopicBar thread={ctx.thread} />}
+      <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
-      <Timeline ctx={ctx} messages={messages} focus={open.focus} selected={selected} onSelect={toggle} end={th ? <TopicEnd ctx={ctx} /> : undefined}
+      <Timeline ctx={ctx} messages={messages} focus={open.focus} selected={selected} onSelect={toggle} end={<TopicEnd ctx={ctx} />}
         footer={left && (
           // The room panel's words; the timeline keeps its last lines clear of it.
           <div role="status" className="pop-in flex items-center gap-3 rounded-2xl stroke bg-ink py-2 pl-4 pr-2 text-canvas shadow-pop">

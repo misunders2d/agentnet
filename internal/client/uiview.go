@@ -20,6 +20,7 @@ import (
 
 // ThreadSummary is one reply-linked conversation with one peer.
 type ThreadSummary struct {
+	Conv    string    `json:"conv,omitempty"`
 	ID      string    `json:"id"` // earliest message of the thread (derived, not stored)
 	Peer    string    `json:"peer"`
 	Title   string    `json:"title"` // first line of the first message
