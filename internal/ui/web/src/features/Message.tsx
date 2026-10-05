@@ -121,7 +121,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
   );
 
   return (
-    <div data-mid={m.id} className={first ? "mt-3.5" : "mt-1"}>
+    <div data-mid={m.id} className={"min-w-0 [overflow-wrap:anywhere] " + (first ? "mt-3.5" : "mt-1")}>
       <div className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={wide ? () => setHot(true) : undefined}

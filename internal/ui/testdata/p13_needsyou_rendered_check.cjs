@@ -3,6 +3,27 @@ const {chromium} = require(process.env.AGENTNET_PLAYWRIGHT);
 const fs = require('node:fs');
 const mode = process.env.P13_MODE, full = process.env.P13_FULL;
 const shots = process.env.AGENTNET_SCREENSHOTS;
+// Document width misses overflow inside the skin's nested columns. Check
+// every ancestor, including hidden frames that focus can scroll sideways.
+async function noHorizontalScroll(target, label) {
+  const boxes = await target.evaluate(async el => {
+    const ancestors = [];
+    for (let box=el; box; box=box.parentElement) ancestors.push(box);
+    // Focus/navigation happen during the real slide; measure once it settles.
+    await Promise.all(ancestors.flatMap(box=>box.getAnimations()).filter(a=>
+      a instanceof CSSAnimation && a.effect.getTiming().iterations!==Infinity
+    ).map(a=>a.finished.catch(()=>{})));
+    return ancestors.map(box=>({
+      tag:box.tagName, classes:box.className,
+      width:box.clientWidth, scrollWidth:box.scrollWidth, left:box.scrollLeft
+    })).filter(box=>box.width>0);
+  });
+  assert(boxes.length>0,label+': no containers measured');
+  for (const box of boxes) {
+    assert(box.scrollWidth<=box.width+1,label+': horizontal overflow '+JSON.stringify(box));
+    assert(Math.abs(box.left)<=1,label+': shifted horizontally '+JSON.stringify(box));
+  }
+}
 (async () => {
   const browser = await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});
   try {
@@ -24,6 +45,7 @@ const shots = process.env.AGENTNET_SCREENSHOTS;
       const summary=p.locator('summary').filter({hasText:'Read the agent’s whole message'}).first();
       await summary.waitFor();await summary.focus();await summary.press('Enter');
       assert.equal(await p.locator('details[open] p').first().textContent(),full,skin+': expansion keeps every paragraph');
+      if(skin==='comic') await noHorizontalScroll(summary,'Comic OKs '+mode);
       await snap('oks-expanded');
       if(skin==='comic') await p.getByRole('button',{name:/^Your agent couldn’t finish/}).click();
       else await p.locator('#review-list button').filter({hasText:'Your agent couldn’t finish'}).click();
@@ -40,6 +62,7 @@ const shots = process.env.AGENTNET_SCREENSHOTS;
         await p.getByText(/Open it on/).locator('visible=true').first().waitFor(); // the closed OKs panel keeps a hidden copy
       }
       assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth > innerWidth+1),false,skin+': horizontal overflow');
+      if(skin==='comic') await noHorizontalScroll(turn,'Comic chat '+mode);
       await snap('chat-agent-turn');
       assert.deepEqual(errors,[],skin+': runtime errors');
       await ctx.close();
