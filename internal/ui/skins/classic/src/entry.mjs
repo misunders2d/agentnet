@@ -927,9 +927,9 @@ function reportLine(c) {
   const snapshots = tied.map((r) => ({ r, item: ((state.overview && state.overview.review) || []).find((it) => it.notice && it.peer === c.peer && it.id === r.id) }));
   const canAct = snapshots.some(({ item }) => item && item.report && item.report.items.some((x) => x.actionable));
   return el("div", { class: "report-line" },
-    el("p", {}, el("strong", {}, c.peer), " reported at " + when(v2 ? v2.at : latest.at) + (tied.length > 1 ? ": " + tied.length + " snapshots at that time; their order is not known." : v2 ? ", from " + v2.host + ": " + plural(v2.items.length, "request", "requests") + " waiting there." : ": " + firstSentence(latest.text) + ".")),
+    el("p", {}, el("strong", {}, c.peer), " reported at " + when(v2 ? v2.at : latest.at) + (tied.length > 1 ? ": " + tied.length + " snapshots at that time; their order is not known." : v2 ? ", from " + v2.host + ": " + plural(v2.items.length || v2.count || 0, "request", "requests") + " waiting there." : ": " + firstSentence(latest.text) + ".")),
     el("p", { class: "hint" }, canAct ? "As their operator you can decide these from here; the host applies a decision only if the request is still in the state you saw."
-      : "That was true on that machine at that time. This page cannot see those requests or decide them: someone with access to " + c.peer + " decides there."),
+      : "That was true on that machine at that time. " + decidersSentence(v2, c.peer)),
     tied.length > 1 ? el("div", {}, snapshots.map(({ r, item }) => el("div", {},
       el("p", { class: "hint" }, "Snapshot from " + (item && item.report ? item.report.host : c.peer) + " at " + when(r.at) + ". This is what it reported then, not a live queue."),
       item && item.report ? reportItems(item) : el("p", { class: "hint" }, r.text)))) : v2 && reportItems(latestItem),
@@ -941,6 +941,17 @@ function reportLine(c) {
 }
 
 const firstSentence = (s) => (s || "").split(/\.\s/)[0].replace(/\.$/, "");
+
+// decidersSentence says who decides a host's requests, as its report names
+// them (client.Report Deciders): never "decide on that machine" (MEL-532).
+function decidersSentence(report, host) {
+  const list = (report && report.deciders) || [];
+  const me = state.overview && state.overview.person && state.overview.person.person;
+  if (me && list.some((d) => d.person === me)) return "You decide these; this device gets them by name in " + host + "'s next report.";
+  if (!list.length) return "Nobody can decide these from their devices yet. Whoever installed " + host + " can name a steward on that machine.";
+  const names = list.map((d) => (d.person ? d.label || "Someone" : who(d.address || "")));
+  return (names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " and " + names[names.length - 1]) + (names.length === 1 ? " decides" : " decide") + " these from their devices.";
+}
 
 function openReports(peer) {
   return ((state.overview && state.overview.review) || []).filter((it) => it.notice && it.peer === peer).map((it) => it.id);
@@ -3152,7 +3163,7 @@ function deleteDialog(m, conv) {
 function reportText(m) {
   try {
     const v = JSON.parse(m.body);
-    if (v && v.v === 2 && Array.isArray(v.items)) return plural(v.items.length, "request", "requests") + " waiting on " + (v.host || m.from) + " at " + when(v.at) + ". See Activity for what they are" + (v.items.some((x) => x.actionable) ? " and to decide them from here." : ".");
+    if (v && v.v === 2 && Array.isArray(v.items)) return plural(v.items.length || v.count || 0, "request", "requests") + " waiting on " + (v.host || m.from) + " at " + when(v.at) + ". See Activity for what they are" + (v.items.some((x) => x.actionable) ? " and to decide them from here." : ".");
   } catch (e) { /* the older count text */ }
   return mentionPlain(shownText(m));
 }
@@ -3240,7 +3251,8 @@ function decisionButtons(it, x) {
   const by = { awaiting: ["accept", "decline"], held: ["accept", "reply", "decline"], needs_human: ["reply", "resolve"], running: ["cancel"],
     interrupted: ["accept"], failed: ["accept"], cancelled: ["accept"] };
   const again = ["interrupted", "failed", "cancelled"].includes(x.state); // accept there means: run it again
-  const acts = (x.actions && x.actions.length ? x.actions : by[x.state] || []);
+  // A DM or group request (conv) is decided here, never answered by hand.
+  const acts = (x.actions && x.actions.length ? x.actions : by[x.state] || []).filter((a) => !(x.conv && a === "reply"));
   if (!acts.length) return null;
   return el("div", { class: "acts" }, acts.map((a, i) => el("button", { type: "button", class: "act" + (i === 0 ? " go" : ""), onclick: () => operatorDialog(it, x, a) }, a === "accept" && again ? "Run it again there…" : decisionWord[a] || a)));
 }

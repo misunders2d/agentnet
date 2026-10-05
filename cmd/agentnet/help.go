@@ -377,7 +377,7 @@ with ADDRESS#SESSION.`,
 	"person": `Usage: agentnet person
        agentnet person create NAME
        agentnet person rename NAME
-       agentnet person service
+       agentnet person service [--steward ADDRESS]
        agentnet person link
        agentnet person links
        agentnet person approve [--native] ID
@@ -389,7 +389,11 @@ One person can use up to eight devices, each with its own keys. person shows
 your person and its devices, marking this one. create NAME sets up a new
 person explicitly. NAME is a display name, not proof of identity: equal
 names never merge people. service marks an independent server or bot; it
-speaks as itself and does not create a human person.
+speaks as itself and does not create a human person. service --steward
+ADDRESS also names, once, the person responsible for it: the person the
+device at ADDRESS speaks for decides its waiting requests from any of their
+devices, those they add later included (agentnet help operator). Run it at
+install, on that machine.
 
 rename NAME changes your display name through the existing signed person
 record. Your person ID, devices, routing address, history and permissions
@@ -618,11 +622,11 @@ stays (dm dismiss-agent PID ends it).`,
 For a machine where nobody sees desktop notifications (a server): when a
 held question, a task awaiting acceptance, a needs_human item or an
 interrupted one waits here, the daemon sends ADDRESS (another agent of the
-same person, e.g. their laptop) one plain message with only a count and this
-agent's address: no text, senders or ids of the requests. Each item is
-reported once. Deciding still happens on this machine: nothing received
-there can accept, decline or approve anything here, and the senders are told
-nothing.
+same person, e.g. their laptop) one message with only a count, who decides them and this agent's address: no
+text, senders or ids of the requests. Each item is
+reported once. That device decides nothing: its card says who does (the
+steward, agentnet help operator), and nothing received there can accept,
+decline or approve anything here; the senders are told nothing.
 
 ADDRESS must be an agent on your Hub that is not revoked: it is checked when
 you set it (nothing changes while the Hub cannot be asked), and doctor says
@@ -765,16 +769,31 @@ items show up.`,
 	"team":  "Usage: agentnet " + teamHelp,
 	"group": "Usage: agentnet " + groupHelp,
 
-	"operator": `Usage: agentnet operator grant ADDRESS | list | revoke ADDRESS
+	"operator": `Usage: agentnet operator grant --person ADDRESS
+       agentnet operator grant ADDRESS
+       agentnet operator list
+       agentnet operator revoke [--person] ADDRESS|PERSON
 
-On a machine nobody sits at, let the person at ADDRESS decide the
-requests waiting here from their own messenger: accept, decline, reply,
-resolve, stop. The grant names that device's exact pinned key, is made
-here only, and nothing received can make or widen it. Granted operators
-receive this machine's review reports with the waiting requests named
-(id, sender, kind, state, first line), except interrupted ones for now: an
-older operator device drops a whole report naming one (inbox --review here
-lists them). "agentnet review-to" alone still gets a count and nothing more. Each decision is applied once, in the state
+On a machine nobody sits at (a server running a company agent), name who
+decides the requests waiting here from their own messenger: accept,
+decline, reply (device requests), resolve, stop.
+
+grant --person ADDRESS names a steward: the person the device at ADDRESS
+speaks for. Every current device of that person decides, the phone
+included, and every device they add later once this machine sees their
+newer signed device list; a device they remove stops then. It prints the
+person and their devices now: check that this is the person you mean.
+grant ADDRESS names one device under its exact pinned key instead. Either
+grant is made here only (agentnet person service --steward ADDRESS does it
+at install); nothing received can make or widen one.
+
+Each steward or granted device receives this machine's reports with the
+waiting requests named (id, sender, kind, state, first line), a request in
+a DM or group too (decided there, never answered by hand from the report),
+except interrupted ones for now. Any other device told about them
+("agentnet review-to") gets how many wait and who decides them. A newer
+report replaces the older ones; when everything reported is decided, an
+empty report clears the card. Each decision is applied once, in the state
 the operator saw; a repeated or stale one is refused and the operator is
 told what the request's state is now.
 `,

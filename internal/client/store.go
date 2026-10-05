@@ -322,7 +322,8 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema,
+	operatorPersonsSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -745,6 +746,9 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	}
 	if state == stateNeedHuman { // a review notice: say locally what it is
 		if _, err := tx.Exec(`UPDATE inbox SET detail = ? WHERE id = ?`, reviewNoticeDetail(in.From), in.ID); err != nil {
+			return err
+		}
+		if err := supersedeNotices(tx, in); err != nil { // one card per host (reviewsupersede.go)
 			return err
 		}
 	}

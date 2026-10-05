@@ -197,6 +197,16 @@ function outText(state, peer, detail) {
 }
 
 const iso = (ms) => new Date(ms).toISOString();
+// isNotice is a received review notice (client isReviewNotice): a version 1
+// plain message with status review_notice, no reply_to, no files.
+const isNotice = (m) => m && m.v === 1 && !m.control && !m.conv && !m.sub && m.kind === "message" && m.status === "review_notice" && !m.reply_to && !(m.attachments || []).length;
+// noticeReport is a notice's version 2 report body, or null (count text).
+const noticeReport = (m) => { try { const v = JSON.parse(m.body); return v && v.v === 2 && Array.isArray(v.items) ? v : null; } catch (e) { return null; } };
+// noticeTime is client.noticeTime: a report's at, else the envelope's ts
+// (seconds); a row stored before ts was kept: its arrival.
+const noticeTime = (m) => { const v = noticeReport(m); return v && Number.isSafeInteger(v.at) && v.at > 0 ? v.at : Number.isSafeInteger(m.ts) ? m.ts : Math.floor((m.at || 0) / 1000); };
+// noticeSettled is client.noticeSettled: a report saying nothing waits.
+const noticeSettled = (m) => { const v = noticeReport(m); return !!v && v.items.length === 0 && !(Number.isSafeInteger(v.count) && v.count > 0); };
 // isoClaim is a time a sender wrote (unix seconds) as the page shows it, or
 // "" when no page could show it (not after 1970, or from year 9999 on, as
 // ui.maxClaimedUnix): a record's claim never breaks a view.
@@ -380,6 +390,7 @@ export class Engine {
     this.link = (await this.store.get("kv", "link")) || null; // this device's own request to join a person, if it joined with a link
     await this.loadErased();
     if (this.erased.size) this.scheduleErase(); // after a restart: what a crash left untold or unerased
+    if (id) await this.settleLeftoverNotices();
     return !!id;
   }
 
@@ -3308,7 +3319,9 @@ export class Engine {
       attachments: n.attachments.length ? n.attachments : undefined };
     if (n.v === 1) {
       await this.checkDeviceAgent(n, env.from, pin.fingerprint);
-      return [{ s: "inbox", k: env.id, v: { ...base, ...(n.agent_id ? { agent_id: n.agent_id } : {}), ...(n.target ? { target: n.target } : {}), v: 1, state: n.kind === "question" || n.kind === "task" ? "held" : "" } }];
+      const row = { ...base, ...(n.agent_id ? { agent_id: n.agent_id } : {}), ...(n.target ? { target: n.target } : {}), v: 1, state: n.kind === "question" || n.kind === "task" ? "held" : "" };
+      if (isNotice(row)) return this.noticeOps(await this.store.all("inbox"), row); // one card per host (client.supersedeNotices)
+      return [{ s: "inbox", k: env.id, v: row }];
     }
     if (n.v === wire.Version2 && JSON.parse(n.root).kind === "group") return this.admitGroupTurn(n, env, pin, base);
     return this.admitConv(n, env, pin, base);
@@ -4695,6 +4708,42 @@ export class Engine {
     return ops;
   }
 
+  // noticeOps is client.supersedeNotices for review notice row about to be
+  // stored: a snapshot from its host stands for all the host's earlier
+  // ones (one card per host). The host's older open notices are resolved;
+  // the row itself is stored resolved when a newer one is open already (a
+  // late, older notice), or when it says nothing waits any more (no items,
+  // no count: the settled snapshot). A host's time is a version 2 report's
+  // at, else the envelope's ts; of the same second, the later stored wins.
+  noticeOps(inbox, row) {
+    if (inbox.some((r) => r.id === row.id)) return []; // stored already: as it stands (dismissed stays dismissed)
+    const at = noticeTime(row);
+    let resolved = noticeSettled(row);
+    const ops = [];
+    for (const r of inbox) {
+      if (r.id === row.id || r.from !== row.from || r.resolved || !isNotice(r)) continue;
+      if (at >= noticeTime(r)) ops.push({ s: "inbox", k: r.id, v: { ...r, resolved: true } });
+      else resolved = true;
+    }
+    ops.push({ s: "inbox", k: row.id, v: resolved ? { ...row, resolved: true } : row });
+    return ops;
+  }
+
+  // settleLeftoverNotices is client.settleLeftoverNotices: once per store,
+  // every open review notice but the newest per host is resolved (notices
+  // stored before they superseded each other).
+  async settleLeftoverNotices() {
+    if (await this.store.get("kv", "notices_settled")) return;
+    const newest = new Map(), ops = [];
+    for (const r of (await this.store.all("inbox")).filter((x) => isNotice(x) && !x.resolved).sort((x, y) => (x.at || 0) - (y.at || 0))) {
+      const cur = newest.get(r.from);
+      if (!cur) { newest.set(r.from, r); continue; }
+      if (noticeTime(r) >= noticeTime(cur)) { ops.push({ s: "inbox", k: cur.id, v: { ...cur, resolved: true } }); newest.set(r.from, r); }
+      else ops.push({ s: "inbox", k: r.id, v: { ...r, resolved: true } });
+    }
+    await this.store.write([...ops, { s: "kv", k: "notices_settled", v: true }]);
+  }
+
   // reportItems are the review notices this device received (kind message,
   // status review_notice), each a report from another machine: a version 2
   // body (client.Report) is parsed for what it says (request ids, the
@@ -4717,12 +4766,19 @@ export class Engine {
             const key = String(it.key || "");
             const o = { id: it.id, from: String(it.from || ""), key, kind: String(it.kind || ""), state: String(it.state || ""), blocker: String(it.blocker || ""), since: iso((it.since || 0) * 1000),
               attempt: Number.isSafeInteger(it.attempt) && it.attempt >= 0 ? it.attempt : 0, actionable: it.actionable === true && wire.validFingerprint(key) };
+            if (it.conv === true) o.conv = true; // a DM or group request: decided, never answered by hand from here
             if (o.actionable && typeof it.excerpt === "string" && it.excerpt) o.excerpt = firstLine(it.excerpt);
             const res = this.decisionResult(inbox, outbox, m, o);
             if (res) o.result = res;
             return o;
           }) };
-          const k = item.report.items.length;
+          // A device that may not decide: how many wait, and who decides
+          // them from their own devices (client.Report Count, Deciders).
+          if (Number.isSafeInteger(v.count) && v.count > 0) item.report.count = v.count;
+          if (Array.isArray(v.deciders)) item.report.deciders = v.deciders.filter((d) => d && typeof d === "object").map((d) => ({
+            ...(typeof d.person === "string" && d.person ? { person: d.person } : {}), ...(typeof d.label === "string" && d.label ? { label: d.label } : {}),
+            ...(typeof d.address === "string" && d.address ? { address: d.address } : {}) })).filter((d) => d.person || d.address);
+          const k = item.report.items.length || item.report.count || 0;
           item.excerpt = k + (k === 1 ? " request" : " requests") + " reported by " + item.report.host;
         }
       } catch (e) { /* an older count-only notice: its text stands */ }
@@ -4736,16 +4792,17 @@ export class Engine {
   noticeLine(m) {
     try {
       const v = JSON.parse(m.body);
-      if (v && v.v === 2 && Array.isArray(v.items) && (!v.host || v.host === m.from)) { const k = v.items.length; return k + (k === 1 ? " request" : " requests") + " reported by " + m.from; }
+      if (v && v.v === 2 && Array.isArray(v.items) && (!v.host || v.host === m.from)) { const k = v.items.length || (Number.isSafeInteger(v.count) ? v.count : 0); return k + (k === 1 ? " request" : " requests") + " reported by " + m.from; }
     } catch (e) { /* count text */ }
     return firstLine(m.body);
   }
 
   // decisionResult is the host's latest answer to this device's decisions
-  // about item it FROM report notice: statuses from that host naming a
-  // decision this device sent it about that request (id, key), whose
-  // decision named this report and this attempt, echoed exactly. Answers
-  // to decisions made from another report or attempt stay with theirs.
+  // about item it of a report from that host: statuses from that host
+  // naming a decision this device sent it about that request (id, key) at
+  // this attempt, echoed exactly, made from any report of that host (a card
+  // a newer report replaced still shows its outcome). Answers to another
+  // attempt stay with theirs (client.decisionResults).
   decisionResult(inbox, outbox, notice, it) {
     let best = null;
     for (const s of inbox) {
@@ -4757,7 +4814,7 @@ export class Engine {
       if (!d) continue;
       let made;
       try { made = JSON.parse(d.body); } catch (e) { continue; }
-      if (made.report !== notice.id || made.attempt !== it.attempt || pay.report !== made.report || pay.attempt !== made.attempt) continue;
+      if (made.attempt !== it.attempt || pay.report !== made.report || pay.attempt !== made.attempt) continue;
       if (!best || pay.at >= best.atRaw) best = { decision: pay.decision, state: pay.state, ...(pay.refused ? { refused: pay.refused } : {}), at: iso(pay.at * 1000), atRaw: pay.at };
     }
     if (best) delete best.atRaw;

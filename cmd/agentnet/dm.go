@@ -19,7 +19,7 @@ import (
 // runPerson shows or sets up this installation's person and its devices
 // (agentnet help person).
 func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
-	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve [--native] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
+	usage := errors.New("usage: person | person create NAME | person rename NAME | person service [--steward ADDRESS] | person link | person links | person approve [--native] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
 	if len(args) == 0 {
 		p, ok, err := a.Person()
 		if err != nil {
@@ -75,6 +75,29 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 			return err
 		}
 		fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+		fmt.Fprintln(stdout, "name who decides its waiting requests from their own devices: agentnet operator grant --person ADDRESS")
+		return nil
+	case args[0] == "service" && len(args) == 3 && args[1] == "--steward":
+		// At install: a service and its steward, named once on this machine
+		// (MEL-532). The steward is checked before anything changes.
+		if role, _ := a.Role(); role != "service" {
+			if _, ok, err := a.Person(); err != nil {
+				return err
+			} else if ok {
+				return errors.New("this installation already speaks for a person")
+			}
+		}
+		g, err := a.GrantOperatorPerson(ctx, args[2])
+		if err != nil {
+			return err
+		}
+		if err := a.SetService(); err != nil {
+			a.RevokeOperatorPerson(g.Person)
+			return err
+		}
+		fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+		printSteward(stdout, g, "is its steward: each of their devices decides its waiting requests from its messenger, devices they add later included")
+		fmt.Fprintf(stdout, "check that this is the person you mean; revoke: agentnet operator revoke --person %s\n", g.Person)
 		return nil
 	case args[0] == "link" && len(args) == 1:
 		o, err := a.NewDeviceLink(ctx)

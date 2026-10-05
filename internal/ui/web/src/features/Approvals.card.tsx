@@ -16,6 +16,7 @@ import {
   participationOf, phaseOf, placeOf, requestText, waitsElsewhere, type Asker, type Phase, type Req,
 } from "./Approvals.words";
 import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
+import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
 
 export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null }) {
@@ -87,12 +88,12 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           <h3 id={"appr-" + m.id} className="font-display text-[19px] font-bold leading-snug">
             {notice ? capital(deviceWords(m.from, o)) + " has requests waiting for a person there" : capital(agent) + "’s follow-up needs a person"}
           </h3>
-          <p className="pt-1.5 text-text-2">{notice ? "Decide on that device. Nothing here can approve them." : said || requestText(m)}</p>
+          <p className="pt-1.5 text-text-2">{notice ? decidersWords(o?.review?.find((r) => r.id === m.id)?.report, m.from, o) : said || requestText(m)}</p>
           <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Close it"}</Button>
         </div>
         <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
           title={notice ? "Dismiss this report?" : "Close without replying?"}
-          body={notice ? "It's cleared on this computer only. The requests still wait for a person on " + deviceWords(m.from, o) + "." : "Nothing is sent to " + asker.name + "."}
+          body={notice ? "It's cleared on this computer only. A newer report from " + deviceWords(m.from, o) + " shows again if requests still wait." : "Nothing is sent to " + asker.name + "."}
           confirm={notice ? "Dismiss" : "Close it"} onConfirm={() => act({ do: "resolve", id: m.id }, notice ? "Report dismissed." : "Closed. Nothing was sent.")} />
       </Shell>
     );

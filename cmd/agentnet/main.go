@@ -175,7 +175,7 @@ func run(args []string) error {
 	case "responder":
 		return runResponder(a, rest)
 	case "operator":
-		return runOperator(a, rest)
+		return runOperator(ctx, a, rest, os.Stdout)
 	case "team":
 		return runTeam(ctx, a, rest, os.Stdout, os.Stderr)
 	case "group":

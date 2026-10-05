@@ -395,6 +395,11 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 		a.Logf("this device is no longer a device of its person")
 		a.store.setConfig(map[string]string{"role": ""})
 	}
+	if err == nil && res.changed && stewardOf(a.store.db, person) {
+		// A steward's newer roster: a device it added gets the waiting
+		// requests by name now, one it removed stops deciding (MEL-532).
+		a.wakeWorker()
+	}
 	return res, err
 }
 

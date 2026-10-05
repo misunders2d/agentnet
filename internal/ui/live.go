@@ -117,7 +117,7 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))}
 		if item.Notice {
 			if r, ok := l.a.NoticeReport(m); ok {
-				item.Report, item.Excerpt = &r, fmt.Sprintf("%s reported %d waiting request(s)", r.Host, len(r.Items))
+				item.Report, item.Excerpt = &r, fmt.Sprintf("%s reported %d waiting request(s)", r.Host, r.Waiting())
 			}
 		}
 		o.Review = append(o.Review, item)

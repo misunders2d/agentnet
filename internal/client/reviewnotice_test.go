@@ -136,8 +136,10 @@ func TestReviewNoticeReachesNamedAgentOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "second notice", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 2 })
-	if b := notices(t, w.alice, w.bob.Address)[1].Body; !strings.HasPrefix(b, "2 request(s) wait") {
-		t.Fatalf("second notice = %q", b)
+	// A device that may not decide gets how many wait and who decides
+	// (nobody yet), never the requests (MEL-532).
+	if r, ok := ParseReport(notices(t, w.alice, w.bob.Address)[1].Body); !ok || r.Count != 2 || len(r.Items) != 0 || len(r.Deciders) != 0 {
+		t.Fatalf("second notice = %+v %v", r, ok)
 	}
 	if !reviewSent(t, w.bob, q2.ID) || st.count() != 0 {
 		t.Fatal("second item not marked, or something ran")

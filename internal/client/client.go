@@ -75,6 +75,7 @@ type Agent struct {
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
 	reviewTried  map[string]bool                                               // review items a review notice was attempted for, this run
 	reviewGen    string                                                        // review_to_gen those attempts were made under
+	reviewMu     sync.Mutex                                                    // one review notice pass at a time (the worker's, or one during a run)
 	releaseTried string                                                        // release a notification was attempted for, this run
 
 	exe       string                       // the daemon's program file as started (RunOptions.Executable)
@@ -218,6 +219,10 @@ func Open(home string) (*Agent, error) {
 			"(with another NAME if the Hub said the address was taken)", home)
 	}
 	if err := st.markSelfConsentSince(); err != nil { // D3 holds from here on (selfconsent.go)
+		st.db.Close()
+		return nil, err
+	}
+	if err := st.settleLeftoverNotices(); err != nil { // once: one review card per host (reviewsupersede.go)
 		st.db.Close()
 		return nil, err
 	}

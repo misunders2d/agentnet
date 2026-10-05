@@ -82,21 +82,32 @@ func (a *Agent) ReviewTo() (string, error) {
 
 func reviewNoticeDetail(from string) string {
 	return "review notice: requests wait for a person's decision on " + from +
-		"; decide there (agentnet inbox --review on that machine). Nothing here runs or can be accepted; agentnet resolve ID once seen"
+		"; its report names them for a steward's devices, or says who decides them. Nothing here runs or can be accepted; agentnet resolve ID once seen"
 }
 
 // sendReviewNotice tells the review_to agent and every granted operator
-// (operators.go), once per item, that items here wait for a decision.
-// Received notices never count, so two agents naming each other cannot
-// loop. The first notice is queued in the outbox in the same transaction
-// that marks its items, so a crash or retry never sends a second one for
-// them, and a failure before queueing leaves them to be reported later:
-// tried once per item per daemon run and per setting, never on every ping.
-// A recipient that reads reports (protocol.CapHeadless) gets the requests
-// named (headless.go Report), with their first lines only if it is a
-// granted operator; anyone else gets the count. Desktop notifications are
-// tracked separately.
+// (operators.go: granted devices and each steward person's current
+// devices), once per item, that items here wait for a decision. Received
+// notices never count, so two agents naming each other cannot loop. The
+// first notice is queued in the outbox in the same transaction that marks
+// its items, so a crash or retry never sends a second one for them, and a
+// failure before queueing leaves them to be reported later: tried once per
+// item per daemon run and per setting, never on every ping. A recipient
+// that reads reports (protocol.CapHeadless) gets a version 2 report
+// (headless.go Report): an operator the requests named, with their first
+// lines; anyone else how many wait and who can decide them (Deciders),
+// never more. Each report is a snapshot of everything waiting now, so the
+// newest replaces the older ones on arrival; once the items a recipient was
+// told about have all left review, it gets one more snapshot, empty if
+// nothing waits, which clears its card (no timer). Desktop notifications
+// are tracked separately.
 func (a *Agent) sendReviewNotice(ctx context.Context) {
+	// The worker's pass and one during a run (worker.go) never overlap: a
+	// pass skipped here is covered by the worker's next one, after the run.
+	if !a.reviewMu.TryLock() {
+		return
+	}
+	defer a.reviewMu.Unlock()
 	gen, err := a.store.config(reviewToGenKey)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		a.Logf("review notice: %v", err)
@@ -122,6 +133,22 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	if to != "" && to != a.Address && !isOperator[to] {
 		recipients = append(recipients, to)
 	}
+	// A recipient told about items earlier gets its settled snapshot even
+	// after its grant or the setting changed (its card must not stay
+	// behind), but nothing new.
+	current := map[string]bool{}
+	for _, r := range recipients {
+		current[r] = true
+	}
+	if rows, err := a.store.db.Query(`SELECT DISTINCT recipient FROM reported ORDER BY recipient`); err == nil {
+		for rows.Next() {
+			var r string
+			if rows.Scan(&r) == nil && r != a.Address && !slices.Contains(recipients, r) {
+				recipients = append(recipients, r)
+			}
+		}
+		rows.Close()
+	}
 	if len(recipients) == 0 {
 		return
 	}
@@ -137,7 +164,7 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	// marked needs_human, except review notices received from others and
 	// a person's DM turns (alertReviewStates: they follow the DM's alerts).
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, received_at, attempts, body FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
+	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, received_at, attempts, body, conv IS NOT NULL FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
 	if err != nil {
 		a.Logf("review notice: %v", err)
 		return
@@ -145,7 +172,7 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	var items []ReportItem
 	for rows.Next() {
 		var it ReportItem
-		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt); err != nil {
+		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt, &it.Conv); err != nil {
 			rows.Close()
 			a.Logf("review notice: %v", err)
 			return
@@ -154,10 +181,13 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		items = append(items, it)
 	}
 	rows.Close()
-	if len(items) == 0 {
-		return
+	type plan struct {
+		to         string
+		list       []ReportItem
+		ids, stale []string
+		left       string // reviewTried key of the settled snapshot
 	}
-	feats, ferr := a.relayFeatures(ctx)
+	var plans []plan
 	for _, to := range recipients {
 		list := items
 		if isOperator[to] {
@@ -170,32 +200,83 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		// Each recipient is told once per item (reported): a recipient
 		// added later gets what waits now, and one that could not be told
 		// keeps its items pending, whatever happened with the others.
-		var ids []string
+		p := plan{to: to, list: list}
+		listed := map[string]bool{}
 		for _, it := range list {
+			listed[it.ID] = true
 			var n int
 			a.store.db.QueryRow(`SELECT count(*) FROM reported WHERE item = ? AND recipient = ?`, it.ID, to).Scan(&n)
-			if n == 0 && !a.reviewTried[to+"\x00"+it.ID] {
-				ids = append(ids, it.ID)
+			if n == 0 && current[to] && !a.reviewTried[to+"\x00"+it.ID] {
+				p.ids = append(p.ids, it.ID)
 			}
 		}
-		if len(ids) == 0 {
+		// Items this recipient was told about that left its list since: a
+		// fresh snapshot settles its card (settled snapshot).
+		if told, err := a.store.db.Query(`SELECT item FROM reported WHERE recipient = ? ORDER BY item`, to); err == nil {
+			for told.Next() {
+				var id string
+				if told.Scan(&id) == nil && !listed[id] {
+					p.stale = append(p.stale, id)
+				}
+			}
+			told.Close()
+		}
+		if len(p.stale) > 0 {
+			p.left = to + "\x00left\x00" + strings.Join(p.stale, ",")
+			if a.reviewTried[p.left] {
+				p.stale, p.left = nil, ""
+			}
+		}
+		if len(p.ids) > 0 || len(p.stale) > 0 {
+			plans = append(plans, p)
+		}
+	}
+	if len(plans) == 0 {
+		return
+	}
+	feats, ferr := a.relayFeatures(ctx)
+	var deciders []Decider
+	for _, p := range plans {
+		to, list, ids := p.to, p.list, p.ids
+		// The requests themselves go only to a granted operator that reads
+		// reports; anyone else learns how many wait and who decides them
+		// (no identity or request state by accident).
+		body := countText(len(list), a.Address)
+		reportKey := ""
+		capable := false
+		if ferr == nil {
+			if key, err := a.sendKey(ctx, to); err == nil {
+				if ok, _ := a.capSupport(ctx, to, key, feats, protocol.CapHeadless); ok {
+					capable = true
+					if isOperator[to] {
+						body = a.reportBody(list)
+						reportKey = key.Fingerprint()
+					} else {
+						if deciders == nil {
+							if deciders, err = a.store.deciders(); err != nil {
+								a.Logf("review notice: %v", err)
+								return
+							}
+							if deciders == nil {
+								deciders = []Decider{}
+							}
+						}
+						body = a.countBody(len(list), deciders)
+					}
+				}
+			}
+		}
+		if isOperator[to] && !capable {
+			// An operator gets the requests by name or nothing yet (a device
+			// just added may not have said what it reads): a count now would
+			// mark them told. The next wake looks again; nothing polls.
 			continue
 		}
 		for _, id := range ids {
 			a.reviewTried[to+"\x00"+id] = true
 		}
-		// The requests themselves go only to a granted operator that reads
-		// reports; the review destination alone learns the count and no
-		// more, as before (no identity or request state by accident).
-		body := fmt.Sprintf("%d request(s) wait for a person's decision on %s. Review there: agentnet inbox --review", len(list), a.Address)
-		reportKey := ""
-		if isOperator[to] && ferr == nil {
-			if key, err := a.sendKey(ctx, to); err == nil {
-				if ok, _ := a.capSupport(ctx, to, key, feats, protocol.CapHeadless); ok {
-					body = a.reportBody(list)
-					reportKey = key.Fingerprint()
-				}
-			}
+		if p.left != "" {
+			a.reviewTried[p.left] = true
 		}
 		claim := func(tx *sql.Tx, _ string) error {
 			// A grant may have changed while this snapshot was prepared. A
@@ -208,6 +289,8 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 				return errNoNewReview
 			}
 			if reportKey != "" {
+				// Its key here must be the granted one (a steward's device:
+				// the key its roster lists), or nothing is sent.
 				active, err := operatorHolds(tx, to, reportKey)
 				if err != nil {
 					return err
@@ -227,8 +310,20 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 					fresh++
 				}
 			}
+			for _, id := range p.stale {
+				res, err := tx.Exec(`DELETE FROM reported WHERE item = ? AND recipient = ?`, id, to)
+				if err != nil {
+					return err
+				}
+				if n, _ := res.RowsAffected(); n == 1 {
+					fresh++
+				}
+			}
 			if fresh == 0 {
 				return errNoNewReview
+			}
+			if len(ids) == 0 {
+				return nil
 			}
 			// The older flag, for the review destination's own record.
 			marks := append([]any{}, alertReviewStates...)
@@ -249,7 +344,26 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		for _, id := range ids {
 			delete(a.reviewTried, to+"\x00"+id) // reported; a later return to review is new
 		}
+		if p.left != "" {
+			delete(a.reviewTried, p.left)
+		}
 	}
+}
+
+// countText is a review notice for a device that reads no reports: how
+// many requests wait on host (none: the earlier notice is settled).
+func countText(n int, host string) string {
+	if n == 0 {
+		return "Nothing waits for a person's decision on " + host + " any more."
+	}
+	return fmt.Sprintf("%d request(s) wait for a person's decision on %s.", n, host)
+}
+
+// countBody is a version 2 report for a device that may not decide here:
+// how many requests wait and who can decide them from their own devices.
+func (a *Agent) countBody(n int, deciders []Decider) string {
+	data, _ := json.Marshal(Report{V: 2, At: time.Now().Unix(), Host: a.Address, Items: []ReportItem{}, Count: n, Deciders: deciders})
+	return string(data)
 }
 
 // noteReviewFailure records why the last notice to the review_to agent

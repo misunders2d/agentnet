@@ -126,12 +126,27 @@ func execTerminal(state string) bool {
 	return false
 }
 
-// Report is a review notice with its requests named (version 2 body).
+// Report is a review notice with its requests named (version 2 body). A
+// device that may not decide here gets no items, only Count and Deciders:
+// who can decide them from their own devices (MEL-532). A report with no
+// items and a zero count says nothing waits any more: it clears the card
+// (the settled snapshot). The newest report from a host stands for all its
+// earlier ones.
 type Report struct {
-	V     int          `json:"v"`
-	At    int64        `json:"at"`
-	Host  string       `json:"host"`
-	Items []ReportItem `json:"items"`
+	V        int          `json:"v"`
+	At       int64        `json:"at"`
+	Host     string       `json:"host"`
+	Items    []ReportItem `json:"items"`
+	Count    int          `json:"count,omitempty"`
+	Deciders []Decider    `json:"deciders,omitempty"`
+}
+
+// Waiting is how many requests the report says wait on its host.
+func (r Report) Waiting() int {
+	if len(r.Items) > 0 {
+		return len(r.Items)
+	}
+	return r.Count
 }
 
 // ReportItem is one waiting request as the host reported it.
@@ -146,6 +161,7 @@ type ReportItem struct {
 	Attempt    int64           `json:"attempt"`
 	Excerpt    string          `json:"excerpt,omitempty"`    // the request's first line: operators only
 	Actionable bool            `json:"actionable,omitempty"` // the recipient's key is a granted operator on the host
+	Conv       bool            `json:"conv,omitempty"`       // a request in a DM or group: decided, never answered by hand from here
 	Result     *DecisionResult `json:"result,omitempty"`     // filled by the reader from the host's answers to its decisions
 }
 
@@ -556,8 +572,12 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		return nil
 	}
 	// decide checks, within tx, the grant and the exact request as named,
-	// and applies change (a request transition) if any.
+	// and applies change (a request transition) if any. The request is a
+	// device request held here, or a DM or group request to this device's
+	// agent (its participation's, not a replica: conv), which a decision
+	// accepts, declines, resolves or stops but never answers by hand.
 	var kind, from string
+	var conv bool
 	decide := func(tx *sql.Tx, change string, changeArgs []any) (string, error) {
 		ok, err := operatorHolds(tx, env.From, senderFP)
 		if err != nil {
@@ -583,8 +603,9 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		}
 		var state string
 		var attempts int64
-		err = tx.QueryRow(`SELECT state, kind, sender, attempts FROM inbox WHERE id = ? AND verified_by = ? AND conv IS NULL AND local = 0 AND ref_id IS NULL`,
-			in.Ref.ID, in.Ref.Fingerprint).Scan(&state, &kind, &from, &attempts)
+		err = tx.QueryRow(`SELECT state, kind, sender, attempts, conv IS NOT NULL FROM inbox WHERE id = ? AND verified_by = ? AND local = 0 AND ref_id IS NULL
+			AND (conv IS NULL OR pid IS NOT NULL AND replica = 0 AND json_extract(target, '$.address') = ?)`,
+			in.Ref.ID, in.Ref.Fingerprint, a.Address).Scan(&state, &kind, &from, &attempts, &conv)
 		if errors.Is(err, sql.ErrNoRows) {
 			return refusedNoRequest, nil
 		}
@@ -593,6 +614,9 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		}
 		if state != d.Expect || attempts != d.Attempt {
 			return fmt.Sprintf("the request is no longer as you saw it (now %s, attempt %d)", state, attempts), nil
+		}
+		if conv && d.Action == "reply" {
+			return "a request in a conversation is answered there, not from a report", nil
 		}
 		if change != "" {
 			res, err := tx.Exec(change, append([]any{in.Ref.ID, d.Expect, d.Attempt}, changeArgs...)...)
@@ -606,22 +630,36 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		return "", nil
 	}
 	const where = ` WHERE id = ? AND state = ? AND attempts = ?`
-	switch d.Action {
-	case "accept", "resolve", "cancel":
+	// A decline of a conversation request is its person's decision there
+	// (declineConv): marked declined in the decision's own transaction, the
+	// requester told by its status; a device request's decline is a reply.
+	convDecline := false
+	if d.Action == "decline" {
+		var n int
+		if err := a.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id = ? AND conv IS NOT NULL`, in.Ref.ID).Scan(&n); err != nil {
+			return err
+		}
+		convDecline = n == 1
+	}
+	switch {
+	case d.Action == "accept", d.Action == "resolve", d.Action == "cancel", convDecline:
 		var change string
 		var args []any
 		switch d.Action {
 		case "accept":
-			change = `UPDATE inbox SET state = ?` + where + ` AND ((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR state IN (?, ?, ?, ?))`
-			args = []any{envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman}
+			change = `UPDATE inbox SET state = ?` + where + ` AND (` + acceptableCond + `)`
+			args = acceptableArgs
 		case "resolve":
 			change = `UPDATE inbox SET state = ?` + where + ` AND state = ?`
 			args = []any{stateNeedHuman}
 		case "cancel":
 			change = `UPDATE inbox SET state = ?` + where + ` AND state = ?`
 			args = []any{stateRunning}
+		case "decline":
+			change = `UPDATE inbox SET state = ?, responder = 'manual'` + where + ` AND conv IS NOT NULL AND pid IS NOT NULL AND replica = 0 AND kind IN (?, ?) AND state = ?`
+			args = []any{envelope.KindQuestion, envelope.KindTask, stateAwaiting}
 		}
-		target := map[string]string{"accept": stateAccepted, "resolve": stateResolved, "cancel": stateCancelReq}[d.Action]
+		target := map[string]string{"accept": stateAccepted, "resolve": stateResolved, "cancel": stateCancelReq, "decline": stateDeclined}[d.Action]
 		tx, err := a.store.db.Begin()
 		if err != nil {
 			return err
@@ -631,6 +669,11 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		refused, err := decide(tx, strings.Replace(change, "SET state = ?", "SET state = '"+target+"'", 1), args)
 		if err != nil {
 			return err
+		}
+		if refused == "" && d.Action == "decline" {
+			if _, err := tx.Exec(`UPDATE inbox SET detail = nullif(?, '') WHERE id = ?`, strings.TrimSpace(d.Text), in.Ref.ID); err != nil {
+				return err
+			}
 		}
 		if _, err := record(tx, refused); err != nil {
 			return err
@@ -647,7 +690,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			answer(state, refused)
 			return nil
 		}
-	case "reply", "decline":
+	case d.Action == "reply", d.Action == "decline":
 		// Checked and recorded in the reply's own outbox transaction: the
 		// claim runs the same checks, then the ordinary takeover.
 		tx, err := a.store.db.Begin()
@@ -838,12 +881,13 @@ func (a *Agent) hostConnected(address string) bool {
 	return false
 }
 
-// decisionResults attaches, to each item of the report with id reportID
-// from host, the host's answer to the last decision this device sent
-// about that item FROM THAT REPORT (its id, key, report and attempt bound
-// in the decision itself); answers to decisions made from another report
-// or attempt stay with theirs.
-func (a *Agent) decisionResults(host, reportID string, r *Report) {
+// decisionResults attaches, to each item of a report from host, the host's
+// answer to the last decision this device sent about that item at that
+// attempt (its id, key and attempt bound in the decision itself), from any
+// report of that host: a decision made from a card a newer report has
+// replaced still shows its outcome. Answers to another attempt stay with
+// theirs.
+func (a *Agent) decisionResults(host string, r *Report) {
 	for i := range r.Items {
 		it := &r.Items[i]
 		rows, err := a.store.db.Query(`SELECT s.body, d.body FROM inbox s JOIN outbox d ON d.id = json_extract(s.body, '$.decision')
@@ -860,7 +904,7 @@ func (a *Agent) decisionResults(host, reportID string, r *Report) {
 			if rows.Scan(&body, &decision) != nil || json.Unmarshal([]byte(body), &st) != nil || json.Unmarshal([]byte(decision), &d) != nil {
 				continue
 			}
-			if st.Decision == "" || d.Report != reportID || d.Attempt != it.Attempt || st.Report != d.Report || st.Attempt != d.Attempt {
+			if st.Decision == "" || d.Attempt != it.Attempt || st.Report != d.Report || st.Attempt != d.Attempt {
 				continue
 			}
 			if it.Result == nil || st.At >= it.Result.At {
@@ -881,6 +925,6 @@ func (a *Agent) NoticeReport(m Message) (Report, bool) {
 		return Report{}, false
 	}
 	r.Host = m.From
-	a.decisionResults(m.From, m.ID, &r)
+	a.decisionResults(m.From, &r)
 	return r, true
 }
