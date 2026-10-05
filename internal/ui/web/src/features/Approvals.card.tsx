@@ -16,6 +16,7 @@ import {
   participationOf, phaseOf, placeOf, requestText, waitsElsewhere, type Asker, type Phase, type Req,
 } from "./Approvals.words";
 import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
+import { focusComposer } from "./Composer.focus";
 import { Command, Details } from "./Settings.parts";
 
 export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null }) {
@@ -75,8 +76,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const allow = () => act({ do: "accept", id: m.id }, phase === "decide" ? "Allowed once." : "Running it again.");
   const reply = () => {
     store.setDraft(conv, { ...store.draft(conv), replyTo: m.id });
-    // The composer's own field (Composer.tsx); it shows the reply it now carries.
-    requestAnimationFrame(() => root.querySelector<HTMLElement>('form[aria-label="Write a message"] textarea')?.focus());
+    focusComposer(root, conv); // this conversation's field, within the tap; it shows the reply it now carries
   };
   const replyHere = !!conv && (isThreadMsg(m) ? can("reply") : !dm?.frozen);
 

@@ -18,6 +18,7 @@ import { candidates, decode, encode, guestAuthor, matches, shift, trigger, type 
 import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, type MenuAction } from "./Composer.parts";
 import { MentionList, optionId } from "./Composer.picker";
 import { useTypingSignal } from "./Composer.typing";
+import { coarse, useFieldFocus } from "./Composer.focus";
 import { usePortal } from "../owned";
 
 const EMPTY: Draft = { text: "" };
@@ -67,9 +68,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   const { text, spans } = useMemo(() => decode(draft.text), [draft.text]);
   const write = (d: Draft, at?: number) => { if (at != null) caretNext.current = at; store.setDraft(conv, d); };
-  // Focus returns to the text after a choice made around it (synchronously,
-  // so a phone keeps its keyboard).
-  const focusField = () => field.current?.focus({ preventScroll: true });
+  // After a choice made around the text, the cursor goes back to it on a
+  // desktop, and on a phone only when the person was typing (Composer.focus.ts).
+  const { watch, focusField } = useFieldFocus(field);
 
   // ---- who is here and who this goes to
   const people = useMemo(() => (dm ? candidates(dm, overview, names) : []), [dm, overview, names]);
@@ -144,19 +145,20 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   useLayoutEffect(() => { setZone(form.current?.parentElement ?? null); }, [conv, !!closed]);
 
-  // On a wide screen, opening a conversation puts the cursor here.
-  useEffect(() => { if (wide && conv) field.current?.focus({ preventScroll: true }); }, [conv]);
+  // On a wide screen, opening a conversation puts the cursor here (not on a
+  // touch screen: that would open its keyboard).
+  useEffect(() => { if (wide && conv && !coarse()) field.current?.focus({ preventScroll: true }); }, [conv]);
 
   // A reply chosen here (from a message, an approval card) puts the cursor
-  // here. Chosen while an agent is addressed, it goes to the conversation:
-  // the agent is let go.
+  // here, on a phone too. Chosen while an agent is addressed, it goes to the
+  // conversation: the agent is let go.
   const lastReply = useRef({ conv, replyTo: draft.replyTo });
   useEffect(() => {
     const prev = lastReply.current;
     lastReply.current = { conv, replyTo: draft.replyTo };
     if (prev.conv !== conv || !draft.replyTo || draft.replyTo === prev.replyTo) return;
     if (draft.agent && dm) stopAsking();
-    focusField();
+    focusField(true);
   }, [conv, draft.replyTo]);
 
   // ---- editing
@@ -377,7 +379,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   );
 
   return (
-    <form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} onKeyDown={formKeys} aria-label="Write a message"
+    <form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} onKeyDown={formKeys} {...watch} aria-label="Write a message" data-conv={conv}
       className="relative border-t-[1.5px] border-outline bg-surface px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:pt-3 lg:pb-4">
       {open && <MentionList id={listId} items={offered} active={active} query={trig?.query || ""} onPick={pick} onHover={setActive} />}
       <p className="sr-only" aria-live="polite">{said}</p>

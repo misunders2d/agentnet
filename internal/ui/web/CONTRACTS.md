@@ -38,7 +38,7 @@ host, including its documented additions (`onSkinsChange`,
 | `features/Conversation.tsx`, `features/Message.tsx`, `features/Markdown.tsx` | `Conversation()` (reads `store.open`, `store.dm`/`store.thread`), `MessageView` | App |
 | `features/Conversation.topics.tsx`, `features/Conversation.alltopics.tsx` | `TopicBar({ thread })` (the bar and the open topic's menu), `TopicEnd({ ctx })` (end of a done or archived topic), `TopicMark`, `topicLabel`, `changeTopic`, `barTopics`; `AllTopics(...)` (side panel / full-screen sheet over `/api/topics`) | Conversation, ChatList |
 | `features/ChatList.topics.tsx` | `TopicResults({ query, onCount })` (topics in the chat search) | ChatList |
-| `features/Composer.tsx`, `features/Emoji.tsx` | `Composer({ dm?: T.DMThread; thread?: T.Thread })`, `EmojiPicker({ onPick, onClose })` | Conversation, Message (reactions) |
+| `features/Composer.tsx`, `features/Emoji.tsx` | `Composer({ dm?: T.DMThread; thread?: T.Thread })`, `EmojiPicker({ onPick, onClose })`; `Composer.focus.ts`: the one rule for putting the cursor in the message field (`useFieldFocus`, `focusComposer(root, conv)` for a Reply chosen outside the composer, `coarse()`) | Conversation, Message (reactions, Reply), Approvals (Reply) |
 | `features/InviteSheet.tsx`, `features/RoomPanel.tsx` | `InviteSheet()` (renders from `store.invite`), `RoomPanel()` (desktop side panel; renders nothing when closed or no conversation), `RoomSheet()` (phone) | App/Conversation |
 | `features/Approvals.tsx` (private: `Approvals.card.tsx`, `.conv.tsx`, `.parts.tsx`, `.reports.tsx`, `.sheets.tsx`, `.title.tsx`, `.words.ts`), `features/AgentsView.tsx` | `OksView()`, `needsYouCount(overview)`, `useNeedsYou()` (the one count for the OKs badge, the home banner and the OKs header: decisions this device gives, never held questions or items another device decides), `ApprovalCard({ message, dm?, thread? })`, `AgentsView()` | App, ChatList, Message |
 | `features/Settings.tsx` | `Settings()` | App |
@@ -85,5 +85,13 @@ decide.
 - **Access:** every target at least 44px; visible focus; labels on icon
   buttons; `role="log"` for the timeline; works at 390px and 1440px, light
   and dark; reduced motion turns loops and slides into short fades.
+- **Phone keyboard:** the frame is sized from the root (`h-full`, never
+  `h-dvh`), bottom sheets sit on `--an-keyboard` (docs/UI_SKINS.md), and the
+  timeline keeps its newest message in view when the keyboard shrinks it.
+  On a touch screen a choice made around the message field (an intent, a
+  chip's cancel) puts the cursor back only when the person was typing, and
+  never with `preventScroll`; Reply always does, inside the tap's own
+  handler (iOS opens its keyboard only then). Use `Composer.focus.ts`, not
+  a second mechanism.
 - **Design:** `docs/plans/MESSENGER_DESIGN.md` (the "Pop Huddle" contract)
   and the mockups it names.
