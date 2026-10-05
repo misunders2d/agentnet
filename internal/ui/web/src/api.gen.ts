@@ -72,6 +72,9 @@ export interface AgentRecord {
 }
 
 export interface AgentView {
+  pids?: string[];
+  member?: boolean;
+  inviters?: PersonView[];
   external?: boolean;
   agent_id?: string;
   pid: string;
@@ -192,6 +195,7 @@ export interface DMDraft {
 }
 
 export interface DMMessage {
+  agent_author_pid?: string;
   group_ref?: GroupHistoryRef;
   excerpt_pid?: string;
   claimed_key?: string;
