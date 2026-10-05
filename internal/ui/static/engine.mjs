@@ -4831,11 +4831,11 @@ export class Engine {
   // and nothing here can make one up. Each item carries the host's answer
   // to this device's decision on it, from this report at this attempt
   // (client.decisionResults).
-  reportItems(inbox, outbox = []) {
+  reportItems(inbox, outbox = [], words = (a) => a) {
     const out = [];
     for (const m of inbox) {
       if (m.v !== 1 || m.control || m.kind !== "message" || m.status !== "review_notice" || m.reply_to || (m.attachments || []).length || m.resolved) continue;
-      const item = { id: m.id, peer: m.from, kind: "message", why: "A report from " + m.from, excerpt: firstLine(m.body), at: iso(m.at), notice: true };
+      const item = { id: m.id, peer: m.from, kind: "message", why: "A report from " + words(m.from), excerpt: firstLine(m.body), at: iso(m.at), notice: true };
       try {
         const v = JSON.parse(m.body);
         if (v && v.v === 2 && Array.isArray(v.items) && typeof v.host === "string" && (!v.host || v.host === m.from)) { // a machine reports only its own requests
@@ -5456,6 +5456,7 @@ export class Engine {
     const inbox = await this.store.all("inbox");
     const outbox = await this.store.all("outbox");
     const pinned = persons.filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
+    const words = await this.peerWordsFn(); // sentences name a person and device, never the address
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
     const needsYou = [], heldTurns = []; // what waits for this person (client.PageReview), by conversation
     for (const c of await this.store.all("convs")) {
@@ -5465,7 +5466,7 @@ export class Engine {
       const originals = member ? [] : [...(await this.dmMembers(c)).values()];
       if (!member) msgs = msgs.filter(m => m.sub !== "event" || participations.some(p => p.pid === m.pid && (p.role !== "human" || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))));
       msgs = await this.oneRowPerRecord(msgs, new Map(participations.filter(p => p.role === "human").map(p => [p.pid, p])));
-      this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns);
+      this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns, words);
       if (this.erasedConv(c.id) && !msgs.some((m) => !m.sub)) continue; // deleted here, and no later turn: not listed until one comes
       for (const info of participations.filter(p => p.role !== "human")) {
         if (!info.host) continue;
@@ -5492,7 +5493,7 @@ export class Engine {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox));
       const view=await this.groupThread(conv), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root}).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
-      this.needsYouOf(conv,parts.filter(p=>p.role!=="human"),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns);
+      this.needsYouOf(conv,parts.filter(p=>p.role!=="human"),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:visible.length?firstLine(visible.at(-1).body):"",last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
@@ -5502,7 +5503,6 @@ export class Engine {
     for (const d of dms) d.decide = needsYou.filter((x) => x.conv === d.id && x.id && (x.actions || []).length).length;
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
     const { threads, topics } = await this.topicOverview(listArchived); // ?topics=1: archived topics counted, not listed
-    const words = await this.peerWordsFn(); // sentences name a person and device, never the address
     const held = await this.store.all("held");
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
@@ -5514,7 +5514,7 @@ export class Engine {
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices],
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
-      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
+      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox"), words), needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
@@ -6549,15 +6549,16 @@ export class Engine {
   // participation resolves here and its host last said (a status reaches
   // only a request this browser sent). This browser runs no agent, so each
   // is read-only: decided on decide_on, never here or by opening it. Person
-  // turns held for the person go to held: they are answered here.
-  needsYouOf(conv, infos, msgs, ctls, needsYou, held) {
+  // turns held for the person go to held: they are answered here. Its
+  // sentences name devices with words (peerWordsFn), never the address.
+  needsYouOf(conv, infos, msgs, ctls, needsYou, held, words = (a) => a) {
     const mine = (h) => !!h && !!this.me && h.person === this.me.person && h.address !== this.address;
     for (const info of infos) {
       if (info.role === "human" || info.state !== "invited" || !mine(info.host)) continue;
       // Listed when its first record reached this browser (msgs are oldest
       // first); the inviter's own time is only its claim.
       const first = msgs.find((m) => m.sub === "event" && m.pid === info.pid);
-      needsYou.push({ reason: "agent_invite", conv, pid: info.pid, peer: info.inviter ? info.inviter.address : "", why: (info.inviter ? info.inviter.label : "Someone") + " invited your agent on " + info.host.address + ". Decide there: this browser runs no agent.",
+      needsYou.push({ reason: "agent_invite", conv, pid: info.pid, peer: info.inviter ? info.inviter.address : "", why: (info.inviter ? info.inviter.label : "Someone") + " invited your agent on " + words(info.host.address) + ". Decide there: this browser runs no agent.",
         excerpt: firstLine(info.note), at: first ? iso(first.at) : isoClaim(info.invited) || iso(this.now()), decide_on: info.host.address });
     }
     for (const m of msgs) {
@@ -6572,7 +6573,7 @@ export class Engine {
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
       if (!e || !["awaiting", "needs_human", "interrupted"].includes(e.state)) continue; // client.PageReview's states
       needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted" }[e.state], conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
-        why: "Decide on " + e.host + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
+        why: "Decide on " + words(e.host) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
     }
   }
 

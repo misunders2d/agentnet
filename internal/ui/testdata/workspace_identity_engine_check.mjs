@@ -97,4 +97,28 @@ assert.equal(bar.workspaceLabel({ name: "", hub_name: "Mellanni", endpoint: "htt
 assert.equal(bar.workspaceLabel({ name: "Mine", endpoint: "https://x.example/" }, { name: "Mellanni" }), "Mine", "a local label wins");
 assert.equal(bar.workspaceLabel({ name: "", endpoint: "http://127.0.0.1:1/" }), "AgentNet", "AgentNet only with no host known");
 assert.equal(bar.whoText({ me: { address: "admin/pixel" }, person: { label: "Sergey" } }, "Mellanni"), "You are Sergey on Pixel in Mellanni.");
-console.log("Browser workspace name, agent devices, persistence, rename routes, skin bar words and device words PASS");
+
+// Person forms, as Go's client.PeerWords (TestPeerWordsPersons): another
+// device of this person, a device a pinned person names, a name that is
+// also this person's (any case) with the key's first group, and anything
+// unproven as the device alone.
+const fpOf = (k) => k + "-00000000-00000000-00000000";
+e.me = { person: "a".repeat(32), label: "Sergey", devices: ["self/phone", "self/pixel", "self/laptop"].map((address, i) => ({ address, fingerprint: fpOf(String(i).repeat(8)) })) };
+await store.write([
+  { s: "persons", k: "b".repeat(32), v: { person: "b".repeat(32), label: "Vitalii", state: "pinned", devices: [{ address: "vitalii/desk", fingerprint: fpOf("ab12cd34") }] } },
+  { s: "persons", k: "c".repeat(32), v: { person: "c".repeat(32), label: "sergey", state: "pinned", devices: [{ address: "mallory/desk", fingerprint: fpOf("19c77bce") }] } },
+  { s: "persons", k: "d".repeat(32), v: { person: "d".repeat(32), label: "Frozen", state: "conflict", devices: [{ address: "frozen/desk", fingerprint: fpOf("deadbeef") }] } },
+]);
+const pw = await e.peerWordsFn();
+for (const [inp, want] of [["self/pixel", "your Pixel"], ["vitalii/desk", "Vitalii (Desk)"], ["mallory/desk", "sergey (Desk · 19c77bce)"],
+  ["frozen/desk", "Desk"], ["nobody/windows-laptop", "Windows laptop"], ["self/phone", "this device"], ["all devices", "all devices"]])
+  assert.equal(pw(inp), want, "peerWordsFn(" + inp + ")");
+// The browser's own needs-you and report sentences use the same words; the
+// address stays only in decide_on and peer, for the skin.
+const report = e.reportItems([{ v: 1, id: "e".repeat(32), from: "self/pixel", kind: "message", status: "review_notice", body: "2 requests", at: 1000 }], [], pw);
+assert.equal(report[0].why, "A report from your Pixel");
+const needs = [];
+e.needsYouOf("f".repeat(32), [{ role: "agent", state: "invited", pid: "9".repeat(32), host: { person: e.me.person, address: "self/laptop" }, inviter: { label: "Vitalii", address: "vitalii/desk" }, note: "" }], [], [], needs, [], pw);
+assert.equal(needs[0].why, "Vitalii invited your agent on your Laptop. Decide there: this browser runs no agent.");
+assert.equal(needs[0].decide_on, "self/laptop");
+console.log("Browser workspace name, agent devices, persistence, rename routes, skin bar words, device words and person words PASS");

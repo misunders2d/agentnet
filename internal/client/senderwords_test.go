@@ -200,3 +200,48 @@ func TestSenderWordsLabelMimicsOwner(t *testing.T) {
 		}
 	}
 }
+
+// The page's device words for people (the browser engine's peerWordsFn
+// asserts the same forms, workspace_identity_engine_check.mjs): another
+// device of this person is "your Phone", a device a pinned person names is
+// "Vitalii (Desk)", a name that is also this person's (in any case) adds the
+// key's first group, and anything unproven is the device alone.
+func TestPeerWordsPersons(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.bob)
+	ctx := tctx(t)
+	carol := mustJoin(t, filepath.Join(t.TempDir(), "carol"), w.aliceInvites("carol"), "desk")
+	for a, label := range map[*Agent]string{w.bob: "Sergey", w.alice: "sergey", carol: "Vitalii"} {
+		if _, err := a.CreatePerson(ctx, label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	phone := linked(t, w.bob)
+	for _, a := range []*Agent{w.alice, carol} { // pinned through their verified chains
+		if _, err := w.bob.sendKey(ctx, a.Address); err != nil {
+			t.Fatal(err)
+		}
+		if s := w.bob.sender(ctx, a.Address, a.Self().Fingerprint(), false); s.Relation != SenderPerson {
+			t.Fatalf("%s: %+v", a.Address, s)
+		}
+	}
+	words := w.bob.PeerWords()
+	for in, want := range map[string]string{
+		phone.Address:          "your Phone",
+		carol.Address:          "Vitalii (Desk)",
+		w.alice.Address:        "sergey (Alice · " + shortKey(w.alice.Self().Fingerprint()) + ")",
+		w.bob.Address:          "this device",
+		"nobody/windows-laptop": "Windows laptop",
+		"all devices":          "all devices",
+	} {
+		if got := words(in); got != want {
+			t.Errorf("PeerWords(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if _, err := w.bob.store.db.Exec(`UPDATE persons SET state = ? WHERE state = ?`, personConflict, personPinned); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.bob.PeerWords()(carol.Address); got != "Desk" {
+		t.Fatalf("a frozen person's device: %q", got)
+	}
+}
