@@ -705,19 +705,28 @@ func TestNameCandidatesParity(t *testing.T) {
 	}
 	data, _ := json.Marshal(bases)
 	wire, _ := filepath.Abs(filepath.Join("..", "..", "internal", "ui", "static", "wire.mjs"))
-	script := `const { nameCandidates } = await import(process.argv[1]); const bases = JSON.parse(process.argv[2]);
-console.log(JSON.stringify(Object.fromEntries(bases.map((b) => [b, nameCandidates(b, ` + fmt.Sprint(appNameTries) + `)]))));`
-	out, err := exec.Command(node, "--input-type=module", "-e", script, "file://"+filepath.ToSlash(wire), string(data)).CombinedOutput()
+	engine, _ := filepath.Abs(filepath.Join("..", "..", "internal", "ui", "static", "engine.mjs"))
+	// The browser's own count of names (engine.mjs autoNameTries), not Go's.
+	script := `const { nameCandidates } = await import(process.argv[1]); const { autoNameTries } = await import(process.argv[2]);
+const bases = JSON.parse(process.argv[3]);
+console.log(JSON.stringify({ tries: autoNameTries, names: Object.fromEntries(bases.map((b) => [b, nameCandidates(b, autoNameTries)])) }));`
+	out, err := exec.Command(node, "--input-type=module", "-e", script, "file://"+filepath.ToSlash(wire), "file://"+filepath.ToSlash(engine), string(data)).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	var got map[string][]string
+	var got struct {
+		Tries int                 `json:"tries"`
+		Names map[string][]string `json:"names"`
+	}
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
+	if got.Tries != appNameTries {
+		t.Errorf("names tried: browser %d, Go %d", got.Tries, appNameTries)
+	}
 	for _, b := range bases {
-		if strings.Join(got[b], " ") != strings.Join(want[b], " ") {
-			t.Errorf("%s: browser %v, Go %v", b, got[b], want[b])
+		if strings.Join(got.Names[b], " ") != strings.Join(want[b], " ") {
+			t.Errorf("%s: browser %v, Go %v", b, got.Names[b], want[b])
 		}
 	}
 }

@@ -22,7 +22,11 @@ import { browserStorageSetupProvider } from "./drivespace-setup.mjs"; // Setting
 import * as getapp from "./getapp.mjs"; // where the AgentNet app is downloaded (getapp.json, shared with Go)
 
 const HEARTBEAT = 90_000;
-const autoNameTries = 20; // device names tried when one is taken (cmd/agentnet appNameTries)
+// Tunables mirrored from Go, pinned by parity tests: device names tried
+// when one is taken (cmd/agentnet appNameTries), and the days an
+// invitation may work (ui.InviteDays).
+export const autoNameTries = 20;
+export const inviteDays = [1, 7, 30];
 
 // inviteMessage is ui.InviteMessage: what an admin sends with a link.
 export const inviteMessage = (from, link) => (from ? from + " invited you" : "You're invited") + " to AgentNet. Open this link to get the app and join: " + link;
@@ -602,7 +606,10 @@ export class Engine {
     try {
       await this.call("POST", "/v1/join", body, { signed: false });
     } catch (e) {
-      if (e.status === 409) throw Object.assign(new Error("The name " + address + " is already used on this server. Choose another name."), { taken: true });
+      // Only a taken name is worth another name (client.go join): a stale
+      // device link, or a person with too many devices, is not.
+      if (e.status === 409 && e.code === "address_taken") throw Object.assign(new Error("The name " + address + " is already used on this server. Choose another name."), { taken: true });
+      if (e.status === 409 && e.code === "roster_stale") throw new Error("Your devices changed since that link was made. Make a new one on your other device.");
       if (e.status === 403 && link) throw new Error("That link cannot be used any more (it was used, or it expired): make a new one on your other device.");
       throw new Error("Could not join (" + e.message + "). Check your connection and try again.");
     }
@@ -6990,7 +6997,7 @@ export class Engine {
     const name = String(r.name || "").trim();
     if (!name) throw new Error("Write the name of the person you invite.");
     if (!wire.validInviteHint(name, wire.MaxInviteHint)) throw new Error("Use a shorter name (up to 64 characters) without line breaks.");
-    if (![1, 7, 30].includes(r.days)) throw new Error("Choose how long the link works: 1, 7 or 30 days.");
+    if (!inviteDays.includes(r.days)) throw new Error("Choose how long the link works: " + inviteDays.slice(0, -1).join(", ") + " or " + inviteDays.at(-1) + " days.");
     const from = this.me && wire.validInviteHint(this.me.label, wire.MaxInviteHint) ? this.me.label : "";
     // TODO(integrate:P2): the workspace's name as the invitation's workspace hint.
     const ttl = r.days * 24 * 3600 * 1e9; // nanoseconds, as Go's time.Duration

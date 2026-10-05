@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -98,5 +99,48 @@ func TestInviteDecodeParity(t *testing.T) {
 		if js["name"] != goInv.Name || js["from"] != goInv.From || js["workspace"] != goInv.Workspace || js["label"] != goInv.Label {
 			t.Errorf("%+v: browser %v, Go %+v", inv, js, goInv)
 		}
+	}
+}
+
+// A device link whose person's devices changed since it was made is
+// refused once, in the words the app uses: no other device names tried,
+// and never "all names taken".
+func TestBrowserEngineStaleLinkNotRetried(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "hub")
+	h := testhub.StartConfig(t, hub.Config{DataDir: dir, Web: true}, "127.0.0.1:0")
+	laptop := personAgent(t, ctx, testhub.BootstrapCode(t, dir), "laptop", "Eve")
+	var offer client.DeviceLinkOffer
+	var err error
+	waitFor(t, "a device link", func() bool { offer, err = laptop.NewDeviceLink(ctx); return err == nil })
+	if _, err := laptop.RenamePerson(ctx, "Eve K"); err != nil {
+		t.Fatal(err)
+	}
+	o, err := protocol.DecodeLinkOffer(offer.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Invite = browserCode(t, o.Invite)
+	base := "https://" + h.Addr
+	w := startEngineNode(t, dir)
+	w.ok(map[string]any{"op": "init", "base": base})
+	v := w.call(map[string]any{"op": "joinLinkAuto", "code": base + "/#" + o.Encode(), "base": "android-phone"})
+	w.refuses("a stale link", v, "Your devices changed since that link was made")
+	if e, _ := v["error"].(string); strings.Contains(e, "taken") {
+		t.Fatalf("a stale link was retried under other names: %s", e)
+	}
+}
+
+// The engine's copies of Go's tunables are Go's.
+func TestEngineTunablesMatchGo(t *testing.T) {
+	w := startEngineNode(t, t.TempDir())
+	v := w.ok(map[string]any{"op": "tunables"})
+	var days []int
+	for _, d := range v["inviteDays"].([]any) {
+		days = append(days, int(d.(float64)))
+	}
+	if !slices.Equal(days, InviteDays) {
+		t.Fatalf("invitation days: browser %v, Go %v", days, InviteDays)
 	}
 }
