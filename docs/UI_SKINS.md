@@ -314,9 +314,13 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   POST `/api/agents` `{action: "create", label, harness, dir}` or `{action:
   "update", id, harness, dir}` (reuse an agent with the same tool, name and
   folder instead of making a second), and one `{action: "publish"}`.
-  `local: false` (nothing can be installed here): show `note`. The folder is
-  chosen by browsing GET `/api/folders?path=` (read-only), never typed. Setup
-  approves nobody, shares no history and keeps the default agent.
+  Read the tool list first: `local: false` (nothing can be installed here)
+  means show `note` and skip `/api/agents`. Say an agent is ready only when
+  its `responder.ready` says so. The folder is chosen by browsing GET
+  `/api/folders?path=` (read-only), never typed; say so when `truncated` is
+  set, and when a folder can't be read (deleted, or closed to the person)
+  still offer Up and Home, not only a retry. Setup approves nobody, shares
+  no history and keeps the default agent.
 - Topics (an agent's device threads, docs/plans/TOPICS.md): `overview.threads`
   lists every thread, archived topics too; a skin that pages topics itself
   asks `/api/overview?topics=1` and gets them without archived topics.

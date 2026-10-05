@@ -10,6 +10,29 @@ export function folderEntries(v) {
  const base = v.path.endsWith(sep) ? v.path : v.path + sep;
  return (v.dirs || []).map(d => typeof d === 'string' ? { name: d, path: base + d } : d);
 }
+// parentFolder: the folder that holds path, from the path alone ('' at a
+// root), so a folder the server can't read still has a way up.
+export function parentFolder(path) {
+ const sep = path.includes('\\') && !path.includes('/') ? '\\' : '/';
+ let p = path;
+ while (p.length > 1 && p.endsWith(sep)) p = p.slice(0, -1);
+ const i = p.lastIndexOf(sep);
+ if (i < 0) return '';
+ const head = p.slice(0, i);
+ if (/^[A-Za-z]:$/.test(head)) return head + sep;
+ if (/[^\\/]/.test(head)) return head;
+ return sep === '/' && i === 0 && p.length > 1 ? '/' : '';
+}
+// folderWayOut: where browsing can go when a folder can't be read (deleted,
+// or closed to this person): up from it, home (no path: the server's
+// default), and the drives last shown. Never only "Try again".
+export function folderWayOut(failed, last) {
+ const out = [], up = failed ? parentFolder(failed) : '';
+ if (up) out.push({ kind: 'up', label: 'Up', path: up });
+ if (failed && failed !== last?.home) out.push({ kind: 'home', label: 'Home' });
+ for (const r of last?.roots || []) if (r !== failed && r !== up) out.push({ kind: 'root', label: r, path: r });
+ return out;
+}
 export async function mountAssistantSetup({ root, api, isCurrent = () => true, isBrowser = false, onChanged = () => {} }) {
  if (!root || !isCurrent()) return;
  const doc = root.ownerDocument;
@@ -31,7 +54,8 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  const selected = () => (view?.harnesses || []).filter(h => chosen.has(h.id));
  const choose = async () => {
   if (busy) return; busy = true; error.textContent = ''; draw();
-  try { [view, catalog] = await Promise.all([call(), agentAPI()]); configs.clear(); folders = null; folderGen++; chosen = new Set((view.harnesses || []).filter(h => h.detected && h.supported && h.configured).map(h => h.id)); busy = false; stage = 'choose'; draw(true); } catch (e) { fail(e); }
+  // The tool list first; the agent list only where setup can run (a server that can't says so in its note).
+  try { view = await call(); if (view.local === false) { busy = false; draw(); return; } catalog = await agentAPI(); configs.clear(); folders = null; folderGen++; chosen = new Set((view.harnesses || []).filter(h => h.detected && h.supported && h.configured).map(h => h.id)); busy = false; stage = 'choose'; draw(true); } catch (e) { fail(e); }
  };
  const checkAll = () => {
   const eligible = (view.harnesses || []).filter(h => h.detected && h.supported);
@@ -71,7 +95,8 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  const close = () => { stage = 'home'; review = null; folders = null; folderGen++; error.textContent = ''; draw(true); };
  // Browsing loads one folder at a time; an answer for a folder no longer asked for is dropped.
  const browse = async (harness, path) => {
-  const mine = ++folderGen; folders = { harness, path, view: null, error: '' }; draw();
+  const last = folders?.harness === harness ? folders.view || folders.last : null;
+  const mine = ++folderGen; folders = { harness, path, view: null, error: '', last }; draw();
   try { const v = await api(path ? '/api/folders?path=' + encodeURIComponent(path) : '/api/folders'); if (mine !== folderGen || !current()) return; folders.view = v; }
   catch (e) { if (mine !== folderGen || !current()) return; folders.error = e.message || 'Folders could not be read.'; }
   draw(); root.querySelector('.setup-folders')?.focus({ preventScroll: true });
@@ -88,7 +113,12 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  function folderBrowser(c) {
   const box = node('div', '', 'setup-folders'); box.tabIndex = -1; box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'Choose a folder');
   const actions = node('div', '', 'setup-actions'), harness = folders.harness;
-  if (folders.error) { box.append(node('p', folders.error, 'setup-error')); actions.append(button('Cancel', endBrowse), button('Try again', () => browse(harness, folders.path), true)); }
+  if (folders.error) {
+   box.append(node('p', folders.error, 'setup-error'));
+   const steps = folderWayOut(folders.path, folders.last);
+   if (steps.length) { const nav = node('div', '', 'setup-folder-nav'); for (const s of steps) nav.append(button(s.label, () => browse(harness, s.path))); box.append(nav); }
+   actions.append(button('Cancel', endBrowse), button('Try again', () => browse(harness, folders.path), true));
+  }
   else if (!folders.view) { box.append(node('p', 'Reading folders…', 'setup-count')); actions.append(button('Cancel', endBrowse)); }
   else {
    const v = folders.view, nav = node('div', '', 'setup-folder-nav');
@@ -100,6 +130,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
    const dirs = folderEntries(v);
    if (dirs.length) { const list = node('ul', '', 'setup-folder-list'); list.setAttribute('aria-label', 'Folders in ' + v.path); for (const d of dirs) { const li = node('li'), b = node('button', d.name); b.type = 'button'; b.onclick = () => browse(harness, d.path); li.append(b); list.append(li); } box.append(list); }
    else box.append(node('p', 'No folders inside this one.', 'setup-count'));
+   if (v.truncated) box.append(node('p', 'Some folders in here are not shown.', 'setup-count'));
    actions.append(button('Cancel', endBrowse), button('Use this folder', () => { c.dir = v.path; endBrowse(); }, true));
   }
   box.append(actions);
@@ -110,7 +141,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
   const card = node('section', '', 'assistant-setup-card'); card.setAttribute('aria-label', 'Set up harnesses');
   const heading = node('h3', stage === 'choose' ? 'Choose your tools' : stage === 'review' ? 'Review setup changes' : stage === 'saved' ? 'Setup result' : 'Connect your tools'); heading.tabIndex = -1; card.append(heading);
   if (isBrowser || view?.local === false) {
-   card.append(node('p', 'This browser cannot inspect or install software. Open Settings → Agent → Set up harnesses on your native AgentNet computer.', 'setup-description')); root.replaceChildren(card); return;
+   card.append(node('p', !isBrowser && view?.note || 'This browser cannot inspect or install software. Open Settings → Agent → Set up harnesses on your native AgentNet computer.', 'setup-description')); root.replaceChildren(card); return;
   }
   if (stage === 'home') {
    card.append(node('p', 'Set up AgentNet integration for Codex, Claude, Pi or OMP. Run this again when tools are installed or removed. Your default responder stays separate.', 'setup-description'));

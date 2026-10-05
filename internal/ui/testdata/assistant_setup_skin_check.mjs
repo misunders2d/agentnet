@@ -1,8 +1,10 @@
 // Classic's and Zoom's "Set up harnesses" (skins/*/src/assistant-setup.mjs)
 // on a tiny stand-in DOM: the working folder is chosen by browsing
-// /api/folders, never typed; review comes before apply; the reviewed change
-// is applied before the named agent is made in the chosen folder; a browser
-// asks the server nothing. Run by TestSkinAssistantSetupFolders.
+// /api/folders, never typed; a folder that can't be read still leads
+// somewhere (Up, Home); review comes before apply; the reviewed change is
+// applied before the named agent is made in the chosen folder; a browser
+// asks the server nothing, and a server that sets nothing up is shown by
+// its own note. Run by TestSkinAssistantSetupFolders.
 import assert from 'node:assert/strict';
 
 class Node_ {
@@ -52,17 +54,25 @@ const click = async (root, name) => { const b = buttonNamed(root, name); assert.
 function tool(id, over = {}) {
   return { id, label: { claude: 'Claude', codex: 'Codex', omp: 'OMP' }[id], detected: true, configured: false, registered: false, supported: true, state: 'detected', note: 'Installed.', ...over };
 }
-function server({ folderDelay } = {}) {
+function server({ folderDelay, agents: start = [], local = true } = {}) {
   const calls = [];
-  let agents = [];
+  let agents = start;
   const view = () => ({ local: true, harnesses: [tool('claude'), tool('codex'), tool('omp', { detected: false, state: 'not_detected' })] });
+  const home = { path: '/home/me', parent: '/home', home: '/home/me', dirs: ['work', 'notes', 'locked'], truncated: true };
   const folders = {
-    '/api/folders': { path: '/home/me', parent: '/home', home: '/home/me', dirs: ['work', 'notes'] },
+    '/api/folders': home,
+    '/api/folders?path=%2Fhome%2Fme': home,
     '/api/folders?path=%2Fhome%2Fme%2Fwork': { path: '/home/me/work', parent: '/home/me', home: '/home/me', dirs: [] },
   };
   const api = async (path, body) => {
     calls.push(body === undefined ? ['GET', path] : ['POST', path, body]);
-    if (path.startsWith('/api/folders')) { if (folderDelay) await folderDelay; return folders[path]; }
+    if (path.startsWith('/api/folders')) {
+      if (folderDelay) await folderDelay;
+      if (!folders[path]) throw new Error('That folder can’t be read.');   // deleted, or closed to this person
+      return folders[path];
+    }
+    if (path === '/api/assistant-setup' && body === undefined && !local) return { local: false, harnesses: [], note: 'This browser cannot inspect or install tools. Open Settings on your AgentNet computer.' };
+    if (path === '/api/agents' && !local) throw new Error('Agent catalog unavailable.');
     if (path === '/api/assistant-setup' && body === undefined) return view();
     if (path === '/api/assistant-setup' && body.action === 'review') return { ...view(), review_id: 'r1', note: 'Only selected.' };
     if (path === '/api/assistant-setup' && body.action === 'apply') { assert.equal(body.review_id, 'r1'); return { ...view(), note: 'Saved.' }; }
@@ -112,6 +122,7 @@ for (const skin of ['classic', 'zoom']) {
   await click(root, 'Choose working folder for Claude');
   assert.deepEqual(s.calls.at(-1), ['GET', '/api/folders'], skin);
   assert.match(root.textContent, /\/home\/me/, skin);
+  assert.match(root.textContent, /Some folders in here are not shown/, skin);
   await click(root, 'work');
   assert.deepEqual(s.calls.at(-1), ['GET', '/api/folders?path=%2Fhome%2Fme%2Fwork'], skin);
   assert.match(root.textContent, /No folders inside this one/, skin);
@@ -151,6 +162,47 @@ for (const skin of ['classic', 'zoom']) {
     release(); await opening; await flush();
     assert.equal(root2.querySelector('.setup-folders'), null, skin);
     assert.match(root2.textContent, /No folder chosen yet/, skin);
+  }
+
+  // An agent whose folder was deleted: browsing starts there and fails, yet
+  // Home and Up still lead to folders that can be used. Never only "Try again".
+  {
+    const gone = { record: { id: 'a0', label: 'Old' }, enabled: true, responder: { harness: 'claude', dir: '/home/me/gone' } };
+    const doc3 = makeDocument(), root3 = doc3.createElement('div'), s3 = server({ agents: [gone] });
+    doc3.documentElement.append(root3);
+    await mountAssistantSetup({ root: root3, api: s3.api });
+    await click(root3, 'Set up harnesses');
+    const c3 = root3.querySelector('#setup-tool-claude');
+    c3.checked = true; c3.onchange(); await flush();
+    await click(root3, 'Change working folder for Claude');
+    assert.deepEqual(s3.calls.at(-1), ['GET', '/api/folders?path=%2Fhome%2Fme%2Fgone'], skin);
+    assert.match(root3.textContent, /can’t be read/, skin);
+    assert.deepEqual(buttons(root3.querySelector('.setup-folders')).map((b) => b.textContent), ['Up', 'Home', 'Cancel', 'Try again'], skin);
+    await click(root3, 'Home');
+    assert.deepEqual(s3.calls.at(-1), ['GET', '/api/folders'], skin);
+    assert.deepEqual(buttons(root3).filter((b) => ['work', 'Use this folder'].includes(b.textContent)).map((b) => b.disabled), [false, false], skin);
+    // A subfolder closed to this person: Up leads back to the folder it is in.
+    await click(root3, 'locked');
+    assert.deepEqual(s3.calls.at(-1), ['GET', '/api/folders?path=%2Fhome%2Fme%2Flocked'], skin);
+    assert.deepEqual(buttons(root3.querySelector('.setup-folders')).map((b) => b.textContent), ['Up', 'Home', 'Cancel', 'Try again'], skin);
+    await click(root3, 'Up');
+    assert.deepEqual(s3.calls.at(-1), ['GET', '/api/folders?path=%2Fhome%2Fme'], skin);
+    await click(root3, 'Use this folder');
+    assert.equal(root3.querySelector('.setup-folders'), null, skin);
+    assert.match(root3.textContent, /\/home\/me/, skin);
+    assert.doesNotMatch(root3.textContent, /\/home\/me\/gone/, skin);
+  }
+
+  // A server that sets nothing up answers with its note; the agent list
+  // (which would only fail) is not asked for.
+  {
+    const doc4 = makeDocument(), root4 = doc4.createElement('div'), s4 = server({ local: false });
+    doc4.documentElement.append(root4);
+    await mountAssistantSetup({ root: root4, api: s4.api });
+    await click(root4, 'Set up harnesses');
+    assert.match(root4.textContent, /Open Settings on your AgentNet computer/, skin);
+    assert.doesNotMatch(root4.textContent, /Agent catalog unavailable/, skin);
+    assert.deepEqual(s4.calls, [['GET', '/api/assistant-setup']], skin);
   }
 }
 console.log('skin assistant setup ok');

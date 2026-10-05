@@ -29,7 +29,9 @@ func TestComicAssistantSetupModel(t *testing.T) {
 }
 
 // TestSkinAssistantSetupFolders drives Classic's and Zoom's setup: the
-// working folder is browsed through /api/folders, never typed.
+// working folder is browsed through /api/folders, never typed, and a folder
+// that can't be read (an agent's deleted folder, a closed subfolder) still
+// leads somewhere through Up and Home.
 func TestSkinAssistantSetupFolders(t *testing.T) {
 	runNodeCheck(t, "testdata/assistant_setup_skin_check.mjs")
 }
