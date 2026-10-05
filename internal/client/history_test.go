@@ -180,7 +180,12 @@ func TestHistoryNeverSwallowsDirectRequest(t *testing.T) {
 	runAgent(t, w.alice)
 	persons(t, w.alice, w.bob)
 	conv := newDM(t, w.bob, w.alice)
-	_, raw := rootOf(t, w.bob, conv)
+	root, raw := rootOf(t, w.bob, conv)
+	// Store-level admission assumes the verified root was installed by the
+	// receive path. Room accounting now reads that conversation in its tx.
+	if err := w.alice.store.addConversation(root, raw, root.Creator.Person); err != nil {
+		t.Fatal(err)
+	}
 	for _, historyFirst := range []bool{true, false} {
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindQuestion,
 			Body: "run this", Conv: conv, LID: protocol.NewID(), Root: raw, PID: protocol.NewID(),
