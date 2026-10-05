@@ -487,7 +487,7 @@ func TestBrowserEngineJourney(t *testing.T) {
 		return len(evMsgs) == 6
 	})
 	record, request := evMsgs[4].(map[string]any), evMsgs[5].(map[string]any)
-	if record["event"] != "Eve invited Eve's agent (on "+eve.addr+") into this DM." || record["body"] != "" {
+	if record["event"] != "Eve invited Eve's agent into this DM." || record["body"] != "" {
 		t.Fatalf("the record as the browser shows it: %v", record)
 	}
 	if request["state"] != "" || request["to"] != eve.addr || request["pid"] != evePID || strings.Contains(fmt.Sprint(request["state_text"]), "Held") {

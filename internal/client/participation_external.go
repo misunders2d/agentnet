@@ -417,6 +417,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if out.Origin == "" {
 		out.Origin = envelope.OriginUI
 	}
+	lid, _ := sendID(ctx)
 	if m.group != nil && out.sub == "" && out.human == nil && info.Member {
 		if out.Target == nil && out.ReplyTo != "" {
 			c, e := roomCauseIn(a.store.db, info.Conv, out.ReplyTo, a.Address, a.Self().Fingerprint())
@@ -446,7 +447,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 		}
 	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: out.Kind, Body: out.Body,
-		ReplyTo: out.ReplyTo, Quote: out.Quote, Topic: out.Topic, TopicEvent: out.TopicEvent, TopicDone: out.TopicDone, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID, Human: out.human}
+		ReplyTo: out.ReplyTo, Quote: out.Quote, Topic: out.Topic, TopicEvent: out.TopicEvent, TopicDone: out.TopicDone, Conv: info.Conv, LID: lid, Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID, Human: out.human}
 	if in.Human != nil {
 		if err := humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), info.Host.Address, info.Host.Fingerprint, false); err != nil {
 			return ConvSent{}, err
@@ -460,7 +461,11 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	}
 	request := in.Sub == "" && (in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask)
 	if request {
-		in.LID = in.ID
+		if queuedSend(ctx) {
+			in.ID = in.LID
+		} else {
+			in.LID = in.ID
+		}
 	}
 	if len(out.Files) > envelope.MaxAttachments || len(out.Files) != 0 && out.sub != "" {
 		return ConvSent{}, errors.New("files belong only to an addressed participation turn, within the attachment limit")
@@ -766,11 +771,14 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if err := a.prepareRemoteCopies(ctx, binding, copies, out.Files); err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.store.addConvOutbox(copies, in, guard, jobKey, binding); err != nil {
+	if err := a.store.addConvOutbox(copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, copies[0].env.ID, in.LID), nil
+	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
 			return ConvSent{}, e

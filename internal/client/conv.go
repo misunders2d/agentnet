@@ -459,6 +459,9 @@ type outCopy struct {
 // to this person's own devices are replicas (history: never executed),
 // except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
+	if _, err := sendID(ctx); err != nil {
+		return ConvSent{}, err
+	}
 	var err error
 	if m.Topic, err = a.outgoingTopic(conv, m.Topic, m.ReplyTo); err != nil {
 		return ConvSent{}, err
@@ -664,7 +667,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			devices, own[d.Address] = append(devices, d), true
 		}
 	}
-	lid := protocol.NewID()
+	lid, _ := sendID(ctx)
 	var copies []outCopy
 	for _, f := range m.Files { // this device's own copy, for its person's other devices to ask for later
 		if err := a.keepSent(f.Path); err != nil {
@@ -783,12 +786,15 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if err := a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.store.addConvOutbox(copies, local, m.claim, jobKey, binding); err != nil {
+	if err := a.store.addConvOutbox(copies, local, a.queuedClaim(ctx, conv, m.claim), jobKey, binding); err != nil {
 		return ConvSent{}, err
 	}
 	receiverStored = true
 	if m.stored != nil {
 		m.stored()
+	}
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, local.ID, lid), nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {

@@ -59,7 +59,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
   const [editing, setEditing] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
 
-  const live = !readOnly && !m.deleted && !excerpt(m);
+  const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
   // A reminder: only on a received message, where this device keeps reminders (a computer).
   const reminder = live && m.dir === "in" ? reminderOf(ctx.overview, m.id) : undefined;
   const remindable = { id: m.id, text: firstLine(shownText(m), 90) };
@@ -110,6 +110,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
         </span>
       )}
       {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
+      {m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
       {quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>
@@ -143,7 +144,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
           {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
           {body}
           <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
-          <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} />
+          {!m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} />}
           {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
         </div>
         {!wide && live && !selecting && (

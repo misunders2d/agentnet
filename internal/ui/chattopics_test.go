@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
@@ -40,12 +41,18 @@ func TestBrowserChatTopicJourney(t *testing.T) {
 	w.ok(map[string]any{"op": "start"})
 	conv := w.api("/api/dm/new", map[string]any{"address": alice.Address})["id"].(string)
 	send := func(body, topic string) map[string]any {
-		return w.api("/api/dm/send", map[string]any{"conv": conv, "body": body, "topic": topic})
+		id := protocol.NewID()
+		r := w.api("/api/dm/send", map[string]any{"id": id, "conv": conv, "body": body, "topic": topic})
+		if r["lid"] != id {
+			t.Fatalf("queued browser topic correlation: %v want %s", r, id)
+		}
+		return r
 	}
 	send("Main flow", "")
 	seed := send("Promoted main message", "")
 	w.api("/api/topic/create", map[string]any{"conv": conv, "id": seed["lid"]})
-	send("Optional topic", "new")
+	topicID := protocol.NewID() // the UI captures this before clearing the new-topic draft
+	send("Optional topic", topicID)
 	native := func() []client.ThreadSummary {
 		ts, e := alice.ChatTopics(conv)
 		if e != nil {
@@ -64,6 +71,15 @@ func TestBrowserChatTopicJourney(t *testing.T) {
 		t.Fatal(what)
 	}
 	wait("native holds two topics", func() bool { return len(native()) == 2 })
+	found := false
+	for _, topic := range native() {
+		if topic.ID == topicID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("native lost the browser's captured topic reference")
+	}
 	first := w.api("/api/topics?conv="+conv+"&limit=1", nil)
 	if first["matched"] != float64(2) || first["next"] == nil {
 		t.Fatalf("topic page: %v", first)

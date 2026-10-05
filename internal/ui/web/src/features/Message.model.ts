@@ -6,7 +6,7 @@
 import type { T } from "../api";
 import { agentName, agentWhere, deliveryWord, deviceKind, deviceWho, jobWord, niceDevice, owner, personName, threadAuthor, threadRow, whoName, type DeviceKind } from "../model";
 
-export type AnyMsg = T.DMMessage | T.Message;
+export type AnyMsg = (T.DMMessage | T.Message) & { _local?: boolean; _failed?: boolean; _retry?: () => void };
 
 /** Everything a message needs to know about the conversation it is in. */
 export interface Ctx {
