@@ -43,6 +43,9 @@ function sections(d: EmojiData, columns: number): Section[] {
   return out;
 }
 
+// The picker is never taller than what a phone's keyboard leaves visible
+// (--an-viewport-h, set by the host while the iOS keyboard covers the page;
+// docs/UI_SKINS.md), so its search field and its emoji both stay in view.
 export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => void; onClose?: () => void }) {
   const [data, setData] = useState<EmojiData | null>(null);
   const [failed, setFailed] = useState(false);
@@ -114,7 +117,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
   return (
     <Picker.Root locale="en" emojibaseUrl={emojiBase} resolveEmojiData={resolve} columns={columns} skinTone={tone}
       onEmojiSelect={(e) => onPick(e.emoji)} onKeyDown={keys} aria-label="Emoji"
-      className="flex h-[min(430px,70dvh)] w-[min(408px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl bg-surface text-ink stroke shadow-pop">
+      className="flex h-[min(430px,70dvh,calc(var(--an-viewport-h,100dvh)_-_24px))] w-[min(408px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl bg-surface text-ink stroke shadow-pop">
       <div className="flex items-center gap-1.5 p-2 pb-1">
         <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-full bg-canvas px-3.5 stroke focus-within:border-agent-ink">
           <IconSearch size={18} stroke={2.2} className="shrink-0 text-muted" aria-hidden="true" />

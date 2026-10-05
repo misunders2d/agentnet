@@ -84,8 +84,10 @@ button { cursor: pointer; }
 .menu .sep { height: 1.5px; margin: 8px 6px; background: var(--hairline); border: 0; }
 .menu .error { margin: 6px 8px; color: var(--danger); font-size: 13px; font-weight: 650; }
 
-/* Dialogs: a card on desktop, a sheet from the bottom on a phone. */
-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; border: 1.5px solid var(--outline); border-radius: 24px;
+/* Dialogs: a card on desktop, a sheet from the bottom on a phone. Both keep
+   to what a phone's keyboard leaves visible: on iOS the host says how much
+   of the screen's bottom it covers (--an-keyboard, loader.js). */
+dialog { bottom: var(--an-keyboard, 0px); width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 48px - var(--an-keyboard, 0px)); padding: 0; border: 1.5px solid var(--outline); border-radius: 24px;
   background: var(--canvas); color: var(--ink); box-shadow: 4px 4px 0 0 var(--shadow); overflow: auto; }
 dialog::backdrop { background: var(--scrim); }
 dialog form { display: grid; gap: 14px; padding: 22px 22px 20px; }
@@ -141,7 +143,7 @@ dialog .error:empty { display: none; }
   .pick.skin { flex: 1; min-width: 0; }
   .menu, .anchor.end .menu { position: fixed; top: 62px; left: 8px; right: 8px; width: auto; max-height: calc(100dvh - 72px); transform-origin: top center; }
   .item { min-height: 56px; }
-  dialog { width: 100vw; max-width: 100vw; margin: auto 0 0; border-radius: 24px 24px 0 0; border-bottom: 0; box-shadow: none; max-height: 92dvh; }
+  dialog { width: 100vw; max-width: 100vw; margin: auto 0 0; border-radius: 24px 24px 0 0; border-bottom: 0; box-shadow: none; max-height: calc(92dvh - var(--an-keyboard, 0px)); }
   dialog form { padding: 20px 16px calc(18px + env(safe-area-inset-bottom)); }
   .actions { flex-direction: column; }
   .actions .btn { width: 100%; }

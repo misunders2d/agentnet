@@ -4,6 +4,7 @@
 // sheet on long-press. Nothing destructive happens by gesture alone: delete
 // always asks first.
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
 import {
@@ -18,8 +19,9 @@ import { Markdown } from "./Markdown";
 import { ReactPopover, controlRef, useReact } from "./Message.reactions";
 import { QuickReactions } from "./Emoji";
 import { decode, encode, shift } from "./Composer.mentions";
+import { focusComposer } from "./Composer.focus";
 import { copyText, deviceWords, isRequest, isThreadMsg, shownText, type AnyMsg, type Ctx } from "./Message.model";
-import { useModal, usePortal } from "../owned";
+import { useModal, useOwned, usePortal } from "../owned";
 
 export interface Can { react: boolean; reply: boolean; edit: boolean; del: boolean; select: boolean }
 
@@ -82,7 +84,12 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
 export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMoreEmoji }: {
   open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; who: string; onMoreEmoji: () => void;
 }) {
+  const { root } = useOwned();
   const close = (fn: () => void) => () => { onOpenChange(false); fn(); };
+  // Reply puts the cursor in the message field within this tap (iOS opens
+  // its keyboard only for a focus() in the tap's own handler): the sheet
+  // lets go of the app first, then the field takes the focus.
+  const reply = () => { flushSync(() => onOpenChange(false)); acts.reply(); focusComposer(root, ctx.conv); };
   const react = useReact(m, ctx);
   const mine = (m.reactions || []).filter((r) => r.mine).map((r) => r.emoji);
   const snippet = plain(shownText(m)).split("\n")[0];
@@ -95,7 +102,7 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
         </div>
       )}
       <div className="flex flex-col">
-        {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={close(acts.reply)} />}
+        {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={reply} />}
         <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select) }} m={m}
           render={(icon, label, onClick, danger) => <SheetItem key={label} icon={icon} label={label} onClick={onClick} danger={danger} />} />
       </div>

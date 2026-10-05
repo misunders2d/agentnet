@@ -23,6 +23,35 @@
   "use strict";
   const page = document.getElementById("skin");
   const browser = window.agentnetEngine;
+
+  // ---- the page is what a phone's keyboard leaves visible
+  //
+  // Android shrinks the layout viewport with the keyboard (index.html:
+  // interactive-widget=resizes-content), so the page and every skin follow
+  // it by themselves. iOS ignores that and shrinks only the visual
+  // viewport: there the host sizes the page from it (--an-viewport-h, read
+  // by core.css) and says how much of the screen's bottom the keyboard
+  // covers (--an-keyboard, for a skin's fixed bottom popups). Both are the
+  // host's own names, set on <html> and inherited into the skin's shadow
+  // tree, and absent while nothing covers the page or the person zooms in.
+  // Events only, no polling.
+  const fitViewport = (vv) => {
+    const style = document.documentElement.style;
+    const fit = () => {
+      if (innerHeight - vv.height > 1 && Math.abs(vv.scale - 1) < 0.01) {
+        style.setProperty("--an-viewport-h", vv.height + "px");
+        style.setProperty("--an-keyboard", Math.max(0, innerHeight - vv.height - vv.offsetTop) + "px");
+        if (scrollX || scrollY) scrollTo(0, 0); // iOS scrolled the page to show the field; it fits now, so back to its top
+      } else {
+        style.removeProperty("--an-viewport-h");
+        style.removeProperty("--an-keyboard");
+      }
+    };
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
+    fit();
+  };
+  if (window.visualViewport) fitViewport(window.visualViewport);
   // Which skin opens and whether it needs consent: built-in skins are
   // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
   const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
