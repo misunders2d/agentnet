@@ -40,10 +40,10 @@ const status = (state) => ({ sub: "status", from: "admin/laptop", lid: "4".repea
   body: JSON.stringify({ state, n: 1, at: 1759500000 }) });
 for (const [state, reason] of [["awaiting", "agent_awaiting"], ["needs_human", "agent_needs_human"], ["interrupted", "agent_interrupted"], ["running", "agent_running"]]) {
   const needs = [], held = [];
-  e.needsYouOf(conv, [active], [req], [status(state)], needs, held);
+  e.needsYouOf(conv, [active], [req], [status(state)], needs, held, (a) => a === "admin/laptop" ? "Alice · Laptop" : a); // the page passes its device words
   assert.deepEqual(needs.map((n) => n.reason), reason ? [reason] : [], "a request the laptop reports " + state);
   if (reason) assert.equal(needs[0].decide_on, "admin/laptop", "decided on the laptop");
-  if (state === "running") assert.match(needs[0].why, /^Running on Alice\./);
+  if (state === "running") assert.match(needs[0].why, /^Running on Alice · Laptop\./);
 }
 // A turn held for the person (conv_held: nothing runs it) is answered by
 // the person's own later turn in that conversation, as
