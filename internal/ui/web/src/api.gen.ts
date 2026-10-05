@@ -11,6 +11,7 @@ export interface Action {
 }
 
 export interface AgentAsk {
+  topic?: string;
   reply_receiver?: ReplyReceiverSelection;
   pid: string;
   kind: string;
@@ -185,6 +186,7 @@ export interface CopyView {
 }
 
 export interface DMDraft {
+  topic?: string;
   pid?: string;
   reply_receiver?: ReplyReceiverSelection;
   conv: string;
@@ -195,6 +197,8 @@ export interface DMDraft {
 }
 
 export interface DMMessage {
+  topic?: string;
+  topic_event?: TopicEvent;
   agent_author_pid?: string;
   group_ref?: GroupHistoryRef;
   excerpt_pid?: string;
@@ -261,6 +265,7 @@ export interface DMSummary {
 }
 
 export interface DMThread {
+  topics?: ThreadSummary[];
   kind?: string;
   title?: string;
   members?: GroupMemberView[];
@@ -917,6 +922,7 @@ export interface ReviewItem {
 }
 
 export interface Sent {
+  lid?: string;
   id: string;
   state: string;
   path?: string;
@@ -1045,6 +1051,7 @@ export interface Thread {
 }
 
 export interface ThreadSummary {
+  conv?: string;
   id: string;
   peer: string;
   title: string;
@@ -1070,10 +1077,18 @@ export interface ThreadSummary {
 }
 
 export interface TopicChange {
+  conv?: string;
+  ids?: string[];
+  counts?: Record<string, number>;
   peer: string;
   id: string;
   title?: string;
   count?: number;
+}
+
+export interface TopicEvent {
+  action: string;
+  seen?: string[];
 }
 
 export interface TopicPage {

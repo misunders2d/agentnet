@@ -755,3 +755,18 @@ button.reaction { cursor: pointer; }
 .file-viewer::backdrop { background: rgb(0 0 0 / .45); }
 .file-viewer .file-preview { max-width: 100%; max-height: 65dvh; width: auto; height: auto; margin: 0 auto 12px; }
 .file-viewer-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
+/* Topics share the skin's surfaces; a narrow bar keeps only controls that fit. */
+.topics-bar { display:flex; flex-wrap:nowrap; gap:6px; padding:6px 12px; overflow:hidden; border-bottom:1px solid var(--line); flex-shrink:0; }
+.topics-bar button,.topics-list button { min-height:44px; border:1px solid var(--line); background:var(--surface); border-radius:8px; padding:6px 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.topics-bar button { max-width:180px; flex-shrink:0; }
+.topics-bar .topic-chip { flex:1;min-width:0; }
+.topics-bar [aria-pressed=true],.topics-list [aria-pressed=true] { background:var(--accent-soft);color:var(--accent-text); }
+.topics-list { position:absolute; inset:0 0 0 auto; z-index:50; width:min(440px,100%); display:flex;flex-direction:column;gap:10px; padding:16px; background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow); }
+.topics-list input[type=search] { min-height:44px; width:100%; background:var(--canvas);border:1px solid var(--line);padding:8px; }
+.topics-actions { display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0; }
+.topics-rows { overflow:auto;min-height:0;flex:1; }
+.topic-row { display:grid;grid-template-columns:32px minmax(0,1fr);padding:4px 0; }
+.topic-row small { grid-column:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted); }
+.topic-row input { width:20px;height:20px;align-self:center; }
+@media(max-width:700px) { .topics-bar button {max-width:120px;} .topics-bar .topic-chip:not([aria-pressed=true]) {display:none;} .topics-bar button {padding:6px;} .topics-list {width:100%;} }
