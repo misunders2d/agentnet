@@ -314,9 +314,9 @@ Authorize specific colleagues and configure or adjust which local harness answer
 agentnet responder list
 
 # Set Claude Code or Codex as background responder
-agentnet responder set --harness claude --dir ~/work/my-project --timeout 5m
+agentnet responder set --harness claude --dir ~/work/my-project
 # Or use Codex (read-only shell sandbox, approval never; auto-approved MCP tools keep effects)
-agentnet responder set --harness codex --dir ~/work/my-project --timeout 5m
+agentnet responder set --harness codex --dir ~/work/my-project
 
 # Approve Alice so her questions are answered automatically
 agentnet approve alice/laptop

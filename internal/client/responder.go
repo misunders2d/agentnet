@@ -1,6 +1,7 @@
 package client
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,6 +169,72 @@ func (a *Agent) SetResponder(r *Responder) error {
 	}
 	notifyDaemon(a.home)
 	return nil
+}
+
+// oldDefaultLimit is the time limit earlier builds stored for every
+// responder and named agent saved without one. It was never the person's
+// choice, and AgentNet sets no limit on agent work, so clearOldDefaultLimit
+// removes it once per home: a stored value equal to it cannot be told
+// apart from that default. A person who wants exactly five minutes sets it
+// again.
+const (
+	oldDefaultLimit     = 5 * time.Minute
+	oldDefaultLimitGone = "old_default_limit_cleared" // config: set once the stored defaults were cleared
+)
+
+// clearOldDefaultLimit clears, once per home (Open), a stored time limit
+// equal to oldDefaultLimit on the default responder and on every named
+// agent of the local catalog.
+func (s *store) clearOldDefaultLimit() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var done int
+	if err := tx.QueryRow(`SELECT count(*) FROM config WHERE k = ?`, oldDefaultLimitGone).Scan(&done); err != nil || done > 0 {
+		return err
+	}
+	var raw string
+	switch err := tx.QueryRow(`SELECT v FROM config WHERE k = 'responder'`).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		var r Responder
+		if json.Unmarshal([]byte(raw), &r) == nil && r.Timeout == oldDefaultLimit {
+			r.Timeout = 0
+			data, _ := json.Marshal(r)
+			if _, err := tx.Exec(`UPDATE config SET v = ? WHERE k = 'responder'`, string(data)); err != nil {
+				return err
+			}
+		}
+	}
+	switch err := tx.QueryRow(`SELECT v FROM config WHERE k = ?`, agentCatalogConfig).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		var entries []LocalAgentInfo
+		changed := false
+		if decodeStrict([]byte(raw), &entries) == nil {
+			for i := range entries {
+				if r := entries[i].Responder; r != nil && r.Timeout == oldDefaultLimit {
+					r.Timeout, changed = 0, true
+				}
+			}
+		}
+		if changed {
+			data, _ := json.Marshal(entries)
+			if _, err := tx.Exec(`UPDATE config SET v = ? WHERE k = ?`, string(data), agentCatalogConfig); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO config(k, v) VALUES(?, '1')`, oldDefaultLimitGone); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // validateResponder is shared by the default and host-local named agents.

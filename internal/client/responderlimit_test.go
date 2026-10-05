@@ -52,3 +52,57 @@ func TestResponderNoDefaultTimeLimit(t *testing.T) {
 		return ok && m.Status == envelope.StatusTimeout
 	})
 }
+
+// A home where an earlier build stored its 5-minute default (on the
+// default responder and on named agents) loses it once, at Open: no
+// platform limit is left in force where no command or screen clears it.
+// A limit the person set otherwise stays, and clearing happens only once.
+func TestStoredOldDefaultLimitCleared(t *testing.T) {
+	w := newWorld(t, "")
+	a := w.bob
+	dir := t.TempDir()
+	setResponder(t, a, "claude", dir, oldDefaultLimit)
+	five, err := a.CreateLocalAgent("Five", Responder{Harness: "claude", Dir: dir, Timeout: oldDefaultLimit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := a.CreateLocalAgent("Own", Responder{Harness: "claude", Dir: dir, Timeout: 7 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.db.Exec(`DELETE FROM config WHERE k = ?`, oldDefaultLimitGone); err != nil { // as a home of an earlier build
+		t.Fatal(err)
+	}
+	limits := func(a *Agent) (def time.Duration, by map[string]time.Duration) {
+		r, err := a.Responder()
+		if err != nil || r == nil {
+			t.Fatalf("responder %v %v", r, err)
+		}
+		agents, err := a.LocalAgents()
+		if err != nil {
+			t.Fatal(err)
+		}
+		by = map[string]time.Duration{}
+		for _, e := range agents {
+			by[e.Record.ID] = e.Responder.Timeout
+		}
+		return r.Timeout, by
+	}
+	opened, err := Open(a.home) // as the next start of the program
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, by := limits(opened)
+	opened.Close()
+	if def != 0 || by[five.ID] != 0 || by[own.ID] != 7*time.Minute {
+		t.Fatalf("after clearing: default %v, agents %v", def, by)
+	}
+	// Once: a five-minute limit the person sets afterwards stays.
+	setResponder(t, a, "claude", dir, oldDefaultLimit)
+	if err := a.store.clearOldDefaultLimit(); err != nil {
+		t.Fatal(err)
+	}
+	if def, _ := limits(a); def != oldDefaultLimit {
+		t.Fatalf("a limit set after the clearing was cleared: %v", def)
+	}
+}

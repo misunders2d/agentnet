@@ -280,8 +280,10 @@ block this release. See [DECISIONS §8](DECISIONS.md#8-terminal-messenger-reques
   replaces older ones and an empty one clears the card. Existing servers need
   `agentnet operator grant --person ADDRESS` once, run by the owner.
 - Responders have no default time limit (owner rule: no platform limits);
-  a limit the person set is still honoured. A responder configured before
-  keeps the 5m the old default stored until `responder set` again.
+  a limit the person set is still honoured. The 5m that earlier builds
+  stored as the default (default responder and named agents) is cleared
+  once when the new build first opens the home; a person who wants exactly
+  5m sets it again.
 - MEL-521 (backend, device threads): a question's run that needs an action
   answers with the exact task it proposes (status `proposal`); `agentnet do
   ID` confirms it as a task. A task from another of your own devices runs as
