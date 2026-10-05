@@ -5,15 +5,19 @@ import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconChevronLeft, IconDotsVertical, IconUserPlus, IconUsers, IconBell, IconBellOff, IconTrash, IconHandStop,
+  IconAlarm, IconPencil, IconDoorExit, IconMessageCheck, IconMessagePause, IconBoltOff,
 } from "@tabler/icons-react";
 import type { Api, T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
-import { deviceKind, niceDevice, personName, timeOf, type DeviceKind } from "../model";
+import { deviceKind, niceDevice, personName, reminderOf, timeOf, type DeviceKind } from "../model";
 import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { Confirm } from "./Message.actions";
+import { RemindSheet, latestReceived } from "./Reminders";
+import { groupRights, useGroupChange } from "./GroupAdmin";
+import { DeviceGrantConfirm, type GrantChange } from "./Trust";
 import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } from "./Message.model";
 import { usePortal } from "../owned";
 
@@ -95,6 +99,15 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   const overview = ctx.overview;
   const t = ctx.dm, th = ctx.thread;
   const [del, setDel] = useState(false);
+  const [remind, setRemind] = useState<boolean | null>(null);
+  const [grant, setGrant] = useState<GrantChange | null>(null);
+  const rights = groupRights(t, overview);
+  const change = useGroupChange(t);
+  // "Remind me about this chat": its newest received message (a computer keeps reminders; a browser doesn't).
+  const latest = overview?.remind ? latestReceived((t ? t.messages : th?.messages) || []) : null;
+  const latestReminder = latest ? reminderOf(overview, latest.id) : undefined;
+  // Standing permissions for a device's agent: kept on a computer only.
+  const grants = !!th && store.host.platform !== "browser";
   const unread = useStore(store, (s) => [...(s.overview?.dms || []), ...(s.overview?.threads || [])].reduce((n, c) => n + (c.id === ctx.conv || c.id === ctx.thread?.topic?.id ? 0 : c.unread), 0)
     + (s.overview?.topics || []).reduce((n, c) => n + c.archived_unread, 0)); // archived topics are counted, not listed
 
@@ -179,13 +192,25 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
                   {muted ? <IconBell size={20} /> : <IconBellOff size={20} />}{muted ? "Turn notifications on" : "Mute notifications"}
                 </Menu.Item>
               )}
+              {latest && (
+                <Menu.Item className={item} onClick={() => setRemind(true)}><IconAlarm size={20} />{latestReminder ? "Change reminder…" : "Remind me about this chat…"}</Menu.Item>
+              )}
+              {rights.admin && <Menu.Item className={item} onClick={() => change.pick("rename")}><IconPencil size={20} />Rename group…</Menu.Item>}
+              {grants && th && (th.approved
+                ? <Menu.Item className={item} onClick={() => setGrant("unapprove")}><IconMessagePause size={20} />Stop answering their questions automatically…</Menu.Item>
+                : <Menu.Item className={item} onClick={() => setGrant("approve")}><IconMessageCheck size={20} />Answer their questions automatically…</Menu.Item>)}
+              {grants && th?.task_grant && <Menu.Item className={item} onClick={() => setGrant("revoke_tasks")}><IconBoltOff size={20} />Stop running their tasks without asking…</Menu.Item>}
               {(t || th) && <Menu.Separator className="mx-2 my-1 h-px bg-hairline" />}
+              {rights.member && <Menu.Item className={item + " text-danger"} onClick={() => change.pick("leave")}><IconDoorExit size={20} />Leave group…</Menu.Item>}
               {(t || th) && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />{th ? "Delete topic…" : "Delete conversation…"}</Menu.Item>}
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
 
+      {change.sheet}
+      {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
+      {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={th.peer} thread={th} />}
       <Confirm open={del} onOpenChange={setDel} ok="Delete" onOk={remove}
         title={th ? "Delete this topic from this device?" : "Delete this conversation from your devices?"}>
         {th ? <p>It’s stored on this device only, so it’s deleted here and nowhere else. {title} keeps its copy.</p> : <>

@@ -14,6 +14,7 @@ import { Tag } from "../ui/Tag";
 import { GuestCard, PastRow, PendingCard, WaitingRow, type Act } from "./RoomPanel.cards";
 import { callName, canBringIn, room, shareable, type Guest } from "./RoomPanel.model";
 import { BringBackSnack, type Snack } from "./RoomPanel.snack";
+import { GroupFooter, MemberMenu, groupRights, useGroupChange } from "./GroupAdmin";
 
 /** RoomPanel is the desktop side panel: open on request, and on its own while
  *  someone is helping or waiting to be let in (until closed for that state). */
@@ -102,6 +103,9 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
   const [busy, setBusy] = useState("");
 
   const invitable = canBringIn(t);
+  const rights = groupRights(t, o);
+  const change = useGroupChange(t);
+  const memberOf = (person?: string) => (person ? (t.members || []).find((x) => x.person === person) : undefined);
 
   // act runs one decision or dismissal; the change stream then redraws the room.
   const act: Act = async (g, what) => {
@@ -131,10 +135,13 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
               <div className="flex items-center gap-1.5"><b className="truncate text-[15px] font-bold">{m.name}{m.me && " (you)"}</b>{m.admin && <Tag>Admin</Tag>}</div>
               {(m.note || m.online != null) && <div className="truncate text-[13px] font-semibold text-text-2">{m.note || (m.online ? "Online" : "Offline")}</div>}
             </div>
+            {rights.admin && memberOf(m.person) && <MemberMenu t={t} member={memberOf(m.person)!} me={m.me} onPick={change.pick} />}
           </li>
         ))}
       </ul>
       {t.kind === "group" && t.frozen && <p className="mt-1 text-[13px] text-muted">The last members this computer could confirm.</p>}
+      {rights.member && <GroupFooter admin={rights.admin} onPick={(a) => change.pick(a)} />}
+      {change.sheet}
 
       <Label n={r.guests.length}>Guests</Label>
       {r.guests.length > 0 ? (

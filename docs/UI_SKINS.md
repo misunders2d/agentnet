@@ -313,7 +313,39 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   stays what was sent), `deleted`, and `can[]` (`react`, `edit`, `delete`): show
   only the actions listed. An edit never reruns anything; a deletion hides text
   and files and recalls nothing already read, saved or given to an agent.
-- Reminders: `/api/remind` and existing `/api/remind/{action}`.
+- Reminders: `overview.remind` says this device keeps reminders (a computer;
+  never a browser) and `overview.reminders[]` lists the pending ones
+  (`{message, conv?, from, title, due, overdue}`, soonest first). POST
+  `/api/remind` `{id, due}` (unix seconds, in the future) sets or moves the
+  reminder on a received message; `/api/remind/done` and
+  `/api/remind/cancel` `{id}` end it. Only the person is reminded, on this
+  computer (a notification while AgentNet runs, window open or not): nothing
+  is sent and the message is unchanged; a reply to it ends it.
+- Groups: POST `/api/groups/manage` `{conv, action, person?, title?}` →
+  `{queued}`: `rename` (title only), `promote`, `demote`, `remove` (the
+  member's `person`), `leave` (nothing else; `queued` until the others
+  confirm). Show admin actions only to an admin of a group that is not
+  frozen; anyone in it may leave. A removal recalls nothing already saved.
+  `/api/groups/invite` `history` takes `{last}`, `{since}` or exact `{refs}`.
+- Trust and standing answers for a device: `/api/act` `{do: "trust", id:
+  address, key}` trusts exactly the compared key (`thread.key.pending`) and
+  lets held messages from it in; `{do: "approve"|"unapprove"|"revoke_tasks",
+  id: address}` turns automatic answers on or off, or stops tasks without
+  asking (nothing running is stopped). A browser does neither: say to do it
+  in AgentNet on a computer, never as a command. `thread.key_changed` on a
+  thread summary flags a paused one.
+- Held back: `overview.quarantine[]` `{id, peer, code, reason, at}`; `code` is
+  `key_changed`, `proof_pending`, `identity_conflict`,
+  `conflicting_duplicate` or `unverified`: write your own sentence from it
+  with the sender's name (`reason` names their address). An `unverified`
+  one (or a code you don't know) only claims its sender: say who it says it
+  is from, never draw it as that person. Content is never shown, and these
+  are not decisions to count.
+- Agent invitation: `/api/dm/agent/invite` `tasks_from` lists the member key
+  fingerprints (at most 16) that may give the agent tasks without asking:
+  offer it per person (their devices now), never per address.
+- Typing: GET `/api/typing` carries this device's `preferences` `{send,
+  show}`; POST `/api/typing/preferences` `{send, show}` saves them here.
 - Connecting coding sessions (MEL-528): GET `/api/assistant-setup` lists the
   tools found on this computer `{local, harnesses[{id, label, detected,
   configured, registered, supported, state, note, change?, next?, target?}],

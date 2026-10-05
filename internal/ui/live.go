@@ -129,10 +129,18 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 	if err != nil {
 		return o, err
 	}
-	for _, x := range q {
-		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
-	}
+	o.Quarantine = quarantineItems(q)
 	return o, nil
+}
+
+// quarantineItems is the overview's held-back list (never null): each
+// item's code says why (holdCode), so a page words it with the sender's name.
+func quarantineItems(q []client.Quarantined) []QuarantineItem {
+	out := make([]QuarantineItem, 0, len(q))
+	for _, x := range q {
+		out = append(out, QuarantineItem{ID: x.ID, Peer: x.Sender, Code: holdCode(x.Reason), Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
+	}
+	return out
 }
 
 // countDecisions sets each conversation's Decide: its requests among

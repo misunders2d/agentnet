@@ -108,7 +108,7 @@ func NewFixture(now func() time.Time) *Fixture {
 	cert := f.thread("dave/srv")
 	f.add(cert, &Message{Dir: "in", Kind: KindQuestion, At: ago(25), State: "held", Unread: true,
 		Body: "Is it safe to rotate the Hub TLS certificate tonight, or is anything still pinned to the old one?"})
-	f.quar = append(f.quar, QuarantineItem{ID: f.id(), Peer: "dave/srv", At: ago(300),
+	f.quar = append(f.quar, QuarantineItem{ID: f.id(), Peer: "dave/srv", At: ago(300), Code: HoldUnverified,
 		Reason: "It did not verify, so its content is not shown."})
 
 	// Announcements bob's agent sent without linking them: each is its own

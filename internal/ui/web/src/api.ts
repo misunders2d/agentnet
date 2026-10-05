@@ -89,6 +89,7 @@ export function api(host: Host) {
     // Typing (ephemeral; never content)
     typing: (scope: T.TypingScope) => get<T.TypingView>(q("/api/typing", { conv: scope.conv || "", peer: scope.peer || "", thread: scope.thread || "" })),
     sendTyping: (scope: T.TypingScope, active: boolean) => post<T.TypingResult>("/api/typing", { scope, active }),
+    typingPreferences: (p: T.TypingPreferences) => post<T.TypingPreferences>("/api/typing/preferences", p), // this device's own: share mine, show others
 
     // Me, my devices, my assistant
     createPerson: (label: string) => post<{ person: T.PersonView; note: string }>("/api/person", { label }),

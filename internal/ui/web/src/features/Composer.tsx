@@ -20,6 +20,7 @@ import { MentionList, optionId } from "./Composer.picker";
 import { useTypingSignal } from "./Composer.typing";
 import { coarse, useFieldFocus } from "./Composer.focus";
 import { usePortal } from "../owned";
+import { TrustNotice } from "./Trust";
 
 const EMPTY: Draft = { text: "" };
 
@@ -368,6 +369,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; setEmojiOpen(true); } }, // opens as the menu leaves: no gap between them
   ];
 
+  // A changed identity: checked and trusted from here (on a computer).
+  if (closed && thread?.key.pending && !dm) return <TrustNotice thread={thread} />;
   if (closed) return (
     <div className="flex items-start gap-3 border-t-[1.5px] border-outline bg-surface px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:py-4">
       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-sunken text-muted"><IconLock size={20} aria-hidden="true" /></span>

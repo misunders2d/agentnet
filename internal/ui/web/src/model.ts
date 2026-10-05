@@ -25,6 +25,7 @@ export interface ChatItem {
   topics?: Topic[];            // an agent's separate conversations not archived, newest first
   peer?: string;               // an agent's device address
   topicTotal?: number;         // every topic with that agent, archived ones too
+  keyChanged?: boolean;        // the agent's identity changed: sending is paused until it is checked and trusted
 }
 
 // ---- topics (docs/plans/TOPICS.md) ------------------------------------------
@@ -50,6 +51,18 @@ export const TOPICS = {
 
 // Arrival notes use seconds; message ordering still uses arrival.
 export const MESSAGES = Object.freeze({ ARRIVED_NOTE_AFTER: 60 });
+
+/** Reminder tunables (MEL-528, "Remind me…"): the quick times offered and
+ *  how the list at the top of Chats behaves. Change them here; there is no
+ *  setting. How far ahead a reminder may be set is the server's
+ *  (client/remind.go maxReminderAhead). */
+export const REMIND = {
+  soon: [30, 120] as readonly number[], // minutes ahead of the quick choices: "In 30 minutes", "In 2 hours"
+  morning: 9,         // hour of "Tomorrow at 9:00" (this device's time)
+  customAhead: 60,    // minutes ahead the "At a time I choose" field starts at
+  listMax: 4,         // reminders shown at the top of Chats before "Show all"
+  titleMax: 90,       // characters of a reminded message's first line in the list
+} as const;
 
 export type TopicState = "active" | "done" | "archived";
 
@@ -180,6 +193,7 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       topics: ts,
       peer,
       topicTotal: c ? c.total : ts.length,
+      keyChanged: (byPeer.get(peer) || []).some((t) => t.key_changed) || !!c?.latest.key_changed,
     });
   }
   return items.sort((a, b) => (b.lastAt || "").localeCompare(a.lastAt || ""));
@@ -396,4 +410,58 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   }
 }
 
-// Message presentation tunables, in seconds.
+// ---- reminders ("Remind me later", on received messages; daemon only) ------
+
+/** reminderOf: the pending reminder on message id, when this device keeps reminders. */
+export const reminderOf = (o: T.Overview | null, id: string) =>
+  (o?.remind && (o.reminders || []).find((r) => r.message === id)) || undefined;
+
+/** clock says a time of day as this device writes it: "9:00 AM", "15:00". */
+export const clock = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+/** dueText says when, on this device's clock: "today 15:00", "tomorrow 9:00", "Tue 7 Oct 9:00". */
+export function dueText(when: string | Date, now = new Date()): string {
+  const d = new Date(when);
+  const time = clock(d);
+  if (d.toDateString() === now.toDateString()) return "today " + time;
+  const next = new Date(now);
+  next.setDate(now.getDate() + 1);
+  if (d.toDateString() === next.toDateString()) return "tomorrow " + time;
+  const year = d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" as const };
+  return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", ...year }) + " " + time;
+}
+
+/** timeZone names this device's time zone ("Europe/Kyiv"), or "" when the browser does not say. */
+export function timeZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
+}
+
+/** reminderTimes: the quick choices of "Remind me…", from now. */
+export function reminderTimes(now = new Date()): { label: string; at: Date }[] {
+  const soon = REMIND.soon.map((m) => ({ label: m < 60 ? "In " + m + " minutes" : "In " + m / 60 + (m === 60 ? " hour" : " hours"), at: new Date(now.getTime() + m * 60e3) }));
+  const morning = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, REMIND.morning, 0);
+  return [...soon, { label: "Tomorrow at " + clock(morning), at: morning }];
+}
+
+/** localInput is d as a datetime-local field's value, in this device's time. */
+export const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
+
+// ---- held back (overview.quarantine) ----------------------------------------
+
+/** holdVerified: whether a held message's sender is known (QuarantineItem.code).
+ *  One that didn't verify ("unverified", or a code this page doesn't know)
+ *  only claims who sent it, so it is never shown as that person. */
+export const holdVerified = (code: string) =>
+  ["key_changed", "proof_pending", "identity_conflict", "conflicting_duplicate"].includes(code);
+
+/** holdSentence says why a received message is held back (QuarantineItem.code),
+ *  naming its sender; its content is never shown. browser: this device can't trust keys. */
+export function holdSentence(code: string, name: string, browser = false): string {
+  switch (code) {
+    case "key_changed": return name + "’s identity changed. It waits until you check and trust the new one" + (browser ? " in AgentNet on your computer." : ".");
+    case "proof_pending": return "It names a chat or a person this device can’t check yet. It waits here; nothing runs it.";
+    case "identity_conflict": return "It disagrees with what this device knows about " + name + ". It stays held; nothing runs it.";
+    case "conflicting_duplicate": return name + " sent different words under a message already received. It stays held; nothing runs it.";
+    default: return "It says it’s from " + name + ", but that couldn’t be checked, so it isn’t shown.";
+  }
+}

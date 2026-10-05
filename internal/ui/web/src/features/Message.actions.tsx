@@ -9,7 +9,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconArrowBackUp, IconCopy, IconDots, IconPencil, IconTrash, IconInfoCircle, IconMoodSmile, IconSquareCheck,
-  IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown,
+  IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown, IconAlarm,
 } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { MESSAGES, deviceName, plain, timeOf } from "../model";
@@ -23,7 +23,7 @@ import { focusComposer } from "./Composer.focus";
 import { copyText, deviceWords, isRequest, isThreadMsg, shownText, type AnyMsg, type Ctx } from "./Message.model";
 import { useModal, useOwned, usePortal } from "../owned";
 
-export interface Can { react: boolean; reply: boolean; edit: boolean; del: boolean; select: boolean }
+export interface Can { react: boolean; reply: boolean; edit: boolean; del: boolean; select: boolean; remind: boolean }
 
 export interface Acts {
   reply: () => void;
@@ -32,6 +32,8 @@ export interface Acts {
   del: () => void;
   details: () => void;
   select?: () => void;
+  remind?: () => void;        // "Remind me…" (or "Change reminder…" when it has one)
+  reminded?: boolean;         // it has a pending reminder
 }
 
 // ---- desktop: the hover toolbar ---------------------------------------------------
@@ -72,6 +74,7 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
     <>
       {text && render(<IconCopy size={20} />, "Copy text", acts.copy)}
       {can.select && acts.select && render(<IconSquareCheck size={20} />, "Select", acts.select)}
+      {can.remind && acts.remind && render(<IconAlarm size={20} />, acts.reminded ? "Change reminder…" : "Remind me…", acts.remind)}
       {can.edit && render(<IconPencil size={20} />, "Edit", acts.edit)}
       {render(<IconInfoCircle size={20} />, "Details", acts.details)}
       {can.del && render(<IconTrash size={20} />, "Delete…", acts.del, true)}
@@ -103,7 +106,7 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
       )}
       <div className="flex flex-col">
         {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={reply} />}
-        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select) }} m={m}
+        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select), remind: acts.remind && close(acts.remind) }} m={m}
           render={(icon, label, onClick, danger) => <SheetItem key={label} icon={icon} label={label} onClick={onClick} danger={danger} />} />
       </div>
     </Sheet>

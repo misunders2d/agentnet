@@ -10,7 +10,7 @@ import {
 } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useApp, useWide } from "../context";
-import { deliveryWord, owner, personName, plain, timeOf } from "../model";
+import { deliveryWord, firstLine, owner, personName, plain, reminderOf, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { ApprovalCard } from "./Approvals";
@@ -22,6 +22,7 @@ import {
   agentLabel, agentOf, eventKind, ev, excerpt, guestOf, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote,
   type AnyMsg, type Ctx, type Who,
 } from "./Message.model";
+import { RemindSheet, ReminderLine } from "./Reminders";
 import { WhatTheySaw } from "./RoomPanel.cards";
 import { room } from "./RoomPanel.model";
 
@@ -55,8 +56,12 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
   const [emoji, setEmoji] = useState<boolean | null>(null);
   const [hot, setHot] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [remind, setRemind] = useState<boolean | null>(null);
 
   const live = !readOnly && !m.deleted && !excerpt(m);
+  // A reminder: only on a received message, where this device keeps reminders (a computer).
+  const reminder = live && m.dir === "in" ? reminderOf(ctx.overview, m.id) : undefined;
+  const remindable = { id: m.id, text: firstLine(shownText(m), 90) };
   const has = (what: string) => live && (m.can || []).includes(what);
   const can: Can = {
     react: has("react"),
@@ -64,6 +69,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
     edit: has("edit"),
     del: has("delete"),
     select: live && !!ctx.dm && ctx.canReply && !!onSelect && (ctx.dm.role || "member") === "member",
+    remind: live && m.dir === "in" && !!ctx.overview?.remind,
   };
   const acts: Acts = {
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
@@ -74,6 +80,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
     del: () => setConfirm(true),
     details: () => setDetails(true),
     select: onSelect && (() => onSelect(m.id)),
+    remind: () => setRemind(true),
+    reminded: !!reminder,
   };
   const touch = useTouchGestures(() => (readOnly ? undefined : setSheet(true)), can.reply ? acts.reply : null);
   const mention = mentionFor(ctx);
@@ -133,6 +141,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
           {body}
           <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
           <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} />
+          {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
         </div>
         {!wide && live && !selecting && (
           <button type="button" onClick={() => setSheet(true)} className="sr-only focus:not-sr-only focus:absolute focus:right-2 focus:top-0 focus:inline-flex focus:min-h-11 focus:items-center focus:rounded-full focus:bg-surface focus:px-3 focus:stroke">
@@ -143,6 +152,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
         {emoji !== null && <EmojiDialog open={emoji} onOpenChange={setEmoji} m={m} ctx={ctx} />}
         {details !== null && <DetailsSheet open={details} onOpenChange={setDetails} m={m} ctx={ctx} who={who.name} />}
         {confirm !== null && <DeleteMessage open={confirm} onOpenChange={setConfirm} m={m} ctx={ctx} />}
+        {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
       </div>
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
       {!readOnly && (isRequest(m) || (m.actions || []).length > 0) && (

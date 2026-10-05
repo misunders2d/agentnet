@@ -44,6 +44,9 @@ host, including its documented additions (`onSkinsChange`,
 | `features/Settings.tsx` | `Settings()` | App |
 | `features/AssistantSetup.tsx` (private: `AssistantSetup.model.ts`, the flow's rules, checked by node in `internal/ui/testdata/assistant_setup_model_check.mjs`) | `AssistantSetup({ start?, onDone? })`: connect Claude Code, Codex, Pi (and OMP) sessions on this computer: the tools the server found → the named agent each gets (a name, and a folder chosen by browsing) → the exact change to review → apply only that reviewed change (`/api/assistant-setup` review/apply, then `/api/agents` create/update/publish). `start` opens straight at the tool list; `onDone` is where Done and Back lead. A browser gets one sentence and no call | Settings (Your agent), Agents (the Connect an agent wizard) |
 | `features/AssistantSetup.folders.tsx` | `FolderField({ label, value, onChange, disabled?, hint? })` and `FolderSheet(...)`: a folder on this computer chosen by browsing GET `/api/folders` (read-only), never a typed path; a folder that can't be read still offers Up and Home | AssistantSetup, Settings (Your agent), Agents (New agent sheet, Connect an agent) |
+| `features/Reminders.tsx` | `Reminders()` (the list at the top of Chats), `RemindSheet`, `ReminderLine`, `openReminder`, `reminderFrom`, `latestReceived` | ChatList, Message, Conversation header |
+| `features/GroupAdmin.tsx` | `GroupChangeSheet`, `MemberMenu`, `GroupFooter`, `groupRights(t, o)`, `useGroupChange(t)` | RoomPanel, Conversation header |
+| `features/Trust.tsx` | `TrustSheet`, `TrustNotice` (the composer while sending is paused), `DeviceGrantConfirm` | Composer, OKs (held back), Conversation header, AgentsView permissions |
 
 A screen may add private helper files named after it (for example
 `features/Message.reactions.tsx`). Do not edit another screen's files or the
@@ -54,6 +57,23 @@ OKs reads the overview (`needs_you`, `held`, `review`, `group_invitations`,
 other read: an invitation card reads its chat once (`/api/dm`) to name what
 your agent would see there; when that fails, its button opens the chat to
 decide.
+
+## Parity with the old app (MEL-528)
+
+Every feature the old app had stays reachable: `internal/ui/comicparity_test.go`
+pins each feature's route or act verb to a real use in Comic (a call site
+outside `api.ts`/`api.gen.ts`, an act verb written out, a field read) and
+to Classic and Zoom (some `src/*.mjs`). A defined but unused `api.ts` method
+does not count. Removing or replacing a screen means checking that table
+first, and editing it only on purpose. Phone limits are the old app's: a
+browser shows no reminders, trust or standing answers (it says "on your
+computer" in words).
+
+`model.ts` also holds the `REMIND` tunables (quick times, the list size at
+the top of Chats), `clock` (one way to write a time of day), `dueText`,
+`reminderOf`, `holdSentence(code, name)` and `holdVerified(code)`: a held
+message that didn't verify only claims its sender, so it is never drawn as
+that person.
 
 ## Rules
 
@@ -66,6 +86,11 @@ decide.
 - **Words:** plain language (see the design contract). No addresses, keys,
   fingerprints, "responder", "receiver", "participation", "realm", "custody",
   "lens" in the normal flow; put technical details behind a Details toggle.
+  People and devices are named (`personName`, `nameOf`, `deviceWords`), never
+  shown as addresses like admin/pixel, and no screen tells the person to run
+  a terminal command (a key to compare is shown as a code, written exactly as
+  Settings → Your devices → Details → Key shows it, so both sides read the
+  same groups).
 - **A standalone skin:** only the host API; never `fetch('/api…')`,
   `EventSource`, page globals (`window.agentnet…`) or anything outside the
   root: no `document.body`/`documentElement` writes (theme, `lang`, classes,

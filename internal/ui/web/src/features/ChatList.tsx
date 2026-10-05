@@ -11,6 +11,7 @@ import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
+import { Reminders } from "./Reminders";
 import { warmPictures } from "./Message.files";
 import { TopicResults } from "./ChatList.topics";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
@@ -122,6 +123,7 @@ export function ChatList() {
       {!overview ? (loadError ? <LoadFailed text={loadError} /> : <Skeleton />) : (
         <>
           {!q && <NeedsYouBanner overview={overview} agentNames={agentNames} />}
+          {!q && <Reminders />}
           {!q && <GroupInvitations />}
           {overview.persons && !overview.person && <NoName />}
           {shownFilters.length > 0 && (
