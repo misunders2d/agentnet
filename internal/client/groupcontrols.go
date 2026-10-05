@@ -56,6 +56,8 @@ func controlMembers(q dbq, conv string) (dmMembers, error) {
 	if root.Kind != protocol.ConvKindGroup {
 		return membersIn(q, conv)
 	}
+	q, closeReads := prepareMembershipReads(q)
+	defer closeReads()
 	packet, err := groupTurnPacketIn(q, conv)
 	if err != nil {
 		return dmMembers{}, err

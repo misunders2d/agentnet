@@ -208,6 +208,7 @@ func TestProofQueueReachesLaterMessages(t *testing.T) {
 // past many unprovable ones; after a restart part-way, the next event
 // starts over and still gets there.
 func TestProofQueueOneEventAndRestart(t *testing.T) {
+	t.Parallel()
 	w, _, valid := setupProofQueue(t, 130)
 	if pages := drain(t, w.bob); pages != 3 || inboxCount(t, w.bob, "id = ?", valid.ID) != 1 {
 		t.Fatalf("one event: %d pages, valid admitted %v", pages, inboxCount(t, w.bob, "id = ?", valid.ID) == 1)

@@ -280,6 +280,7 @@ func TestSessionAddressing(t *testing.T) {
 // With both daemons connected and nothing to send, the only traffic is the
 // Hub's pings on the already-open streams: no requests reach the Hub.
 func TestIdleDaemonsDoNotPoll(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "hub")
 	// A ping interval well above one signed request's round trip on slow CI
 	// disks (Windows): the Hub closes a stream whose ack is later than two
@@ -465,6 +466,7 @@ func (s slowPuts) RoundTrip(r *http.Request) (*http.Response, error) {
 // A long queued upload runs beside the stream: pings are still answered and
 // incoming messages still arrive while it is in progress.
 func TestQueuedUploadDoesNotBlockStream(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "hub")
 	const beat = time.Second // allow signed ACK persistence on slow CI disks
 	w := &world{hub: testhub.StartConfig(t, hub.Config{DataDir: dir, Heartbeat: beat}, "127.0.0.1:0")}
@@ -566,6 +568,7 @@ func countPaths(l *requestLog, part string) int {
 // The receipt wait may be longer than the transport's response-header
 // timeout: the Hub sends headers at once.
 func TestReceiptWaitOutlivesHeaderTimeout(t *testing.T) {
+	t.Parallel()
 	// Setup keeps the ordinary request budget (slow CI disks, Windows).
 	w := newWorld(t, "")
 	res, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "x"}) // bob offline

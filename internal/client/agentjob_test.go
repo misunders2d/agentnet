@@ -749,6 +749,7 @@ func (h postHook) RoundTrip(r *http.Request) (*http.Response, error) {
 // next queued output is held back (and stays so), and a plain message to a
 // frozen person stays queued.
 func TestAgentOutputRecheckedAtEachHandOver(t *testing.T) {
+	t.Parallel()
 	for _, stop := range []string{"dismissal", "freeze"} {
 		t.Run(stop, func(t *testing.T) {
 			w, conv, _, stopBob := agentWorld(t)

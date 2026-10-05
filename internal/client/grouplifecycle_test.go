@@ -611,6 +611,7 @@ func TestGroupLifecycleSignedInvalidIngressAndChangedRosterRetry(t *testing.T) {
 }
 
 func TestGroupLifecycleSelectedOriginalRefsLeakNoHistoryOrFiles(t *testing.T) {
+	t.Parallel()
 	w, p := groupLifecycleFixture(t, true)
 	phone, await, _ := linkPhone(t, w.alice, "phone")
 	request := pendingLink(t, w.alice)
@@ -688,6 +689,7 @@ func TestGroupLifecycleSelectedOriginalRefsLeakNoHistoryOrFiles(t *testing.T) {
 }
 
 func TestGroupLifecycleOfflineExplicitConsentReconnect(t *testing.T) {
+	t.Parallel()
 	w, p := groupLifecycleFixture(t, false)
 	inv := groupLifecycleInvite(t, w, p, nil)
 	deliverGroupLifecycleSubtype(t, w.alice, w.bob, envelope.SubGroupProof)
@@ -714,6 +716,7 @@ func TestGroupLifecycleOfflineExplicitConsentReconnect(t *testing.T) {
 // The inviter re-issues it at the new head with the same target and history,
 // the invitee's earlier consent shows as stale, and a fresh acceptance joins.
 func TestGroupLifecycleConcurrentInvitationsReissuedForFreshConsent(t *testing.T) {
+	t.Parallel()
 	w, p := groupLifecycleFixture(t, true)
 	carol := proofReader(t, w, "carol")
 	runAgent(t, carol)

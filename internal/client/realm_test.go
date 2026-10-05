@@ -62,6 +62,7 @@ func newRealmRelay(t *testing.T, v protocol.VersionInfo) *realmRelay {
 func realmAgent(t *testing.T, relay *realmRelay) *Agent {
 	t.Helper()
 	home := t.TempDir()
+	seedFixtureStore(t, home)
 	id, err := identity.Generate()
 	if err != nil {
 		t.Fatal(err)

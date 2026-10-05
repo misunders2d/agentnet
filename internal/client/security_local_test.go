@@ -15,7 +15,9 @@ import (
 
 func securityStore(t *testing.T) *store {
 	t.Helper()
-	s, err := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	s, err := openStore(filepath.Join(home, "agent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

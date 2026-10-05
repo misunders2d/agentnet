@@ -146,6 +146,7 @@ func TestPageReviewSkipsUnresolvableParticipation(t *testing.T) {
 // conversation deleted here is gone with it. The other person's question
 // is listed until then.
 func TestPageReviewHeldTurns(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)

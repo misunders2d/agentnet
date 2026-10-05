@@ -60,6 +60,7 @@ func TestGroupWarmOriginalReplay(t *testing.T) {
 }
 
 func TestGroupWarmFreshSelfConsentBoundary(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"fresh", "fresh-at-target", "same-old", "older-different", "known-removed", "invalid-decrypted", "malformed-decrypted", "cipher-corrupt", "join-slot-mismatch"} {
 		t.Run(mode, func(t *testing.T) {
 			w, p0, c0 := newGroupPublicationFixture(t)
