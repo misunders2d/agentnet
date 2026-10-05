@@ -304,7 +304,9 @@ func TestHeadlessReviewStaysPending(t *testing.T) {
 func TestNeedsHumanMarkerIsExact(t *testing.T) {
 	for out, want := range map[string]bool{
 		"AGENTNET: NEEDS-HUMAN\nwhy":         true,
-		"AGENTNET: NEEDS-HUMAN  \r\nwhy":     true,
+		"AGENTNET: NEEDS-HUMAN\r\nwhy":       true,
+		"AGENTNET: NEEDS-HUMAN  \r\nwhy":     false,
+		" AGENTNET: NEEDS-HUMAN\nwhy":        false,
 		"agentnet: needs-human\nwhy":         false,
 		"I think AGENTNET: NEEDS-HUMAN here": false,
 		"answer\nAGENTNET: NEEDS-HUMAN":      false,
@@ -483,9 +485,11 @@ func TestQuestionCounterQuestionRoundTrip(t *testing.T) {
 		}
 	}
 	quiet(t, w.bob, n, 0)
-	if inboxCount(t, w.alice, `status = ?`, envelope.StatusReviewNotice) != 0 {
-		t.Fatal("counter-question sent a review notice")
-	}
+	// Running requests are visible through report snapshots. They are not
+	// needs-human outcomes; their settled snapshots clear the remote card.
+	eventually(t, "finished questions settle their running reports", func() bool {
+		return inboxCount(t, w.alice, `status = ? AND state = ?`, envelope.StatusReviewNotice, stateNeedHuman) == 0
+	})
 }
 
 // A review notice from another machine is a report about decisions waiting
