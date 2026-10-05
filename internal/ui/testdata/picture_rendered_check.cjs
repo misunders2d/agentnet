@@ -25,7 +25,11 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
    await p.getByRole('button',{name:'Remove picture',exact:true}).click();await p.getByRole('button',{name:'Remove picture',exact:true}).waitFor({state:'hidden'});
    if(skin==='comic')await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^Chats/}).click();else await p.locator('#settings').evaluate(d=>d.close());
    await p.getByRole('button',{name:/^Bob/}).first().click();
-   await p.getByRole('button',{name:/Open.*avatar\.png/}).click();
+   // Comic exposes an image thumbnail; Classic/Zoom expose a file chip.
+   const openPicture=skin==='comic'
+    ? p.getByRole('button',{name:'Open picture avatar.png',exact:true})
+    : p.locator('.file').filter({hasText:'avatar.png'}).getByRole('button',{name:'Open',exact:true});
+   await openPicture.click();
    await p.getByRole('button',{name:'Use as my picture',exact:true}).click();await dialog.waitFor();await shot('chat-picture');
    await dialog.getByRole('button',{name:'Save picture',exact:true}).click();await dialog.waitFor({state:'hidden'});
    const used=await (await ctx.request.get(new URL(process.argv[2]).origin+'/api/overview')).json();assert(used.person.picture,'chat image selected by person');
