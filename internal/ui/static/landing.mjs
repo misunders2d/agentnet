@@ -149,8 +149,8 @@ async function computer(ui, p, code, problem) {
       serverLine(ui, info),
       ui.el("p", {}, "This link comes from one of your devices: this computer joins as one more device of yours, with your chats, once you approve it there."),
       ui.el("ol", { class: "landing-steps" },
-        ui.el("li", {}, ui.el("strong", {}, "Install AgentNet. "), await downloadsBlock(ui, p)),
-        ui.el("li", {}, ui.el("strong", {}, "Open this link in AgentNet. "), openButton(ui, code, "Open in AgentNet"))),
+        ui.el("li", {}, ui.el("strong", { class: "landing-step-title" }, "Install AgentNet. "), await downloadsBlock(ui, p)),
+        ui.el("li", {}, ui.el("strong", { class: "landing-step-title" }, "Open this link in AgentNet. "), openButton(ui, code, "Open in AgentNet"))),
       ui.el("p", { class: "hint", id: "landing-expiry" }, "The link works until " + until + ". If it runs out while you install, make a new one on your other device."));
     return;
   }
@@ -158,8 +158,8 @@ async function computer(ui, p, code, problem) {
     serverLine(ui, info),
     info.from && ui.el("p", { class: "hint" }, "Who invited you and the names are what the invitation says; the server is where it leads."),
     ui.el("ol", { class: "landing-steps" },
-      ui.el("li", {}, ui.el("strong", {}, "Get the app. "), await downloadsBlock(ui, p)),
-      ui.el("li", {}, ui.el("strong", {}, "Open your invitation in AgentNet. "), openButton(ui, code, "Open in AgentNet"),
+      ui.el("li", {}, ui.el("strong", { class: "landing-step-title" }, "Get the app. "), await downloadsBlock(ui, p)),
+      ui.el("li", {}, ui.el("strong", { class: "landing-step-title" }, "Open your invitation in AgentNet. "), openButton(ui, code, "Open in AgentNet"),
         ui.el("p", { class: "hint" }, "If the app opens without it, copy the invitation and paste it there."), copyButton(ui, code))));
 }
 

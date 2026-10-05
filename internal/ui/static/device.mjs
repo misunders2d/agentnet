@@ -305,7 +305,8 @@ async function start(engine, joinedNow) {
   }
   panel.hidden = true;
   document.getElementById("skin").hidden = false;
-  window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn) };
+  // loader.js binds the host's Drive provider to this engine's (driveService).
+  window.agentnetEngine = { api: (path, body) => engine.api(path, body), listen: (fn) => engine.listen(fn), driveService: () => engine.driveService() };
   // The shell first: adopting this device installs the realm guard on its
   // transport, and the first stream must not outrun it.
   const problems = await workspaces(engine);
