@@ -395,6 +395,28 @@ export interface GetAppView {
   platforms: GetAppPlatform[] | null;
 }
 
+export interface GoogleAccess {
+  workspace_url: string;
+  enabled: boolean;
+  can_admin: boolean;
+  emails: GoogleEmail[] | null;
+  domains: string[] | null;
+}
+
+export interface GoogleAccessChange {
+  email?: string;
+  domain?: string;
+  remove: boolean;
+  admin?: boolean;
+}
+
+export interface GoogleEmail {
+  domain_member: boolean;
+  email: string;
+  admin: boolean;
+  denied: boolean;
+}
+
 export interface GroupChange {
   conv: string;
   action: string;
@@ -432,6 +454,7 @@ export interface GroupInviteDraft {
 export interface GroupMemberView {
   person?: string;
   label: string;
+  email?: string;
   address: string;
   fingerprint?: string;
   state: string;
@@ -707,6 +730,7 @@ export interface PersonRef {
 export interface PersonView {
   person?: string;
   label: string;
+  email?: string;
   address: string;
   fingerprint?: string;
   state: string;
