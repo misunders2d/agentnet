@@ -309,6 +309,17 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 	if _, err := tx.Exec(`DELETE FROM person_devices WHERE person = ?`, person); err != nil {
 		return res, err
 	}
+	if state == personSelf {
+		// A device this person removed: its tasks here no longer run as
+		// the person's own (ownDeviceHolds).
+		for addr := range old {
+			if !slices.ContainsFunc(cur.Devices, func(d identity.Public) bool { return d.Address == addr }) {
+				if err := demoteOwnDevice(tx, addr, "that device is no longer one of yours"); err != nil {
+					return res, err
+				}
+			}
+		}
+	}
 	for _, d := range cur.Devices {
 		added, ok := old[d.Address]
 		if !ok {

@@ -669,6 +669,9 @@ func initialState(db querier, in envelope.Inner, verifiedBy string) (string, err
 		return stateHeld, nil
 	case envelope.KindTask:
 		granted, err := taskGranted(db, in.From, verifiedBy)
+		if err == nil && !granted && in.Conv == "" {
+			granted, err = ownDeviceHolds(db, in.From, verifiedBy) // one of this person's own devices (selfconsent.go)
+		}
 		if err != nil || !granted {
 			return stateAwaiting, err
 		}
@@ -1084,7 +1087,7 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
    attempts = attempts + 1, last_attempt_at = unixepoch()
    WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
     OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND sender IN (SELECT address FROM approvals))
-     OR (kind = ? AND `+taskGrantHolds+`))))
+     OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+`)))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     ORDER BY received_at, id LIMIT 1)
    RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,'')`,

@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
 // Self-invite consent (owner decision D3, docs/plans/ROOM_V1.md §5): an
@@ -71,8 +73,12 @@ func (a *Agent) SelfConsentTrust() ([]TrustedDevice, error) {
 	return append([]TrustedDevice{{Address: a.Address, Fingerprint: a.Self().Fingerprint()}}, added...), nil
 }
 
-// UntrustOwnDevice removes the device at address from the trust set; this
-// device itself always stays in it.
+// UntrustOwnDevice narrows what the device at address may do here: it
+// leaves the self-consent trust set (its invites wait for a click again),
+// and, as one of this person's devices, its tasks to this device's agent
+// wait for the person's OK again (ownDeviceHolds), those pending now
+// included. This device itself always stays trusted. Linking that device
+// again (new keys) undoes it.
 func (a *Agent) UntrustOwnDevice(address string) error {
 	if address == a.Address {
 		return errors.New("this device always trusts itself: its own invites are its person's")
@@ -83,11 +89,80 @@ func (a *Agent) UntrustOwnDevice(address string) error {
 			return err
 		}
 		i := slices.IndexFunc(added, func(d TrustedDevice) bool { return d.Address == address })
-		if i < 0 {
-			return fmt.Errorf("%s is not in the trust set", address)
+		if i >= 0 {
+			if err := putConfigJSON(tx, selfConsentKey, slices.Delete(added, i, i+1)); err != nil {
+				return err
+			}
 		}
-		return putConfigJSON(tx, selfConsentKey, slices.Delete(added, i, i+1))
+		var fp string
+		err = tx.QueryRow(`SELECT d.fingerprint FROM person_devices d JOIN persons pr ON pr.person = d.person AND pr.state = ? WHERE d.address = ?`, personSelf, address).Scan(&fp)
+		if errors.Is(err, sql.ErrNoRows) {
+			if i < 0 {
+				return fmt.Errorf("%s is neither in the trust set nor one of your devices", address)
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var narrowed []TrustedDevice
+		if err := configJSONIn(tx, ownNarrowedKey, &narrowed); err != nil {
+			return err
+		}
+		if !slices.Contains(narrowed, TrustedDevice{Address: address, Fingerprint: fp}) {
+			if err := putConfigJSON(tx, ownNarrowedKey, append(narrowed, TrustedDevice{Address: address, Fingerprint: fp})); err != nil {
+				return err
+			}
+		}
+		return demoteOwnDevice(tx, address, "you untrusted that device of yours")
 	})
+}
+
+// demoteOwnDevice moves the device-thread tasks from address waiting to run
+// here back to awaiting the person, unless a task grant for their key
+// holds (taskgrant.go): the device is no longer one whose tasks run as the
+// person's own (untrusted, or removed from the roster).
+func demoteOwnDevice(tx *sql.Tx, address, why string) error {
+	_, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ?, notified = 0, review_sent = 0
+		WHERE sender = ? AND kind = ? AND state = ? AND conv IS NULL AND NOT `+taskGrantHolds,
+		stateAwaiting, "not run without asking: "+why+"; accept ID runs it once", address, envelope.KindTask, statePending)
+	return err
+}
+
+// Own devices (owner rule 2026-10-05, "my devices are me"): a task sent to
+// this device's agent in a device thread by another current device of this
+// installation's own person runs without asking, as the person's own work
+// (D9 for device threads). It holds for exactly the key the person's signed
+// roster, pinned here, lists for that device, verified the task with, and
+// while no key change for it is pending; a device the person removed from
+// the roster, or untrusted here (person untrust: ownNarrowedKey), waits for
+// the OK again. Nothing received grants it: the roster is the person's own
+// signed device list, and adding a device to it took the person's tap. A
+// browser or phone device of the person is one of them too (owner question
+// 1 in the P4 spec: excluding browser keys would be one more condition
+// here). The harness's normal task permissions still apply.
+const ownNarrowedKey = "own_narrowed" // devices the person untrusted here, by exact key
+
+// ownDeviceHoldsFor is that condition for an address and a verifying
+// fingerprint, as SQL expressions: the single own-device predicate.
+const ownDeviceHoldsFor = `EXISTS (SELECT 1 FROM persons pr JOIN person_devices d ON d.person = pr.person
+	JOIN peers p ON p.address = d.address
+	WHERE pr.state = 'self' AND d.address = %s AND d.fingerprint = %s AND p.pending IS NULL
+	  AND NOT EXISTS (SELECT 1 FROM json_each(coalesce((SELECT v FROM config WHERE k = 'own_narrowed'), '[]')) n
+	    WHERE json_extract(n.value, '$.address') = d.address AND json_extract(n.value, '$.fingerprint') = d.fingerprint))`
+
+// ownTaskHolds is ownDeviceHoldsFor for an inbox row.
+var ownTaskHolds = fmt.Sprintf(ownDeviceHoldsFor, "inbox.sender", "inbox.verified_by")
+
+// ownDeviceHolds reports whether a task from address verified by fp is
+// this person's own and may run without asking.
+func ownDeviceHolds(q querier, address, fp string) (bool, error) {
+	if fp == "" {
+		return false, nil
+	}
+	var ok bool
+	err := q.QueryRow(`SELECT `+fmt.Sprintf(ownDeviceHoldsFor, "?", "?"), address, fp).Scan(&ok)
+	return ok, err
 }
 
 // markSelfConsentSince records, once, when this home first ran a build

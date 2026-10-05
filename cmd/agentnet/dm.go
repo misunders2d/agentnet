@@ -133,7 +133,7 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		if err := a.UntrustOwnDevice(args[1]); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "untrusted %s: its invites of your own agents here wait for your accept again\n", args[1])
+		fmt.Fprintf(stdout, "untrusted %s: its invites of your own agents here, and its tasks to your agent here, wait for your OK again\n", args[1])
 		return nil
 	case args[0] == "remove" && len(args) == 2:
 		if err := a.RemoveDevice(ctx, args[1]); err != nil {
