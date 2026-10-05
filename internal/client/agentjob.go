@@ -512,10 +512,10 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		fmt.Fprintf(&b, "You are the agent of %s, running on their device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.%s\n", host, hostAt, host, other, also)
 	}
 	if j.Kind == envelope.KindTask {
-		fmt.Fprintf(&b, "%s gives you the task below. Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n", asker)
+		fmt.Fprintf(&b, "%s gives you the task below. Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n", capFirst(asker))
 	} else {
 		fmt.Fprintf(&b, "%s asks you the question below. Answer in plain text, concisely. Use the conversation shared with you, your own knowledge, and your skills and the tools you are allowed to use to look things up. "+
-			"Do not change files or take any action with effects for this question.\n", asker)
+			"Do not change files or take any action with effects for this question.\n", capFirst(asker))
 		fmt.Fprintf(&b, "If you need information from %s to answer, reply with your question for them. They can answer it in this conversation.\n", asker)
 		b.WriteString(lookupText)
 	}

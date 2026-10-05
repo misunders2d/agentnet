@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/misunders2d/agentnet/internal/identity"
@@ -15,8 +16,10 @@ import (
 // A device no verified record names, or whose person is frozen, is named
 // as that device. The relation is worked out when the text is made and
 // never stored: a device removed from its person, or a key that changed,
-// reads differently at once. Labels are each person's own claim; the
-// address and the short key stay in the text as the verified details.
+// reads differently at once. Labels are each person's own claim: the text
+// says the verified relation first and quotes the label after it, so a
+// label that copies the relation's words ("Sergey (your owner)") reads as
+// a name; the address and the short key stay as the verified details.
 
 // Sender relations.
 const (
@@ -149,15 +152,46 @@ func (a *Agent) personSender(p personRow, address, fp string) Sender {
 	return s
 }
 
-// label is the person's name, or a stand-in when they gave none.
-func (s Sender) label() string {
-	if s.Label != "" {
-		return s.Label
+// ownerNoun is who this device's agent answers to: "your owner", or, on a
+// device that speaks for no person, "the person who runs this device".
+func ownerNoun(noSelf bool) string {
+	if noSelf {
+		return "the person who runs this device"
 	}
-	if s.Relation == SenderSelf || s.Relation == SenderOwner {
-		return "Your owner"
+	return "your owner"
+}
+
+// capFirst starts a sentence with s.
+func capFirst(s string) string {
+	if s == "" {
+		return s
 	}
-	return "A person"
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// relation is what this device proved about the sender, said first, before
+// any name: a name is the person's own claim and may copy these words.
+func (s Sender) relation() string {
+	switch s.Relation {
+	case SenderSelf, SenderOwner:
+		return ownerNoun(s.NoSelf)
+	case SenderPerson:
+		if s.NoSelf {
+			return "a person in this workspace"
+		}
+		return "another person"
+	}
+	return ""
+}
+
+// quoted is the person's own name as a quoted claim, between commas
+// (`, "Sergey",`), or "" when they gave none. The quotes are Go's, so a name
+// holding quotes or commas cannot end early and read as more than a name.
+func (s Sender) quoted(lead string) string {
+	if s.Label == "" {
+		return ""
+	}
+	return ", " + lead + strconv.Quote(s.Label) + ","
 }
 
 // details are the verified details: the address and the short key.
@@ -168,23 +202,19 @@ func (s Sender) details() string {
 	return s.Address + ", key " + s.Key
 }
 
-// Words is the long form, for the sentence that says who asks:
-// "Sergey — your owner — writing from their device Pixel (admin/pixel, key 19c77bce)".
+// Words is the long form, for the sentence that says who asks, the
+// verified relation first and the person's own name quoted after it:
+// `your owner, "Sergey", writing from their device Pixel (admin/pixel, key
+// 19c77bce)`, `another person, who calls themselves "Vitalii", writing
+// from their device Desk (vitalii/desk, key ab12cd34)`.
 func (s Sender) Words() string {
 	switch s.Relation {
 	case SenderSelf:
-		if s.Label == "" {
-			return "your owner, on this device"
-		}
-		return s.Label + " — your owner — on this device"
+		return s.relation() + s.quoted("") + " on this device"
 	case SenderOwner:
-		return s.label() + " — your owner — writing from their device " + s.Device + " (" + s.details() + ")"
+		return s.relation() + s.quoted("") + " writing from their device " + s.Device + " (" + s.details() + ")"
 	case SenderPerson:
-		who := " (another person)"
-		if s.NoSelf {
-			who = " (a person in this workspace)"
-		}
-		return s.label() + who + " writing from their device " + s.Device + " (" + s.details() + ")"
+		return s.relation() + s.quoted("who calls themselves ") + " writing from their device " + s.Device + " (" + s.details() + ")"
 	}
 	if s.Key == "" {
 		return "the device " + s.Address + ", which this device could not match to a verified person"
@@ -192,24 +222,21 @@ func (s Sender) Words() string {
 	return "the device " + s.Address + " (key " + s.Key + "), which this device could not match to a verified person"
 }
 
-// Name is the short form, for lines of earlier messages: "Sergey (your
-// owner) on Pixel", "Vitalii on Desk", "the device admin/pixel".
+// Name is the short form, for lines of earlier messages, in the same
+// order: `your owner, "Sergey", on Pixel`, `another person, "Vitalii", on
+// Desk`, "the device admin/pixel".
 func (s Sender) Name() string {
 	switch s.Relation {
 	case SenderSelf:
-		if s.Label == "" {
-			return "your owner, on this device"
-		}
-		return s.Label + " (your owner) on this device"
-	case SenderOwner:
-		return s.label() + " (your owner) on " + s.Device
-	case SenderPerson:
-		return s.label() + " on " + s.Device
+		return s.relation() + s.quoted("") + " on this device"
+	case SenderOwner, SenderPerson:
+		return s.relation() + s.quoted("") + " on " + s.Device
 	}
 	return "the device " + s.Address
 }
 
-// Ref is Name with the address: "Vitalii on Desk (vitalii/desk)".
+// Ref is Name with the address: `another person, "Vitalii", on Desk
+// (vitalii/desk)`.
 func (s Sender) Ref() string {
 	if s.Relation == SenderUnverified {
 		return s.Name()
