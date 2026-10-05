@@ -642,6 +642,9 @@ func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText 
 		fmt.Fprintf(&b, "\n## The local user's follow-up instructions\n%s\n", instructions)
 	case j.Kind == envelope.KindTask:
 		fmt.Fprintf(&b, "You are running a task that the AgentNet coworker %s sent to %s. The local user accepted it.\n", j.From, a.Address)
+		if p, err := a.ProposalOf(j.ID); err == nil && p != nil {
+			fmt.Fprintf(&b, "This task carries out the action you proposed in answer to their question (the reply chain below), confirmed by %s. Its text is exactly your proposal.\n", p.ConfirmedBy)
+		}
 		b.WriteString("Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n")
 		b.WriteString(outboxPrompt(j.run))
 	default:

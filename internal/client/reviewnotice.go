@@ -181,6 +181,11 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		items = append(items, it)
 	}
 	rows.Close()
+	for i := range items { // what a task carries out, for the operator approving it (MEL-521)
+		if items[i].Kind == envelope.KindTask && !items[i].Conv {
+			items[i].Proposal, _ = a.ProposalOf(items[i].ID)
+		}
+	}
 	type plan struct {
 		to         string
 		list       []ReportItem

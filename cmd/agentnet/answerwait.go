@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
@@ -124,4 +125,27 @@ func landsIn(r *client.ReplyReceiver) string {
 		return "local agent " + r.AgentID + ", which continues with it (the app shows a copy)"
 	}
 	return "this computer's AgentNet inbox (the app shows it)"
+}
+
+// runDo is the command line's "Do it" on a proposal (MEL-521): it sends
+// exactly the proposal's stored text as a task replying to it, which the
+// host runs under its normal task approval. Confirming again shows the
+// task already sent. It is refused inside a run (runguard.go): only the
+// person who asked confirms.
+func runDo(ctx context.Context, a *client.Agent, args []string) error {
+	fs := flag.NewFlagSet("do", flag.ContinueOnError)
+	answerFor := answerWaitFlag(fs, 0)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: do [--answer-wait D] ID   (ID: the proposal, as ask printed it)")
+	}
+	r, err := a.ConfirmProposal(ctx, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	printResult(r, defaultWait)
+	fmt.Fprintln(os.Stderr, "sent as a task: it runs there under its usual approval (waits for their OK unless they let your tasks run)")
+	return awaitAnswer(ctx, a, r.ID, "agentnet conversation "+r.ID, answerWait(answerFor), nil, os.Stdout, os.Stderr)
 }

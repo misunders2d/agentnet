@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"strings"
 	"sync"
@@ -189,5 +190,44 @@ func TestAskAnswerWaitWords(t *testing.T) {
 	printAnswer(&b, &client.AwaitedAnswer{ID: "P", From: "hub/zen", Kind: envelope.KindAnswer, Status: envelope.StatusProposal, Body: "edit CHANGELOG.md"})
 	if !strings.Contains(b.String(), "proposes an action (not run)") || !strings.Contains(b.String(), "agentnet do P") {
 		t.Fatal(b.String())
+	}
+}
+
+// agentnet do confirms only a proposal: anything else is refused and sends
+// nothing (the confirm itself: client.TestConfirmProposal).
+func TestDoCommand(t *testing.T) {
+	a, peer := askPair(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := runDo(ctx, a, []string{"unknown-id"}); err == nil {
+		t.Fatal("an unknown id confirmed")
+	}
+	if err := runDo(ctx, a, nil); err == nil || !strings.Contains(err.Error(), "usage: do") {
+		t.Fatalf("usage: %v", err)
+	}
+	if err := peer.Approve(a.Address); err != nil {
+		t.Fatal(err)
+	}
+	q, err := a.SendMessage(ctx, client.Outgoing{To: peer.Address, Kind: envelope.KindQuestion, Body: "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var answer string
+	for answer == "" && ctx.Err() == nil {
+		if r, err := peer.Reply(ctx, q.ID, "a plain answer"); err == nil {
+			answer = r.ID
+		} else {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	r, err := a.AwaitReply(ctx, q.ID, 20*time.Second, nil)
+	if err != nil || r.Answer == nil {
+		t.Fatalf("answer %+v %v", r, err)
+	}
+	if err := runDo(ctx, a, []string{r.Answer.ID}); !errors.Is(err, client.ErrNotConfirmable) {
+		t.Fatalf("a plain answer confirmed: %v", err)
+	}
+	if !strings.Contains(topics["do"], "nothing runs twice") || !strings.Contains(rootHelp, "  do  ") {
+		t.Fatal("do is not documented")
 	}
 }

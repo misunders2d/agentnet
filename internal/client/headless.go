@@ -162,6 +162,7 @@ type ReportItem struct {
 	Excerpt    string          `json:"excerpt,omitempty"`    // the request's first line: operators only
 	Actionable bool            `json:"actionable,omitempty"` // the recipient's key is a granted operator on the host
 	Conv       bool            `json:"conv,omitempty"`       // a request in a DM or group: decided, never answered by hand from here
+	Proposal   *ProposalView   `json:"proposal,omitempty"`   // a task carrying out its agent's proposal: operators only, first lines`
 	Result     *DecisionResult `json:"result,omitempty"`     // filled by the reader from the host's answers to its decisions
 }
 

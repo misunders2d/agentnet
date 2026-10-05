@@ -114,3 +114,111 @@ func TestAgentProposalInConversation(t *testing.T) {
 		t.Fatalf("prompt:\n%s", st.last())
 	}
 }
+
+// proposalAsked runs a question from alice to bob's proposing agent and
+// returns the proposal alice received.
+func proposalAsked(t *testing.T) (*world, *stub, Message, string) {
+	t.Helper()
+	st := installStub(t, "propose")
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "stub", st.dir, time.Minute)
+	if err := w.bob.Approve(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "is the changelog up to date?", Kind: envelope.KindQuestion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p Message
+	eventually(t, "the proposal", func() bool {
+		var ok bool
+		p, ok = findReply(w.alice, q.ID)
+		return ok && p.Status == envelope.StatusProposal
+	})
+	return w, st, p, q.ID
+}
+
+// Do it sends exactly the stored proposal as a task replying to it; the
+// host sees where it comes from, runs it only with the usual approval, and
+// a second confirmation never runs twice (MEL-521).
+func TestConfirmProposal(t *testing.T) {
+	w, st, p, q := proposalAsked(t)
+	sent, err := w.alice.ConfirmProposal(tctx(t), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body, replyTo, kind string
+	w.alice.store.db.QueryRow(`SELECT body, reply_to, coalesce(kind, json_extract(envelope, '$.kind')) FROM outbox WHERE id = ?`, sent.ID).Scan(&body, &replyTo, &kind)
+	if body != p.Body || replyTo != p.ID || kind != envelope.KindTask {
+		t.Fatalf("task %q %q %q", body, replyTo, kind)
+	}
+	if again, err := w.alice.ConfirmProposal(tctx(t), p.ID); err != nil || again.ID != sent.ID {
+		t.Fatalf("confirmed twice: %+v %v", again, err)
+	}
+	waitState(t, w.bob, sent.ID, stateAwaiting) // the usual approval: alice may not task bob
+	v, err := w.bob.ProposalOf(sent.ID)
+	if err != nil || v == nil || v.QuestionID != q || v.ConfirmedBy != w.alice.Address || v.Proposal != p.Body || v.Question != "is the changelog up to date?" {
+		t.Fatalf("provenance %+v %v", v, err)
+	}
+	// Another confirmation of the same proposal (another of alice's
+	// devices, a retry): not run twice, and alice learns so.
+	dup := receiverDirect(t, w.alice, w.bob, envelope.Inner{Kind: envelope.KindTask, Body: p.Body, ReplyTo: p.ID})
+	if err := w.bob.verifyAndStore(tctx(t), dup); err != nil {
+		t.Fatal(err)
+	}
+	if m := inboxRow(t, w.bob, dup.ID); m.State != stateNotRun || !strings.Contains(m.Detail, sent.ID) {
+		t.Fatalf("second confirmation %+v", m)
+	}
+	// Accepted: the run is told what it carries out.
+	if err := w.bob.Accept(sent.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the run", func() bool {
+		return strings.Contains(mustRead(t, st.log+".stdin"), "carries out the action you proposed")
+	})
+}
+
+// A task with the proposal's text from anyone but its addressee is an
+// ordinary task: no provenance, and it uses up nothing.
+func TestProposalOnlyFromAddressee(t *testing.T) {
+	w, _, p, _ := proposalAsked(t)
+	carol := mustJoin(t, t.TempDir()+"/carol", w.aliceInvites("carol"), "desk")
+	forged := receiverDirect(t, carol, w.bob, envelope.Inner{Kind: envelope.KindTask, Body: p.Body, ReplyTo: p.ID})
+	if err := w.bob.store.pin(carol.Self()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.bob.verifyAndStore(tctx(t), forged); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := w.bob.ProposalOf(forged.ID); v != nil {
+		t.Fatalf("a third party's task carries provenance %+v", v)
+	}
+	sent, err := w.alice.ConfirmProposal(tctx(t), p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, sent.ID, stateAwaiting) // not not_run: the forgery used up nothing
+}
+
+// A proposal edited or deleted after it was made, or one that is not a
+// proposal, is not confirmed.
+func TestEditedProposalNotConfirmable(t *testing.T) {
+	w, _, p, q := proposalAsked(t)
+	if _, err := w.alice.ConfirmProposal(tctx(t), q); err == nil {
+		t.Fatal("a question was confirmed as a proposal")
+	}
+	if _, err := w.alice.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, state, verified_by, sub, received_ms, ref_id, ref_fp) VALUES(?, ?, 1, 'message', '{}', 1, '', ?, ?, 1, ?, ?)`,
+		strings.Repeat("e", 32), w.bob.Address, w.bob.Self().Fingerprint(), envelope.SubRevision, p.ID, w.bob.Self().Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.alice.ConfirmProposal(tctx(t), p.ID); err == nil || !strings.Contains(err.Error(), "edited or deleted") {
+		t.Fatalf("an edited proposal: %v", err)
+	}
+	var n int
+	w.alice.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE coalesce(kind, json_extract(envelope, '$.kind')) = ? AND reply_to = ?`, envelope.KindTask, p.ID).Scan(&n)
+	if n != 0 {
+		t.Fatal("a task was sent")
+	}
+}

@@ -104,6 +104,8 @@ func run(args []string) error {
 		return runSend(ctx, a, rest, false)
 	case "ask", "task":
 		return runSendKind(ctx, a, cmd, rest)
+	case "do":
+		return runDo(ctx, a, rest)
 	case "accept", "approve", "unapprove":
 		if len(rest) == 2 && ((cmd == "accept" && rest[0] == "--always") || (cmd != "accept" && rest[0] == "--tasks")) {
 			return runTaskGrant(a, cmd, rest[1])

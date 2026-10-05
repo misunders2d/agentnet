@@ -736,6 +736,10 @@ type ReviewItem struct {
 	// the host's answer to this device's last decision. A count-only
 	// notice has no Report and offers nothing but reading and dismissing.
 	Report *client.Report `json:"report,omitempty"`
+	// Proposal: a task that carries out an action this device's agent
+	// proposed (MEL-521): the question, the proposal and who confirmed
+	// it, for the person approving it. It grants nothing.
+	Proposal *client.ProposalView `json:"proposal,omitempty"`
 	// Reason ReasonSelfConsented (owner decision D3): a notice, not a
 	// received item, that this person's own agent AgentID ("" the default
 	// one) joined conversation Conv without their accept, invited from

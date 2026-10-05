@@ -734,6 +734,20 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	if err != nil {
 		return err
 	}
+	// A proposal confirmed a second time (another device of the asker, a
+	// retry) is not run twice (proposal.go); the requester learns it from
+	// the request's status.
+	duplicate := ""
+	if proposal, err := proposalFor(tx, in); err != nil {
+		return err
+	} else if proposal != "" {
+		if duplicate, err = proposalConfirmedBy(tx, proposal, in.From, in.ID); err != nil {
+			return err
+		}
+		if duplicate != "" {
+			state = stateNotRun
+		}
+	}
 	in = tombstoned(tx, in, verifiedBy) // a message deleted before it arrived here keeps no text
 	res, err := tx.Exec(insertInbox, inboxArgs(in, state, verifiedBy)...)
 	if err != nil {
@@ -744,6 +758,11 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	}
 	if in.ReceiverRoute != nil {
 		if _, err := tx.Exec(`UPDATE inbox SET receiver_route=? WHERE id=?`, receiverRouteJSON(in.ReceiverRoute), in.ID); err != nil {
+			return err
+		}
+	}
+	if duplicate != "" {
+		if _, err := tx.Exec(`UPDATE inbox SET detail = ? WHERE id = ?`, "that proposal was confirmed already, as task "+duplicate+": not run twice", in.ID); err != nil {
 			return err
 		}
 	}

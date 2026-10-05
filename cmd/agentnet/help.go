@@ -37,6 +37,7 @@ Messages and files:
   send       send an encrypted message, with --file attachments
   ask        send a question (approved peers may get an automatic answer)
   task       send a task (runs only if the recipient accepts it)
+  do         confirm an agent's proposed action: send it as a task ("Do it")
   reply      reply to a received message (takes over a question or task)
   inbox      list received messages
   conversation  show a whole conversation, sent and received
@@ -229,6 +230,21 @@ for an OK).
 
 Example:
   agentnet task bob/desk "update CHANGELOG.md for release 1.4"`,
+
+	"do": `Usage: agentnet do [--answer-wait D] ID
+
+"Do it" on a proposal. When a question's answer needs an action its agent
+may not take for a question (editing files, running something, sending
+something), the agent answers with the exact task it proposes instead
+("proposes an action (not run)"; ID is that answer). do sends exactly that
+text, as stored, as a task replying to it, to the same agent; there it runs
+under the usual task approval (it waits for their OK unless they let your
+tasks run; on your own devices it runs at once). Confirming again shows the
+task already sent; nothing runs twice. Refused for a proposal edited or
+deleted after it was made, one from a key whose change is pending, and
+from any device but the one that asked. Confirm with the person first
+unless they already asked for that work. Refused inside a run.
+--answer-wait D waits for the result and prints it, as for ask (default 0).`,
 
 	"reply": `Usage: agentnet reply [--file PATH]... [--wait 5s] ID TEXT
 
