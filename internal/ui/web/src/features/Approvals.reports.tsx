@@ -32,12 +32,23 @@ const stateWords: Record<string, string> = {
 const label = (d: Decision, again: boolean) =>
   ({ accept: again ? "Run again there" : "Allow there", decline: "Decline there", reply: "Answer there", resolve: "Close there", cancel: "Stop there" })[d];
 
-/** Who decides a host's requests, as its report names them: a sentence for
- * the card, never a command or "decide on that device". */
+/** Who decides a host's requests, as its report says: a sentence for the
+ * card, never a command or "decide on that device", and nothing the report
+ * does not say. A report naming the requests went to a device that decides
+ * them (a steward's or an operator's); a count report names who does
+ * (nobody yet when it names no one); a count-text notice says neither. */
 export function decidersWords(report: T.Report | undefined, host: string, o: T.Overview | null): string {
-  const who = report?.deciders || [];
-  const me = o?.person?.person;
   const where = deviceWords(host, o);
+  if (!report) return capital(where) + " didn’t say who decides these.";
+  const items = report.items || [];
+  if (items.length > 0) {
+    return items.some((x) => x.actionable)
+      ? "You decide these from this device: they’re in OKs, under Reports from other computers."
+      : capital(where) + " listed these but didn’t let this device decide them.";
+  }
+  if (!report.count) return "Nothing waits there any more.";
+  const who = report.deciders || [];
+  const me = o?.person?.person;
   if (me && who.some((d) => d.person === me)) return "You decide these; this device gets them by name in " + where + "’s next report.";
   if (who.length === 0) return "Nobody can decide these from their devices yet. Whoever installed " + where + " can name a steward on that machine.";
   const names = who.map((d) => (d.person ? d.label || "Someone" : capital(deviceWords(d.address || "", o))));
@@ -127,7 +138,7 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
         <div className="mt-2 flex flex-wrap gap-2">
           {acts.map((d, i) => <Button key={d} size="sm" variant={i === 0 ? "act" : "outline"} onClick={() => setPick(d)}>{label(d, again)}</Button>)}
         </div>
-      ) : !decided && <p className="pt-1 text-[13px] text-muted">{decidersWords(report.report, host, o)}</p>}
+      ) : !decided && <p className="pt-1 text-[13px] text-muted">{x.actionable ? "Nothing to decide on it right now." : "This device can’t decide it."}</p>}
       <OperatorSheet open={!!pick} decision={pick} x={x} where={deviceWords(host, o)} again={again}
         onOpenChange={(v) => { if (!v) setPick(null); }}
         onSend={(text) => store.run((api) => api.decide({ host, id: x.id, key: x.key, action: pick!, expect: x.state, attempt: x.attempt, text, report: report.id }), "Sent to " + deviceWords(host, o) + ".")} />

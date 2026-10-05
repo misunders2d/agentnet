@@ -49,4 +49,8 @@ const status = { id: '9'.repeat(32), control: true, sub: 'status', from: 'bot/a'
 const got = e.reportItems([named, status], outbox)[0].report.items[0];
 assert.equal(got.conv, true);
 assert.equal(got.result?.decision, decision);
+// A task carrying out a proposal shows where it comes from (client.ReportItem.proposal).
+const proposal = { question_id: 'q'.repeat(32), question: 'is the changelog up to date?', asker: 'me/browser', proposal_id: 'p'.repeat(32), proposal: 'Update CHANGELOG.md for 1.4\nwith the fixes', confirmed_by: 'me/browser' };
+const carried = row({ from: 'bot/a', ts: 12, body: JSON.stringify({ v: 2, at: 12, host: 'bot/a', items: [{ id: '6'.repeat(32), from: 'me/browser', key, kind: 'task', state: 'awaiting', blocker: 'awaiting_acceptance', since: 1, attempt: 0, actionable: true, proposal }] }) }, 2);
+assert.deepEqual(e.reportItems([carried])[0].report.items[0].proposal, { ...proposal, proposal: 'Update CHANGELOG.md for 1.4' });
 console.log(JSON.stringify({ verdicts }));

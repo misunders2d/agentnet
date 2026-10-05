@@ -104,7 +104,7 @@ const firstLine = (s, n) => {
 const announce = (t) => { $("live").textContent = t; };
 const kindTag = { question: "Question", task: "Task" };
 const statusWord = { declined: "Declined", failed: "Failed", timeout: "Timed out", cancelled: "Cancelled", interrupted: "Interrupted",
-  review_notice: "Report" };
+  review_notice: "Report", proposal: "Proposed task (not run)" };
 
 // Addresses are person/agent: the person leads, the agent is secondary.
 function who(addr) {
@@ -942,14 +942,21 @@ function reportLine(c) {
 
 const firstSentence = (s) => (s || "").split(/\.\s/)[0].replace(/\.$/, "");
 
-// decidersSentence says who decides a host's requests, as its report names
-// them (client.Report Deciders): never "decide on that machine" (MEL-532).
+// decidersSentence says who decides a host's requests, as its report says
+// (client.Report): never "decide on that machine" (MEL-532), and nothing the
+// report does not say. A report naming the requests went to a device that
+// decides them; a count report names who does (nobody yet when it names no
+// one); a count-text notice (no report) says neither.
 function decidersSentence(report, host) {
-  const list = (report && report.deciders) || [];
+  if (!report) return host + " did not say who decides these.";
+  const items = report.items || [];
+  if (items.length) return items.some((x) => x.actionable) ? "You decide these from this device." : host + " listed these but did not let this device decide them.";
+  if (!report.count) return "Nothing waits there any more.";
+  const list = report.deciders || [];
   const me = state.overview && state.overview.person && state.overview.person.person;
   if (me && list.some((d) => d.person === me)) return "You decide these; this device gets them by name in " + host + "'s next report.";
   if (!list.length) return "Nobody can decide these from their devices yet. Whoever installed " + host + " can name a steward on that machine.";
-  const names = list.map((d) => (d.person ? d.label || "Someone" : who(d.address || "")));
+  const names = list.map((d) => (d.person ? d.label || "Someone" : d.address || "a device"));
   return (names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " and " + names[names.length - 1]) + (names.length === 1 ? " decides" : " decide") + " these from their devices.";
 }
 

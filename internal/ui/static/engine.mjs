@@ -4769,6 +4769,11 @@ export class Engine {
               attempt: Number.isSafeInteger(it.attempt) && it.attempt >= 0 ? it.attempt : 0, actionable: it.actionable === true && wire.validFingerprint(key) };
             if (it.conv === true) o.conv = true; // a DM or group request: decided, never answered by hand from here
             if (o.actionable && typeof it.excerpt === "string" && it.excerpt) o.excerpt = firstLine(it.excerpt);
+            // A task carrying out its agent's proposal (client.ProposalView, first lines): for the operator approving it.
+            const p = it.proposal;
+            if (o.actionable && p && typeof p === "object" && typeof p.proposal_id === "string" && p.proposal_id) {
+              o.proposal = Object.fromEntries(["question_id", "question", "asker", "proposal_id", "proposal", "confirmed_by"].map((k) => [k, firstLine(typeof p[k] === "string" ? p[k] : "")]));
+            }
             const res = this.decisionResult(inbox, outbox, m, o);
             if (res) o.result = res;
             return o;
