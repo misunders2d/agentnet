@@ -45,6 +45,11 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
+	deliveryLocks  sync.Map // envelope id -> cancellation-aware lock, shared by immediate sends and retry passes
+	flushOnce      sync.Once
+	flushLock      chan struct{} // one ordered outbox pass at a time
+	routeHints     sync.Map      // optional verified first-attempt direct route; never queue storage
+	posting        backgroundPosts
 	humanMu        sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
 	statusLocks    sync.Map      // request id → *sync.Mutex: one status of a request at a time (headless.go)
 	statusWake     chan struct{} // wakes this process's status sender (statusLoop)
@@ -244,6 +249,7 @@ func Open(home string) (*Agent, error) {
 
 // Close releases local storage and the agent's unused Hub connections.
 func (a *Agent) Close() error {
+	a.stopBackgroundPosts()
 	a.typingDisconnected()
 	a.hub.release()
 	return a.store.db.Close()
@@ -365,6 +371,10 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...str
 // are encrypted into a private spool first; if the Hub is unreachable the
 // message stays queued and the daemon resumes it.
 func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error) {
+	id, err := sendID(ctx)
+	if err != nil {
+		return SendResult{}, err
+	}
 	binding, err := a.prepareReplyReceiver(m.ReplyReceiver)
 	if err != nil {
 		return SendResult{}, err
@@ -421,7 +431,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		m.Kind = envelope.KindMessage
 	}
 	in := envelope.Inner{
-		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
+		ID: id, From: a.Address, To: to, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, TopicDone: m.TopicDone, Session: session, Fallback: m.Fallback, Status: m.Status,
 		Target: m.Target, AgentID: m.AgentID,
 	}
@@ -527,10 +537,19 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		return SendResult{}, err
 	}
 	receiverStored = true
-	defer notifyDaemon(a.home) // a messenger page open in the daemon shows the message and its state
 	if m.releaseSpoolLock != nil {
 		m.releaseSpoolLock()
 	}
+	if queuedSend(ctx) {
+		if route != nil {
+			a.routeHints.Store(env.ID, route)
+		}
+		a.NoteChange()
+		a.postOutboxBackground()
+		state, _, _, _ := a.store.outboxState(env.ID)
+		return SendResult{ID: env.ID, State: state}, nil
+	}
+	defer notifyDaemon(a.home)
 	if binding != nil && binding.remote != nil && binding.remote.Role == "origin" {
 		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {
 			return SendResult{ID: env.ID, State: stateReceiverWaiting, Detail: err.Error()}, err
@@ -566,10 +585,17 @@ func blobsOf(atts []envelope.Attachment) []envelope.Blob {
 // deliver tries the direct route (if any) and then the Hub. The spool is
 // released only once one of them has confirmed custody of the message.
 func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *protocol.SessionAd) (SendResult, error) {
-	if state, _, found, e := a.store.outboxState(env.ID); e != nil {
+	lock, _ := a.deliveryLocks.LoadOrStore(env.ID, make(chan struct{}, 1))
+	select {
+	case lock.(chan struct{}) <- struct{}{}:
+	case <-ctx.Done():
+		return SendResult{}, ctx.Err()
+	}
+	defer func() { <-lock.(chan struct{}) }()
+	if state, path, found, e := a.store.outboxState(env.ID); e != nil {
 		return SendResult{}, e
-	} else if found && state == stateReceiverWaiting {
-		return SendResult{ID: env.ID, State: state}, nil
+	} else if found && (state == stateReceiverWaiting || state == protocol.StateCustody || state == protocol.StateDelivered || state == protocol.StateQuarantined || state == protocol.StateExpired) {
+		return SendResult{ID: env.ID, State: state, Path: path}, nil
 	}
 	if ok, err := a.receiverOriginalMayDeliver(env); err != nil || !ok {
 		state, _, _, _ := a.store.outboxState(env.ID)
@@ -746,6 +772,13 @@ func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResul
 
 // FlushOutbox retries every queued message once.
 func (a *Agent) FlushOutbox(ctx context.Context) error {
+	a.flushOnce.Do(func() { a.flushLock = make(chan struct{}, 1) })
+	select {
+	case a.flushLock <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-a.flushLock }()
 	if _, err := a.holdEndedOutputs(""); err != nil {
 		return err
 	}
@@ -753,9 +786,38 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	blocked := map[string]bool{}
 	for _, env := range envs {
-		if _, err := a.deliver(ctx, env, nil); err != nil && !retryable(err) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var conv string
+		if err := a.store.db.QueryRow(`SELECT coalesce(conv, '') FROM outbox WHERE id=?`, env.ID).Scan(&conv); err != nil {
+			return err
+		}
+		key := conv + "\x00" + env.To
+		// An older waiting copy is also a FIFO barrier, until its normal
+		// capability/receiver release makes it sendable.
+		var older int
+		if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND coalesce(conv,'')=? AND rowid<(SELECT rowid FROM outbox WHERE id=?) AND state IN (?,?,?)`, env.To, conv, env.ID, stateQueued, stateConvWaiting, stateReceiverWaiting).Scan(&older); err != nil {
+			return err
+		}
+		if older > 0 {
+			blocked[key] = true
+		}
+		if blocked[key] {
+			continue
+		}
+		var route *protocol.SessionAd
+		if hint, ok := a.routeHints.LoadAndDelete(env.ID); ok {
+			route = hint.(*protocol.SessionAd)
+		}
+		res, err := a.deliver(ctx, env, route)
+		if err != nil && !retryable(err) {
 			a.Logf("message %s to %s rejected: %v", env.ID, env.To, err)
+		}
+		if res.State == stateQueued || retryable(err) {
+			blocked[key] = true
 		}
 	}
 	return nil

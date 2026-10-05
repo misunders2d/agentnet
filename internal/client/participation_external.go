@@ -317,8 +317,9 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if out.Origin == "" {
 		out.Origin = envelope.OriginUI
 	}
+	lid, _ := sendID(ctx)
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: out.Kind, Body: out.Body,
-		ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID}
+		ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: info.Conv, LID: lid, Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID}
 	if err := externalTurn(in, info, m, a.Address, a.Self().Fingerprint()); err != nil {
 		return ConvSent{}, err
 	}
@@ -606,11 +607,14 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if err := a.prepareRemoteCopies(ctx, binding, copies, out.Files); err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.store.addConvOutbox(copies, in, guard, jobKey, binding); err != nil {
+	if err := a.store.addConvOutbox(copies, in, a.queuedClaim(ctx, info.Conv, guard), jobKey, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, copies[0].env.ID, in.LID), nil
+	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
 			return ConvSent{}, e

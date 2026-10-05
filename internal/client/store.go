@@ -567,7 +567,7 @@ func (s *store) coolRoute(endpoint string, until time.Time) error {
 func (s *store) queued() ([]envelope.Envelope, error) {
 	// A conversation message to a frozen (conflicting) person is not sent.
 	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
-		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?)) ORDER BY created_at`, stateQueued, personConflict)
+		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?)) ORDER BY created_at, rowid`, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}

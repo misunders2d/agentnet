@@ -380,6 +380,7 @@ export class Engine {
     this.running = false;
     this.version = "";
     this.featureList = null;
+    this.sendAbort = new AbortController();
     this.typing = { connected: false, supported: false, generation: 0, seen: new Map(), replay: new Map(), sent: new Map(), timer: null, visible: "[]", abort: new AbortController() };
     this.notKept = new Map(); // received file blob id -> why its ciphertext is not kept here (gone, full, large)
     this.fetching = new Map(); // "ct/" + blob id -> the one fetch of it under way
@@ -427,7 +428,7 @@ export class Engine {
     if (signed) Object.assign(headers, await wire.signRequest(this.keys, this.address, method, path, text));
     let r;
     try {
-      r = await this.fetch(this.base + path, { method, headers, body: text || undefined, cache: "no-store", signal });
+      r = await this.fetch(this.base + path, { method, headers, body: text || undefined, cache: "no-store", signal: signal || this.sendAbort.signal });
     } catch (e) {
       throw new HubError(0, "", "cannot reach your server");
     }
@@ -448,7 +449,7 @@ export class Engine {
     const headers = { "Content-Type": "application/octet-stream", ...(await wire.signRequest(this.keys, this.address, method, path, bytes)) };
     let r;
     try {
-      r = await this.fetch(this.base + path, { method, headers, body: bytes, cache: "no-store" });
+      r = await this.fetch(this.base + path, { method, headers, body: bytes, cache: "no-store", signal: this.sendAbort.signal });
     } catch (e) {
       throw new HubError(0, "", "cannot reach your server");
     }
@@ -1436,32 +1437,32 @@ export class Engine {
 
   // sendDM sends a message to the person. Never a question or task for
   // them, never v1.
-  async sendDM({ conv, body, quote="", reply_to: replyTo, files = [], reply_receiver = null, pid = "" }) {
+  async sendDM({ id: sendID = "", conv, body, quote="", reply_to: replyTo, files = [], reply_receiver = null, pid = "" }) {
     body = String(body || "").trim();
     if (wire.blank(body) && !files.length) throw new Error("Write a message or add a file first.");
     checkFiles(files);
     const c = (await this.store.get("convs", conv)) || await this.groupRecord(conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
-    if (c.kind === "group") { if (pid) throw new Error("Human guests require an unchanged two-person DM."); return this.sendGroupTurn(c, {body, quote,reply_to:replyTo || "",files,receiver:reply_receiver}); }
+    if (c.kind === "group") { if (pid) throw new Error("Human guests require an unchanged two-person DM."); return this.sendGroupTurn(c, {id: sendID, queued: true, body, quote,reply_to:replyTo || "",files,receiver:reply_receiver}); }
     if (replyTo) {
       const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
       if (!m || m.conv !== conv) throw new Error("A reply stays within its conversation.");
       if (m.receiver_route) replyTo = m.receiver_route.request_ref;
     }
     const human = await this.humanPlan(c, pid);
-    if (human) return this.sendHumanTurn(c, { kind: "message", body, quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver, pid }, human);
-    return this.sendConv(c, { kind: "message", body, quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver });
+    if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind: "message", body, quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver, pid }, human);
+    return this.sendConv(c, { id: sendID, queued: true, kind: "message", body, quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver });
   }
 
   // sendConv stores the sealed envelope before it is sent, and sends that
   // exact envelope on every retry: a message, a participation record (sub
   // "event") or a request to another device's agent (pid and target).
-  async sendConv(c, { kind, body, quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null, files = [], receiver = null }) {
+  async sendConv(c, { id: sendID = "", queued = false, kind, body, quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null, files = [], receiver = null }) {
     if (pid) {
       const ev = sub === "event" ? await this.eventRecord(body) : null;
       const events = [...await this.convEvents(c.id), ...(ev ? [ev] : [])];
       const members = await this.dmMembers(c, events), info = this.resolveAgent(pid, events, members);
-      if (info.external || members.group) return this.sendExternal(c, { kind, body, quote,reply_to: replyTo, origin, sub, pid, target, files, receiver }, info);
+      if (info.external || members.group) return this.sendExternal(c, { id: sendID, queued, kind, body, quote,reply_to: replyTo, origin, sub, pid, target, files, receiver }, info);
     }
     const required_cap = wire.agentRequirement({ kind, body, sub, target });
     const { why: stop } = await this.gate(c);
@@ -1478,7 +1479,7 @@ export class Engine {
     // request's own target), sealed and its files encrypted to that device.
     const fan = [{ person: me.person, roster: me.hash }, { person: peer.person, roster: peer.hash }];
     const devices = [...peer.devices.map((d) => ({ ...d, own: false })), ...me.devices.filter((d) => d.address !== this.address).map((d) => ({ ...d, own: true }))];
-    const lid = wire.newID(), firstID = wire.newID(), at = this.now(), checks = [];
+    const lid = this.localSendID(sendID), firstID = wire.newID(), at = this.now(), checks = [];
     const attention = origin === "ui" && sub === "" && ["message", "question", "task"].includes(kind);
     const plain = [];
     for (const f of files) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
@@ -1520,16 +1521,30 @@ export class Engine {
     if (!recs.length) throw new Error("No device of this conversation can be sent a copy now.");
     const final = (await this.gate(c)).why; // a profile just read may have frozen the person
     if (final) throw new Error(final);
-    await this.commitReceiverCopies(recs, prepared, checks);
+    await this.commitReceiverCopies(recs, prepared, checks, queued);
     this.changed();
     await this.keepSent(plain);
-    if (prepared) await this.post(prepared.delegation);
+    if (queued) this.queueOutbox();
+    else if (prepared) await this.post(prepared.delegation);
     else for (const r of recs) if (r.state === "queued") await this.post(r);
     const least = copyOrder(recs);
     return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map((r) => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
   }
 
   async post(rec) {
+    if (this.closing) return;
+    this.posting ??= new Map();
+    if (this.posting.has(rec.id)) return this.posting.get(rec.id);
+    const run = (async () => {
+      const current = await this.store.get("outbox", rec.id);
+      if (!current || !["queued", "waiting"].includes(current.state)) return;
+      return this.postStored({ ...current, state: rec.state });
+    })();
+    this.posting.set(rec.id, run);
+    try { return await run; } finally { this.posting.delete(rec.id); }
+  }
+
+  async postStored(rec) {
     if (rec.state === "receiver_waiting") return;
     try {
       await this.receiverDeliveryGate(rec);
@@ -1669,9 +1684,30 @@ export class Engine {
   // the recipient can read them. Each passes the gate first, again after a
   // profile read that may freeze the person; what does not pass is kept
   // and never sent.
+  localSendID(id) {
+    if (id && !wire.validID(id)) throw Error("Invalid local send id.");
+    return id || wire.newID();
+  }
+
+  queueOutbox() { if (!this.closing) this.flushOutbox().catch(() => {}); }
+
   async flushOutbox() {
-    for (const rec of await this.store.all("outbox")) {
-      if (!this.connected) return;
+    if (this.outboxPass) { this.outboxAgain = true; return this.outboxPass; }
+    const run = (async () => {
+      do { this.outboxAgain = false; await this.flushOutboxOnce(); } while (this.outboxAgain && this.connected);
+    })();
+    this.outboxPass = run;
+    try { return await run; } finally { this.outboxPass = null; if (this.outboxAgain && this.connected && !this.closing) this.queueOutbox(); }
+  }
+
+  async flushOutboxOnce() {
+    const blocked = new Set();
+    const rows = (await this.store.all("outbox")).sort((a,b) => (a.send_order ?? a.at) - (b.send_order ?? b.at));
+    for (const rec of rows) {
+      if (!this.connected || this.closing) return;
+      const key = (rec.conv || "") + "\0" + rec.to;
+      if (blocked.has(key)) continue;
+      if (rec.state === "receiver_waiting") { blocked.add(key); continue; }
       if (rec.state !== "queued" && rec.state !== "waiting") continue;
       if (rec.v === 1) {
         const pin = await this.store.get("pins", rec.to);
@@ -1681,18 +1717,19 @@ export class Engine {
             await this.receiverOutboxProgress({ ...rec, detail: why });
             this.changed();
           }
-          continue;
+          blocked.add(key); continue;
         }
         await this.post({ ...rec, state: "queued", detail: "" });
+        if ((await this.store.get("outbox", rec.id))?.state === "queued") blocked.add(key);
         continue;
       }
       const c = (await this.store.get("convs", rec.conv)) || await this.groupRecord(rec.conv);
       let g;
-      try { g = await this.gate(c, rec); } catch (e) { continue; }
+      try { g = await this.gate(c, rec); } catch (e) { blocked.add(key); continue; }
       if (!g.why && rec.state === "waiting") {
         let ok = false;
-        try { [ok] = rec.required_cap === wire.CapConvClear ? await this.ctlSupport(rec.to, g.pin, wire.CapConvClear) : await this.supports(rec.to, g.pin); } catch (e) { continue; }
-        if (!ok) continue;
+        try { [ok] = rec.required_cap === wire.CapConvClear ? await this.ctlSupport(rec.to, g.pin, wire.CapConvClear) : await this.supports(rec.to, g.pin); } catch (e) { blocked.add(key); continue; }
+        if (!ok) { blocked.add(key); continue; }
         g = await this.gate(c, rec);
       }
       if (g.why) {
@@ -1700,9 +1737,10 @@ export class Engine {
           await this.receiverOutboxProgress({ ...rec, detail: g.why });
           this.changed();
         }
-        continue;
+        blocked.add(key); continue;
       }
       await this.post({ ...rec, state: "queued", detail: "" });
+      if (["queued","waiting"].includes((await this.store.get("outbox", rec.id))?.state)) blocked.add(key);
     }
   }
 
@@ -1840,7 +1878,7 @@ export class Engine {
     return { route: wire.parseReceiverRoute({ ...route, op: "request" }), delegation, checks };
   }
 
-  async commitReceiverCopies(copies, prepared, checks = []) {
+  async commitReceiverCopies(copies, prepared, checks = [], queued = false) {
     if (prepared) {
       await this.receiverHost({ address: prepared.route.host, fingerprint: prepared.route.host_key }, checks);
       for (const rec of copies) {
@@ -1852,7 +1890,21 @@ export class Engine {
         rec.required_receiver_cap = true;
       }
     }
-    await this.store.write([...copies, ...(prepared ? [prepared.delegation] : [])].map(v => ({ s: "outbox", k: v.id, v })), checks);
+    const rows = [...copies, ...(prepared ? [prepared.delegation] : [])];
+    // All local batch commits share this short serialization point. No network waits here.
+    const previous = this.sendCommit || Promise.resolve();
+    const run = previous.catch(() => {}).then(async () => {
+      const kept = await this.store.all("outbox");
+      let order = kept.reduce((last,r) => Math.max(last,r.send_order ?? r.at ?? 0), this.now());
+      if (queued && rows.some(r => r.conv && r.lid && kept.some(old => old.conv === r.conv && old.lid === r.lid))) throw Error("This send is already kept here.");
+      for (const r of rows) {
+        if (await this.store.get("outbox", r.id)) throw Error("Local send id already exists.");
+        r.send_order = ++order;
+      }
+      await this.store.write(rows.map(v => ({ s: "outbox", k: v.id, v })), checks);
+    });
+    this.sendCommit = run;
+    await run;
   }
 
   async receiverOriginAuthority(rec, checks) {
@@ -1912,7 +1964,7 @@ export class Engine {
 
   // sendDirect sends a message, question or task to the device at to (a
   // reply to reply_to, a device message with it), with files.
-  async sendDirect({ to, kind, body, quote="",reply_to: replyTo = "", files = [], agent_id = "", reply_receiver = null }) {
+  async sendDirect({ id: sendID = "", to, kind, body, quote="",reply_to: replyTo = "", files = [], agent_id = "", reply_receiver = null }) {
     body = String(body || "").trim();
     kind = kind || "message";
     to = String(to || "").trim();
@@ -1927,13 +1979,13 @@ export class Engine {
       const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
       if (!m || m.v !== 1 || (m.from || m.to) !== to) throw new Error("A reply stays in its conversation with that device.");
     }
-    return this.sendV1({ to, kind, body, quote,replyTo, files, status: "", target, receiver: reply_receiver });
+    return this.sendV1({ id: sendID, queued: true, to, kind, body, quote,replyTo, files, status: "", target, receiver: reply_receiver });
   }
 
   // sendV1 seals one version 1 message to the key pinned for to (pinned
   // the first time), keeps it with its files before sending, and sends
   // that exact envelope, retried until the server takes it.
-  async sendV1({ to, kind, body, quote="",replyTo, files, status, target = null, receiver = null }) {
+  async sendV1({ id: sendID = "", queued = false, to, kind, body, quote="",replyTo, files, status, target = null, receiver = null }) {
     const pin = await this.sendKey(to);
     const required_cap = wire.agentRequirement({ target });
     if (target && (target.address !== to || target.fingerprint !== pin.fingerprint)) throw new Error("Selected agent's host key changed: nothing is sent.");
@@ -1947,7 +1999,7 @@ export class Engine {
       plain.push({ bytes, name: wire.safeName(f.name) });
       sealed.push({ ...(await wire.encryptFile(bytes, wire.safeName(f.name), recipient)), uploaded: false });
     }
-    const id = wire.newID(), at = this.now();
+    const id = this.localSendID(sendID), at = this.now();
     const attachments = sealed.map((f) => f.attachment), checks = [];
     const prepared = await this.prepareReceiverRequest(receiver, { id, to, to_key: pin.fingerprint, ts: Math.floor(at / 1000), kind, body, reply_to: replyTo, target }, plain, checks);
     if (prepared) await this.receiverSupport(to, pin);
@@ -1965,7 +2017,8 @@ export class Engine {
     await this.commitReceiverCopies(copies, prepared, checks);
     this.changed();
     await this.keepSent(plain); // as a DM's files: reopened here, offered to your other devices
-    if (prepared) await this.post(prepared.delegation);
+    if (queued) this.queueOutbox();
+    else if (prepared) await this.post(prepared.delegation);
     else for (const copy of copies) await this.post(copy);
     const now = await this.store.get("outbox", id);
     return { id, state: now.state, detail: now.detail };
@@ -2001,12 +2054,12 @@ export class Engine {
 
   // replyV1 answers received device message id by hand: an answer to a
   // question, a result (done) for a task, else a message.
-  async replyV1(id, body) {
+  async replyV1(id, body, sendID = "") {
     const m = await this.store.get("inbox", id);
     if (!m || m.v !== 1) throw new Error("No message with that id.");
     body = String(body || "").trim();
     if (!body) throw new Error("Write your answer first.");
-    const r = await this.sendV1({ to: m.from, kind: replyKind(m.kind), body, replyTo: id, files: [], status: m.kind === "task" ? "done" : "" });
+    const r = await this.sendV1({ id: sendID, queued: true, to: m.from, kind: replyKind(m.kind), body, replyTo: id, files: [], status: m.kind === "task" ? "done" : "" });
     if (m.state === "held") await put(this.store, "inbox", id, { ...(await this.store.get("inbox", id)), state: "answered" });
     this.changed();
     return { note: r.state === "queued" ? "Your answer waits to be sent; it is retried automatically." : "Answered." };
@@ -2561,12 +2614,12 @@ export class Engine {
     return rows[0].lid || rows[0].id;
   }
 
-  async sendGroupTurn(c,{body,quote="",reply_to="",files=[],receiver=null}) {
+  async sendGroupTurn(c,{id:sendID="",queued=false,body,quote="",reply_to="",files=[],receiver=null}) {
     checkFiles(files);
     const checks=[], {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=wire.groupMember(packet.state,me.person), reply=await this.groupReply(c.id,reply_to);
     quote=await this.groupReply(c.id,quote);
     const plain=[];for(const file of files)plain.push({name:wire.safeName(file.name),bytes:file.bytes instanceof Uint8Array?file.bytes:new Uint8Array(await file.arrayBuffer())});
-    const copies=[], lid=wire.newID(), firstID=wire.newID(), at=this.now(), stamp=await wire.groupAdmissionHash(own.admission);
+    const copies=[], lid=this.localSendID(sendID), firstID=wire.newID(), at=this.now(), stamp=await wire.groupAdmissionHash(own.admission);
     const replyKeys=[];
     if(receiver?.host) for(const member of members) if(member.person!==me.person) for(const d of member.devices || []) replyKeys.push({key:d.fingerprint,admission:await wire.groupAdmissionHash(wire.groupMember(packet.state,member.person).admission)});
     replyKeys.sort((a,b)=>a.key.localeCompare(b.key));
@@ -2583,8 +2636,8 @@ export class Engine {
       copies.push({id,lid,conv:c.id,kind:"message",body,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:"queued",required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(prepared?{receiver_route:prepared.route}:{})});
     }
     if(!copies.length)throw Error("Group has no other current device to receive a copy.");
-    await this.commitReceiverCopies(copies,prepared,checks);this.changed();await this.keepSent(plain);
-    if(prepared)await this.post(prepared.delegation);else for(const rec of copies)await this.post(rec);
+    await this.commitReceiverCopies(copies,prepared,checks,queued);this.changed();await this.keepSent(plain);
+    if(queued)this.queueOutbox();else if(prepared)await this.post(prepared.delegation);else for(const rec of copies)await this.post(rec);
     const least=copyOrder(copies);return {id:copies[0].id,lid,state:least.state,detail:least.detail};
   }
 
@@ -3977,6 +4030,19 @@ export class Engine {
     if (this.running || this.revoked || !this.joined) return;
     this.running = true;
     this.loop();
+  }
+
+  // Managed workspace shutdown lets in-flight posts settle before its IDB
+  // closes. A tab/process crash instead recovers the unchanged encrypted outbox.
+  async close() {
+    this.closing = true;
+    this.stop();
+    const settled = Promise.allSettled([this.outboxPass, this.sendCommit, ...this.posting?.values() || [], ...this.sendRequests || []].filter(Boolean));
+    let timer;
+    try {
+      await Promise.race([settled, new Promise(resolve => { timer = setTimeout(() => { this.sendAbort.abort(); resolve(); }, 5000); })]);
+      await settled;
+    } finally { clearTimeout(timer); }
   }
 
   stop() {
@@ -5707,7 +5773,7 @@ export class Engine {
     const hosts = [...evidence.scopes.values()].map(p => p.host.devices.find(d => d.address === p.host.address && d.fingerprint === p.host.fingerprint));
     if (request && x.external) hosts.push({ address: x.host.address, fingerprint: x.host.fingerprint }); // the outside assistant host reads the addressed request only
     const devices = [...new Map([...evidence.members.values()].flatMap(p => p.devices).concat(hosts).filter(d => d.address !== this.address).map(d => [d.address, d])).values()];
-    const lid = wire.newID(), firstID = wire.newID(), at = this.now(), plain = [], recs = [];
+    const lid = this.localSendID(n.id), firstID = wire.newID(), at = this.now(), plain = [], recs = [];
     for (const f of n.files || []) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
     checkFiles(plain.map(f => ({ name: f.name, size: f.bytes.length })));
     const prepared = request ? null : await this.prepareReceiverRequest(n.receiver, { id: firstID, lid, conv: c.id, root: c.root, ts: Math.floor(at / 1000), kind: "message", body: n.body, quote:n.quote||"",reply_to: n.reply_to || "", origin: "ui", pid: h.author_pid || "", human: h }, plain, checks);
@@ -5728,13 +5794,13 @@ export class Engine {
     }
     if (!recs.length) throw new Error("No authorized human audience device.");
     for (const r of recs) { const gate = await this.humanGate(c, r, checks); if (gate.why) throw new Error(gate.why); }
-    try { await this.commitReceiverCopies(recs, prepared, checks); }
+    try { await this.commitReceiverCopies(recs, prepared, checks, n.queued); }
     catch (e) {
       if (e instanceof StoreConflict && attempt < 3) return this.sendHumanTurn(c, original, h, x, attempt + 1);
       throw e;
     }
     await this.keepSent(plain); this.changed();
-    if (prepared) await this.post(prepared.delegation); else for (const r of recs) await this.post(r);
+    if (n.queued) this.queueOutbox(); else if (prepared) await this.post(prepared.delegation); else for (const r of recs) await this.post(r);
     const least = copyOrder(recs);
     return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map(r => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
   }
@@ -6181,7 +6247,7 @@ export class Engine {
     const host = info.host.devices.find((d) => d.address === info.host.address && d.fingerprint === info.host.fingerprint);
     const extra = ending ? [...new Set(events.map(x => x.e.pid))].map(pid => this.resolveAgent(pid, events, members)).filter(p => p.role === "human" && p.state === "active" && !p.held).map(p => p.host.devices.find(d => d.address === p.host.address && d.fingerprint === p.host.fingerprint)).filter(Boolean) : [];
     const devices = [...new Map([host, ...extra, ...(excerptHostOnly ? [] : [...members.values()].flatMap((p) => p.devices))].filter((d) => d && d.address !== this.address).map(d=>[d.address,d])).values()];
-    const firstID = wire.newID(), lid = n.lid || (["question", "task"].includes(n.kind) && !n.sub ? firstID : wire.newID()), at = this.now();
+    const firstID = wire.newID(), lid = n.id ? this.localSendID(n.id) : n.lid || (["question", "task"].includes(n.kind) && !n.sub ? firstID : wire.newID()), at = this.now();
     const plain = [];
     for (const f of n.files || []) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
     checkFiles(plain.map((f) => ({ name: f.name, size: f.bytes.length })));
@@ -6222,7 +6288,7 @@ export class Engine {
       }
     }
     if(prepared && carriers.length)throw Error("Receiver setup does not belong on participation proof carriers.");
-    try { await this.commitReceiverCopies([...recs,...carriers],prepared,checks); }
+    try { await this.commitReceiverCopies([...recs,...carriers],prepared,checks,n.queued); }
     catch (e) {
       // Receipt push can change an earlier outbox row in this captured scope.
       // Nothing is committed yet: recheck the same signed turn, never recreate
@@ -6231,8 +6297,8 @@ export class Engine {
       throw e;
     }
     await this.keepSent(plain); this.changed();
-    if(prepared)await this.post(prepared.delegation);else for (const r of recs) if (r.state === "queued") await this.post(r);
-    for (const r of carriers) await this.post(r);
+    if(n.queued)this.queueOutbox();else if(prepared)await this.post(prepared.delegation);else for (const r of recs) if (r.state === "queued") await this.post(r);
+    if (!n.queued) for (const r of carriers) await this.post(r);
     const least = copyOrder(recs);
     return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map((r) => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
   }
@@ -6593,7 +6659,7 @@ export class Engine {
 
   // askAgent sends a question or task to an active participation's agent,
   // on the other person's computer: its one target.
-  async askAgent({ pid, kind = "question", body, files = [], reply_receiver = null }) {
+  async askAgent({ id: sendID = "", pid, kind = "question", body, files = [], reply_receiver = null }) {
     body = String(body || "").trim();
     if (wire.blank(body) && !files.length) throw new Error("Write what to ask or add a file first.");
     checkFiles(files);
@@ -6607,10 +6673,10 @@ export class Engine {
       const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(p => p.role === "human" && p.state === "active" && !p.held && p.host?.address === this.address && p.host.fingerprint === this.fp);
       if (!members.has(this.me?.person) && !guest) throw new Error("Only a current conversation member or accepted guest asks its agent.");
       const human = await this.humanPlan(c, guest?.pid || "");
-      if (human) return this.sendHumanTurn(c, { kind, body, files, pid, origin: "ui", receiver: reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}) } }, human, info);
+      if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind, body, files, pid, origin: "ui", receiver: reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}) } }, human, info);
     }
     if (!members.has(this.me?.person)) throw new Error("Only a current conversation member asks its agent.");
-    return this.sendConv(c, { kind, body, files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
+    return this.sendConv(c, { id: sendID, queued: true, kind, body, files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
   }
 
   // ---- notifications (docs/revival/NOTIFY.md): off until the person turns
@@ -6959,6 +7025,15 @@ export class Engine {
 
   // api answers the page's requests as the daemon's page API does.
   async api(path, body) {
+    const sending = ["/api/send", "/api/dm/send", "/api/dm/agent/ask"].includes(path) || path === "/api/act" && body?.do === "reply";
+    if (sending && this.closing) throw Error("This workspace is closing. Your draft is kept.");
+    const request = this.apiResult(path, body);
+    if (sending) { this.sendRequests ??= new Set(); this.sendRequests.add(request); }
+    try { return await request; }
+    finally { if (sending) this.sendRequests.delete(request); }
+  }
+
+  async apiResult(path, body) {
     try { return await this.apiRequest(path,body); }
     catch(e) {
       if (["human_unsupported","agent_identity_unsupported"].includes(e.code)) {
@@ -7055,7 +7130,7 @@ export class Engine {
     case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : this.refreshThread(body.id);
     case "/api/act":
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
-      if (body.do === "reply") return this.replyV1(body.id, body.body);
+      if (body.do === "reply") return this.replyV1(body.id, body.body, body.send_id);
       if (body.do === "resolve") return this.dismissReport(body.id);
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");
     case "/api/send": return this.sendDirect(body);

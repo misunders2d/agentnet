@@ -226,7 +226,7 @@ export class BrowserMemberships {
     record.state="enrolled";record.address=engine.address;this.save();
     const host=this.shell.register(record,engine);run.host=host;engine.start();ready(host);await released;
    }catch(e){failed(e);}
-   finally{run.engine?.stop();store?.close();this.runs.delete(record.id);}
+   finally{if(run.engine?.close)await run.engine.close();else run.engine?.stop();store?.close();this.runs.delete(record.id);}
   });run.finished.catch(failed);return started;
  }
  async join({name,invite,agent,id}) {

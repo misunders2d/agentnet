@@ -547,6 +547,7 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	ctx = client.WithQueuedSend(ctx, d.ID)
 	res, err := l.a.AskAgentWithReceiver(ctx, d.PID, kind, body, receiver, files...)
 	if err != nil {
 		if errors.Is(err, client.ErrNoParticipation) {
@@ -555,5 +556,5 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 		return Sent{}, Refuse(l.updateSentence(err))
 	}
 	l.a.NoteChange()
-	return Sent{ID: res.ID, State: res.State, Detail: res.Detail}, nil
+	return Sent{ID: res.ID, LID: res.LID, State: res.State, Detail: res.Detail}, nil
 }

@@ -1,3 +1,4 @@
+import { sendID } from "../optimistic.mjs";
 // The message composer: one row of "+", the text and send. Typing @ offers
 // the people and agents here; picking an agent asks it ("Zen should Answer |
 // Do it") instead of writing to everyone. In a device conversation, replying
@@ -115,7 +116,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const filesAllowed = !!lim && !closed && target.kind !== "answer" && (!visitor || (target.kind === "agent" && target.canAsk));
   const limit = !files.length ? "" : filesAllowed ? overLimit(files, lim)
     : target.kind === "answer" ? "Files can’t go with an answer. Remove them to send." : "Files can’t be sent here. Remove them to send.";
-  const sending = conv in busy;
+  const sending = false; // each captured send progresses independently; a new draft stays usable
   const gone = target.kind === "agent" && !target.canAsk;
   const needsAgent = visitor && target.kind !== "agent";
   const ready = !closed && !sending && !gone && !needsAgent && !handled && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
@@ -239,18 +240,27 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   };
 
   // ---- sending
-  async function send() {
-    if (!ready || (!dm && !thread)) return;
-    const c = conv, d = latest(), to = target, here = dm, device = thread;
+  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread }) {
+    if (!retry && (!ready || (!dm && !thread))) return;
+    const { c, d, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
+    const id = retry?.id || sendID();
     const was = decode(d.text);
     const body = encode(was.text, was.spans, true).trim();
     const sent = d.files || [];
     const progress = (s: string) => setBusy((b) => ({ ...b, [c]: s }));
     const title = here ? (here.kind === "group" ? here.title || "the group" : personName(here.peer)) : to.kind === "device" ? to.name : "that chat";
-    progress("");
+    if (store.isActive()) {
+      clearSent(c, d, sent);
+      if (d.newTopic) store.setDraft(c, { ...store.draft(c), newTopic: false });
+    }
+    store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
+      _topic: !!d.newTopic, dir: "out", from: store.get().overview?.me.address || "", kind: to.kind === "answer" ? "answer" : here && to.kind !== "agent" ? "message" : d.doIt ? "task" : "question", body, at: new Date().toISOString(),
+      reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
+      () => { store.sends.remove(id); void send({ id, c, d, to, here, device }); });
     setNotice(null);
     typing.stop();
     try {
+      await store.sends.ready(id); // previous turn reaches durable storage before this one is prepared
       // Each file is handed to this computer's AgentNet once; a retry after a
       // failure hands over only the rest. (In a browser device the engine
       // takes the file itself in place of an id.)
@@ -259,6 +269,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         if (f.staged) { ids.push(f.staged); continue; }
         progress(sent.length > 1 ? "Preparing file " + (i + 1) + " of " + sent.length + "…" : "Preparing the file…");
         const id = await store.api.stage(f.file);
+        f.staged = id;
         ids.push(id);
         if (typeof id === "string") keepStaged(c, f.key, id);
       }
@@ -267,26 +278,38 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       const reply = d.replyTo && messageOf(d.replyTo, words, here, device) ? d.replyTo : undefined;
       let r: T.Sent | undefined;
       try {
-        if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, body })).note || "Answer sent.");
-        else if (to.kind === "agent") r = await store.api.askAgent({ pid: to.pid, kind: d.doIt ? "task" : "question", body, files: fileIds });
+        if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, send_id: id, body })).note || "Answer sent.");
+        else if (to.kind === "agent") r = await store.api.askAgent({ id, pid: to.pid, kind: d.doIt ? "task" : "question", body, files: fileIds });
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
-          r = await store.api.send({ to: device.peer, kind: d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
-          if (d.newTopic && r) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
-        } else r = await store.api.sendDM({ conv: c, body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
+          r = await store.api.send({ id, to: device.peer, kind: d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
+          // Keep the preview in the visible conversation throughout saving;
+          // once the new topic exists its loaded view takes over the same id.
+          if (d.newTopic) store.sends.move(id, id);
+          else if ((last as (T.Message & { _topic?: boolean }) | undefined)?._topic) store.sends.move(id, last!.id);
+          if (d.newTopic && r && store.isActive()) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
+        } else r = await store.api.sendDM({ id, conv: c, body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
       } finally {
+        for (const f of sent) f.staged = undefined;
         forgetStaged(c, sent); // a send takes the files it names, sent or refused
       }
-      clearSent(c, d, sent);
+      store.sends.finish(id, r);
+      releaseFiles(sent);
       if (!r) { /* answered: the request's own card shows what happened */ }
-      else if (r.state === "queued") store.toast("Will send when you’re back online.");
+      else if (r.state === "queued") store.toast("Sending…");
       else if (r.state === "waiting") store.toast("Kept here, not sent yet: " + (r.detail || "they can’t receive messages right now."));
       else if (r.state === "receiver_waiting" && r.detail) store.toast(r.detail);
       void store.refetch();
     } catch (e) {
+      if (!store.sends.has(id)) return; // a pushed durable turn already proves this save
+      if (!store.isActive()) { store.sends.fail(id, errorText(e)); return; }
+      const current = store.get().drafts[c] ?? EMPTY;
+      const restored = !current.text && !(current.files || []).length;
+      if (restored) { store.setDraft(c, { ...d, files: sent }); store.sends.remove(id); }
+      else store.sends.fail(id, errorText(e));
       const why = errorText(e).replace(/\.?$/, ".");
-      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (sent.length ? " Your text and files are still here." : " Your text is still here.") });
+      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (restored ? " Your text and files are restored." : " Your newer draft is kept. Retry the failed message above.") });
       else store.toast("Not sent to " + title + ": " + why + " It’s kept in that chat.", "error");
     } finally {
       setBusy(({ [c]: _, ...rest }) => rest);
@@ -298,6 +321,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (f.key === key ? { ...f, staged: id } : f)) });
   }
   function forgetStaged(c: string, list: StagedFile[]) {
+    if (!store.isActive()) return;
     const d = store.get().drafts[c], keys = new Set(list.map((f) => f.key));
     if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) });
   }
@@ -313,7 +337,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     }
     if (cur.replyTo === d.replyTo) next.replyTo = undefined;
     store.setDraft(c, next);
-    releaseFiles(list);
+
   }
 
   // ---- keys

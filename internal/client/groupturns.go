@@ -228,7 +228,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		return ConvSent{}, err
 	}
 	raw, _ := json.Marshal(packet.Root)
-	lid := protocol.NewID()
+	lid, _ := sendID(ctx)
 	release, err := lockfile.Wait(a.spoolLockPath())
 	if err != nil {
 		return ConvSent{}, err
@@ -310,7 +310,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		return ConvSent{}, err
 	}
 	beforeOutbox()
-	err = a.store.addConvOutbox(copies, envelope.Inner{}, func(tx *sql.Tx, _ string) error {
+	err = a.store.addConvOutbox(copies, envelope.Inner{}, a.queuedClaim(ctx, conv, func(tx *sql.Tx, _ string) error {
 		current, e := groupTurnPacketIn(tx, conv)
 		if e != nil {
 			return e
@@ -336,12 +336,15 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			}
 		}
 		return nil
-	}, "", binding)
+	}), "", binding)
 	if err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, copies[0].env.ID, lid), nil
+	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
 			return ConvSent{}, e

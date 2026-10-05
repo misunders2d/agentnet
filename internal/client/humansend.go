@@ -110,7 +110,8 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if err != nil {
 		return ConvSent{}, err
 	}
-	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: out.Body, ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: root.ID(), LID: protocol.NewID(), Root: raw, PID: h.AuthorPID, Human: h, Origin: out.Origin}
+	lid, _ := sendID(ctx)
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: out.Body, ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: root.ID(), LID: lid, Root: raw, PID: h.AuthorPID, Human: h, Origin: out.Origin}
 	if request || output {
 		in.Kind, in.PID, in.Target, in.AgentID, in.Status, in.Emotion = out.Kind, out.PID, out.Target, out.AgentID, out.status, out.Emotion
 		if request && in.Target != nil {
@@ -255,11 +256,14 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if out.selfJob { // asked on the host itself: its job is recorded with it
 		jobKey, local.ID, local.To = a.Self().Fingerprint(), in.LID, a.Address
 	}
-	if err := a.store.addConvOutbox(copies, local, guard, jobKey, binding); err != nil {
+	if err := a.store.addConvOutbox(copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, local.ID, in.LID), nil
+	}
 	if binding != nil && binding.setup != nil {
 		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {
 			return ConvSent{}, err

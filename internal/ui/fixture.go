@@ -385,6 +385,9 @@ func (f *Fixture) Send(d Draft) (Sent, error) {
 		f.threads = append(f.threads, t)
 	}
 	m := f.add(t, &Message{Dir: "out", Kind: kind, At: f.now(), State: f.outState(d.To), Path: "relay", Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote})
+	if d.ID != "" {
+		m.ID = d.ID
+	}
 	f.bump()
 	return Sent{ID: m.ID, State: m.State, Path: m.Path}, nil
 }
@@ -448,7 +451,10 @@ func (f *Fixture) Act(a Action) (string, error) {
 			return "", Refuse("Write a reply first.")
 		}
 		m.State, m.Detail = "manual", ""
-		f.add(t, &Message{Dir: "out", Kind: replyKind, At: f.now(), ReplyTo: m.ID, Status: "done", State: f.outState(t.peer), Path: "relay", Body: body})
+		reply := f.add(t, &Message{Dir: "out", Kind: replyKind, At: f.now(), ReplyTo: m.ID, Status: "done", State: f.outState(t.peer), Path: "relay", Body: body})
+		if a.SendID != "" {
+			reply.ID = a.SendID
+		}
 	case DoAccept, DoAcceptAlways:
 		m.State, m.Detail, m.Responder = "running", "", f.me.Responder
 		if a.Do == DoAcceptAlways {
@@ -596,11 +602,11 @@ func (f *Fixture) SendDM(x DMDraft) (Sent, error) {
 	for _, d := range f.dms {
 		if d.id == x.Conv {
 			f.nextID++
-			m := DMMessage{ID: fmt.Sprintf("dmm%04d", f.nextID), Dir: "out", From: f.me.Address, Kind: KindMessage, Body: body,
+			m := DMMessage{ID: fmt.Sprintf("dmm%04d", f.nextID), LID: x.ID, Dir: "out", From: f.me.Address, Kind: KindMessage, Body: body,
 				ReplyTo: x.ReplyTo, Quote: x.Quote, Origin: "ui", State: "delivered", StateText: DMStateText("out", KindMessage, "delivered", d.peer.Address, ""), At: f.now()}
 			d.msgs = append(d.msgs, m)
 			f.bump()
-			return Sent{ID: m.ID, State: m.State}, nil
+			return Sent{ID: m.ID, LID: m.LID, State: m.State}, nil
 		}
 	}
 	return Sent{}, NotFound("no conversation with that id")

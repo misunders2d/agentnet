@@ -1,3 +1,4 @@
+import { pendingSends, sendID } from "/assets/optimistic.mjs";
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
 const mounted = new WeakMap();
@@ -26,6 +27,7 @@ const setTimeout = (fn, ms) => { const timer = globalThis.setTimeout(() => { tim
 "use strict";
 
 const $ = (id) => root.querySelector("#" + CSS.escape(id));
+const sends = pendingSends(host, () => { if (alive) renderBody(false); });
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {},
   drafts: {}, draftKey: null, replyReceiver: null, replyReceiverHost: null, receiverCatalog: null, receiverCatalogSeq: 0, receiverBindings: [], sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
   dm: null, dmData: null, dmReply: null, dmAgent: null, seenReported: {}, pendingOpen: null, clickedAtStart: null,
@@ -101,7 +103,7 @@ const firstLine = (s, n) => {
   const l = mentionPlain(s || "").split("\n")[0]; // a person mention reads as @Name
   return l.length > n ? l.slice(0, n - 1).trimEnd() + "…" : l;
 };
-const announce = (t) => { $("live").textContent = t; };
+const announce = (t) => { if (alive) $("live").textContent = t; };
 const kindTag = { question: "Question", task: "Task" };
 const statusWord = { declined: "Declined", failed: "Failed", timeout: "Timed out", cancelled: "Cancelled", interrupted: "Interrupted",
   review_notice: "Report" };
@@ -284,7 +286,7 @@ async function preparedFiles(files, host) {
   if (files.some((f) => f.reattachRequired)) throw new Error(overLimit(files));
   for (const [i, f] of files.entries()) {
     if (f.staged) continue;
-    $("compose-hint").textContent = "Handing " + (i + 1) + " of " + files.length + " files to AgentNet on this computer…";
+    if (alive) $("compose-hint").textContent = "Handing " + (i + 1) + " of " + files.length + " files to AgentNet on this computer…";
     f.staged = await host.stage(f.file);
   }
   return files.map((f) => f.staged);
@@ -1975,8 +1977,9 @@ async function loadDM(scrollToEnd) {
 
 // Classic renders the open DM as a chat.
 function renderDMBody(scrollToEnd) {
-  const t = state.dmData;
-  if (!t) return;
+  const base = state.dmData;
+  if (!base) return;
+  const t = { ...base, messages: sends.merge("dm:" + base.id, base.messages) };
   const tl = $("timeline");
   const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
   fill(tl, t.messages.length ? t.messages.map((m, i) => dmMsg(m, t, t.messages[i - 1]))
@@ -2037,6 +2040,7 @@ async function askGuestUpdate(p) {
 // dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
 // shown as that: a person's name is their claim, an agent is marked.
 function dmMsg(m, t, prev) {
+  if (m._local) return el("li", {id:"m-"+m.id,class:"msg out"}, el("div", {class:"col"}, el("div", {class:"bubble"}, el("p", {class:"body"}, [m.body,...(m.attachments || m.files || []).map(f=>f.name)].filter(Boolean).join("\n"))), el("div", {class:"foot",role:"status"}, m.state_text, m._failed && el("button", {type:"button",class:"text-btn",onclick:m._retry}, "Retry"))));
   if (m.event) {
     return el("li", { id: "m-" + m.id, class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
   }
@@ -2114,7 +2118,7 @@ function myDeviceName(address) {
 function deliveryText(m) {
   return ["waiting","quarantined","expired","failed"].includes(m.delivery) && m.state_text ? m.state_text : copyWord[m.delivery] || m.delivery;
 }
-const copyWord = { delivered: "delivered", custody: "on your server", queued: "queued here", waiting: "kept here, not sent yet", failed: "not sent", quarantined: "they could not verify it", expired: "not delivered: that session ended first" };
+const copyWord = { delivered: "delivered", custody: "on your server", queued: "Sending…", waiting: "kept here, not sent yet", failed: "not sent", quarantined: "they could not verify it", expired: "not delivered: that session ended first" };
 
 // agentLinkText says which agent a person's device runs, and where it is
 // in DMs here. The link is the invitation's host: that person and device.
@@ -2665,48 +2669,66 @@ function setDMAgent(a) {
   if (humanGroup() && previous !== state.dmAgent) refreshTyping();
 }
 
-async function sendDM() {
-  const t = state.dmData;
+
+function startSend(key, text, files, reply, answering, t, kind, retry, id) {
+  sends.begin(key, { id, ...(state.dm ? { lid: id, origin: "ui", pid: state.dmAgent || "" } : { author: {label: "You", about: ""}, to: t.peer }),
+    dir: "out", from: state.overview?.me?.address || "", body: text, kind, at: new Date().toISOString(), reply_to: reply?.id || answering?.id || "", quote: reply?.id || "",
+    attachments: files.map(f => ({name:f.name,size:f.size,openable:false})), files: files.map(f => ({name:f.name,size:f.size,openable:false})) }, retry);
+  if (alive && state.draftKey === key) {
+    if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; state.mentions = []; state.mentionText = ""; }
+    if (reply && state.dmReply === reply) setDMReply(null);
+    if (answering && state.answering === answering) setAnswering(null);
+    state.files = state.files.filter(f => !files.includes(f)); renderPending(); keepDraft(); syncComposer();
+  }
+}
+function failSend(id, key, ws, text, files, reply, answering, reason, mentions) {
+  if (!sends.fail(id, reason)) return; // a pushed durable message already merged
+  if (!alive) return; // the current renderer owns drafts; this failed turn keeps its Retry
+  const here = alive && wsNow() === ws && state.draftKey === key;
+  const d = here ? {text: $("body").value, files: state.files} : draftsOf(ws)[key] || {text:"",files:[]};
+  if (!d.text && !(d.files || []).length) {
+    if (here) {
+      $("body").value = text; state.mentions = mentions || []; state.mentionText = text; grow();
+      state.files = files; renderPending(); if (reply) setDMReply(reply); if (answering) setAnswering(answering); keepDraft(); syncComposer();
+    } else draftsOf(ws)[key] = {...d, text, files, reply, answering, mentions};
+    sends.remove(id);
+  }
+  if (here) $("compose-error").textContent = "Not sent: " + reason + (d.text || d.files?.length ? " Your newer draft is kept. Retry the failed message above." : " Your text and files are restored.");
+  else announce("Not sent: " + reason + ". Your draft is kept in its conversation.");
+}
+
+async function sendDM(retry) {
+  const t = retry?.t || state.dmData;
   if (state.sending || !t || t.frozen || (dmHumanGuest(t) && !guestAuthor(t)) || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
-  const key = state.draftKey, text = $("body").value, reply = state.dmReply, agent = state.dmAgent, files = state.files.slice(), kind = kindValue() === "task" ? "task" : "question";
-  trackMentions();
-  const signed = encodeMentions(text, state.mentions || []); // each exact person mention as its reference; the rest as typed
-  if (askGone()) { kindHint(); return; } // never sent to the person instead
-  const elsewhere = boundElsewhere();
+  const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:kindValue() === "task" ? "task" : "question"};
+  const id = retry?.id || sendID(), mentions = retry?.mentions || (state.mentions || []).slice();
+  if (!retry) trackMentions();
+  const signed = encodeMentions(text, mentions); // each exact person mention as its reference; the rest as typed
+  if (!retry && askGone()) { kindHint(); return; } // never sent to the person instead
+  const elsewhere = retry ? "" : boundElsewhere();
   if (elsewhere) { $("compose-error").textContent = elsewhere; return; }
-  if (files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
+  if (!retry && files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
   if (typingUI) typingUI.stop();
-  const host = currentHost, ws = wsNow(), receiverSelection = state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = !!state.overview?.reply_receivers, nativeSessions = !!state.overview?.reply_sessions, receiverContext = receiverCapture(); // captured local delegation
-  state.sending = true;
-  syncComposer();
-  $("compose-error").textContent = "";
+  const host = currentHost, ws = wsNow(), receiverSelection = retry ? retry.receiverSelection : state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = retry ? retry.nativeReceiver : !!state.overview?.reply_receivers, nativeSessions = retry ? retry.nativeSessions : !!state.overview?.reply_sessions, receiverContext = retry ? retry.receiverContext : receiverCapture(); // captured local delegation
+  startSend(key, text, files, reply, null, t, agent ? kind : "message", () => { sends.remove(id); void sendDM({id,key,text,reply,agent,files,kind,t,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext}); }, id);
+  if (alive) { syncComposer(); $("compose-error").textContent = ""; }
   try {
+    await sends.ready(id);
     let r;
     const humanAsk = !!agent && (dmHumanGuest(t) || (t.guests || []).some(g => g.state === "active")); // a request with guests present names its assistant only
     const receiver = humanAsk ? null : await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
-      r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
-        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+      r = agent ? await api("/api/dm/agent/ask", { id, pid: agent, kind, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
+        : await api("/api/dm/send", { id, conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
-      : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
-    if (alive && wsNow() === ws && state.draftKey === key) {
-      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; state.mentions = []; state.mentionText = ""; }
-      if (state.dmReply === reply) setDMReply(null);
-      dropFiles(files);
-    } else if (draftsOf(ws)[key]) { // that DM's draft keeps only what was not sent
-      const d = draftsOf(ws)[key];
-      files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
-      d.files = (d.files || []).filter((x) => !files.includes(x));
-      if (d.text === text) { d.text = ""; d.mentions = []; }
-      if (d.reply === reply) d.reply = null;
-      if (!d.text && !d.files.length && !d.answering && !d.reply && !d.agent && !d.reply_receiver && !d.reply_receiver_host) delete draftsOf(ws)[key];
-    }
-    if (!alive) pending.accepted?.({key, text, files, reply});
+      : r.state === "queued" ? "Sending…" : "Sent.");
+    sends.finish(id, r);
+    files.forEach(f => f.url && URL.revokeObjectURL(f.url));
+    if (alive && wsNow() === ws) void loadDM();
   } catch (e) {
-    if (alive && wsNow() === ws && state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
-    else announce("Not sent to " + (t.title || t.peer?.label || "this conversation") + ": " + e.message + " Your text is kept in that DM.");
+    failSend(id, key, ws, text, files, reply, null, e.message, mentions);
   } finally {
     if (alive && wsNow() === ws) { state.sending = false; kindHint(); syncComposer(); if (state.newVersion) updated(state.newVersion); }
     else { state.sending = false; sentElsewhere(ws); }
@@ -3020,8 +3042,9 @@ async function loadThread(scrollToEnd) {
 // Classic renders the open device thread.
 function renderBody(scrollToEnd) {
   if (state.dm) { renderDMBody(scrollToEnd); return; }
-  const t = state.data;
-  if (!t) return;
+  const base = state.data;
+  if (!base) return;
+  const t = { ...base, messages: sends.merge(state.draftKey || state.thread, base.messages) };
   const byId = Object.fromEntries(t.messages.map((m) => [m.id, m]));
   const tl = $("timeline");
   const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
@@ -3343,6 +3366,7 @@ async function openMessage(ref) {
 }
 
 function renderMsg(m, byId, prev, t) {
+  if (m._local) return el("li", {id:"m-"+m.id,class:"msg out"}, el("div", {class:"col"}, el("div", {class:"bubble"}, el("p", {class:"body"}, [m.body,...(m.attachments || m.files || []).map(f=>f.name)].filter(Boolean).join("\n"))), el("div", {class:"foot",role:"status"}, m.state_text, m._failed && el("button", {type:"button",class:"text-btn",onclick:m._retry}, "Retry"))));
   const cont = continues(m, prev);
   const parent = m.reply_to && byId[m.reply_to];
   const actions = m.actions || [];
@@ -3572,7 +3596,7 @@ function newConversationDialog(prefill) {
     focus: typeof prefill === "string" ? body : to,
     run: async () => {
       const r = await api("/api/send", { to: to.value.trim(), kind: kind.value, body: body.value });
-      announce(r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
+      announce(r.state === "queued" ? "Sending…" : "Sent.");
       openThread(r.id);
     },
   });
@@ -4067,33 +4091,35 @@ function grow() {
   t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + "px";
 }
 
-async function send(ev) {
-  ev.preventDefault();
-  if (state.dm) { await sendDM(); return; }
-  const t = state.data;
-  if (state.sending || !t || t.key.pending) return; // one send at a time, to a loaded conversation
+async function send(ev, retry) {
+  ev?.preventDefault();
+  if (!retry && state.dm) { await sendDM(); return; }
+  const t = retry?.t || state.data;
+  if (state.sending || !t || t.key.pending) return; // only a loaded conversation with its trusted device key
   // Everything this send needs is fixed now: switching conversation or a
   // refresh while it is on its way changes none of it.
-  const key = state.draftKey, text = $("body").value, answering = state.answering, files = answering ? [] : state.files.slice();
+  let key = retry?.key || state.draftKey, text = retry ? retry.text : $("body").value, answering = retry ? retry.answering : state.answering, files = retry ? retry.files : answering ? [] : state.files.slice();
+  const id = retry?.id || sendID(), mentions = retry?.mentions || (state.mentions || []).slice();
   const last = t.messages[t.messages.length - 1];
-  const draft = { to: t.peer, kind: kindValue(), body: text, reply_to: last ? last.id : "" };
-  const agentID = !answering && draft.kind !== "message" ? state.deviceAgentID || "" : "";
+  const draft = retry?.draft ? {...retry.draft,id} : { id, to: t.peer, kind: kindValue(), body: text, reply_to: last ? last.id : "" };
+  const agentID = retry ? draft.agent_id || "" : !answering && draft.kind !== "message" ? state.deviceAgentID || "" : "";
   if (agentID) draft.agent_id = agentID;
-  if (agentID && deviceAgentMissing()) { $("compose-error").textContent = "Selected agent unavailable. Refresh agents or choose the device default; your draft stays here."; return; }
-  const elsewhere = boundElsewhere();
+  if (!retry && agentID && deviceAgentMissing()) { $("compose-error").textContent = "Selected agent unavailable. Refresh agents or choose the device default; your draft stays here."; return; }
+  const elsewhere = retry ? "" : boundElsewhere();
   if (elsewhere) { $("compose-error").textContent = elsewhere; return; }
-  if (answering && state.files.length) { $("compose-error").textContent = noFilesWhy(); return; }
-  if (files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
+  if (!retry && answering && state.files.length) { $("compose-error").textContent = noFilesWhy(); return; }
+  if (!retry && files.length && overLimit(files)) { $("compose-error").textContent = overLimit(files); return; }
   // The membership this send is for: its host carries it, and only its own
   // drafts are touched when it is done, wherever the person is by then.
-  const host = currentHost, ws = wsNow(), receiverSelection = state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = !!state.overview?.reply_receivers, nativeSessions = !!state.overview?.reply_sessions, receiverContext = receiverCapture();
+  const host = currentHost, ws = wsNow(), receiverSelection = retry ? retry.receiverSelection : state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = retry ? retry.nativeReceiver : !!state.overview?.reply_receivers, nativeSessions = retry ? retry.nativeSessions : !!state.overview?.reply_sessions, receiverContext = retry ? retry.receiverContext : receiverCapture();
   if (typingUI) typingUI.stop();
-  state.sending = true;
-  syncComposer();
-  $("compose-error").textContent = "";
+  startSend(key, text, files, null, answering, t, answering ? "answer" : draft.kind, () => { sends.remove(id); void send(null, {id,key,text,files,answering,t,mentions,draft,receiverSelection,nativeReceiver,nativeSessions,receiverContext}); }, id);
+  if (alive) { syncComposer(); $("compose-error").textContent = ""; }
   try {
+    await sends.ready(id);
+    let r;
     if (answering) {
-      await act({ do: "reply", id: answering.id, body: text }, host);
+      await act({ do: "reply", id: answering.id, send_id: id, body: text }, host);
     } else {
       if (agentID) {
         const agents = await readAgentCatalog(t.peer, host);
@@ -4105,28 +4131,14 @@ async function send(ev) {
       const receiver = await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
       if (receiver) draft.reply_receiver = receiver;
       if (files.length) draft.files = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
-      let r;
       try { r = await api("/api/send", draft, host); } finally { sentStaged(files); }
-      announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
+      announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "queued" ? "Sending…" : "Sent.");
     }
-    // Clear only what was sent: text typed meanwhile, or in another
-    // conversation, stays.
-    if (alive && wsNow() === ws && state.draftKey === key) {
-      if ($("body").value === text) { $("body").value = ""; grow(); state.typedFor = null; state.mentions = []; state.mentionText = ""; }
-      if (state.answering === answering) setAnswering(null);
-      dropFiles(files);
-    } else if (draftsOf(ws)[key]) { // that conversation's draft keeps only what was not sent
-      const d = draftsOf(ws)[key];
-      files.forEach((f) => f.url && URL.revokeObjectURL(f.url));
-      d.files = (d.files || []).filter((x) => !files.includes(x));
-      if (d.text === text) { d.text = ""; d.mentions = []; }
-      if (d.answering === answering) d.answering = null;
-      if (!d.text && !d.files.length && !d.answering && !d.agent_id && !d.reply_receiver && !d.reply_receiver_host) delete draftsOf(ws)[key];
-    }
-    if (!alive) pending.accepted?.({key, text, files, answering});
+    sends.finish(id, r);
+    files.forEach(f => f.url && URL.revokeObjectURL(f.url));
+    if (alive && wsNow() === ws) void loadThread();
   } catch (e) {
-    if (alive && wsNow() === ws && state.draftKey === key) $("compose-error").textContent = e.message + (files.length ? " Your files are still here." : "");
-    else announce("Not sent to " + t.peer + ": " + e.message + " Your text is kept in that conversation.");
+    failSend(id,key,ws,text,files,null,answering,e.message,mentions);
   } finally {
     if (alive && wsNow() === ws) { state.sending = false; syncComposer(); if (state.newVersion) updated(state.newVersion); }
     else { state.sending = false; sentElsewhere(ws); }
@@ -4842,7 +4854,7 @@ const ready = start();
 const stop = () => {
   keepDraft();
   if (wsAPI()?.state) workspaceCapture(wsNow(), wsAPI().state(wsNow()));
-  alive = false; state.gen++;
+  alive = false; state.gen++; sends.dispose();
   if (pending.changed === pendingChanged) pending.changed = null;
   if (pending.accepted === pendingAccepted) pending.accepted = null;
   stopListen?.(); typingUI?.destroy(); abort.abort();
