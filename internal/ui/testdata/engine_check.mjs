@@ -6,7 +6,36 @@ import { Engine, memoryStore, probeStore, sameOrigin } from "../static/engine.mj
 import * as wire from "../static/wire.mjs";
 import { createInterface } from "node:readline";
 
-let store = memoryStore();
+// stats counts what a catch-up costs (backlog_test.go): requests by method
+// and path shape, store reads and writes, and page changes. latency delays
+// every request as a phone's network does; writeDelay every store write as
+// a phone's strict IndexedDB commit does.
+const stats = { req: {}, reads: 0, rows: 0, scans: {}, writes: 0, changed: 0, renders: 0, pushed: 0, acking: 0, acksAtOnce: 0 };
+const scanned = (s, v) => { stats.reads++; stats.rows += v.length; stats.scans[s] = (stats.scans[s] || 0) + v.length; return v; };
+let latency = 0, writeDelay = 0;
+let ackGate = null; // holdAcks: receipts wait here until released
+// page stands in for an open skin: on a change it reads the overview and
+// the open DM again, one read at a time (a change meanwhile reads again
+// once), as Classic's refetch does.
+let pageConv = "", pageBusy = false, pageAgain = false;
+async function pageRefetch() {
+  if (pageBusy) { pageAgain = true; return; }
+  pageBusy = true;
+  try {
+    do { pageAgain = false; stats.renders++; await engine.api("/api/overview"); await engine.api("/api/dm?id=" + pageConv); } while (pageAgain);
+  } catch (e) { /* the next change reads again */ } finally { pageBusy = false; }
+}
+const onChange = () => { stats.changed++; if (pageConv) pageRefetch(); };
+// counting is the engine with the messages its stream pushes counted.
+const counting = (e) => { const d = e.dispatch.bind(e); e.dispatch = (event, data) => { if (event === "message") stats.pushed++; return d(event, data); }; e.listen(onChange); return e; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const counted = (st) => ({ ...st,
+  all: async (s) => scanned(s, await st.all(s)),
+  after: async (s, k, n) => scanned(s, await st.after(s, k, n)),
+  prefix: async (s, p) => scanned(s, await st.prefix(s, p)),
+  async write(ops, checks) { stats.writes++; if (writeDelay) await sleep(writeDelay); return st.write(ops, checks); } });
+const raw = memoryStore(); // the test's own reads (count) are not counted
+let store = counted(raw);
 let engine = null;
 let offline = false, dropPosts = false, receiptReads = 0;
 const realFetch = globalThis.fetch.bind(globalThis);
@@ -25,6 +54,13 @@ const json = (v, status = 200) => new Response(JSON.stringify(v), { status, head
 const forged = new Map(); // person id -> { record, address }
 async function fetchImpl(url, opts = {}) {
   const u = new URL(url);
+  const shape = (opts.method || "GET") + " " + u.pathname.replace(/[0-9a-f]{32,}/g, ":id");
+  stats.req[shape] = (stats.req[shape] || 0) + 1;
+  if (shape.endsWith("/ack") && shape.startsWith("POST /v1/messages/")) { // receipts sent at once, at most
+    stats.acksAtOnce = Math.max(stats.acksAtOnce, ++stats.acking);
+    try { if (ackGate) await ackGate.held; if (latency) await sleep(latency); return await fetchNet(url, opts); } finally { stats.acking--; }
+  }
+  if (latency) await sleep(latency);
   if ((opts.method || "GET") === "GET" && u.pathname.startsWith("/v1/messages/")) receiptReads++;
   for (const [person, f] of forged) {
     if (u.pathname === "/v1/persons/" + person + "/chain") return json({ records: [JSON.parse(f.record)], more: false });
@@ -60,7 +96,7 @@ async function handle(req) {
   switch (req.op) {
   case "init":
     if (req.notify) notifyCalls = [];
-    engine = new Engine({ store, base: req.base, fetch: fetchImpl, push: fakePush });
+    engine = counting(new Engine({ store, base: req.base, fetch: fetchImpl, push: fakePush }));
     await engine.load();
     await probeStore(store);
     return { joined: engine.joined };
@@ -86,6 +122,18 @@ async function handle(req) {
     return {};
   }
   case "receiptReads": return { count: receiptReads };
+  case "holdAcks": // receipts wait until released (on: false)
+    if (req.on && !ackGate) { let open; ackGate = { held: new Promise((r) => { open = r; }) }; ackGate.open = open; }
+    if (!req.on && ackGate) { ackGate.open(); ackGate = null; }
+    return {};
+  case "stats": { // what was counted since the last reset; latency and writeDelay are set for what follows
+    const out = structuredClone(stats);
+    if (req.reset) Object.assign(stats, { req: {}, reads: 0, rows: 0, scans: {}, writes: 0, changed: 0, renders: 0, pushed: 0, acksAtOnce: stats.acking }); // acking: those under way
+    if (req.latency !== undefined) latency = req.latency;
+    if (req.writeDelay !== undefined) writeDelay = req.writeDelay;
+    if (req.page !== undefined) pageConv = req.page;
+    return out;
+  }
   case "status":
     return { connected: engine.connected, revoked: engine.revoked, members: engine.members.current, link: engine.link ? engine.link.state : "" };
   case "api":
@@ -119,7 +167,7 @@ async function handle(req) {
   }
   case "reload": { // the page is reloaded: a new engine over the same stored data
     engine.stop();
-    engine = new Engine({ store, base: req.base, fetch: fetchImpl, push: fakePush });
+    engine = counting(new Engine({ store, base: req.base, fetch: fetchImpl, push: fakePush }));
     await engine.load();
     engine.start();
     return { joined: engine.joined };
@@ -175,7 +223,7 @@ async function handle(req) {
   case "inboxRec":
     return { rec: (await store.get("inbox", req.id)) || null };
   case "count":
-    return { n: (await store.all(req.store)).length };
+    return { n: (await raw.all(req.store)).length };
   case "keys": {
     const id = await store.get("kv", "identity");
     let exported = true;
