@@ -3,19 +3,20 @@
 // program API. Leaving a joined workspace points to Reconnect, not to
 // joining again; Reconnect lists the disconnected membership and routes
 // that same one again under a new handle, and the skin is mounted again
-// over a host bound to it.
+// over a host bound to it. The bar shows the workspace's own name from the
+// overviews the skin reads on its changes, and reads none per change itself.
 // Uses an installed Playwright via AGENTNET_PLAYWRIGHT; no existing browser
 // is attached. Optional AGENTNET_SCREENSHOTS writes only to that directory.
 const fs = require('fs'), http = require('http'), path = require('path'), assert = require('node:assert/strict');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
 const base = path.resolve(__dirname, '../static') + '/';
 const other = 'c'.repeat(32), hostOf = (n) => n.toString(16).padStart(32, '0'), digest = 'f'.repeat(64);
-const skin = `export async function mount(root,host){window.mounts=(window.mounts||0)+1;window.skinHost=host;const h=document.createElement('h1');h.textContent='Fixture skin in '+host.workspace.name;root.append(h);host.onOpen(()=>{});await host.api('/api/overview');}export function unmount(root){root.replaceChildren();}`;
+const skin = `export async function mount(root,host){window.mounts=(window.mounts||0)+1;window.skinHost=host;const h=document.createElement('h1');h.textContent='Fixture skin in '+host.workspace.name;root.append(h);host.onOpen(()=>{});host.listen((e)=>{if(e.type==='change')host.api('/api/overview').catch(()=>{});});await host.api('/api/overview');}export function unmount(root){root.replaceChildren();}`;
 
 const world = () => {
   let generation = 1;
   const s = {
-    posts: [],
+    posts: [], overviews: {}, streams: [], wsName: 'Mellanni',
     def: { id: 'default', name: 'This computer', endpoint: 'https://home.example', address: 'alice/laptop', state: 'enrolled', handle: hostOf(1) },
     acme: { id: other, name: 'Acme', endpoint: 'https://acme.example', address: 'alice/laptop', realm: 'd'.repeat(32), state: 'enrolled', handle: hostOf(2) },
   };
@@ -50,7 +51,18 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/workspaces') return json([state.def, ...(state.acme.state === 'enrolled' ? [state.acme] : [])]);
   if (u.pathname === '/api/workspaces/all') return json([state.def, state.acme]);
   const scoped = u.pathname.match(/^\/workspaces\/([^/]+)\/([^/]+)\/api\/overview$/);
-  if (scoped) return scoped[2] === state.acme.handle || scoped[2] === state.def.handle ? json({ me: { address: 'alice/laptop', fingerprint: 'SHA256:fixture' } }) : send(409, 'text/plain', 'stale or disconnected workspace');
+  if (scoped) {
+    state.overviews[scoped[2]] = (state.overviews[scoped[2]] || 0) + 1;
+    return scoped[2] === state.acme.handle || scoped[2] === state.def.handle ? json({ me: { address: 'alice/laptop', fingerprint: 'SHA256:fixture' }, workspace: { name: state.wsName, server: 'home.example' } }) : send(409, 'text/plain', 'stale or disconnected workspace');
+  }
+  const events = u.pathname.match(/^\/workspaces\/([^/]+)\/([^/]+)\/events$/);
+  if (events) {
+    if (events[2] !== state.acme.handle && events[2] !== state.def.handle) return send(409, 'text/plain', 'stale or disconnected workspace');
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+    res.write(': open\n\n');
+    state.streams.push({ handle: events[2], res });
+    return;
+  }
   send(404, 'text/plain', 'not found');
 });
 
@@ -69,6 +81,18 @@ const server = http.createServer((req, res) => {
       await page.addInitScript((d) => localStorage.setItem('agentnet.skin.trusted.fixture', d), digest);
       await page.goto(origin + '/?skin=fixture');
       await page.getByRole('heading', { name: 'Fixture skin in This computer' }).waitFor();
+      // The workspace's own name, then a rename: one change, one overview
+      // read (the skin's); the bar takes the name from it.
+      await page.getByRole('button', { name: 'Workspace: Mellanni. Switch or join another' }).waitFor();
+      for (let i = 0; i < 50 && !state.streams.some((x) => x.handle === state.def.handle); i++) await new Promise((r) => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, 200)); // the mount reads are done
+      const readsBefore = state.overviews[state.def.handle];
+      state.wsName = 'Renamed';
+      for (const x of state.streams) if (x.handle === state.def.handle) x.res.write('event: change\ndata: 2\n\n');
+      await page.getByRole('button', { name: 'Workspace: Renamed. Switch or join another' }).waitFor();
+      await new Promise((r) => setTimeout(r, 300));
+      const reads = state.overviews[state.def.handle] - readsBefore;
+      assert.equal(reads, 1, name + ': a change made ' + reads + ' overview reads; only the skin\'s is wanted');
       const menu = async () => { await page.getByRole('button', { name: /^Workspace: / }).click(); await page.getByRole('menu', { name: 'Workspaces' }).waitFor(); };
       const rows = () => page.getByRole('menu', { name: 'Workspaces' }).getByRole('menuitemradio').allInnerTexts();
       const notice = page.locator('#skin-bar .notice .text');
@@ -142,6 +166,7 @@ const server = http.createServer((req, res) => {
     }
     console.log('workspace reconnect check PASS: desktop/390, leaving points to Reconnect, same membership under a new handle, skin remounted, nothing left to reconnect, host.workspaces disconnected()/reconnect(id), host.reconnect after a restart');
   } finally {
+    for (const x of state.streams) x.res.end();
     if (browser) await browser.close();
     await new Promise((r) => server.close(r));
   }

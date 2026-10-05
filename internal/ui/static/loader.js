@@ -175,6 +175,10 @@
   // the workspace list) is the same for every one. The identity a
   // membership proved in its overview is what host.reconnect checks.
   const known = new Map(); // membership id -> { address, fingerprint } from its own overview
+  // The skin bar's listeners: each overview a skin reads (it reads one on
+  // its changes anyway) also tells the bar its workspace's name, so the bar
+  // reads none per change of its own.
+  const overviewSeen = new Set();
   const canRebind = !!shell && !memberships && !browser && typeof shell.recoverNative === "function";
   let remount = null, rebinding = null;
   const hostFor = (id) => {
@@ -182,7 +186,10 @@
     const wid = bound.workspace.id;
     const api = async (path, body) => {
       const r = await bound.api(path, body);
-      if (body === undefined && path === "/api/overview" && r && r.me && r.me.fingerprint) known.set(wid, { address: r.me.address, fingerprint: r.me.fingerprint });
+      if (body === undefined && path === "/api/overview" && r) {
+        if (r.me && r.me.fingerprint) known.set(wid, { address: r.me.address, fingerprint: r.me.fingerprint });
+        for (const fn of [...overviewSeen]) { try { fn(wid, r); } catch (_) { /* the bar's own */ } }
+      }
       return r;
     };
     const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces }, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
@@ -280,7 +287,7 @@
       const { mountSkinBar } = await import("/assets/skinbar.mjs");
       bar = mountSkinBar(document.body, {
         skins: () => common.skins, selected, home, choose: (id) => go(id), host: () => window.agentnet, workspaces,
-        manage: common.manageLocalSkins || null,
+        manage: common.manageLocalSkins || null, overviews: (fn) => { overviewSeen.add(fn); return () => overviewSeen.delete(fn); },
       });
       await bar.ready; // No unstyled host controls before the skin’s first paint.
     }

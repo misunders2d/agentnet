@@ -68,7 +68,7 @@ export const coinLetters = (label) => {
   return words.length ? (words[0][0] + (words[1] ? words[1][0] : "")).toUpperCase() : "A";
 };
 
-export function mountSkinBar(parent, { skins, selected, home, choose, host, workspaces, manage }) {
+export function mountSkinBar(parent, { skins, selected, home, choose, host, workspaces, manage, overviews }) {
   const holder = document.createElement("div");
   holder.id = "skin-bar";
   holder.style.visibility = "hidden";
@@ -222,29 +222,23 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
     const chev = icon("chevron", 16); chev.classList.add("chev");
     wsButton.append(coin, el("span", "key", "Workspace"), wsValue, chev);
     const current = () => workspaces.list().find((w) => w.id === workspaces.active()) || host().workspace;
-    // The current workspace's own name and server, from its overview: read
-    // on mount, on a switch, and after its changes (at most one read at a
-    // time; changes meanwhile read once more after it).
-    let ownWs = null, reading = false, again = false, unlisten = null;
+    // The current workspace's own name and server, from its overview: the
+    // ones the skin reads anyway (overviews: the host hands each to the bar),
+    // and one read of the bar's own on mount and on a switch, never one per
+    // change (an overview is the page's largest read).
+    let ownWs = null;
     const readOwn = () => {
-      if (reading) { again = true; return; }
-      reading = true;
       const wid = workspaces.active();
-      host().api("/api/overview").then((o) => { if (workspaces.active() === wid) { ownWs = (o && o.workspace) || null; label(); } }).catch(() => {})
-        .finally(() => { reading = false; if (again) { again = false; readOwn(); } });
+      host().api("/api/overview").then((o) => { if (workspaces.active() === wid) { ownWs = (o && o.workspace) || null; label(); } }).catch(() => {});
     };
-    const follow = () => {
-      if (unlisten) { try { unlisten(); } catch (_) { /* gone */ } unlisten = null; }
-      const h = host();
-      if (h && typeof h.listen === "function") { try { unlisten = h.listen((e) => { if (e && e.type === "change") readOwn(); }); } catch (_) { unlisten = null; } }
-    };
+    if (typeof overviews === "function") overviews((wid, o) => { if (wid === workspaces.active() && o.workspace) { ownWs = o.workspace; label(); } });
     const label = () => {
       const name = workspaceLabel(current(), ownWs);
       coin.textContent = coinLetters(name); wsValue.textContent = name;
       wsButton.setAttribute("aria-label", "Workspace: " + name + ". Switch or join another");
     };
-    label(); follow(); readOwn();
-    workspaces.onChange(() => { ownWs = null; label(); follow(); readOwn(); if (openMenu === wsMenu) wsMenu.close(false); });
+    label(); readOwn();
+    workspaces.onChange(() => { ownWs = null; label(); readOwn(); if (openMenu === wsMenu) wsMenu.close(false); });
     const deviceName = () => { const a = (host().workspace && host().workspace.address) || ""; return a.includes("/") ? a.split("/").pop() : ""; };
     const wsMenu = makeMenu(wsButton, "Workspaces", (panel) => {
       const active = workspaces.active();
