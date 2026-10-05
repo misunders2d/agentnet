@@ -173,3 +173,34 @@ export const routeFor = (c: Candidate, t: T.DMThread): Route => (c.kind === "age
 
 /** How many earlier messages each invitation may carry. */
 export const capFor = (r: Route) => (r === "group" ? 64 : 200);
+
+// ---- who may give an invited agent tasks without asking (AgentInvite.tasks_from) ----
+
+/** The most member keys one invitation may name (protocol.MaxTaskKeys; pinned by TestComicParityRoutes). */
+export const TASK_KEYS_MAX = 16;
+
+/** One person who may be allowed to give the agent tasks without asking: their
+ *  member keys in this conversation, the only keys the invitation may name. */
+export interface TaskPerson { key: string; name: string; seed: string; me: boolean; keys: string[] }
+
+/** taskPeople: the conversation's members, one row each (never a device): in a
+ *  two-person chat you and them, in a group its members. Their keys are the
+ *  devices their signed records list now; a device added later is not covered. */
+export function taskPeople(t: T.DMThread, o: T.Overview): TaskPerson[] {
+  const me = o.person;
+  const holders: T.PersonView[] = t.kind === "group" ? t.members || [] : [me, t.peer].filter((p): p is T.PersonView => !!p);
+  const seen = new Set<string>();
+  const out: TaskPerson[] = [];
+  for (const p of holders) {
+    if (!p.person || seen.has(p.person)) continue;
+    seen.add(p.person);
+    const keys = [...new Set((p.devices?.length ? p.devices.map((d) => d.fingerprint) : [p.fingerprint || ""]).filter(Boolean))];
+    const mine = !!me?.person && p.person === me.person;
+    out.push({ key: p.person, name: mine ? "You" : personName(p), seed: p.person, me: mine, keys });
+  }
+  return out.sort((a, b) => Number(b.me) - Number(a.me));
+}
+
+/** taskKeys: the member keys of the people chosen, each once. */
+export const taskKeys = (people: TaskPerson[], chosen: Set<string>) =>
+  [...new Set(people.filter((p) => chosen.has(p.key)).flatMap((p) => p.keys))];

@@ -10,8 +10,9 @@ import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
-import { capFor, catalogHosts, pool, readCatalog, routeFor, useCatalogs, type Candidate, type Route } from "./InviteSheet.candidates";
-import { Checklist, ContextChoice, Preview, type Mode } from "./InviteSheet.context";
+import { TASK_KEYS_MAX, capFor, catalogHosts, pool, readCatalog, routeFor, taskKeys, taskPeople, useCatalogs, type Candidate, type Route, type TaskPerson } from "./InviteSheet.candidates";
+import { Checklist, ContextChoice, Preview, sinceShared, type Mode } from "./InviteSheet.context";
+import { dueText, localInput } from "../model";
 import { callName, canBringIn, plural, shareable } from "./RoomPanel.model";
 
 export function InviteSheet() {
@@ -74,6 +75,11 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
 
   const [mode, setMode] = useState<Mode>(invite.selected?.length ? "selected" : "recent");
   const [recent, setRecent] = useState(10);
+  const [since, setSince] = useState(() => localInput(new Date(Date.now() - 24 * 3600e3))); // "Since a date": a day ago to start
+  // Who may give an invited agent tasks without asking, per candidate: your
+  // own agent starts with you (own agents inherit your rights); anyone
+  // else is a tap of yours.
+  const [tasksFor, setTasksFor] = useState<{ cand: string; chosen: Set<string> } | null>(null);
   const [selected, setSelected] = useState(() => new Set(invite.selected || []));
   const [selection, setSelection] = useState(invite.selected?.length ? preset.label : ""); // what the selection is, until changed
   const [note, setNote] = useState("");
@@ -90,18 +96,30 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const max = Math.min(cap, list.length);
   const count = Math.min(recent, max);
   const picked = list.filter((m) => selected.has(m.id));
-  const shared = mode === "recent" ? list.slice(list.length - count) : picked;
+  const sinceSel = sinceShared(list, since, cap);
+  const shared = mode === "recent" ? list.slice(list.length - count) : mode === "since" ? sinceSel.shared : picked;
   const tooMany = mode === "selected" && picked.length > cap;
   const files = shared.reduce((n, m) => n + (m.attachments?.length || 0), 0);
   const filesKey = shared.filter((m) => m.attachments?.length).map((m) => m.id).join(",");
   const needFiles = files > 0 && filesOk !== filesKey;
-  const gapless = mode === "recent" || (picked.length > 0 && list.indexOf(picked[picked.length - 1]) - list.indexOf(picked[0]) === picked.length - 1 && picked[picked.length - 1] === list[list.length - 1]);
+  const gapless = mode === "recent" || mode === "since" || (picked.length > 0 && list.indexOf(picked[picked.length - 1]) - list.indexOf(picked[0]) === picked.length - 1 && picked[picked.length - 1] === list[list.length - 1]);
 
   const shownName = c ? (c.kind === "agent" ? callName(c.name) : c.name) : "";
   const Who = c ? c.name : "They";
   const after = route === "agent" ? "Then only what someone asks it here." : route === "group" ? "Then everything new: they become a member." : "Then new messages while they’re here.";
   const offline = conn !== "live";
   const now = route === "agent" && !!c?.mine; // your own agent joins in this one step
+
+  const people = useMemo(() => (t && o ? taskPeople(t, o) : []), [t, o]);
+  const chosenTasks = c && tasksFor?.cand === c.key ? tasksFor.chosen : new Set(c?.mine ? people.filter((x) => x.me).map((x) => x.key) : []);
+  const tasksFrom = route === "agent" ? taskKeys(people, chosenTasks) : [];
+  const tooManyKeys = tasksFrom.length > TASK_KEYS_MAX;
+  const toggleTasks = (key: string) => {
+    if (!c) return;
+    const next = new Set(chosenTasks);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setTasksFor({ cand: c.key, chosen: next });
+  };
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -120,7 +138,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           const fresh = await readCatalog(store.api, c.host!);
           if (!fresh.some((r) => r.id === c.agentId)) throw new Error(c.name + " is no longer offered on that computer. Nothing was sent.");
         }
-        v = await store.api.inviteAgent({ conv: t.id, host: c.host!, ...(c.agentId ? { agent_id: c.agentId } : {}), share: shared.map((m) => m.id), tasks_from: [], note: note.trim() });
+        v = await store.api.inviteAgent({ conv: t.id, host: c.host!, ...(c.agentId ? { agent_id: c.agentId } : {}), share: shared.map((m) => m.id), tasks_from: tasksFrom, note: note.trim() });
       } else if (route === "guest") {
         await store.api.inviteGuest({ conv: t.id, host: c.person!.address, share: shared.map((m) => m.lid || m.id), note: note.trim() });
       } else {
@@ -191,7 +209,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
             </p>
           ) : (
           <div className="mt-2.5">
-            <ContextChoice mode={mode} onMode={setMode} recent={count} max={max} onRecent={setRecent} picked={picked.length} label={selection} available={list.length} />
+            <ContextChoice mode={mode} onMode={setMode} recent={count} max={max} onRecent={setRecent} picked={picked.length} label={selection} available={list.length}
+              since={since} onSince={setSince} sinceCount={sinceSel.total} cap={cap} />
           </div>
           )}
           {mode === "selected" && (
@@ -202,7 +221,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           {mode === "selected" && selected.size > picked.length && (
             <p className="mt-2 text-[13px] text-muted">{plural(selected.size - picked.length, "picked message")} can’t be shared this way and will stay private.</p>
           )}
-          {!tooMany && list.length > 0 && <Preview key={mode + count + picked.length} who={Who} shared={shared} after={after} t={t} o={o} names={names} gapless={gapless} />}
+          {!tooMany && list.length > 0 && <Preview key={mode + count + picked.length + (mode === "since" ? since : "")} who={Who} shared={shared} after={after} t={t} o={o} names={names} gapless={gapless}
+            limit={mode === "since" && sinceSel.over ? "Only the newest " + cap + " since " + dueText(since) + " are shared: that’s the most one invitation carries." : undefined} />}
           {files > 0 && (
             <label className="mt-3 flex min-h-11 cursor-pointer items-center gap-3 rounded-2xl stroke bg-surface px-3 py-2 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink">
               <input type="checkbox" className="sr-only" checked={!needFiles} onChange={(e) => setFilesOk(e.target.checked ? filesKey : "")} />
@@ -210,6 +230,9 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
               <IconPaperclip size={18} className="shrink-0 text-text-2" aria-hidden="true" />
               <span className="text-[14px] font-semibold">Also share the {plural(files, "file")} on these messages</span>
             </label>
+          )}
+          {route === "agent" && people.length > 0 && (
+            <TaskChoice people={people} chosen={chosenTasks} onToggle={toggleTasks} mine={!!c.mine} owner={c.ownerName || "its owner"} keys={tasksFrom.length} />
           )}
           {route !== "group" && (
             <label className="mt-3 flex h-12 items-center gap-2 rounded-2xl stroke bg-surface px-3.5 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink">
@@ -223,7 +246,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     </>
   );
 
-  const ready = !!c && !c.unavailable && !tooMany && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck);
+  const ready = !!c && !c.unavailable && !tooMany && !tooManyKeys && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck);
   const footer = t && allowed ? (
     <div>
       {sent.length > 0 && !error && (
@@ -255,6 +278,43 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
         : "They join as a guest and see only what you share. Anyone here can dismiss them."} footer={footer}>
       {body}
     </Sheet>
+  );
+}
+
+/** TaskChoice: who may give the invited agent tasks without asking, one row per
+ *  person (their devices today). Your own agent starts with you ticked. */
+function TaskChoice({ people, chosen, onToggle, mine, owner, keys }: {
+  people: TaskPerson[]; chosen: Set<string>; onToggle: (key: string) => void; mine: boolean; owner: string; keys: number;
+}) {
+  return (
+    <fieldset className="mt-4">
+      <legend className="font-display text-[16px] font-bold leading-tight">Who can give it tasks without asking</legend>
+      <p className="mt-1 text-[13px] text-text-2">
+        Their tasks run without waiting for an OK. Everyone else’s wait for {mine ? "yours" : owner + "’s"}.{mine ? "" : " " + owner + " sees this before saying yes."}
+      </p>
+      <div className="mt-2 flex flex-col gap-1">
+        {people.map((p) => {
+          const on = chosen.has(p.key), none = !p.keys.length;
+          return (
+            <label key={p.key} className={"flex min-h-12 items-center gap-3 rounded-2xl px-2.5 py-1.5 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink "
+              + (none ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:bg-sunken")}>
+              <input type="checkbox" className="sr-only" checked={on} disabled={none} onChange={() => onToggle(p.key)} />
+              <span aria-hidden="true" className={"grid size-[22px] shrink-0 place-items-center rounded-md border-[1.5px] border-outline " + (on ? "bg-act text-act-ink" : "bg-surface")}>{on && <IconCheck size={15} stroke={3} />}</span>
+              <PersonAvatar name={p.name} seed={p.seed} size={28} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-semibold">{p.name}</span>
+                <span className="block truncate text-[13px] text-text-2">
+                  {none ? "Their devices aren’t checked here yet" : p.me ? (mine ? "Your own agent: on by default" : "From your devices") : mine && on ? "They can give your agent tasks without asking you" : "From their devices"}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      {keys > TASK_KEYS_MAX
+        ? <p role="alert" className="mt-1.5 text-[13px] font-semibold text-danger">One invitation can name at most {TASK_KEYS_MAX} devices, and these people have {keys}. Untick someone.</p>
+        : <p className="mt-1.5 text-[13px] text-muted">It covers the devices they have now. A device they add later waits for an OK.</p>}
+    </fieldset>
   );
 }
 
