@@ -39,6 +39,15 @@ function whoTextIn(o, address) {
   const w = whoParts(o, address);
   return [w.name, w.key, w.device].filter(Boolean).join(" · ");
 }
+// devicesText: a person's devices in words, "on Desk, Phone", never addresses.
+function devicesText(p) {
+  return "on " + (p.devices && p.devices.length ? p.devices : [{ address: p.address }]).map((d) => deviceWords(d.address)).join(", ");
+}
+// whoMatches: search finds a device by its address or by who it is in words
+// ("sergey" finds admin/pixel, shown as "Sergey · Pixel"); q is lower case.
+function whoMatches(o, address, q) {
+  return String(address || "").toLowerCase().includes(q) || whoTextIn(o, address).toLowerCase().includes(q);
+}
 // ---- end of people words
 export async function mount(root, host) {
   if (host.version !== 1) throw new Error('Zoom requires AgentNet host API v1');
@@ -796,12 +805,12 @@ function searchKnown(q, threads, dir) {
   // People by the name they give or their device; DMs by their lines or
   // the person's name. Nothing matched is merged or guessed.
   const has = (s) => (s || "").toLowerCase().includes(q);
-  const people = (o.people || []).filter((p) => has(p.label) || has(p.address) || devicesOf(p).some((d) => has(d.address) || has(d.name)));
+  const people = (o.people || []).filter((p) => has(p.label) || has(p.address) || devicesOf(p).some((d) => has(d.address) || has(d.name) || has(deviceWords(d.address))));
   const dms = (o.dms || []).filter((d) => has(d.title) || has(d.last) || has(d.peer.label));
-  const agents = contactsOf(threads).filter((c) => c.peer.toLowerCase().includes(q));
+  const agents = contactsOf(threads).filter((c) => whoMatches(o, c.peer, q));
   const known = new Set(threads.map((t) => t.peer));
   // Agents the server lists that there is no conversation with yet.
-  const listed = ((dir && dir.members) || []).filter((m) => !known.has(m.address) && m.address.toLowerCase().includes(q));
+  const listed = ((dir && dir.members) || []).filter((m) => !known.has(m.address) && whoMatches(o, m.address, q));
   const conversations = threads.filter((t) => !t.notice_only &&
     (t.title.toLowerCase().includes(q) || t.last.toLowerCase().includes(q)))
     .sort((a, b) => new Date(b.last_at) - new Date(a.last_at));
@@ -1479,7 +1488,7 @@ function renderHub() {
     const p = x.person;
     fill($("conv-name"), p.label);
     $("conv-topic").textContent = "Person · " + plural(x.dms.length, "DM", "DMs") + " · each DM is a separate conversation";
-    $("conv-presence").textContent = "The name they give · " + (devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address) +
+    $("conv-presence").textContent = "The name they give · " + devicesText(p) +
       " · " + (personStateText[p.state] || p.state);
     fill($("hub"),
       deviceDisclosure(p),
@@ -2495,7 +2504,7 @@ function inviteDialog(t) {
   const members = humanGroup(t) ? t.members : [me, t.peer];
   const devices = humanGroup(t) ? members.flatMap(p => (p.devices?.length ? p.devices : [{address:p.address,fingerprint:p.fingerprint}]).map(d => ({...d,label:p.label,person:p.person}))) : [];
   const hosts = humanGroup(t) ? [...new Map(devices.filter(d=>d.address && !(browser && d.address===me.address)).map(d=>[d.address,choice("radio","agent-host",d.address,(d.person===me.person?"Yours":d.label+"'s")+", on "+d.address)])).values()] : [!browser && choice("radio", "agent-host", me.address, "Yours, on " + me.address),
-    choice("radio", "agent-host", t.peer.address, t.peer.label + "'s, on " + t.peer.address)].filter(Boolean);
+    choice("radio", "agent-host", t.peer.address, t.peer.label + "'s, on their " + deviceWords(t.peer.address))].filter(Boolean);
   const memberAddresses = new Set(humanGroup(t) ? devices.map(d=>d.address) : [me.address, t.peer.address, ...(me.devices || []).map(d => d.address), ...(t.peer.devices || []).map(d => d.address)]);
   const external = new Set(directory().current ? directory().members.filter(m => !memberAddresses.has(m.address)).map(m => m.address) : []);
   for (const address of external) hosts.push(choice("radio", "agent-host", address, "External host · " + address));
@@ -2778,13 +2787,13 @@ function searchItems(q, threads, open) {
     ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.person(p, e.currentTarget) },
       el("span", { class: "result-kind" }, "Person"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, p.label, p.person && el("span", { class: "hint", title: "Person ID: " + p.person }, " · @" + p.person.slice(0, 8))),
-        el("span", { class: "hint" }, "via " + p.address + " · " + (personStateText[p.state] || p.state)))))),
+        el("span", { class: "hint" }, devicesText(p) + " · " + (personStateText[p.state] || p.state)))))),
     dms.length > 0 && el("li", { class: "result-head" }, dms.some(humanGroup) ? plural(dms.length, "conversation", "conversations") : plural(dms.length, "DM", "DMs")),
     ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.dm(d, e.currentTarget) },
       el("span", { class: "result-kind" }, humanGroup(d) ? "Group" : "DM"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, d.title || "No messages yet"),
         el("span", { class: "hint" }, "with " + d.peer.label + " · " + when(d.last_at))), dmFlags(d)))),
-    agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "agent", "agents")),
+    agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "device", "devices")),
     ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.contact(c, e.currentTarget) },
       el("span", { class: "result-kind" }, runsAgent(c.peer) ? "Agent" : "Person"), el("span", { class: "result-main" }, who(c.peer),
         el("span", { class: "hint" }, " · " + plural(c.conversations.length, "conversation", "conversations"))), presenceBadge(c.peer), counts(c)))),
@@ -5017,7 +5026,7 @@ const Zoom = {
       el("ul", { class: "person-cards" }, self, people.map((p) => {
         const theirs = dms.filter((d) => d.peer.person && d.peer.person === p.person);
         const held = theirs.reduce((n, d) => n + d.held, 0), unread = theirs.reduce((n, d) => n + d.unread, 0);
-        const status = [devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address, personStateText[p.state] || p.state, theirs.length && plural(theirs.length, "DM", "DMs"),
+        const status = [devicesText(p), personStateText[p.state] || p.state, theirs.length && plural(theirs.length, "DM", "DMs"),
           held && held + " held", unread && unread + " new"].filter(Boolean).join(" · ");
         const b = el("button", { type: "button", class: "person-card" + (p.state === "conflict" ? " danger" : ""), "aria-label": p.label + ", " + status },
           avatar(p.label || p.address, "node-face"), el("span", { class: "node-name" }, p.label), el("span", { class: "node-status" }, status));
@@ -5058,7 +5067,7 @@ const Zoom = {
     const online = presenceOf(p.address);
     return el("div", { class: "zoom-person" },
       el("header", { class: "zoom-head" }, avatar(p.label || p.address), el("div", {}, el("h2", {}, p.label),
-        el("p", { class: "hint" }, "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state) +
+        el("p", { class: "hint" }, "The name they give · " + devicesText(p) + " · " + (personStateText[p.state] || p.state) +
           (online ? " · their computer is " + online : "")))),
       deviceDisclosure(p, (addr, from) => this.go(1, { peer: addr, person: null }, from)),
       el("div", { class: "zoom-contact" },
@@ -5077,7 +5086,7 @@ const Zoom = {
     const me = state.overview && state.overview.person ? state.overview.person.label : "You";
     return el("div", { class: "zoom-scene" },
       el("header", { class: "zoom-head" }, el("div", {},
-        el("p", { class: "hint" }, humanGroup(d) ? "Group: " + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · via " + d.peer.address),
+        el("p", { class: "hint" }, humanGroup(d) ? "Group: " + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · " + devicesText(d.peer)),
         el("h2", {}, d.messages[0] ? firstLine(d.messages[0].body, 80) : "No messages yet"))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
       el("ol", { class: "mini-chat" }, d.messages.map((m) => {
