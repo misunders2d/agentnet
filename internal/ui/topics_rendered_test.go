@@ -16,7 +16,9 @@ import (
 
 // The topic bar, the open topic's menu, All topics and the end of a done
 // topic as the default messenger renders them over a real installation
-// with 48 topics with one agent, at 1800x960 and 390x844, light and dark:
+// with 48 topics with one standalone device (no agent), at 1800x960 and
+// 390x844, light and dark. MEL-529 names this peer as a device/person;
+// the conversation still has its topics and a named loading header:
 // the bar never scrolls and holds at most six chips (two topics on a
 // phone), topics that need the person and are not in the bar mark the All
 // topics chip, All topics lists, filters and searches (focus starts in its

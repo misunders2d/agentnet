@@ -100,7 +100,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   const names = useAgentNames();
   const draft = useStore(store, (s) => s.drafts[dm?.id||thread!.id]);
   const [all, setAll] = useState(false);
-  const item = chatList(overview, names).find((i) => i.kind === "agent" && i.peer === thread?.peer);
+  const item = chatList(overview, names).find((i) => i.open.kind === "thread" && i.peer === thread?.peer);
   const current=dm?.topics?.find(t=>t.id===draft?.topic);
   const open = dm ? current?topicOf(current):null : thread?.topic ? topicOf(thread.topic) : null;
   const topics = dm ? (dm.topics||[]).filter(t=>t.state!=="archived").map(topicOf) : item?.topics || [];

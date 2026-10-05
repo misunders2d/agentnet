@@ -129,7 +129,7 @@ function Loading({ o }: { o: NonNullable<Open> }) {
   const [slow, setSlow] = useState(false);
   useEffect(() => { const x = setTimeout(() => setSlow(true), 6000); return () => clearTimeout(x); }, []);
   // Its header is the chat list's: who it is with, where the real header puts it.
-  const item = useMemo(() => chatList(overview, names).find((i) => (o.kind === "dm" ? i.open.kind === "dm" && i.open.id === o.id : i.kind === "agent" && i.peer === o.peer)), [overview, names, o]);
+  const item = useMemo(() => chatList(overview, names).find((i) => (o.kind === "dm" ? i.open.kind === "dm" && i.open.id === o.id : i.open.kind === "thread" && i.peer === o.peer)), [overview, names, o]);
   const size = wide ? 48 : 40;
   const face = !item ? <span className="shrink-0 rounded-full bg-hairline" style={{ width: size, height: size }} />
     : item.kind === "agent" ? <AgentAvatar seed={item.avatarSeed} size={size} device={deviceKind(item.avatarSeed)} />
