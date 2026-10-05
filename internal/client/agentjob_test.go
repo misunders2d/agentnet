@@ -165,7 +165,7 @@ func TestAgentAnswersInTheConversation(t *testing.T) {
 		t.Fatalf("answer at alice: %+v", ans)
 	}
 	prompt := st.last()
-	for _, want := range []string{"deploy failed at step 3", "logs are in the ticket", "please look", "emotion: WORD", "## Question from the other person", "reply with your question for them"} {
+	for _, want := range []string{"deploy failed at step 3", "logs are in the ticket", "please look", "emotion: WORD", "## Question from Person of " + w.alice.Address + " (another person) writing from their device Alice (" + w.alice.Address + ", key ", "reply with your question for them"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}
@@ -208,7 +208,7 @@ func TestAgentAnswersInTheConversation(t *testing.T) {
 	}
 	prompt = st.last()
 	if !strings.Contains(prompt, "what failed?") || strings.Count(prompt, "and the fix?") != 1 ||
-		!strings.Contains(prompt, "You (the agent), answer: the deploy failed") || !strings.Contains(prompt, "your own person") {
+		!strings.Contains(prompt, "You (the agent), answer: the deploy failed") || !strings.Contains(prompt, "Person of "+w.bob.Address+" — your owner — on this device asks you the question below") {
 		t.Fatalf("follow-up prompt:\n%s", prompt)
 	}
 
@@ -243,7 +243,7 @@ func TestAgentContextBound(t *testing.T) {
 	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
 	pid := participate(t, w, conv, lids[:2], nil)
 	old := agentContextBytes
-	agentContextBytes = 60
+	agentContextBytes = 70 // one line naming its speaker as a person on a device
 	t.Cleanup(func() { agentContextBytes = old })
 	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "what failed?")
 	if err != nil {
@@ -251,13 +251,13 @@ func TestAgentContextBound(t *testing.T) {
 	}
 	replyAt(t, w.alice, conv, q.ID)
 	prompt := st.last()
-	if !strings.Contains(prompt, "(1 earlier message(s) left out to stay within 60 bytes.)") ||
+	if !strings.Contains(prompt, "(1 earlier message(s) left out to stay within 70 bytes.)") ||
 		strings.Contains(prompt, "deploy failed at step 3\n") || !strings.Contains(prompt, "logs are in the ticket") {
 		t.Fatalf("bounded prompt:\n%s", prompt)
 	}
 	info := stateAt(t, w.bob, pid)
-	c, err := w.bob.agentContext(info, "", 60)
-	if err != nil || c.Bytes > 60 || c.Omitted == 0 || len(c.lines) != len(c.Messages) {
+	c, err := w.bob.agentContext(info, "", 70)
+	if err != nil || c.Bytes > 70 || c.Omitted == 0 || len(c.lines) != len(c.Messages) {
 		t.Fatalf("context: %+v %v", c, err)
 	}
 }

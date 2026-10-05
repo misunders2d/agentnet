@@ -1089,9 +1089,9 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
      OR (kind = ? AND `+taskGrantHolds+`))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     ORDER BY received_at, id LIMIT 1)
-   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,'')`,
+   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,'')`,
 			stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
-			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote)
+			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err = tx.Commit(); err != nil {
 				return job{}, false, err
@@ -1234,17 +1234,18 @@ func (s *store) setRunGroup(id string, pgid int, start string) error {
 // the inbox (messages from peer) and the outbox (messages to peer). It stops
 // at any message that is not between this installation and peer, or whose
 // earlier link is unknown, so a sender cannot pull in other conversations by
-// naming their ids.
-func (s *store) threadText(peer, replyTo string, max int) ([]string, error) {
+// naming their ids. Lines from peer are headed peerName (Sender.Name), this
+// device's own "this device".
+func (s *store) threadText(peer, replyTo string, max int, peerName string) ([]string, error) {
 	var out []string
 	for id := replyTo; id != "" && len(out) < max; {
 		var who, body, next, kind, state, status string
 		err := s.db.QueryRow(`SELECT body, coalesce(reply_to, ''), kind, state, coalesce(status, '') FROM inbox WHERE id = ? AND sender = ?`, id, peer).Scan(&body, &next, &kind, &state, &status)
-		who = peer
+		who = peerName
 		if errors.Is(err, sql.ErrNoRows) {
 			// v1 keeps its kind in the envelope; the kind column belongs to DMs.
 			err = s.db.QueryRow(`SELECT body, coalesce(reply_to, ''), coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, '') FROM outbox WHERE id = ? AND recipient = ?`, id, peer).Scan(&body, &next, &kind, &state, &status)
-			who = "me"
+			who = "this device"
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			break

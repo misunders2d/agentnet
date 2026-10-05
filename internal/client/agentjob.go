@@ -460,25 +460,29 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	if err != nil {
 		return "", err
 	}
+	// Members are worded from their verified record (Sender): the host's
+	// own person as "your owner", anyone else as a person.
 	asker := "someone who is neither a member nor a guest here (" + j.From + ")"
 	switch {
 	case j.Local:
-		asker = host + ", your own person"
+		asker = Sender{Relation: SenderSelf, Label: host, Address: a.Address}.Words()
 	case author != nil:
 		asker = guestName(*author) + ", an outside person present in this conversation only temporarily, as a guest"
 	default:
 		for _, p := range m.persons {
-			switch {
-			case !p.has(j.From, j.Key):
-			case p.info.Person == info.Host.Person:
-				asker = host + ", your own person (from their device " + j.From + ")"
-			case m.group != nil || info.External:
-				asker = p.info.Label + " (" + j.From + ")"
-			default:
-				asker = "the other person, " + p.info.Label
+			if !p.has(j.From, j.Key) {
+				continue
 			}
+			s := a.personSender(p, j.From, j.Key)
+			if p.info.Person == info.Host.Person {
+				s.Relation = SenderOwner
+			} else if s.Relation != SenderPerson {
+				s.Relation = SenderPerson
+			}
+			asker = s.Words()
 		}
 	}
+	hostAt := DeviceWords(a.Address) + " (" + a.Address + ")"
 	// Every reader of the reply besides the members: the guests its
 	// request's audience names that are still present (as its output goes).
 	also := ""
@@ -496,16 +500,16 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 			audience = append(audience, p.info.Label)
 		}
 		slices.Sort(audience)
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. Your person accepted bounded participation in the group between %s. Replies go only to its current human members and this exact invited host.%s Use selected grants and this PID's addressed turns only; no ambient room history or other assistants' sessions.\n", host, a.Address, strings.Join(audience, ", "), also)
+		fmt.Fprintf(&b, "You are the agent of %s, running on their device %s. Your owner accepted bounded participation in the group between %s. Replies go only to its current human members and this exact invited host.%s Use selected grants and this PID's addressed turns only; no ambient room history or other assistants' sessions.\n", host, hostAt, strings.Join(audience, ", "), also)
 	} else if info.External {
 		var audience []string
 		for _, member := range m.root.Members {
 			p := m.persons[member.Person]
 			audience = append(audience, p.info.Label)
 		}
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted bounded participation in the direct conversation between %s; your reply is sent to those two members.%s You are an invited external agent, with selected snapshots and addressed turns only, not ordinary room membership or ambient history access.\n", host, a.Address, host, strings.Join(audience, " and "), also)
+		fmt.Fprintf(&b, "You are the agent of %s, running on their device %s. %s accepted bounded participation in the direct conversation between %s; your reply is sent to those two members.%s You are an invited external agent, with selected snapshots and addressed turns only, not ordinary room membership or ambient history access.\n", host, hostAt, host, strings.Join(audience, " and "), also)
 	} else {
-		fmt.Fprintf(&b, "You are the agent of %s, running on their AgentNet device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.%s\n", host, a.Address, host, other, also)
+		fmt.Fprintf(&b, "You are the agent of %s, running on their device %s. %s accepted your participation in their direct conversation with %s; your reply is sent to both of them.%s\n", host, hostAt, host, other, also)
 	}
 	if j.Kind == envelope.KindTask {
 		fmt.Fprintf(&b, "%s gives you the task below. Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n", asker)
@@ -856,10 +860,15 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 	if err != nil {
 		return ParticipationContext{}, err
 	}
+	// Speakers by device and exact key, worded from their verified record.
 	names := map[string]string{}
 	for _, p := range m.persons {
 		for _, d := range p.roster.Devices {
-			names[d.Address] = p.info.Label
+			s := a.personSender(p, d.Address, d.Fingerprint())
+			if p.info.Person == info.Host.Person && s.Relation == SenderPerson {
+				s.Relation = SenderOwner
+			}
+			names[d.Address+"|"+d.Fingerprint()] = s.Name()
 		}
 	}
 	c := ParticipationContext{PID: info.PID, Note: info.Note, State: info.State, Grant: info.Grant, Limit: limit}
@@ -878,7 +887,10 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 		if msg.ExcerptPID != "" {
 			ref.Fingerprint = msg.Claimed
 		}
-		who := names[msg.From]
+		who := names[msg.From+"|"+msg.Key]
+		if who == "" && msg.Claimed != "" {
+			who = names[msg.From+"|"+msg.Claimed]
+		}
 		if who == "" {
 			who = "someone"
 		}

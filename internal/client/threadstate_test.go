@@ -55,7 +55,7 @@ func TestQuestionContextPreservesTaskState(t *testing.T) {
 	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET state = ?, detail = 'PRIVATE-DECISION' WHERE id = ?`, stateNeedHuman, task.ID); err != nil {
 		t.Fatal(err)
 	}
-	lines, err := w.bob.store.threadText(w.alice.Address, task.ID, 4)
+	lines, err := w.bob.store.threadText(w.alice.Address, task.ID, 4, "Alice on Laptop")
 	if err != nil || !strings.Contains(strings.Join(lines, "\n"), "local state: needs_human") || strings.Contains(strings.Join(lines, "\n"), "PRIVATE-DECISION") {
 		t.Fatalf("private detail in context: %v, %v", lines, err)
 	}
