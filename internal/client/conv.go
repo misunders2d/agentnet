@@ -466,7 +466,8 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if m.Topic, err = a.outgoingTopic(conv, m.Topic, m.ReplyTo); err != nil {
 		return ConvSent{}, err
 	}
-	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) && !envelope.AgentOrigin(m.Origin) {
+	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && (m.Kind == "" || m.Kind == envelope.KindMessage || m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && !envelope.AgentOrigin(m.Origin) {
+		// Addressed questions/tasks continue the same causal topic chain as chat.
 		m.ReplyTo, err = a.chatTopicHead(conv, m.Topic)
 		if err != nil {
 			return ConvSent{}, err

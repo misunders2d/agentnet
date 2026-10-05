@@ -878,6 +878,69 @@
           "Pending": false
         }
       ]
+    },
+    {
+      "name": "Same-second follow-up continues its prior answer before explicit agent closure",
+      "messages": [
+        {
+          "id": "follow-up-request",
+          "lid": "b",
+          "kind": "question",
+          "dir": "out",
+          "body": "Please finish",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "y"
+        },
+        {
+          "id": "first-request",
+          "lid": "z",
+          "kind": "question",
+          "dir": "out",
+          "body": "What failed?",
+          "sent": 1790000000,
+          "topic": "flow"
+        },
+        {
+          "id": "last-answer",
+          "lid": "a",
+          "kind": "answer",
+          "dir": "in",
+          "body": "Finished",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "follow-up-request",
+          "status": "done",
+          "topic_done": true
+        },
+        {
+          "id": "first-answer",
+          "lid": "y",
+          "kind": "answer",
+          "dir": "in",
+          "body": "The deploy failed",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "first-request",
+          "status": "done"
+        }
+      ],
+      "local": {},
+      "assigned": {
+        "a": "flow",
+        "b": "flow",
+        "y": "flow",
+        "z": "flow"
+      },
+      "want": [
+        {
+          "ID": "flow",
+          "State": "done",
+          "Count": 4,
+          "DoneBy": "agent",
+          "Pending": false
+        }
+      ]
     }
   ]
 }

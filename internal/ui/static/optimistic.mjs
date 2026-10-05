@@ -1,12 +1,17 @@
 // UI-only send previews. Durable messages and all authority remain the host's.
 const ledgers = new WeakMap();
+const ledgerKey = Symbol.for("agentnet.ui.pendingSends");
 export function sendID() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
 }
 export function pendingSends(host, changed = () => {}) {
-  const scope = host.workspaces?.state?.(host.workspace.id) || host;
-  let shared = ledgers.get(scope);
-  if (!shared) { shared = {ledger: new Map(), changed}; ledgers.set(scope, shared); }
+  const state = host.workspaces?.state?.(host.workspace.id);
+  // Package-local copies share previews through the public membership state.
+  let shared = state ? state[ledgerKey] : ledgers.get(host);
+  if (!shared) {
+    shared = {ledger: new Map(), changed};
+    if (state) state[ledgerKey] = shared; else ledgers.set(host, shared);
+  }
   shared.changed = changed; // the currently mounted renderer owns notifications
   const ledger = shared.ledger, notify = () => shared.changed?.();
   const rows = key => [...ledger.values()].filter(x => x.key === key);

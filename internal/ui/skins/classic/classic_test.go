@@ -49,6 +49,8 @@ func TestStandaloneClassicPackage(t *testing.T) {
 		sourcePath := filepath.Join("src", name)
 		if name == "topics.mjs" {
 			sourcePath = filepath.Join("..", "shared", name)
+		} else if name == "optimistic.mjs" {
+			sourcePath = filepath.Join("..", "..", "static", name)
 		}
 		source, err := os.ReadFile(sourcePath)
 		if err != nil {
