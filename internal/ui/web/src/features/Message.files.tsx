@@ -14,6 +14,7 @@ import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
 import { openPictureEditor } from "../pictures.mjs";
 import { isThreadMsg, type AnyMsg } from "./Message.model";
+import { SaveToDrive } from "./Drive";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string }
 
@@ -48,9 +49,10 @@ export function MessageFiles({ m }: { m: AnyMsg }) {
   if (!files.length) return null;
   return (
     <div className="mt-1.5 flex flex-col gap-1.5">
-      {files.map((f) => standing(m, f) === "open" && pictureName.test(f.name)
-        ? <Picture key={f.index} m={m} f={f} />
-        : <FileChip key={f.index} m={m} f={f} />)}
+      {files.map((f) => <div key={f.index} className="min-w-0 space-y-1">
+        {standing(m, f) === "open" && pictureName.test(f.name) ? <Picture m={m} f={f} /> : <FileChip m={m} f={f} />}
+        {standing(m, f) === "open" && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
+      </div>)}
     </div>
   );
 }

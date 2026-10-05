@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { IconArrowLeft, IconMessagePlus, IconPencil, IconSearch, IconUsersPlus, IconX } from "@tabler/icons-react";
 import { useAgentNames, useApp, useWide } from "../context";
 import { useStore, type Store } from "../store";
-import type { T } from "../api";
+import { errorText, type T } from "../api";
 import { deviceKind, niceDevice, personName } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button, IconButton } from "../ui/Button";
@@ -14,6 +14,7 @@ import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { presence } from "./ChatList.row";
 import { chatItems, type ListItem } from "./ChatList.words";
+import { TeamPeople } from "./Teams";
 
 /** Someone a chat can be started with. */
 export interface Candidate {
@@ -213,6 +214,7 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
           </span>
         </button>
       )}
+      {!q && <Button variant="outline" onClick={() => { onDone(); store.showTab("settings", "teams"); }}>Teams</Button>}
 
       {shownPeople.length > 0 && <>
         <h3 className={heading}>People</h3>
@@ -236,37 +238,50 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
   );
 }
 
-function NewGroupForm({ onBack, onCreated }: { onBack: () => void; onCreated: () => void }) {
+export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack: () => void; onCreated: () => void; initialPeople?: T.PersonRef[] }) {
   const store = useApp();
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [people, setPeople] = useState(initialPeople);
+  const [created, setCreated] = useState("");
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const t = title.trim();
-    if (!t) { setError("Give the group a name."); return; }
+    if (!t && !created) { setError("Give the group a name."); return; }
+    if (busy) return;
     setBusy(true); setError("");
-    const r = await store.run((a) => a.newGroup(t), "Group created. Now bring people in.");
-    setBusy(false);
-    if (!r) return;
-    onCreated();
-    await store.open({ kind: "dm", id: r.id });
-    store.openInvite(r.id);
+    let id = created;
+    try {
+      if (!id) { id = (await store.api.newGroup(t)).id; if (!store.isActive()) return; setCreated(id); }
+      for (const p of people) {
+        if (!store.isActive()) return;
+        await store.api.inviteToGroup({ conv: id, person: p.id, history: {} });
+        setPeople((ps) => ps.filter((x) => x.id !== p.id));
+      }
+      if (!store.isActive()) return;
+      onCreated();
+      await store.open({ kind: "dm", id });
+      store.openInvite(id);
+    } catch (e) { if (store.isActive()) setError(errorText(e) + (id ? " The group is already created; retry only the remaining invitations." : "")); }
+    finally { setBusy(false); void store.refetch(); }
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-3 pt-1 pb-2">
-      <button type="button" onClick={onBack} className="-ml-2 flex min-h-11 items-center gap-1.5 self-start rounded-full px-2 text-[15px] font-semibold text-text-2 hover:bg-sunken">
+      <button type="button" disabled={busy} onClick={onBack} className="-ml-2 flex min-h-11 items-center gap-1.5 self-start rounded-full px-2 text-[15px] font-semibold text-text-2 hover:bg-sunken">
         <IconArrowLeft size={18} aria-hidden="true" />Back to people
       </button>
       <label className="block font-semibold">
         Group name
-        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={64} autoFocus autoComplete="off" disabled={busy}
+        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={64} autoFocus autoComplete="off" disabled={busy || !!created}
           placeholder="For example, Savannah rush order"
           className="mt-1.5 block h-12 w-full rounded-xl bg-surface px-3 text-[16px] stroke placeholder:text-muted" />
       </label>
       <p className="text-[13px] text-muted">You’ll be its admin. Only you can bring people in at first; you can make others admins later.</p>
+      <TeamPeople selected={people} onChange={setPeople} disabled={busy} />
+      {created && <p role="status">The group is already created. Only the remaining people below will be invited when you retry.</p>}
       {error && <p role="alert" className="rounded-xl bg-danger-bg px-3 py-2.5 font-semibold text-danger">{error}</p>}
-      <Button variant="act" size="lg" type="submit" disabled={busy} className="mt-1">{busy ? "Creating…" : "Create group"}</Button>
+      <Button variant="act" size="lg" type="submit" disabled={busy} className="mt-1">{busy ? "Sending…" : created ? "Retry remaining invitations" : "Create group"}</Button>
     </form>
   );
 }

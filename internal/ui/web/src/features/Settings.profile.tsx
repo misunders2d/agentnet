@@ -16,6 +16,7 @@ import { Card, copyText, Details, Fact, GroupLabel, Hint, input, PageHead, Skele
 import { usePortal } from "../owned";
 import { openPictureEditor } from "../pictures.mjs";
 import { QrCode } from "./Settings.qr";
+import { Confirm } from "./Message.actions";
 
 /** The words for this device's own request to join a person (Overview.link). */
 const ownLinkText: Record<string, string> = {
@@ -47,7 +48,7 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
   const p = o.person;
   if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename person={p} /></>;
 
-  const own = o.link && ownLinkText[o.link.state];
+  const own = o.role !== "service" && o.link && ownLinkText[o.link.state];
   return (
     <>
       <PageHead title="Set up your person" titleRef={titleRef} lead="A person is you, the human others chat with. A service or bot, like a server, doesn’t need one." />
@@ -65,8 +66,22 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
       ) : (
         <Card className="p-4"><p>This computer has no person yet.</p></Card>
       )}
+      {o.persons && o.role === "unset" && o.link?.state !== "pending" && store.host.platform !== "browser" && <ServiceRole />}
     </>
   );
+}
+
+function ServiceRole() {
+  const store = useApp();
+  const [open, setOpen] = useState(false);
+  return <div className="mt-4">
+    <Button variant="outline" onClick={() => setOpen(true)}>It is a service or bot…</Button>
+    <Confirm open={open} onOpenChange={setOpen} title="A service or bot" ok="It is a service or bot" danger={false}
+      onOk={() => store.run((a) => a.serviceRole(), "This computer is a service or bot.")}>
+      <p>This computer has no person. Nobody writes personal chats as a human here, or asks others to trust it as one. It keeps its device conversations and invitations.</p>
+      <p className="mt-2">Choose this for a server, automation or bot.</p>
+    </Confirm>
+  </div>;
 }
 
 function Rename({ person }: { person: T.PersonView }) {

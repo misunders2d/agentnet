@@ -16,6 +16,7 @@ import { JoinSheet, LeaveSheet, RenameSheet, useDisconnected, useReconnect, useW
 import { errorText } from "../api";
 import { Card, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
 import { GoogleMembers } from "./GoogleMembers";
+import { DriveSettings } from "./Drive";
 
 // ---- Storage -----------------------------------------------------------------
 
@@ -26,7 +27,7 @@ const days = (sec: number) => { const d = Math.round(sec / 86400); return d === 
 export function StorageSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const r = useLoad(() => store.api.storage(), []);
-  const head = <PageHead title="Storage" titleRef={titleRef} lead="What AgentNet keeps, as it reports it. Nothing here deletes anything." />;
+  const head = <><PageHead title="Storage" titleRef={titleRef} lead="What AgentNet keeps, as it reports it." /><DriveSettings /></>;
   if (r.error && !r.data) return <>{head}<Failed text={/not found|404/i.test(r.error) ? "This AgentNet doesn’t report storage yet." : "Storage couldn’t be read just now."} retry={r.reload} /></>;
   if (!r.data) return <>{head}<Skeleton lines={5} /></>;
   const { local, remote } = r.data;

@@ -20,6 +20,7 @@ import { groupRights, useGroupChange } from "./GroupAdmin";
 import { DeviceGrantConfirm, type GrantChange } from "./Trust";
 import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } from "./Message.model";
 import { usePortal } from "../owned";
+import { ProjectSpaceSheet } from "./Drive";
 
 // ---- who is helping -------------------------------------------------------------------
 
@@ -107,6 +108,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   const [del, setDel] = useState(false);
   const [remind, setRemind] = useState<boolean | null>(null);
   const [grant, setGrant] = useState<GrantChange | null>(null);
+  const [space, setSpace] = useState(false);
   const rights = groupRights(t, overview);
   const change = useGroupChange(t);
   // "Remind me about this chat": its newest received message (a computer keeps reminders; a browser doesn't).
@@ -197,6 +199,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
           <Menu.Positioner side="bottom" align="end" sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {t && <Menu.Item className={item} onClick={() => store.setPanel(true)}><IconUsers size={20} />In this chat</Menu.Item>}
+              {t?.peer.person && <Menu.Item className={item} onClick={() => setSpace(true)}><IconUsers size={20} />Project space</Menu.Item>}
               {t && notify?.available && (
                 <Menu.Item className={item} onClick={() => void store.run((a) => a.notify("mute", { conv: t.id, muted: !muted }), muted ? "Notifications on for this chat" : "This chat won’t notify you")}>
                   {muted ? <IconBell size={20} /> : <IconBellOff size={20} />}{muted ? "Turn notifications on" : "Mute notifications"}
@@ -219,6 +222,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
       </Menu.Root>
 
       {change.sheet}
+      {t?.peer.person && <ProjectSpaceSheet conv={t.id} open={space} onOpenChange={setSpace} />}
       {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
       {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={grant === "revoke_tasks" ? (th.task_target || th.peer) : grant === "unapprove" ? (th.question_target || th.peer) : th.peer} thread={th} />}
       <Confirm open={del} onOpenChange={setDel} ok="Delete" onOk={remove}
@@ -294,4 +298,3 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
     </div>
   );
 }
-

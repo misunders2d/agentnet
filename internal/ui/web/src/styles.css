@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Existing Drive widgets inherit Comic's theme and fit narrow sheets. */
+.drive-space .drive-error { color: var(--an-danger); }
+.drive-space pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Pop Huddle: the Comic skin's design tokens (docs/plans/MESSENGER_DESIGN.md).
    The skin runs in a shadow tree the host gives it, so tokens, theme and
    the base reset belong to the skin's own root (.an-root, set by main.tsx),

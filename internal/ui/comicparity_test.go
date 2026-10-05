@@ -22,7 +22,7 @@ import (
 var comicParity = []struct {
 	feature string
 	route   string // the host API route, act verb or overview field
-	comic   string // a regexp over Comic's sources outside api.ts and api.gen.ts; "" = not in Comic yet
+	comic   string // a regexp over Comic's features; empty only for documented reply-continuation exceptions below
 	skins   string // a regexp some Classic and Zoom src/*.mjs file must match
 }{
 	{"1 reminders: set or move", "POST /api/remind", `\.remind\(`, route("/api/remind")},
@@ -42,16 +42,18 @@ var comicParity = []struct {
 	{"6 tasks without asking on agent invite", "POST /api/dm/agent/invite tasks_from", `tasks_from: [A-Za-z]`, `tasks_from: [A-Za-z]`},
 	{"7 group history since a date", "POST /api/groups/invite history", `onMode\("since"\)`, `\{ since: `},
 	{"8 typing preferences", "POST /api/typing/preferences", `\.typingPreferences\(`, route("/api/typing/preferences")},
-	// Items 9-13 are still only in Classic and Zoom (MEL-528 P5b fills in comic).
-	{"9 service or bot", "POST /api/device/service", "", route("/api/device/service")},
-	{"10 teams", "GET /api/teams", "", route("/api/teams")},
-	{"10 team changes", "POST /api/team", "", route("/api/team")},
-	{"10 a team's people", "POST /api/teams/snapshot", "", route("/api/teams/snapshot")},
-	{"11 hooks setup", "/api/assistant-setup", "", route("/api/assistant-setup")},
+	{"9 service or bot", "POST /api/device/service", `\.serviceRole\(`, route("/api/device/service")},
+	{"10 teams", "GET /api/teams", `\.teams\(`, route("/api/teams")},
+	{"10 team changes", "POST /api/team", `\.changeTeam\(`, route("/api/team")},
+	{"10 a team's people", "POST /api/teams/snapshot", `\.teamSnapshot\(`, route("/api/teams/snapshot")},
+	{"11 hooks setup", "/api/assistant-setup", `setup: store\.api\.assistantSetup`, route("/api/assistant-setup")},
+	// Approved P24 exception. Exact Classic actions and send-time gates are
+	// listed in docs/COMIC_PARITY_GAPS.md. Classic/Zoom keep them available.
 	{"12 reply receivers", "GET /api/reply-receivers", "", route("/api/reply-receivers")},
 	{"12 reply sessions", "GET /api/reply-sessions", "", route("/api/reply-sessions")},
-	{"13 drive setup", "/api/drive/setup", "", route("/api/drive/setup")},
-	{"13 save to drive", "host.drive.driveUpload", "", `driveUpload`},
+	{"13 drive setup", "/api/drive/setup", `mountFileStorageOptions\(`, route("/api/drive/setup")},
+	{"13 project space", "host.drive", `mountDriveSpace\(`, `mountDriveSpace\(`},
+	{"13 save to drive", "host.drive.driveUpload", `saveAttachmentToDrive\(`, `driveUpload`},
 }
 
 // route matches a route written as a string literal, in either quotes.
@@ -99,6 +101,9 @@ func TestComicParityRoutes(t *testing.T) {
 		"zoom":    readSources(t, "skins/zoom/src", []string{".mjs"}),
 	}
 	for _, row := range comicParity {
+		if row.comic == "" && row.feature != "12 reply receivers" && row.feature != "12 reply sessions" {
+			t.Errorf("Undocumented Comic parity exception: %s", row.feature)
+		}
 		if row.comic != "" && !regexp.MustCompile(row.comic).MatchString(comic) {
 			t.Errorf("Comic no longer uses %s (%s): nothing in web/src outside api.ts matches %s", row.route, row.feature, row.comic)
 		}
