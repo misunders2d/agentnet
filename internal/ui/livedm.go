@@ -347,27 +347,15 @@ func (l *Live) DM(id string) (DMThread, error) {
 		if err != nil {
 			return DMThread{}, err
 		}
-		labels, addressLabels := map[string]string{}, map[string]string{}
+		labels := map[string]string{}
 		for _, p := range known {
 			labels[p.Person] = p.Label
-			for _, d := range p.Devices {
-				addressLabels[d.Address] = p.Label
-			}
 		}
 		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
 				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
-			if m.State == "waiting" {
-				label := addressLabels[laggingCopy(m, c.Peer.Address)]
-				if laggingCopy(m, c.Peer.Address) == "all devices" {
-					label = "your other device"
-				}
-				if label == "" {
-					label = "someone"
-				}
-				dm.StateText = DMStateText(m.Dir, m.Kind, m.State, label, m.Detail)
-			}
+
 			for i := range dm.Copies {
 				if dm.Copies[i].Own {
 					dm.Copies[i].Person = "You"

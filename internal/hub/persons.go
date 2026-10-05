@@ -200,7 +200,14 @@ func (s *store) putPersonStep(caller identity.Public, raw []byte, r protocol.Per
 				continue
 			}
 			res.removed = append(res.removed, d.Address)
-			if err := revokeDeviceAdminGrants(tx, d.Address); err != nil {
+			if target, err := rawAgentIn(tx, d.Address); err != nil {
+				return res, err
+			} else if target.Admin && target.linked {
+				if err := addDeviceAdminNotice(tx, r.Person, d.Address, caller.Address, false); err != nil {
+					return res, err
+				}
+			}
+			if err := revokeDeviceAdminGrants(tx, d.Address, caller.Address); err != nil {
 				return res, err
 			}
 			if _, err := tx.Exec(`UPDATE agents SET admin = 0, admin_granted_by = NULL WHERE address = ? AND linked = 1`, d.Address); err != nil {

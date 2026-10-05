@@ -393,7 +393,7 @@ func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "", "a granted admin cannot revoke an invite admin")
 		return
 	}
-	if err := h.store.revoke(req.Address); err != nil {
+	if err := h.store.revoke(req.Address, caller); err != nil {
 		writeError(w, http.StatusNotFound, "", "unknown or already revoked agent")
 		return
 	}

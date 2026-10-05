@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -468,12 +468,25 @@ func (s *store) enroll(secret string, pub identity.Public, label string, link *p
 	return !createdBy.Valid, createdBy.String, tx.Commit()
 }
 
-func (s *store) revoke(address string) error {
+func (s *store) revoke(address string, from ...string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	by := address
+	if len(from) > 0 {
+		by = from[0]
+	}
+	target, err := rawAgentIn(tx, address)
+	if err != nil {
+		return err
+	}
+	if target.Admin && target.Person != "" && !target.Revoked {
+		if err := addDeviceAdminNotice(tx, target.Person, address, by, false); err != nil {
+			return err
+		}
+	}
 	res, err := tx.Exec(`UPDATE agents SET revoked_at = ? WHERE address = ? AND revoked_at IS NULL`, time.Now().Unix(), address)
 	if err != nil {
 		return err
@@ -481,7 +494,7 @@ func (s *store) revoke(address string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errNotFound
 	}
-	if err := revokeDeviceAdminGrants(tx, address); err != nil {
+	if err := revokeDeviceAdminGrants(tx, address, by); err != nil {
 		return err
 	}
 	if err := dropNotify(tx, address); err != nil { // its notification state goes with it

@@ -907,6 +907,10 @@ type ReviewItem struct {
 // without the person's accept.
 const ReasonSelfConsented = "self_consented"
 
+// ReasonDeviceAdmin is a Hub-reported company-settings access change: a
+// local notice, never a request or permission. Resolve dismisses it here.
+const ReasonDeviceAdmin = "device_admin"
+
 // ConvItem is a conversation item waiting for the person
 // (client.ConvReview); Reason is one of client.ReviewAwaiting,
 // ReviewNeedsHuman, ReviewInterrupted, ReviewInvite or ReviewHeldTurn, and Conv is the

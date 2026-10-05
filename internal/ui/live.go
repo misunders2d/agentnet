@@ -135,6 +135,13 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 	if err := l.selfConsentReview(&o); err != nil { // own agents that joined without a click (liveselfconsent.go)
 		return o, err
 	}
+	notices, err := l.a.DeviceAdminNotices()
+	if err != nil {
+		return o, err
+	}
+	for _, n := range notices {
+		o.Review = append(o.Review, ReviewItem{ID: n.ID, Peer: n.By, Kind: KindMessage, Why: client.DeviceAdminNoticeText(n), At: time.Unix(n.At, 0), Notice: true, Reason: ReasonDeviceAdmin})
+	}
 	q, err := l.a.Quarantine()
 	if err != nil {
 		return o, err

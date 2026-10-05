@@ -4353,7 +4353,9 @@ export class Engine {
       }
       return;
     }
-    if (event === "receipt") {
+    if (event === "device_admin") {
+      await this.onDeviceAdminNotice(data);
+    } else if (event === "receipt") {
       let r;try{r=JSON.parse(data);}catch{return;}
       if(!r||Object.keys(r).some(k=>!["id","state","seq"].includes(k))||!wire.validID(r.id)||!Number.isSafeInteger(r.seq)||r.seq<=0||!["delivered","quarantined","expired"].includes(r.state))return;
       const row=await this.store.get("outbox",r.id),cursor=await this.store.get("kv","receipt-cursor");
@@ -4407,6 +4409,29 @@ export class Engine {
       this.flushOutbox().catch(() => {});
       this.flushReceipts().catch(() => {});
     }
+  }
+
+  async onDeviceAdminNotice(data) {
+    let n;
+    try { n=JSON.parse(data); } catch { return; }
+    if (!n || Object.keys(n).some(k=>!["seq","id","person","device","by","admin","at"].includes(k)) || !wire.validID(n.id) || !wire.validID(n.person) || !wire.validAddress(n.device) || !wire.validAddress(n.by) || typeof n.admin!=="boolean" || !Number.isSafeInteger(n.seq) || n.seq<=0 || !Number.isSafeInteger(n.at) || n.at<=0 || n.at>=2**40 || !this.me || this.me.person!==n.person) return;
+    const key="device-admin/"+n.id, old=await this.store.get("kv",key);
+    if (old) return; // dismissed notes stay as deduplication tombstones
+    await this.store.write([{s:"kv",k:key,v:{...n,device_admin_notice:true,dismissed:false}}],[{s:"kv",k:key,v:old}]);
+    this.changed();
+  }
+
+  async deviceAdminReview() {
+    const notices=(await this.store.all("kv")).filter(n=>n?.device_admin_notice && !n.dismissed && n.person===this.me?.person);
+    return notices.map(n=>({id:n.id,peer:n.by,kind:"message",why:"Your "+deviceWords(n.device)+(n.admin?" can now":" can no longer")+" change company settings — "+(n.admin?"granted":"withdrawn")+" from "+deviceWords(n.by)+" at "+new Date(n.at*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",hour12:false})+".",excerpt:"",at:iso(n.at*1000),notice:true,reason:"device_admin"}));
+  }
+
+  async dismissDeviceAdminNotice(id) {
+    const key="device-admin/"+id, n=await this.store.get("kv",key);
+    if (!n?.device_admin_notice) return null;
+    await this.store.write([{s:"kv",k:key,v:{...n,dismissed:true}}],[{s:"kv",k:key,v:n}]);
+    this.changed();
+    return {note:"Notice hidden on this device. Company settings access is unchanged."};
   }
 
   // keepMemberFacts keeps what the member list says that this device shows
@@ -5782,7 +5807,7 @@ export class Engine {
       me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
       workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices],
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
-      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox"), words), needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
+      threads, topics, topic_list: true, review: [...this.reportItems(await this.store.all("inbox"), await this.store.all("outbox"), words), ...await this.deviceAdminReview()], needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
@@ -7483,7 +7508,7 @@ export class Engine {
     case "/api/act":
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
       if (body.do === "reply") return this.replyV1(body.id, body.body);
-      if (body.do === "resolve") return this.dismissReport(body.id);
+      if (body.do === "resolve") return await this.dismissDeviceAdminNotice(body.id) || this.dismissReport(body.id);
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");
     case "/api/send": return this.sendDirect(body);
     case "/api/simulate": throw new Error("Not available here.");

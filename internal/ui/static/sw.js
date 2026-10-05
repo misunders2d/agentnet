@@ -35,15 +35,15 @@ const channelPattern = /^[A-Za-z0-9_-]{22}$/;
 const channelOf = (v) => (typeof v === "string" && channelPattern.test(v) ? v : "");
 
 self.addEventListener("push", (event) => {
-  let chan = "";
+  let chan = "", security = false;
   try {
     const p = event.data ? event.data.json() : null;
-    if (p && p.v === 1) chan = channelOf(p.chan);
+    if (p && p.v === 1) { chan = channelOf(p.chan); security = p.notice === "device_admin"; }
   } catch (e) { /* unreadable: shown as a summary */ }
   // Every push is shown (a browser may require it), and says nothing of
   // the message: the page reads it after decrypting it.
   event.waitUntil(self.registration.showNotification("AgentNet", {
-    body: "New activity", tag: chan || "summary", renotify: true, icon: "/assets/icon-192.png", data: { chan },
+    body: security ? "Company settings access changed. Open AgentNet to read the notice." : "New activity", tag: security ? "device-admin" : chan || "summary", renotify: true, icon: "/assets/icon-192.png", data: { chan },
   }));
 });
 

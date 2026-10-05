@@ -306,6 +306,8 @@ func (a *Agent) sync(ctx context.Context) {
 
 func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 	switch event {
+	case "device_admin":
+		return a.onDeviceAdminNotice([]byte(data))
 	case "receipt":
 		var receipt protocol.ReceiptEvent
 		if err := decodeStrict([]byte(data), &receipt); err != nil || !protocol.ValidID(receipt.ID) || receipt.Seq <= 0 || (receipt.State != protocol.StateDelivered && receipt.State != protocol.StateQuarantined && receipt.State != protocol.StateExpired) {
