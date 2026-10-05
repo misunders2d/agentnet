@@ -44,13 +44,18 @@ const bad=sendID();ui.begin('dm',{id:bad,lid:bad,dir:'out',body:'bad'},()=>retri
 const scope={}, bound={workspace:{id:'one'},workspaces:{state:()=>scope}};
 let oldChanges=0,newChanges=0;
 const oldUI=pendingSends(bound,()=>oldChanges++), ongoing=sendID();oldUI.begin('dm',{id:ongoing,dir:'out',body:'switch'});
-const newUI=pendingSends(bound,()=>newChanges++);oldUI.dispose();oldUI.fail(ongoing,'kept for Retry');
-assert.equal(oldChanges,1);assert.equal(newChanges,1);assert.equal(newUI.merge('dm',[])[0]._failed,true);newUI.dispose();
+// A standalone skin loads its own module instance, without a host asset URL.
+const {readFile} = await import('node:fs/promises');
+const optimisticSource=await readFile(new URL('../static/optimistic.mjs',import.meta.url),'utf8');
+const standalone=await import('data:text/javascript,'+encodeURIComponent(optimisticSource));
+const newUI=standalone.pendingSends(bound,()=>newChanges++);oldUI.dispose();oldUI.fail(ongoing,'kept for Retry');
+assert.equal(oldChanges,1);assert.equal(newChanges,1);assert.equal(newUI.merge('dm',[])[0]._failed,true);
+const otherUI=standalone.pendingSends({workspace:{id:'two'},workspaces:{state:()=>({})}});
+assert.equal(otherUI.merge('dm',[]).length,0,'pending previews stay in their own membership');newUI.dispose();
 console.log('queued engine send PASS: durable return, FIFO, retry, no duplicate post, Close drain; optimistic merge/failure/retry PASS');
 
 // Execute each legacy skin's actual captured-send functions: a second press
 // during a new device topic's local save must target its pending first turn.
-const {readFile} = await import('node:fs/promises');
 const {runInNewContext} = await import('node:vm');
 for (const skin of ['classic','zoom']) {
   const src=await readFile(new URL(`../skins/${skin}/src/entry.mjs`,import.meta.url),'utf8');

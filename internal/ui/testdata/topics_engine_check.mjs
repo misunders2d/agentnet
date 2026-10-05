@@ -34,6 +34,22 @@ for(const c of vectors.chat_cases){
  same(got,c.want,c.name+' shared derivation');
 }
 
+// A new addressed request continues the logical topic head in both native
+// room and browser send paths. Its agent output still replies to the request.
+for (const room of [false,true]) {
+  const e=new Engine({store:memoryStore(),base:'https://synthetic.invalid'});
+  e.address='ann/phone';e.me={person:'ann'};
+  const c={id:'chat'}, info={state:'active',held:0,host:{address:'bob/desk',fingerprint:'b'.repeat(64)}};
+  e.agentConv=async()=>({c,info});e.outgoingTopic=async()=> 'flow';
+  e.chatTopicHead=async(conv,topic)=>{same([conv,topic],['chat','flow'],'head belongs to the requested topic');return 'previous-answer';};
+  e.dmMembers=async()=>new Map([['ann',{}]]);e.humanPlan=async()=>room?{}:null;
+  let sent;
+  e.sendConv=async(_,m)=>{sent=m;};e.sendHumanTurn=async(_,m)=>{sent=m;};
+  await e.askAgent({pid:'participant',kind:'question',body:'Please finish',topic:'flow'});
+  same(sent.reply_to,'previous-answer','agent request retains logical topic parent, room='+room);
+  same(sent.target.address,'bob/desk','topic parent never changes the execution target');
+}
+
 // 3. Routes, on a browser device holding many topics with one agent.
 const day = 86400_000, now = 1790000000_000, me = 'ann/phone', bob = 'bob/desk', other = 'eve/box';
 const store = memoryStore();

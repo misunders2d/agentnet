@@ -844,6 +844,10 @@ func TestChatTopicAgentReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	request, n := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.LID == next.LID })
+	if n != 1 || request.ReplyTo != answer.LID {
+		t.Fatalf("follow-up lost its logical topic parent: %+v (previous answer %s)", request, answer.LID)
+	}
 	done := replyAt(t, w.alice, conv, next.ID)
 	if done.Topic != answer.Topic || !done.TopicDone || done.Body != "Finished the work" {
 		t.Fatalf("explicit close: %+v", done)

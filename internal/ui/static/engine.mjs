@@ -7382,15 +7382,16 @@ export class Engine {
     if (info.state !== "active" || info.held > 0) throw new Error("The agent's participation is " + info.state + ": not active.");
     if (info.host.address === this.address) throw new Error("This browser runs no agent.");
     topic=await this.outgoingTopic(c.id,topic,"");
+    const replyTo=topic?await this.chatTopicHead(c.id,topic):"";
     const members=await this.dmMembers(c);
     if (!members.group) { // with guests present the room sees addressed work too; a guest asks only as her exact accepted scope
       const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(p => p.role === "human" && p.state === "active" && !p.held && p.host?.address === this.address && p.host.fingerprint === this.fp);
       if (!members.has(this.me?.person) && !guest) throw new Error("Only a current conversation member or accepted guest asks its agent.");
       const human = await this.humanPlan(c, guest?.pid || "");
-      if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind, body, topic,files, pid, origin: "ui", receiver: reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}) } }, human, info);
+      if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind, body, topic,reply_to:replyTo,files, pid, origin: "ui", receiver: reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}) } }, human, info);
     }
     if (!members.has(this.me?.person)) throw new Error("Only a current conversation member asks its agent.");
-    return this.sendConv(c, { id: sendID, queued: true, kind, body, topic,files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
+    return this.sendConv(c, { id: sendID, queued: true, kind, body, topic,reply_to:replyTo,files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
   }
 
   // ---- notifications (docs/revival/NOTIFY.md): off until the person turns
