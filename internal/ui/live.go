@@ -433,6 +433,7 @@ func (l *Live) Send(d Draft) (Sent, error) {
 	defer cleanup() // SendMessage encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	ctx = client.WithQueuedSend(ctx, d.ID)
 	target, err := l.namedSendTarget(ctx, d)
 	if err != nil {
 		return Sent{}, err
@@ -452,11 +453,16 @@ func (l *Live) Act(x Action) (string, error) {
 	note := ""
 	switch x.Do {
 	case DoReply:
+		ctx = client.WithQueuedSend(ctx, x.SendID)
 		if strings.TrimSpace(x.Body) == "" {
 			return "", Refuse("Write a reply first.")
 		}
-		_, err = l.a.Reply(ctx, x.ID, x.Body)
-		note = "Reply sent."
+		var res client.SendResult
+		res, err = l.a.Reply(ctx, x.ID, x.Body)
+		note = "Reply saved; sending."
+		if res.State == protocol.StateCustody || res.State == protocol.StateDelivered {
+			note = "Reply sent."
+		}
 	case DoAccept:
 		err = l.a.Accept(x.ID)
 		note = "Accepted. Your responder takes it from here."

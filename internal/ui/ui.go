@@ -712,6 +712,7 @@ type AgentInvite struct {
 // AgentAsk is a question (or task) for an active participation's agent.
 type AgentAsk struct {
 	Topic         string                  `json:"topic,omitempty"`
+	ID            string                  `json:"id,omitempty"` // optional local send correlation (logical id in a conversation)
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	PID           string                  `json:"pid"`
 	Kind          string                  `json:"kind"`
@@ -750,6 +751,7 @@ type AgentView struct {
 // files the page handed over (Files.StageFile).
 type DMDraft struct {
 	Topic         string                  `json:"topic,omitempty"`
+	ID            string                  `json:"id,omitempty"`  // optional local send correlation (logical id in a conversation)
 	PID           string                  `json:"pid,omitempty"` // exact human author participation; not a receiver/executor
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	Conv          string                  `json:"conv"`
@@ -1099,6 +1101,7 @@ type File struct {
 
 // Draft is a message to send.
 type Draft struct {
+	ID            string                  `json:"id,omitempty"` // optional local send correlation (logical id in a conversation)
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	AgentID       string                  `json:"agent_id,omitempty"`
 	To            string                  `json:"to"`
@@ -1120,6 +1123,7 @@ type Sent struct {
 
 // Action is a local decision.
 type Action struct {
+	SendID string   `json:"send_id,omitempty"`
 	Do     string   `json:"do"`
 	ID     string   `json:"id,omitempty"`     // message id, or peer address for peer actions
 	Body   string   `json:"body,omitempty"`   // reply text

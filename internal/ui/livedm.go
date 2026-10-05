@@ -449,6 +449,7 @@ func (l *Live) SendDM(d DMDraft) (Sent, error) {
 	defer cleanup() // SendConv encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	ctx = client.WithQueuedSend(ctx, d.ID)
 	res, err := l.a.SendConv(ctx, d.Conv, client.ConvOutgoing{Topic: d.Topic, Kind: envelope.KindMessage, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Origin: envelope.OriginUI, Files: files, ReplyReceiver: receiver, PID: d.PID})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
