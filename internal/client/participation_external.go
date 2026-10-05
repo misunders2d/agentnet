@@ -970,6 +970,30 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 		}
 		if !disclosed {
 			parsed, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
+			if err != nil && group && senderMember && in.Kind == envelope.KindMessage {
+				// Current members may forward an exact counted end. Verify
+				// its original author here; externalTurn below still requires
+				// the signed record to resolve under that author's removal right.
+				forwarded, parseErr := protocol.ParseParticipationEvent([]byte(in.Body))
+				if parseErr == nil && forwarded.Type == protocol.EventDismiss && forwarded.Conv == in.Conv && forwarded.PID == in.PID && (forwarded.Author.Address != sender.Address || forwarded.Author.Fingerprint != sender.Fingerprint()) {
+					key, proofErr := a.sendKey(ctx, forwarded.Author.Address)
+					if proofErr != nil {
+						return true, proofErr
+					}
+					person, proofErr := a.personOfKey(ctx, key.Address, key)
+					if proofErr != nil {
+						return true, proofErr
+					}
+					bound, proofErr := a.boundIn(ctx, forwarded.Author.Person, forwarded.Author.Roster)
+					if proofErr != nil {
+						return true, proofErr
+					}
+					if !bound || person.info.Person != forwarded.Author.Person || !person.has(key.Address, forwarded.Author.Fingerprint) || key.Fingerprint() != forwarded.Author.Fingerprint {
+						return true, hold(reasonInvalid, "group: forwarded end original author proof differs")
+					}
+					parsed, err = forwarded, forwarded.Verify(key.SignKey)
+				}
+			}
 			if err != nil {
 				return true, hold(reasonInvalid, err.Error())
 			}

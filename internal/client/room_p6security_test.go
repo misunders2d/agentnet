@@ -2,7 +2,6 @@ package client
 
 import (
 	"encoding/json"
-	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -141,7 +140,7 @@ func TestP6SecurityStaleMembershipCarrier(t *testing.T) {
 	forged := next
 	forged.Memberships = stale
 	p6SecurityContextTo(t, w.bob, dave, forged)
-	if p, e := dave.Participation(visitor.PID); !errors.Is(e, ErrNoParticipation) {
+	if p, e := dave.Participation(visitor.PID); e != nil || p.State != PartDismissed || p.Following() {
 		t.Fatalf("non-admin stale carrier revived membership: %+v %v", p, e)
 	}
 	targets, err := dave.groupVisitorTargets(conv)
