@@ -2,9 +2,11 @@
 
 ## Current work — October 5 release candidate
 
-Source snapshot: `c049c6c7`, the release branch after the app, Google sign-in,
-topics, person approvals, group agents, sending, catch-up, unread and readable
-needs-you fixes were combined. Read the [release notes](NEXT_RELEASE.md) for
+The October 5 candidate includes the app, Google sign-in, topics, person
+approvals, group agents, sending, catch-up, unread and readable needs-you
+fixes combined at `c049c6c7`, plus the later profile picture, Comic parity,
+Windows installation and group security fixes below.
+Read the [release notes](NEXT_RELEASE.md) for
 what people see and the [installation guide](revival/INSTALL.md) for setup.
 This entry records the candidate, not a published release or a production
 upgrade. No release number is assigned here.
@@ -13,6 +15,10 @@ People install one AgentNet app per computer and open its icon. It brings
 its own `agentnet` command; command-line setup is for agents, server
 operators and advanced use. Phones use the browser/home-screen app. Comic,
 Classic and Zoom are all standalone interface packages in this candidate.
+Windows installation adds the bundled command to the current user's PATH;
+new terminal/agent sessions pick it up. Its login startup entry quotes the
+whole executable path, including account/install paths containing spaces.
+Existing enabled entries are repaired; a saved disabled choice stays disabled.
 
 The current behavior is:
 
@@ -28,31 +34,62 @@ The current behavior is:
   Adding the same agent again shares selected history instead of making
   another entry. Agents can ask each other and use permitted replies in
   that group. Their owners' approvals still decide execution; joining the
-  group is not a permission to run tasks.
+  group is not a permission to run tasks. An outside-owner agent requires
+  a current admin with the exact current group admission; an old admin
+  record gives no authority. Valid signed removals are retained in membership
+  context and retried to current devices, including late joiners, without
+  waiting for another group message. The receive path records only readers
+  proven by the message's signed recipients, not everyone currently in the
+  group; being a current member cannot authorize sharing old messages.
 - Person approvals cover current and future verified devices. Only a
   person's own human devices can enroll more devices. Removed devices,
   changed keys and conflicting identities do not retain automatic access.
+  Grants select the exact verified person ID (or an explicit advanced device
+  address); a display name, even a unique one, never selects a grant target.
+- Person profile pictures use the existing signed roster. All three skins
+  offer choose/crop/preview/save/replace/remove and Use as my picture from a
+  chat image. The Hub serves public PNGs by content hash; checked native and
+  browser caches support offline display. Pictures are at most 256 pixels
+  square and 64 KB. Removing clears the profile reference, not uploaded blobs
+  or old signed references; pictures confer no identity or permission. Custom
+  agent pictures are not included.
+- Comic has native service/bot controls, verified team management and
+  reviewed team-based invitations, plus Google Drive setup/project-space/file
+  saving controls. Existing provider consent and sharing rules apply; later
+  team changes grant no chat access. Reply receiver/session selection,
+  continuation status and configured session-close backups remain in Classic
+  and Zoom. See [the exact Comic gap](COMIC_PARITY_GAPS.md); this is not full
+  parity.
 - Send clears the draft you sent immediately and leaves one progress
   bubble. Another draft stays usable while delivery continues. Failures
   keep Retry and preserve newer writing. Phone catch-up processes messages,
   files and receipts with fewer delays. Reading visible messages clears
   their unread badge.
 - The people responsible for deciding can read the full needs-you
-  explanation in the chat and on the OKs card. Running and stalled work stay visible, and an action proposed in
-  an answer needs confirmation. Invitations show the workspace name.
+  explanation in the chat and on the OKs card. Running and stalled work
+  stay visible; Ask again retries, and Mark as handled clears without a
+  reply or work. Invitations show the workspace name.
+- MEL-521's app Do it/no-toggle entry is deliberately left as a placeholder
+  in the [release notes](NEXT_RELEASE.md), for Claude to fill after merge.
 
 Evidence is scoped. Component reports record native/browser agreement,
 focused tests with race checks, and local rendered checks across Comic,
 Classic and Zoom. P16 records a passing whole UI-package race run; that is
 not a passing whole-repository run. P6 integration/security reports record
 focused race checks and full vet. The skin and page types were regenerated
-through `c049c6c7`. No final candidate CI, publication, installer verification
-or production rollout is established by these records.
+through the earlier `c049c6c7` snapshot. Later P22/P27/P29 picture checks
+were completed across Comic, Classic and Zoom at desktop and phone widths;
+Claude reports all six rendered scenarios passing with screenshots checked.
+P20 removal and P26 reader-proof reports record focused native/browser race
+checks; their browser checks use in-memory fixtures. P24 adds Comic controls,
+with P30 correcting its rendered fixtures; those reports alone do not
+establish a rendered or real Google Drive pass. No final candidate CI,
+publication, installed-device verification or production rollout is
+established by these records.
 
 Remaining gates and limits:
 
-- The latest Linux shell build passed, but its AppImage packaging check
-  timed out. Installer completion, install/open/tray behavior and download
+- Installer completion, install/open/tray/startup behavior and download
   verification belong to the release integrator. Windows and Mac desktop
   installer runs are unverified; Mac remains explicitly untested. Builds
   are unsigned.
@@ -65,6 +102,12 @@ Remaining gates and limits:
   New outside-owner group agents require a current admin's invitation;
   if that inviter leaves or loses admin rights, a current admin must add
   the agent again. Earlier private history is not widened automatically.
+  The receive-path reader fix does not rewrite previously stored reader rows
+  or grants. A late joiner already holding a stale acceptance may retain it
+  if the non-inviter admin who removed the agent loses that role before the
+  end arrives. A still-authorized person with an active local view can issue
+  a fresh removal; an already dismissed local participation cannot simply
+  be removed again. Do not claim unconditional old-state repair.
 - Browser recovery after a refused, expired or removed membership still
   lacks the desktop app's Start again flow. The app's separate failed-link
   state was not included in that reset repair.

@@ -19,7 +19,7 @@ An older release may offer only the command-line program.
 | Linux, AppImage | `AgentNet-linux-x86_64.AppImage` | Keep the file, allow it to run in its file properties, then open it. It adds an AgentNet icon to the app launcher. AppImage needs FUSE 2. |
 | Linux, Ubuntu or Debian | `AgentNet-linux-amd64.deb` | Open it with your system's package installer, then open the AgentNet icon. |
 | Linux, Fedora | `AgentNet-linux-x86_64.rpm` | Open it with your system's package installer, then open the AgentNet icon. |
-| Windows | `AgentNet-windows-x64-setup.exe` | Run the installer for your own account, then open AgentNet from the Start menu. This is a per-user install; administrator rights are not required. |
+| Windows | `AgentNet-windows-x64-setup.exe` | Run the installer for your own account, then open AgentNet from the Start menu. It adds the bundled `agentnet` command to your user PATH for new terminal/agent sessions. Administrator rights are not required. |
 | Mac, Intel or Apple silicon | `AgentNet-macos-universal.dmg` | Open the disk image, copy AgentNet to Applications, then open it there. Requires macOS 13.3 or later. **Installation and use are untested on a real Mac.** |
 | Android or iPhone | No desktop installer | Open your workspace link in the browser and add AgentNet to the home screen. On iPhone, paste the invitation into that home-screen app if it did not carry over. |
 
@@ -27,9 +27,8 @@ An older release may offer only the command-line program.
 may warn or block opening them. Check that the download comes from this
 project's release before allowing it. Opening permission depends on your
 system; the reviewed reports do not qualify those installer prompts on a
-real Windows PC or Mac. The latest recorded Linux app build passed, but
-AppImage packaging did not
-finish in that check; a working downloadable installer is not claimed here.
+real Windows PC or Mac. A completed, working downloadable installer is not
+qualified by this guide's local test record.
 
 ### Join your workspace
 
@@ -46,7 +45,9 @@ finish in that check; a working downloadable installer is not claimed here.
    for that OK; knowing the account name is not approval.
 4. Open AgentNet from its icon next time. Closing its window leaves it
    running in the tray. Use Open AgentNet to return, Start when I log in
-   to choose login startup, and Quit AgentNet to stop it.
+   to choose login startup, and Quit AgentNet to stop it. Windows startup
+   handles spaces in your account or installation folder name. An enabled
+   older startup entry is repaired; your choice to disable startup is kept.
 
 Google sign-in has local test coverage, not a real-account sign-in check.
 An identity created before Google enrollment is not converted automatically;
@@ -57,11 +58,32 @@ Phones have no native desktop installer. Their browser/home-screen app uses
 its own device identity; adding it to an existing person still needs an
 existing device's approval.
 
-The app includes the same `agentnet` program that coding agents use. This
-does not promise that every installer adds it to your terminal's PATH.
+The app includes the same `agentnet` program that coding agents use. On
+Windows, the installer adds its folder to your user PATH and preserves
+existing entries. Open a new terminal or coding-agent session after installing
+so it can find `agentnet`; if an already running launcher still has the old
+environment, reopen it or sign out and back in. The installer reports a failed
+PATH update rather than claiming it succeeded. Uninstall removes its own PATH
+entry. Other platforms still need their installed command location checked;
+this is not a promise that every installer changes PATH.
+
 For advanced commands, use that installed program or the standalone setup
 below. `agentnet ui` opens the installed app. App builds update as a whole;
 `agentnet update` does not replace the command inside the app.
+
+### Your profile and interface
+
+In your profile, choose a picture, crop it, check the preview and save it;
+you can replace or remove it later, or choose Use as my picture from a chat
+image. These controls work in Comic, Classic and Zoom, including on phones.
+Your picture is public on the workspace's server and does not prove your
+identity. Removing it from the profile does not delete uploaded images.
+Custom agent pictures are not included.
+
+Comic also offers service/bot settings on computers, teams and Google Drive
+storage/project-space controls. Choosing a reply receiver or an existing
+agent session remains in Classic and Zoom; see the
+[remaining Comic gap](../COMIC_PARITY_GAPS.md).
 
 ### Existing installs and recovery
 
@@ -478,7 +500,9 @@ uninstall` lists the exact commands and paths.)
 For the October 5 candidate, reviewed reports establish local app-shell and
 messenger checks, cross-platform compilation, and tests using a stand-in
 Google service. They do not establish real Windows/Mac app installation,
-physical-phone behavior, real Google sign-in or a completed new AppImage.
+physical-phone behavior, real Google sign-in or installed-app startup.
+Person-picture rendered checks cover all three interfaces at desktop and
+phone widths; those browser checks are not physical-device acceptance.
 See the [current handoff](../HANDOFF.md) and [release notes](../NEXT_RELEASE.md).
 The matrix below describes the project's earlier test coverage; it is not
 qualification of the current desktop installers.
