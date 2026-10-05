@@ -38,6 +38,9 @@ const (
 	reasonInvalid    = "invalid"
 )
 
+// ErrDaemonRunning means another process holds this home's daemon lock.
+var ErrDaemonRunning = errors.New("another agentnet daemon is already running")
+
 // Run holds the push stream open until ctx ends, reconnecting with jittered
 // exponential backoff. It never polls: the Hub pushes messages and sparse
 // pings. A message that cannot be processed yet ends the connection; the Hub
@@ -48,7 +51,7 @@ const (
 func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	release, err := lockfile.Acquire(filepath.Join(a.home, "daemon.lock"))
 	if errors.Is(err, lockfile.ErrLocked) {
-		return fmt.Errorf("another agentnet daemon is already running for %s", a.home)
+		return fmt.Errorf("%w for %s", ErrDaemonRunning, a.home)
 	}
 	if err != nil {
 		return err
@@ -69,7 +72,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return a.startFailed(err)
 	}
 	defer stopWorker()
-	a.openConv = opts.OpenConv
+	a.openConv, a.openPage = opts.OpenConv, opts.OpenPage
 	alertCtx, stopAlerts := context.WithCancel(ctx)
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); a.alertLoop(alertCtx, a.alertWake) }()

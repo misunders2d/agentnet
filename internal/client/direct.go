@@ -52,6 +52,13 @@ type RunOptions struct {
 	// conversation ("" : the page itself), for a click on a DM alert
 	// (alerts.go); nil or an empty command: the alert is a banner only.
 	OpenConv func(conv string) []string
+	// OpenPage, if set, gives the command that opens the AgentNet app's
+	// window on a page destination (the URL fragment: "conv=<id>", "review",
+	// "msg=<id>&dir=in"; "" : the window itself), for clicks on alerts,
+	// reminders and review notifications. It takes the place of OpenConv
+	// and of the terminal review: in the app, a click never opens a
+	// browser tab or a terminal.
+	OpenPage func(fragment string) []string
 }
 
 // Direct delivery limits. Variables so tests can shorten them.

@@ -71,6 +71,8 @@ type Agent struct {
 	alertWake      chan struct{}              // wakes the desktop alert loop (alerts.go)
 	openConv       func(conv string) []string // RunOptions.OpenConv
 
+	openPage func(fragment string) []string // RunOptions.OpenPage (the AgentNet app's window)
+
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
 	reviewTried  map[string]bool                                               // review items a review notice was attempted for, this run
