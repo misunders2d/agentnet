@@ -156,3 +156,35 @@ func TestComicGroupParityRendered(t *testing.T) {
 	}
 	t.Logf("%s", out)
 }
+
+// Trusting a changed identity and the held-back list as Comic renders them
+// over the demo installation (testdata/comic_trust_check.cjs), where one
+// device's key changed and one message did not verify: the chat row says
+// "Identity changed", the paused composer offers "Check and trust…", whose
+// Trust stays off until the codes are said to match and then lets writing
+// resume; OKs lists the held message by name with a plain reason, never an
+// address. At 1440x900 light and 390x844 dark. Opt-in as
+// TestComicParityRendered.
+func TestComicTrustRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to an installed playwright-core")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []string{"1440x900-light", "390x844-dark"} {
+		var s *Server
+		ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))
+		s = New(NewFixture(time.Now), ts.Listener.Addr().String(), testToken) // a fresh demo each time: trusting changes it
+		ts.Start()
+		cmd := exec.Command(node, "testdata/comic_trust_check.cjs")
+		cmd.Env = append(os.Environ(), "PARITY_URL="+ts.URL+"/?t="+testToken, "PARITY_SIZE="+size)
+		out, err := cmd.CombinedOutput()
+		ts.Close()
+		if err != nil || !strings.Contains(string(out), "comic trust check PASS") {
+			t.Fatalf("%s: %v\n%s", size, err, out)
+		}
+		t.Logf("%s", out)
+	}
+}
