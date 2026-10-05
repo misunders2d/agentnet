@@ -132,8 +132,9 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         assert.equal(await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/device/service').length), 1);
       } else assert.equal(await service.count(), 0, 'browser cannot choose service role');
       await p.evaluate(() => __p24.person());
-      // Close phone Profile to return to the settings rows.
-      if (width < 1024) await p.getByRole('button', { name: 'You', exact: true }).click();
+      // Return from phone Profile through its section header. Main nav
+      // also has a You button, which keeps the current section open.
+      if (width < 1024) await p.locator('.an-tab-in > .sticky').getByRole('button', { name: 'You', exact: true }).click();
       await p.getByRole('button', { name: /^Teams/ }).click();
       await p.getByRole('heading', { name: 'Teams', exact: true }).waitFor(T);
       await snap('teams');
