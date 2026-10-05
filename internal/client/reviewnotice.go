@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -160,6 +161,13 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	if a.reviewTried == nil {
 		a.reviewTried = map[string]bool{}
 	}
+	for _, to := range a.reviewAgain.take() { // skipped devices the Hub since showed changed
+		for k := range a.reviewTried {
+			if strings.HasPrefix(k, to+"\x00") {
+				delete(a.reviewTried, k)
+			}
+		}
+	}
 	// Every item waiting here counts, including follow-ups your responder
 	// marked needs_human, except review notices received from others and
 	// a person's DM turns (alertReviewStates: they follow the DM's alerts).
@@ -271,17 +279,21 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 				}
 			}
 		}
-		if isOperator[to] && !capable {
-			// An operator gets the requests by name or nothing yet (a device
-			// just added may not have said what it reads): a count now would
-			// mark them told. The next wake looks again; nothing polls.
-			continue
-		}
 		for _, id := range ids {
 			a.reviewTried[to+"\x00"+id] = true
 		}
 		if p.left != "" {
 			a.reviewTried[p.left] = true
+		}
+		if isOperator[to] && !capable {
+			// An operator gets the requests by name or nothing yet (a device
+			// just added may not have said what it reads): a count now would
+			// mark them told. Tried once, like any item: it is looked at
+			// again only when the Hub's member list shows that device
+			// changed (reviewAgain), a new item waits or the daemon starts
+			// again. A ping is no change: nothing polls the Hub.
+			a.reviewAgain.skip(to)
+			continue
 		}
 		claim := func(tx *sql.Tx, _ string) error {
 			// A grant may have changed while this snapshot was prepared. A
@@ -353,6 +365,63 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 			delete(a.reviewTried, p.left)
 		}
 	}
+}
+
+// reviewAgain holds the operator devices a review pass skipped because they
+// could not read reports yet (an older program, or one that has not
+// connected since it was linked or updated), and of those the ones the
+// Hub's member list since showed changed: connected, reconnected or on a
+// newer roster step (onMembers). Only those are looked at again before the
+// next daemon run; a ping changes nothing, so nothing polls the Hub.
+type reviewAgain struct {
+	sync.Mutex
+	skipped map[string]bool
+	changed map[string]bool
+}
+
+func (r *reviewAgain) skip(address string) {
+	r.Lock()
+	defer r.Unlock()
+	if r.skipped == nil {
+		r.skipped = map[string]bool{}
+	}
+	r.skipped[address] = true
+}
+
+// note records the addresses whose member entry changed; it reports whether
+// one of them was skipped (the worker then looks again).
+func (r *reviewAgain) note(changed []string) bool {
+	r.Lock()
+	defer r.Unlock()
+	again := false
+	for _, address := range changed {
+		if r.skipped[address] {
+			delete(r.skipped, address)
+			if r.changed == nil {
+				r.changed = map[string]bool{}
+			}
+			r.changed[address], again = true, true
+		}
+	}
+	return again
+}
+
+// take returns the skipped devices that changed since, once.
+func (r *reviewAgain) take() []string {
+	r.Lock()
+	defer r.Unlock()
+	out := make([]string, 0, len(r.changed))
+	for address := range r.changed {
+		out = append(out, address)
+	}
+	r.changed = nil
+	return out
+}
+
+func (r *reviewAgain) reset() {
+	r.Lock()
+	r.skipped, r.changed = nil, nil
+	r.Unlock()
 }
 
 // countText is a review notice for a device that reads no reports: how

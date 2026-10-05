@@ -1,13 +1,19 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 func holds(t *testing.T, host *Agent, a *Agent) bool {
@@ -271,4 +277,100 @@ func TestCountReportNamesDeciders(t *testing.T) {
 		}
 		return false
 	})
+}
+
+// profileCount counts the Hub profile reads made for one address and,
+// while bare is set, answers them as for a device that has said nothing of
+// what it reads (no capability records).
+type profileCount struct {
+	base http.RoundTripper
+	path string
+	n    *atomic.Int32
+	bare *atomic.Bool
+}
+
+func (c profileCount) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != "GET" || r.URL.Path != c.path {
+		return c.base.RoundTrip(r)
+	}
+	c.n.Add(1)
+	resp, err := c.base.RoundTrip(r)
+	if err != nil || !c.bare.Load() {
+		return resp, err
+	}
+	var prof protocol.Profile
+	err = json.NewDecoder(resp.Body).Decode(&prof)
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	prof.Caps = nil
+	data, _ := json.Marshal(prof)
+	resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(data)), int64(len(data))
+	resp.Header.Del("Content-Length")
+	return resp, nil
+}
+
+// A steward's device that cannot read reports yet (an older program, or
+// one that has not connected since it was linked) is skipped like a failed
+// notice: tried once per item, never again on every worker wake (each Hub
+// ping wakes the worker: that would poll the Hub). A member list showing
+// that device changed has the host look once more, and then it is told.
+func TestNonCapableStewardDeviceNotPolled(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	persons(t, w.alice)
+	host := w.bob
+	if _, err := host.GrantOperatorPerson(tctx(t), w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
+	phone := linkedVia(t, w.alice, "phone", approveLink(w.alice))
+	me, _, _ := w.alice.Person()
+	if _, err := host.refreshPerson(tctx(t), me.Person, false); err != nil {
+		t.Fatal(err)
+	}
+	if ops, _ := host.store.activeOperators(); !slices.Contains(ops, phone.Address) {
+		t.Fatalf("the phone is no steward device: %v", ops)
+	}
+	label, name, _ := protocol.SplitAddress(phone.Address)
+	var lookups atomic.Int32
+	var bare atomic.Bool
+	bare.Store(true)
+	host.hub.http.Transport = profileCount{host.hub.http.Transport, "/v1/agents/" + label + "/" + name + "/profile", &lookups, &bare}
+	task := protocol.NewID()
+	if _, err := host.store.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, state)
+		VALUES(?, ?, 0, ?, 'run the export', 0, ?)`, task, w.alice.Address, envelope.KindTask, stateAwaiting); err != nil {
+		t.Fatal(err)
+	}
+	told := func(a *Agent) bool {
+		var n int
+		host.store.db.QueryRow(`SELECT count(*) FROM reported WHERE item = ? AND recipient = ?`, task, a.Address).Scan(&n)
+		return n == 1
+	}
+	host.sendReviewNotice(tctx(t))
+	first := lookups.Load()
+	if first == 0 || told(phone) || !told(w.alice) {
+		t.Fatalf("first pass: %d phone lookup(s), phone told %v, laptop told %v", first, told(phone), told(w.alice))
+	}
+	for range 5 { // as five pings would wake the worker
+		host.sendReviewNotice(tctx(t))
+	}
+	if n := lookups.Load(); n != first {
+		t.Fatalf("the Hub was asked about the phone %d more time(s) on wakes that changed nothing", n-first)
+	}
+	// The Hub's member list says the phone is connected (as after an
+	// update): looked at once more, and now it reads reports.
+	bare.Store(false)
+	raw, _ := json.Marshal(protocol.Members{Members: []protocol.Member{{Address: phone.Address, Presence: protocol.PresenceConnected, Joined: 1}}})
+	host.onMembers(raw)
+	host.sendReviewNotice(tctx(t))
+	again := lookups.Load()
+	if again == first || !told(phone) {
+		t.Fatalf("a member change: %d more lookup(s), phone told %v", again-first, told(phone))
+	}
+	host.onMembers(raw) // the same entry: no change
+	host.sendReviewNotice(tctx(t))
+	if n := lookups.Load(); n != again {
+		t.Fatalf("an unchanged member list looked again (%d more)", n-again)
+	}
 }

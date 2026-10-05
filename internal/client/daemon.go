@@ -492,6 +492,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.Logf("run folders left by an earlier run: %v", err)
 	}
 	a.notifyTried, a.reviewTried, a.reviewGen, a.releaseTried = nil, nil, "", "" // a new run tries failed notices once more
+	a.reviewAgain.reset()
 	wake := make(chan struct{}, 1)
 	a.wakeWorker = func() {
 		select {

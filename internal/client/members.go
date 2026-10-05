@@ -113,8 +113,12 @@ func (a *Agent) onMembers(data []byte) {
 		a.typingMembershipChanged()
 		return
 	}
+	prev := a.members.view.Members.Members
 	a.members.view = MemberView{Listed: MembersListed, Members: m, At: time.Now(), Current: true}
 	a.members.mu.Unlock()
+	if a.reviewAgain.note(changedMembers(prev, m.Members)) {
+		a.wakeWorker() // a device that could not read reports may now (reviewnotice.go)
+	}
 	connected := 0
 	for _, e := range m.Members {
 		if e.Presence == protocol.PresenceConnected {
@@ -133,4 +137,21 @@ func (a *Agent) onMembers(data []byte) {
 	if a.kick != nil {
 		a.kick()
 	}
+}
+
+// changedMembers lists the addresses whose entry in next differs from prev:
+// new, connected or gone offline, or on another roster step.
+func changedMembers(prev, next []protocol.Member) []string {
+	was := make(map[string]protocol.Member, len(prev))
+	for _, e := range prev {
+		was[e.Address] = e
+	}
+	var out []string
+	for _, e := range next {
+		p, ok := was[e.Address]
+		if !ok || p.Presence != e.Presence || (p.Person == nil) != (e.Person == nil) || p.Person != nil && *p.Person != *e.Person {
+			out = append(out, e.Address)
+		}
+	}
+	return out
 }
