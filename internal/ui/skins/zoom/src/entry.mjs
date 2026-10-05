@@ -3433,7 +3433,7 @@ function approvalDialog(t) {
     ok:"Stop automatic answers",run:()=>act({do:"unapprove",id:t.question_target || target}) });
   return dialog({ title:"Approve " + who + "?",
     body:[el("p",{},"Your responder answers " + who + "’s questions " + (person ? "from all current and future verified devices." : "from this device only.") + " Removing a device ends person access; key changes and person conflicts block it. Your normal question settings apply; tools you already allow keep their effects. Tasks still wait for you."),
-      el("p",{},"Questions already waiting stay waiting; allow one separately."),el("p",{class:"hint"},"In a terminal: agentnet approve " + target)],
+      el("p",{},"Questions already waiting stay waiting; allow one separately.")],
     ok:"Approve " + who,run:()=>act({do:"approve",id:target}) });
 }
 

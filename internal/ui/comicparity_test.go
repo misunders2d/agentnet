@@ -32,13 +32,13 @@ var comicParity = []struct {
 	{"2 group admin and leave", "POST /api/groups/manage", `\.manageGroup\(`, route("/api/groups/manage")},
 	{"3 trust a changed key", "act trust", `do: "trust"`, `do: "trust"`},
 	{"4 held-back list", "overview.quarantine", `\.quarantine\b`, `\.quarantine\b`},
-	{"5 answer questions automatically", "act approve", `do: "approve"`, `do: "approve"`},
+	{"5 answer questions automatically", "act approve", `do: "approve"`, act("approve")},
 	// Before they ask: Comic's request card has its own "Always answer", so
 	// the act verb alone does not pin these two ways in.
-	{"5 answer questions automatically before they ask (chat menu)", "act approve", `setGrant\("approve"\)`, `do: "approve"`},
-	{"5 answer questions automatically before they ask (Permissions)", "act approve", `what: "approve"`, `do: "approve"`},
-	{"5 stop automatic answers", "act unapprove", `do: "unapprove"`, `do: "unapprove"`},
-	{"5 stop tasks without asking", "act revoke_tasks", `do: "revoke_tasks"`, `do: "revoke_tasks"`},
+	{"5 answer questions automatically before they ask (chat menu)", "act approve", `setGrant\("approve"\)`, act("approve")},
+	{"5 answer questions automatically before they ask (Permissions)", "act approve", `what: "approve"`, act("approve")},
+	{"5 stop automatic answers", "act unapprove", `do: "unapprove"`, act("unapprove")},
+	{"5 stop tasks without asking", "act revoke_tasks", `do: "revoke_tasks"`, act("revoke_tasks")},
 	{"6 tasks without asking on agent invite", "POST /api/dm/agent/invite tasks_from", `tasks_from: [A-Za-z]`, `tasks_from: [A-Za-z]`},
 	{"7 group history since a date", "POST /api/groups/invite history", `onMode\("since"\)`, `\{ since: `},
 	{"8 typing preferences", "POST /api/typing/preferences", `\.typingPreferences\(`, route("/api/typing/preferences")},
@@ -56,6 +56,9 @@ var comicParity = []struct {
 
 // route matches a route written as a string literal, in either quotes.
 func route(r string) string { return `["']` + regexp.QuoteMeta(r) + `["']` }
+
+// act pins the actual verb literal without pinning the call site's spacing.
+func act(verb string) string { return `\bdo\s*:\s*["']` + regexp.QuoteMeta(verb) + `["']` }
 
 // readSources concatenates the files under dir with one of exts, except skip.
 func readSources(t *testing.T, dir string, exts []string, skip ...string) string {

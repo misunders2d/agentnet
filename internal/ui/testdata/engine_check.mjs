@@ -261,14 +261,26 @@ async function handle(req) {
   }
   case "sendFilesLater": { // sendFiles, answered once its first upload is under way
     const files = req.files.map((f) => { const bytes = new Uint8Array(Buffer.from(f.b64, "base64")); return { name: f.name, size: bytes.length, bytes }; });
+    // The stream is stopped to isolate profile reads; a simulated live
+    // connection still lets MEL-547's background outbox begin the upload.
+    if (req.connected) engine.connected = true;
     held.send = engine.api("/api/dm/send", { conv: req.conv, body: req.body || "", files });
-    held.send.catch(() => {});
-    await held.started;
+    let timer;
+    try {
+      await Promise.race([
+        held.started,
+        held.send.then(() => new Promise(() => {})), // durable return precedes the upload
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Error("held upload did not start")), 5000); }),
+      ]);
+    } finally { clearTimeout(timer); }
     return {};
   }
-  case "releaseUploads":
+  case "releaseUploads": {
     held.open();
-    return { v: await held.send };
+    const saved = await held.send;
+    await engine.outboxPass; // observe the post-upload gate, not just the local save
+    return { v: saved };
+  }
   case "hubStatus": // what the relay says of a message this device sent
     return { v: await engine.call("GET", "/v1/messages/" + req.id) };
   case "convRoot":

@@ -1,11 +1,13 @@
 package client
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // remindWorld: alice and bob; bob's daemon runs with its notifications
@@ -228,6 +230,72 @@ func TestReminderEndsOnlyWithAReply(t *testing.T) {
 	}
 	if stateOf(dmq.ID) != ReminderReplied {
 		t.Fatalf("a DM reply did not end it: %s", stateOf(dmq.ID))
+	}
+}
+
+// Replies can name the logical turn or a stored physical copy. A logical
+// id in another conversation and non-answer statuses must not end it.
+func TestReminderReplyMatchesLogicalOrPhysicalID(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	lid := protocol.NewID()
+	ids := []string{protocol.NewID(), protocol.NewID(), protocol.NewID(), protocol.NewID()}
+	for i, conv := range []string{"conversation", "conversation", "other", ""} {
+		if _, err := s.db.Exec(`INSERT INTO inbox(id, sender, ts, kind, body, received_at, conv, lid)
+			VALUES(?, 'sender/desk', 1, 'message', 'remind me', 1, nullif(?, ''), ?)`, ids[i], conv, lid); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`INSERT INTO reminders(message, conv, due_at, state, rev, created_at, updated_at)
+			VALUES(?, nullif(?, ''), 2, 'pending', 1, 1, 1)`, ids[i], conv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name, conv, reply, status string
+		replied                   []int
+	}{
+		{"physical", "conversation", ids[0], "", []int{0}},
+		{"logical", "conversation", lid, "", []int{0, 1}},
+		{"other conversation", "other", lid, "", []int{2}},
+		{"wrong conversation", "other", ids[0], "", nil},
+		{"unlinked", "conversation", "", "", nil},
+		{"progress", "conversation", lid, envelope.StatusProgress, nil},
+		{"failed", "conversation", lid, envelope.StatusFailed, nil},
+		{"timeout", "conversation", lid, envelope.StatusTimeout, nil},
+		{"cancelled", "conversation", lid, envelope.StatusCancelled, nil},
+		{"legacy physical", "", ids[3], "", []int{3}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := s.db.Exec(`UPDATE reminders SET state = 'pending'`); err != nil {
+				t.Fatal(err)
+			}
+			tx, err := s.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if err := replyEndsReminder(tx, c.conv, c.reply, c.status); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			for i, id := range ids {
+				want := ReminderPending
+				for _, replied := range c.replied {
+					if i == replied {
+						want = ReminderReplied
+					}
+				}
+				var state string
+				if err := s.db.QueryRow(`SELECT state FROM reminders WHERE message = ?`, id).Scan(&state); err != nil || state != want {
+					t.Fatalf("copy %d: %s, want %s: %v", i, state, want, err)
+				}
+			}
+		})
 	}
 }
 

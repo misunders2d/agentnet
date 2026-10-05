@@ -18,7 +18,7 @@ const fetch=async(url,options={})=>{
  if(p.startsWith('/v1/blobs/')){const b=blobs.get(p.split('/')[3]);if(p.endsWith('/complete'))b.state='stored';else if(options.method==='PUT'){if(holdUpload){const hold=holdUpload;holdUpload=null;hold.started();await hold.release;}const bytes=new Uint8Array(options.body);b.ct.set(bytes,b.received);b.received+=bytes.length;}return json(b);}
  throw Error('unexpected synthetic path '+p);
 };
-async function device(address){const e=new Engine({store:memoryStore(),base:'https://synthetic.invalid',fetch,now:()=>now});e.keys=await wire.newKeys();e.address=address;e.pub=await wire.publicEntry(e.keys,address);e.fp=await wire.fingerprint(e.pub);publics.set(address,e.pub);return e;}
+async function device(address){const e=new Engine({store:memoryStore(),base:'https://synthetic.invalid',fetch,now:()=>now});e.keys=await wire.newKeys();e.address=address;e.pub=await wire.publicEntry(e.keys,address);e.fp=await wire.fingerprint(e.pub);e.connected=true;publics.set(address,e.pub);return e;}
 const phone=await device('alice/phone'),laptop=await device('alice/laptop'),bob=await device('bob/desk'),mallory=await device('mallory/desk');
 const first=await wire.newRoster(phone.keys,phone.address,'Alice'),join=await wire.joinConsent(laptop.keys,laptop.address,first.person,1,await wire.rosterHash(first)),linked=await wire.nextRoster(phone.keys,phone.address,first,[phone.pub,laptop.pub],join);
 await wire.verifyNext(linked,first);
@@ -33,6 +33,7 @@ for(const e of [phone,laptop,bob,mallory])await caps(e);
 const receiver={kind:'live_session',session_handle:'selected-Codex',host:{address:laptop.address,fingerprint:laptop.fp},on_close:{agent_id:'a'.repeat(32),instructions:'Exact local continuation',mode:'question'}};
 const file={name:'selected.txt',bytes:new TextEncoder().encode('SELECTED BYTES')};
 const sent=await phone.api('/api/send',{to:bob.address,kind:'question',body:'Frozen request <&>',files:[file],reply_receiver:receiver});
+await phone.outboxPass;
 assert.equal(sent.state,'receiver_waiting');assert.equal(posts.length,1);
 const delegation=await phone.store.get('outbox',wire.parseEnvelope(posts[0]).id),original=await phone.store.get('outbox',sent.id);
 assert.equal(delegation.to,laptop.address);assert.equal(original.state,'receiver_waiting');assert.notEqual(original.attachments[0].blob.id,delegation.attachments[0].blob.id);
@@ -61,6 +62,7 @@ assert.equal(new TextDecoder().decode(await wire.decryptFile(blobs.get(released.
 await receive(restarted,accepted);await restarted.flushOutbox();assert.equal(posts.filter(raw=>wire.parseEnvelope(raw).to===bob.address).length,1,'duplicate ready never resends');
 // Human answer reaches origin and exactly selected sibling via one encrypted batch.
 const beforeReply=posts.length;await bob.replyV1(sent.id,'Exact human answer');
+await bob.outboxPass;
 const replies=posts.slice(beforeReply).filter(raw=>wire.parseEnvelope(raw).kind==='answer');
 assert.equal(replies.length,2);assert.deepEqual(new Set(replies.map(raw=>wire.parseEnvelope(raw).to)),new Set([phone.address,laptop.address]));
 for(const raw of replies){const env=wire.parseEnvelope(raw),to=env.to===phone.address?phone:laptop,reply=await wire.open(raw,to.keys,to.address,bob.pub);assert.equal(reply.reply_to,original.receiver_route.request_ref);assert.equal(reply.body,'Exact human answer');assert.ok(!reply.receiver_route);}
@@ -78,6 +80,7 @@ await assert.rejects(()=>phone.api('/api/reply-sessions?host='+laptop.address+'&
 // Ordinary DM uses the same prepared transition across both audiences.
 const conv=await phone.newDM(bob.address),dmBefore=posts.length;
 const dmSent=await phone.api('/api/dm/send',{conv,body:'Selected DM request',reply_receiver:receiver});assert.equal(dmSent.state,'receiver_waiting');
+await phone.outboxPass;
 const dmDelegation=await phone.store.get('outbox',wire.parseEnvelope(posts.at(-1)).id);
 assert.equal(posts.length,dmBefore+1);assert.equal(dmDelegation.receiver_setup.request.conv,conv);assert.equal(dmDelegation.receiver_setup.originals.length,2);
 const dmReadyRoute={...dmDelegation.receiver_route,op:'ready'};
@@ -121,7 +124,9 @@ await restarted.store.write([{s:'kv',k:'person',v:current}]);
 await caps(bob,[wire.CapEnv2,wire.CapPerson]);await assert.rejects(()=>phone.sendDirect({to:bob.address,kind:'question',body:'no downgrade',reply_receiver:receiver}),/cannot receive selected/);
 // Actual UI deletion clears ordinary private snapshots in the same local retention path.
 await caps(bob,[wire.CapReplyReceiver,wire.CapEnv2,wire.CapPerson,wire.CapControl]);
+phone.connected=true;
 const ordinary=await phone.sendDirect({to:bob.address,kind:'message',body:'DELETE ORDINARY PRIVATE SNAPSHOT',files:[file],reply_receiver:receiver});
+await phone.outboxPass;
 const ordinarySetup=(await phone.store.all('outbox')).find(r=>r.receiver_setup?.request.id===ordinary.id),custody=ordinarySetup.state;
 // Same physical ID in a foreign scope or author is not this ordinary request.
 const foreignScope={...structuredClone(ordinarySetup),id:wire.newID(),receiver_setup:{...structuredClone(ordinarySetup.receiver_setup),request:{...ordinarySetup.receiver_setup.request,conv:wire.newID(),lid:ordinary.id}}};
@@ -139,13 +144,13 @@ const postsBeforeRetry=posts.length;await phone.post(ordinarySetup);await phone.
 let releaseUpload,uploadStarted;const started=new Promise(resolve=>uploadStarted=resolve),release=new Promise(resolve=>releaseUpload=resolve);holdUpload={started:uploadStarted,release};
 const racing=phone.sendDirect({to:bob.address,kind:'message',body:'DELETE DURING UPLOAD',files:[file],reply_receiver:receiver});await started;
 const racingSetup=(await phone.store.all('outbox')).find(r=>r.receiver_setup?.request.body==='DELETE DURING UPLOAD'),racingID=racingSetup.receiver_setup.request.id;
-await phone.messageControl('delete',{id:racingID,dir:'out'});const beforeRelease=posts.length;releaseUpload();const raced=await racing;
-assert.equal(raced.state,'failed');assert.equal(posts.length,beforeRelease);assert.equal((await phone.store.get('outbox',racingSetup.id)).body,'');assert.equal((await phone.store.get('outbox',racingSetup.id)).files,undefined);assert.equal((await phone.store.get('outbox',racingID)).receiver_redacted,true);
+await phone.messageControl('delete',{id:racingID,dir:'out'});const beforeRelease=posts.length;releaseUpload();await racing;await phone.outboxPass;
+assert.equal((await phone.store.get('outbox',racingID)).state,'failed');assert.equal(posts.length,beforeRelease);assert.equal((await phone.store.get('outbox',racingSetup.id)).body,'');assert.equal((await phone.store.get('outbox',racingSetup.id)).files,undefined);assert.equal((await phone.store.get('outbox',racingID)).receiver_redacted,true);
 // Once handover has started, a real custody response preserves that fact while retaining deletion.
 let releaseMessage,messageStarted;const messageStart=new Promise(resolve=>messageStarted=resolve),messageRelease=new Promise(resolve=>releaseMessage=resolve);holdMessage={started:messageStarted,release:messageRelease};
 const handing=phone.sendDirect({to:bob.address,kind:'message',body:'DELETE DURING CUSTODY',reply_receiver:receiver});await messageStart;
 const handingSetup=(await phone.store.all('outbox')).find(r=>r.receiver_setup?.request.body==='DELETE DURING CUSTODY'),handingID=handingSetup.receiver_setup.request.id;
-await phone.messageControl('delete',{id:handingID,dir:'out'});releaseMessage();await handing;
+await phone.messageControl('delete',{id:handingID,dir:'out'});releaseMessage();await handing;await phone.outboxPass;
 const custodyAfterDelete=await phone.store.get('outbox',handingSetup.id);assert.equal(custodyAfterDelete.state,'custody');assert.equal(custodyAfterDelete.body,'');assert.ok(custodyAfterDelete.receiver_redacted);assert.equal((await phone.store.get('outbox',handingID)).state,'failed');
 // The upload-progress write itself is atomic against a later retention transaction.
 const progress=await phone.sendDirect({to:bob.address,kind:'message',body:'DELETE AT PROGRESS COMMIT',files:[file],reply_receiver:receiver}),progressSetup=(await phone.store.all('outbox')).find(r=>r.receiver_setup?.request.id===progress.id),progressWrite=phone.store.write.bind(phone.store);

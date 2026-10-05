@@ -486,7 +486,7 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			if err := recordRoomContext(tx, in, jobKeyOrSelf(tx, in.From), in.From); err != nil {
 				return err
 			}
-			if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
+			if err := replyEndsReminder(tx, in.Conv, in.ReplyTo, in.Status); err != nil {
 				return err
 			}
 			if err := turnClosesHeld(tx, in, now.UnixMilli()); err != nil {

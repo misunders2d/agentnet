@@ -58,8 +58,8 @@ func TestBrowserEngineCustodyNotConfirmed(t *testing.T) {
 		msg = ms[len(ms)-1].(map[string]any)
 		return msg["state"] == "custody"
 	})
-	// Named as a person and device, never by address (MEL-525).
-	if want := "On the server; delivery to Alice (Laptop) not confirmed yet"; msg["state_text"] != want {
+	// The person name is a quoted claim, never verified identity or an address (P2).
+	if want := `On the server; delivery to another person, who calls themselves "Alice" (Laptop) not confirmed yet`; msg["state_text"] != want {
 		t.Fatalf("custody says %q, want %q", msg["state_text"], want)
 	}
 }

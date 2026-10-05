@@ -57,6 +57,7 @@ async function fixture() {
     { s: "convs", k: conv, v: { id: conv, root: wire.rootJSON(root), peer: peer.person } },
     { s: "inbox", k: thread, v: { id: thread, v: 1, from: peerAddress, kind: "message", body: "fixture", at: clock } },
   ]);
+  await e.load(); // include normal one-time notice settlement before durable baselines
   e.realm = realm; e.session = id(); e.connected = true; e.resetTyping(true, true);
   e.members = { listed: "listed", current: true, list: [{ address: peerAddress, presence: "idle", person: { id: peer.person, hash: peer.hash, seq: peer.seq } }], at: clock };
   const recipientSession = id();
@@ -187,7 +188,7 @@ try {
     const me = e.me; e.me = null;
     check(!(await f.view()).preferences.send && !(await f.view()).preferences.show, "unset/service-without-person defaults off; no label inference");
     check((await e.api("/api/typing", { scope: f.legacy, active: true })).submitted === 0, "unset default sends nothing");
-    const baseline = await f.count();
+    const baseline = JSON.parse(await f.count());
     await e.api("/api/typing/preferences", { send: true, show: true });
     check((await e.api("/api/typing", { scope: f.legacy, active: true })).submitted === 1, "explicit local unset opt-in for known legacy scope");
     e.me = me; await e.dispatch("signal", await f.signal());
@@ -199,7 +200,10 @@ try {
     for (const [path, body] of [["/api/typing", { scope: f.scope, active: "yes" }], ["/api/typing", { scope: { conv: f.scope.conv, extra: "x" }, active: true }], ["/api/typing/preferences", { show: "yes" }]]) {
       await assert.rejects(e.api(path, body)); checks++;
     }
-    check(await f.count() !== baseline && (await f.store.all("kv")).length === 3 && !e.typing.sent.has("draft"), "sole new durable row is preferences"); e.stop(); loaded.stop();
+    baseline.find(([s]) => s === "kv")[1].push({ send: false, show: false });
+    assert.deepEqual(JSON.parse(await f.count()), baseline, "sole new durable row is preferences"); checks++;
+    assert.deepEqual(await f.store.get("kv", "typing-preferences"), { send: false, show: false }); checks++;
+    check(!e.typing.sent.has("draft"), "no draft persisted or buffered"); e.stop(); loaded.stop();
   }
   // Changed current key/caps and disconnection during async profile lookup stop sends.
   {

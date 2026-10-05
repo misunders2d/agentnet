@@ -69,13 +69,16 @@ func TestLiveRefreshAsksAboutHeldCopiesBehindOthers(t *testing.T) {
 	}
 	defer db.Close()
 	if _, err := db.Exec(`INSERT INTO outbox(id, recipient, body, envelope, state, error, created_at, conv, lid, kind, created_ms)
-		VALUES(?, 'admin/gone', 'behind a failed copy', '{}', 'failed', 'hub: recipient has been revoked (403)', ?, ?, ?, 'message', ?)`,
+		VALUES(?, 'admin/gone', 'behind a failed copy', '{"ts":1}', 'failed', 'hub: recipient has been revoked (403)', ?, ?, ?, 'message', ?)`,
 		strings.Repeat("f", 32), time.Now().Unix(), conv, sent.LID, time.Now().UnixMilli()+1); err != nil {
 		t.Fatal(err)
 	}
 	stateOf := func(to string) string {
 		msgs, e := alice.ConversationMessages(conv)
-		if e != nil || len(msgs) != 1 {
+		if e != nil {
+			t.Fatal(e)
+		}
+		if len(msgs) != 1 {
 			return ""
 		}
 		for _, c := range msgs[0].Copies {

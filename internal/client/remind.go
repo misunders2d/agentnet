@@ -120,12 +120,16 @@ func (a *Agent) endReminder(id, state string) error {
 // stored in tx answers (replyTo; "" : not a reply). An automatic report
 // that the work failed, timed out or was cancelled (status) is not an
 // answer: the reminder stays.
-func replyEndsReminder(tx *sql.Tx, replyTo, status string) error {
+func replyEndsReminder(tx *sql.Tx, conv, replyTo, status string) error {
 	if replyTo == "" || status == envelope.StatusProgress || status == envelope.StatusFailed || status == envelope.StatusTimeout || status == envelope.StatusCancelled {
 		return nil
 	}
-	_, err := tx.Exec(`UPDATE reminders SET state = ?, updated_at = ? WHERE message = ? AND state = ?`,
-		ReminderReplied, time.Now().Unix(), replyTo, ReminderPending)
+	// Conversation replies name a logical turn; reminders retain the local
+	// physical copy. Keep aliases within that conversation.
+	_, err := tx.Exec(`UPDATE reminders SET state = ?, updated_at = ?
+		WHERE state = ? AND coalesce(conv, '') = ?
+		AND (message = ? OR message IN (SELECT id FROM inbox WHERE conv = ? AND lid = ?))`,
+		ReminderReplied, time.Now().Unix(), ReminderPending, conv, replyTo, conv, replyTo)
 	return err
 }
 
