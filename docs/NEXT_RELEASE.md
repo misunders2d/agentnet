@@ -1,4 +1,90 @@
-# Messenger release v0.6.0 — 2026-10-02
+# AgentNet release notes — 2026-10-05
+
+This release brings AgentNet closer to an ordinary chat app: open it from its
+icon, sign in, and talk to people and their agents in the same place.
+
+These notes describe the release candidate. The release number, published
+downloads and final installer checks are not confirmed by this record.
+
+## What changes for you
+
+- **One app on each computer.** Install AgentNet and open its icon. It keeps
+  working in the tray when you close the window. The app installs the
+  `agentnet` command too; people do not need terminal commands to use it.
+  Phones keep the browser/home-screen app.
+- **Sign in with Google.** In a workspace that enables Google sign-in, use
+  the account your workspace allows. Adding another device still needs an
+  OK from an existing human device of yours. Signing in does not give
+  someone else permission to use your agents.
+- **Topics in every chat.** People chats, groups and agent chats all have
+  New topic and All topics. Keep the main conversation, start a separate
+  topic, or turn a message into one. Follow-ups and agent replies stay in
+  their topic. In people chats and groups, Mark done and Reopen are shared;
+  a new or previously unseen message makes the topic active again.
+- **Handle several topics together.** Select topics in All topics to mark
+  them done, archive them or Delete for me. You get a confirmation and a
+  short Undo period. Archive is your own view. Deleting a topic in a people
+  chat removes the messages you hold from your linked devices; other people
+  keep their copies. Deleting an agent chat stays on this device.
+- **Agents belong to the group.** Everyone in the group can address an
+  accepted agent without inviting it again. It appears once; bringing it
+  in again shares more selected history. Agents can ask other agents in
+  the group and receive the reply. The owner's approvals still decide
+  what an agent may answer or do. New group agents receive future group
+  messages and files, including when their owner is outside the group;
+  earlier history is shared only when selected.
+- **Approve a person across their devices.** Approve Sergey once for
+  questions or tasks, and it covers his current verified devices and ones
+  he links later. Removing a device ends its access once the removal is
+  verified. Changed keys and conflicting identities still pause access.
+  A person's own human devices can add devices; an agent-only host cannot.
+- **Read the whole request when an agent needs you.** Its full explanation
+  is visible to the people responsible for deciding, in the chat and on
+  the OKs card, with readable long text on a
+  narrow screen. Work in progress stays visible; stalled work is called
+  out. If a question needs an action, the agent can propose it for you to
+  confirm with Do it.
+- **Send keeps you writing.** Your sent draft clears immediately, one
+  Sending bubble shows progress, and you can write the next message while
+  delivery continues. A failed send keeps a way to retry without replacing
+  your newer draft. Sending is not a promise that a task has finished.
+- **Faster phone catch-up.** After time away, messages, files and receipts
+  are processed with fewer delays and fewer repeated screen refreshes.
+- **Unread follows what you see.** Reading an open chat clears the unread
+  messages shown there instead of leaving a stray badge. Your own
+  messages do not show as unread.
+- **Know which workspace you are joining.** Invitations name the workspace,
+  and people and agents are shown with readable names.
+
+## Limits to know
+
+The desktop packages are Linux AppImage, `.deb` and `.rpm`, a Windows
+per-user installer, and a universal Mac `.dmg` for Intel and Apple silicon.
+See the [installation guide](revival/INSTALL.md). Installers are unsigned.
+Mac installation and use are untested on a real Mac; Windows installer and
+real desktop behavior are also not qualified by these local test reports.
+The latest recorded Linux app build completed, but AppImage packaging did
+not finish in that check. Published installer downloads still need checking.
+
+Google sign-in was tested with a local stand-in, not a real Google account.
+Older identities are not converted to Google identities: Google-enabled
+workspaces require fresh enrollment. Physical phone catch-up and the
+reported live group incident still need real-device checks.
+
+The wider person identity work remains tracked in **MEL-525**; this release
+adds approvals across a verified person's devices, not the larger identity
+redesign. Remaining group-agent work and live acceptance stay tracked in
+**MEL-542**. Older limited guest invitations are not silently expanded to
+new group membership. An outside-owner agent requires a current group
+admin's invitation; if that inviting admin leaves or loses admin rights,
+a current admin must add it again.
+
+---
+
+The following v0.6.0 release record is historical. It does not establish
+publication, deployment or test results for the October 5 candidate above.
+
+# Historical release: Messenger v0.6.0 — 2026-10-02
 
 Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
 `49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset

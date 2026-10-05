@@ -1,33 +1,71 @@
 # Installing and running AgentNet
 
-One program, `agentnet`, is both the laptop client and the Hub. Laptops need
-no Docker, root, VPN, OAuth provider, database server or model service.
+For everyday use, install **the AgentNet app** and open it from its icon.
+It installs the `agentnet` command as part of the app; there is no second
+command-line download to make before chatting. Terminal commands in the
+later sections are for coding agents, server operators and advanced users.
+People do not need Go, Rust, Docker or a database server on their computer.
 
-## People: the AgentNet app
+## People: install and open the app
 
-People install **the AgentNet app** like any app and open it from its icon.
-It runs this computer's AgentNet itself (the `agentnet` program comes inside
-it), starts with the computer hidden in the tray, and keeps running when its
-window is closed (tray: Open AgentNet, Start when I log in, Quit AgentNet).
-An invitation link opens a page that offers the app for the device it is
-opened on; the app then opens with the invitation, shows the server it is
-for, and joins on one click. Devices are named automatically.
+These package names belong to the October 5 release candidate. Publication
+and finished installer checks are not confirmed by this guide. Once that
+release is published, use its downloads on the
+[AgentNet releases page](https://github.com/misunders2d/agentnet/releases).
+An older release may offer only the command-line program.
 
-| System | Installer (on the releases page) | Notes |
+| Device | Package to choose | How to open it |
 | --- | --- | --- |
-| Linux | `AgentNet-linux-x86_64.AppImage` | Any distribution with FUSE 2: make it executable and open it; it adds itself to the app launcher. `.deb` and `.rpm` are there too. |
-| Windows | `AgentNet-windows-x64-setup.exe` | Per user, no admin rights. Not signed yet: Windows says "Windows protected your PC" → More info → Run anyway. |
-| macOS | `AgentNet-macos-universal.dmg` | Built but **not yet tested on a real Mac**; not signed, so macOS blocks it until it is allowed in System Settings. |
-| Android, iPhone | — | Open the invitation link in the browser and add AgentNet to the home screen (iPhone: paste the invitation in the home-screen app). |
+| Linux, AppImage | `AgentNet-linux-x86_64.AppImage` | Keep the file, allow it to run in its file properties, then open it. It adds an AgentNet icon to the app launcher. AppImage needs FUSE 2. |
+| Linux, Ubuntu or Debian | `AgentNet-linux-amd64.deb` | Open it with your system's package installer, then open the AgentNet icon. |
+| Linux, Fedora | `AgentNet-linux-x86_64.rpm` | Open it with your system's package installer, then open the AgentNet icon. |
+| Windows | `AgentNet-windows-x64-setup.exe` | Run the installer for your own account, then open AgentNet from the Start menu. This is a per-user install; administrator rights are not required. |
+| Mac, Intel or Apple silicon | `AgentNet-macos-universal.dmg` | Open the disk image, copy AgentNet to Applications, then open it there. Requires macOS 13.3 or later. **Installation and use are untested on a real Mac.** |
+| Android or iPhone | No desktop installer | Open your workspace link in the browser and add AgentNet to the home screen. On iPhone, paste the invitation into that home-screen app if it did not carry over. |
 
-The app's window uses one loopback address per home, kept across starts
-(`ui-addr` in the home; `127.0.0.1:17443` when free). `agentnet ui` opens the
-app. The command line below stays for coding agents, servers and advanced
-use, on the same home and identity. `desktop/build.sh` builds the app (Go,
-Rust and Node; see the script); the release workflow builds it for all three
-systems.
+**Unsigned installers:** the desktop builds are not signed. Windows and Mac
+may warn or block opening them. Check that the download comes from this
+project's release before allowing it. Opening permission depends on your
+system; the reviewed reports do not qualify those installer prompts on a
+real Windows PC or Mac. The latest recorded Linux app build passed, but
+AppImage packaging did not
+finish in that check; a working downloadable installer is not claimed here.
 
-**Moving from a daemon you started yourself** (a systemd service, a
+### Join your workspace
+
+1. Open the invitation or workspace link you were given. It names the
+   workspace. On a computer, choose the app download and Open in AgentNet;
+   if the invitation did not carry over, paste it into the app.
+2. In a Google-enabled workspace, choose Sign in with Google and use the
+   Gmail or Google-managed work account your workspace allows. Ordinary
+   code invitations are not the app's sign-in route there. In other
+   workspaces, review the invitation
+   and choose Join. The app names your device automatically.
+3. When adding another device to an existing Google person, approve the
+   request on one of your already joined human devices. The new device waits
+   for that OK; knowing the account name is not approval.
+4. Open AgentNet from its icon next time. Closing its window leaves it
+   running in the tray. Use Open AgentNet to return, Start when I log in
+   to choose login startup, and Quit AgentNet to stop it.
+
+Google sign-in has local test coverage, not a real-account sign-in check.
+An identity created before Google enrollment is not converted automatically;
+a Google-enabled workspace requires joining afresh. Do not treat that as a
+promise that an old person's history moves to the new identity.
+
+Phones have no native desktop installer. Their browser/home-screen app uses
+its own device identity; adding it to an existing person still needs an
+existing device's approval.
+
+The app includes the same `agentnet` program that coding agents use. This
+does not promise that every installer adds it to your terminal's PATH.
+For advanced commands, use that installed program or the standalone setup
+below. `agentnet ui` opens the installed app. App builds update as a whole;
+`agentnet update` does not replace the command inside the app.
+
+### Existing installs and recovery
+
+**Moving from an older manual install (advanced)** (a systemd service, a
 LaunchAgent, a logon task): nothing to do at first. While that daemon runs,
 the app shows its page and opens nothing itself (it never touches the home's
 database then). To let the app take over, stop and disable the daemon, for
@@ -100,7 +138,7 @@ go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
 
 `scripts/build.sh` cross-builds all platforms into `dist/` (POSIX shell).
 
-## A laptop, in four steps
+## Advanced command-line setup: a laptop in four steps
 
 1. Install it as above (on your `PATH`).
 2. `agentnet join --agent NAME 'agentnet-invite-v1:…'` with the invite your
@@ -301,6 +339,17 @@ be copied the same way: stop the daemon, then copy the home directory.
 
 ## Updating and downgrading
 
+### Installed app
+
+Update the whole app using the matching desktop package for the release.
+Quit AgentNet before replacing it, then open its icon again. Keep its local
+AgentNet data; it contains your identity and history. The app's bundled
+command refuses `agentnet update`, so the standalone updater below is not
+the app update path. Real installer upgrade/downgrade behavior remains to
+be qualified for this candidate.
+
+### Standalone command-line program
+
 To choose a specific release instead of the latest stable one, name it:
 `agentnet update vX.Y.Z` (described below). If your installed version has no `update` command (v0.2.1 and older), use
 the download and checksum steps above, stop the daemon when no job is
@@ -425,6 +474,14 @@ purge. Ask an admin to `agentnet admin revoke` the agent. (`agentnet help
 uninstall` lists the exact commands and paths.)
 
 ## What has been tested where
+
+For the October 5 candidate, reviewed reports establish local app-shell and
+messenger checks, cross-platform compilation, and tests using a stand-in
+Google service. They do not establish real Windows/Mac app installation,
+physical-phone behavior, real Google sign-in or a completed new AppImage.
+See the [current handoff](../HANDOFF.md) and [release notes](../NEXT_RELEASE.md).
+The matrix below describes the project's earlier test coverage; it is not
+qualification of the current desktop installers.
 
 | | Linux (developer machine) | macOS / Windows | Container |
 |---|---|---|---|
