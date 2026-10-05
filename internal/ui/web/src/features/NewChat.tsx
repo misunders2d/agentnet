@@ -60,7 +60,7 @@ export function candidates(o: T.Overview | null): { people: Candidate[]; server:
 /** directoryNote says what the server's member list is not, when it says less than usual. */
 function directoryNote(o: T.Overview): string {
   const d = o.directory;
-  if (!d || d.status === "not_listed") return "This server doesn’t list its members, so only people you already know show here.";
+  if (!d || d.status === "not_listed") return "This workspace doesn’t list its members, so only people you already know show here.";
   if (d.status !== "listed") return "";
   if (!d.current) return "The server’s member list isn’t available right now.";
   return "";

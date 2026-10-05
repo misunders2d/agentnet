@@ -138,6 +138,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
           style={touch.dx ? { transform: "translateX(" + touch.dx + "px)" } : undefined}>
           {first && !who.mine && <NameLine m={m} who={who} />}
           {first && who.mine && excerpt(m) && <span className="mb-1 text-[13px] text-muted">From before you joined</span>}
+          {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
           {body}
           <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
           <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} />

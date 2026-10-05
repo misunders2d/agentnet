@@ -10,7 +10,7 @@ import {
 import type { Api, T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
-import { deviceKind, niceDevice, personName, reminderOf, timeOf, type DeviceKind } from "../model";
+import { deviceKind, niceDevice, personName, threadRow, reminderOf, timeOf, type DeviceKind } from "../model";
 import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
@@ -133,11 +133,15 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
     sub = p.text;
     avatar = <PersonAvatar name={title} seed={t.peer.person || t.peer.address} size={wide ? 48 : 40} online={online} />;
   } else if (th) {
-    title = threadAgentName(ctx);
+    // An agent only where one runs (model.threadRow): your phone is you, Vitalii's phone is Vitalii.
+    const row = threadRow(th.peer, overview, ctx.names);
+    title = row.title;
     const p = presence([th.peer], overview);
     online = p.online;
-    sub = [hostOf(th.peer, overview) ? "on " + niceDevice(th.peer) : "Agent", p.text.replace(/ · .*$/, "")].filter(Boolean).join(" · ");
-    avatar = <AgentAvatar seed={th.peer} size={wide ? 48 : 40} device={deviceKind(th.peer)} mood={online === false ? "asleep" : "neutral"} />;
+    sub = [row.subtitle, p.text.replace(/ · .*$/, "")].filter(Boolean).join(" · ");
+    avatar = row.kind === "agent"
+      ? <AgentAvatar seed={row.seed} size={wide ? 48 : 40} device={deviceKind(row.local ? overview?.me.address : th.peer)} mood={online === false && !row.local ? "asleep" : "neutral"} />
+      : <PersonAvatar name={row.title} seed={row.seed} size={wide ? 48 : 40} online={online} />;
   }
 
   const notify = overview?.notify;

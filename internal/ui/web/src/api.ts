@@ -116,6 +116,10 @@ export function api(host: Host) {
     changeTeam: (c: T.TeamChange) => post<T.TeamState>("/api/team", c),
     teamSnapshot: (teams: string[]) => post<T.TeamSnapshot>("/api/teams/snapshot", { teams }),
     storage: () => get<T.StorageSummary>("/api/storage"),
+
+    // The workspace's own name (its admin names it for everyone)
+    workspace: () => get<T.WorkspaceInfoView>("/api/workspace"),
+    renameWorkspaceForEveryone: (name: string) => post<T.WorkspaceInfoView>("/api/workspace/name", { name } satisfies T.WorkspaceNameChange),
   };
 }
 

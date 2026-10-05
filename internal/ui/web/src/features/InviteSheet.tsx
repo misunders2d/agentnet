@@ -59,7 +59,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [sent, setSent] = useState<{ key: string; name: string }[]>([]); // people invited to a group from this sheet
   const p = useMemo(() => {
     if (!t || !o) return null;
-    const x = pool(t, o, catalogs, names, invitations);
+    const x = pool(t, o, catalogs, names, invitations, store.host.platform);
     // Until the invitation list catches up, someone just invited stays marked here.
     const asked = new Set(sent.map((s) => s.key));
     return { ...x, candidates: x.candidates.map((c) => (asked.has(c.key) && !c.unavailable ? { ...c, unavailable: "Invited · waiting for them to accept" } : c)) };

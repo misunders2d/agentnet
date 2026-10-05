@@ -50,7 +50,7 @@ export function TopicResults({ query, onCount }: { query: string; onCount: (n: n
   };
 
   if (!long || (!hits?.topics.length && !failed)) return null;
-  const agents = new Map(chatList(overview, names).filter((i) => i.kind === "agent").map((i) => [i.peer || "", i.title]));
+  const agents = new Map(chatList(overview, names).filter((i) => i.open.kind === "thread").map((i) => [i.peer || "", i.title]));
   return (
     <div className="px-2 pt-4 lg:px-1">
       <h2 className="px-4 pb-1 text-[12px] font-extrabold uppercase tracking-[.08em] text-muted lg:px-3">

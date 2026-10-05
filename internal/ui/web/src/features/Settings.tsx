@@ -19,7 +19,7 @@ import { NotificationsSection, notifySummary } from "./Settings.notify";
 import { GroupLabel, Tile } from "./Settings.parts";
 import { DeviceGlyph, DevicesSection, devicesOf, pendingLinks, ProfileSection } from "./Settings.profile";
 import { AboutSection, StorageSection, WorkspacesSection } from "./Settings.system";
-import { workspaceLabel } from "./WorkspaceSwitcher";
+import { useWorkspaceLabel } from "./WorkspaceSwitcher";
 
 /** applySavedTheme applies the theme remembered in this browser; call it once at startup. */
 export function applySavedTheme() { applyTheme(savedTheme()); }
@@ -194,8 +194,9 @@ function summary(id: RowId, o: T.Overview | null, workspace: string, theme: Them
 function Row({ id, o, selected, desktop, first, onPick, rowRef }: { id: RowId; o: T.Overview | null; selected: boolean; desktop?: boolean; first: boolean; onPick: () => void; rowRef: (el: HTMLButtonElement | null) => void }) {
   const store = useApp();
   const theme = useTheme();
+  const labelOf = useWorkspaceLabel();
   const s = ROWS[id];
-  const value = summary(id, o, workspaceLabel(store.host.workspace), theme);
+  const value = summary(id, o, labelOf(), theme);
   const look = desktop
     ? "rounded-xl border-[1px] " + (selected ? "border-outline bg-surface" : "border-transparent hover:bg-sunken")
     : (first ? "" : "border-t border-hairline ") + "active:bg-sunken";
