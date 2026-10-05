@@ -128,6 +128,11 @@ func (s *store) putPersonStep(caller identity.Public, raw []byte, r protocol.Per
 		return res, err
 	}
 	if r.Seq == 0 {
+		// Email-bearing first rosters are created atomically by Google join,
+		// never by an invite-code device's self-assertion.
+		if r.Email != "" {
+			return res, errBadStep
+		}
 		if err := r.VerifyFirst(); err != nil {
 			return res, fmt.Errorf("%w: %v", errBadStep, err)
 		}
@@ -184,6 +189,11 @@ func (s *store) putPersonStep(caller identity.Public, raw []byte, r protocol.Per
 				return res, err
 			}
 			res.activated = added.Address
+			if r.Email != "" {
+				if _, err := tx.Exec(`UPDATE agents SET admin=coalesce((SELECT admin FROM google_emails WHERE email=? AND denied=0),0) WHERE address=?`, r.Email, added.Address); err != nil {
+					return res, err
+				}
+			}
 		}
 		for _, d := range prev.Devices {
 			if r.Has(d.Address, d.Fingerprint()) {

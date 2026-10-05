@@ -22,6 +22,12 @@ func (h *Hub) routes() http.Handler {
 		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion, Features: features, RealmID: h.RealmID()})
 	})
 	mux.HandleFunc("POST /v1/join", h.handleJoin)
+	mux.HandleFunc("GET /v1/google/config", h.handleGoogleConfig)
+	mux.HandleFunc("POST /v1/google/prepare", h.handleGooglePrepare)
+	mux.HandleFunc("POST /v1/google/join", h.handleGoogleJoin)
+	mux.HandleFunc("POST /v1/google/exchange", h.handleGoogleExchange)
+	mux.HandleFunc("GET /v1/google/access", h.handleGoogleAccess)
+	mux.HandleFunc("PUT /v1/google/access", h.handleGoogleAccessChange)
 	mux.HandleFunc("GET /v1/agents", h.handleMembers)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}", h.handleDirectory)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)
@@ -69,6 +75,9 @@ func (h *Hub) routes() http.Handler {
 		relay := http.Handler(static.Relay(filepath.Join(h.cfg.DataDir, "skins")))
 		if wrapped, err := static.WithConnectOrigins(relay, h.cfg.BrowserOrigins); err == nil { // validated in Open
 			relay = wrapped
+		}
+		if h.cfg.GoogleWebClientID != "" {
+			relay = static.WithGoogleSignIn(relay)
 		}
 		mux.Handle("/", relay)
 	}

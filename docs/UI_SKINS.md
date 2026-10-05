@@ -307,7 +307,18 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   AgentNet, so its ten minutes cover only that step.
 - The AgentNet app (MEL-533, MEL-534, MEL-536): `overview.app` is `true` when
   the page is the app's window (the app updates as a whole: offer the new
-  version of the app, never a terminal command). Invite people:
+  version of the app, never a terminal command). Google membership (P8):
+  GET `/api/google/access` answers `{workspace_url, enabled, can_admin,
+  emails[{email, admin, denied}], domains[]}`. Only `can_admin` may edit:
+  POST the same route with one `{email}` or `{domain}`, plus `remove` and
+  `admin` booleans. Removal of an email blocks domain admission too and
+  revokes its active and pending devices. Offer Invite by email and Allow
+  everyone at @domain in Workspaces; the Get AgentNet link uses
+  `workspace_url`. A person's optional `email` is part of their signed,
+  immutable roster binding; show it with their editable name. Later-device
+  Google sign-in uses the existing one-tap device approval. With Google
+  enabled, `/api/invites` hides code invites; codes remain an admin CLI
+  fallback. Without Google configured, the existing invitation UI works:
   `POST /api/invite` `{name, admin, days}` (`days` 1, 7 or 30) answers
   `{link, label, expires, message}` (one link that offers the app and opens
   in it; `message` is ready to send); GET `/api/invites` answers

@@ -87,6 +87,7 @@ function Rename({ person }: { person: T.PersonView }) {
         <PersonAvatar name={name.trim() || person.label} seed={person.person || person.address} size={72} />
         <div className="min-w-0 max-w-full">
           <p className="truncate font-display text-[28px] font-extrabold leading-tight">{name.trim() || person.label}</p>
+		  {person.email && <p className="mt-1 break-all text-sm text-muted">{person.email}</p>}
           <p className="mt-1 flex flex-wrap justify-center gap-1.5">
             {devices.map((d) => (
               <span key={d.address} className="inline-flex items-center gap-1 rounded-full stroke bg-surface px-2.5 py-0.5 text-[13px] font-semibold">

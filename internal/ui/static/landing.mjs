@@ -6,6 +6,7 @@
 // who invited and the names are only what the invitation says. Nothing
 // joins without the person's tap, and devices are named automatically.
 import { appLink, detectPlatform, downloads, forPlatform, isPhone } from "./getapp.mjs";
+import { mountGoogleSignIn } from "./google-signin.mjs";
 import { decodeInvite, decodeOffer } from "./wire.mjs";
 
 const phoneNames = { android: "android-phone", iphone: "iphone", ipad: "ipad" };
@@ -74,6 +75,8 @@ export function read(code, now = Date.now()) {
 // (phones only) and start the messenger.
 export async function landing(ui, link) {
   const p = platform();
+  const cfg = ui.googleConfig ? await ui.googleConfig().catch(() => ({})) : {};
+  if (cfg.web_client_id || cfg.desktop_client_id) return googleLanding(ui, p, cfg);
   const code = link && !link.damaged ? link.code : "";
   const problem = link && link.damaged ? "This link could not be opened. Paste the invitation below, or ask the sender for a new link." : "";
   if (isPhone(p)) return phone(ui, p, code, problem);
@@ -249,4 +252,24 @@ export async function appBanner(ui) {
     ui.el("button", { type: "button", class: "btn", onclick: () => { location.href = appLink(""); } }, "Open the app"),
     dismiss(ui, () => { bar.remove(); try { localStorage.setItem(key, "1"); } catch (e) { /* this time only */ } }));
   return bar;
+}
+
+async function googleLanding(ui, p, cfg) {
+  const root = ui.el("div", { class: "join-form" });
+  const origin = location.origin;
+  if (!isPhone(p)) {
+    ui.show("Get AgentNet", ui.el("p", { class: "join-intro" }, "Your Google email is you. Get the app, then sign in."),
+      await downloadsBlock(ui, p),
+      ui.el("a", { class: "btn primary", href: "agentnet://open#google-signin=" + encodeURIComponent(origin) }, "Sign in with Google in AgentNet"));
+    return;
+  }
+  if ((p === "iphone" || p === "ipad") && !standalone()) {
+    ui.show("Get AgentNet", ui.el("p", {}, "Add AgentNet to your home screen first. Then open it and sign in with Google."),
+      ui.el("p", {}, "Tap Share, then Add to Home Screen.")); return;
+  }
+  ui.show("Welcome to AgentNet", ui.el("p", { class: "join-intro" }, "Sign in with your invited Google email."),
+    ui.el("p", { class: "hint" }, "Every later device also needs your OK on an existing device."), root, ...ui.notes());
+  if (!cfg.web_client_id) { root.textContent = "Your workspace admin must enable Google browser sign-in."; return; }
+  try { await mountGoogleSignIn(root, cfg.web_client_id, await ui.googleNonce(), token => ui.googleJoin(token, phoneNames[p] || "browser")); }
+  catch (e) { root.replaceChildren(ui.el("p", { class: "error", role: "alert" }, e.message)); }
 }

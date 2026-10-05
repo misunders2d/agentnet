@@ -66,6 +66,13 @@ async function handle(req) {
     return { joined: engine.joined };
   case "join":
     return { address: await engine.join(req.code, req.name) };
+  case "googleKeys": {
+    const nonce = await engine.googleNonce();
+    const pending = await store.get("kv", "google_joining");
+    return { nonce, public: wire.marshalPublic(await wire.publicEntry(pending.keys, "google/" + req.name)) };
+  }
+  case "googleJoin":
+    return { address: await engine.joinGoogle(req.token, req.name) };
   case "joinLink": // a device link from another device of the person (its QR's text)
     return { address: await engine.joinAndLink(req.code, req.name) };
   case "joinAuto": // under an automatic name: base, base-2 … while taken

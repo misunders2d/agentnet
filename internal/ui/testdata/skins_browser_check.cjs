@@ -70,11 +70,11 @@ const local = (version) => {
 
       for (const id of ['classic','zoom']) {
         await page.goto(origin + '/?skin=' + id);
-        await page.waitForFunction(id=>!!document.querySelector('#skin')?.shadowRoot?.querySelector('.'+id+'-root #me')?.textContent.includes('alice'),id);
+        await page.waitForFunction(id=>document.querySelector('#skin')?.shadowRoot?.querySelector('.'+id+'-root #me')?.textContent==='This device',id);
         assert.equal(await page.getByRole('button',{name:'Use this skin',exact:true}).count(),0,tag+': built-in never asks trust');
         assert(await page.evaluate(()=>!!window.agentnet.drive&&typeof window.agentnet.drive.drive==='function'&&typeof window.agentnet.drive.driveUpload==='function'),tag+': real host Drive provider');
         await page.goto(origin + '/');
-        await page.waitForFunction(id=>!!document.querySelector('#skin')?.shadowRoot?.querySelector('.'+id+'-root #me')?.textContent.includes('alice'),id);
+        await page.waitForFunction(id=>document.querySelector('#skin')?.shadowRoot?.querySelector('.'+id+'-root #me')?.textContent==='This device',id);
         await noScroll(id);await snap(id);
         await page.getByRole('button',{name:'Switch to Comic',exact:true}).click();await comicUp();
       }

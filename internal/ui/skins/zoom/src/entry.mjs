@@ -128,7 +128,7 @@ async function loadOverview() {
   if (!state.version) state.version = o.version;
   else if (o.version && o.version !== state.version) updated(o.version);
   $("demo").hidden = !o.demo;
-  $("me").textContent = o.me.address;
+  $("me").textContent = o.person ? o.person.label + (o.person.email ? " · " + o.person.email : "") : "This device";
   $("me").title = "Key " + o.me.fingerprint;
   const m = machineLines(o);
   $("machine").textContent = m.summary;
@@ -1129,7 +1129,7 @@ function groupInvitationDialog(i) {
 function inviteGroupDialog(t, initialPerson) {
   const host = currentHost, gen = state.gen, ws = wsNow();
   const people = (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !(t.members || []).some(m => m.person === p.person));
-  const person = el("select", { id: "group-invite-person" }, people.map(p => el("option", { value: p.person }, p.label + " · " + p.address)));
+  const person = el("select", { id: "group-invite-person" }, people.map(p => el("option", { value: p.person }, p.label + (p.email ? " · " + p.email : ""))));
   if (initialPerson) { if (!people.some(p => p.person === initialPerson)) { announce("That person is no longer eligible. Review current group members and people."); return; } person.value = initialPerson; }
   const selection = groupPeopleSelection(t, host, gen, ws, null, () => { person.disabled = true; });
   const mode = el("select", { id: "group-history-mode" }, el("option", { value: "none" }, "Share nothing earlier"), el("option", { value: "last" }, "Last messages"), el("option", { value: "since" }, "Messages since a date"), el("option", {value:"selected"},"Selected messages"));
@@ -1386,7 +1386,7 @@ function hubOf(h) {
   if (h.kind === "person") {
     const dms = (o.dms || []).filter((d) => personKey(d.peer) === h.key);
     const p = (o.people || []).find((x) => personKey(x) === h.key) || (dms[0] && dms[0].peer);
-    return p ? { label: p.label, person: p, dms, count: dms.length } : null;
+    return p ? { label: p.label + (p.email ? " · " + p.email : ""), person: p, dms, count: dms.length } : null;
   }
   const c = contactsOf(o.threads || []).find((x) => x.peer === h.key);
   return c ? { label: c.peer, contact: c, count: c.conversations.length + c.singles.length } : null;
@@ -1435,7 +1435,7 @@ function renderHub() {
   }
   if (x.person) {
     const p = x.person;
-    fill($("conv-name"), p.label);
+    fill($("conv-name"), p.label + (p.email ? " · " + p.email : ""));
     $("conv-topic").textContent = "Person · " + plural(x.dms.length, "DM", "DMs") + " · each DM is a separate conversation";
     $("conv-presence").textContent = "The name they give · " + (devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address) +
       " · " + (personStateText[p.state] || p.state);
@@ -4241,7 +4241,7 @@ function renderProfile(o) {
   const p = o.person;
   $("profile-initial").textContent = (p ? p.label : o.me.address).charAt(0).toUpperCase();
   fill($("profile-card"), p ? el("div", { class: "profile-card" }, avatar(p.label),
-    el("div", {}, el("h3", {}, p.label), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
+    el("div", {}, el("h3", {}, p.label), p.email && el("p", { class: "hint" }, p.email), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
       p.person && el("p", { class: "hint", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8))))
     : setupChoice());
   fill($("profile-devices"), p ? deviceDisclosure(p, (addr) => { $("settings").close(); openHub({ kind: "device", key: addr }); }) : null,

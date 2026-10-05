@@ -44,6 +44,7 @@ var ErrService = errors.New("this installation is a service: it speaks as itself
 type PersonInfo struct {
 	Person string `json:"person"`
 	Label  string `json:"label"` // the person's own claim, not verified
+	Email  string `json:"email,omitempty"`
 	// Address and Fingerprint are the one device this view is about: this
 	// installation for its own person, the host or author device of a
 	// participation, otherwise the person's first current device.
@@ -109,6 +110,7 @@ func scanPersonIn(q dbq, where string, args ...any) (personRow, bool, error) {
 	if err := json.Unmarshal(p.raw, &p.roster); err != nil {
 		return p, false, err
 	}
+	p.info.Email = p.roster.Email
 	added := map[string]int64{}
 	if rows, err := q.Query(`SELECT address, added FROM person_devices WHERE person = ?`, p.info.Person); err == nil {
 		for rows.Next() {
@@ -563,7 +565,7 @@ func (a *Agent) ListedPersons() ([]PersonInfo, error) {
 			continue
 		}
 		seen[r.Person] = true
-		p := PersonInfo{Person: r.Person, Label: r.Label, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
+		p := PersonInfo{Person: r.Person, Label: r.Label, Email: r.Email, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
 		for _, d := range r.Devices {
 			_, name, _ := protocol.SplitAddress(d.Address)
 			p.Devices = append(p.Devices, DeviceInfo{Address: d.Address, Name: name, Fingerprint: d.Fingerprint()})

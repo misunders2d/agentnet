@@ -304,6 +304,7 @@ const (
 type PersonView struct {
 	Person      string `json:"person,omitempty"`
 	Label       string `json:"label"`
+	Email       string `json:"email,omitempty"`
 	Address     string `json:"address"` // the one device the person speaks through
 	Fingerprint string `json:"fingerprint,omitempty"`
 	State       string `json:"state"`

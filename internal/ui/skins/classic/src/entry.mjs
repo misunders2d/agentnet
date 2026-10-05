@@ -132,7 +132,7 @@ async function loadOverview() {
   if (!state.version) state.version = o.version;
   else if (o.version && o.version !== state.version) updated(o.version);
   $("demo").hidden = !o.demo;
-  $("me").textContent = o.me.address;
+  $("me").textContent = o.person ? o.person.label + (o.person.email ? " · " + o.person.email : "") : "This device";
   $("me").title = "Key " + o.me.fingerprint;
   const m = machineLines(o);
   $("machine").textContent = m.summary;
@@ -1131,7 +1131,7 @@ function groupInvitationDialog(i) {
 function inviteGroupDialog(t, initialPerson) {
   const host = currentHost, gen = state.gen, ws = wsNow();
   const people = (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !(t.members || []).some(m => m.person === p.person));
-  const person = el("select", { id: "group-invite-person" }, people.map(p => el("option", { value: p.person }, p.label + " · " + p.address)));
+  const person = el("select", { id: "group-invite-person" }, people.map(p => el("option", { value: p.person }, p.label + (p.email ? " · " + p.email : ""))));
   if (initialPerson) { if (!people.some(p => p.person === initialPerson)) { announce("That person is no longer eligible. Review current group members and people."); return; } person.value = initialPerson; }
   const selection = groupPeopleSelection(t, host, gen, ws, null, () => { person.disabled = true; });
   const mode = el("select", { id: "group-history-mode" }, el("option", { value: "none" }, "Share nothing earlier"), el("option", { value: "last" }, "Last messages"), el("option", { value: "since" }, "Messages since a date"), el("option", {value:"selected"},"Selected messages"));
@@ -1347,6 +1347,7 @@ function personRow(p, dms) {
     el("span", { class: "conv-main" },
       el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, p.label),
         last && el("span", { class: "conv-time" }, when(last.last_at))),
+      p.email && el("span", { class: "person-email" }, p.email),
       el("span", { class: "person-tags" }, el("span", { class: "kind-tag" }, "Person"), p.person && el("span", { class: "kind-tag", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8))),
       el("span", { class: "conv-bottom" },
         el("span", { class: "conv-last" }, last ? last.last || "No messages yet" : "No DM yet"),
@@ -4434,7 +4435,7 @@ function renderProfile(o) {
   const p = o.person;
   $("profile-initial").textContent = (p ? p.label : o.me.address).charAt(0).toUpperCase();
   fill($("profile-card"), p ? el("div", { class: "profile-card" }, avatar(p.label),
-    el("div", {}, el("h3", {}, p.label), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
+    el("div", {}, el("h3", {}, p.label), p.email && el("p", { class: "hint" }, p.email), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
       p.person && el("p", { class: "hint", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8))))
     : setupChoice());
   fill($("profile-devices"), p ? deviceDisclosure(p, (addr) => { $("settings").close(); openHub({ kind: "device", key: addr }); }) : null,

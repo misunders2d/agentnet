@@ -82,6 +82,8 @@ export function api(host: Host) {
     // Me, my devices, my assistant
     createPerson: (label: string) => post<{ person: T.PersonView; note: string }>("/api/person", { label }),
     renamePerson: (label: string) => post<T.PersonView>("/api/person/label", { label }),
+	googleAccess: () => get<T.GoogleAccess>("/api/google/access"),
+	changeGoogleAccess: (c: T.GoogleAccessChange) => post<unknown>("/api/google/access", c),
     deviceLink: () => post<T.DeviceLink>("/api/device/link", {}),
     decideDevice: (id: string, accept: boolean) => post<{ note: string }>("/api/device/decide", { id, accept }),
     removeDevice: (address: string) => post<{ note: string }>("/api/device/remove", { address }),

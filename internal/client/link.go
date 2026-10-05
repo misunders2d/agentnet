@@ -128,6 +128,9 @@ func (a *Agent) onLinkEvent(data []byte) {
 }
 
 func (a *Agent) takeLinkRequest(ev protocol.LinkEvent) error {
+	if ev.Google != nil {
+		return a.takeGoogleLinkRequest(ev)
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
@@ -298,7 +301,7 @@ func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) 
 	if err := json.Unmarshal([]byte(pub), &dev); err != nil {
 		return err
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Seq: me.info.Seq + 1, Prev: me.info.Roster,
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Seq: me.info.Seq + 1, Prev: me.info.Roster,
 		Devices: append(append([]identity.Public(nil), me.roster.Devices...), dev), By: a.Self().Fingerprint(), Join: join}
 	r.Sign(a.id.Sign)
 	if _, err := r.VerifyNext(me.roster); err != nil {
@@ -437,7 +440,7 @@ func (a *Agent) RemoveDevice(ctx context.Context, address string) error {
 	case len(keep) == 0:
 		return errors.New("the last device of a person cannot be removed")
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, By: a.Self().Fingerprint()}
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, By: a.Self().Fingerprint()}
 	r.Sign(a.id.Sign)
 	raw, _ := json.Marshal(r)
 	err = a.hub.doBytes(ctx, "PUT", "/v1/person", raw, nil)

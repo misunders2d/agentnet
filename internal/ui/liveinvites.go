@@ -24,6 +24,13 @@ func InviteMessage(from, link string) string {
 
 // Invite implements Invitations: one invitation link for a new person.
 func (l *Live) Invite(r InviteRequest) (InviteView, error) {
+	access, err := l.GoogleAccess()
+	if err != nil {
+		return InviteView{}, Refuse("Could not check workspace sign-in. Try again.")
+	}
+	if access.Enabled {
+		return InviteView{}, Refuse("Invite by email in Settings → Workspaces. Invitation codes are an advanced admin CLI fallback.")
+	}
 	name := strings.TrimSpace(r.Name)
 	if name == "" {
 		return InviteView{}, Refuse("Write the name of the person you invite.")
@@ -66,6 +73,13 @@ func inviteWords(err error) string {
 // Hub's answer for this device (an admin device).
 // TODO(integrate:P2): use P2's shared canAdmin helper here once merged.
 func (l *Live) Invites() (InvitesView, error) {
+	access, err := l.GoogleAccess()
+	if err != nil {
+		return InvitesView{}, Refuse("Could not check workspace sign-in. Try again.")
+	}
+	if access.Enabled {
+		return InvitesView{Invites: []PendingInviteView{}}, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
 	p, err := l.a.Invites(ctx)

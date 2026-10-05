@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/misunders2d/agentnet/internal/googleauth"
 	"log"
 	"net"
 	"net/http"
@@ -66,6 +67,12 @@ type Config struct {
 	// protocol.DefaultPushHosts (each a host name; a subscription's host
 	// must be one of them or a subdomain of one).
 	PushHosts []string
+
+	GoogleWebClientID         string
+	GoogleDesktopClientID     string
+	GoogleDesktopClientSecret string       // optional OAuth exchange setting; never public or logged
+	GoogleClientIDs           []string     // additional accepted audiences
+	GoogleHTTP                *http.Client // optional controlled transport (mock issuer tests); trust checks stay fixed
 }
 
 // Hub serves the AgentNet Hub API.
@@ -95,6 +102,7 @@ type Hub struct {
 	syncDir    func(dir string) error
 	done       chan struct{}
 	closeOnce  sync.Once
+	google     *googleauth.Validator
 }
 
 // Open prepares the data directory, database, TLS certificate, and — for a
@@ -164,6 +172,15 @@ func Open(cfg Config) (*Hub, error) {
 		h.waiters.notifyAll() // some waited-for messages may have expired
 	}, onChange: func(string) { h.membersChanged() }}
 	err = h.loadRealm()
+	if err == nil {
+		audiences := append([]string(nil), cfg.GoogleClientIDs...)
+		for _, id := range []string{cfg.GoogleWebClientID, cfg.GoogleDesktopClientID} {
+			if id != "" {
+				audiences = append(audiences, id)
+			}
+		}
+		h.google, err = googleauth.New(cfg.GoogleHTTP, audiences)
+	}
 	if err == nil && !cfg.PlatformTLS {
 		err = h.loadOrCreateCert(u.Hostname())
 	}

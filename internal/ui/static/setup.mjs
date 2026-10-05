@@ -39,7 +39,7 @@ export function codeFrom(text) {
   if (hash >= 0 && !s.startsWith(invitePrefix) && !s.startsWith(linkPrefix)) s = s.slice(hash + 1);
   try { s = decodeURIComponent(s); } catch (e) { return ""; }
   s = s.trim();
-  return s.startsWith(invitePrefix) || s.startsWith(linkPrefix) ? s : "";
+  return s.startsWith(invitePrefix) || s.startsWith(linkPrefix) || s.startsWith("google-signin=") ? s : "";
 }
 
 let panel, state = { state: "none", device: "", device_words: "" };
@@ -71,10 +71,29 @@ function welcome(problem) {
   });
   show("Welcome to AgentNet",
     el("p", { class: "join-intro" }, "Chat with people and their agents."),
-    state.state === "incomplete" && el("p", { class: "join-recovery" }, "Joining did not finish last time. Paste the same invitation again to finish it."),
-    "Open the invitation link you were sent, or paste it here.",
-    form);
-  box.focus();
+    state.state === "incomplete" && el("p", { class: "join-recovery" }, "Joining did not finish last time. Sign in with the same Google account to finish it, or reuse your invitation below."),
+    "Open your workspace’s Get AgentNet link, or enter its address below.",
+    googleForm(), el("details", {}, el("summary", {}, "Use an invitation or device link"), form));
+  panel.querySelector("#google-hub").focus();
+}
+
+function googleForm(hub = "") {
+  const address = el("input", { id: "google-hub", type: "url", value: hub, placeholder: "https://your-workspace.example", autocomplete: "url", required: true });
+  const error = el("p", { class: "error", role: "alert" });
+  const button = el("button", { type: "submit", class: "btn primary join-go" }, "Sign in with Google");
+  const form = el("form", { class: "join-form" }, el("label", { for: "google-hub" }, "Workspace address"), address,
+    el("p", { class: "hint" }, "Use your invited Google email. Another device of yours must approve each later device."), error, button);
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault(); if (button.disabled) return; button.disabled = true; error.textContent = "";
+    try {
+      await call("/api/setup/google", { hub: address.value.trim() });
+      error.textContent = "Continue in your browser. Return here after Google sign-in.";
+      const events = new EventSource("/api/setup/google/events");
+      events.onmessage = event => { events.close(); const result = JSON.parse(event.data); if (result.state === "joined") location.replace("/"); else { error.textContent = result.problem; button.disabled = false; } };
+      events.onerror = () => { events.close(); location.replace("/"); };
+    } catch (e) { error.textContent = e.message; button.disabled = false; }
+  });
+  return form;
 }
 
 // ended says how this computer's membership ended and starts again on the
@@ -105,6 +124,7 @@ function ended() {
 }
 
 async function inspect(code) {
+  if (code.startsWith("google-signin=")) { const hub = code.slice("google-signin=".length); show("Welcome to AgentNet", googleForm(hub)); return; }
   let inv;
   try { inv = await call("/api/setup/inspect", { code }); } catch (e) { welcome(e.message); return; }
   if (inv.problem) { welcome(inv.problem); return; }
