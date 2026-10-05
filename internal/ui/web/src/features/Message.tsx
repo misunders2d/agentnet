@@ -66,6 +66,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
     select: live && !!ctx.dm && ctx.canReply && !!onSelect && (ctx.dm.role || "member") === "member",
   };
   const acts: Acts = {
+    topic:live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
     copy: () => {
       navigator.clipboard?.writeText(plain(shownText(m))).then(() => store.toast("Copied", "ok"), () => store.toast("Couldn’t copy here", "error"));

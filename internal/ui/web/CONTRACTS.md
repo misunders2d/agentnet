@@ -36,7 +36,7 @@ host, including its documented additions (`onSkinsChange`,
 |---|---|---|
 | `features/ChatList.tsx`, `features/NewChat.tsx`, `features/WorkspaceSwitcher.tsx` | `ChatList()`, `WorkspaceCoin()`; for Settings: `JoinSheet`, `LeaveSheet`, `workspaceLabel(w)`, `useDisconnected(ws, revision)`, `useReconnect(ws, onDone)` → `{ busy, error, done, reconnect }` (a failure is shown under its row, not as a toast) | App, Settings |
 | `features/Conversation.tsx`, `features/Message.tsx`, `features/Markdown.tsx` | `Conversation()` (reads `store.open`, `store.dm`/`store.thread`), `MessageView` | App |
-| `features/Conversation.topics.tsx`, `features/Conversation.alltopics.tsx` | `TopicBar({ thread })` (the bar and the open topic's menu), `TopicEnd({ ctx })` (end of a done or archived topic), `TopicMark`, `topicLabel`, `changeTopic`, `barTopics`; `AllTopics(...)` (side panel / full-screen sheet over `/api/topics`) | Conversation, ChatList |
+| `features/Conversation.topics.tsx`, `features/Conversation.alltopics.tsx` | `TopicBar({ thread?, dm? })` (the bar and the open topic's menu), `TopicEnd({ ctx })` (end of a done or archived topic), `TopicMark`, `topicLabel`, `changeTopic`, `barTopics`; `AllTopics(...)` (side panel / full-screen sheet over `/api/topics`) | Conversation, ChatList |
 | `features/ChatList.topics.tsx` | `TopicResults({ query, onCount })` (topics in the chat search) | ChatList |
 | `features/Composer.tsx`, `features/Emoji.tsx` | `Composer({ dm?: T.DMThread; thread?: T.Thread })`, `EmojiPicker({ onPick, onClose })` | Conversation, Message (reactions) |
 | `features/InviteSheet.tsx`, `features/RoomPanel.tsx` | `InviteSheet()` (renders from `store.invite`), `RoomPanel()` (desktop side panel; renders nothing when closed or no conversation), `RoomSheet()` (phone) | App/Conversation |
@@ -109,3 +109,13 @@ Bring-in reads `checkGuest({conv,host})` before inviting. `needs_update` names
 people whose app must update; `offline` remains a separate condition. An invite
 can wait durably for an update. The guest card's Ask-to-update action only opens
 and prefills a DM draft.
+
+People-chat topics keep `Draft.topic`/`newTopic` per conversation. The timeline
+filters `DMMessage.topic` while retaining the full DM for quotes and granted
+context. New topic is opt-in; Main flow clears the selection. `AllTopics`
+accepts `conv` for DM/group routes and `peer` for device threads. Bulk controls
+collect `ids`, show one confirmation, and delay the host call by
+`TOPICS.undoDelay` so Undo/close cancels before mutation. Shared Done/Reopen
+uses the verified sender's existing person/device display; local archive and
+delete scopes are stated beside the controls. Classic and Zoom copy the
+shared authored `skins/shared/topics.mjs` into their independent packages.

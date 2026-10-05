@@ -482,6 +482,26 @@ func TestBrowserWireV2MatchesGo(t *testing.T) {
 			}
 			return in
 		}
+
+		topic := protocol.NewID()
+		marked := in2(w.ok(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": msg(map[string]any{"topic": topic, "topic_event": map[string]any{"action": "done", "seen": []string{topic}}})}))
+		if marked.Topic != topic || marked.TopicEvent == nil || marked.TopicEvent.Action != "done" || len(marked.TopicEvent.Seen) != 1 {
+			t.Fatalf("topic event: %+v", marked)
+		}
+		marked.From, marked.To, marked.ID = bob.Address, dana, protocol.NewID()
+		topicEnv, err := envelope.Seal(marked, bobID.Sign, danaRecipient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		topicOpened := w.ok(map[string]any{"op": "open", "envelope": marshal(t, topicEnv), "from": publicJSON(t, bob)})["inner"].(map[string]any)
+		if topicOpened["topic"] != topic || topicOpened["topic_event"].(map[string]any)["action"] != "done" {
+			t.Fatalf("browser topic event: %v", topicOpened)
+		}
+		for _, extra := range []map[string]any{{"topic": "invalid"}, {"topic_event": map[string]any{"action": "done"}}, {"topic": topic, "topic_done": true}, {"topic": topic, "sub": "history"}, {"topic": topic, "topic_event": map[string]any{"action": "delete"}}, {"topic": topic, "topic_event": map[string]any{"action": "done", "seen": []string{"invalid"}}}} {
+			if got := w.call(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": msg(extra)}); got["error"] == nil {
+				t.Fatalf("browser accepted invalid topic: %v", extra)
+			}
+		}
 		q := in2(w.ok(map[string]any{"op": "seal", "to": publicJSON(t, bob), "message": msg(map[string]any{"kind": "question",
 			"target": map[string]any{"address": bob.Address, "fingerprint": bob.Fingerprint()}})}))
 		if q.Target == nil || q.Target.Address != bob.Address {

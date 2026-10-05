@@ -19,8 +19,8 @@ const filters: { id: TopicState; label: string; none: string }[] = [
   { id: "archived", label: "Archived", none: "Nothing archived yet" },
 ];
 
-export function AllTopics({ open, onOpenChange, peer, agent, current }: {
-  open: boolean; onOpenChange: (o: boolean) => void; peer: string; agent: string; current?: string;
+export function AllTopics({ open, onOpenChange, peer,conv, agent, current }: {
+  open: boolean; onOpenChange: (o: boolean) => void; peer: string;conv?:string; agent: string; current?: string;
 }) {
   const store = useApp();
   const wide = useWide();
@@ -34,15 +34,32 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
   const [matched, setMatched] = useState(0);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState("");
+  const [selected,setSelected]=useState<string[]>([]);
+  const [counts,setCounts]=useState<Record<string,number>>({});
+  const [action,setAction]=useState<"delete"|"done"|"archive"|null>(null);
+  const [undo,setUndo]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const timer=useRef<ReturnType<typeof setTimeout>|null>(null);
+  const cancel=()=>{if(timer.current)clearTimeout(timer.current);timer.current=null;setUndo(false);setAction(null);};
+  useEffect(()=>()=>{if(timer.current)clearTimeout(timer.current);},[]);
+  useEffect(()=>{if(!open){cancel();setSelected([]);}},[open]);
+  const commit=()=>{
+    setUndo(true);const ids=[...selected],covered={...counts},what=action!;
+    timer.current=setTimeout(()=>{
+      timer.current=null;setUndo(false);setBusy(true);
+      void store.run(a=>a.changeTopic(what,{conv,peer,id:"",ids,counts:covered})).then(r=>{if(r){if(what==="delete"&&conv&&ids.includes(store.draft(conv).topic||""))store.setDraft(conv,{...store.draft(conv),topic:undefined,newTopic:false,replyTo:undefined});setSelected([]);setAction(null);store.toast(r.note,"ok");}setBusy(false);});
+    },TOPICS.undoDelay);
+  };
+  const toggle=(id:string)=>{setCounts(had=>({...had,[id]:items.find(t=>t.id===id)?.count||1}));setSelected(had=>had.includes(id)?had.filter(x=>x!==id):[...had,id]);};
   const asked = useRef(0);
   const search = useRef<HTMLInputElement>(null);
   const portal = usePortal();
   const modal = useModal(open);
 
   // Counts per filter, from the overview: it lists active and done topics and counts archived ones.
-  const shown = (overview?.threads || []).filter((t) => t.peer === peer && !t.notice_only).map(topicOf);
+  const shown = (conv ? ((store.get().views[conv] as import("../api").T.DMThread)?.topics||[]) : overview?.threads || []).filter((t) => (conv?t.conv===conv:t.peer===peer) && !t.notice_only).map(topicOf);
   const count = { active: shown.filter((t) => t.state === "active").length, done: shown.filter((t) => t.state === "done").length,
-    archived: (overview?.topics || []).find((c) => c.peer === peer)?.archived || 0 };
+    archived:conv?shown.filter(t=>t.state==="archived").length:(overview?.topics || []).find((c) => c.peer === peer)?.archived || 0 };
 
   useEffect(() => { const x = setTimeout(() => setQ(query.trim()), TOPICS.searchDelay); return () => clearTimeout(x); }, [query]);
 
@@ -55,23 +72,23 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
     shownFor.current = key;
     if (!same) { setItems([]); setNext(""); } // never another filter's rows under this one
     setLoading(true);
-    store.api.topics({ peer, state: filter, q, limit: same ? Math.min(Math.max(items.length, TOPICS.pageSize), TOPICS.pageMax) : TOPICS.pageSize }).then((p) => {
+    store.api.topics({ conv,peer, state: filter, q, limit: same ? Math.min(Math.max(items.length, TOPICS.pageSize), TOPICS.pageMax) : TOPICS.pageSize }).then((p) => {
       if (ask !== asked.current) return;
       setItems((p.topics || []).map(topicOf)); setNext(p.next || ""); setMatched(p.matched); setFailed("");
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
-  }, [open, peer, filter, q, seq]);
+  }, [open, conv,peer, filter, q, seq]);
   // Emptied once it has slid away, not while it does (it would flash "No topics").
   const reset = () => { setItems([]); setNext(""); setQuery(""); setQ(""); shownFor.current = ""; };
 
   const more = () => {
     const ask = ++asked.current;
     setLoading(true);
-    store.api.topics({ peer, state: filter, q, before: next, limit: TOPICS.pageSize }).then((p) => {
+    store.api.topics({ conv,peer, state: filter, q, before: next, limit: TOPICS.pageSize }).then((p) => {
       if (ask !== asked.current) return;
       setItems((had) => [...had, ...(p.topics || []).map(topicOf).filter((t) => !had.some((h) => h.id === t.id))]); setNext(p.next || ""); setMatched(p.matched);
     }, (e) => { if (ask === asked.current) setFailed(errorText(e)); }).finally(() => { if (ask === asked.current) setLoading(false); });
   };
-  const go = (t: Topic) => { onOpenChange(false); void store.open({ kind: "thread", id: t.id, peer: t.peer }); };
+  const go = (t: Topic) => { onOpenChange(false); if(conv)store.setDraft(conv,{...store.draft(conv),topic:t.id,newTopic:false,replyTo:undefined});else void store.open({ kind: "thread", id: t.id, peer: t.peer }); };
   const f = filters.find((x) => x.id === filter)!;
 
   return (
@@ -110,6 +127,12 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
             </div>
           </div>
 
+          {selected.length>0 && <div className="shrink-0 border-b border-hairline px-4 py-2" aria-live="polite">
+            <p className="text-[14px] font-semibold">{selected.length} selected</p>
+            {!action ? <div className="mt-2 flex flex-wrap gap-2">{(["delete","done","archive"] as const).map(what=><Button key={what} size="sm" disabled={busy} onClick={()=>setAction(what)}>{what==="delete"?"Delete for me":what==="done"?"Mark done":"Archive"}</Button>)}<Button size="sm" onClick={()=>setSelected([])}>Cancel selection</Button></div>
+              : <><p className="mt-1 text-[14px]">{action==="delete"?"Delete these topics for you? Others keep their copies. People chats: your devices; agent chats: this device.":action==="done"?conv?"Mark these topics done for everyone?":"Mark these topics done on this device?":"Archive these topics on this device? Nothing deleted."}</p>
+                <div className="mt-2 flex gap-2">{undo?<><span className="text-[14px]">Will apply in six seconds.</span><Button size="sm" onClick={cancel}>Undo</Button></>:<><Button size="sm" disabled={busy} onClick={commit}>Confirm</Button><Button size="sm" disabled={busy} onClick={cancel}>Cancel</Button></>}</div></>}
+          </div>}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-2 lg:px-3" aria-busy={loading}>
             <p role="status" className={q && !loading && !failed && items.length ? "px-3 pb-1 text-[13px] font-semibold text-text-2" : "sr-only"}>
               {q && !loading && !failed ? (matched === 1 ? "1 " + f.label.toLowerCase() + " topic matches" : matched + " " + f.label.toLowerCase() + " topics match") : ""}
@@ -126,9 +149,10 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
             {items.length > 0 && (
               <ul aria-label={f.label + " topics"} className="flex flex-col gap-0.5">
                 {items.map((t) => (
-                  <li key={t.id}>
+                  <li key={t.id} className="flex items-center">
+                    <input type="checkbox" aria-label={"Select "+(t.title||"Untitled topic")} checked={selected.includes(t.id)} disabled={undo||busy} onChange={()=>toggle(t.id)} className="m-3 size-5 shrink-0"/>
                     <button type="button" onClick={() => go(t)} aria-current={t.id === current ? "true" : undefined} aria-label={topicLabel(t) + ", " + when(t.lastAt)}
-                      className={"flex w-full flex-col gap-1 rounded-2xl border px-3 py-2.5 text-left transition-colors duration-200 "
+                      className={"flex min-w-0 flex-1 flex-col gap-1 rounded-2xl border px-3 py-2.5 text-left transition-colors duration-200 "
                         + (t.id === current ? "border-outline bg-surface shadow-pop-sm" : "border-transparent hover:bg-sunken")}>
                       <span className="flex min-w-0 items-center gap-2">
                         <span className={"min-w-0 flex-1 truncate text-[15.5px] " + (t.unread ? "font-extrabold" : "font-bold")}>{firstLine(t.title, TOPICS.listTitle) || "Untitled"}</span>
@@ -154,7 +178,7 @@ export function AllTopics({ open, onOpenChange, peer, agent, current }: {
             {loading && items.length === 0 && <p className="px-4 py-6 text-center text-[14px] text-text-2" role="status">Loading topics…</p>}
           </div>
           <p className="shrink-0 border-t border-hairline px-5 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))] text-[12.5px] text-muted">
-            Names you give topics and Done marks are kept on this device only.
+            {conv?"Done and Reopen are shared with everyone. Rename and Archive stay on this device. Delete for me leaves others’ copies.":"Names, Done and Archive stay on this device. Delete for me leaves others’ copies."}
           </p>
         </Dialog.Popup>
       </Dialog.Portal>

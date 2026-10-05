@@ -130,6 +130,39 @@ type Inner struct {
 	Human         *HumanTurn     `json:"human,omitempty"`
 	Quote         string         `json:"quote,omitempty"`
 	TopicDone     bool           `json:"topic_done,omitempty"`
+	Topic         string         `json:"topic,omitempty"`
+	TopicEvent    *TopicEvent    `json:"topic_event,omitempty"`
+}
+
+// TopicEvent is a shared human action. Seen names exact logical turns covered
+// by done/open; a later or previously unseen turn always ends the mark.
+type TopicEvent struct {
+	Action string   `json:"action"`
+	Seen   []string `json:"seen,omitempty"`
+}
+
+// CheckTopic is shared by live envelopes and retained history.
+func CheckTopic(in Inner) error {
+	if in.Topic != "" && (in.V != Version2 || !validID(in.Topic) || in.Sub != "") {
+		return errors.New("topic belongs only on a conversation turn")
+	}
+	if e := in.TopicEvent; e != nil {
+		if in.Topic == "" || in.Kind != KindMessage || in.Target != nil || AgentOrigin(in.Origin) || in.Status != "" || len(in.Attachments) != 0 {
+			return errors.New("topic event belongs only on a human conversation message")
+		}
+		if e.Action != "create" && e.Action != "done" && e.Action != "open" {
+			return errors.New("invalid topic action")
+		}
+		for _, id := range e.Seen {
+			if !validID(id) {
+				return errors.New("invalid topic seen message")
+			}
+		}
+	}
+	if in.TopicDone && (in.V != Version && in.V != Version2 || in.Status != StatusDone || in.Kind != KindAnswer && in.Kind != KindResult || in.V == Version2 && (in.Topic == "" || in.PID == "" || !AgentOrigin(in.Origin))) {
+		return errors.New("topic_done belongs only on a completed agent answer or result")
+	}
+	return nil
 }
 
 // Ref names one earlier message exactly: its id (a device message's
@@ -596,8 +629,8 @@ func checkVersion2(in Inner) error {
 	if err := CheckQuote(in); err != nil {
 		return err
 	}
-	if in.TopicDone && (in.V != Version || in.Conv != "" || in.Status != StatusDone || (in.Kind != KindAnswer && in.Kind != KindResult)) {
-		return errors.New("topic_done belongs only on a completed device-thread answer or result")
+	if err := CheckTopic(in); err != nil {
+		return err
 	}
 	// Progress replies to one request in plain text: in version 1 (a named
 	// executor's progress names it), or as a conversation participation's

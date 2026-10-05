@@ -164,7 +164,7 @@ func deriveTopic(g []threadRow, l topicLocal, now int64) topicVerdict {
 	if v.DoneBy != "" {
 		v.State = TopicDone
 	}
-	if !v.Pending && now-v.QuietSince >= int64(TopicArchiveAfter/time.Second) {
+	if !v.Pending && (live && l.Mark == "archived" || now-v.QuietSince >= int64(TopicArchiveAfter/time.Second)) {
 		v.State = TopicArchived
 	}
 	return v
@@ -425,6 +425,7 @@ func sortTopics(ts []ThreadSummary) {
 
 // TopicQuery asks for one page of the All topics list.
 type TopicQuery struct {
+	Conv   string
 	Peer   string // "" every peer
 	State  string // "" every state, or TopicActive, TopicDone, TopicArchived
 	Query  string // words in the title (the person's name and the automatic one) or the last line, any case
@@ -444,6 +445,13 @@ var ErrTopicQuery = errors.New("that topic list request is not valid")
 
 // Topics lists one page of topics (never review-notice threads).
 func (a *Agent) Topics(q TopicQuery) (TopicPage, error) {
+	if q.Conv != "" {
+		all, err := a.ChatTopics(q.Conv)
+		if err != nil {
+			return TopicPage{}, err
+		}
+		return chatTopicPage(all, q)
+	}
 	switch q.State {
 	case "", TopicActive, TopicDone, TopicArchived:
 	default:

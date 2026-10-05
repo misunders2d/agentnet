@@ -34,6 +34,7 @@ func (a *Agent) showExcerpts(rows []ConvMessage) []ConvMessage {
 		msg.SyncedFrom, msg.Claimed, msg.Key = msg.From, h.FromKey, ""
 		msg.From, msg.Body, msg.LID, msg.At = h.From, h.Body, h.LID, h.TS
 		msg.Kind, msg.ReplyTo, msg.Origin, msg.Emotion, msg.Target, msg.AgentID = h.Kind, h.ReplyTo, h.Origin, h.Emotion, h.Target, h.AgentID
+		msg.Topic, msg.TopicEvent, msg.TopicDone = h.Topic, h.TopicEvent, h.TopicDone
 		msg.Sub, msg.Job, msg.JobDetail, msg.History, msg.Replica = "", "", "", true, true
 		used := make([]bool, len(msg.Attachments))
 		for _, manifest := range h.Attachments {

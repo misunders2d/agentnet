@@ -46,7 +46,11 @@ func TestStandaloneZoomPackage(t *testing.T) {
 		if strings.Contains(name, "..") || filepath.IsAbs(name) {
 			t.Fatal("unsafe asset", name)
 		}
-		source, err := os.ReadFile(filepath.Join("src", name))
+		sourcePath := filepath.Join("src", name)
+		if name == "topics.mjs" {
+			sourcePath = filepath.Join("..", "shared", name)
+		}
+		source, err := os.ReadFile(sourcePath)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,7 +72,7 @@ func TestStandaloneZoomPackage(t *testing.T) {
 				}
 			}
 			if node, err := exec.LookPath("node"); err == nil {
-				if out, err := exec.Command(node, "--check", filepath.Join("src", name)).CombinedOutput(); err != nil {
+				if out, err := exec.Command(node, "--check", sourcePath).CombinedOutput(); err != nil {
 					t.Fatalf("%s syntax: %v: %s", name, err, out)
 				}
 			}

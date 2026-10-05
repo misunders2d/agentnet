@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, roomSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, roomSchema, chatTopicSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -478,7 +478,7 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 		env.ID, env.To, in.Body, string(data), stateQueued, storeNow().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in), recipientKey); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE outbox SET quote=nullif(?,''),topic_done=? WHERE id=?`, in.Quote, in.TopicDone, env.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE outbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=? WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, env.ID); err != nil {
 		return err
 	}
 	if len(selected) > 0 && selected[0].binding != nil {

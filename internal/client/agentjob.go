@@ -559,6 +559,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		b.WriteString(lookupText)
 	}
 	b.WriteString(reactionConvPromptText)
+	b.WriteString("Close a finished topic only on purpose: add topic: done before emotion. Omit it while work or follow-up remains.\n")
 	fmt.Fprintf(&b, "If %s must decide or act before this can go further, or this needs an action you are not allowed to take, make your first line exactly %q and then say what they need to decide; nothing will be sent.\n", host, needsHumanMarker)
 	b.WriteString("End your reply with a last line of exactly the form \"emotion: WORD\", WORD being one lowercase word (letters, digits or hyphens, at most 24) for the feeling your reply is shown with. " +
 		"It is yours to choose; without a readable line your reply is shown neutral.\n")
@@ -680,7 +681,8 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 			return
 		}
 	}
-	text, choice := splitReaction(text) // optional, just before the emotion line
+	text, choice, closed := splitTrailers(text, envelope.StatusDone) // optional, just before the emotion line
+	topic, _ := a.outgoingTopic(j.Conv, "", j.ID)
 	selfFP := a.id.Public(a.Address).Fingerprint()
 	claim := func(tx *sql.Tx, replyID string) error {
 		v, why, err := agentVerdict(tx, j.agentReq(stateRunning), a.Address, selfFP, true, map[string]*partView{})
@@ -700,7 +702,7 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 		return nil
 	}
 	res, err := a.SendConv(ctx, j.Conv, ConvOutgoing{Kind: replyKind(j.Kind), Body: text, ReplyTo: j.ID, Origin: envelope.OriginAgentPrefix + r.Harness, AgentID: j.AgentID,
-		Emotion: emotion, PID: j.PID, status: envelope.StatusDone, claim: claim})
+		Emotion: emotion, PID: j.PID, Topic: topic, TopicDone: closed && topic != "", status: envelope.StatusDone, claim: claim})
 	var hb *heldBack
 	switch {
 	case errors.As(err, &hb):

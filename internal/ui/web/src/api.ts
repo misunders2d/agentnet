@@ -60,9 +60,9 @@ export function api(host: Host) {
 
     // Topics (an agent's separate conversations): one page of the All topics
     // list, and the person's own changes, kept on this device only.
-    topics: (p: { peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
+    topics: (p: { conv?: string; peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
       get<T.TopicPage>(q("/api/topics", Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])))),
-    changeTopic: (what: "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
+    changeTopic: (what: "create" | "archive" | "delete" | "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
 
     // Files
     stage: (file: File) => host.stage(file),

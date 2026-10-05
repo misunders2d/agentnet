@@ -579,7 +579,7 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	res, err := l.a.AskAgentWithReceiver(ctx, d.PID, kind, body, receiver, files...)
+	res, err := l.a.AskAgentInTopic(ctx, d.PID, kind, body, d.Topic, receiver, files...)
 	if err != nil {
 		if errors.Is(err, client.ErrNoParticipation) {
 			return Sent{}, NotFound("no such agent in a DM here")
@@ -587,5 +587,5 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 		return Sent{}, Refuse(l.updateSentence(err))
 	}
 	l.a.NoteChange()
-	return Sent{ID: res.ID, State: res.State, Detail: res.Detail}, nil
+	return Sent{LID: res.LID, ID: res.ID, State: res.State, Detail: res.Detail}, nil
 }

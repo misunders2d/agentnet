@@ -30,6 +30,7 @@ export interface Acts {
   del: () => void;
   details: () => void;
   select?: () => void;
+  topic?:()=>void;
 }
 
 // ---- desktop: the hover toolbar ---------------------------------------------------
@@ -69,6 +70,7 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
   return (
     <>
       {text && render(<IconCopy size={20} />, "Copy text", acts.copy)}
+      {acts.topic && render(<IconSquareCheck size={20}/>,"Make a topic",acts.topic)}
       {can.select && acts.select && render(<IconSquareCheck size={20} />, "Select", acts.select)}
       {can.edit && render(<IconPencil size={20} />, "Edit", acts.edit)}
       {render(<IconInfoCircle size={20} />, "Details", acts.details)}
@@ -96,7 +98,7 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
       )}
       <div className="flex flex-col">
         {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={close(acts.reply)} />}
-        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select) }} m={m}
+        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select),topic:acts.topic&&close(acts.topic) }} m={m}
           render={(icon, label, onClick, danger) => <SheetItem key={label} icon={icon} label={label} onClick={onClick} danger={danger} />} />
       </div>
     </Sheet>

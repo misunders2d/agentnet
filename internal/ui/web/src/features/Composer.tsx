@@ -265,15 +265,19 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       let r: T.Sent | undefined;
       try {
         if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, body })).note || "Answer sent.");
-        else if (to.kind === "agent") r = await store.api.askAgent({ pid: to.pid, kind: d.doIt ? "task" : "question", body, files: fileIds });
+        else if (to.kind === "agent") r = await store.api.askAgent({ pid: to.pid, kind: d.doIt ? "task" : "question", body, topic:d.newTopic?"new":d.topic,files: fileIds });
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
           r = await store.api.send({ to: device.peer, kind: d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
           if (d.newTopic && r) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
-        } else r = await store.api.sendDM({ conv: c, body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
+        } else r = await store.api.sendDM({ conv: c, topic:d.newTopic?"new":d.topic,body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
       } finally {
         forgetStaged(c, sent); // a send takes the files it names, sent or refused
+      }
+      if(here && d.newTopic && r?.lid) {
+        const fresh=await store.api.dm(c);const topic=(fresh.messages||[]).find(m=>m.lid===r.lid)?.topic;
+        store.setDraft(c,{...store.draft(c),newTopic:false,topic});
       }
       clearSent(c, d, sent);
       if (!r) { /* answered: the request's own card shows what happened */ }
@@ -388,7 +392,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
             onCancel={() => { write({ ...latest(), replyTo: undefined }); focusField(); }} />
         : <ReplyChip title={"Replying to " + replyMsg.who} text={replyMsg.text} cancel="Cancel reply"
             onCancel={() => { write({ ...latest(), replyTo: undefined }); focusField(); }} />)}
-      {thread && draft.newTopic && !replyMsg && (
+      {(thread || dm) && draft.newTopic && !replyMsg && (
         <ReplyChip title={"New topic" + ("name" in target ? " with " + target.name : "")} text="Your next message starts a separate conversation." cancel="Keep this conversation"
           onCancel={() => { write({ ...latest(), newTopic: false }); focusField(); }} />
       )}
