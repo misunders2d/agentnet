@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
@@ -35,8 +36,22 @@ func selfExe() (string, error) {
 	if err != nil || !appStable.on {
 		return exe, err
 	}
-	return stableCopy(exe, appStable.home)
+	stableMu.Lock()
+	defer stableMu.Unlock()
+	if stableDone[appStable.home] != "" { // checked once per process: the program does not change while it runs
+		return stableDone[appStable.home], nil
+	}
+	path, err := stableCopy(exe, appStable.home)
+	if err == nil {
+		stableDone[appStable.home] = path
+	}
+	return path, err
 }
+
+var (
+	stableMu   sync.Mutex
+	stableDone = map[string]string{} // home -> its checked copy
+)
 
 // stableCopy keeps an owner-only copy of exe at <home>/bin/agentnet: written
 // to a temporary file in that directory and renamed over the old copy only
