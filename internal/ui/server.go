@@ -126,6 +126,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/invite", s.invite) // livegetapp.go, liveinvites.go: Invite people (MEL-533)
 	mux.HandleFunc("GET /api/invites", s.invites)
 	mux.HandleFunc("POST /api/invite/revoke", s.revokeInvite)
+	mux.HandleFunc("GET /api/google/access", s.googleAccess)
+	mux.HandleFunc("POST /api/google/access", s.googleAccess)
 	mux.HandleFunc("GET /api/get-app", s.getApp)  // where to get the AgentNet app (static/getapp.json)
 	mux.HandleFunc("GET /api/folders", s.folders) // Connect an agent's folder picker (livefolders.go)
 	mux.HandleFunc("GET /events", s.events)

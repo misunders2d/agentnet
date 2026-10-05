@@ -132,6 +132,9 @@ func (a *Agent) onLinkEvent(data []byte) {
 }
 
 func (a *Agent) takeLinkRequest(ev protocol.LinkEvent) error {
+	if ev.Google != nil {
+		return a.takeGoogleLinkRequest(ev)
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
@@ -311,7 +314,7 @@ func (a *Agent) decideLink(ctx context.Context, id string, accept, native, agent
 	if err := json.Unmarshal([]byte(pub), &dev); err != nil {
 		return err
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Seq: me.info.Seq + 1, Prev: me.info.Roster,
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Seq: me.info.Seq + 1, Prev: me.info.Roster,
 		Devices: append(append([]identity.Public(nil), me.roster.Devices...), dev), HumanKeys: me.roster.Humans(), By: a.Self().Fingerprint(), Join: join}
 	if !agentHost {
 		r.HumanKeys = append(r.HumanKeys, dev.Fingerprint())
@@ -453,7 +456,7 @@ func (a *Agent) RemoveDevice(ctx context.Context, address string) error {
 	case len(keep) == 0:
 		return errors.New("the last device of a person cannot be removed")
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, HumanKeys: slices.DeleteFunc(me.roster.Humans(), func(fp string) bool {
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, HumanKeys: slices.DeleteFunc(me.roster.Humans(), func(fp string) bool {
 		return !slices.ContainsFunc(keep, func(d identity.Public) bool { return d.Fingerprint() == fp })
 	}), By: a.Self().Fingerprint()}
 	r.Sign(a.id.Sign)
@@ -475,6 +478,7 @@ func (a *Agent) RemoveDevice(ctx context.Context, address string) error {
 
 // LinkStatus is the new device's side of a link.
 type LinkStatus struct {
+	Google      bool   `json:"google,omitempty"`
 	State       string `json:"state"` // "" (no link), pending, linked, refused, expired, stale, failed
 	Detail      string `json:"detail,omitempty"`
 	Person      string `json:"person,omitempty"`
@@ -641,7 +645,7 @@ func (a *Agent) finishLink(ctx context.Context) (LinkStatus, error) {
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &step)
 	}
-	if !ok || me.info.Person != s.Person || err != nil || step.By != s.ApproverKey || !step.Has(a.Address, a.Self().Fingerprint()) {
+	if !ok || me.info.Person != s.Person || err != nil || (!s.Google && step.By != s.ApproverKey) || !step.Has(a.Address, a.Self().Fingerprint()) {
 		s.State, s.Detail = LinkFailed, "the person's roster does not name this device in the step its approver signed"
 		a.setLinkState(s)
 		return s, ErrLinkCrossPerson

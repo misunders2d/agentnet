@@ -443,8 +443,11 @@ type appSetup struct {
 	mu     sync.Mutex // one join or start again at a time
 	joined chan appJoined
 
-	stateMu sync.Mutex
-	state   string // client.EnrollNone …
+	stateMu      sync.Mutex
+	state        string // client.EnrollNone …
+	googleDone   chan struct{}
+	googleStop   func()
+	googleStatus ui.SetupGoogleStatus
 }
 
 type appJoined struct {
@@ -655,28 +658,7 @@ func (s *appSetup) SetupJoin(j ui.SetupJoin) (ui.SetupResult, error) {
 			s.r.logf("joined, but the person was not created (%v); the page offers it again", err)
 		}
 	}
-	res := ui.SetupResult{Host: inv.Host}
-	if l := a.LinkState(); l.State == client.LinkPending {
-		res.Waiting = l.Approver
-	}
-	started := make(chan error, 1)
-	select {
-	case s.joined <- appJoined{a: a, started: started}:
-	case <-s.ctx.Done():
-		a.Close()
-		return ui.SetupResult{}, ui.Refuse("AgentNet is closing.")
-	}
-	t := time.NewTimer(appStartTimeout)
-	defer t.Stop()
-	select {
-	case err := <-started:
-		if err != nil {
-			return ui.SetupResult{}, ui.Refuse("Joined, but AgentNet could not start: " + appWords(err))
-		}
-	case <-t.C:
-		return ui.SetupResult{}, ui.Refuse("Joined; AgentNet is still starting. Close and open the app again in a moment.")
-	}
-	return res, nil
+	return s.completeJoin(a, inv.Host)
 }
 
 // joinWords is a failed join in the person's words; nothing was enrolled.

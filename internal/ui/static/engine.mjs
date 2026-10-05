@@ -601,6 +601,50 @@ export class Engine {
 
   // ---- joining and the person
 
+  async googleNonce() {
+    if (this.joined) throw new Error("This browser already joined.");
+    let pending = await this.store.get("kv", "google_joining");
+    if (!pending) { pending = { keys: await wire.newKeys() }; await put(this.store, "kv", "google_joining", pending); }
+    return wire.googleNonce(await wire.publicEntry(pending.keys, "google/browser"));
+  }
+
+  async joinGoogle(token, name) {
+    if (this.joined) throw new Error("This browser already joined.");
+    await this.googleNonce();
+    const pending = await this.store.get("kv", "google_joining"), keys = pending.keys;
+    const publicHint = await wire.publicEntry(keys, "google/" + name);
+    const prepared = await this.call("POST", "/v1/google/prepare", await wire.googleRequest(keys, token, publicHint), { signed: false });
+    const pub = await wire.publicEntry(keys, prepared.address);
+    let first = pending.first ? await wire.parseRoster(pending.first) : null, link = pending.link;
+    if (pending.address && (pending.address !== prepared.address || pending.email !== prepared.email)) throw new Error("Use the same Google account to finish joining.");
+    if (link && !prepared.enrolled && link.expires <= Math.floor(this.now() / 1000)) { first = null; link = null; }
+    if (!first && !link) {
+      if (!prepared.head) first = await wire.newRoster(keys, prepared.address, prepared.name, prepared.email);
+      else {
+        const h = await wire.parseRoster(prepared.head), ap = await wire.parsePublic(prepared.approver);
+        if (h.email !== prepared.email || !(await wire.rosterHas(h, ap.address, await wire.fingerprint(ap)))) throw new Error("Invalid existing person.");
+        link = { email: prepared.email, person: h.person, seq: h.seq, roster: await wire.rosterHash(h),
+          approver: { address: ap.address, fingerprint: await wire.fingerprint(ap) }, expires: Math.floor(this.now() / 1000) + linkTTL,
+          offer: wire.newID(), join: await wire.joinConsent(keys, prepared.address, h.person, h.seq + 1, await wire.rosterHash(h)) };
+      }
+      await put(this.store, "kv", "google_joining", { keys, address: prepared.address, email: prepared.email, first: first ? wire.rosterJSON(first) : null, link });
+    }
+    try {
+      await this.call("POST", "/v1/google/join", await wire.googleRequest(keys, token, pub, first, link), { signed: false });
+    } catch (e) {
+      if (["roster_stale", "too_many_devices", "bad_step"].includes(e.code)) await put(this.store, "kv", "google_joining", { keys });
+      throw e;
+    }
+    const fingerprint = await wire.fingerprint(pub);
+    const ownLink = link && { google: true, state: "pending", person: link.person, approver: link.approver.address, approver_key: link.approver.fingerprint, expires: link.expires, seq: link.seq + 1 };
+    const identity = { address: prepared.address, keys, fingerprint, joined: this.now() };
+    this.address = identity.address; this.keys = keys; this.fp = fingerprint;
+    const me = first && { ...(await this.personRecord([first], "self", null)), published: true };
+    await this.store.write([{ s: "kv", k: "identity", v: identity }, { s: "kv", k: "google_joining", v: undefined },
+      ...(ownLink ? [{ s: "kv", k: "link", v: ownLink }] : []), ...(me ? [{ s: "kv", k: "person", v: me }] : [])]);
+    await this.load(); if (me) await this.pinDevices(me); this.changed(); return identity.address;
+  }
+
   // join enrolls this browser as the device label/agentName with the
   // invitation code, once. The code is never stored or logged.
   async join(code, agentName) {
@@ -698,7 +742,7 @@ export class Engine {
       await wire.verifyFirst(steps[0]);
       for (let i = 1; i < steps.length; i++) await wire.verifyNext(steps[i], steps[i - 1]);
       const step = steps.find((r) => r.seq === s.seq);
-      if (!step || step.by !== s.approver_key || !(await wire.rosterHas(step, this.address, this.fp))) {
+      if (!step || (!s.google && step.by !== s.approver_key) || !(await wire.rosterHas(step, this.address, this.fp))) {
         throw new Error("the person's roster does not name this device in the step its approver signed");
       }
       if (!(await wire.rosterHas(steps[steps.length - 1], this.address, this.fp))) throw new Error("this device is no longer in its person's roster");
@@ -721,7 +765,7 @@ export class Engine {
   // fingerprint are the one device a view is about: this one for your own
   // person, else the first current device.
   personView(p, extra) {
-    return p && { person: p.person, label: p.label, address: p.address, fingerprint: p.fingerprint, state: p.state,
+    return p && { person: p.person, label: p.label, email: p.state === "conflict" ? "" : p.email || "", address: p.address, fingerprint: p.fingerprint, state: p.state,
       devices: (p.devices || []).map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint, human:(p.human_keys || []).includes(d.fingerprint), this: d.address === this.address })),
       ...extra };
   }
@@ -750,7 +794,7 @@ export class Engine {
       const h = await wire.rosterHash(st);
       if (!steps2.some((x) => x.hash === h)) steps2.push({ hash: h, devices: await Promise.all(st.devices.map(async (d) => d.address + "|" + (await wire.fingerprint(d)))) });
     }
-    return { person: r.person, label: r.label, seq: r.seq, human_keys:await wire.rosterHumans(r), hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
+    return { person: r.person, label: r.label, email: r.email || "", seq: r.seq, human_keys:await wire.rosterHumans(r), hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
       address: one.address, fingerprint: one.fingerprint, state, published: before ? !!before.published : false };
   }
 
@@ -813,7 +857,7 @@ export class Engine {
       for (const a of added.keys()) if (!addresses.has(a)) added.delete(a);
       for (const a of addresses) if (!added.has(a)) added.set(a, r.seq);
     }
-    return { person: p.person, label: p.label, address: this.address, fingerprint: this.fp, roster: p.hash, seq: p.seq, state: p.state,
+    return { person: p.person, label: p.label, email: p.email || "", address: this.address, fingerprint: this.fp, roster: p.hash, seq: p.seq, state: p.state,
       devices: p.devices.map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint,
         ...(d.address === this.address ? { this: true } : {}), added: added.get(d.address) })) };
   }
@@ -890,6 +934,7 @@ export class Engine {
     let ev;
     try {
       const j = JSON.parse(data);
+      if (j.google) return this.onGoogleLinkEvent(j);
       if (typeof j.offer !== "string" || !wire.validID(j.offer)) throw new Error("offer");
       ev = { offer: j.offer, device: await wire.parsePublic(j.device), join: wire.unb64(j.join, "join"), mac: wire.unb64(j.mac, "mac") };
     } catch (e) {
@@ -908,6 +953,22 @@ export class Engine {
       join: wire.b64(ev.join), requested_at: now, expires: o.expires, state, detail: "" };
     await put(this.store, "kv", "links", book);
     this.changed();
+  }
+
+  async onGoogleLinkEvent(ev) {
+    const l = ev.google, me = this.me;
+    if (!me?.email || l.email !== me.email || l.person !== me.person || !(await wire.rosterHas(await wire.parseRoster(me.json), this.address, this.fp)) || !(await wire.rosterHas(await wire.parseRoster(me.json), l.approver.address, l.approver.fingerprint)) ||
+      l.seq !== me.seq || l.roster !== me.hash || l.offer !== ev.offer || !wire.validID(ev.offer) || !Number.isSafeInteger(l.expires) ||
+      l.expires <= Math.floor(this.now() / 1000) || l.expires > Math.floor(this.now() / 1000) + wire.MaxLinkTTL) return;
+    const dev = await wire.parsePublic(ev.device), join = wire.unb64(ev.join, "join");
+    if (dev.address.split("/")[0] !== this.address.split("/")[0]) return;
+    if (!(await wire.checkJoin(me.person, me.seq + 1, me.hash, dev, join))) return;
+    const book = await this.linkBook();
+    if (book.requests[ev.offer]) return;
+    book.offers[ev.offer] = { ...l, used: true };
+    book.requests[ev.offer] = { id: ev.offer, address: dev.address, device: wire.marshalPublic(dev), fingerprint: await wire.fingerprint(dev),
+      join: wire.b64(join), requested_at: Math.floor(this.now() / 1000), expires: l.expires, state: "pending", detail: "" };
+    await put(this.store, "kv", "links", book); this.changed();
   }
 
   async setRequest(id, state, extra) {
@@ -1403,6 +1464,13 @@ export class Engine {
       throw new Hold("proof_pending", "person " + person + ": " + e.message);
     }
     const p = await this.personRecord(steps, "pinned", null);
+    const peers = [this.me, ...(await this.store.all("persons"))].filter(Boolean);
+    if (p.email && peers.some(other => other.person !== p.person && other.email === p.email)) {
+      p.state = "conflict";
+      await put(this.store, "persons", p.person, p);
+      this.changed();
+      throw new Hold("invalid", "Another account claims this email; the earlier person stays pinned.");
+    }
     await put(this.store, "persons", p.person, p);
     await this.pinDevices(p);
     return p;
@@ -7198,6 +7266,8 @@ export class Engine {
   // the server makes their label from the name and writes the names on the
   // invitation as its unsigned hints.
   async invite(r) {
+    const cfg = await this.call("GET", "/v1/google/config", undefined, { signed: false });
+    if (cfg.web_client_id || cfg.desktop_client_id) throw new Error("Invite by email in Settings → Workspaces. Invitation codes are an advanced admin CLI fallback.");
     const name = String(r.name || "").trim();
     if (!name) throw new Error("Write the name of the person you invite.");
     if (!wire.validInviteHint(name, wire.MaxInviteHint)) throw new Error("Use a shorter name (up to 64 characters) without line breaks.");
@@ -7221,6 +7291,8 @@ export class Engine {
   // invitesList says whether this device may invite and, for an admin's
   // device, the invitations still waiting to be used.
   async invitesList() {
+    const cfg = await this.call("GET", "/v1/google/config", undefined, { signed: false });
+    if (cfg.web_client_id || cfg.desktop_client_id) return { can_invite: false, invites: [] };
     const p = await this.call("GET", "/v1/admin/invites");
     return { can_invite: !!p.can_invite, invites: (p.invites || []).map((i) => ({ id: i.id, name: i.name || "", label: i.label, admin: !!i.admin, by: i.created_by,
       ...(i.created_at ? { created: iso(i.created_at * 1000) } : {}), expires: iso(i.expires * 1000) })) };
@@ -7352,6 +7424,7 @@ export class Engine {
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");
     case "/api/send": return this.sendDirect(body);
     case "/api/simulate": throw new Error("Not available here.");
+    case "/api/google/access": return body === undefined ? this.call("GET", "/v1/google/access") : this.call("PUT", "/v1/google/access", body);
     case "/api/invite": return this.invite(body || {});
     case "/api/invites": return this.invitesList();
     case "/api/invite/revoke": await this.revokeInvite((body || {}).id); return { revoked: true };

@@ -15,3 +15,5 @@
   background: var(--accent-soft); color: var(--text); border-bottom: 1px solid var(--line); font-size: 14px; }
 .app-banner-text { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
 .app-banner .btn { text-decoration: none; padding: 6px 14px; }
+
+.join-card > a.btn { display: inline-block; margin-top: 12px; text-decoration: none; }

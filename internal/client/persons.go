@@ -44,6 +44,7 @@ var ErrService = errors.New("this installation is a service: it speaks as itself
 type PersonInfo struct {
 	Person string `json:"person"`
 	Label  string `json:"label"` // the person's own claim, not verified
+	Email  string `json:"email,omitempty"`
 	// Address and Fingerprint are the one device this view is about: this
 	// installation for its own person, the host or author device of a
 	// participation, otherwise the person's first current device.
@@ -109,6 +110,9 @@ func scanPersonIn(q dbq, where string, args ...any) (personRow, bool, error) {
 	p.raw = []byte(raw)
 	if err := json.Unmarshal(p.raw, &p.roster); err != nil {
 		return p, false, err
+	}
+	if p.info.State != personConflict {
+		p.info.Email = p.roster.Email
 	}
 	added := map[string]int64{}
 	if rows, err := q.Query(`SELECT address, added FROM person_devices WHERE person = ?`, p.info.Person); err == nil {
@@ -282,6 +286,22 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 		return res, nil
 	}
 	raw, _ := json.Marshal(cur)
+	if cur.Email != "" {
+		var other string
+		e := tx.QueryRow(`SELECT person FROM persons WHERE person != ? AND json_extract(record, '$.email') = ? LIMIT 1`, person, cur.Email).Scan(&other)
+		if e == nil {
+			if _, e = tx.Exec(`INSERT INTO persons(person,label,seq,hash,record,state,pinned_at) VALUES(?,?,?,?,?,?,?)`, person, cur.Label, cur.Seq, cur.Hash(), string(raw), personConflict, time.Now().Unix()); e != nil {
+				return res, e
+			}
+			if e = s.done(tx.Commit()); e != nil {
+				return res, e
+			}
+			return res, errPersonConflict
+		}
+		if !errors.Is(e, sql.ErrNoRows) {
+			return res, e
+		}
+	}
 	lists := cur.Has(me.Address, me.Fingerprint())
 	_, haveSelf, err := scanPersonIn(tx, `state = ?`, personSelf)
 	if err != nil {
@@ -564,6 +584,27 @@ func (a *Agent) ListedPersons() ([]PersonInfo, error) {
 	defer a.listed.mu.Unlock()
 	seen := map[string]bool{}
 	var out []PersonInfo
+	emails := map[string]string{}
+	rows, err := a.store.db.Query(`SELECT person, record FROM persons`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var person, raw string
+		if err = rows.Scan(&person, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		var r protocol.PersonRoster
+		if json.Unmarshal([]byte(raw), &r) == nil && r.Email != "" {
+			emails[r.Email] = person
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
 	for _, m := range a.MemberView().Members.Members {
 		if m.Person == nil || seen[m.Person.ID] {
 			continue
@@ -578,7 +619,13 @@ func (a *Agent) ListedPersons() ([]PersonInfo, error) {
 			continue
 		}
 		seen[r.Person] = true
-		p := PersonInfo{Person: r.Person, Label: r.Label, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
+		p := PersonInfo{Person: r.Person, Label: r.Label, Email: r.Email, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
+		if other := emails[r.Email]; r.Email != "" && other != "" && other != r.Person {
+			p.Email = ""
+			p.State = personConflict
+		} else if r.Email != "" {
+			emails[r.Email] = r.Person
+		}
 		for _, d := range r.Devices {
 			_, name, _ := protocol.SplitAddress(d.Address)
 			p.Devices = append(p.Devices, DeviceInfo{Address: d.Address, Name: name, Fingerprint: d.Fingerprint()})

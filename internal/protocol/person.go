@@ -83,6 +83,9 @@ type PersonRoster struct {
 	By        string   `json:"by,omitempty"`
 	Sig       []byte   `json:"sig,omitempty"`
 	Join      []byte   `json:"join,omitempty"`
+	// Email is set only by Google enrollment. It is signed and immutable
+	// along the roster chain; omitted on existing invite-code persons.
+	Email string `json:"email,omitempty"`
 }
 
 // Canonical returns the bytes the signing device signs.
@@ -146,6 +149,11 @@ func JoinBytes(person string, seq int64, prev string, dev identity.Public) []byt
 
 // Validate checks the shape and bounds of r (not its signatures or chain).
 func (r PersonRoster) Validate() error {
+	if r.Email != "" {
+		if email, err := NormalizeEmail(r.Email); err != nil || email != r.Email {
+			return errors.New("person: invalid email")
+		}
+	}
 	if !ValidID(r.Person) {
 		return errors.New("person: invalid id")
 	}
@@ -213,7 +221,7 @@ func (r PersonRoster) VerifyNext(prev PersonRoster) (added *identity.Public, err
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
-	if r.Person != prev.Person || r.Seq != prev.Seq+1 || r.Prev != prev.Hash() {
+	if r.Person != prev.Person || r.Seq != prev.Seq+1 || r.Prev != prev.Hash() || r.Email != prev.Email {
 		return nil, errors.New("person: not the next roster of that chain")
 	}
 	signer, ok := prev.Device(r.By)

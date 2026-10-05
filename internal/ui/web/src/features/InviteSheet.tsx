@@ -357,6 +357,7 @@ function Row({ c, on, onChoose }: { c: Candidate; on: boolean; onChoose: (key: s
       <CandidateAvatar c={c} size={40} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[15.5px] font-bold leading-tight">{c.name}</span>
+        {c.person?.email && <span className="block truncate text-sm text-muted">{c.person.email} · verified by this workspace</span>}
         <span className={"block truncate text-[13px] font-semibold " + (c.kind === "agent" ? "text-agent-ink" : "text-text-2")}>{c.unavailable || c.subtitle}</span>
         {c.reason && <span className="mt-0.5 flex items-center gap-1 text-[13px] font-semibold text-approval-ink"><IconAt size={14} stroke={2.4} aria-hidden="true" />{c.reason}</span>}
       </span>

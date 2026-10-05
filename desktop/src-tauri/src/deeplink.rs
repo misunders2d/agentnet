@@ -9,9 +9,10 @@ pub const MAX_FRAGMENT: usize = 8192;
 
 /// What a fragment may start with: an invitation, a device link from
 /// another device of the person, or a destination of a notification click.
-pub const ALLOWED: [&str; 6] = [
+pub const ALLOWED: [&str; 7] = [
     "agentnet-invite-v1:",
     "agentnet-link-v2:",
+    "google-signin=",
     "conv=",
     "msg=",
     "review",
@@ -58,6 +59,7 @@ mod tests {
         for f in [
             "agentnet-invite-v1:eyJodWIiOiJodHRwczovL3gifQ",
             "agentnet-link-v2:abc_-123",
+            "google-signin=https%3A%2F%2Frelay.example.com",
             "conv=0123abcd",
             "msg=0123&dir=in&workspace=default",
             "review",

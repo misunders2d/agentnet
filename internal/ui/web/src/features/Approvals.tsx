@@ -221,7 +221,7 @@ function DeviceRow({ l }: { l: T.LinkRequest }) {
     <Card>
       <span className="grid size-10 shrink-0 place-items-center rounded-full bg-guest-bg text-guest-ink stroke" aria-hidden="true"><IconDeviceMobile size={20} /></span>
       <Body tag={<Tag tone="muted">New device</Tag>} at={l.requested_at} title={<>A new device, “{l.name}”, wants to join as you</>}
-        meta={"Approve it only if you just opened your link on it yourself. The request ends " + when(l.expires) + "."}>
+        meta={"Approve it only if you just signed in with Google or opened your device link on it yourself. The request ends " + when(l.expires) + "."}>
         <div className="mt-3 flex flex-wrap gap-2">
           <Button variant="act" size="sm" disabled={busy} onClick={() => setSure(true)}>Approve device</Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => decide(false)}>Refuse</Button>

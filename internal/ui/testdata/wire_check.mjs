@@ -43,8 +43,13 @@ async function handle(req) {
     return { envelope: await wire.seal(m, keys, to) };
   }
   case "roster": {
-    const r = await wire.newRoster(keys, address, req.label);
+    const r = await wire.newRoster(keys, address, req.label, req.email || "");
     return { json: wire.rosterJSON(r), hash: await wire.rosterHash(r) };
+  }
+  case "google": {
+    const pub = await wire.publicEntry(keys, address);
+    const first = req.first ? await wire.parseRoster(req.first) : null;
+    return { nonce: await wire.googleNonce(pub), ttl: wire.MaxLinkTTL, body: await wire.googleRequest(keys, req.token, pub, first) };
   }
   case "parseRoster": { // a first roster, or with prev the step after it
     const r = await wire.parseRoster(req.json);
@@ -85,6 +90,7 @@ async function handle(req) {
       ok: req.labels.map((l) => { try { wire.validLabel(l); return true; } catch (e) { return false; } }),
       why: req.labels.map((l) => { try { wire.validLabel(l); return ""; } catch (e) { return e.message; } }),
     };
+  case "validEmail": return { valid: req.emails.map(wire.validEmail) };
   case "root": {
     const c = await wire.newRoot(keys, req.me, req.other);
     return { json: wire.rootJSON(c), id: await wire.rootID(c) };

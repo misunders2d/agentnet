@@ -274,6 +274,9 @@ function showLanding(engine, link) {
   };
   const ui = {
     el, show, onCode: null,
+    googleConfig: () => engine.call("GET", "/v1/google/config", undefined, { signed: false }),
+    googleNonce: () => engine.googleNonce(),
+    async googleJoin(token, device) { const persisted = await persist(); await engine.joinGoogle(token, device); engine.storage = { persisted }; onInvite = null; start(engine, true); },
     notes: () => [storageNote(), privacy()],
     async join(code, device, name) {
       const problem = inviteProblem(code);

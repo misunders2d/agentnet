@@ -80,7 +80,9 @@ Running and checking:
   cleanup    free local space from failed or abandoned sends
 
 Admin (from an admin agent):
-  admin invite, admin revoke
+  admin google list | invite [--admin] EMAIL | allow-domain DOMAIN
+  admin google remove EMAIL | remove-domain DOMAIN
+  admin invite, admin revoke (advanced invite-code fallback)
   The invitee's name (LABEL) comes from your person: use what they said, or ask; never infer it.
 
 Hub (on the server):

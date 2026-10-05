@@ -15,6 +15,7 @@ import { harnessName } from "./Settings.assistant";
 import { JoinSheet, LeaveSheet, RenameSheet, useDisconnected, useReconnect, useWorkspaceLabel, workspaceLabel } from "./WorkspaceSwitcher";
 import { errorText } from "../api";
 import { Card, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
+import { GoogleMembers } from "./GoogleMembers";
 
 // ---- Storage -----------------------------------------------------------------
 
@@ -194,7 +195,7 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
     focusOn.current = "";
     (row.querySelector<HTMLElement>("button:not([disabled])") || row).focus();
   });
-  const head = <PageHead title="Workspaces" titleRef={titleRef} lead="Each workspace is its own server, with its own people and chats. You switch between them here." />;
+  const head = <><PageHead title="Workspaces" titleRef={titleRef} lead="Each workspace is its own server, with its own people and chats. You switch between them here." /><GoogleMembers /></>;
   if (!ws) return (
     <>{head}
       <NameForEveryone />

@@ -2,7 +2,7 @@
 // node against a real test Hub (trusted by its own certificate through
 // NODE_EXTRA_CA_CERTS), with an in-memory store, answering one JSON request
 // per line on stdin with one JSON line on stdout.
-import { Engine, memoryStore, probeStore, sameOrigin, autoNameTries, inviteDays } from "../static/engine.mjs";
+import { Engine, HubError, memoryStore, probeStore, sameOrigin, autoNameTries, inviteDays } from "../static/engine.mjs";
 import * as wire from "../static/wire.mjs";
 import { createInterface } from "node:readline";
 
@@ -102,6 +102,57 @@ async function handle(req) {
     return { joined: engine.joined };
   case "join":
     return { address: await engine.join(req.code, req.name) };
+  case "googleReviewProbes": {
+    const ownerKeys = await wire.newKeys(), ownerAddress = "g-fixture/laptop", email = "person@example.com";
+    const head = await wire.newRoster(ownerKeys, ownerAddress, "Person", email), hash = await wire.rosterHash(head);
+    const approver = await wire.publicEntry(ownerKeys, ownerAddress), approverFP = await wire.fingerprint(approver);
+    for (const scenario of ["first-race", "expired", "roster_stale", "too_many_devices", "bad_step", "network", "server", "address_taken", "landed-expired"]) {
+      const mem = memoryStore(), keys = await wire.newKeys(), address = "g-fixture/browser";
+      const oldFirst = await wire.newRoster(keys, address, "Person", email);
+      const link = { email, person: head.person, seq: head.seq, roster: hash, approver: { address: ownerAddress, fingerprint: approverFP },
+        expires: Math.floor(Date.now()/1000) + (scenario.includes("expired") || scenario === "expired" ? -1 : 600), offer: wire.newID(),
+        join: await wire.joinConsent(keys, address, head.person, head.seq+1, hash) };
+      await mem.write([{s:"kv",k:"google_joining",v:{keys,address,email,first:scenario === "first-race" ? wire.rosterJSON(oldFirst) : null,link:scenario === "first-race" ? null : link}}]);
+      const e = new Engine({store:mem,base:"https://fixture.invalid",fetch:()=>{throw Error("external fetch forbidden")}});
+      let attempts = 0;
+      e.call = async (method,path,body) => {
+        if(path.endsWith("prepare")) return {address,email,name:"Person",head:wire.rosterJSON(head),approver:JSON.parse(wire.marshalPublic(approver)),enrolled:scenario === "landed-expired"};
+        if(!path.endsWith("join")) throw Error("unexpected request " + path);
+        if(typeof body === "string") body = JSON.parse(body);
+        attempts++;
+        if(scenario === "expired" && body.link.expires <= Math.floor(Date.now()/1000)) throw Error("expired consent reused");
+        if(scenario === "landed-expired" && body.link.expires !== link.expires) throw Error("landed consent rewritten");
+        if(attempts === 1 && !["expired","landed-expired"].includes(scenario)) {
+          const code = scenario === "first-race" ? "roster_stale" : scenario;
+          throw new HubError(scenario === "network" ? 0 : scenario === "server" ? 503 : code === "bad_step" ? 400 : 409,code,"fixture refusal");
+        }
+        if(!body.link) throw Error("fresh retry did not use current head");
+        return {};
+      };
+      try { await e.joinGoogle("mock", "browser"); } catch(error) {
+        const saved = await mem.get("kv","google_joining"), definite = ["first-race","roster_stale","too_many_devices","bad_step"].includes(scenario);
+        if(definite && (saved.link || saved.first)) throw Error(scenario + " intent not cleared");
+        if(!definite && !saved.link) throw Error(scenario + " exact intent lost");
+        await e.joinGoogle("mock","browser");
+      }
+      if(!e.joined) throw Error(scenario + " retry not joined");
+    }
+    const mem=memoryStore(), e=new Engine({store:mem,base:"https://fixture.invalid",fetch:()=>{throw Error("external fetch forbidden")}});
+    const spoofKeys=await wire.newKeys(), spoof=await wire.newRoster(spoofKeys,"g-spoof/phone","Spoof",email);
+    e.chain=async id=>id===head.person?[head]:[spoof];
+    await e.pinChain(head.person);
+    let blocked=false;try { await e.pinChain(spoof.person); } catch { blocked=true; }
+    const conflicting=await mem.get("persons",spoof.person);
+    if(!blocked || conflicting.state!=="conflict" || e.personView(conflicting).email) throw Error("duplicate email displayed as pinned person");
+    return {passed:true};
+  }
+  case "googleKeys": {
+    const nonce = await engine.googleNonce();
+    const pending = await store.get("kv", "google_joining");
+    return { nonce, public: wire.marshalPublic(await wire.publicEntry(pending.keys, "google/" + req.name)) };
+  }
+  case "googleJoin":
+    return { address: await engine.joinGoogle(req.token, req.name) };
   case "joinLink": // a device link from another device of the person (its QR's text)
     return { address: await engine.joinAndLink(req.code, req.name) };
   case "joinAuto": // under an automatic name: base, base-2 … while taken

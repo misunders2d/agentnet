@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/misunders2d/agentnet/internal/ui/static"
@@ -38,6 +40,15 @@ type SetupInvite struct {
 	Workspace string `json:"workspace,omitempty"`
 	Expires   string `json:"expires,omitempty"` // a device link's end (RFC 3339)
 	Problem   string `json:"problem,omitempty"` // why it cannot be used here, in plain words
+}
+
+type SetupGoogleStatus struct {
+	State   string `json:"state"`
+	Problem string `json:"problem,omitempty"`
+}
+type SetupGoogleProvider interface {
+	SetupGoogle(hub string) error
+	SetupGoogleState() (SetupGoogleStatus, <-chan struct{})
 }
 
 // SetupJoin is the person's Join: the code, and with an invitation the name
@@ -83,6 +94,49 @@ func NewSetup(p SetupProvider, host, token string) http.Handler {
 	})
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, p.SetupState()) })
+	mux.HandleFunc("POST /api/setup/google", func(w http.ResponseWriter, r *http.Request) {
+		var v struct {
+			Hub string `json:"hub"`
+		}
+		if !readJSON(w, r, &v) {
+			return
+		}
+		g, ok := p.(SetupGoogleProvider)
+		if !ok {
+			http.Error(w, "Google sign-in unavailable", 404)
+			return
+		}
+		writeResult(w, struct{}{}, g.SetupGoogle(v.Hub))
+	})
+	mux.HandleFunc("POST /api/setup/google/cancel", func(w http.ResponseWriter, r *http.Request) {
+		g, ok := p.(interface{ SetupGoogleCancel() error })
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		writeResult(w, struct{}{}, g.SetupGoogleCancel())
+	})
+	mux.HandleFunc("GET /api/setup/google/events", func(w http.ResponseWriter, r *http.Request) {
+		g, ok := p.(SetupGoogleProvider)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-store")
+		v, done := g.SetupGoogleState()
+		if v.State == "waiting" || v.State == "" {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-done:
+			}
+			v, _ = g.SetupGoogleState()
+		}
+		b, _ := json.Marshal(v)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		http.NewResponseController(w).Flush()
+	})
 	mux.HandleFunc("POST /api/setup/inspect", func(w http.ResponseWriter, r *http.Request) {
 		var v struct {
 			Code string `json:"code"`

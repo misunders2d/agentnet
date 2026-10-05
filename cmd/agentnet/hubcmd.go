@@ -202,6 +202,8 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 	adminLabel := fs.String("admin-label", env("ADMIN_LABEL", "admin"), "person label for the bootstrap admin invite")
 	platformTLS := fs.Bool("platform-tls", env("PLATFORM_TLS", "") == "1", "serve plain HTTP behind a platform that terminates HTTPS for --public-url (env AGENTNET_PLATFORM_TLS=1)")
 	web := fs.Bool("web", env("WEB", "") == "1", "serve the browser messenger at this Hub's URL (env AGENTNET_WEB=1)")
+	googleWeb := fs.String("google-web-client-id", env("GOOGLE_WEB_CLIENT_ID", ""), "Google Web OAuth client ID for browser sign-in")
+	googleDesktop := fs.String("google-desktop-client-id", env("GOOGLE_DESKTOP_CLIENT_ID", ""), "Google Desktop OAuth client ID for app sign-in")
 	maxFile := fs.String("max-file", env("MAX_FILE", "100MiB"), "largest attachment (plaintext)")
 	quota := fs.String("quota", env("QUOTA", "1GiB"), "total attachment storage")
 	uploadTTL := fs.Duration("upload-ttl", mustDuration(env("UPLOAD_TTL", "24h")), "idle time before an unfinished upload is removed")
@@ -244,6 +246,7 @@ func hubServe(ctx context.Context, fs *flag.FlagSet, data *string, args []string
 		}
 	}
 	h, err := hub.Open(hub.Config{DataDir: *data, PublicURL: *public, AdminLabel: *adminLabel, PlatformTLS: *platformTLS, Web: *web,
+		GoogleWebClientID: *googleWeb, GoogleDesktopClientID: *googleDesktop, GoogleDesktopClientSecret: env("GOOGLE_DESKTOP_CLIENT_SECRET", ""),
 		MaxFileSize: maxBytes, StorageQuota: quotaBytes, UploadTTL: *uploadTTL, PushHosts: extra, BrowserOrigins: []string(browserOrigins)})
 	if err != nil {
 		return err

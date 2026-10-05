@@ -19,8 +19,8 @@ import { QrCode } from "./Settings.qr";
 const ownLinkText: Record<string, string> = {
   pending: "Waiting for your other device to approve this one. Open AgentNet there and answer it.",
   refused: "Your other device refused this one, so it did not join as you.",
-  expired: "That link expired before this device was approved. Make a new one on your other device (Your devices → Add a device).",
-  stale: "That link is out of date because your devices changed meanwhile. Make a new one on your other device.",
+  expired: "This device was not approved in time. Sign in with Google again, or make a new device link on your other device.",
+  stale: "Your devices changed meanwhile. Sign in with Google again, or make a new device link on your other device.",
   failed: "Joining as you did not work.",
 };
 
@@ -87,6 +87,7 @@ function Rename({ person }: { person: T.PersonView }) {
         <PersonAvatar name={name.trim() || person.label} seed={person.person || person.address} size={72} />
         <div className="min-w-0 max-w-full">
           <p className="truncate font-display text-[28px] font-extrabold leading-tight">{name.trim() || person.label}</p>
+		  {person.email && <p className="mt-1 break-all text-sm text-muted">{person.email} · verified by this workspace</p>}
           <p className="mt-1 flex flex-wrap justify-center gap-1.5">
             {devices.map((d) => (
               <span key={d.address} className="inline-flex items-center gap-1 rounded-full stroke bg-surface px-2.5 py-0.5 text-[13px] font-semibold">
@@ -229,7 +230,7 @@ function DeviceRequest({ link }: { link: T.LinkRequest }) {
           <Tile color="#A8D8FF" size={44}><DeviceGlyph name={link.name} size={24} /></Tile>
           <h3 className="font-display text-[20px] font-bold leading-tight">“{link.name}” asks to join as you</h3>
         </div>
-        <p className="mt-3 text-[15px]">Approve it only if you just opened your link on it yourself. Once approved it is you: it sends and gets your chats, and your chats are copied to it.</p>
+        <p className="mt-3 text-[15px]">Approve it only if you just signed in with Google or opened your device link on it yourself. Once approved it is you: it sends and gets your chats, and your chats are copied to it.</p>
         <Details>
           <Fact name="Address">{link.address}</Fact>
           <Fact name="Key">{link.fingerprint}</Fact>

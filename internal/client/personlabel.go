@@ -31,7 +31,7 @@ func (a *Agent) RenamePerson(ctx context.Context, label string) (PersonInfo, err
 		if !ok || me.info.Person != person || !me.roster.Has(a.Address, a.Self().Fingerprint()) {
 			return PersonInfo{}, errors.New("this device no longer speaks for its person")
 		}
-		r := protocol.PersonRoster{Person: person, Label: label, Seq: me.roster.Seq + 1, Prev: me.roster.Hash(), Devices: me.roster.Devices, HumanKeys: me.roster.Humans(), By: a.Self().Fingerprint()}
+		r := protocol.PersonRoster{Person: person, Label: label, Email: me.roster.Email, Seq: me.roster.Seq + 1, Prev: me.roster.Hash(), Devices: me.roster.Devices, HumanKeys: me.roster.Humans(), By: a.Self().Fingerprint()}
 		r.Sign(a.id.Sign)
 		if _, err = r.VerifyNext(me.roster); err != nil {
 			return PersonInfo{}, err

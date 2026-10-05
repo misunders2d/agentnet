@@ -72,6 +72,7 @@ export const defaultAssistantReaction = (n) => n.v === Version3 && n.sub === Sub
 // (client.HistoryItem.inner makes a control version 3): conversation only.
 export const historyAssistantReaction = (h) => h.sub === SubReaction && !!h.ref && (!!h.agent_id || !!h.pid);
 export const MaxBody = 1 << 20;          // protocol.MaxBody
+export const MaxLinkTTL = 10 * 60;      // protocol.MaxLinkTTL
 const kinds = new Set(["message", "question", "answer", "task", "result"]);
 const invitePrefix = "agentnet-invite-v1:";
 
@@ -85,6 +86,16 @@ const recipientPattern = /^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/;
 
 export const validName = (s) => typeof s === "string" && namePattern.test(s);
 export const validID = (s) => typeof s === "string" && idPattern.test(s);
+
+// protocol.NormalizeEmail's accepted normalized form (no local rewriting).
+export function validEmail(s) {
+  if (typeof s !== "string" || s.length > 254) return false;
+  const parts = s.split("@"); if (parts.length !== 2) return false;
+  const [local, domain] = parts;
+  return local.length > 0 && local.length <= 64 && /^[a-z0-9.!#$%&'*+\-/=?^_`{|}~]+$/.test(local) &&
+    !local.startsWith(".") && !local.endsWith(".") && !local.includes("..") &&
+    domain.length <= 253 && domain.includes(".") && domain.split(".").every(l => l.length > 0 && l.length <= 63 && /^[a-z0-9-]+$/.test(l) && !l.startsWith("-") && !l.endsWith("-"));
+}
 
 // nameCandidates is cmd/agentnet's nameCandidates: the device names tried
 // in turn when the server says one is taken (base, base-2 … n in all),
@@ -327,6 +338,21 @@ export async function joinRequest(keys, address, secret, link) {
   const signed = (sig) => '{"secret":' + goString(secret) + ',"public":' + marshalPublic(pub) + linkJSON + ',"sig":' + goBytes(sig) + "}";
   const sig = await signBytes(keys, utf8.encode("agentnet-join-v1\n" + signed(null)));
   return signed(sig);
+}
+
+// GoogleRequest/GoogleNonce match protocol/google.go byte for byte.
+export async function googleNonce(pub) {
+  return b64url(await sha256(utf8.encode("agentnet-google-device-v1\n" + b64(pub.sign_key) + "\n" + pub.box_recipient)));
+}
+function googleLinkJSON(l) {
+  return '{"email":' + goString(l.email) + ',"person":' + goString(l.person) + ',"seq":' + goInt(l.seq, "seq") +
+    ',"roster":' + goString(l.roster) + ',"approver":{"address":' + goString(l.approver.address) + ',"fingerprint":' + goString(l.approver.fingerprint) +
+    '},"expires":' + goInt(l.expires, "expiry") + ',"offer":' + goString(l.offer) + ',"join":' + goBytes(l.join) + '}';
+}
+export async function googleRequest(keys, token, pub, first = null, link = null) {
+  const body = sig => '{"id_token":' + goString(token) + ',"public":' + marshalPublic(pub) +
+    (first ? ',"first":' + rosterJSON(first) : '') + (link ? ',"link":' + googleLinkJSON(link) : '') + ',"sig":' + goBytes(sig) + '}';
+  return body(await signBytes(keys, utf8.encode("agentnet-google-v1\n" + body(null))));
 }
 
 // signRequest returns the headers that authenticate a Hub request as agent
@@ -950,7 +976,7 @@ function strictRecord(json, max, what, fields) {
 function marshalRoster(r, withSig) {
   return '{"person":' + goString(r.person) + ',"label":' + goString(r.label) + ',"seq":' + goInt(r.seq, "seq") +
     ',"prev":' + goString(r.prev) + ',"devices":' + (r.devices ? "[" + r.devices.map(marshalPublic).join(",") + "]" : "null") +
-    (r.human_keys?.length ? ',"human_keys":[' + r.human_keys.map(goString).join(",") + ']' : "") + (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + "}";
+    (r.human_keys?.length ? ',"human_keys":[' + r.human_keys.map(goString).join(",") + ']' : "") + (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + (r.email ? ',"email":' + goString(r.email) : "") + "}";
 }
 export const rosterJSON = (r) => marshalRoster(r, true);
 const rosterCanonical = (r) => utf8.encode(personDomain + marshalRoster(r, false));
@@ -974,6 +1000,7 @@ export const checkJoin = (person, seq, prev, dev, join) => verifyBytes(dev.sign_
 // validateRoster is PersonRoster.Validate: its shape and bounds, and each
 // device's entry (not the signatures of the record or the chain).
 export async function validateRoster(r) {
+  if (r.email && !validEmail(r.email)) throw new Error("person: invalid email");
   if (!validID(r.person)) throw new Error("person: invalid id");
   validLabel(r.label);
   if (!Number.isSafeInteger(r.seq) || r.seq < 0) throw new Error("person: invalid seq");
@@ -1018,8 +1045,8 @@ export async function rosterHas(r, address, fp) {
 
 // newRoster creates this device's person, as the person asked: a random
 // id, the name they give, and this device (seq 0).
-export async function newRoster(keys, address, label) {
-  const r = { person: newID(), label, seq: 0, prev: "", devices: [await publicEntry(keys, address)], by: "", sig: null, join: null };
+export async function newRoster(keys, address, label, email = "") {
+  const r = { person: newID(), label, seq: 0, prev: "", devices: [await publicEntry(keys, address)], by: "", sig: null, join: null, email };
   await validateRoster(r);
   r.sig = await signBytes(keys, rosterCanonical(r));
   if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large; use a shorter label");
@@ -1033,7 +1060,7 @@ export async function nextRoster(keys, address, prev, devices, join, label = pre
   const by = await fingerprint(await publicEntry(keys, address));
   if (!(await rosterHas(prev, address, by))) throw new Error("person: this device is not in the roster it would follow");
   const kept=new Set(await Promise.all(devices.map(fingerprint)));
-  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, human_keys:humanKeys || (await rosterHumans(prev)).filter(fp=>kept.has(fp)), by, sig: null, join: join || null };
+  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, human_keys:humanKeys || (await rosterHumans(prev)).filter(fp=>kept.has(fp)), by, sig: null, join: join || null, email: prev.email || "" };
   await validateRoster(r);
   r.sig = await signBytes(keys, rosterCanonical(r));
   if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large");
@@ -1042,10 +1069,10 @@ export async function nextRoster(keys, address, prev, devices, join, label = pre
 
 export async function parseRoster(json) {
   const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array", human_keys:"array",
-    by: "string", sig: "string", join: "string" });
+    by: "string", sig: "string", join: "string", email: "string" });
   const devices = f.devices ? await Promise.all(f.devices.map((d) => parsePublicShape(d))) : null;
   const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", devices, human_keys:f.human_keys || [], by: f.by || "",
-    sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null };
+    sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null, email: f.email || "" };
   await validateRoster(r);
   fitsRecord(rosterJSON(r), MaxPersonRecord, "person");
   return r;
@@ -1063,7 +1090,7 @@ export async function verifyFirst(r) {
 // added device, or null.
 export async function verifyNext(r, prev) {
   await validateRoster(r);
-  if (r.person !== prev.person || r.seq !== prev.seq + 1 || r.prev !== (await rosterHash(prev))) throw new Error("person: not the next roster of that chain");
+  if (r.person !== prev.person || r.seq !== prev.seq + 1 || r.prev !== (await rosterHash(prev)) || (r.email || "") !== (prev.email || "")) throw new Error("person: not the next roster of that chain");
   const signer = await rosterDevice(prev, r.by);
   if (!signer) throw new Error("person: signed by a device that is not in the roster before it");
   if (!(await verifyBytes(signer.sign_key, rosterCanonical(r), r.sig))) throw new Error("person: signature invalid");

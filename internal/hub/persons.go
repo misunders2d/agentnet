@@ -128,6 +128,11 @@ func (s *store) putPersonStep(caller identity.Public, raw []byte, r protocol.Per
 		return res, err
 	}
 	if r.Seq == 0 {
+		// Email-bearing first rosters are created atomically by Google join,
+		// never by an invite-code device's self-assertion.
+		if r.Email != "" {
+			return res, errBadStep
+		}
 		if err := r.VerifyFirst(); err != nil {
 			return res, fmt.Errorf("%w: %v", errBadStep, err)
 		}
@@ -166,7 +171,7 @@ func (s *store) putPersonStep(caller identity.Public, raw []byte, r protocol.Per
 			var until int64
 			err := tx.QueryRow(`SELECT pending_inviter, pending_until FROM agents WHERE address = ? AND pending_person = ? AND revoked_at IS NULL`,
 				added.Address, r.Person).Scan(&inviter, &until)
-			if errors.Is(err, sql.ErrNoRows) || err == nil && (inviter != caller.Address || until <= now.Unix()) {
+			if errors.Is(err, sql.ErrNoRows) || err == nil && ((inviter != caller.Address && prev.Email == "") || until <= now.Unix()) {
 				return res, errLinkGone
 			}
 			if err != nil {
@@ -184,6 +189,11 @@ func (s *store) putPersonStep(caller identity.Public, raw []byte, r protocol.Per
 				return res, err
 			}
 			res.activated = added.Address
+			if r.Email != "" {
+				if _, err := tx.Exec(`UPDATE agents SET admin=coalesce((SELECT admin FROM google_emails WHERE email=? AND denied=0),0) WHERE address=?`, r.Email, added.Address); err != nil {
+					return res, err
+				}
+			}
 		}
 		for _, d := range prev.Devices {
 			if r.Has(d.Address, d.Fingerprint()) {
@@ -346,7 +356,7 @@ func (h *Hub) handleDeviceRefuse(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "malformed refusal")
 		return
 	}
-	n, err := h.store.endPending(`pending_inviter = ? AND address = ?`, "refused", caller, req.Address)
+	n, err := h.store.endPending(`address = ? AND (pending_inviter = ? OR (json_extract(pending_event, '$.google') IS NOT NULL AND pending_person IN (SELECT person_id FROM agents WHERE address=? AND revoked_at IS NULL AND pending_person IS NULL)))`, "refused", req.Address, caller, caller)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
@@ -392,8 +402,8 @@ func (s *store) endPending(where, reason string, args ...any) ([]string, error) 
 // pendingLinks returns the "link" events of the devices waiting for
 // inviter's approval.
 func (s *store) pendingLinks(inviter string) (map[string][]byte, error) {
-	rows, err := s.db.Query(`SELECT address, pending_event FROM agents WHERE pending_inviter = ? AND pending_person IS NOT NULL AND revoked_at IS NULL AND pending_until > ?`,
-		inviter, time.Now().Unix())
+	rows, err := s.db.Query(`SELECT address, pending_event FROM agents WHERE (pending_inviter = ? OR (json_extract(pending_event, '$.google') IS NOT NULL AND pending_person IN (SELECT person_id FROM agents WHERE address=? AND revoked_at IS NULL AND pending_person IS NULL))) AND pending_person IS NOT NULL AND revoked_at IS NULL AND pending_until > ?`,
+		inviter, inviter, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}

@@ -133,7 +133,7 @@ export const niceDevice = (address: string) =>
   deviceName(address || "").split("-").filter(Boolean)
     .map((w, i) => deviceSpecial[w.toLowerCase()] || (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
 
-export const personName = (p: T.PersonView | undefined | null) => (p && (p.label || niceDevice(p.address))) || "Someone";
+export const personName = (p: T.PersonView | undefined | null) => (p && (p.label || "Someone")) || "Someone";
 
 /** possessive: "Vitalii" → "Vitalii's"; "you" for this installation's person. */
 export const owner = (p: T.PersonView | undefined | null, me?: T.PersonView | null) =>

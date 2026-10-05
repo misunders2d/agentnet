@@ -133,6 +133,7 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
             <PersonAvatar name={m.name} seed={m.seed} size={36} online={m.online} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5"><b className="truncate text-[15px] font-bold">{m.name}{m.me && " (you)"}</b>{m.admin && <Tag>Admin</Tag>}</div>
+              {m.email && <div className="truncate text-sm text-muted">{m.email} · verified by this workspace</div>}
               {(m.note || m.online != null) && <div className="truncate text-[13px] font-semibold text-text-2">{m.note || (m.online ? "Online" : "Offline")}</div>}
             </div>
             {rights.admin && memberOf(m.person) && <MemberMenu t={t} member={memberOf(m.person)!} me={m.me} onPick={change.pick} />}

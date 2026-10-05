@@ -859,6 +859,8 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		return errors.New("usage: admin invite|revoke|release|workspace ...")
 	}
 	switch args[0] {
+	case "google":
+		return runGoogleAdmin(ctx, a, args[1:])
 	case "invite":
 		fs := flag.NewFlagSet("admin invite", flag.ContinueOnError)
 		ttl := fs.Duration("ttl", 7*24*time.Hour, "invite lifetime (max 720h)")

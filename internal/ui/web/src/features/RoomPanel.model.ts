@@ -59,7 +59,7 @@ export const shareable = (t: T.DMThread) => timeline(t).filter((m) => !m.excerpt
 
 // ---- the room -----------------------------------------------------------------
 
-export interface Member { key: string; person?: string; name: string; seed: string; me: boolean; admin: boolean; online: boolean | null; note: string }
+export interface Member { email?: string; key: string; person?: string; name: string; seed: string; me: boolean; admin: boolean; online: boolean | null; note: string }
 
 export interface Guest {
   key: string;
@@ -131,7 +131,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
     const agents = (t.agents || []).filter((a) => LIVE.has(a.state) && a.host.person && a.host.person === p.person).flatMap((a) => (a.agent_id && names[a.agent_id] ? [names[a.agent_id]] : []));
     const admin = "admin" in p && !!(p as T.GroupMemberView).admin;
     return {
-      key: p.person || p.address, person: p.person, name: personName(p), seed: p.person || p.address, me: self, admin,
+      key: p.person || p.address, person: p.person, email: p.email, name: personName(p), seed: p.person || p.address, me: self, admin,
       online: self ? null : online(o, p.address),
       note: agents.length ? agents.join(", ") + "’s owner" : "",
     };

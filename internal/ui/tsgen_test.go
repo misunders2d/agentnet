@@ -36,6 +36,7 @@ var tsRoots = []any{
 	client.TypingView{}, client.TypingResult{}, client.StorageSummary{}, static.Skin{}, TopicPage{}, ApprovalsView{},
 	WorkspaceInfoView{},
 	InviteView{}, InvitesView{}, GetAppView{}, FoldersView{}, // the AgentNet app (MEL-533/534/536)
+	protocol.GoogleAccess{}, protocol.GoogleAccessChange{},
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
