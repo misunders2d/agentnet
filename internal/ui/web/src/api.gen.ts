@@ -2,6 +2,7 @@
 // Regenerate: go test ./internal/ui -run TestTypeScriptViewTypes -update
 
 export interface Action {
+  send_id?: string;
   do: string;
   id?: string;
   body?: string;
@@ -12,6 +13,7 @@ export interface Action {
 
 export interface AgentAsk {
   topic?: string;
+  id?: string;
   reply_receiver?: ReplyReceiverSelection;
   pid: string;
   kind: string;
@@ -187,6 +189,7 @@ export interface CopyView {
 
 export interface DMDraft {
   topic?: string;
+  id?: string;
   pid?: string;
   reply_receiver?: ReplyReceiverSelection;
   conv: string;
@@ -340,6 +343,7 @@ export interface Directory {
 }
 
 export interface Draft {
+  id?: string;
   reply_receiver?: ReplyReceiverSelection;
   agent_id?: string;
   to: string;
