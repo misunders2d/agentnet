@@ -126,12 +126,28 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	}
 	var recipients []string
 	isOperator := map[string]bool{}
+	isOwner := map[string]bool{}
 	for _, addr := range operators {
 		if addr != a.Address {
 			recipients, isOperator[addr] = append(recipients, addr), true
 		}
 	}
-	if to != "" && to != a.Address && !isOperator[to] {
+	// Reuse encrypted reports for the person's current devices. This is
+	// visibility of the agent's needs-you text, never an operator grant.
+	if me, ok, err := a.store.selfPerson(a.Address); err != nil {
+		a.Logf("review notice: %v", err)
+		return
+	} else if ok {
+		for _, d := range me.info.Devices {
+			if d.Address != a.Address {
+				isOwner[d.Address] = true
+				if !slices.Contains(recipients, d.Address) {
+					recipients = append(recipients, d.Address)
+				}
+			}
+		}
+	}
+	if to != "" && to != a.Address && !slices.Contains(recipients, to) {
 		recipients = append(recipients, to)
 	}
 	// A recipient told about items earlier gets its settled snapshot even
@@ -179,6 +195,7 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		return
 	}
 	var items []ReportItem
+	agentText := map[string]string{}
 	for rows.Next() {
 		var it ReportItem
 		var detail string
@@ -188,6 +205,9 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 			return
 		}
 		it.Blocker, it.Excerpt = blockerOf(it.Kind, it.State), firstLine(it.Excerpt)
+		if it.State == stateNeedHuman {
+			agentText[it.ID] = detail
+		}
 		if it.State == stateRunning {
 			it.Excerpt = detail
 			if strings.HasPrefix(detail, "Seems stuck:") {
@@ -214,6 +234,9 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	var plans []plan
 	for _, to := range recipients {
 		list := items
+		if isOwner[to] && !isOperator[to] {
+			list = slices.DeleteFunc(slices.Clone(items), func(it ReportItem) bool { return it.State != stateNeedHuman })
+		}
 		if isOperator[to] {
 			// An operator device of an older version (v0.6.2) drops a whole
 			// report naming an interrupted request, and with it the alert
@@ -263,18 +286,31 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	for _, p := range plans {
 		to, list, ids := p.to, p.list, p.ids
 		// The requests themselves go only to a granted operator that reads
-		// reports; anyone else learns how many wait and who decides them
+		// reports; current own devices also get read-only needs-you text. Other
+		// recipients learn how many wait and who decides them
 		// (no identity or request state by accident).
 		body := countText(len(list), a.Address)
 		reportKey := ""
+		fullText := false
 		capable := false
 		if ferr == nil {
 			if key, err := a.sendKey(ctx, to); err == nil {
 				if ok, _ := a.capSupport(ctx, to, key, feats, protocol.CapHeadless); ok {
 					capable = true
-					if isOperator[to] {
-						body = a.reportBody(list)
+					if isOperator[to] || isOwner[to] {
 						reportKey = key.Fingerprint()
+						owner, err := ownerReportHolds(a.store.db, to, reportKey)
+						if err != nil {
+							a.Logf("review notice: %v", err)
+							return
+						}
+						steward, err := stewardHolds(a.store.db, to, reportKey)
+						if err != nil {
+							a.Logf("review notice: %v", err)
+							return
+						}
+						fullText = owner || steward
+						body = a.reportBodyFor(list, agentText, fullText, isOperator[to])
 					} else {
 						if deciders == nil {
 							if deciders, err = a.store.deciders(); err != nil {
@@ -296,7 +332,7 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		if p.left != "" {
 			a.reviewTried[p.left] = true
 		}
-		if isOperator[to] && !capable {
+		if (isOperator[to] || isOwner[to]) && !capable {
 			// An operator gets the requests by name or nothing yet (a device
 			// just added may not have said what it reads): a count now would
 			// mark them told. Tried once, like any item: it is looked at
@@ -325,8 +361,21 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 				if err != nil {
 					return err
 				}
-				if !active {
+				owner, err := ownerReportHolds(tx, to, reportKey)
+				if err != nil {
+					return err
+				}
+				if !active && !owner || isOperator[to] && !active {
 					return errNoNewReview
+				}
+				if fullText && !owner {
+					steward, err := stewardHolds(tx, to, reportKey)
+					if err != nil {
+						return err
+					}
+					if !steward {
+						return errNoNewReview
+					}
 				}
 			}
 			now := time.Now().Unix()
@@ -531,13 +580,88 @@ func (a *Agent) ReviewToHealth() (string, error) {
 // reportBody is a version 2 report of items for a granted operator: the
 // requests named, with their first lines, each actionable from there.
 func (a *Agent) reportBody(items []ReportItem) string {
+	return a.reportBodyFor(items, nil, false, true)
+}
+
+// Full agent output travels only in ciphertext to current own devices or
+// a current steward. Excerpt is an existing private report field; public
+// execution statuses continue to carry only their bounded blocker text.
+func (a *Agent) reportBodyFor(items []ReportItem, agentText map[string]string, full, actionable bool) string {
 	r := Report{V: 2, At: time.Now().Unix(), Host: a.Address, Items: make([]ReportItem, 0, len(items))}
 	for _, it := range items {
-		it.Actionable = true
+		it.Actionable = actionable
+		if full && it.State == stateNeedHuman && agentText[it.ID] != "" {
+			it.Excerpt = agentText[it.ID]
+		}
 		r.Items = append(r.Items, it)
 	}
 	data, _ := json.Marshal(r)
 	return string(data)
+}
+
+func ownerReportHolds(q querier, address, fp string) (bool, error) {
+	person, err := permissionPersonIn(q, address, fp)
+	if err != nil || person == "" {
+		return false, err
+	}
+	var self bool
+	err = q.QueryRow(`SELECT state = ? FROM persons WHERE person = ?`, personSelf, person).Scan(&self)
+	return self, err
+}
+
+// Another native device reads the same encrypted owner report as the
+// browser. Project its result beside the original request, without any
+// job or actions here. Local job details remain authoritative.
+func (a *Agent) privateNeedsYou(msgs []ConvMessage) error {
+	hosts := map[string]string{}
+	for _, m := range msgs {
+		if m.Job == "" && m.Target != nil && m.Exec != nil && m.Exec.State == stateNeedHuman && !m.History && m.ExcerptPID == "" {
+			ok, err := ownerReportHolds(a.store.db, m.Target.Address, m.Target.Fingerprint)
+			if err != nil {
+				return err
+			}
+			if ok {
+				hosts[m.Target.Address] = m.Target.Fingerprint
+			}
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	rows, err := a.store.db.Query(`SELECT sender, coalesce(verified_by,''), body FROM inbox WHERE conv IS NULL AND local=0 AND replica=0 AND (`+receivedNotice+`) ORDER BY rowid`, envelope.KindMessage, envelope.StatusReviewNotice)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	latest := map[string]Report{}
+	for rows.Next() {
+		var host, fp, body string
+		if err := rows.Scan(&host, &fp, &body); err != nil {
+			return err
+		}
+		if hosts[host] != fp || fp == "" {
+			continue
+		}
+		if r, ok := notificationReport(body, host, fp); ok && r.At >= latest[host].At {
+			latest[host] = r
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Job != "" || m.Target == nil || m.Exec == nil || m.Exec.State != stateNeedHuman || m.History || m.ExcerptPID != "" || hosts[m.Target.Address] != m.Target.Fingerprint {
+			continue
+		}
+		for _, it := range latest[m.Target.Address].Items {
+			if it.Conv && it.State == stateNeedHuman && it.Key == m.Key && it.Attempt == m.Exec.Attempt && (it.ID == m.ID || it.ID == m.LID || slices.ContainsFunc(m.Copies, func(c ConvCopy) bool { return c.ID == it.ID })) {
+				m.JobDetail = it.Excerpt
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // receivedNotice matches exactly the rows isReviewNotice files (kind, status,

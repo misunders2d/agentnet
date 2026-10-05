@@ -30,7 +30,7 @@ const stateWords: Record<string, string> = {
   resolved: "was closed", answered: "was answered", cancel_requested: "is stopping", queued: "is queued", not_run: "didn’t run", stopped: "was stopped",
 };
 const label = (d: Decision, again: boolean) =>
-  ({ accept: again ? "Run again there" : "Allow there", decline: "Decline there", reply: "Answer there", resolve: "Close there", cancel: "Stop there" })[d];
+  ({ accept: again ? "Ask again there" : "Allow there", decline: "Decline there", reply: "Answer there", resolve: "Mark as handled", cancel: "Stop there" })[d];
 
 /** Who decides a host's requests, as its report says: a sentence for the
  * card, never a command or "decide on that device", and nothing the report
@@ -129,6 +129,8 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
     <li className="rounded-xl bg-sunken px-3 py-2.5">
       <p className="text-[15px] leading-snug"><b>{from}</b> {x.kind === "task" ? "gave it a task" : x.kind === "question" ? "asked it something" : "sent a " + kindWord(x.kind)} · {stateWords[x.state] || x.state}</p>
       <p className="pt-0.5 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]">{x.excerpt ? "“" + x.excerpt + "”" : "Its text isn’t shared with this device."}</p>
+      {x.state === "needs_human" && x.excerpt && <details className="mt-2"><summary className="cursor-pointer font-semibold">Read all available detail</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{x.excerpt}</p></details>}
+      {x.state === "needs_human" && !x.actionable && <p className="pt-1 text-[13px]">Open it on {deviceWords(host, o)}.</p>}
       {x.state === "running" && <p role="status" className="pt-1 text-[13px] text-text-2">{x.blocker === "seems_stuck" ? "Seems stuck · " : "Running · "}since {new Date(typeof x.since === "number" ? x.since * 1000 : x.since).toLocaleString()}</p>}
       {x.proposal && <details className="mt-2 text-[14px] [overflow-wrap:anywhere]">
         <summary>How this task was chosen</summary>

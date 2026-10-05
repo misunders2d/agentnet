@@ -93,12 +93,12 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {notice ? capital(deviceWords(m.from, o)) + " has requests waiting for a person there" : capital(agent) + "’s follow-up needs a person"}
           </h3>
           <p className="pt-1.5 text-text-2">{notice ? decidersWords(o?.review?.find((r) => r.id === m.id)?.report, m.from, o) : said || requestText(m)}</p>
-          <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Close it"}</Button>
+          <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Mark as handled"}</Button>
         </div>
         <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
-          title={notice ? "Dismiss this report?" : "Close without replying?"}
+          title={notice ? "Dismiss this report?" : "Mark as handled?"}
           body={notice ? "It's cleared on this computer only. A newer report from " + deviceWords(m.from, o) + " shows again if requests still wait." : "Nothing is sent to " + asker.name + "."}
-          confirm={notice ? "Dismiss" : "Close it"} onConfirm={() => act({ do: "resolve", id: m.id }, notice ? "Report dismissed." : "Closed. Nothing was sent.")} />
+          confirm={notice ? "Dismiss" : "Mark as handled"} onConfirm={() => act({ do: "resolve", id: m.id }, notice ? "Report dismissed." : "Marked as handled. Nothing was sent.")} />
       </Shell>
     );
   }
@@ -140,8 +140,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         </Details>}
 
         {phase === "needs_human" || (phase === "stopped" && said) ? (
-          <div className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
-            <p className="text-[13px] font-bold uppercase tracking-wide">{capital(agent)} says</p>
+          <div data-agent-needs-you={phase === "needs_human" || undefined} role="region" aria-label="Your agent says" tabIndex={-1} className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
+            <p className="text-[13px] font-bold">{phase === "needs_human" ? "Your agent couldn’t finish — it needs your answer" : capital(agent) + " says"}</p>
             <p className="pt-0.5 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{said || "It needs a person to decide. It didn't say more."}</p>
           </div>
         ) : null}
@@ -175,8 +175,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           </>}
           {phase === "needs_human" && <>
             {replyHere && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={reply}>Reply</Button>}
-            {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Run again"}</Button>}
-            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Close without replying…</TextButton>}
+            {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
+            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
           </>}
           {phase === "stopped" && <>
             {can("accept") && <Button variant="act" size="lg" icon={<IconRefresh size={20} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Run it again"}</Button>}
@@ -214,8 +214,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         title={"Stop " + agent + "?"} body="It stops working on this now. Whatever it already did stays done."
         confirm="Stop" tone="danger" onConfirm={() => act({ do: "cancel", id: m.id }, "Stopping.")} />
       <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
-        title="Close without replying?" body={"Nothing is sent to " + asker.person + ". You can still write to them in the chat."}
-        confirm="Close it" onConfirm={() => act({ do: "resolve", id: m.id }, "Closed. Nothing was sent.")} />
+        title="Mark as handled?" body={"Nothing is sent to " + asker.person + ". You can still write to them in the chat."}
+        confirm="Mark as handled" onConfirm={() => act({ do: "resolve", id: m.id }, "Marked as handled. Nothing was sent.")} />
     </section>
   );
 }

@@ -20,7 +20,7 @@ import { Tag } from "../ui/Tag";
 import { ScreenTitle } from "./Approvals.title";
 import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { Reports } from "./Approvals.reports";
-import { Body, Card, Landing, kindTag, useLand, useOpen } from "./Approvals.parts";
+import { Body, Card, OpenCard, Landing, kindTag, useLand, useOpen } from "./Approvals.parts";
 import { ConvRow, SelfConsentRow } from "./Approvals.conv";
 import { HeldBack } from "./Approvals.held";
 import { capital, decidable, inSentence, isSelfConsent, nameOf, peerAgent, whyWords } from "./Approvals.words";
@@ -189,10 +189,9 @@ function ReviewRow({ r, o, names }: { r: T.ReviewItem; o: T.Overview; names: Rec
   const title = r.kind === "task" ? from + " gave " + inSentence(mine) + " a task" : r.kind === "question" ? from + " asked " + inSentence(mine) + " something"
     : mine + " needs you about " + from + "’s message";
   return (
-    <Card onOpen={() => go("thread", r.id, r.id)} current={isOpen(r.id)} label={title + ". Review it."}>
-      <AgentAvatar seed={r.peer} size={40} mood="waiting" />
-      <Body tag={kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} meta={whyWords(r.why, r.peer, o)} />
-    </Card>
+    <OpenCard onOpen={() => go("thread", r.id, r.id)} current={isOpen(r.id)} label={title + ". Review it."} face={<AgentAvatar seed={r.peer} size={40} mood="waiting" />} detail={<details><summary className="cursor-pointer font-semibold">Read the whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{whyWords(r.why, r.peer, o)}</p></details>}>
+      <Body tag={kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} />
+    </OpenCard>
   );
 }
 

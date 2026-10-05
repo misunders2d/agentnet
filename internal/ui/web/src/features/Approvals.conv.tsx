@@ -71,15 +71,16 @@ function RequestRow({ c, o }: Props) {
   const actions = c.decide_on ? <DecideOn address={c.decide_on} o={o} /> : acts.length ? <>
     {can("accept") && <Button variant={human ? "outline" : "act"} size="sm" disabled={!!busy}
       onClick={() => run("accept", (api) => api.act({ do: "accept", id: c.id }), human ? "Running it again." : "Allowed once.")}>
-      {busy === "accept" ? (human ? "Starting…" : "Allowing…") : human ? "Run again" : "Allow once"}
+      {busy === "accept" ? (human ? "Starting…" : "Allowing…") : human ? "Ask again" : "Allow once"}
     </Button>}
     {can("decline") && <Button variant="outline" size="sm" disabled={!!busy} onClick={() => setSheet("decline")}>Decline</Button>}
-    {can("resolve") && <Button variant="ghost" size="sm" disabled={!!busy} aria-label="Close without replying" onClick={() => setSheet("close")}>Close…</Button>}
+    {can("resolve") && <Button variant="ghost" size="sm" disabled={!!busy} aria-label="Mark as handled" onClick={() => setSheet("close")}>Mark as handled</Button>}
   </> : undefined;
   return (
     <>
       <OpenCard onOpen={() => go("dm", c.conv, c.id)} current={isOpen(c.conv, c.id)} label={title + ". Open it in the chat."}
-        face={<SenderFace c={c} o={o} />} actions={actions}>
+        face={human ? <AgentAvatar seed={c.pid || c.peer} size={40} /> : <SenderFace c={c} o={o} />} actions={actions}
+        detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
         <Body tag={human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
           meta={capital(inChat(c.conv, o)) + (human || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
           {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}
@@ -88,8 +89,8 @@ function RequestRow({ c, o }: Props) {
       <DeclineSheet open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : "")} who={who === "You" ? "Your other device" : who} kind={kind}
         onDecline={(reason) => run("decline", (api) => api.act({ do: "decline", id: c.id, reason }), "Declined. " + (who === "You" ? "Your other device" : who) + " is told.")} />
       <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : "")}
-        title="Close without replying?" body={"Nothing is sent" + (who === "You" ? "." : " to " + who + ". You can still write to them in the chat.")}
-        confirm="Close it" onConfirm={() => run("resolve", (api) => api.act({ do: "resolve", id: c.id }), "Closed. Nothing was sent.")} />
+        title="Mark as handled?" body={"Nothing is sent" + (who === "You" ? "." : " to " + who + ". You can still write to them in the chat.")}
+        confirm="Mark as handled" onConfirm={() => run("resolve", (api) => api.act({ do: "resolve", id: c.id }), "Marked as handled. Nothing was sent.")} />
     </>
   );
 }

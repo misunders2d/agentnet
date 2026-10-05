@@ -34,7 +34,8 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	t.Setenv("AGENTNET_NOTIFY", "off")
 	t.Setenv("HOME", t.TempDir()) // nothing of the real harness's sessions is read
 	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\nprintf 'AGENTNET: NEEDS-HUMAN\\nwhich branch?\\n'\n"), 0o700)
+	agentText := "Which branch should I use?\n\nChoose the release branch before I continue.\n" + strings.Repeat("LongLine", 80)
+	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\nprintf 'AGENTNET: NEEDS-HUMAN\\n%s\\n' '"+agentText+"'\n"), 0o700)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -161,11 +162,15 @@ func TestBrowserEngineNeedsYouReadOnly(t *testing.T) {
 	// here read-only as the laptop reports it, until resolved there.
 	w.until("the laptop's agent active in the browser", func() bool { a := agent(inv.PID); return a != nil && a["can_ask"] == true })
 	asked := w.api("/api/dm/agent/ask", map[string]any{"pid": inv.PID, "body": "deploy now?"})["id"].(string)
-	w.until("the laptop's needs-human", func() bool { return item(client.ReviewNeedsHuman) != nil })
+	w.until("the laptop's full private needs-human text", func() bool { it := item(client.ReviewNeedsHuman); return it != nil && it["why"] == agentText })
 	it = item(client.ReviewNeedsHuman)
 	if it["conv"] != conv || it["pid"] != inv.PID || it["id"] != asked || it["kind"] != envelope.KindQuestion || it["excerpt"] != "deploy now?" ||
-		it["decide_on"] != laptop.Address || it["actions"] != nil || !strings.Contains(it["why"].(string), laptop.Address) {
+		it["decide_on"] != laptop.Address || it["actions"] != nil || it["why"] != agentText {
 		t.Fatalf("needs-human in the browser: %v", it)
+	}
+	phoneTurn := dmMessage(w, conv, "deploy now?")
+	if phoneTurn == nil || phoneTurn["job_detail"] != agentText || phoneTurn["actions"] != nil {
+		t.Fatalf("phone lost full agent turn or gained actions: %v", phoneTurn)
 	}
 	w.refuses("accepting in the browser", w.call(map[string]any{"op": "api", "path": "/api/act", "body": map[string]any{"do": "accept", "id": asked}}), "Nothing runs in this browser")
 	m := goMessage(laptop, conv, "deploy now?")
