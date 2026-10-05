@@ -52,6 +52,10 @@ func (a *Agent) groupParticipationFileSources(q dbq, conv, lid, author string, l
 		if err != nil {
 			return nil, err
 		}
+		s.item.Human, err = storedHuman(q, s.dir, s.item.ID)
+		if err != nil {
+			return nil, err
+		}
 		if retractedRef(q, conv, s.item.LID, s.item.FromKey) {
 			return nil, ErrGroupHistoryUnavailable
 		}

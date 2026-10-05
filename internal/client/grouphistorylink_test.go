@@ -232,6 +232,10 @@ func TestGroupHistoryLinkAuthorityChangesAndVisitor(t *testing.T) {
 	if groupHistoryCarrierCount(t, a, phone.Address, p.State.Conv) != 0 {
 		t.Fatal("authority refusal enqueued carriers")
 	}
+	// The fake pending-withdrawal scenario ends here; the admin may invite a visitor.
+	if _, err = a.store.db.Exec(`DELETE FROM group_pending_withdrawals WHERE conv=?`, p.State.Conv); err != nil {
+		t.Fatal(err)
+	}
 	// A visitor may hold this context, but its newly linked sibling receives none.
 	visitor := proofReader(t, w, "visitor-sibling")
 	stopVisitor := runAgent(t, visitor)
@@ -244,7 +248,7 @@ func TestGroupHistoryLinkAuthorityChangesAndVisitor(t *testing.T) {
 	if err = visitor.PublishAgentCatalog(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
-	participation, err := w.bob.InviteNamedAgent(tctx(t), p.State.Conv, visitor.Address, named.ID, nil, nil, "no ambient room")
+	participation, err := w.alice.InviteNamedAgent(tctx(t), p.State.Conv, visitor.Address, named.ID, nil, nil, "no ambient room")
 	if err != nil {
 		t.Fatal(err)
 	}

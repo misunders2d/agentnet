@@ -51,8 +51,18 @@ func TestGroupParticipationFilesLateLinkedRequestAndNamedOutput(t *testing.T) {
 		t.Fatal(e)
 	}
 	parts := []ParticipationInfo{}
-	for range 2 {
-		p, e := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, record.ID, nil, []string{w.alice.Self().Fingerprint()}, "exact PID file scope")
+	for i := range 2 {
+		agent := record
+		if i == 1 { // distinct named agents: re-inviting one now reuses its PID
+			agent, e = w.bob.CreateLocalAgent("second file reviewer", Responder{Harness: "agentstub", Dir: stub.dir})
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = w.bob.PublishAgentCatalog(tctx(t)); e != nil {
+				t.Fatal(e)
+			}
+		}
+		p, e := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, agent.ID, nil, []string{w.alice.Self().Fingerprint()}, "exact PID file scope")
 		if e != nil {
 			t.Fatal(e)
 		}

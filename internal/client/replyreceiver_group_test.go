@@ -138,6 +138,9 @@ func TestGroupReplyReceiverMemberAndVisitorPIDNative(t *testing.T) {
 				t.Fatal(e)
 			}
 			eventually(t, "active selected participation", func() bool { v, e := w.alice.Participation(part.PID); return e == nil && v.Claimable() })
+			if e = host.Approve(w.alice.Address); e != nil {
+				t.Fatal(e)
+			}
 			owner, call := nativeReceiverFixture(t, w.alice, "pi")
 			sent, e := w.alice.AskAgentWithReceiver(tctx(t), part.PID, envelope.KindQuestion, "original exact PID request", &ReplyReceiver{Kind: "live_session", SessionHandle: owner.Handle})
 			if e != nil {

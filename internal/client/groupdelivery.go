@@ -444,7 +444,7 @@ func (a *Agent) admitGroupCarrier(ctx context.Context, env envelope.Envelope, in
 			_, err = groupProofRecord(a.store.db, in.Conv, root.Creator.Fingerprint, packet.State.Seq)
 		}
 		if err == nil {
-			err = a.AcceptGroupContext(ctx, packet)
+			err = a.acceptGroupContextFrom(ctx, packet, sender)
 		}
 	}
 	if err != nil {

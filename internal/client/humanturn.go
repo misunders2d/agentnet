@@ -381,7 +381,18 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 				if err != nil {
 					return err
 				}
-				_, err = externalOutputRequest(tx, in, p, m, a.Address, a.Self().Fingerprint())
+				if _, err = externalOutputRequest(tx, in, p, m, a.Address, a.Self().Fingerprint()); err != nil {
+					return err
+				}
+			}
+			// Preserve this member's receive epoch for selected replies and own history.
+			// An outside following host keeps no member admission.
+			if m.device(a.Address, a.Self().Fingerprint()) {
+				admission, err := groupMemberAdmission(tx, *m.group, a.Address, a.Self().Fingerprint())
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(`UPDATE inbox SET group_admission=? WHERE id=?`, admission.Hash(), in.ID)
 				return err
 			}
 		}
@@ -400,9 +411,7 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 			a.convWork.due(convFetch)
 		}
 		a.kickNow()
-		if state != "" {
-			a.wakeWorker()
-		}
+		a.wakeWorker() // an exactly correlated selected receiver may own this output
 	}
 	return nil
 }

@@ -98,6 +98,10 @@ func TestHumanTurnRoomShapes(t *testing.T) {
 		ask.Kind, ask.Target, ask.PID, ask.Origin, ask.Emotion = KindQuestion, target, assistant, "agent:claude", "curious"
 		ask.Human = f.turn(conv, agent[0].(HumanScope).PID, guest, agent)
 		ok["an agent participant's request"] = ask
+		routed := ask
+		routed.Origin, routed.Emotion, routed.Human = OriginUI, "", f.turn(conv, "", guest, agent)
+		routed.ReceiverRoute = &ReceiverRoute{Op: "request", Host: "fixture/alice", HostKey: target.Fingerprint, RequestRef: routed.LID, RequestDigest: strings.Repeat("c", 64), DelegationID: protocol.NewID()}
+		ok["a member's routed request"] = routed
 		task := ask
 		task.Kind, task.Origin, task.Emotion = KindTask, OriginUI, ""
 		task.Human = f.turn(conv, guest[0].(HumanScope).PID, guest, agent)
@@ -112,7 +116,13 @@ func TestHumanTurnRoomShapes(t *testing.T) {
 			}
 		}
 		bad := map[string]Inner{}
-		x := ask
+		x := routed
+		x.ReceiverRoute = &ReceiverRoute{Op: "delegate", Host: "fixture/alice", HostKey: target.Fingerprint, RequestRef: routed.LID, RequestDigest: strings.Repeat("c", 64), DelegationID: protocol.NewID()}
+		bad["a delegation in a captured turn"] = x
+		x = ask
+		x.ReceiverRoute = routed.ReceiverRoute
+		bad["an agent redirecting its request"] = x
+		x = ask
 		x.Human = f.turn(conv, guest[0].(HumanScope).PID, guest, agent)
 		bad["an agent origin for a person"] = x
 		x = ask
