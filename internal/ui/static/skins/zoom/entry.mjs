@@ -149,7 +149,7 @@ const firstLine = (s, n) => {
 const announce = (t) => { $("live").textContent = t; };
 const kindTag = { question: "Question", task: "Task" };
 const statusWord = { declined: "Declined", failed: "Failed", timeout: "Timed out", cancelled: "Cancelled", interrupted: "Interrupted",
-  review_notice: "Report" };
+  review_notice: "Report", proposal: "Proposed task (not run)" };
 
 // Addresses are person/agent: the person leads, the agent is secondary.
 // A device as people see it: the person (or "You"), then the device; the
@@ -977,9 +977,9 @@ function reportLine(c) {
   const snapshots = tied.map((r) => ({ r, item: ((state.overview && state.overview.review) || []).find((it) => it.notice && it.peer === c.peer && it.id === r.id) }));
   const canAct = snapshots.some(({ item }) => item && item.report && item.report.items.some((x) => x.actionable));
   return el("div", { class: "report-line" },
-    el("p", {}, el("strong", {}, c.peer), " reported at " + when(v2 ? v2.at : latest.at) + (tied.length > 1 ? ": " + tied.length + " snapshots at that time; their order is not known." : v2 ? ", from " + v2.host + ": " + plural(v2.items.length, "request", "requests") + " waiting there." : ": " + firstSentence(latest.text) + ".")),
+    el("p", {}, el("strong", {}, c.peer), " reported at " + when(v2 ? v2.at : latest.at) + (tied.length > 1 ? ": " + tied.length + " snapshots at that time; their order is not known." : v2 ? ", from " + v2.host + ": " + plural(v2.items.length || v2.count || 0, "request", "requests") + " waiting there." : ": " + firstSentence(latest.text) + ".")),
     el("p", { class: "hint" }, canAct ? "As their operator you can decide these from here; the host applies a decision only if the request is still in the state you saw."
-      : "That was true on that machine at that time. This page cannot see those requests or decide them: someone with access to " + c.peer + " decides there."),
+      : "That was true on that machine at that time. " + decidersSentence(v2, c.peer)),
     tied.length > 1 ? el("div", {}, snapshots.map(({ r, item }) => el("div", {},
       el("p", { class: "hint" }, "Snapshot from " + (item && item.report ? item.report.host : c.peer) + " at " + when(r.at) + ". This is what it reported then, not a live queue."),
       item && item.report ? reportItems(item) : el("p", { class: "hint" }, r.text)))) : v2 && reportItems(latestItem),
@@ -991,6 +991,24 @@ function reportLine(c) {
 }
 
 const firstSentence = (s) => (s || "").split(/\.\s/)[0].replace(/\.$/, "");
+
+// decidersSentence says who decides a host's requests, as its report says
+// (client.Report): never "decide on that machine" (MEL-532), and nothing the
+// report does not say. A report naming the requests went to a device that
+// decides them; a count report names who does (nobody yet when it names no
+// one); a count-text notice (no report) says neither.
+function decidersSentence(report, host) {
+  if (!report) return host + " did not say who decides these.";
+  const items = report.items || [];
+  if (items.length) return items.some((x) => x.actionable) ? "You decide these from this device." : host + " listed these but did not let this device decide them.";
+  if (!report.count) return "Nothing waits there any more.";
+  const list = report.deciders || [];
+  const me = state.overview && state.overview.person && state.overview.person.person;
+  if (me && list.some((d) => d.person === me)) return "You decide these; this device gets them by name in " + host + "'s next report.";
+  if (!list.length) return "Nobody can decide these from their devices yet. Whoever installed " + host + " can name a steward on that machine.";
+  const names = list.map((d) => (d.person ? d.label || "Someone" : d.address || "a device"));
+  return (names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " and " + names[names.length - 1]) + (names.length === 1 ? " decides" : " decide") + " these from their devices.";
+}
 
 function openReports(peer) {
   return ((state.overview && state.overview.review) || []).filter((it) => it.notice && it.peer === peer).map((it) => it.id);
@@ -2684,24 +2702,25 @@ function rerender() {
 
 function renderReview(items) {
   const decisions = items.filter((it) => !it.notice);
-  const reports = items.filter((it) => it.notice);
+  const security = items.filter((it) => it.reason === "device_admin");
+  const reports = items.filter((it) => it.notice && it.reason !== "device_admin");
   const btn = $("review-btn");
   const n = decisions.length;
-  const total = n + reports.length + (state.overview.links || []).filter((l) => l.state === "pending").length;
+  const total = n + reports.length + security.length + (state.overview.links || []).filter((l) => l.state === "pending").length;
   $("review-count").textContent = total;
   $("review-count").hidden = !total;
-  $("review-word").textContent = n ? "Needs you" : reports.length ? "Reports" : "Nothing needs you";
+  $("review-word").textContent = n ? "Needs you" : security.length ? "Notices" : reports.length ? "Reports" : "Nothing needs you";
   $("review-reports").hidden = true;
   $("review-reports").textContent = plural(reports.length, "report", "reports");
   btn.dataset.n = n;
   btn.setAttribute("aria-label", (n === 1 ? "1 item needs your decision" : n + " items need your decision") +
-    (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : ""));
+    (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : "") + (security.length ? ", " + plural(security.length, "company settings notice", "company settings notices") : ""));
   fill($("review-list"), ...(n ? decisions.map((it) => el("li", {},
     el("button", { type: "button", onclick: () => { toggleReview(false); openThread(it.id, it.id); } },
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
       el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
-  fill($("activity-extra"), remindersSection(), ...linkNotices().map((n) => el("li", {}, n)));
+  fill($("activity-extra"), remindersSection(), ...security.map(it => el("li", {}, el("p", {}, it.why), el("time", {datetime:it.at}, when(it.at)), el("button", {type:"button", onclick:async()=>{ await api("/api/act",{do:"resolve",id:it.id}); await loadOverview(); }}, "Hide notice"))), ...linkNotices().map((n) => el("li", {}, n)));
   const senders = [...new Set(reports.map((it) => it.peer))];
   const contacts = contactsOf(state.overview.threads);
   fill($("report-list"), ...senders.map((peer) => {
@@ -3113,7 +3132,7 @@ function deleteDialog(m, conv) {
 function reportText(m) {
   try {
     const v = JSON.parse(m.body);
-    if (v && v.v === 2 && Array.isArray(v.items)) return plural(v.items.length, "request", "requests") + " waiting on " + (v.host || m.from) + " at " + when(v.at) + ". See Activity for what they are" + (v.items.some((x) => x.actionable) ? " and to decide them from here." : ".");
+    if (v && v.v === 2 && Array.isArray(v.items)) return plural(v.items.length || v.count || 0, "request", "requests") + " waiting on " + (v.host || m.from) + " at " + when(v.at) + ". See Activity for what they are" + (v.items.some((x) => x.actionable) ? " and to decide them from here." : ".");
   } catch (e) { /* the older count text */ }
   return mentionPlain(shownText(m));
 }
@@ -3170,7 +3189,16 @@ function execLine(m, t) {
 // A version 2 report: what a machine said about its own requests at that
 // time. Actions appear only for items core marked actionable (this device's
 // key holds that host's operator grant); everything else is read-only.
-const blockerWord = { awaiting_acceptance: "waits for acceptance", question_not_approved: "asks from a sender not approved for automatic answers", needs_human: "needs a person's decision" };
+const blockerWord = { awaiting_acceptance: "waits for acceptance", question_not_approved: "asks from a sender not approved for automatic answers", needs_human: "needs a person's decision", running: "running", seems_stuck: "seems stuck" };
+function proposalCard(p) {
+  if (!p || !p.proposal_id) return null;
+  const name = (address) => deviceOwner(address)?.label || String(address || 'Someone').split('/')[0].replaceAll('-', ' ');
+  return el("details", { class: "tech" }, el("summary", {}, "How this task was chosen"),
+    el("p", { style: "white-space:pre-wrap;overflow-wrap:anywhere" }, name(p.asker) + " asked: " + p.question),
+    el("p", { style: "white-space:pre-wrap;overflow-wrap:anywhere" }, "Your agent suggested: " + p.proposal),
+    el("p", {}, name(p.confirmed_by) + " chose Do it. This uses only their usual task approval."));
+}
+
 function reportItems(it) {
   const r = it.report;
   if (!r || !Array.isArray(r.items)) return null;
@@ -3186,6 +3214,7 @@ function reportItems(it) {
       el("div", { class: "report-head" }, el("strong", {}, kindTag[x.kind] || x.kind || "request"), " from ", who(x.from || "?"), " · ", (execWord[x.state] || x.state || "state unknown"),
         x.blocker && el("span", { class: "hint" }, " · " + (blockerWord[x.blocker] || x.blocker)), x.since && el("span", { class: "hint" }, " · since " + when(x.since))),
       x.excerpt ? el("p", { class: "report-excerpt" }, x.excerpt) : el("p", { class: "hint" }, "Its text is not shared with this device."),
+      proposalCard(x.proposal),
       el("p", { class: "hint mono" }, "Request " + x.id.slice(0, 8) + "… on " + r.host),
       res, acts);
   }));
@@ -3201,7 +3230,8 @@ function decisionButtons(it, x) {
   const by = { awaiting: ["accept", "decline"], held: ["accept", "reply", "decline"], needs_human: ["reply", "resolve"], running: ["cancel"],
     interrupted: ["accept"], failed: ["accept"], cancelled: ["accept"] };
   const again = ["interrupted", "failed", "cancelled"].includes(x.state); // accept there means: run it again
-  const acts = (x.actions && x.actions.length ? x.actions : by[x.state] || []);
+  // A DM or group request (conv) is decided here, never answered by hand.
+  const acts = (x.actions && x.actions.length ? x.actions : by[x.state] || []).filter((a) => !(x.conv && a === "reply"));
   if (!acts.length) return null;
   return el("div", { class: "acts" }, acts.map((a, i) => el("button", { type: "button", class: "act" + (i === 0 ? " go" : ""), onclick: () => operatorDialog(it, x, a) }, a === "accept" && again ? "Run it again there…" : decisionWord[a] || a)));
 }
@@ -4390,7 +4420,7 @@ async function renderNamedAgents(note = "", host = currentHost, gen = state.gen,
         el("label", { for: "named-harness", class: "field-label" }, "Local program"), harness,
         el("label", { for: "named-dir", class: "field-label" }, "Works in"), dir,
         el("p", { class: "hint" }, "Choose the program and folder this agent works in. Saving also tries to make it available to others. Installed program and folder checks do not test sign-in or model availability. Saving does not run the agent."),
-        entry && el("p", { class: "hint" }, "Its timeout and context files are kept.")],
+        entry && el("p", { class: "hint" }, "Its context files (and any time limit you set) are kept.")],
       run: async () => {
         if (!harness.value || !dir.value.trim() || (!entry && !label.value.trim())) throw new Error("Choose an installed program, an absolute working folder and a display label for a new agent.");
         await change({ action: entry ? "update" : "create", ...(entry ? { id: entry.record.id } : { label: label.value.trim() }), harness: harness.value, dir: dir.value.trim() });
@@ -4405,7 +4435,7 @@ async function renderNamedAgents(note = "", host = currentHost, gen = state.gen,
       return el("section", { class: "named-agent-card", "aria-label": "Local agent " + namedAgentLabel(entry.record.id, view.host, records) },
         el("strong", { title: entry.record.id + " · " + view.host + " (host-signed agent)" }, namedAgentLabel(entry.record.id, view.host, records)), el("p", {}, "On " + view.host),
         el("p", { class: "hint" }, !entry.enabled ? "Disabled on this computer. Earlier messages remain." : r ? "Program: " + r.harness + " · " + r.dir + (r.ready ? " · program/folder checks pass" : " · not ready: " + (r.problem || "check program and folder")) : "Program settings unavailable."),
-        r && el("p", { class: "hint" }, "Timeout: " + r.timeout + " seconds · Context files: " + ((r.context || []).join(", ") || "none")),
+        r && el("p", { class: "hint" }, (r.timeout_seconds ? "Your time limit: " + r.timeout_seconds + " seconds · " : "") + "Context files: " + ((r.context || []).join(", ") || "none")),
         el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn", onclick: () => edit(entry) }, "Configure…"),
           entry.enabled && el("button", { type: "button", class: "text-btn", onclick: () => dialog({ title: "Disable " + namedAgentLabel(entry.record.id, view.host, records) + "?", ok: "Disable locally",
             body: [el("p", {}, "Disables this agent on this computer and tries to update the agent list for others. Earlier messages remain. Drafts for this agent keep their recipient.")], run: () => change({ action: "disable", id: entry.record.id }) }) }, "Disable…")));
@@ -5152,6 +5182,7 @@ const Zoom = {
           avatar(mine ? state.overview.me.address : m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,t),bubble),
           m.summary && el("p", { class: "narr" }, "Your responder's summary: " + m.summary),
           m.state_text && !needsYou(m) && el("p", { class: "narr" + (working(m) ? " running" : "") }, m.state_text),
+          proposalCard(m.proposal),
           needsYou(m) && el("div", { class: "decide" }, el("p", { class: "decide-why" }, (m.state_text || "").replace(/^Needs you: /, "Needs you · ")),
             el("div", { class: "acts" }, m.actions.map((a, i) => actionButton(a, m, t, i === 0)))),
           working(m) && el("div", { class: "acts" }, actionButton("cancel", m, t, false)),

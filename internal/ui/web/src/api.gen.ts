@@ -272,6 +272,12 @@ export interface DMThread {
   audience_pending?: boolean;
 }
 
+export interface Decider {
+  person?: string;
+  label?: string;
+  address?: string;
+}
+
 export interface DecisionAction {
   host: string;
   id: string;
@@ -641,6 +647,7 @@ export interface Message {
   exec?: ExecView;
   quote?: string;
   sent_at?: string;
+  proposal?: ProposalView;
 }
 
 export interface NotifyView {
@@ -744,6 +751,15 @@ export interface Presence {
   at?: string;
 }
 
+export interface ProposalView {
+  question_id: string;
+  question: string;
+  asker: string;
+  proposal_id: string;
+  proposal: string;
+  confirmed_by: string;
+}
+
 export interface QuarantineItem {
   id: string;
   peer: string;
@@ -843,6 +859,8 @@ export interface Report {
   at: number;
   host: string;
   items: ReportItem[] | null;
+  count?: number;
+  deciders?: Decider[];
 }
 
 export interface ReportItem {
@@ -856,6 +874,8 @@ export interface ReportItem {
   attempt: number;
   excerpt?: string;
   actionable?: boolean;
+  conv?: boolean;
+  proposal?: ProposalView;
   result?: DecisionResult;
 }
 
@@ -886,6 +906,7 @@ export interface ReviewItem {
   at: string;
   notice?: boolean;
   report?: Report;
+  proposal?: ProposalView;
   reason?: string;
   conv?: string;
   agent_id?: string;
