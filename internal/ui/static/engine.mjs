@@ -47,6 +47,17 @@ const historyPage = 50;
 // linkTTL is how long a device link lives: a minute under the server's
 // limit (protocol.MaxLinkTTL), for this browser's clock.
 const linkTTL = 9 * 60;
+// A phone opened after hours closed catches up on hundreds of messages
+// (MEL-546). receiptWidth bounds the receipts sent at once; arrivals tell
+// the page at once when they start, then at gaps from burstFirst doubling
+// to burstMost while they keep coming, and once burstQuiet ms after the
+// last, instead of after every message.
+const receiptWidth = 8;
+const burstFirst = 1000, burstMost = 8000, burstQuiet = 250;
+// retractionWrite: a write that may change which retractions inbox and
+// outbox hold (a retraction row put, or any row removed). A row's kind
+// never changes under its key, so no other write can.
+const retractionWrite = (ops) => ops.some((o) => (o.s === "inbox" || o.s === "outbox") && (o.v === undefined || (o.v.control && o.v.sub === wire.SubRetraction)));
 
 // ---- storage -------------------------------------------------------------------------------
 
@@ -66,7 +77,11 @@ export async function openIDB(name = "agentnet") {
   });
   opening.then((d) => { if (refused) d.close(); }, () => {}); // late: the tab that blocked it went away after the refusal
   const db = await Promise.race([opening, blocked]);
+  let retractionMark = 0;
   return {
+    // retractionMark changes after every write that may change the
+    // retractions held (Engine.retractions keeps them between such writes).
+    retractionMark: () => retractionMark,
     get: (s, k) => db.get(s, k),
     all: (s) => db.getAll(s),
     // after returns up to n values whose keys follow k, in key order ("" is the start).
@@ -100,6 +115,7 @@ export async function openIDB(name = "agentnet") {
         throw e;
       }
       await tx.done;
+      if (retractionWrite(ops)) retractionMark++;
     },
     close: () => db.close(),
   };
@@ -109,7 +125,9 @@ export async function openIDB(name = "agentnet") {
 // clones, as IndexedDB keeps them.
 export function memoryStore() {
   const data = Object.fromEntries(stores.map((s) => [s, new Map()]));
+  let retractionMark = 0;
   return {
+    retractionMark: () => retractionMark,
     get: async (s, k) => (data[s].has(k) ? structuredClone(data[s].get(k)) : undefined),
     all: async (s) => [...data[s].values()].map((v) => structuredClone(v)),
     after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
@@ -123,6 +141,7 @@ export function memoryStore() {
         if (o.v === undefined) data[o.s].delete(o.k);
         else data[o.s].set(o.k, structuredClone(o.v));
       }
+      if (retractionWrite(ops)) retractionMark++;
     },
     close() {},
   };
@@ -378,6 +397,8 @@ export class Engine {
     this.notKept = new Map(); // received file blob id -> why its ciphertext is not kept here (gone, full, large)
     this.fetching = new Map(); // "ct/" + blob id -> the one fetch of it under way
     this.erased = new Set(); // erased turn names (conv|key|lid), as the erased store holds them
+    this.burst = { gap: 0, told: 0, pending: false, quiet: null }; // arrivals told to the page (changed)
+    this.retractionCache = null; // { mark, rows }: the retractions held, as of the store's retractionMark
   }
 
   // ---- lifecycle
@@ -404,12 +425,33 @@ export class Engine {
     return () => this.listeners.delete(fn);
   }
 
-  changed() {
+  // changed tells the page something changed. An arrival (a message or
+  // receipt the stream brought) is told at once when arrivals start, then
+  // at growing gaps while they keep coming, and once when they stop: a
+  // catch-up of hundreds of messages had the page read every view again
+  // after each one (MEL-546). Anything else is told at once.
+  changed(arrival = false) {
     this.seq++;
+    if (arrival) this.arrived();
+    else this.tell();
+    if (this.erased.size) this.scheduleErase(); // a change may end work an erased turn's text was kept for
+  }
+
+  tell() {
+    this.burst.pending = false;
+    this.burst.told = Date.now(); // pacing for the page, not a protocol time
     for (const f of this.listeners) {
       try { f(this.seq); } catch (e) { /* a listener's problem stays there */ }
     }
-    if (this.erased.size) this.scheduleErase(); // a change may end work an erased turn's text was kept for
+  }
+
+  arrived() {
+    const b = this.burst;
+    clearTimeout(b.quiet);
+    b.quiet = setTimeout(() => { b.quiet = null; b.gap = 0; if (b.pending) this.tell(); }, burstQuiet);
+    if (!b.gap) { b.gap = burstFirst; return this.tell(); }
+    if (Date.now() - b.told >= b.gap) { b.gap = Math.min(2 * b.gap, burstMost); return this.tell(); }
+    b.pending = true;
   }
 
   // ---- the relay
@@ -3230,7 +3272,7 @@ export class Engine {
       if (typeof head.id === "string" && wire.validID(head.id)) {
         await this.store.write([{ s: "held", k: head.id, v: { id: head.id, from: String(head.from || ""), reason: "invalid", envelope: data, at: this.now() } },
           { s: "receipts", k: head.id, v: { id: head.id, state: "quarantined" } }]);
-        await this.flushReceipts();
+        this.flushReceipts().catch(() => {});
       }
       return;
     }
@@ -3241,13 +3283,13 @@ export class Engine {
     } else {
       await this.admit(data, env); // stored (or held) before any receipt
     }
-    await this.flushReceipts();
+    this.flushReceipts().catch(() => {}); // sent alongside the next messages, not before them (MEL-546)
   }
 
   async hold(env, data, reason) {
     await this.store.write([{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: this.now() } },
       { s: "receipts", k: env.id, v: { id: env.id, state: "quarantined" } }]);
-    this.changed();
+    this.changed(true);
   }
 
   // admit verifies and stores one envelope as the Go client does
@@ -3264,7 +3306,7 @@ export class Engine {
       ops.push(fromHeld ? { s: "held", k: env.id, v: undefined } : { s: "receipts", k: env.id, v: { id: env.id, state: "delivered" } });
       await this.store.write(ops, ops.checks);
       if (ops.some((o) => o.s === "erased")) await this.loadErased();
-      this.changed();
+      this.changed(true);
       if (ops.some(o => o.s === "inbox" && o.v?.sub === "event")) { this.recoverHumanExcerpts().catch(() => {}); this.discloseHumanAudience(); this.retryHeld().catch(() => {}); }
       if (ops.groupCarrier) this.retryHeld().catch(() => {});
       if (ops.groupCarrier) this.recoverGroupIntents().catch(() => {});
@@ -3278,7 +3320,7 @@ export class Engine {
         else if (e.reason !== "proof_pending") {
           const h = await this.store.get("held", env.id);
           await put(this.store, "held", env.id, { ...h, reason: e.reason });
-          this.changed();
+          this.changed(true);
         }
         return;
       }
@@ -3743,15 +3785,47 @@ export class Engine {
     }
   }
 
-  // flushReceipts sends every stored receipt the server has not taken yet.
-  async flushReceipts() {
-    for (const r of await this.store.all("receipts")) {
-      try {
-        await this.call("POST", "/v1/messages/" + r.id + "/ack", { state: r.state });
-      } catch (e) {
-        if (!(e instanceof HubError && e.status === 404)) return; // kept; sent again later
+  // flushReceipts sends every stored receipt the server has not taken yet,
+  // receiptWidth at a time: one round trip after another made a phone
+  // opened after hours take minutes to catch up (MEL-546). One pass runs at
+  // a time; a call during it makes another pass after it, so a receipt
+  // stored meanwhile is sent. A receipt is removed only while it is still
+  // the one sent.
+  flushReceipts() {
+    this.receiptsAgain = true;
+    if (!this.receiptsRun) this.receiptsRun = this.receiptPasses().finally(() => { this.receiptsRun = null; });
+    return this.receiptsRun;
+  }
+
+  async receiptPasses() {
+    while (this.receiptsAgain) {
+      this.receiptsAgain = false;
+      const rows = await this.store.all("receipts"), sent = [];
+      let next = 0, kept = false;
+      const send = async () => {
+        while (!kept && next < rows.length) {
+          const r = rows[next++];
+          try {
+            await this.call("POST", "/v1/messages/" + r.id + "/ack", { state: r.state });
+          } catch (e) {
+            if (!(e instanceof HubError && e.status === 404)) { kept = true; return; } // kept; sent again later
+          }
+          sent.push(r);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(receiptWidth, rows.length) }, send));
+      if (sent.length) {
+        try {
+          await this.store.write(sent.map((r) => ({ s: "receipts", k: r.id, v: undefined })), sent.map((r) => ({ s: "receipts", k: r.id, v: r })));
+        } catch (e) {
+          if (!(e instanceof StoreConflict)) throw e;
+          for (const r of sent) { // one changed meanwhile: the others go, it is sent again
+            try { await this.store.write([{ s: "receipts", k: r.id, v: undefined }], [{ s: "receipts", k: r.id, v: r }]); }
+            catch (err) { if (!(err instanceof StoreConflict)) throw err; this.receiptsAgain = true; }
+          }
+        }
       }
-      await put(this.store, "receipts", r.id, undefined);
+      if (kept) return;
     }
   }
 
@@ -4132,7 +4206,7 @@ export class Engine {
       if(!r||Object.keys(r).some(k=>!["id","state","seq"].includes(k))||!wire.validID(r.id)||!Number.isSafeInteger(r.seq)||r.seq<=0||!["delivered","quarantined","expired"].includes(r.state))return;
       const row=await this.store.get("outbox",r.id),cursor=await this.store.get("kv","receipt-cursor");
       const ops=[{s:"kv",k:"receipt-cursor",v:r.seq}];if(row&&(["queued","custody"].includes(row.state)||row.state==="quarantined"&&r.state==="delivered"))ops.push({s:"outbox",k:r.id,v:{...row,state:r.state,detail:""}});
-      try { await this.store.write(ops,[{s:"outbox",k:r.id,v:row},{s:"kv",k:"receipt-cursor",v:cursor}]); } catch(e) { if(e instanceof StoreConflict)return this.dispatch(event,data);throw e; }this.changed();
+      try { await this.store.write(ops,[{s:"outbox",k:r.id,v:row},{s:"kv",k:"receipt-cursor",v:cursor}]); } catch(e) { if(e instanceof StoreConflict)return this.dispatch(event,data);throw e; }this.changed(true);
     } else if (event === "message") {
       await this.onMessage(data);
     } else if (event === "signal") {
@@ -4867,10 +4941,23 @@ export class Engine {
   // target's key and its logical/message id): a retraction by that key's
   // author is pinned here, whether or not the target row itself is.
   async refTombstoned(conv, ref) {
+    const ctls = await this.retractions();
+    if (!ctls.length) return false;
     const authorPerson = conv ? await this.personOfFp(ref.fingerprint) : "";
-    const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))];
-    return rows.some((c) => c.control && c.sub === wire.SubRetraction && c.ref && c.ref.id === ref.id && c.ref.fingerprint === ref.fingerprint && (c.conv || "") === (conv || "") &&
+    return ctls.some((c) => c.ref && c.ref.id === ref.id && c.ref.fingerprint === ref.fingerprint && (c.conv || "") === (conv || "") &&
       (conv ? !!authorPerson && (c.person || "") === authorPerson : (c.fp || this.fp) === ref.fingerprint));
+  }
+
+  // retractions are the retraction rows held in inbox and outbox, kept in
+  // memory until the store says a write may have changed them: admitting a
+  // message read every message held here to look for one (MEL-546). A store
+  // without retractionMark is read each time.
+  async retractions() {
+    const mark = this.store.retractionMark?.(), c = this.retractionCache;
+    if (mark !== undefined && c && c.mark === mark) return c.rows;
+    const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))].filter((r) => r.control && r.sub === wire.SubRetraction);
+    if (mark !== undefined && this.store.retractionMark() === mark) this.retractionCache = { mark, rows };
+    return rows;
   }
 
   // tombstoned says whether a valid retraction by its author is already
@@ -4880,8 +4967,7 @@ export class Engine {
   // text, so a deletion never comes back; a question or task keeps its
   // admitted text.
   async tombstoned(r) {
-    const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))];
-    const ctls = rows.filter((c) => c.control && c.sub === wire.SubRetraction);
+    const ctls = await this.retractions();
     if (!ctls.length) return false;
     return this.retractedBy(r, ctls, r.conv ? await this.personOfFp(r.fp || this.fp) : "");
   }
@@ -4889,8 +4975,8 @@ export class Engine {
   // isRetracted says whether a message row's author retracted it, as the
   // control rows held here say (the same rule controlsOn applies).
   async isRetracted(r) {
-    const rows = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))];
-    return this.retractedBy(r, rows.filter((c) => c.control), await this.personOfFp(r.fp || this.fp));
+    const ctls = await this.retractions();
+    return ctls.length > 0 && this.retractedBy(r, ctls, await this.personOfFp(r.fp || this.fp));
   }
 
   // retractedBy says whether a retraction among ctls applies to row r: it
