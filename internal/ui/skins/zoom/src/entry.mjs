@@ -1936,19 +1936,50 @@ function renderDMBody() { /* Zoom renders after the bound load completes. */ }
 // A named agent's report refers to its host's request copy. Other audience
 // copies carry that same logical ID; resolve only in this conversation and
 // exact participation/host/agent, never by a similar body or another grant.
-function dmReplyParent(m, t) {
-  if (!m.reply_to) return null;
-  if (humanGroup(t)) { const found = t.messages.filter(x => x.id === m.reply_to || x.lid === m.reply_to); return found.length === 1 ? found[0] : null; }
-  if (!(m.pid && m.agent_id && (m.kind === "answer" || m.kind === "result"))) {
-    const exact = t.messages.find(x => x.id === m.reply_to); // a device's own copy id, as before
+function dmReplyParent(m, t, ref = m.quote) {
+  if (!ref) return null;
+  if (humanGroup(t)) { const found = t.messages.filter(x => x.id === ref || x.lid === ref); return found.length === 1 ? found[0] : null; }
+  if (ref === m.quote || !(m.pid && m.agent_id && (m.kind === "answer" || m.kind === "result"))) {
+    const exact = t.messages.find(x => x.id === ref); // a device's own copy id, as before
     if (exact) return exact;
-    const logical = t.messages.filter(x => x.lid === m.reply_to); // a human-audience reply names the parent's LID
+    const logical = t.messages.filter(x => x.lid === ref); // a human-audience reply names the parent's LID
     return logical.length === 1 ? logical[0] : null;
   }
-  const candidates = t.messages.filter(x => (x.id === m.reply_to || x.lid === m.reply_to) &&
+  const candidates = t.messages.filter(x => (x.id === ref || x.lid === ref) &&
     x.pid === m.pid && !x.event && !x.excerpt_pid && (x.kind === "question" || x.kind === "task") &&
     x.target && x.target.address === m.from && x.target.agent_id === m.agent_id);
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+
+function sentWhen(m) {
+  const sent = m.sent_at || m.at, day = new Date(sent);
+  if (day.toDateString() === new Date(m.at).toDateString()) return when(sent);
+  return day.toLocaleDateString([], {month: "short", day: "numeric"}) + " · " + day.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+}
+function messageReference(m,t) {
+ const output=["answer","result"].includes(m.kind)||m.status==="progress"||m.verified_agent&&m.kind==="message",ref=m.quote||output&&m.reply_to;
+ if(!ref)return null;const parent=dmReplyParent(m,t,ref),previous=(t.messages||[]).slice(0,(t.messages||[]).indexOf(m)).filter(x=>!x.event).at(-1);
+ if(output&&!m.quote&&parent===previous)return null;
+ const line=parent?parent.deleted?"Message deleted":firstLine(shownText(parent),90):"a message not shown here";
+ return el("button",{type:"button",class:"replyref",onclick:()=>parent&&Zoom.go(3,{msg:parent.id})},(m.quote?"Reply to: ":m.kind==="message"?"↳ update on ":"↳ answer to ")+line);
+}
+function guestUpdateTargets(g,t) {
+  const all = [g.host, t.peer, ...(t.members || []), state.overview.person].filter(Boolean);
+  const people = [...new Map(all.map(p => [p.person || p.address, p])).values()];
+  return people.filter(p => p.person !== state.overview.person?.person && p.state !== "self" && (g.needs_update || []).includes(p.label) && people.filter(x => x.label === p.label).length === 1);
+}
+function guestUpdateDraft(member) {
+  return (member ? "Could you update AgentNet? Our chat needs it for a guest to join." : "Could you update AgentNet? I'd like to bring you into a chat.") + " Get AgentNet: https://github.com/misunders2d/agentnet/releases";
+}
+async function askGuestUpdate(p) {
+  const member = state.dmData?.peer?.person === p.person || state.dmData?.peer?.address === p.address;
+  const existing = (state.overview.dms || []).find(d => d.peer?.person === p.person || d.peer?.address === p.address);
+  const id = existing?.id || (await api("/api/dm/new", {address: p.address})).id;
+  $("dialog").close();
+  await loadOverview(); await openDM(id);
+  $("body").value = guestUpdateDraft(member);
+  grow(); keepDraft(); $("body").focus();
 }
 
 // dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
@@ -1968,15 +1999,17 @@ function dmDetails(m) {
       m.claimed_key && [el("dt", {}, "Claimed author key"), el("dd", { class: "mono" }, m.claimed_key)],
       m.excerpt_pid && m.synced_from && [el("dt", {}, "Forwarded by"), el("dd", {}, m.synced_from)],
       namedDetails(m),
-      el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
+      el("dt", {}, "Sent"), el("dd", {}, new Date(m.sent_at || m.at).toLocaleString()),
       el("dt", {}, "Device"), el("dd", {}, m.from),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
+      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
+      m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
       !m.excerpt_pid && m.synced_from && [el("dt", {}, "Copied here"), el("dd", {}, "from your " + myDeviceName(m.synced_from) + " when this device was added. Who wrote it is that device's word, not checked here; nothing runs it.")],
       (m.copies || []).length > 1 && [el("dt", {}, "Copies"), el("dd", {}, el("ul", { class: "copy-list" }, m.copies.map((c) =>
-        el("li", {}, c.to + ": " + (copyWord[c.state] || c.state) + (c.detail ? " (" + c.detail + ")" : "")))))],
+        el("li", {}, (c.own?"your ":(c.person||"Someone")+"’s ") + (c.to.split("/")[1]||"device") + ": " + (copyWord[c.state] || c.state)))))],
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")],
       controlDetails(m)));
 }
@@ -1988,7 +2021,10 @@ function myDeviceName(address) {
   return d ? d.name : address;
 }
 
-const copyWord = { delivered: "delivered", custody: "on your server", queued: "queued here", waiting: "kept here, not sent yet", failed: "failed" };
+function deliveryText(m) {
+  return ["waiting","quarantined","expired","failed"].includes(m.delivery) && m.state_text ? m.state_text : copyWord[m.delivery] || m.delivery;
+}
+const copyWord = { delivered: "delivered", custody: "on your server", queued: "queued here", waiting: "kept here, not sent yet", failed: "not sent", quarantined: "they could not verify it", expired: "not delivered: that session ended first" };
 
 // agentLinkText says which agent a person's device runs, and where it is
 // in DMs here. The link is the invitation's host: that person and device.
@@ -2111,6 +2147,8 @@ function participantsDialog(t) {
 function guestCard(g, t) {
   return el("div", { class: "agent-card " + g.state },
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Guest"), el("strong", {}, g.host.label || g.host.address)),
+    g.needs_update?.length && el("p",{class:"hint"},"Waiting for "+g.needs_update.map(label=>label===state.overview.person?.label?"your other device":label).join(", ")+" to update AgentNet"),
+    guestUpdateTargets(g,t).map(p => el("button", {type:"button",class:"btn",onclick:()=>askGuestUpdate(p).catch(e=>announce(e.message))}, "Ask "+p.label+" to update")),
     el("p", {}, g.state === "active" ? "Joined this conversation." : g.state === "dismissed" ? "No longer in the active audience here. Other devices may still be updating." : g.state === "invited" ? "Invitation waiting for a response." : g.state_text),
     el("p", { class: "hint" }, "Invited by " + g.inviter.label),
     el("details", { class: "tech" }, el("summary", {}, "Details"), el("p", {}, "Device: " + g.host.address), el("p", { class: "mono" }, "Participation: " + g.pid)),
@@ -2144,14 +2182,18 @@ function inviteHumanDialog(t, address = "") {
   const host = el("input", { id: "guest-host", type: "text", placeholder: "person/device, e.g. carol/desk", autocomplete: "off", spellcheck: "false", maxlength: "65" });
   host.value = address; // chosen from @ (an exact directory entry), still editable here
   const candidates = directory().current ? directory().members.filter(p => !addresses.has(p.address)) : [];
-  const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address; } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
+  const updateNote=el("p",{class:"hint",role:"status"});let checkedHost="";
+  const checkHost=async()=>{const chosen=host.value.trim();checkedHost="";updateNote.textContent="Checking their app…";try{const v=await api("/api/dm/guest/check",{conv:t.id,host:chosen},transport);if(current()&&host.value.trim()===chosen){checkedHost=chosen;updateNote.textContent=v.text||"";$("dialog-ok").textContent=v.needs_update?.some(p=>p.role==="guest")?"Invite · waits for update":"Invite person";}}catch(e){if(current()&&host.value.trim()===chosen)updateNote.textContent="Could not check "+chosen.split("/")[0]+"’s app. Try again.";}};
+  host.addEventListener("change",checkHost);
+  const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address;void checkHost(); } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
   const ref = m => m.lid || m.id;
   const share = t.messages.filter(m => !m.event && !m.excerpt_pid && !m.deleted).slice(-30).map(m => choice("checkbox", "guest-share", ref(m), el("span", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 70) || "(files only)"), (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size))))));
   const fileConsent = choice("checkbox", "guest-file-consent", "yes", "Share files attached to the earlier messages I select with this person after acceptance.");
   share.forEach(c => c.input.addEventListener("change", () => { fileConsent.input.checked = false; }));
   const note = el("input", { id: "guest-note", type: "text", maxlength: "200", autocomplete: "off" });
   fileConsent.input.addEventListener("change", () => { if (fileConsent.input.checked && $("dialog-error").textContent === "Selected context includes files. Confirm file sharing, or deselect those messages.") $("dialog-error").textContent = ""; });
-  dialog({ title: "Invite person", body: [
+  if(address)void checkHost();
+  dialog({ title: "Invite person", body: [updateNote,
     el("p", {}, "Selected earlier messages and files are shared after they join. They’ll also receive new messages while they’re here."),
     el("label", { for: "guest-host", class: "field-label" }, "Person’s address"), host, el("div", { class: "agent-actions" }, picks),
     el("fieldset", { class: "choices" }, el("legend", {}, "Earlier context to share after acceptance"), share.length ? share.map(c => c.row) : el("p", { class: "hint" }, "No earlier messages."), el("p", { class: "hint" }, "None unless selected. Unselected earlier text and files remain private.")), fileConsent.row,
@@ -2162,6 +2204,7 @@ function inviteHumanDialog(t, address = "") {
       const address = host.value.trim(), selected = share.filter(c => c.input.checked).map(c => c.input.value);
       if (!address || addresses.has(address)) throw new Error("Choose the exact address of someone outside this private DM.");
       if (t.messages.some(m => selected.includes(ref(m)) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected context includes files. Confirm file sharing, or deselect those messages.");
+      if(checkedHost!==address){await checkHost();if(checkedHost!==address)throw Error("Could not check "+address.split("/")[0]+"’s app. Try again.");}
       await api("/api/dm/guest/invite", { conv: t.id, host: address, share: selected, note: note.value }, transport);
       if (current()) { announce("Human invited. No earlier context or files leave before acceptance."); await loadDM(); }
     } });
@@ -2554,7 +2597,7 @@ async function sendDM() {
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
       r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
-        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
@@ -3145,9 +3188,11 @@ function details(m) {
     el("dl", {},
       el("dt", {}, "Written by"), el("dd", {}, m.author.about),
       namedDetails(m),
-      el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
+      el("dt", {}, "Sent"), el("dd", {}, new Date(m.sent_at || m.at).toLocaleString()),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
+      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
+      m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],
       m.responder && [el("dt", {}, "Handled by"), el("dd", {}, m.responder === "manual" ? "a reply by hand" : "your responder (" + m.responder + ")")],
@@ -4977,16 +5022,16 @@ const Zoom = {
         el("h2", {}, d.messages[0] ? firstLine(d.messages[0].body, 80) : "No messages yet"))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
       el("ol", { class: "mini-chat" }, d.messages.map((m) => {
-        if (m.event) return el("li", { class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.at }, when(m.at)));
+        if (m.event) return el("li", { class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
         const mine = m.dir === "out";
         const bubble = el("button", { type: "button", class: "mc-bubble" },
-          el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + when(m.at)),
+          el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + sentWhen(m)),
           el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
           !m.deleted && (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
-        return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, avatar(mine ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), bubble,
-          m.state_text && el("p", { class: "narr" }, m.state_text));
+        return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, avatar(mine ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,d),bubble),
+          (m.delivery || m.state_text) && el("p", { class: "narr" }, m.dir === "out" && m.delivery ? deliveryText(m) : m.state_text));
       })),
       el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen || state.sending, onclick: () => dmWriteDialog(d) },
         d.frozen ? "Nothing more can be sent in this conversation" : humanGroup(d) ? "Write in this group…" : "Write in this DM…")));
@@ -5000,7 +5045,8 @@ const Zoom = {
     const me = state.overview && state.overview.person ? state.overview.person.label : "You";
     return el("article", { class: "zoom-message", tabindex: "-1" },
       el("div", { class: "meta" }, avatar(m.dir === "out" ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("span", { class: "who" }, dmAuthor(m, d)),
-        kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.at }, when(m.at))),
+        kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.sent_at || m.at }, sentWhen(m))),
+      messageReference(m,state.dmData?.messages.includes(m)?state.dmData:state.data),
       bodyOf(m),
       !m.deleted && fileChips(m, m.attachments),
       reactionsRow(m, d.id), messageMenu(m, d.id, { querySelector: () => null }),
@@ -5028,12 +5074,12 @@ const Zoom = {
       el("ol", { class: "mini-chat" }, t.messages.map((m) => {
         const mine = m.dir === "out";
         const bubble = el("button", { type: "button", class: "mc-bubble" },
-          el("span", { class: "mc-who" }, authorName(m) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + when(m.at)),
+          el("span", { class: "mc-who" }, authorName(m) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + sentWhen(m)),
           el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") },
-          avatar(mine ? state.overview.me.address : m.from, "sm"), bubble,
+          avatar(mine ? state.overview.me.address : m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,t),bubble),
           m.summary && el("p", { class: "narr" }, "Your responder's summary: " + m.summary),
           m.state_text && !needsYou(m) && el("p", { class: "narr" + (working(m) ? " running" : "") }, m.state_text),
           needsYou(m) && el("div", { class: "decide" }, el("p", { class: "decide-why" }, (m.state_text || "").replace(/^Needs you: /, "Needs you · ")),
@@ -5052,7 +5098,8 @@ const Zoom = {
     d.open = true;
     return el("article", { class: "zoom-message", tabindex: "-1" },
       el("div", { class: "meta" }, avatar(m.dir === "out" ? state.overview.me.address : m.from, "sm"), el("span", { class: "who" }, authorName(m)),
-        kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.at }, when(m.at))),
+        kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.sent_at || m.at }, sentWhen(m))),
+      messageReference(m,state.dmData?.messages.includes(m)?state.dmData:state.data),
       bodyOf(m),
       !m.deleted && m.files && m.files.length && el("p", { class: "hint" }, "Files: " + m.files.map((f) => f.name + " (" + size(f.size) + ")").join(", ")),
       reactionsRow(m, ""), messageMenu(m, "", { querySelector: () => null }),

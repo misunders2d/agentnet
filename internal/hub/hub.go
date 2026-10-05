@@ -154,8 +154,12 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	h := &Hub{cfg: cfg, store: st, unlock: unlock, heartbeat: cfg.Heartbeat, syncDir: secfile.SyncDir, done: make(chan struct{})}
 	h.presence = presence{grace: cfg.SessionGrace, onEnd: func(agent, session string) {
-		if err := st.expireSession(agent, session); err != nil {
+		senders, err := st.expireSession(agent, session)
+		if err != nil {
 			cfg.Logf("expire session %s#%s: %v", agent, session, err)
+		}
+		for _, sender := range senders {
+			h.streams.notify(sender)
 		}
 		h.waiters.notifyAll() // some waited-for messages may have expired
 	}, onChange: func(string) { h.membersChanged() }}

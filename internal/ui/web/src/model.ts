@@ -48,6 +48,9 @@ export const TOPICS = {
   pageMax: 200,       // topics one request may list (client.TopicPageMax)
 } as const;
 
+// Arrival notes use seconds; message ordering still uses arrival.
+export const MESSAGES = Object.freeze({ ARRIVED_NOTE_AFTER: 60 });
+
 export type TopicState = "active" | "done" | "archived";
 
 /** Topic is one of an agent's separate conversations (a device thread): each
@@ -392,3 +395,5 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
     default: return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
   }
 }
+
+// Message presentation tunables, in seconds.

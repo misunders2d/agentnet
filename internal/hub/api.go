@@ -303,7 +303,7 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "ack state must be delivered or quarantined")
 		return
 	}
-	state, err := h.store.setDisposition(r.PathValue("id"), caller, req.State)
+	state, sender, changed, err := h.store.setDisposition(r.PathValue("id"), caller, req.State)
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "", "unknown message")
 		return
@@ -311,6 +311,9 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
+	}
+	if changed {
+		h.streams.notify(sender)
 	}
 	h.waiters.notify(r.PathValue("id"))
 	writeJSON(w, http.StatusOK, protocol.Receipt{ID: r.PathValue("id"), State: state})

@@ -8,7 +8,7 @@ import { createInterface } from "node:readline";
 
 let store = memoryStore();
 let engine = null;
-let offline = false, dropPosts = false;
+let offline = false, dropPosts = false, receiptReads = 0;
 const realFetch = globalThis.fetch.bind(globalThis);
 // A network that can be switched off, as a phone on a train, or that
 // loses only the messages posted.
@@ -25,6 +25,7 @@ const json = (v, status = 200) => new Response(JSON.stringify(v), { status, head
 const forged = new Map(); // person id -> { record, address }
 async function fetchImpl(url, opts = {}) {
   const u = new URL(url);
+  if ((opts.method || "GET") === "GET" && u.pathname.startsWith("/v1/messages/")) receiptReads++;
   for (const [person, f] of forged) {
     if (u.pathname === "/v1/persons/" + person + "/chain") return json({ records: [JSON.parse(f.record)], more: false });
     if (u.pathname === "/v1/agents/" + f.address + "/profile") {
@@ -72,6 +73,19 @@ async function handle(req) {
   case "start":
     engine.start();
     return {};
+  case "testHumanCaps": { // signed old/new reader ads, only on this test device
+    const profile = await engine.profile(engine.address);
+    const old = (profile.caps || []).map(wire.parseCaps).find(c => c.session === engine.session);
+    const caps = old.caps.filter(c => ![wire.CapHumanParticipation, wire.CapRoom].includes(c));
+    if (req.supported) caps.push(wire.CapHumanParticipation);
+    const clock = Date.now;
+    let record;
+    try { Date.now = () => (old.ts + 1) * 1000; record = await wire.newCaps(engine.keys, engine.address, engine.session, caps); }
+    finally { Date.now = clock; }
+    await engine.call("PUT", "/v1/caps", wire.capsJSON(record));
+    return {};
+  }
+  case "receiptReads": return { count: receiptReads };
   case "status":
     return { connected: engine.connected, revoked: engine.revoked, members: engine.members.current, link: engine.link ? engine.link.state : "" };
   case "api":

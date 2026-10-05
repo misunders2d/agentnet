@@ -99,3 +99,25 @@ decide.
   a second mechanism.
 - **Design:** `docs/plans/MESSENGER_DESIGN.md` (the "Pop Huddle" contract)
   and the mockups it names.
+
+## Messaging fields (host API v1)
+
+Use DM/group `delivery` for ticks, with `state` as the fallback and raw Details
+state. It counts other people, using each person's best device copy; own-device
+copies do not hold their tick back. Copy labels use `own`/`person` and a device
+name. `sent_at` is the guarded signed sent time; arrival `at` still orders the
+messages and day dividers. `MESSAGES.ARRIVED_NOTE_AFTER` controls the Details
+arrival note in seconds.
+
+`quote` alone selects a quote card and names its parent only within the open
+conversation. `reply_to` remains the thread/session link. Agent outputs use a
+compact request jump link when distant and no reference when adjacent.
+
+A topic closes through an explicit agent close or a local Mark done. Ordinary
+answers, including manual replies, keep it active. Only an agent close has a
+conclusion; Mark done never manufactures one.
+
+Bring-in reads `checkGuest({conv,host})` before inviting. `needs_update` names
+people whose app must update; `offline` remains a separate condition. An invite
+can wait durably for an update. The guest card's Ask-to-update action only opens
+and prefills a DM draft.

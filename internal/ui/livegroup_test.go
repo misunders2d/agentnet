@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -122,7 +123,8 @@ func TestLiveRefreshAsksAboutEveryHeldCopy(t *testing.T) {
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "hub")
 	testhub.Start(t, dir, "127.0.0.1:0", "")
-	alice, err := client.Join(ctx, t.TempDir(), testhub.BootstrapCode(t, dir), "laptop")
+	home := t.TempDir()
+	alice, err := client.Join(ctx, home, testhub.BootstrapCode(t, dir), "laptop")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +211,7 @@ func TestLiveRefreshAsksAboutEveryHeldCopy(t *testing.T) {
 		return ""
 	}
 	wait("the other person's copy delivered", func() bool { return stateOf(bob.Address) == protocol.StateDelivered })
-	time.Sleep(receiptWait + time.Second) // the send's own bounded receipt waits are over
+	// Receipts arrive through the sender daemon's push stream.
 	// The phone's copy is held by the Hub, or kept here until the phone's
 	// capabilities are known (it is released once the phone connects).
 	if got := stateOf(phone.Address); got != protocol.StateCustody && got != "waiting" {
@@ -220,7 +222,16 @@ func TestLiveRefreshAsksAboutEveryHeldCopy(t *testing.T) {
 		msgs, e := phone.ConversationMessages(conv)
 		return e == nil && len(msgs) == 1
 	})
-	wait("the copy shown as held", func() bool { return stateOf(phone.Address) == protocol.StateCustody })
+	wait("the phone receipt pushed", func() bool { return stateOf(phone.Address) == protocol.StateDelivered })
+	// A pre-upgrade local row may still say custody although the peer holds it.
+	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec("UPDATE outbox SET state='custody' WHERE conv=? AND recipient=?", conv, phone.Address); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = l.Refresh(conv); err != nil {
 		t.Fatal(err)
 	}

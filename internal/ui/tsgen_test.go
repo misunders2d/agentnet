@@ -29,7 +29,7 @@ var updateTS = flag.Bool("update", false, "rewrite web/src/api.gen.ts")
 //	go test ./internal/ui -run TestTypeScriptViewTypes -update
 var tsRoots = []any{
 	// responses
-	Overview{}, DMThread{}, Thread{}, Presence{}, Sent{}, AgentView{}, GuestView{},
+	Overview{}, DMThread{}, Thread{}, Presence{}, Sent{}, AgentView{}, GuestView{}, GuestCheck{}, GuestCheckRequest{},
 	GroupInvitationView{}, GroupChangeResult{}, ResponderView{}, AgentCatalogView{}, AgentCatalogChangeResult{},
 	ReplyReceiverBindingView{}, ReplySessionCatalogView{}, NotifyView{}, DeviceLink{}, AssistantSetupView{},
 	WorkspaceBinding{}, client.TeamsView{}, protocol.TeamState{}, protocol.TeamSnapshot{},

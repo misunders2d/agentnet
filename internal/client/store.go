@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -478,6 +478,9 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 		env.ID, env.To, in.Body, string(data), stateQueued, storeNow().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in), recipientKey); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`UPDATE outbox SET quote=nullif(?,''),topic_done=? WHERE id=?`, in.Quote, in.TopicDone, env.ID); err != nil {
+		return err
+	}
 	if len(selected) > 0 && selected[0].binding != nil {
 		if followUp != "" {
 			return errors.New("explicit reply receiver cannot use legacy follow-up")
@@ -529,8 +532,10 @@ func (s *store) releaseUploads(messageID string) error {
 // is recorded as reported.
 func (s *store) setOutboxState(id, state, errText, path string) error {
 	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, ''), path = coalesce(nullif(?, ''), path)
-		WHERE id = ? AND NOT (state = ? AND ? IN (?, ?, ?))`,
-		state, errText, path, id, stateNotDelivered, state, stateQueued, stateConvWaiting, stateFailed)
+		WHERE id = ? AND NOT (state = ? AND ? IN (?, ?, ?))
+		AND NOT (state IN ('delivered','expired') AND ? <> state)
+		AND NOT (state='quarantined' AND ? NOT IN ('quarantined','delivered'))`,
+		state, errText, path, id, stateNotDelivered, state, stateQueued, stateConvWaiting, stateFailed, state, state)
 	return s.done(err)
 }
 
@@ -589,8 +594,8 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id, received_ms)
-	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?)`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id, received_ms, quote, topic_done)
+	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), ?)`
 
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
@@ -644,7 +649,7 @@ const inAlertReview = `(state IN (?, ?, ?) OR state = ? AND kind IN (?, ?)) AND 
 // both kinds in the order they arrived.
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
 	now := storeNow() // the clock of stored device-thread times (topics.go)
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID, now.UnixMilli()}
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID, now.UnixMilli(), in.Quote, in.TopicDone}
 }
 
 // initialState decides whether a new message waits for anything.
@@ -1040,8 +1045,9 @@ func (s *store) disposition(id string) (string, error) {
 
 // job is a received question or task the worker has claimed.
 type job struct {
-	ID, From, Kind, Body, ReplyTo, Status string
-	Attachments                           int
+	ID, From, Kind, Body, ReplyTo, Status, Quote string
+	TopicDone                                    bool
+	Attachments                                  int
 
 	AgentID  string
 	Executor *ExecutorStamp
@@ -1083,9 +1089,9 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
      OR (kind = ? AND `+taskGrantHolds+`))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     ORDER BY received_at, id LIMIT 1)
-   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,'')`,
+   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,'')`,
 			stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
-			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target)
+			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err = tx.Commit(); err != nil {
 				return job{}, false, err
@@ -1295,3 +1301,7 @@ func (s *store) replyTo(id, peer string) (string, error) {
 	}
 	return reply, err
 }
+
+const messagingSchema = `ALTER TABLE inbox ADD COLUMN quote TEXT; ALTER TABLE outbox ADD COLUMN quote TEXT; ALTER TABLE inbox ADD COLUMN topic_done INTEGER NOT NULL DEFAULT 0; ALTER TABLE outbox ADD COLUMN topic_done INTEGER NOT NULL DEFAULT 0;`
+
+const deliveryPersonSchema = `ALTER TABLE outbox ADD COLUMN recipient_person TEXT;`

@@ -41,6 +41,7 @@ const (
 
 // ParticipationInfo is one participation as this installation resolves it.
 type ParticipationInfo struct {
+	NeedsUpdate []string            `json:"needs_update,omitempty"`
 	Role        string              `json:"role,omitempty"`
 	PID         string              `json:"pid"`
 	Conv        string              `json:"conv"`
@@ -390,6 +391,25 @@ func participationIn(q dbq, conv, pid string, m dmMembers, self string) (Partici
 	}
 	info := resolve(conv, pid, events, m)
 	info.HostHere = info.Host.Address == self && info.Host.State == personSelf
+	if info.Role == protocol.RoleHuman {
+		rows, err := q.Query(`SELECT DISTINCT coalesce(p.label,'Someone') FROM outbox o LEFT JOIN person_devices d ON d.address=o.recipient LEFT JOIN persons p ON p.person=d.person WHERE o.pid=? AND o.state='waiting' AND o.required_cap=? AND instr(coalesce(o.error,''),?)=1`, pid, protocol.CapHumanParticipation, WaitPeerUpdate)
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
+		for rows.Next() {
+			var label string
+			if err = rows.Scan(&label); err != nil {
+				rows.Close()
+				return ParticipationInfo{}, err
+			}
+			info.NeedsUpdate = append(info.NeedsUpdate, label)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return ParticipationInfo{}, err
+		}
+	}
 	return info, nil
 }
 
@@ -475,8 +495,10 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 		if !p.has(hostAddress, key.Fingerprint()) || p.info.State != personPinned && p.info.State != personSelf {
 			return ParticipationInfo{}, errors.New("host has no current pinned person/device proof")
 		}
-		if err := a.requireParticipationCaps(ctx, key, protocol.CapExternalParticipation); err != nil {
-			return ParticipationInfo{}, err
+		if role != protocol.RoleHuman {
+			if err := a.requireParticipationCaps(ctx, key, protocol.CapExternalParticipation); err != nil {
+				return ParticipationInfo{}, err
+			}
 		}
 		host = &protocol.ParticipationHost{Person: p.info.Person, Address: hostAddress, Fingerprint: key.Fingerprint(), AgentID: agentID}
 	}
@@ -494,12 +516,12 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 		if key.Fingerprint() != host.Fingerprint {
 			return ParticipationInfo{}, errors.New("human host key changed")
 		}
-		if err := a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation); err != nil {
+		if err := a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation); err != nil && !errors.Is(err, errAgentIdentityUnsupported) {
 			return ParticipationInfo{}, err
 		}
 		for _, person := range m.persons {
 			for _, device := range person.roster.Devices {
-				if err := a.requireParticipationCaps(ctx, device, protocol.CapHumanParticipation); err != nil {
+				if err := a.requireParticipationCaps(ctx, device, protocol.CapHumanParticipation); err != nil && !errors.Is(err, errAgentIdentityUnsupported) {
 					return ParticipationInfo{}, err
 				}
 			}

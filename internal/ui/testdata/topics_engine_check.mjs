@@ -20,7 +20,7 @@ check(vectors.archive_after === TOPICS.archiveAfter, 'the vectors assume the sam
 // 2. The shared derivation vectors.
 for (const c of vectors.cases) {
   const facts = c.messages.map((m) => ({ id: m.id, reply_to: m.reply_to || '', at: m.at, in: m.dir === 'in', kind: m.kind, state: m.state || '',
-    status: m.status || '', notice: !!m.notice, selected: !!m.selected }));
+    status: m.status || '', topic_done:!!m.topic_done, notice: !!m.notice, selected: !!m.selected }));
   const got = deriveTopic(facts, c.local || null, vectors.now);
   same(got, Object.fromEntries(Object.entries(c.want).filter(([, v]) => v !== '' && v !== undefined)), c.name);
 }
@@ -42,7 +42,7 @@ const plain = [];
 for (let i = 0; i < 150; i++) plain.push(out({ body: (i % 3 ? 'Alpha note ' : 'Beta note ') + i + '\nsecond line', at: now - (i < 40 ? 9 * day : day) + i * 60_000 }));
 // A task the agent finished: done by the agent, with its conclusion.
 const task = out({ kind: 'task', body: 'Count the boxes\nin aisle 4', at: now - 3600_000 });
-const result = inn({ kind: 'result', status: 'done', body: '412 boxes\nall dry', reply_to: task.id, at: now - 3500_000 });
+const result = inn({ kind: 'result', status: 'done',topic_done:true, body: '412 boxes\nall dry', reply_to: task.id, at: now - 3500_000 });
 // A task that failed: not done. A question held for the person: pending.
 const failed = out({ kind: 'task', body: 'Ship it', at: now - 3400_000 });
 inn({ kind: 'result', status: 'failed', body: 'could not ship', reply_to: failed.id, at: now - 3300_000 });
@@ -75,7 +75,7 @@ let t = await topicOf(result.id);
 check(t.id === task.id && t.state === 'done' && t.done_by === 'agent' && t.conclusion === '412 boxes' && t.concluded_by === bob && !t.pending && t.title === 'Count the boxes', 'agent-done topic: ' + JSON.stringify(t));
 check(t.quiet_since === new Date(Math.floor(result.at / 1000) * 1000).toISOString(), 'quiet since its last message, in whole seconds: ' + t.quiet_since);
 t = await topicOf(mine.id);
-check(t.id === given.id && t.state === 'done' && t.done_by === 'you' && t.conclusion === 'Labelled A to F' && t.concluded_by === me, 'answered by hand here: done by you, your words: ' + JSON.stringify(t));
+check(t.id === given.id && t.state === 'active' && !t.done_by && !t.conclusion, 'answered by hand here: done by you, your words: ' + JSON.stringify(t));
 t = await topicOf(failed.id);
 check(t.state === 'active' && !t.done_by && !t.pending, 'a failed result is not done');
 t = await topicOf(held.id);
@@ -109,7 +109,7 @@ check(page.matched === 51 && page.topics.some((x) => x.peer === other), 'search 
 page = await list({ q: 'second line' });
 check(page.matched === 0, 'only the first line is searched');
 page = await list({ peer: bob, state: 'done' });
-check(page.matched === 2 && page.topics.some((x) => x.id === task.id) && page.topics.some((x) => x.id === given.id), 'done filter');
+check(page.matched === 1 && page.topics.some((x) => x.id === task.id), 'done filter');
 for (const q of [{ state: 'deleted' }, { limit: String(TOPICS.pageMax + 1) }, { limit: '-1' }, { limit: 'many' }, { before: 'yesterday' }]) {
   await refuses(() => list(q), /not valid/, 'refuses ' + JSON.stringify(q));
 }

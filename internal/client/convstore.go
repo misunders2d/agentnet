@@ -143,7 +143,8 @@ func contentHash(in envelope.Inner) string {
 		AgentID                                                      string                  `json:",omitempty"`
 		ReceiverRoute                                                *envelope.ReceiverRoute `json:",omitempty"`
 		Human                                                        *envelope.HumanTurn     `json:",omitempty"`
-	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID, in.AgentID, in.ReceiverRoute, in.Human}
+		Quote                                                        string                  `json:",omitempty"`
+	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID, in.AgentID, in.ReceiverRoute, in.Human, in.Quote}
 	for _, a := range in.Attachments {
 		c.Attachments = append(c.Attachments, att{a.Name, a.Size, a.SHA256})
 	}
@@ -238,6 +239,9 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	if n, _ := res.RowsAffected(); n == 0 {
 		return admittedAgain, nil // this envelope id is stored already
 	}
+	if _, err := tx.Exec(`UPDATE inbox SET quote=nullif(?,''),topic_done=? WHERE id=?`, in.Quote, in.TopicDone, in.ID); err != nil {
+		return "", err
+	}
 	if in.Human != nil {
 		if _, err := tx.Exec(`UPDATE inbox SET human=? WHERE id=?`, humanJSON(in.Human), in.ID); err != nil {
 			return "", err
@@ -313,6 +317,9 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 			in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, in.TS, in.Status,
 			in.Conv, in.LID, in.Sub, in.Origin, in.Emotion, targetJSON(in.Target), contentHash(in), at, in.PID, claimedFP, via, refID, refFP, in.AgentID)
 		if err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(`UPDATE inbox SET quote=nullif(?,''),topic_done=? WHERE id=?`, in.Quote, in.TopicDone, in.ID); err != nil {
 			return "", err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
@@ -466,6 +473,9 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub, refID, refFP, in.AgentID, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`UPDATE outbox SET quote=nullif(?,''),topic_done=?,recipient_person=(SELECT person FROM person_devices WHERE address=?) WHERE id=?`, in.Quote, in.TopicDone, env.To, env.ID); err != nil {
+			return err
+		}
 		if i == 0 {
 			if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
 				return err
@@ -507,6 +517,15 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, ?, ?, ?, ?, nullif(?, ''), nullif(?, ''), ?, ?, ?, 1, 1, ?)`,
 			first, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), stateAgentWaiting, jobKey,
 			in.Conv, in.LID, in.Origin, targetJSON(in.Target), contentHash(in), now.UnixMilli(), in.PID, now.Unix()); err != nil {
+			return err
+		}
+	}
+	if jobKey != "" {
+		in := local
+		if len(copies) > 0 {
+			in = copies[0].in
+		}
+		if _, err := tx.Exec(`UPDATE inbox SET quote=nullif(?,''),topic_done=? WHERE id=?`, in.Quote, in.TopicDone, first); err != nil {
 			return err
 		}
 	}
@@ -579,6 +598,9 @@ type ConvMessage struct {
 	Kind       string              `json:"kind"`
 	Body       string              `json:"body"`
 	ReplyTo    string              `json:"reply_to,omitempty"`
+	Quote      string              `json:"quote,omitempty"`
+	Sent       int64               `json:"sent"`
+	Delivery   string              `json:"delivery"`
 	Sub        string              `json:"sub,omitempty"`
 	Replica    bool                `json:"replica,omitempty"`
 	Origin     string              `json:"origin,omitempty"`  // the sender's assertion ("" for none)
@@ -632,6 +654,10 @@ type ConvMessage struct {
 // chain): received messages from them are this person's own, sent from
 // another device.
 func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]ConvMessage, error) {
+	persons, err := s.devicePersons()
+	if err != nil {
+		return nil, err
+	}
 	// A received request's agent_id is its local executor stamp. The
 	// request remains its human sender's turn; only replies name an author.
 	rows, err := s.db.Query(`
@@ -639,13 +665,13 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
-		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, '')
+		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, ''
 		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
 		   AND NOT `+erasedIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, '')
+		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),o.created_at,coalesce(o.recipient_person,'')
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+`
 		ORDER BY ms, 1`, conv, self, selfFP, conv, selfFP)
@@ -657,10 +683,10 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 	sent := map[string]int{} // logical id of a message sent here: its index in out
 	for rows.Next() {
 		var m ConvMessage
-		var target, to string
+		var target, to, person string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person); err != nil {
 			return nil, err
 		}
 		if target != "" {
@@ -672,7 +698,10 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		}
 		switch {
 		case m.Dir == "out":
-			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to]}
+			if person == "" {
+				person = persons[to]
+			}
+			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to], Person: person}
 			if i, ok := sent[m.LID]; ok {
 				out[i].Copies = append(out[i].Copies, c)
 				if rank(c.State) < rank(out[i].State) {
@@ -709,6 +738,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 	}
 	for i := range out {
 		out[i].Attachments = files[fileKey(out[i])]
+		out[i].Delivery = deliveryOf(out[i].Copies)
 	}
 	return out, nil
 }

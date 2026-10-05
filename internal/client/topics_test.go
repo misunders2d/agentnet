@@ -21,15 +21,16 @@ type topicVectors struct {
 	Cases        []struct {
 		Name     string `json:"name"`
 		Messages []struct {
-			ID       string `json:"id"`
-			Dir      string `json:"dir"`
-			Kind     string `json:"kind"`
-			State    string `json:"state"`
-			Status   string `json:"status"`
-			ReplyTo  string `json:"reply_to"`
-			At       int64  `json:"at"`
-			Notice   bool   `json:"notice"`
-			Selected bool   `json:"selected"`
+			ID        string `json:"id"`
+			Dir       string `json:"dir"`
+			Kind      string `json:"kind"`
+			State     string `json:"state"`
+			Status    string `json:"status"`
+			ReplyTo   string `json:"reply_to"`
+			At        int64  `json:"at"`
+			Notice    bool   `json:"notice"`
+			Selected  bool   `json:"selected"`
+			TopicDone bool   `json:"topic_done"`
 		} `json:"messages"`
 		Local topicLocal   `json:"local"`
 		Want  topicVerdict `json:"want"`
@@ -55,7 +56,7 @@ func TestTopicDerivationVectors(t *testing.T) {
 		var g []threadRow
 		for _, m := range c.Messages {
 			g = append(g, threadRow{link: link{id: m.ID, replyTo: m.ReplyTo, at: m.At}, in: m.Dir == "in", kind: m.Kind, state: m.State,
-				status: m.Status, notice: m.Notice, selected: m.Selected})
+				status: m.Status, topicDone: m.TopicDone, notice: m.Notice, selected: m.Selected})
 		}
 		if got := deriveTopic(g, c.Local, v.Now); got != c.Want {
 			t.Errorf("%s:\n got %+v\nwant %+v", c.Name, got, c.Want)
@@ -102,12 +103,12 @@ func TestTopicLifecycle(t *testing.T) {
 	}
 	eventually(t, "the result arrived", func() bool { return topicOf(t, w.alice, a).Count == 2 })
 	ta := topicOf(t, w.alice, a)
-	if ta.State != TopicDone || ta.DoneBy != DoneByAgent || ta.Conclusion != "412 boxes" || ta.ConcludedBy != bob || ta.Pending || ta.Title != "Count the boxes" || ta.ID != a {
+	if ta.State != TopicActive || ta.DoneBy != "" || ta.Conclusion != "" || ta.ConcludedBy != "" || ta.Pending || ta.Title != "Count the boxes" || ta.ID != a {
 		t.Fatalf("finished task's topic: %+v", ta)
 	}
 	// Bob wrote that result by hand (Reply): on his device it is done by
 	// him, his own words; alice cannot tell (a v1 reply does not say).
-	if tb := topicOf(t, w.bob, res.ID); tb.State != TopicDone || tb.DoneBy != DoneByYou || tb.ConcludedBy != bob || tb.Conclusion != "412 boxes" {
+	if tb := topicOf(t, w.bob, res.ID); tb.State != TopicActive || tb.DoneBy != "" || tb.ConcludedBy != "" || tb.Conclusion != "" {
 		t.Fatalf("bob's copy: %+v", tb)
 	}
 

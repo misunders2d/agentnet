@@ -1,0 +1,51 @@
+[
+  {
+    "name": "valid",
+    "fields": {},
+    "valid": true
+  },
+  {
+    "name": "malformed",
+    "fields": {
+      "quote": "not-an-id"
+    },
+    "valid": false
+  },
+  {
+    "name": "self",
+    "fields": {
+      "quote": "11111111111111111111111111111111"
+    },
+    "valid": false
+  },
+  {
+    "name": "answer",
+    "fields": {
+      "kind": "answer",
+      "status": "done",
+      "reply_to": "44444444444444444444444444444444"
+    },
+    "valid": false
+  },
+  {
+    "name": "sub",
+    "fields": {
+      "sub": "reaction"
+    },
+    "valid": false
+  },
+  {
+    "name": "status",
+    "fields": {
+      "status": "done"
+    },
+    "valid": false
+  },
+  {
+    "name": "agent",
+    "fields": {
+      "origin": "agent:codex"
+    },
+    "valid": false
+  }
+]

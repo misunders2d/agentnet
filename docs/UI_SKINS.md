@@ -340,8 +340,8 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   `archived_unread`, `latest`) and `overview.topic_list` says the routes
   below exist. A thread summary carries `state` (active, done, archived),
   `done_by` (agent, you), `conclusion` (the final reply's first line: the
-  agent's words when `done_by` is agent, label it as theirs; the person's
-  own when `done_by` is you), `concluded_by`, `pending`, `renamed`,
+  agent's words from an explicit close, labelled as theirs; a local
+  Mark done carries no conclusion), `concluded_by`, `pending`, `renamed`,
   `auto_title`, `quiet_since`; `/api/thread` adds `topic`. GET
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
   matched}`; POST `/api/topic/rename` `{peer,id,title}`, `/api/topic/done`
@@ -363,6 +363,25 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   `unknown` reason, `local.complete`, `remote.status` available | unsupported |
   unavailable with the Hub's own-usage report). Show unknown as unknown, never
   zero; the Hub's quota is the whole server's, never an allowance.
+- Messaging: DM/group messages carry `delivery`, `sent_at`, and `quote`;
+  device-thread messages carry `sent_at` and `quote`. Use `delivery` for
+  delivery ticks: each other person's best device copy, then the least
+  advanced person. Own devices count only when there are no other people.
+  `state` remains the raw stored state, never a completion claim. Copies
+  carry `own` and `person` (a display label); Details should name the person
+  and device, without routing addresses. Show `sent_at`; keep timeline order
+  and day dividers by `at` (arrival). Show an arrival note in Details when
+  the gap is at least 60 seconds.
+  `POST /api/send` and `/api/dm/send` accept `quote`, independent of
+  `reply_to` (threading/session continuity). Only an explicit `quote` gets
+  a quote card. Agent answers/results/progress have no quote card; a distant
+  request gets a compact jump link, an adjacent request no reference.
+- Human guests: `POST /api/dm/guest/check` `{conv,host}` returns
+  `{ready,needs_update:[{label,me}],offline:[],text}`. Check when the person
+  is selected; an older app may still be invited and its stored invitation
+  waits for an update. Guest views expose `needs_update` labels for waiting
+  copies. “Ask NAME to update” opens a DM and prefills a draft; sending is
+  always the person's choice. Changed keys remain refused.
 - Presence refresh: `/api/refresh`, triggered by user navigation; no polling.
 - What a conversation view says without its sentences: a DM message's
   `reply_to` names the message as this device shows it (an agent's answer

@@ -460,7 +460,7 @@ func (l *Live) agentResult(info client.ParticipationInfo, err error) (AgentView,
 		if errors.Is(err, client.ErrNoParticipation) {
 			return AgentView{}, NotFound("no such agent in a DM here")
 		}
-		return AgentView{}, Refuse(sentence(err))
+		return AgentView{}, Refuse(l.updateSentence(err))
 	}
 	l.a.NoteChange()
 	_, msgs, p, derr := l.dmOf(info.Conv)
@@ -552,7 +552,7 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 		if errors.Is(err, client.ErrNoParticipation) {
 			return Sent{}, NotFound("no such agent in a DM here")
 		}
-		return Sent{}, Refuse(sentence(err))
+		return Sent{}, Refuse(l.updateSentence(err))
 	}
 	l.a.NoteChange()
 	return Sent{ID: res.ID, State: res.State, Detail: res.Detail}, nil

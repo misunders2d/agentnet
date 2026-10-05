@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
@@ -156,7 +157,12 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	req, err := a.hub.request(ctx, "GET", "/v1/stream"+a.adQuery, nil)
+	cursor, _ := a.store.config("receipt_cursor")
+	seq, _ := strconv.ParseInt(cursor, 10, 64)
+	if seq < 0 {
+		seq = 0
+	}
+	req, err := a.hub.request(ctx, "GET", "/v1/stream"+a.adQuery+"&receipts="+strconv.FormatInt(seq, 10), nil)
 	if err != nil {
 		return false, err
 	}
@@ -297,6 +303,13 @@ func (a *Agent) sync(ctx context.Context) {
 
 func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 	switch event {
+	case "receipt":
+		var receipt protocol.ReceiptEvent
+		if err := decodeStrict([]byte(data), &receipt); err != nil || !protocol.ValidID(receipt.ID) || receipt.Seq <= 0 || (receipt.State != protocol.StateDelivered && receipt.State != protocol.StateQuarantined && receipt.State != protocol.StateExpired) {
+			a.Logf("invalid receipt event ignored")
+			return nil
+		}
+		return a.store.applyReceipt(receipt)
 	case "message":
 		var env envelope.Envelope
 		if err := json.Unmarshal([]byte(data), &env); err != nil {

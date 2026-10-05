@@ -122,7 +122,7 @@ for (const ending of ['member', 'guest']) {
   const replies = (await a.dm(conv)).messages.filter(m => m.body === 'CAROL REPLY');
   check(replies.length === 1 && replies[0].from === c.address && replies[0].kind === 'message', 'exact human provenance, ordinary kind');
   check(new TextDecoder().decode((await a.openFile(replies[0].id, 0, 'in')).bytes) === 'REPLY', 'guest-authored bytes');
-  check(replies[0].reply_to === message.lid && (await c.store.all('outbox')).filter(r => r.body === 'CAROL REPLY').every(r => r.reply_to === message.lid), 'guest reply names the parent LID on every copy, never its own copy id');
+  check(replies[0].reply_to === (await a.dm(conv)).messages.find(m => m.lid === message.lid).id && (await c.store.all('outbox')).filter(r => r.body === 'CAROL REPLY').every(r => r.reply_to === message.lid), 'guest reply names the parent LID on every copy, never its own copy id');
   const elsewhere = await a.sendDM({ conv: await a.newDM(stranger.address), body: 'OTHER CONVERSATION' });
   const carolCopy = (await c.store.all('outbox')).find(r => r.body === 'CAROL REPLY' && r.to === a.address);
   const wrong = await worldState.receive(await worldState.from(c, a, { body: 'WRONG PARENT', human: carolCopy.human, pid: invited.pid, reply_to: elsewhere.lid }), a);
@@ -166,11 +166,12 @@ for (const ending of ['member', 'guest']) {
   const next = await a.changeHuman('invite', { conv, host: c.address });
   check(next.pid !== invited.pid && next.state === 'invited', 'fresh consent for reinvitation, never revive old PID');
 }
-// Older sessions refuse without an outbox invitation or agent interpretation.
+// Older sessions keep the exact invitation locally until signed readers update.
 {
   const w = await world(); await w.caps(w.carol, [wire.CapEnv2, wire.CapPerson, wire.CapAgentIdentity, wire.CapExternalParticipation]);
-  await refuses(() => w.alice.changeHuman('invite', { conv: w.conv, host: w.carol.address }), /human participation/i);
-  check((await w.alice.store.all('outbox')).every(m => m.sub !== 'event'), 'unsupported peer receives no fallback invite');
+  const invited = await w.alice.changeHuman('invite', {conv:w.conv,host:w.carol.address});
+  const waiting=(await w.alice.store.all('outbox')).filter(m=>m.pid===invited.pid&&m.to===w.carol.address);
+  check(waiting.length>0&&waiting.every(m=>m.state==='waiting'&&m.required_cap===wire.CapHumanParticipation),'exact unsupported guest invitation waits locally, never falls back');
 }
 // End wins over delayed acceptance; selected context remains undisclosed.
 {
@@ -189,7 +190,7 @@ for (const ending of ['member', 'guest']) {
   await w.drain(w.carol); await w.drain(w.bob); await w.carol.changeHuman('decide', { pid: invite.pid, accept: true }); await w.drain(a); await w.drain(w.bob);
   const originalWrite = a.store.write.bind(a.store); let inserted = false;
   a.store.write = async (ops, checks) => { if (!inserted && ops.some(o => o.s === 'outbox' && o.v?.human)) { inserted = true; await a.changeHuman('end', { pid: invite.pid }); } return originalWrite(ops, checks); };
-  await refuses(() => a.sendDM({ conv: w.conv, body: 'RACING LOCAL END', files: [{ name: 'race.txt', size: 4, bytes: new TextEncoder().encode('RACE') }] }), /storage changed/i);
+  await refuses(() => a.sendDM({ conv: w.conv, body: 'RACING LOCAL END', files: [{ name: 'race.txt', size: 4, bytes: new TextEncoder().encode('RACE') }] }), /ended or is held/i);
   check(!(await a.store.all('outbox')).some(m => m.body === 'RACING LOCAL END'), 'no captured ordinary copy after authority read-set race');
 }
 // Other accepted senders learn only the signed end; their previously captured
@@ -269,7 +270,7 @@ for (const ending of ['original', 'self']) {
   const got = (await c.dm(conv)).messages.find(m => m.body === 'GUEST FIRST');
   check(got && new TextDecoder().decode((await c.openFile(got.id, 0, 'in')).bytes) === 'FIRST', 'other guest receives text and exact file bytes');
   await c.sendDM({ conv, pid: cp.pid, reply_to: got.id, body: 'GUEST REPLY' }); await w.drain(d);
-  check((await d.dm(conv)).messages.find(m => m.body === 'GUEST REPLY')?.reply_to === first.lid, 'guest-to-guest reply names the parent LID');
+  check((await d.dm(conv)).messages.find(m => m.body === 'GUEST REPLY')?.reply_to === (await d.dm(conv)).messages.find(m=>m.lid===first.lid).id, 'guest-to-guest reply names the parent LID');
   const bAcc = (await sharedBy(b, c, dp.pid, 'accept'))[0], aAcc = (await sharedBy(a, c, dp.pid, 'accept'))[0];
   await b.store.write([{ s: 'outbox', k: bAcc.id, v: { ...bAcc, state: 'queued' } }]); // a lost ACK: delivery unconfirmed
   await a.store.write([{ s: 'outbox', k: aAcc.id, v: { ...aAcc, state: 'queued' } }]);
@@ -286,6 +287,64 @@ for (const ending of ['original', 'self']) {
   check((await c.dm(conv)).guests.find(g => g.pid === dp.pid)?.state === 'dismissed', 'replayed acceptance cannot undo the end');
   const after = await c.sendDM({ conv, pid: cp.pid, body: 'AFTER OTHER LEFT' });
   check((await c.store.all('outbox')).filter(r => r.lid === after.lid).every(r => r.to !== d.address), 'later guest turn excludes the departed guest');
+}
+// P3 review: a pushed receipt during the profile read is delivery progress,
+// not a change to the captured human authority.
+{
+  const w = await world(), {alice:a,bob:b,carol:c,conv} = w;
+  const invited = await a.changeHuman('invite',{conv,host:c.address}); await w.accept(invited.pid);
+  await a.sendDM({conv,body:'FIRST RACE TURN'});
+  const first = (await a.store.all('outbox')).find(r=>r.body==='FIRST RACE TURN'&&r.to===c.address);
+  const profile = a.profile.bind(a); let fired = false;
+  a.profile = async address => {
+    if (!fired) { fired=true; await a.dispatch('receipt',JSON.stringify({id:first.id,state:'delivered',seq:1})); }
+    return profile(address);
+  };
+  await a.sendDM({conv,body:'SECOND RACE TURN'});
+  check(fired && (await a.store.get('outbox',first.id)).state==='delivered','receipt injected during profile read');
+  check((await a.store.all('outbox')).filter(r=>r.body==='SECOND RACE TURN').length===2,'exactly one human turn commits and sends');
+  // An actual dependency change still causes bounded pre-commit rechecking.
+  let changed = false;
+  a.profile = async address => {
+    if (!changed) {
+      changed=true;const row=await a.store.get('outbox',first.id);
+      await a.store.write([{s:'outbox',k:first.id,v:{...row,authority_probe:true}}]);
+    }
+    return profile(address);
+  };
+  await a.sendDM({conv,body:'RECHECKED TURN'});
+  check(changed && (await a.store.all('outbox')).filter(r=>r.body==='RECHECKED TURN').length===2,'authority conflict retries before storing, never duplicates');
+}
+// Plain-DM quotes are logical on every device, even when each copy id differs.
+{
+  const w=await world(),{alice:a,bob:b,conv}=w;
+  const ap=await w.sibling(a,'alice/phone'),bp=await w.sibling(b,'bob/phone');
+  const original=await a.sendDM({conv,body:'MULTIDEVICE PARENT'});
+  for(const e of [b,ap,bp])await w.drain(e);
+  const parent=(await b.dm(conv)).messages.find(m=>m.lid===original.lid);
+  const quoted=await b.sendDM({conv,body:'MULTIDEVICE QUOTE',quote:parent.id});
+  for(const e of [a,ap,bp]){
+    await w.drain(e);const view=await e.dm(conv),q=view.messages.find(m=>m.lid===quoted.lid),p=view.messages.find(m=>m.lid===original.lid);
+    check(q&&p&&q.quote===p.id,'quote resolves on '+e.address);
+  }
+}
+// Only the exact invited host's connectivity matters. Member phones catch up.
+{
+  const w=await world(),{alice:a,bob:b,carol:c,conv}=w;
+  const phone=await w.sibling(a,'alice/phone');
+  const profile=a.profile.bind(a);
+  a.profile=async address=>({...await profile(address),live:address!==phone.address});
+  const v=await a.checkHuman({conv,host:c.address});
+  check(v.ready&&v.offline.length===0&&!v.text.includes('reconnect'),'offline member device does not delay a live guest');
+  await w.caps(phone,[wire.CapEnv2,wire.CapPerson]);
+  const own=await a.checkHuman({conv,host:c.address});
+  check(own.needs_update.some(p=>p.role==='me'&&p.me)&&own.text.includes('your other devices')&&!own.text.includes('before joining'),'own-device wording does not invite self');
+  await w.caps(phone);await w.caps(b,[wire.CapEnv2,wire.CapPerson]);
+  const member=await a.checkHuman({conv,host:c.address});
+  check(member.needs_update.some(p=>p.role==='member')&&member.text.includes('keep this chat working with a guest')&&!member.text.includes('before joining'),'existing-member wording');
+  await w.caps(b);await w.caps(c,[wire.CapEnv2,wire.CapPerson]);
+  const guest=await a.checkHuman({conv,host:c.address});
+  check(guest.needs_update.some(p=>p.role==='guest')&&guest.text.includes('before joining'),'guest wording');
 }
 console.log('human engine isolated lifecycle checks passed: ' + checks);
 

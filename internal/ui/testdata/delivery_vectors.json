@@ -1,0 +1,217 @@
+[
+  {
+    "name": "no copies",
+    "copies": [],
+    "want": ""
+  },
+  {
+    "name": "own device ignored",
+    "copies": [
+      {
+        "state": "custody",
+        "person": "self",
+        "own": true,
+        "to": "self/phone"
+      },
+      {
+        "state": "delivered",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "delivered"
+  },
+  {
+    "name": "best device for peer",
+    "copies": [
+      {
+        "state": "custody",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      },
+      {
+        "state": "delivered",
+        "person": "bob",
+        "own": false,
+        "to": "bob/phone"
+      }
+    ],
+    "want": "delivered"
+  },
+  {
+    "name": "worst other person",
+    "copies": [
+      {
+        "state": "delivered",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      },
+      {
+        "state": "custody",
+        "person": "carol",
+        "own": false,
+        "to": "carol/phone"
+      }
+    ],
+    "want": "custody"
+  },
+  {
+    "name": "only own devices",
+    "copies": [
+      {
+        "state": "custody",
+        "person": "self",
+        "own": true,
+        "to": "bob/laptop"
+      },
+      {
+        "state": "delivered",
+        "person": "self",
+        "own": true,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "delivered"
+  },
+  {
+    "name": "queued",
+    "copies": [
+      {
+        "state": "queued",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "queued"
+  },
+  {
+    "name": "waiting",
+    "copies": [
+      {
+        "state": "waiting",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "waiting"
+  },
+  {
+    "name": "quarantine",
+    "copies": [
+      {
+        "state": "quarantined",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "quarantined"
+  },
+  {
+    "name": "expiry",
+    "copies": [
+      {
+        "state": "expired",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "expired"
+  },
+  {
+    "name": "failure",
+    "copies": [
+      {
+        "state": "failed",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "failed"
+  },
+  {
+    "name": "unknown local",
+    "copies": [
+      {
+        "state": "not_delivered",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "not_delivered"
+  },
+  {
+    "name": "receiver local",
+    "copies": [
+      {
+        "state": "receiver_waiting",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      }
+    ],
+    "want": "receiver_waiting"
+  },
+  {
+    "name": "unknown devices separate",
+    "copies": [
+      {
+        "state": "delivered",
+        "person": "",
+        "own": false,
+        "to": "unknown/a"
+      },
+      {
+        "state": "custody",
+        "person": "",
+        "own": false,
+        "to": "unknown/b"
+      }
+    ],
+    "want": "custody"
+  },
+  {
+    "name": "tied receipt states",
+    "copies": [
+      {
+        "state": "quarantined",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      },
+      {
+        "state": "expired",
+        "person": "carol",
+        "own": false,
+        "to": "carol/phone"
+      }
+    ],
+    "want": "expired"
+  },
+  {
+    "name": "peer delivery survives failed copy",
+    "copies": [
+      {
+        "state": "failed",
+        "person": "bob",
+        "own": false,
+        "to": "bob/laptop"
+      },
+      {
+        "state": "delivered",
+        "person": "bob",
+        "own": false,
+        "to": "bob/phone"
+      }
+    ],
+    "want": "delivered"
+  }
+]

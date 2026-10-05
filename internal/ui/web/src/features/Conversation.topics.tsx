@@ -297,11 +297,10 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
       <div className="flex flex-wrap items-center gap-2">
         {archived ? <Tag tone="muted"><IconArchive size={12} stroke={2.6} aria-hidden="true" />Archived</Tag> : <Tag tone="ok"><IconCircleCheck size={12} stroke={2.6} aria-hidden="true" />Done</Tag>}
         {t.doneBy === "you" && !t.conclusion && <span className="text-[13px] text-text-2">You marked it done on this device.</span>}
-        {t.doneBy === "you" && t.conclusion && !archived && <span className="text-[13px] text-text-2">You answered it.</span>}
-        {t.doneBy === "agent" && !archived && <span className="text-[13px] text-text-2">{agent} finished it.</span>}
+        {t.doneBy === "agent" && !archived && <span className="text-[13px] text-text-2">{agent} closed this topic.</span>}
       </div>
       {t.conclusion && (
-        <p className="mt-2 text-[15px]"><span className="font-bold">{t.doneBy === "you" ? "Your answer:" : agent + "’s conclusion:"}</span> <span className="text-text-2">{t.conclusion}</span></p>
+        <p className="mt-2 text-[15px]"><span className="font-bold">{agent + "’s conclusion:"}</span> <span className="text-text-2">{t.conclusion}</span></p>
       )}
       {archived && (
         <p className="mt-2 text-[14px] text-text-2">

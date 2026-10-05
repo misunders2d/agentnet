@@ -85,8 +85,10 @@ func TestLiveRefreshAsksAboutHeldCopiesBehindOthers(t *testing.T) {
 		}
 		return ""
 	}
-	if got := stateOf(bob.Address); got != protocol.StateCustody {
-		t.Fatalf("bob's copy before refresh = %q", got)
+	wait("bob receipt pushed", func() bool { return stateOf(bob.Address) == protocol.StateDelivered })
+	// Simulate the durable custody row left by an older relay, behind a failed copy.
+	if _, err = db.Exec("UPDATE outbox SET state='custody' WHERE conv=? AND recipient=?", conv, bob.Address); err != nil {
+		t.Fatal(err)
 	}
 	wait("bob's copy refreshed", func() bool {
 		if _, e := l.Refresh(conv); e != nil {

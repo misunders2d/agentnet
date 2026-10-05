@@ -82,6 +82,9 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [error, setError] = useState("");
 
   const route: Route | null = c && t ? routeFor(c, t) : null;
+  const [guestCheck,setGuestCheck]=useState<T.GuestCheck|null>(null);
+  const [checkError,setCheckError]=useState("");
+  useEffect(()=>{let alive=true;setGuestCheck(null);setCheckError("");if(route==="guest"&&c?.person?.address&&t)store.api.checkGuest({conv:t.id,host:c.person.address}).then(v=>{if(alive)setGuestCheck(v);}).catch(e=>{if(alive)setCheckError(errorText(e));});return()=>{alive=false;};},[route,c?.key,t?.id]);
   const list = useMemo(() => (t ? shareable(t).filter((m) => (route === "group" ? !!m.group_ref : true)) : []), [t, route]);
   const cap = route ? capFor(route) : 200;
   const max = Math.min(cap, list.length);
@@ -106,7 +109,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   }, [p, query]);
 
   async function bring() {
-    if (!c || !t || !route || busy) return;
+    if (!c || !t || !route || busy || route==="guest"&&!guestCheck) return;
     setBusy(true);
     setError("");
     let v: T.AgentView | undefined;
@@ -220,7 +223,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     </>
   );
 
-  const ready = !!c && !c.unavailable && !tooMany && !needFiles && !offline && !busy;
+  const ready = !!c && !c.unavailable && !tooMany && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck);
   const footer = t && allowed ? (
     <div>
       {sent.length > 0 && !error && (
@@ -229,6 +232,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           <span>Invited {joinNames(sent.map((s) => s.name))}. {sent.length === 1 ? "They become a member" : "Each becomes a member"} once they accept.{c ? "" : " Choose someone else, or you’re done."}</span>
         </p>
       )}
+      {route === "guest" && <p role="status" className="text-sm text-muted">{checkError || guestCheck?.text || (!guestCheck ? "Checking their app…" : "")}</p>}
       {error && <p role="alert" className="mb-2 rounded-xl bg-danger-bg px-3 py-2 text-[14px] font-semibold text-danger">{error}</p>}
       {offline && <p role="status" className="mb-2 text-[13px] font-semibold text-guest-ink">You’re offline. Invitations go out once you’re connected again.</p>}
       {needFiles && !offline && <p role="status" className="mb-2 text-[13px] font-semibold text-text-2">These messages carry {plural(files, "file")}: tick “Also share” above, or pick messages without files.</p>}
@@ -237,7 +241,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       ) : (
         <Button variant="act" size="lg" disabled={!ready} onClick={bring} className="min-h-14 text-[17px]"
           icon={c ? <CandidateAvatar c={c} size={28} /> : undefined}>
-          {!c ? "Choose who to bring in" : busy ? "Bringing " + shownName + " in…" : "Bring " + shownName + " in" + (now ? " now" : "")}
+          {!c ? "Choose who to bring in" : busy ? "Bringing " + shownName + " in…" : route === "guest" && guestCheck?.needs_update?.some(p => p.role === "guest") ? "Invite " + shownName + " — waits for update" : "Bring " + shownName + " in" + (now ? " now" : "")}
         </Button>
       )}
       {c && route && <p className="mt-2.5 pb-1 text-center text-[13px] font-semibold leading-snug text-muted">{consentText(c, route)}</p>}

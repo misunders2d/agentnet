@@ -21,17 +21,14 @@ thousands of topics.
 
 ## Lifecycle: active → done → archived
 
-- **Done by the agent:** the topic's latest request (question or task) got
-  its final answer or result with status `done`, that reply is the topic's
-  last message, and nothing in the topic is pending. Its conclusion is the
-  first line of that reply, always shown labelled as the agent's words.
-- **Answered by the person:** on the device that answered, a final reply
-  the person wrote by hand (`Reply` takes the request over: state `manual`;
-  in the browser device, which runs no agent, every reply) makes the topic
-  done by the person (`done_by` you), and the reply is shown as *their*
-  answer, never the agent's. **Known limit:** the device that asked cannot
-  tell: a v1 reply does not say whether a person or the agent wrote it, so
-  there it reads as the agent's conclusion.
+- **Done by the agent:** the last message is a successful answer or result
+  carrying `topic_done: true`, and nothing in the topic is pending. The
+  worker sets this only from an explicit final `topic: done` line on a
+  nonempty successful reply. That line and an optional `reaction:` line
+  may appear in either order. Its conclusion is the reply's first line,
+  labelled as the agent's words. An ordinary final answer keeps the topic active.
+- **Answered by hand:** a person's reply keeps the topic active. It never
+  becomes an agent conclusion and never implies a local Mark done.
 - **Done by the person:** "Mark done". "Reopen" makes a done (or archived)
   topic active again.
 - **Not done:** a failed result, a result that needs a person, a progress
@@ -45,7 +42,7 @@ thousands of topics.
   topics → Archived and open normally, saying they are archived. **Nothing
   is ever deleted by archiving.**
 - **Any new message makes a topic active again** (it ends any Mark done or
-  Reopen); the agent's next final answer can make it done again. A mark
+  Reopen); the agent's next explicit close can make it done again. A mark
   covers only the messages the page showed when the person chose it
   (`count`): one that arrived meanwhile keeps the topic active, and the
   page says so.

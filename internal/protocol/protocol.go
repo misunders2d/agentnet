@@ -168,6 +168,15 @@ type RevokeRequest struct {
 }
 
 // Receipt reports what the Hub can prove about a message.
+const StreamReceipts = "receipts"
+const ReceiptBatch = 100
+
+type ReceiptEvent struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+	Seq   int64  `json:"seq"`
+}
+
 type Receipt struct {
 	ID    string `json:"id"`
 	State string `json:"state"`          // one of the State constants

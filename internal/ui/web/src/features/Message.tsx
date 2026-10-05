@@ -80,9 +80,11 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
 
   const text = useMemo(() => askChip(shownText(m), m, ctx), [m, ctx]);
   const time = <Meta m={m} who={who} />;
-  const parent = m.reply_to ? all.find((x) => x.id === m.reply_to || (!isThreadMsg(x) && x.lid === m.reply_to)) : undefined;
-  // An agent's answer right under its request needs no quote of it.
-  const quote = !!m.reply_to && (parent ? !(isReply(m) && adjacent(all, parent, m)) : !isReply(m));
+  const parent = referenceParent(all,m.quote);
+  const quote=!!m.quote;
+  const request=referenceParent(all,m.reply_to);
+  const output=isReply(m)||(isThreadMsg(m)&&m.status==="progress")||(!isThreadMsg(m)&&m.verified_agent&&m.kind==="message");
+  const link=output&&request&&!adjacent(all,request,m);
 
   const shape = who.agent ? "rounded-xl bg-agent text-ink"
     : who.mine ? "rounded-[20px] bg-mine text-mine-ink" + (last ? " rounded-br-md" : "")
@@ -97,6 +99,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
           {who.agent ? <AgentAvatar seed={who.seed} size={32} guest={who.guest} device={who.device} /> : <PersonAvatar name={who.name} seed={who.seed} size={32} guest={who.guest} />}
         </span>
       )}
+      {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
       {quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>
@@ -170,7 +173,7 @@ function NameLine({ m, who }: { m: AnyMsg; who: Who }) {
 
 /** Meta: the time (and for your messages a delivery tick) at the end of the text. */
 function Meta({ m, who }: { m: AnyMsg; who: Who }) {
-  const s = m.state || "";
+  const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
   const tick = !who.mine || who.agent || excerpt(m) ? null
     : s === "delivered" ? <IconChecks size={15} className="text-ok-ink" />
       : s === "custody" ? <IconCheck size={15} />
@@ -180,7 +183,7 @@ function Meta({ m, who }: { m: AnyMsg; who: Who }) {
   return (
     <span className="float-right ml-2.5 mt-[0.5em] inline-flex items-center gap-1 text-[12px] leading-none text-muted tnum">
       {m.edited && !m.deleted && <span>edited</span>}
-      <time dateTime={m.at}>{timeOf(m.at)}</time>
+      <time dateTime={m.sent_at || m.at}>{new Date(m.sent_at || m.at).toDateString()!==new Date(m.at).toDateString()?new Date(m.sent_at || m.at).toLocaleDateString([], {month:"short",day:"numeric"})+" · ":""}{timeOf(m.sent_at || m.at)}</time>
       {tick && <span aria-hidden="true" className="-mr-0.5">{tick}</span>}
       {tick && <span className="sr-only">{deliveryWord(s)}</span>}
     </span>
@@ -220,7 +223,7 @@ function Under({ m, ctx, all, who, status, onDetails }: { m: AnyMsg; ctx: Ctx; a
     );
   }
   if (!who.mine || who.agent || m.deleted) return null;
-  const s = m.state || "";
+  const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
   if (!status && !problem(s)) return null;
   const word = deliveryWord(s);
   if (!word) return null;
@@ -364,3 +367,11 @@ function mentionFor(ctx: Ctx): RenderMention {
   };
 }
 
+
+function referenceParent(all: AnyMsg[], id?: string) {
+  if (!id) return undefined;
+  const exact = all.find(m => m.id === id);
+  if (exact) return exact;
+  const logical = all.filter(m => !isThreadMsg(m) && m.lid === id);
+  return logical.length === 1 ? logical[0] : undefined;
+}

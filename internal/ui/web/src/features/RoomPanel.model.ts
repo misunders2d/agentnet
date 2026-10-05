@@ -227,3 +227,13 @@ export const plural = (n: number, word: string) => n + " " + word + (n === 1 ? "
 
 /** span joins two times, once when they read the same. */
 export const span = (a: string, b: string) => (a === b ? a : a + "–" + b);
+
+/** Labels describe a wait; only a unique known person can be its DM target. */
+export function guestUpdatePeople(waiting: string[], candidates: (T.PersonView | null | undefined)[], self?: string) {
+  const people = [...new Map(candidates.filter((p): p is T.PersonView => !!p).map(p => [p.person || p.address, p])).values()];
+  return people.filter(p => p.person !== self && p.state !== "self" && waiting.includes(p.label) && people.filter(x => x.label === p.label).length === 1);
+}
+
+export function guestUpdateDraft(member: boolean) {
+  return (member ? "Could you update AgentNet? Our chat needs it for a guest to join." : "Could you update AgentNet? I'd like to bring you into a chat.") + " Get AgentNet: https://github.com/misunders2d/agentnet/releases";
+}

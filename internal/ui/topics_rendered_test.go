@@ -64,6 +64,20 @@ func TestTopicsRendered(t *testing.T) {
 		if _, err := bob.Reply(ctx, task, fmt.Sprintf("%d bath sets\nall dry", 410+i+1)); err != nil {
 			t.Fatal(err)
 		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			topic, err := bob.TopicOf(task)
+			if err == nil && topic.Count == 2 {
+				if _, err = bob.MarkTopicDone(alice.Address, task, 2); err != nil {
+					t.Fatal(err)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("local manual reply was not stored")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	var s *Server
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Handler().ServeHTTP(w, r) }))

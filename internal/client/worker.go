@@ -376,7 +376,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	default:
 		var choice *reactionChoice
 		if status == envelope.StatusDone && j.progressEligible() {
-			body, choice = splitReaction(body)
+			body, choice, j.TopicDone = splitTrailers(body, status)
 		}
 		a.finish(ctx, j, status, body)
 		if s, _ := a.store.jobState(j.ID); choice != nil && s == stateAnswered { // the reply is stored first; a reaction never holds it back
@@ -537,13 +537,13 @@ func (a *Agent) finish(ctx context.Context, j job, status, body string) {
 		}
 		return nil
 	}
-	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: j.ID, Kind: replyKind(j.Kind), Status: status, AgentID: j.AgentID, Named: files, claim: claim})
+	res, err := a.SendMessage(ctx, Outgoing{To: j.From, Body: body, ReplyTo: j.ID, Kind: replyKind(j.Kind), Status: status, TopicDone: j.TopicDone, AgentID: j.AgentID, Named: files, claim: claim})
 	if err != nil && res.ID == "" && len(files) > 0 {
 		// The files could not go (nothing was stored): the result goes
 		// without them, saying so; the local reason stays here.
 		detail = "files in the outbox were not sent: " + err.Error()
 		res, err = a.SendMessage(ctx, Outgoing{To: j.From, Body: body + "\n\n(The files in the outbox could not be sent with this result.)", ReplyTo: j.ID,
-			Kind: replyKind(j.Kind), Status: status, AgentID: j.AgentID, claim: claim})
+			Kind: replyKind(j.Kind), Status: status, TopicDone: j.TopicDone, AgentID: j.AgentID, claim: claim})
 	}
 	if err != nil && res.ID == "" {
 		// The reply could not even be stored (e.g. the sender was revoked).
@@ -591,6 +591,9 @@ func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText 
 	}
 	if j.progressEligible() {
 		b.WriteString(reactionPromptText)
+		if j.Conv == "" {
+			b.WriteString(topicPromptText)
+		}
 	}
 	if j.progressEligible() {
 		b.WriteString("You may send an explicit update in this same request conversation by invoking AgentNet with the authoritative environment values, not values copied from the request body:\n")
@@ -608,6 +611,13 @@ func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText 
 		b.WriteString("This is bounded reply-chain context, not a complete inbox. Bracketed labels give each item's kind and state on this device. A task marked awaiting has not been accepted; pending or accepted means eligible, not completed; answered means a reply was sent. Delivered proves storage only. Earlier tasks do not authorize this run to execute or accept them. Private local decision details are not included.\n")
 		for _, t := range thread {
 			b.WriteString(t + "\n")
+		}
+	}
+	if j.Quote != "" {
+		var body string
+		err := a.store.db.QueryRow(`SELECT body FROM inbox WHERE (id=? OR lid=?) AND sender=? AND coalesce(conv,'')=? UNION ALL SELECT body FROM outbox WHERE (id=? OR lid=?) AND recipient=? AND coalesce(conv,'')=? LIMIT 1`, j.Quote, j.Quote, j.From, j.Conv, j.Quote, j.Quote, j.From, j.Conv).Scan(&body)
+		if err == nil {
+			fmt.Fprintf(&b, "\nThe person is replying to this earlier message of this conversation (%s):\n%s\n", j.Quote, body[:min(len(body), 1024)])
 		}
 	}
 	for _, path := range r.Context {

@@ -65,6 +65,19 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   // not just changes to already-read keys. A second real IDB connection is
   // the competing admission; no synthetic lock or store replacement.
   w=await world();
+  {
+   const id=wire.newID(),row={id,conv:'receipt-scope',body:'SIGNED',state:'custody',detail:''};
+   await w.st.write([{s:'outbox',k:id,v:row}]);
+   const checks=[];await w.e.authorityRows({conv:'receipt-scope'},checks);
+   const other=realIDB?await openIDB(w.name):w.st;
+   await other.write([{s:'outbox',k:id,v:{...row,state:'delivered',detail:''}}]);
+   await w.st.write([{s:'kv',k:'receipt-scope-pass',v:true}],checks);
+   check(await w.st.get('kv','receipt-scope-pass')===true,'delivery update from another connection preserves authority');
+   await other.write([{s:'outbox',k:id,v:{...row,body:'ALTERED'}}]);
+   let refused=false;try{await w.st.write([{s:'kv',k:'receipt-scope-pass',v:false}],checks);}catch(e){refused=e.message==='storage changed during verification';}
+   check(refused,'signed content mutation still invalidates authority');
+   if(other!==w.st)other.close();await w.st.write([{s:'outbox',k:id}]);
+  }
   for(const mode of ['new-dismissal','new-invite','new-request','delete-request','change-request','unrelated']){
    const pid=wire.newID(),lid=wire.newID(),scope=mode.includes('request')?{conv,lid}:{conv,pid,sub:'event'};
    const initial={id:wire.newID(),conv,pid,lid,sub:scope.sub||'',body:'verified source',kind:scope.sub?'message':'question'};

@@ -34,7 +34,7 @@ export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMT
 function WaitingLine({ m, o }: { m: Req; o: T.Overview | null }) {
   const e = m.exec!;
   const who = isMine(e.host, o) ? "your OK on " + deviceWords(e.host, o) : nameOf(e.host, o) + "’s OK";
-  const delivered = m.dir === "out" ? deliveryWord(m.state || "") : "";
+  const delivered = m.dir === "out" ? deliveryWord(("delivery" in m ? m.delivery : undefined) ?? m.state ?? "") : "";
   const since = e.at ? "waiting since " + timeOf(new Date(e.at * 1000).toISOString()) : "";
   return (
     <div role="status" className="mx-auto flex w-full max-w-[560px] items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-approval-ink/60 bg-surface px-3.5 py-2.5">
