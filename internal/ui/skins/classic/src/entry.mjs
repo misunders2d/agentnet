@@ -4621,7 +4621,7 @@ function storageArea(a) {
 function storageRemote(r) {
   if (!r || r.status !== "available" || !r.usage) {
     return el("div", { class: "storage-block" }, el("h4", {}, "On your server"),
-      el("p", { class: "hint" }, r && r.status === "unsupported" ? (r.reason || "This server does not report storage usage.")
+      el("p", { class: "hint" }, r && r.status === "unsupported" ? (r.reason || "The workspace’s server does not report storage usage.")
         : (r && r.reason) || "Not known now: your server did not answer. What is shown above is this device's own view."));
   }
   const u = r.usage, own = u.own || {}, stored = own.stored || {}, inc = own.incomplete || {};
