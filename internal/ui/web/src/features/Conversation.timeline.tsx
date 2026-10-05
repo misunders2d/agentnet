@@ -58,12 +58,15 @@ export function Timeline({ ctx, messages, focus, selected, onSelect, empty, foot
 
   useEffect(() => { if (focus && seen.current && box.current) flash(box.current, focus, true); }, [focus]);
 
-  // Pictures, reactions and the typing line change the height: stay pinned.
+  // Pictures, reactions and the typing line change the height, and a
+  // phone's keyboard (or a growing message box) shrinks the view: the
+  // latest message stays in sight while you are at the bottom.
   useEffect(() => {
     const el = box.current, content = inner.current;
     if (!el || !content) return;
     const ro = new ResizeObserver(() => { if (atBottom.current) el.scrollTop = el.scrollHeight; });
     ro.observe(content);
+    ro.observe(el);
     return () => ro.disconnect();
   }, []);
 

@@ -20,6 +20,7 @@ export async function mount(root: HTMLElement, host: Host): Promise<void> {
   root.classList.add("an-root");
   root.lang = navigator.language || "en";
   const app = document.createElement("div");
+  app.className = "an-app"; // the frame's box: as tall as root (styles.css)
   const portals = document.createElement("div");
   portals.className = "an-portals";
   root.append(app, portals);
