@@ -33,6 +33,10 @@ var comicParity = []struct {
 	{"3 trust a changed key", "act trust", `do: "trust"`, `do: "trust"`},
 	{"4 held-back list", "overview.quarantine", `\.quarantine\b`, `\.quarantine\b`},
 	{"5 answer questions automatically", "act approve", `do: "approve"`, `do: "approve"`},
+	// Before they ask: Comic's request card has its own "Always answer", so
+	// the act verb alone does not pin these two ways in.
+	{"5 answer questions automatically before they ask (chat menu)", "act approve", `setGrant\("approve"\)`, `do: "approve"`},
+	{"5 answer questions automatically before they ask (Permissions)", "act approve", `what: "approve"`, `do: "approve"`},
 	{"5 stop automatic answers", "act unapprove", `do: "unapprove"`, `do: "unapprove"`},
 	{"5 stop tasks without asking", "act revoke_tasks", `do: "revoke_tasks"`, `do: "revoke_tasks"`},
 	{"6 tasks without asking on agent invite", "POST /api/dm/agent/invite tasks_from", `tasks_from: [A-Za-z]`, `tasks_from: [A-Za-z]`},
