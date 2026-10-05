@@ -28,6 +28,7 @@ export interface Helper {
   who: string;             // the invite sheet's key for them, to bring them back ("p:<person>", "a:<host>#<agent id>")
   name: string;
   agent: boolean;
+  member?: boolean;
   seed: string;
   device?: DeviceKind;     // an agent's device badge
   sub: string;             // "since 10:33", "Waiting for your OK", "Waiting for Anna to join"
@@ -46,7 +47,7 @@ export function helpers(ctx: Ctx, run: <R>(fn: (a: Api) => Promise<R>) => Promis
     if (a.state !== "active" && a.state !== "invited") continue;
     const since = joined(a.pid) || a.invited;
     out.push({
-      pid: a.pid, who: "a:" + a.host.address + "#" + (a.agent_id || ""), name: agentLabel(a, ctx), agent: true, seed: a.agent_id || a.host.address, device: deviceKind(a.host.address), active: a.state === "active",
+      pid: a.pid, who: "a:" + a.host.address + "#" + (a.agent_id || ""), name: agentLabel(a, ctx), agent: true, member:!!a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address), active: a.state === "active",
       // An agent joins once its owner says OK (the room panel's words).
       sub: a.state === "active" ? "since " + timeOf(since) : a.host_here ? "Waiting for your OK" : "Waiting for " + personName(a.host) + "’s OK",
       dismiss: a.can_dismiss ? () => run((x) => x.dismissAgent(a.pid)) : undefined, review: a.can_decide,
@@ -66,13 +67,18 @@ export function helpers(ctx: Ctx, run: <R>(fn: (a: Api) => Promise<R>) => Promis
 
 /** headcount: "2 guests", "1 guest · 1 invited" — someone invited is not a guest yet. */
 export function headcount(hs: Helper[]): string {
+  const members=hs.filter(h=>h.member&&h.active).length;
+  if(members) {
+    const rest=hs.filter(h=>!h.member||!h.active);
+    return members+(members===1?" agent":" agents")+(rest.length?" · "+headcount(rest):"");
+  }
   const here = hs.filter((h) => h.active).length, asked = hs.length - here;
   return [here && here + (here === 1 ? " guest" : " guests"), asked && asked + " invited"].filter(Boolean).join(" · ");
 }
 
 /** HelperTag: GUEST while in the room; INVITED (yellow when it waits for you) until then. */
 function HelperTag({ h }: { h: Helper }) {
-  return h.active ? <Tag tone="guest">Guest</Tag> : <Tag tone={h.review ? "act" : "muted"}>Invited</Tag>;
+  return h.active ? h.member ? <Tag>Agent</Tag> : <Tag tone="guest">Guest</Tag> : <Tag tone={h.review ? "act" : "muted"}>Invited</Tag>;
 }
 
 // ---- presence -------------------------------------------------------------------------
@@ -275,7 +281,7 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
   };
   return (
     <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b-[1.5px] border-outline bg-guest-bg pl-3 pr-2">
-      {h.agent ? <AgentAvatar seed={h.seed} size={32} guest device={h.device} mood={h.active ? "neutral" : "waiting"} /> : <PersonAvatar name={h.name} seed={h.seed} size={32} guest />}
+      {h.agent ? <AgentAvatar seed={h.seed} size={32} guest={!h.member} device={h.device} mood={h.active ? "neutral" : "waiting"} /> : <PersonAvatar name={h.name} seed={h.seed} size={32} guest />}
       <span className="min-w-0 flex-1 leading-tight">
         <span className="flex items-center gap-1.5"><b className="truncate text-[14px] font-bold">{h.name}</b><HelperTag h={h} /></span>
         <span className={"block truncate text-[13px] " + (!h.active && h.review ? "font-semibold text-approval-ink" : "text-text-2")}>{h.sub}</span>
@@ -283,7 +289,7 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
       {h.review ? <Button size="sm" variant="act" onClick={() => store.setPanel(true)}>Review</Button>
         : h.dismiss && (
           <Button size="sm" variant="outline" icon={<IconHandStop size={18} />} disabled={busy} onClick={dismiss}
-            title="Stops new messages. What was already shared stays with them.">Dismiss</Button>
+            title="Stops new messages. What was already shared stays with them.">{h.member ? "Remove agent" : "Dismiss"}</Button>
         )}
     </div>
   );

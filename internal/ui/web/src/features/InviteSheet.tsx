@@ -91,7 +91,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [guestCheck,setGuestCheck]=useState<T.GuestCheck|null>(null);
   const [checkError,setCheckError]=useState("");
   useEffect(()=>{let alive=true;setGuestCheck(null);setCheckError("");if(route==="guest"&&c?.person?.address&&t)store.api.checkGuest({conv:t.id,host:c.person.address}).then(v=>{if(alive)setGuestCheck(v);}).catch(e=>{if(alive)setCheckError(errorText(e));});return()=>{alive=false;};},[route,c?.key,t?.id]);
-  const list = useMemo(() => (t ? shareable(t).filter((m) => (route === "group" ? !!m.group_ref : true)) : []), [t, route]);
+  const list = useMemo(() => (t ? shareable(t).filter((m) => (route === "group" || t.kind === "group" ? !!m.group_ref : true)) : []), [t, route]);
   const cap = route ? capFor(route) : 200;
   const max = Math.min(cap, list.length);
   const count = Math.min(recent, max);
@@ -106,9 +106,9 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
 
   const shownName = c ? (c.kind === "agent" ? callName(c.name) : c.name) : "";
   const Who = c ? c.name : "They";
-  const after = route === "agent" ? "Then only what someone asks it here." : route === "group" ? "Then everything new: they become a member." : "Then new messages while they’re here.";
+  const after = route === "agent" ? (t?.kind === "group" ? "Then new group turns while it is a member; its owner decides what runs." : "Then only what someone asks it here.") : route === "group" ? "Then everything new: they become a member." : "Then new messages while they’re here.";
   const offline = conn !== "live";
-  const now = route === "agent" && !!c?.mine; // your own agent joins in this one step
+  const now = route === "agent" && !!c?.mine && !c.alreadyHere; // your own agent joins in this one step
 
   const people = useMemo(() => (t && o ? taskPeople(t, o) : []), [t, o]);
   const chosenTasks = c && tasksFor?.cand === c.key ? tasksFor.chosen : new Set(c?.mine ? people.filter((x) => x.me).map((x) => x.key) : []);
@@ -159,7 +159,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       return;
     }
     store.closeInvite();
-    if (now && v) {
+    if (c.alreadyHere) store.toast("Shared more messages with " + shownName, "ok");
+    else if (now && v) {
       // "Bring Ledger in now" is the owner's own OK: let it join unless the
       // invitation already made it active.
       let joined = v.state === "active";
@@ -195,7 +196,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
 
       {c && route && (
         <div className="fade-in" key={route}>
-          <h3 className="mt-5 font-display text-[18px] font-bold leading-tight">What can {shownName} see?</h3>
+          <h3 className="mt-5 font-display text-[18px] font-bold leading-tight">{c.alreadyHere ? "Share more messages with " : "What can "}{shownName}{c.alreadyHere ? "" : " see?"}</h3>
           {route === "group" && (
             <p className="mt-1.5 flex gap-2 rounded-xl bg-sunken px-3 py-2 text-[13px] font-semibold text-text-2">
               <IconInfoCircle size={17} className="mt-px shrink-0" aria-hidden="true" />
@@ -234,7 +235,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           {route === "agent" && people.length > 0 && (
             <TaskChoice people={people} chosen={chosenTasks} onToggle={toggleTasks} mine={!!c.mine} owner={c.ownerName || "its owner"} keys={tasksFrom.length} />
           )}
-          {route !== "group" && (
+          {route !== "group" && !c.alreadyHere && (
             <label className="mt-3 flex h-12 items-center gap-2 rounded-2xl stroke bg-surface px-3.5 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink">
               <span className="shrink-0 text-[13px] font-extrabold text-text-2">Why?</span>
               <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} autoComplete="off" placeholder={"A note for " + (route === "agent" ? "it" : "them") + " (optional)"}
@@ -264,7 +265,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       ) : (
         <Button variant="act" size="lg" disabled={!ready} onClick={bring} className="min-h-14 text-[17px]"
           icon={c ? <CandidateAvatar c={c} size={28} /> : undefined}>
-          {!c ? "Choose who to bring in" : busy ? "Bringing " + shownName + " in…" : route === "guest" && guestCheck?.needs_update?.some(p => p.role === "guest") ? "Invite " + shownName + " — waits for update" : "Bring " + shownName + " in" + (now ? " now" : "")}
+          {!c ? "Choose who to bring in" : busy ? (c.alreadyHere ? "Sharing more messages…" : "Bringing " + shownName + " in…") : c.alreadyHere ? "Share more messages with " + shownName : route === "guest" && guestCheck?.needs_update?.some(p => p.role === "guest") ? "Invite " + shownName + " — waits for update" : "Bring " + shownName + " in" + (now ? " now" : "")}
         </Button>
       )}
       {c && route && <p className="mt-2.5 pb-1 text-center text-[13px] font-semibold leading-snug text-muted">{consentText(c, route)}</p>}
@@ -274,7 +275,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) store.closeInvite(); }} title="Bring someone in"
       description={t?.kind === "group"
-        ? "People you add become members. Agents join as guests and see only what you share."
+        ? "People and agents can join as members. Agents stay until removed; their owners decide what runs."
         : "They join as a guest and see only what you share. Anyone here can dismiss them."} footer={footer}>
       {body}
     </Sheet>
@@ -370,7 +371,7 @@ function Row({ c, on, onChoose }: { c: Candidate; on: boolean; onChoose: (key: s
 
 function CandidateAvatar({ c, size }: { c: Candidate; size: 28 | 40 }) {
   return c.kind === "agent"
-    ? <AgentAvatar seed={c.seed} size={size} device={c.device} mood={c.online === false ? "asleep" : "neutral"} />
+    ? <AgentAvatar seed={c.seed} size={size} device={c.alreadyHere ? undefined : c.device} mood={c.online === false ? "asleep" : "neutral"} />
     : <PersonAvatar name={c.name} seed={c.seed} size={size} online={size >= 32 ? c.online : undefined} />;
 }
 
@@ -387,6 +388,7 @@ function Problem({ text, onRetry }: { text: string; onRetry: () => void }) {
 
 /** consentText says who must agree before anything joins. */
 function consentText(c: Candidate, r: Route): string {
+  if (c.alreadyHere) return "Shares selected messages with the agent already here.";
   if (r === "agent") return c.mine ? "It’s yours, so this is your OK: it joins right away." : "It joins only if " + (c.ownerName || "its owner") + " says yes.";
   return r === "group" ? "They become a member only if they accept." : "They join only if they accept.";
 }

@@ -182,6 +182,8 @@ func run(args []string) error {
 		return runOperator(ctx, a, rest, os.Stdout)
 	case "team":
 		return runTeam(ctx, a, rest, os.Stdout, os.Stderr)
+	case "room":
+		return runRoom(ctx, a, rest, os.Stdout)
 	case "group":
 		return runGroup(ctx, a, rest, os.Stdout, os.Stderr)
 	case "a2a":

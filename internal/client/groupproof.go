@@ -469,6 +469,9 @@ func (a *Agent) acceptGroupContext(ctx context.Context, packet GroupContext, for
 	if err = installGroupMembership(tx, packet, withdrawals); err != nil {
 		return err
 	}
+	if err = admitRoomMembershipProof(tx, packet); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

@@ -13,16 +13,16 @@ import (
 // Status authority remains the exact executor's claim about one immutable
 // addressed request. It grants no human control or ordinary room authority.
 func (a *Agent) groupStatusScope(q dbq, ref ControlRef, host, hostFP string) (ParticipationInfo, error) {
-	rows, err := q.Query(`SELECT pid,kind,coalesce(target,''),sender,coalesce(verified_by,claimed_fp,'') FROM inbox WHERE conv=? AND lid=? AND ref_id IS NULL
- UNION ALL SELECT pid,kind,coalesce(target,''),?,? FROM outbox WHERE conv=? AND lid=? AND ref_id IS NULL`, ref.Conv, ref.ID, a.Address, a.Self().Fingerprint(), ref.Conv, ref.ID)
+	rows, err := q.Query(`SELECT pid,kind,coalesce(target,''),sender,coalesce(verified_by,claimed_fp,''),coalesce(human,'') FROM inbox WHERE conv=? AND lid=? AND ref_id IS NULL
+ UNION ALL SELECT pid,kind,coalesce(target,''),?,?,coalesce(human,'') FROM outbox WHERE conv=? AND lid=? AND ref_id IS NULL`, ref.Conv, ref.ID, a.Address, a.Self().Fingerprint(), ref.Conv, ref.ID)
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
-	var pid, kind, raw, from, fp string
+	var pid, kind, raw, from, fp, human string
 	found := false
 	for rows.Next() {
-		var p, k, t, s, f string
-		if err = rows.Scan(&p, &k, &t, &s, &f); err != nil {
+		var p, k, t, s, f, h string
+		if err = rows.Scan(&p, &k, &t, &s, &f, &h); err != nil {
 			break
 		}
 		if f != ref.Fingerprint {
@@ -32,7 +32,7 @@ func (a *Agent) groupStatusScope(q dbq, ref ControlRef, host, hostFP string) (Pa
 			err = errors.New("group: status original request conflicting")
 			break
 		}
-		pid, kind, raw, from, fp, found = p, k, t, s, f, true
+		pid, kind, raw, from, fp, human, found = p, k, t, s, f, h, true
 	}
 	if err == nil {
 		err = rows.Err()
@@ -59,7 +59,14 @@ func (a *Agent) groupStatusScope(q dbq, ref ControlRef, host, hostFP string) (Pa
 	if err != nil {
 		return info, err
 	}
-	if !info.Claimable() || info.Host.Address != host || info.Host.Fingerprint != hostFP || target.Address != host || target.Fingerprint != hostFP || target.AgentID != info.AgentID || !m.requestEpoch(from, fp, &target) {
+	var captured *envelope.HumanTurn
+	if human != "" {
+		if err = json.Unmarshal([]byte(human), &captured); err != nil {
+			return info, err
+		}
+	}
+	agent := captured != nil && captured.AgentAuthor()
+	if !info.Claimable() || info.Host.Address != host || info.Host.Fingerprint != hostFP || target.Address != host || target.Fingerprint != hostFP || target.AgentID != info.AgentID || !agent && !m.requestEpoch(from, fp, &target) {
 		return info, errors.New("group: status does not match current exact request/PID/host/requester epoch")
 	}
 	output := envelope.Inner{Conv: ref.Conv, PID: pid, Kind: replyKind(kind), ReplyTo: ref.ID, AgentID: info.AgentID}

@@ -420,27 +420,28 @@ type DMThread struct {
 
 // DMMessage is one message of a DM.
 type DMMessage struct {
-	GroupRef    *protocol.GroupHistoryRef `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
-	ExcerptPID  string                    `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
-	ClaimedKey  string                    `json:"claimed_key,omitempty"` // forwarded authorship, never verified here
-	Target      *envelope.Target          `json:"target,omitempty"`
-	AgentID     string                    `json:"agent_id,omitempty"`
-	ID          string                    `json:"id"`
-	LID         string                    `json:"lid,omitempty"`
-	Dir         string                    `json:"dir"` // in or out
-	From        string                    `json:"from"`
-	Kind        string                    `json:"kind"`
-	Body        string                    `json:"body"`
-	ReplyTo     string                    `json:"reply_to,omitempty"`
-	Origin      string                    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
-	State       string                    `json:"state"`
-	StateText   string                    `json:"state_text"`
-	Detail      string                    `json:"detail,omitempty"`
-	At          time.Time                 `json:"at"`
-	Unread      bool                      `json:"unread,omitempty"`
-	Replica     bool                      `json:"replica,omitempty"`
-	PID         string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
-	Attachments []FileView                `json:"attachments,omitempty"`
+	AgentAuthorPID string                    `json:"agent_author_pid,omitempty"`
+	GroupRef       *protocol.GroupHistoryRef `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
+	ExcerptPID     string                    `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
+	ClaimedKey     string                    `json:"claimed_key,omitempty"` // forwarded authorship, never verified here
+	Target         *envelope.Target          `json:"target,omitempty"`
+	AgentID        string                    `json:"agent_id,omitempty"`
+	ID             string                    `json:"id"`
+	LID            string                    `json:"lid,omitempty"`
+	Dir            string                    `json:"dir"` // in or out
+	From           string                    `json:"from"`
+	Kind           string                    `json:"kind"`
+	Body           string                    `json:"body"`
+	ReplyTo        string                    `json:"reply_to,omitempty"`
+	Origin         string                    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
+	State          string                    `json:"state"`
+	StateText      string                    `json:"state_text"`
+	Detail         string                    `json:"detail,omitempty"`
+	At             time.Time                 `json:"at"`
+	Unread         bool                      `json:"unread,omitempty"`
+	Replica        bool                      `json:"replica,omitempty"`
+	PID            string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
+	Attachments    []FileView                `json:"attachments,omitempty"`
 
 	// VerifiedAgent: an agent's turn as sent, by its participation's exact
 	// host key (client.ConvMessage.VerifiedAgent). UIs should label an
@@ -718,6 +719,9 @@ type AgentAsk struct {
 // installation runs it, who invited it, what it may be shown and who may
 // give it tasks. The host's person decides; either person can end it.
 type AgentView struct {
+	PIDs       []string     `json:"pids,omitempty"`
+	Member     bool         `json:"member,omitempty"`
+	Inviters   []PersonView `json:"inviters,omitempty"`
 	External   bool         `json:"external,omitempty"` // exact invited host outside the DM member persons
 	AgentID    string       `json:"agent_id,omitempty"`
 	PID        string       `json:"pid"`

@@ -215,33 +215,28 @@ Until both do, a forged row that an older reader admitted still renders as an ag
 
 New command `agentnet room ask --pid PB --kind question|task TEXT`, backed by `SendRoomAsk`.
 
-**The CLI refuses unless all of these hold:**
-1. `AGENTNET_REQUEST_ID` names a `stateRunning` **task** job of a follower PA hosted here (decision 3).
-2. PB is another `Claimable` PID in the same conversation.
-3. This run has made at most 2 asks.
-4. The running request was not itself authored by an agent. This keeps asks to depth 1.
+**Group implementation (P6, MEL-540/541/542, 2026-10-05).**
+1. `AGENTNET_REQUEST_ID` names a running question or task addressed to the exact active group agent hosted here.
+2. PB is a different active agent in the same verified group. A question may ask questions; only a task may assign tasks.
+3. There are no per-run, hourly or nesting limits. Every ask keeps its immutable cause; actual origin cycles stop. Cancel the originating run or remove the participation to stop further asks.
 
-**What it sends:**
-- `Target`: PB's host, with an empty `GroupAdmission`.
-- `PID=PB`, `Human.AuthorPID=PA` and `Origin agent:<harness>`.
-- `ReplyTo`: PA's running request. This records the cause without a new field.
+The signed request retains `PID=PB`, `Human.AuthorPID=PA`, the captured room audience and `ReplyTo` equal to PA's running request logical ID. Its target binds PB's exact host key and agent ID. Display author and target are distinct.
+
+`agentnet room ask --pid PB --kind question|task TEXT` stores then waits for the exact correlated reply. `agentnet room wait REQUEST_ID` can read an addressed reply already permitted by the running agent's group context. Waiting reads local storage; it sends no periodic Hub requests. Refusal, ended participation and stopped originating run end the waiter. A transport receipt alone never completes it.
 
 ### 4.4 Verdict at PB's host
 
-`agentVerdict` (`agentjob.go:85`) gets a new branch placed **before** `requestEpoch` (`:116`) and the member path (`:119`). A new `roomAgentAuthor(q, r, m)` resolves the stored `human.author_pid` (review M5).
+`roomChain` runs before the ordinary human requester admission check. Trace every locally verified cause back to a current human group member. At each hop the source participation, host key, agent ID and target must still agree. Missing cause proof waits; a forged, cyclic, changed or ended cause never gains permission from one-time acceptance.
 
-| Check | Outcome |
-|---|---|
-| PA is `Role==""`/room, active, unheld, at exactly (`r.Sender`, `r.Key`), and not `r.PID` | PA ended → stop; PA held → wait |
-| The cause is held here, is a request with `PID==PA`, and was not authored by an agent | Otherwise → ask |
-| PA has made more than 4 asks in the last hour, counted in `inbox` (review X9) | Ask |
-| Question | Runs only with `agent_grants.questions` for (address, pinned fp, agent_id), or after one `accept` |
-| Task | Runs only with `agent_grants.tasks` for that exact key and agent, or after one `accept` |
-| Group | `requestEpoch` is replaced by "PA's invite epoch verifies" |
+Standing permission must hold at the receiving host for every upstream human/agent key. Existing exact-key question approvals and task grants apply; own-person requests retain their authority. A one-time acceptance permits this exact request, never a new standing grant. A question anywhere in the chain cannot authorize a task. Normal harness permissions remain the final authority.
 
-- **Never consulted** for these requests: `TaskKeys`, `r.Local`, `approvals`, `task_grants`, or the member auto-question rule.
-- **Grants:** `approve --agent ADDRESS[/AGENT] [--tasks]` writes `agent_grants`. A grant stops holding when the key changes.
-- `accept --always` still refuses conversation items (`taskgrant.go:128`).
+Group agents use accepted, signed room participations without expiry. A second Bring in at the same exact host key and agent ID signs a `share` anchored to the original invite; it unions exact selected message references and inviter attribution without changing task consent. UI collapses active legacy duplicate cards by exact identity; their signed records remain separate.
+
+Accepted room agents on outside hosts receive new ordinary group turns through the same captured consent, with no human membership or execution from ordinary chat. Removed or changed recipients cannot receive saved copies.
+
+The appended `room_membership_events` table retains only exact counted consent records once the host accepts, so an inviter leaving cannot remove the agent or resurrect a recorded removal. It confers no human membership or current sender authority and never bypasses changed pinned keys or host admissions. The `room_context` table records exact message IDs and signer keys admitted/sent while this host's accepted room membership is active. It supplies future group turns, including another agent's verified replies. Earlier messages require explicit signed selections; private/native sessions are never ambient context. Current person-key and group admission fences remain; missing/changed identity evidence suspends execution. Existing DM room behavior and human-group-guest execution remain separate phases. Captured group history to a newly linked device remains fail-closed; this package adds no history migration/backfill.
+
+Integration owners: TODO(integrate:P2) merge verified naming helpers; TODO(integrate:P4) preserve origin correlation and atomic receiver consent when merging proposals; TODO(integrate:P5a) preserve membership/share/author parity. Generated skins and host types must be regenerated by the integration owner.
 
 ### 4.5 Needs-you and run guard
 
@@ -469,13 +464,13 @@ Every phase runs `go vet ./...` and `go test -race -count=1 -timeout 600s ./...`
 
 1. **D3 trust set.** Chosen: the host plus own native devices the person added. The literal D3 reading ("any linked device") would let a browser key enable execution.
 2. **Follower context.** Chosen: an agent run withholds turns from unapproved guests and agents (with a count); people still see everything.
-3. **May question runs ask other agents?** Chosen: no.
+3. **May question runs ask other agents?** Owner P6 override: yes, questions only; tasks retain the full origin chain and recipient authority.
 4. **Own agent asking own agent.** Owner decision D9: runs without asking, for any two agents of the same person.
 5. **Outbox review.** Chosen: no extra review for files from an approved task.
 6. **`Until` default.** Chosen: none; guests stay until dismissed.
 7. **Outside guests.** Chosen: no workspace-wide ban yet. Group guests learn the member list; the invite sheet says so.
 8. **Limits (as proposed):**
-   - asks: 2 per run, 4 per hour;
+   - asks: no platform count, hourly or depth limit (owner override); origin correlation and stop remain;
    - inbound: 16 files, 200 MiB;
    - outbound: 8 files, 100 MiB;
    - followers: 16.

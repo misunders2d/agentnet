@@ -228,6 +228,12 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 	if in.Target != nil && (in.Target.AgentID != p.AgentID || in.Target.Address != p.Host.Address || in.Target.Fingerprint != p.Host.Fingerprint) {
 		return reasonInvalid, errors.New("named request differs from its participation host")
 	}
+	if in.Human != nil && in.Human.AgentAuthor() {
+		p, err = a.participation(in.Conv, in.Human.AuthorPID)
+		if err != nil {
+			return reasonProof, err
+		}
+	}
 	if agent && (p.Role == protocol.RoleHuman || sender.Address != p.Host.Address || sender.Fingerprint() != p.Host.Fingerprint) {
 		return reasonInvalid, errors.New("an agent's turn is not from its participation's exact host")
 	}
@@ -271,7 +277,11 @@ func (a *Agent) verifyAgents(conv string, msgs []ConvMessage) {
 		if m.ExcerptPID != "" || m.PID == "" || !agentTurn(m.Sub, m.Kind, m.status, m.ReplyTo, m.PID, m.Origin) {
 			continue
 		}
-		p, seen := parts[m.PID]
+		author := m.PID
+		if m.Human != nil && m.Human.AgentAuthor() {
+			author = m.Human.AuthorPID
+		}
+		p, seen := parts[author]
 		if !seen {
 			if members == nil {
 				dm, err := a.dmMembers(conv)
@@ -280,10 +290,10 @@ func (a *Agent) verifyAgents(conv string, msgs []ConvMessage) {
 				}
 				members = &dm
 			}
-			if info, err := participationIn(a.store.db, conv, m.PID, *members, a.Address); err == nil {
+			if info, err := participationIn(a.store.db, conv, author, *members, a.Address); err == nil {
 				p = &info
 			}
-			parts[m.PID] = p
+			parts[author] = p
 		}
 		key := m.Key
 		if m.History {

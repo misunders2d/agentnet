@@ -167,6 +167,16 @@ func (a *Agent) enqueueGroupWithdrawal(ctx context.Context, packet GroupContext,
 	}
 	visitorPacket.Withdrawals = append(append(append([]protocol.GroupWithdrawal{}, packet.Withdrawals...), pins...), w)
 	for _, target := range visitors {
+		// Permanent agent consent remains eligible after its inviter leaves.
+		// Reuse the original disclosure on recovery; this private context marker
+		// binds only its exact withdrawal, not a human recipient admission.
+		var existing int
+		if err = a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE conv=? AND sub=? AND pid=? AND recipient=? AND recipient_fp=? AND group_admission=?`, w.Conv, envelope.SubGroupContext, target.pid, target.key.Address, target.key.Fingerprint(), groupWithdrawalHash(w)).Scan(&existing); err != nil {
+			return err
+		}
+		if existing > 0 {
+			continue
+		}
 		if err = groupVisitorCarrierDestination(a.store.db, visitorPacket, target.pid, target.key.Address, target.key.Fingerprint()); err != nil {
 			return err
 		}
@@ -174,6 +184,7 @@ func (a *Agent) enqueueGroupWithdrawal(ctx context.Context, packet GroupContext,
 		if e != nil {
 			return e
 		}
+		copy.groupAdmission = groupWithdrawalHash(w)
 		copies = append(copies, copy)
 	}
 	for _, m := range packet.State.Members {

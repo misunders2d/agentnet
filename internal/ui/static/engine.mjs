@@ -1627,7 +1627,12 @@ export class Engine {
     checkFiles(files);
     const c = (await this.store.get("convs", conv)) || await this.groupRecord(conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
-    if (c.kind === "group") { if (pid) throw new Error("Human guests require an unchanged two-person DM."); return this.sendGroupTurn(c, {body, quote,reply_to:replyTo || "",files,receiver:reply_receiver}); }
+    if (c.kind === "group") {
+      if (pid) throw new Error("Human guests require an unchanged two-person DM.");
+      const events=await this.convEvents(c.id),members=await this.dmMembers(c,events);
+      if([...new Set(events.map(x=>x.e.pid))].some(pid=>{const p=this.resolveAgent(pid,events,members);return p.external&&follows(p)&&p.state==="active"&&!p.held;}))return this.sendHumanTurn(c,{kind:"message",body,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver},await this.roomPlan(c,events,members));
+      return this.sendGroupTurn(c, {body, quote,reply_to:replyTo || "",files,receiver:reply_receiver});
+    }
     if (replyTo) {
       const m = (await this.store.get("inbox", replyTo)) || (await this.store.get("outbox", replyTo));
       if (!m || m.conv !== conv) throw new Error("A reply stays within its conversation.");
@@ -2025,7 +2030,7 @@ export class Engine {
     return { route: wire.parseReceiverRoute({ ...route, op: "request" }), delegation, checks };
   }
 
-  async commitReceiverCopies(copies, prepared, checks = []) {
+  async commitReceiverCopies(copies, prepared, checks = [], extraOps = []) {
     if (prepared) {
       await this.receiverHost({ address: prepared.route.host, fingerprint: prepared.route.host_key }, checks);
       for (const rec of copies) {
@@ -2037,7 +2042,7 @@ export class Engine {
         rec.required_receiver_cap = true;
       }
     }
-    await this.store.write([...copies, ...(prepared ? [prepared.delegation] : [])].map(v => ({ s: "outbox", k: v.id, v })), checks);
+    await this.store.write([...copies, ...(prepared ? [prepared.delegation] : [])].map(v => ({ s: "outbox", k: v.id, v })).concat(extraOps), checks);
   }
 
   async receiverOriginAuthority(rec, checks) {
@@ -2357,16 +2362,36 @@ export class Engine {
     }catch(e){frozen=e.message;members=await this.groupPeople(packet).catch(()=>[]);}
     const inbox=await this.store.all("inbox"),outbox=await this.store.all("outbox"),ctls=[...inbox,...outbox].filter(r=>r.control&&r.conv===conv);
     const visitorPIDs=new Set(infos.filter(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp).map(i=>i.pid));
-    const messages=(await this.convMessages(conv,inbox,outbox)).filter(m=>role!=="visitor"||visitorPIDs.has(m.pid||m.excerpt_pid)),shownReply=linkReplies(messages,this.fp);
+    const messages=(await this.convMessages(conv,inbox,outbox)).filter(m=>role!=="visitor"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
     const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone";
-    return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:infos.map(i=>this.agentView(i,messages,null,members,role)),messages:await Promise.all(messages.map(async m=>{
+    const agentCards=new Map();
+    for(const i of infos) {
+      if(!i.host)continue;
+      const v=this.agentView(i,messages,null,members,role),key=v.host.address+"#"+v.host.fingerprint+"#"+(v.agent_id||"");
+      const prior=agentCards.get(key);
+      if(prior && ["active","invited"].includes(prior.state) && ["active","invited"].includes(v.state)) {
+        const rank=x=>x.state==="active"?0:1;
+        const earlier=(a,b)=>(a.invited||"")<(b.invited||"") || a.invited===b.invited && a.pid<b.pid;
+        const chosen=rank(prior)<rank(v)||rank(prior)===rank(v)&&(prior.shared.length>v.shared.length||prior.shared.length===v.shared.length&&earlier(prior,v))?prior:v;
+        chosen.pids=[...prior.pids,...v.pids];
+        chosen.shared=[...new Set([...prior.shared,...v.shared])];
+        chosen.tasks_from=[...new Map([...prior.tasks_from,...v.tasks_from].map(p=>[p.person,p])).values()];
+        chosen.inviters=[...new Map([...(prior.inviters||[prior.inviter]),...(v.inviters||[v.inviter])].map(p=>[p.person,p])).values()];
+        agentCards.set(key,chosen);
+      } else agentCards.set(key,v);
+    }
+    for(const card of agentCards.values()) {
+      const grants=new Map(infos.filter(i=>card.pids.includes(i.pid)).flatMap(i=>i.grant).map(r=>[r.fingerprint+"/"+r.lid,r]));
+      card.missing=[...grants.values()].filter(ref=>!messages.some(m=>!m.sub&&m.lid===ref.lid&&(m.fp===ref.fingerprint&&!m.replica || !m.fp&&!m.history&&this.fp===ref.fingerprint || card.pids.includes(m.excerpt_pid)&&m.claimed_key===ref.fingerprint&&m.history))).length;
+    }
+    return {id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},role,members,frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,agents:[...agentCards.values()],messages:await Promise.all(messages.map(async m=>{
       const here=!m.fp&&!m.history,out=here||!!m.own,event=m.sub==="event"?this.eventText(m.body,null,members):"",fp=m.fp||this.fp,ev=event?this.eventFields(m.body,members):null;
       const targetPerson=await this.personOfFp(fp),rel=ctls.filter(x=>x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.sub!==wire.SubStatus&&x.sub!==wire.SubDecision);
       const view=event||m.excerpt_pid?{can:[],reactions:[]}:this.controlsOn(rel,targetPerson,x=>x.person||"",personLabel,p=>p===this.me.person,undefined,pid=>infos.find(i=>i.pid===pid)?.host?.label||"");
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===m.pid),here?this.address:m.from,fp),state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -2387,6 +2412,13 @@ export class Engine {
         const pin=await this.pinned(rec.to), fence=await this.groupControlFence(members,this.fp,rec.recipient_fp);
         if(pin.pending||pin.fingerprint!==rec.recipient_fp||fence!==rec.group_admission)throw Error("Group control sender or recipient admission changed.");return {why:"",pin};
       }catch(e){return {why:e.message};}
+    }
+    if(rec?.human&&!rec.pid) {
+      try {
+        const members=await this.dmMembers(c);
+        if(!rec.group_admission||members.epochs.get(this.fp)!==rec.group_admission)throw Error("Group sender admission changed; saved copy is not sent.");
+        return this.humanGate(c,rec);
+      } catch(e) {return {why:e.message};}
     }
     if(rec?.pid && ![wire.SubGroupProof,wire.SubGroupContext].includes(rec.sub))return this.externalGate(c,rec);
     if(rec?.pid && [wire.SubGroupProof,wire.SubGroupContext].includes(rec.sub)) {
@@ -2665,6 +2697,7 @@ export class Engine {
       if(!row?.consent?.admission)throw Error("Exact accepted invitation missing.");
       historyItems=await this.groupSelectedItems(conv,row.proposal.history || [],finalChecks);
     }
+    const roomEvents=await this.convEvents(conv,finalChecks),roomMembers=await this.dmMembers({id:conv,kind:"group",root:g.root},roomEvents,finalChecks,packet),deliveryPacket={...packet,memberships:await this.roomMemberships({id:conv},roomEvents,roomMembers)};
     g.records=records.map(wire.groupCommitJSON);g.context=wire.groupContextJSON(packet);g.rosters=finalResolved.raw;
     const copies=[];
     for(const member of await wire.effectiveGroupMembers(packet.state,finalPins)) {
@@ -2673,7 +2706,7 @@ export class Engine {
         if(device.address===this.address) continue;
         await this.groupRead(finalChecks,"pins",device.address);
         for(const page of this.groupProofPages(records)) {const last=page.at(-1);copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupProof,{v:1,seq:last.seq,hash:last.hash},wire.groupJournalJSON({records:page,more:false}),device));}
-        copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(packet),device));
+        copies.push(await this.groupCarrierCopy(packet.root,wire.SubGroupContext,{v:1,seq:packet.state.seq,hash:record.hash},wire.groupContextJSON(deliveryPacket),device));
         if(invitation && member.admission.seq===packet.state.seq) {
           for(const item of historyItems)copies.push(await this.groupDataCopy(packet,"history",wire.historyJSON(item),device));
         }
@@ -2748,7 +2781,9 @@ export class Engine {
 
   async sendGroupTurn(c,{body,quote="",reply_to="",files=[],receiver=null}) {
     checkFiles(files);
-    const checks=[], {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=wire.groupMember(packet.state,me.person), reply=await this.groupReply(c.id,reply_to);
+    const consentChecks=[], consentEvents=await this.convEvents(c.id,consentChecks), consentMembers=await this.dmMembers(c,consentEvents,consentChecks), human=await this.roomPlan(c,consentEvents,consentMembers);
+    if(human)return this.sendHumanTurn(c,{kind:"message",body,quote,reply_to,files,receiver},human);
+    const checks=consentChecks, {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=wire.groupMember(packet.state,me.person), reply=await this.groupReply(c.id,reply_to);
     quote=await this.groupReply(c.id,quote);
     const plain=[];for(const file of files)plain.push({name:wire.safeName(file.name),bytes:file.bytes instanceof Uint8Array?file.bytes:new Uint8Array(await file.arrayBuffer())});
     const copies=[], lid=wire.newID(), firstID=wire.newID(), at=this.now(), stamp=await wire.groupAdmissionHash(own.admission);
@@ -2768,7 +2803,7 @@ export class Engine {
       copies.push({id,lid,conv:c.id,kind:"message",body,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:"queued",required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(prepared?{receiver_route:prepared.route}:{})});
     }
     if(!copies.length)throw Error("Group has no other current device to receive a copy.");
-    await this.commitReceiverCopies(copies,prepared,checks);this.changed();await this.keepSent(plain);
+    await this.commitReceiverCopies(copies,prepared,checks,await this.roomStoredOps(c.id,checks,{lid},this.fp,null,null,packet));this.changed();await this.keepSent(plain);
     if(prepared)await this.post(prepared.delegation);else for(const rec of copies)await this.post(rec);
     const least=copyOrder(copies);return {id:copies[0].id,lid,state:least.state,detail:least.detail};
   }
@@ -2776,7 +2811,11 @@ export class Engine {
   async admitGroupTurn(n,env,pin,base) {
     const room=!!n.human&&!n.sub&&!!n.pid&&n.pid===n.human.author_pid; // a person guest's turn (client roomGroupTurn): its PID is its author's
     if(n.pid&&!room) {
-      if(n.human)throw new Hold("invalid","Group: a request or output carrying a captured audience is not read yet."); // the group participation path does not read it (client admitConv; ROOM_V1 P3/P4)
+      if(n.human) {
+        if(n.human.proof.some(e=>e.role==="human"))throw new Hold("invalid","Group human guest execution audience is not enabled.");
+        const c=await this.groupRecord(n.conv);const sender=await this.personOf(env.from,pin);
+        return this.admitHumanTurn(n,env,pin,base,wire.parseGroupRoot(n.root),sender,c);
+      } // the group participation path does not read it (client admitConv; ROOM_V1 P3/P4)
       return this.admitGroupParticipation(n,env,pin,base);
     }
     const root=wire.parseGroupRoot(n.root), checks=[], {packet,members}=await this.groupTurnEvidence(n.conv,checks);
@@ -2806,6 +2845,7 @@ export class Engine {
     const ops=[];if(seen?.history)ops.push({s:"inbox",k:seen.id,v:undefined});
     const stamp=await wire.groupAdmissionHash(wire.groupMember(packet.state,this.me.person).admission);
     ops.push({s:"inbox",k:env.id,v:{...base,v:wire.Version2,conv:n.conv,lid:n.lid,sub:"",origin:n.origin,fp:pin.fingerprint,own,replica:n.replica,state:"",group_admission:stamp,...(n.human?{pid:n.pid,human:n.human}:{})}},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}});
+    ops.push(...await this.roomStoredOps(n.conv,checks,n,pin.fingerprint,null,null,packet));
     ops.checks=checks;return ops;
   }
 
@@ -2871,7 +2911,7 @@ export class Engine {
     let attachments=n.attachments;
     if(n.sub==="excerpt") {const h=wire.parseGrantedExcerpt(n,info),used=new Set();attachments=h.attachments.map(a=>{const i=n.attachments.findIndex((f,i)=>!used.has(i)&&f.name===a.name&&f.size===a.size&&f.sha256===a.sha256);if(i>=0){used.add(i);return n.attachments[i];}return {...a,blob:null,availability:"unavailable",detail:"Selected bytes were not available at the forwarder."};});}
     const rec={...base,v:2,conv:n.conv,lid:n.lid,pid:n.pid,sub:n.sub,origin:n.origin,target:n.target||null,...(n.agent_id?{agent_id:n.agent_id}:{}),replica:n.replica,own,read:own||!!n.sub||base.read,attachments,group_admission:members.epochs.get(this.fp)||"",state:!own&&!n.sub&&["question","task"].includes(n.kind)&&n.target?.address===this.address?"conv_held":""};
-    const ops=[...(seen?.history?[{s:"inbox",k:seen.id}]:[]),{s:"inbox",k:env.id,v:rec},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}}];ops.checks=checks;ops.groupCarrier=true;return ops;
+    const ops=[...(seen?.history?[{s:"inbox",k:seen.id}]:[]),{s:"inbox",k:env.id,v:rec},{s:"lids",k:key,v:{id:env.id,conv:n.conv,hash}},...await this.roomStoredOps(n.conv,checks,n,pin.fingerprint,events,members)];ops.checks=checks;ops.groupCarrier=true;return ops;
   }
 
   async selectGroupHistory(conv, selection={}) {
@@ -3405,6 +3445,7 @@ export class Engine {
     // Logical quiet dedup survives receipt flushing. Original bytes are retained
     // in verified group state; no plaintext carrier is copied into held/files.
     const ops = [{ s: "kv", k, v: g }, { s: "kv", k: "group-realm", v: root.realm }, { s: "kv", k: seenKey, v: hash }, { s: "kv", k: "group-carrier/" + env.id, v: true }];
+    if(packet?.memberships?.length)ops.push(...await this.roomMembershipOps(packet,checks));
     ops.checks = checks; ops.groupCarrier = true;
     return ops;
   }
@@ -4769,7 +4810,7 @@ export class Engine {
     if(rows.some(r=>!r.pid||r.sub||!["question","task"].includes(r.kind)||r.pid!==first.pid||r.kind!==first.kind||JSON.stringify(r.target)!==JSON.stringify(first.target)))throw new Hold("invalid","Group status request is conflicting.");
     const events=await this.convEvents(conv,checks,first.pid),members=await this.dmMembers(c,events,checks),info=this.resolveAgent(first.pid,events,members);
     const target=first.target,fp=first.fp||this.fp;
-    if(info.state!=="active"||info.held||info.host?.address!==host||info.host.fingerprint!==hostFP||target?.address!==host||target.fingerprint!==hostFP||target.agent_id!==info.agent_id||target.group_admission!==members.epochs.get(fp))throw new Hold("invalid","Group status differs from exact PID/host/requester admission.");
+    if(info.state!=="active"||info.held||info.host?.address!==host||info.host.fingerprint!==hostFP||target?.address!==host||target.fingerprint!==hostFP||target.agent_id!==info.agent_id||!(first.human && wire.agentAuthor(first.human)) && target.group_admission!==members.epochs.get(fp))throw new Hold("invalid","Group status differs from exact PID/host/requester admission.");
     await this.checkExternalReply({conv,pid:first.pid,kind:replyKind(first.kind),reply_to:ref.id,agent_id:info.agent_id},info,members,checks);
     return info;
   }
@@ -5876,7 +5917,7 @@ export class Engine {
         return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
-          origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
+          origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
           state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? await this.shownCopies(m.copies) : undefined,
           ...(m.excerpt_pid ? { excerpt_pid: m.excerpt_pid, claimed_key: m.claimed_key } : {}),
@@ -5944,6 +5985,87 @@ export class Engine {
     return h;
   }
 
+  // TODO(integrate:P4): retain atomic consent ops when merging commitReceiverCopies proposal changes.
+  // TODO(integrate:P5a): share/member/author fields must retain Go parity on the host contract.
+  roomConsentOps(conv,events,info) {
+    if(!info.member || info.held || !["active","dismissed"].includes(info.state))return [];
+    const counted=new Set([info.invite,info.scope,info.decision,info.dismissal]);
+    return events.filter(x=>counted.has(x.hash)||info.shares.includes(wire.eventJSON(x.e))).map(x=>({s:"kv",k:"room-event/"+conv+"/"+x.hash,v:{pid:info.pid}}));
+  }
+
+  roomReaderKey(conv,ref,person,admission) { return "room-reader/"+conv+"/"+ref.fingerprint+"/"+ref.lid+"/"+person+"/"+admission; }
+
+  async roomStoredOps(conv,checks,n=null,fp=this.fp,events=null,members=null,packet=null) {
+    events ||= await this.convEvents(conv,checks);
+    members ||= await this.dmMembers(await this.groupRecord(conv),events,checks,packet);
+    const ops=[];
+    for(const pid of new Set(events.map(x=>x.e.pid)))ops.push(...this.roomConsentOps(conv,events,this.resolveAgent(pid,events,members)));
+    if(n && !n.sub)for(const p of members.values()) {
+      const admission=members.epochs.get(p.devices[0]?.fingerprint);
+      if(admission)ops.push({s:"kv",k:this.roomReaderKey(conv,{lid:n.lid,fingerprint:fp},p.person,admission),v:true});
+    }
+    return ops;
+  }
+
+  async roomMemberships(c,events,members) {
+    const selected=new Set();
+    for(const pid of new Set(events.map(x=>x.e.pid))) {
+      const p=this.resolveAgent(pid,events,members);
+      if(p.member && follows(p))for(const hash of [p.invite,p.scope,p.decision])if(hash)selected.add(hash);
+      if(p.member && follows(p))for(const raw of p.shares)selected.add(await wire.eventHash(wire.parseEvent(raw)));
+    }
+    return events.filter(x=>selected.has(x.hash)).map(x=>x.e);
+  }
+
+  async roomMembershipOps(packet,checks) {
+    if(!packet.memberships?.length)return [];
+    const conv=packet.state.conv, grouped=new Map(), ops=[], kept=await this.groupRead(checks,"kv","room-memberships/"+conv)||[];
+    for(const e of packet.memberships) {
+      if(e.conv!==conv || e.role || !["invite","scope","accept","share"].includes(e.type))throw new Hold("invalid","Unrelated membership carrier record.");
+      const p=await this.groupRead(checks,e.author.person===this.me.person?"kv":"persons",e.author.person===this.me.person?"person":e.author.person),pin=await this.sendKey(e.author.address),pub=await this.pubOf(pin);
+      if(!p || p.state==="conflict" || !p.hashes.includes(e.author.roster) || !p.devices.some(d=>d.address===e.author.address&&d.fingerprint===e.author.fingerprint) || pin.fingerprint!==e.author.fingerprint)throw new Hold("proof_pending","Membership author exact proof missing.");
+      try{await wire.verifyEvent(e,pub.sign_key);}catch(err){throw new Hold("invalid",err.message);}
+      const group=await this.groupRead(checks,"kv","group/"+conv);
+      if(e.group && (!group?.records[e.group.seq] || wire.parseGroupCommit(group.records[e.group.seq]).hash!==e.group.hash || e.group.seq>packet.state.seq))throw new Hold("invalid","Membership original binding differs.");
+      grouped.set(e.pid,[...(grouped.get(e.pid)||[]),e]);
+    }
+    for(const [pid,evs] of grouped) {
+      const indexed=await this.groupRead(checks,"kv","room-pid/"+pid);
+      if(indexed && indexed!==conv)throw new Hold("invalid","Membership ID names another conversation.");
+      ops.push({s:"kv",k:"room-pid/"+pid,v:conv});
+      const invites=evs.filter(e=>e.type==="invite"&&e.group&&e.audience==="room"&&!e.until), inv=invites[0];
+      if(!inv || invites.some(e=>wire.eventJSON(e)!==wire.eventJSON(inv)))throw new Hold("invalid","Membership needs one original invite.");
+      const invite=await wire.eventHash(inv);
+      if(inv.group.host_role==="visitor") {
+        const group=await this.groupRead(checks,"kv","group/"+conv);
+        if(!wire.parseGroupCommit(group.records[inv.group.seq]).admins.includes(inv.author.person))throw new Hold("invalid","Outside agent invitation needs a group administrator.");
+      }
+      const exact=e=>e.prev===invite&&e.author.person===inv.host.person&&e.author.address===inv.host.address&&e.author.fingerprint===inv.host.fingerprint;
+      if(!evs.some(e=>e.type==="accept"&&exact(e)))throw new Hold("invalid","Membership needs exact host consent.");
+      for(const e of evs) {
+        if(e.type==="accept"&&!exact(e) || e.type==="scope"&&!wire.sameScope(e,await wire.scopeOf(inv,e.ts)) || e.type==="share"&&(e.prev!==invite||!["person","address","fingerprint","agent_id"].every(k=>(e.host?.[k]||"")===(inv.host[k]||""))))throw new Hold("invalid","Membership scope differs.");
+        const hash=await wire.eventHash(e), raw=wire.eventJSON(e);
+        if(!kept.includes(raw))kept.push(raw);
+        if(e.type!=="share")ops.push({s:"kv",k:"room-event/"+conv+"/"+hash,v:{pid}});
+      }
+    }
+    ops.push({s:"kv",k:"room-memberships/"+conv,v:kept});return ops;
+  }
+
+  async roomPlan(c,events,members) {
+    const h={audience:[],proof:[]};
+    for(const pid of new Set(events.map(x=>x.e.pid))) {
+      const p=this.resolveAgent(pid,events,members);
+      if(!follows(p)||p.state!=="active"||p.held)continue;
+      const accept=events.find(x=>x.hash===p.decision)?.e;
+      if(!accept)throw Error("Room acceptance proof missing.");
+      h.audience.push({pid:p.pid,invite:p.invite,decision:p.decision});
+      h.proof.push(await this.participationScope(c,p,events),accept);
+    }
+    if(!h.audience.length)return null;
+    await wire.validateHumanTurn(h,c.id);return h;
+  }
+
   // participationScope is client.participationScope: a participation's held
   // public scope, or, for this device's own DM invite, a new one signed and
   // sent; nobody else's invitation is ever shared in its place.
@@ -5951,7 +6073,7 @@ export class Engine {
     const held = info.scope && events.find(x => x.hash === info.scope);
     if (held) return held.e;
     const inv = events.find(x => x.hash === info.invite)?.e;
-    if (inv?.type !== "invite" || inv.group || inv.author.address !== this.address || inv.author.fingerprint !== this.fp) throw new Error("Participation's public scope is not held here yet.");
+    if (inv?.type !== "invite" || inv.group && inv.audience!=="room" || inv.author.address !== this.address || inv.author.fingerprint !== this.fp) throw new Error("Participation's public scope is not held here yet.");
     const s = await wire.signEvent(this.keys, await wire.scopeOf(inv, Math.floor(this.now() / 1000)));
     await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(s), pid: s.pid });
     return s;
@@ -5985,7 +6107,7 @@ export class Engine {
       try { await wire.verifyEvent(e, (await this.pubOf(pin)).sign_key); } catch (err) { throw new Hold("invalid", err.message); }
       if (e.type === "scope") { // the invitation's public projection: never its note, grant or task keys
         const host = people.get(e.host.person), hostPin = await this.groupRead(checks, "pins", e.host.address);
-        if (!members.has(e.author.person) || members.has(e.host.person) && !roomAgentScope(e) || !host.devices.some(d => d.address === e.host.address && d.fingerprint === e.host.fingerprint) || !hostPin || hostPin.pending || hostPin.fingerprint !== e.host.fingerprint) throw new Hold("invalid", "Human invitation does not bind original member and outside host.");
+        if (!members.has(e.author.person) && !members.roomEvents?.has(await wire.eventHash(e)) || members.has(e.host.person) && !roomAgentScope(e) || !host.devices.some(d => d.address === e.host.address && d.fingerprint === e.host.fingerprint) || !hostPin || hostPin.pending || hostPin.fingerprint !== e.host.fingerprint) throw new Hold("invalid", "Human invitation does not bind original member and outside host.");
         if (!members.has(e.host.person)) members.hosts.set(host.person, host);
         invitations.set(e.pid, e);
       }
@@ -6019,7 +6141,7 @@ export class Engine {
       try { await wire.verifyEvent(e, (await this.pubOf(pin)).sign_key); } catch (err) { throw new Hold("invalid", err.message); }
       if (e.type === "scope") {
         const host = members.get(e.host.person) || members.hosts.get(e.host.person), hostPin = await this.groupRead(checks, "pins", e.host.address);
-        if (!members.has(e.author.person) || members.has(e.host.person) && !roomAgentScope(e) || !host?.devices.some(d => d.address === e.host.address && d.fingerprint === e.host.fingerprint) || !hostPin || hostPin.pending || hostPin.fingerprint !== e.host.fingerprint) throw new Hold("invalid", "Human invitation does not bind a current member and its exact host.");
+        if (!members.has(e.author.person) && !members.roomEvents?.has(await wire.eventHash(e)) || members.has(e.host.person) && !roomAgentScope(e) || !host?.devices.some(d => d.address === e.host.address && d.fingerprint === e.host.fingerprint) || !hostPin || hostPin.pending || hostPin.fingerprint !== e.host.fingerprint) throw new Hold("invalid", "Human invitation does not bind a current member and its exact host.");
         invitations.set(e.pid, e);
       }
     }
@@ -6076,6 +6198,11 @@ export class Engine {
       const pin = await this.groupRead(checks, "pins", rec.to);
       if (!pin || pin.pending || pin.fingerprint !== rec.recipient_fp) throw new Error("Human recipient key changed.");
       const evidence = await this.humanEvidence(c, rec.human, checks);
+      if(c.kind==="group") {
+        const x=await this.assistantOf(c,rec,checks);
+        if(x) { this.externalRole(rec,x,evidence.members,this.address,this.fp);await this.checkExternalReply(rec,x,evidence.members,checks); }
+        if(rec.target && !wire.agentAuthor(rec.human) && evidence.members.epochs.get(this.fp)!==rec.target.group_admission)throw Error("Original group requester admission changed.");
+      }
       this.humanTurnAuthorization(rec, evidence, await this.assistantOf(c, rec, checks), this.address, this.fp, rec.to, pin.fingerprint);
       return { why: "", pin };
     } catch (e) { return { why: e.message }; }
@@ -6091,7 +6218,9 @@ export class Engine {
     const request = !!x;
     if (request && (!["question", "task"].includes(n.kind) || !n.target || n.receiver)) throw new Error("An addressed request names its assistant only.");
     const checks = [], evidence = await this.humanEvidence(c, h, checks);
-    const root = wire.parseRoot(c.root), fan = root.members.map(m => ({ person: m.person, roster: evidence.members.get(m.person).hash }));
+    const root = wire.parseRoot(c.root), fan = c.kind==="group" ? [] : root.members.map(m => ({ person: m.person, roster: evidence.members.get(m.person).hash }));
+    const groupAdmission=c.kind==="group"?evidence.members.epochs.get(this.fp):"";
+    if(c.kind==="group"&&!groupAdmission)throw Error("Only a current human member writes an ordinary group turn.");
     const hosts = [...evidence.scopes.values()].map(p => p.host.devices.find(d => d.address === p.host.address && d.fingerprint === p.host.fingerprint));
     if (request && x.external) hosts.push({ address: x.host.address, fingerprint: x.host.fingerprint }); // the outside assistant host reads the addressed request only
     const devices = [...new Map([...evidence.members.values()].flatMap(p => p.devices).concat(hosts).filter(d => d.address !== this.address).map(d => [d.address, d])).values()];
@@ -6106,17 +6235,24 @@ export class Engine {
       const isHost = request && d.address === x.host.address && d.fingerprint === x.host.fingerprint;
       this.humanTurnAuthorization({ ...turn, human: h }, evidence, x, this.address, this.fp, d.address, d.fingerprint);
       await this.requireHumanSupport(d.address, pin);
+      if(c.kind==="group")await this.groupSupport(d.address,pin);
       if (isHost && (x.external || x.agent_id)) await this.requireAgentIdentity(d.address, pin, x.external ? wire.CapExternalParticipation : wire.CapAgentIdentity);
       if (prepared) await this.receiverSupport(d.address, pin);
       const pub = await this.pubOf(pin), sealed = [];
       for (const f of plain) sealed.push({ ...await wire.encryptFile(f.bytes, f.name, pub), uploaded: false });
       const id = isHost ? lid : recs.length || request ? wire.newID() : firstID, own = this.me.devices.some(x => x.address === d.address), inner = { v: 2, id, from: this.address, to: d.address, ts: Math.floor(at / 1000), kind: turn.kind, body: n.body, quote:n.quote||"",reply_to: n.reply_to || "", origin: "ui", conv: c.id, lid, root: c.root, fan, replica: own, pid: turn.pid, ...(request ? { target: turn.target } : {}), human: h, attachments: sealed.map(f => f.attachment), receiver_route: prepared?.route };
+      if(c.kind==="group") {
+        inner.fan=[{person:this.me.person,roster:this.me.hash}];
+        const reader=[...evidence.members.values()].find(p=>p.devices.some(x=>x.address===d.address&&x.fingerprint===d.fingerprint));
+        if(reader&&reader.person!==this.me.person)inner.fan.push({person:reader.person,roster:reader.hash});
+      }
       const envelope = await wire.seal(inner, this.keys, pub);
-      recs.push({ ...inner, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: "queued", detail: "" });
+      recs.push({ ...inner, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, ...(groupAdmission?{group_admission:groupAdmission}:{}), recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: "queued", detail: "" });
     }
     if (!recs.length) throw new Error("No authorized human audience device.");
     for (const r of recs) { const gate = await this.humanGate(c, r, checks); if (gate.why) throw new Error(gate.why); }
-    try { await this.commitReceiverCopies(recs, prepared, checks); }
+    const consentEvents=c.kind==="group"?[...await this.convEvents(c.id,checks),...await Promise.all(h.proof.map(async e=>({e,hash:await wire.eventHash(e)})))]:[];
+    try { await this.commitReceiverCopies(recs, prepared, checks, c.kind==="group"?await this.roomStoredOps(c.id,checks,recs[0],this.fp,consentEvents,evidence.members):[]); }
     catch (e) {
       if (e instanceof StoreConflict && attempt < 3) return this.sendHumanTurn(c, original, h, x, attempt + 1);
       throw e;
@@ -6127,20 +6263,27 @@ export class Engine {
     return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map(r => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
   }
 
-  async admitHumanTurn(n, env, pin, base, root, senderPerson) {
-    const c = await this.store.get("convs", n.conv);
+  async admitHumanTurn(n, env, pin, base, root, senderPerson, group = null) {
+    const c = group || await this.store.get("convs", n.conv);
     if (!c) throw new Hold("proof_pending", "Human turn waits for its original invitation root.");
     // Resolve only already pinned original members / exact carried host proof.
-    for (const m of root.members) if (m.person !== this.me.person) await this.pinChain(m.person);
+    for (const m of group ? [] : root.members) if (m.person !== this.me.person) await this.pinChain(m.person);
     for (const e of n.human.proof.filter(e => e.type === "scope")) {
       const hp = await this.sendKey(e.host.address);
       if (hp.fingerprint !== e.host.fingerprint || (await this.personOf(e.host.address, hp)).person !== e.host.person) throw new Hold("invalid", "Human host differs from pinned person proof.");
     }
     if (n.target && n.target.address === this.address) throw new Hold("invalid", "This browser runs no agent.");
-    const checks = [], stored = await this.groupRead(checks, "convs", n.conv), senderPin = await this.groupRead(checks, "pins", env.from);
+    const checks = [], stored = group ? await this.groupRecord(n.conv) : await this.groupRead(checks, "convs", n.conv), senderPin = await this.groupRead(checks, "pins", env.from);
     if (!stored || stored.root !== c.root || !senderPin || senderPin.pending || senderPin.fingerprint !== pin.fingerprint) throw new StoreConflict();
     const evidence = await this.humanEvidence(c, n.human, checks), x = await this.assistantOf(c, n, checks);
     this.humanTurnAuthorization(n, evidence, x, env.from, pin.fingerprint, this.address, this.fp);
+    if(group) {
+      const {packet}=await this.groupTurnEvidence(n.conv,checks);
+      if(wire.rootJSON(root)!==wire.rootJSON(packet.root))throw new Hold("invalid","Group root differs from verified context.");
+      await this.checkConversationAgent(n,env.from,pin.fingerprint,c);
+      if(n.target && !wire.agentAuthor(n.human) && evidence.members.epochs.get(pin.fingerprint)!==n.target.group_admission)throw new Hold("invalid","Group requester admission changed.");
+      if(x)await this.checkExternalReply(n,x,evidence.members,checks);
+    }
     if (x && !n.target && n.reply_to) { // an output names one exact request of its assistant
       const req = await this.groupRead(checks, "inbox", n.reply_to) || await this.groupRead(checks, "outbox", n.reply_to) || (await this.authorityRows({ conv: n.conv, lid: n.reply_to }, checks))[0];
       if (req && (req.pid !== n.pid || !["question", "task"].includes(req.kind))) throw new Hold("invalid", "Assistant output does not reply to its exact request.");
@@ -6151,8 +6294,13 @@ export class Engine {
     if (seen && !seen.history) { if (seen.hash !== hash) throw new Hold("conflicting_duplicate", "Human logical copy differs."); ops.checks = checks; return ops; }
     if (seen?.history) ops.push({ s: "inbox", k: seen.id, v: undefined });
     const own = senderPerson.person === this.me.person, rec = { ...base, v: 2, conv: n.conv, lid: n.lid, sub: "", pid: n.pid, human: n.human, origin: n.origin, emotion: n.emotion || "", target: n.target || null, ...(n.agent_id ? { agent_id: n.agent_id } : {}), replica: n.replica, own, read: own || base.read, state: "" };
-    const forwards = !own && wire.rootMember(root, this.me.person) ? await this.forwardStale(n, env, pin, c) : [];
-    ops.push({ s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, conv: n.conv, hash } }, ...forwards.map(r => ({ s: "outbox", k: r.id, v: r }))); ops.checks = checks;
+    const forwards = !group && !own && wire.rootMember(root, this.me.person) ? await this.forwardStale(n, env, pin, c) : [];
+    ops.push({ s: "inbox", k: env.id, v: rec }, { s: "lids", k: key, v: { id: env.id, conv: n.conv, hash } }, ...forwards.map(r => ({ s: "outbox", k: r.id, v: r })));
+    if(group) {
+      const events=[...await this.convEvents(n.conv,checks),...await Promise.all(n.human.proof.map(async e=>({e,hash:await wire.eventHash(e)})))];
+      ops.push(...await this.roomStoredOps(n.conv,checks,n,pin.fingerprint,events,evidence.members));
+    }
+    ops.checks = checks;
     return ops; // ordinary human traffic: no claim, worker, task or root expansion
   }
 
@@ -6327,9 +6475,10 @@ export class Engine {
     if (!n.agent_id && !n.target?.agent_id && !agent) return;
     if (!wire.validID(n.pid)) throw new Hold("invalid", "an agent's or named conversation turn has no participation");
     if (!c) throw new Hold("proof_pending", "named participation's conversation is not here yet");
-    const info = this.resolveAgent(n.pid, await this.convEvents(n.conv), await this.dmMembers(c));
+    let info = this.resolveAgent(n.pid, await this.convEvents(n.conv), await this.dmMembers(c));
     if (!info.invite || !info.host || info.state === "conflict") throw new Hold("proof_pending", "named participation has no unambiguous verified invitation");
     if (n.target && (n.target.agent_id !== info.agent_id || n.target.address !== info.host.address || n.target.fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "named request differs from its participation host");
+    if(n.human && wire.agentAuthor(n.human)) info=this.resolveAgent(n.human.author_pid,await this.convEvents(n.conv),await this.dmMembers(c));
     if (agent && (info.role === "human" || address !== info.host.address || fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "an agent's turn is not from its participation's exact host");
     // Ended is final, failing closed: an output still in flight at the end is
     // refused for good here if the end arrived first, while a device that
@@ -6354,19 +6503,21 @@ export class Engine {
       if (ev.author.address !== address || ev.author.fingerprint !== fp) throw new Hold("invalid", "event is not its sending device's own");
       const author = members.get(ev.author.person);
       const memberAuthor = member && author?.hashes.includes(ev.author.roster) && author.devices.some((d) => d.address === address && d.fingerprint === fp) && (!members.group || members.epochs.get(fp)===ev.author.group_admission);
-      if (ev.type === "invite") {
+      if(ev.type === "share") {
+        if(!member||!info.shares?.includes(wire.eventJSON(ev)))throw new Hold("invalid","share does not name the exact group agent membership");
+      } else if (ev.type === "invite") {
         if (!memberAuthor || ev.prev) throw new Hold("invalid", "invite is not this member's exact invitation");
       } else if (ev.type === "scope") {
         if (!memberAuthor || ev.prev !== info.invite) throw new Hold("invalid", "scope is not this member's projection of its invitation");
       } else if (["accept", "decline"].includes(ev.type)) {
         const p = members.hosts.get(ev.author.person) || members.get(ev.author.person);
         if (!host || ev.author.person !== info.host.person || !p?.hashes.includes(ev.author.roster) || ev.prev !== info.invite || members.group && (member ? members.epochs.get(fp)!==ev.author.group_admission : !!ev.author.group_admission)) throw new Hold("invalid", "decision is not from the exact invited host for its invite");
-      } else if ((!memberAuthor && !(info.role === "human" && host && info.decision && info.dismissalEvent === wire.eventJSON(ev))) || ![info.invite, info.decision, info.dismissal].includes(ev.prev)) throw new Hold("invalid", "only a current member or exact accepted human host ends participation");
+      } else if ((!memberAuthor && !((info.role === "human" || info.member && info.external) && host && info.dismissalEvent === wire.eventJSON(ev))) || ![info.invite, info.decision, info.dismissal].includes(ev.prev)) throw new Hold("invalid", "only a current member or exact accepted human host ends participation");
       return;
     }
     if (n.sub === "excerpt") {
       if (info.role === "human" && (info.state !== "active" || info.held)) throw new Hold("proof_pending", "human selected context waits for exact acceptance");
-      if (!member || address !== info.inviter.address || fp !== info.inviter.fingerprint || !n.replica || n.kind !== "message" || info.held || !["invited", "active"].includes(info.state)) throw new Hold("invalid", "excerpt is not from the inviter for a live granted participation");
+      if (!member || !(info.inviters||[info.inviter]).some(p=>p.address===address&&p.fingerprint===fp) || !n.replica || n.kind !== "message" || info.held || !["invited", "active"].includes(info.state)) throw new Hold("invalid", "excerpt is not from the inviter for a live granted participation");
       try { wire.parseGrantedExcerpt(n, info); } catch (e) { throw new Hold("invalid", e.message); }
       return;
     }
@@ -6374,6 +6525,10 @@ export class Engine {
     if (info.role === "human") throw new Hold("invalid", "human participation confers no executor authority");
     if (info.state !== "active" || info.held) throw new Hold(info.state === "invited" ? "proof_pending" : "invalid", "external participation is not active");
     if (["question", "task"].includes(n.kind)) {
+      if(n.human && wire.agentAuthor(n.human)) {
+        if(!n.target || n.target.address!==info.host.address || n.target.fingerprint!==info.host.fingerprint || (n.target.agent_id||"")!==(info.agent_id||""))throw new Hold("invalid","Room ask targets a different agent.");
+        return;
+      }
       if (!member || !n.target || n.target.address !== info.host.address || n.target.fingerprint !== info.host.fingerprint || n.target.agent_id !== info.agent_id || (members.group ? members.epochs.get(fp)!==n.target.group_admission : !!n.target.group_admission)) throw new Hold("invalid", "request does not name the exact invited agent and requester admission");
     } else if (["answer", "result"].includes(n.kind) || progressOutput(n)) {
       if (!host || n.agent_id !== info.agent_id || !n.reply_to) throw new Hold("invalid", "output does not belong to the exact invited agent");
@@ -6398,7 +6553,12 @@ export class Engine {
     for (const r of candidates) {
       const fp = r.to ? this.fp : r.fp, address = r.to ? this.address : r.from;
       const member = [...members.values()].some((p) => p.devices.some((d) => d.address === address && d.fingerprint === fp));
-      if (!member || r.conv !== n.conv || r.pid !== n.pid || r.sub || r.excerpt_pid || !["question", "task"].includes(r.kind) || !progressOutput(n) && replyKind(r.kind) !== n.kind || !r.lid || original && (original.lid !== r.lid || original.fp !== fp) || r.target?.address !== info.host.address || r.target?.fingerprint !== info.host.fingerprint || r.target?.agent_id !== info.agent_id || (members.group ? members.epochs.get(fp)!==r.target?.group_admission : !!r.target?.group_admission)) throw new Hold("invalid", "external answer does not match its exact participation request");
+      const agent=!!r.human && wire.agentAuthor(r.human);
+      if(agent) {
+        const e=await this.convEvents(n.conv,checks,r.human.author_pid),asking=this.resolveAgent(r.human.author_pid,e,await this.dmMembers(await this.groupRecord(n.conv)||await this.store.get("convs",n.conv),e,checks));
+        if(asking.state!=="active" || asking.held || asking.host?.address!==address || asking.host.fingerprint!==fp)throw new Hold("invalid","Asking agent membership ended or changed.");
+      }
+      if (!agent && !member || r.conv !== n.conv || r.pid !== n.pid || r.sub || r.excerpt_pid || !["question", "task"].includes(r.kind) || !progressOutput(n) && replyKind(r.kind) !== n.kind || !r.lid || original && (original.lid !== r.lid || original.fp !== fp) || r.target?.address !== info.host.address || r.target?.fingerprint !== info.host.fingerprint || r.target?.agent_id !== info.agent_id || (!agent && (members.group ? members.epochs.get(fp)!==r.target?.group_admission : !!r.target?.group_admission))) throw new Hold("invalid", "external answer does not match its exact participation request");
       original = { lid: r.lid, fp };
     }
   }
@@ -6535,6 +6695,7 @@ export class Engine {
   }
 
   async externalGate(c, rec, checks) {
+    if (rec.human) return this.humanGate(c,rec,checks);
     if (rec.forwarded) return this.disclosureGate(c, rec, checks);
     try {
       if (!c) throw new Error("External conversation is not kept here.");
@@ -6562,13 +6723,19 @@ export class Engine {
     const others = ending ? [...new Set(events.map(x => x.e.pid))].map(pid => this.resolveAgent(pid, events, members)).filter(p => p.role === "human" && p.state === "active" && !p.held).map(p => p.host) : [];
     for (const p of [...members.values(), info.host, ...others]) { try { await this.refreshPerson(p); } catch (e) { if (!retryable(e)) throw e; } }
     const checks=[];
-    events=await this.convEvents(c.id,checks,ending ? undefined : n.pid);if(n.sub==="event")events.push(await this.eventRecord(n.body));
+    events=await this.convEvents(c.id,checks,members.group || ending ? undefined : n.pid);if(n.sub==="event")events.push(await this.eventRecord(n.body));
     members = await this.dmMembers(c, events, checks); info = this.resolveAgent(n.pid, events, members);
+    if(members.group && info.member && !n.sub && !n.human) n={...n,human:await this.roomPlan(c,events,members)};
     this.externalRole(n, info, members, this.address, this.fp);
     checkFiles(n.files || []);
     const host = info.host.devices.find((d) => d.address === info.host.address && d.fingerprint === info.host.fingerprint);
     const extra = ending ? [...new Set(events.map(x => x.e.pid))].map(pid => this.resolveAgent(pid, events, members)).filter(p => p.role === "human" && p.state === "active" && !p.held).map(p => p.host.devices.find(d => d.address === p.host.address && d.fingerprint === p.host.fingerprint)).filter(Boolean) : [];
-    const devices = [...new Map([host, ...extra, ...(excerptHostOnly ? [] : [...members.values()].flatMap((p) => p.devices))].filter((d) => d && d.address !== this.address).map(d=>[d.address,d])).values()];
+    const roomHosts=[];
+    if(n.human) {
+      const evidence=await this.humanEvidence(c,n.human,checks);
+      for(const p of evidence.scopes.values())roomHosts.push(p.host.devices.find(d=>d.address===p.host.address&&d.fingerprint===p.host.fingerprint));
+    }
+    const devices = [...new Map([host, ...extra, ...roomHosts, ...(excerptHostOnly ? [] : [...members.values()].flatMap((p) => p.devices))].filter((d) => d && d.address !== this.address).map(d=>[d.address,d])).values()];
     const firstID = wire.newID(), lid = n.lid || (["question", "task"].includes(n.kind) && !n.sub ? firstID : wire.newID()), at = this.now();
     const plain = [];
     for (const f of n.files || []) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
@@ -6597,7 +6764,7 @@ export class Engine {
     if (!recs.length) throw new Error("No participation recipient.");
     for (const rec of recs) { const gate = await this.externalGate(c, rec, checks); if (gate.why) throw new Error(gate.why); }
     const carriers=[];
-    if(members.group && n.sub==="event" && wire.parseEvent(n.body).type==="invite") {
+    if(members.group && n.sub==="event" && ["invite","share"].includes(wire.parseEvent(n.body).type)) {
       const selectedRows=(await this.convMessages(c.id,await this.store.all("inbox"),await this.store.all("outbox")));
       for (const ref of wire.parseEvent(n.body).grant || []) {
         const source=selectedRows.find(row=>row.lid===ref.lid&&(row.fp||this.fp)===ref.fingerprint);
@@ -6610,7 +6777,7 @@ export class Engine {
       }
     }
     if(prepared && carriers.length)throw Error("Receiver setup does not belong on participation proof carriers.");
-    try { await this.commitReceiverCopies([...recs,...carriers],prepared,checks); }
+    try { await this.commitReceiverCopies([...recs,...carriers],prepared,checks,members.group?await this.roomStoredOps(c.id,checks,n,this.fp,events,members):[]); }
     catch (e) {
       // Receipt push can change an earlier outbox row in this captured scope.
       // Nothing is committed yet: recheck the same signed turn, never recreate
@@ -6679,7 +6846,7 @@ export class Engine {
     const packet = group ? currentPacket || await this.groupCurrentState(c.id, checks) : null;
     const root = group ? packet.root : wire.parseRoot(c.root);
     const out = new Map();
-    if (group) { out.group=packet;out.epochs=new Map();out.groupInvites=new Set(); }
+    if (group) { out.group=packet;out.epochs=new Map();out.groupInvites=new Set();out.roomEvents=new Set();out.roomAuthors=new Map(); }
     for (const member of group ? await wire.effectiveGroupMembers(packet.state,packet.withdrawals) : root.members) {
       const p = group ? await this.groupRead(checks, member.person === this.me?.person ? "kv" : "persons", member.person === this.me?.person ? "person" : member.person) : member.person === this.me?.person ? this.me : await this.store.get("persons", member.person);
       if (p && p.state !== "conflict" && p.hashes.includes(group ? member.roster : wire.rootMember(root, p.person))) {
@@ -6689,21 +6856,43 @@ export class Engine {
     }
     out.hosts = new Map();
     for (const { e } of events || await this.convEvents(c.id)) {
-      const h = ["invite", "scope"].includes(e.type) && e.host; // a scope names its invite's host
+      const h = ["invite", "scope", "share"].includes(e.type) && e.host; // a scope names its invite's host
       if (!h || out.has(h.person)) continue;
       const p = group ? await this.groupRead(checks, h.person === this.me?.person ? "kv" : "persons", h.person === this.me?.person ? "person" : h.person) : h.person === this.me?.person ? this.me : await this.store.get("persons", h.person);
       if (p && ["self", "pinned"].includes(p.state) && p.devices.some((d) => d.address === h.address && d.fingerprint === h.fingerprint)) out.hosts.set(h.person, p);
+    }
+    if(group) for(const {e,hash} of events || await this.convEvents(c.id)) {
+      const kept=await this.groupRead(checks,"kv","room-event/"+c.id+"/"+hash);
+      if(!kept || kept.pid!==e.pid)continue;
+      const p=await this.groupRead(checks,e.author.person===this.me?.person?"kv":"persons",e.author.person===this.me?.person?"person":e.author.person);
+      if(p && ["self","pinned"].includes(p.state) && p.hashes.includes(e.author.roster) && p.devices.some(d=>d.address===e.author.address&&d.fingerprint===e.author.fingerprint)) {out.roomEvents.add(hash);out.roomAuthors.set(p.person,p);}
     }
     if (group) {
       const g=await this.groupRead(checks,"kv","group/"+c.id);
       for(const {e,hash} of events || await this.convEvents(c.id)) {
         const scope=e.group, author=out.get(e.author.person), record=scope && g.records[scope.seq] && wire.parseGroupCommit(g.records[scope.seq]);
-        if(e.type!=="invite"&&e.type!=="scope" || !scope || !record || record.hash!==scope.hash || scope.seq>packet.state.seq || !author || out.epochs.get(e.author.fingerprint)!==e.author.group_admission)continue; // a room scope carries its invite's binding
+        if(e.type!=="invite"&&e.type!=="scope"&&e.type!=="share" || !scope || !record || record.hash!==scope.hash || scope.seq>packet.state.seq || !out.roomEvents.has(hash) && (!author || out.epochs.get(e.author.fingerprint)!==e.author.group_admission))continue; // a room scope carries its invite's binding
         const host=out.get(e.host.person), isMember=!!host;
         if(scope.host_role==="member" ? !isMember || out.epochs.get(e.host.fingerprint)!==scope.host_admission : scope.host_role!=="visitor" || isMember || scope.host_admission)continue;
-        if((e.task_keys || []).some((fp,i)=>!out.epochs.get(fp)||out.epochs.get(fp)!==scope.task_admissions?.[i]))continue;
+        if(!out.roomEvents.has(hash) && (e.task_keys || []).some((fp,i)=>!out.epochs.get(fp)||out.epochs.get(fp)!==scope.task_admissions?.[i]))continue;
+        if(scope.host_role==="visitor" && ["invite","scope"].includes(e.type) && !record.admins.includes(e.author.person))continue;
         out.groupInvites.add(hash);
       }
+    }
+    out.shareGrants = new Map();
+    if(group)for(const {e,hash} of events || await this.convEvents(c.id,checks)) {
+      if(e.type!=="share")continue;
+      const allowed=[];
+      for(const ref of e.grant||[]) {
+        let visible=!!await this.groupRead(checks,"kv",this.roomReaderKey(c.id,ref,e.author.person,e.author.group_admission));
+        const member=wire.groupMember(packet.state,e.author.person);
+        if(!visible && member && await wire.groupAdmissionHash(member.admission)===e.author.group_admission) {
+          const h=member.admission.history?.find(h=>h.lid===ref.lid&&h.author===ref.fingerprint);
+          if(h)for(const row of await this.authorityRows({conv:c.id},checks))if(row.lid===ref.lid && (row.fp||this.fp)===ref.fingerprint && await wire.groupHistoryContentHash(c.id,row)===h.hash)visible=true;
+        }
+        if(visible)allowed.push(ref);
+      }
+      out.shareGrants.set(hash,allowed);
     }
     return out;
   }
@@ -6726,6 +6915,7 @@ export class Engine {
     // new membership table. Guard the whole captured set, including absence.
     const rows = (await this.authorityRows({ conv }, checks)).sort((a, b) => a.at - b.at);
     const out = [], seen = new Set();
+    for(const raw of await this.groupRead(checks||[],"kv","room-memberships/"+conv)||[]) { const e=wire.parseEvent(raw), hash=await wire.eventHash(e);if((!pid||e.pid===pid)&&!seen.has(hash)){seen.add(hash);out.push({e,hash});} }
     for (const m of rows) {
       try {
         const events = m.sub === "event" ? [wire.parseEvent(m.body)] : m.human ? wire.parseHumanTurn(m.human).proof : [];
@@ -6752,16 +6942,18 @@ export class Engine {
     const author = (a) => { const p = m.get(a.person); return p && p.hashes.includes(a.roster) && (m.group ? m.epochs.get(a.fingerprint)===a.group_admission : !a.group_admission) ? at(p, a.address, a.fingerprint) : null; };
     const host = (h) => (h ? at(m.get(h.person) || m.hosts?.get(h.person), h.address, h.fingerprint) : null);
     const memberKey = (fp) => [...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp));
-    const invites = new Map(), decisions = [], dismisses = [], scopes = [];
+    const priorAuthor=x=>m.roomEvents?.has(x.hash)?at(m.roomAuthors?.get(x.e.author.person),x.e.author.address,x.e.author.fingerprint):null;
+    const invites = new Map(), decisions = [], dismisses = [], scopes = [], shares = [];
     for (const x of evs.filter((y) => y.e.pid === pid)) {
       const p = m.hosts?.get(x.e.author.person);
       const decisionAuthor = ["accept", "decline"].includes(x.e.type) && !x.e.author.group_admission && p?.hashes.includes(x.e.author.roster) && at(p, x.e.author.address, x.e.author.fingerprint);
-      const humanLeaveAuthor = x.e.type === "dismiss" && !x.e.author.group_admission && p?.hashes.includes(x.e.author.roster) && at(p, x.e.author.address, x.e.author.fingerprint) && evs.some(y => y.e.pid === pid && ["invite", "scope"].includes(y.e.type) && y.e.role === "human" && author(y.e.author) && host(y.e.host) && y.e.host.person === x.e.author.person && y.e.host.address === x.e.author.address && y.e.host.fingerprint === x.e.author.fingerprint);
-      if (!author(x.e.author) && !decisionAuthor && !humanLeaveAuthor) { info.held++; continue; }
+      const humanLeaveAuthor = x.e.type === "dismiss" && !x.e.author.group_admission && p?.hashes.includes(x.e.author.roster) && at(p, x.e.author.address, x.e.author.fingerprint) && evs.some(y => y.e.pid === pid && ["invite", "scope"].includes(y.e.type) && (y.e.role === "human" || y.e.audience === "room" && y.e.group?.host_role === "visitor") && author(y.e.author) && host(y.e.host) && y.e.host.person === x.e.author.person && y.e.host.address === x.e.author.address && y.e.host.fingerprint === x.e.author.fingerprint);
+      if (!author(x.e.author) && !priorAuthor(x) && !decisionAuthor && !humanLeaveAuthor) { info.held++; continue; }
       if (x.e.type === "invite") {
-        if (!host(x.e.host) || !(x.e.task_keys || []).every(memberKey) || (m.group ? !m.groupInvites.has(x.hash) : !!x.e.group)) { info.held++; continue; }
+        if (!host(x.e.host) || !(x.e.task_keys || []).every(memberKey) && !m.roomEvents?.has(x.hash) || (m.group ? !m.groupInvites.has(x.hash) : !!x.e.group)) { info.held++; continue; }
         invites.set(x.hash, x);
       } else if (x.e.type === "scope") { if (!m.group || m.groupInvites.has(x.hash)) scopes.push(x); } // an invite's public projection, by its own author; in a group, a room scope whose binding verifies
+      else if (x.e.type === "share") shares.push(x);
       else if (x.e.type === "dismiss") dismisses.push(x);
       else decisions.push(x);
     }
@@ -6783,12 +6975,20 @@ export class Engine {
     if (invites.size === 1) {
       [[info.invite, inv]] = [...invites];
       if (!info.scope) for (const s of scopes) if (wire.projectsHash(s.e, inv.e, info.invite) && (!info.scope || s.hash < info.scope)) info.scope = s.hash;
-      Object.assign(info, { role: inv.e.role || "", host: host(inv.e.host), inviter: author(inv.e.author), grant: inv.e.grant || [], taskKeys: inv.e.task_keys || [], audience: inv.e.audience || "", until: inv.e.until || 0,
+      Object.assign(info, { role: inv.e.role || "", host: host(inv.e.host), inviter: author(inv.e.author)||priorAuthor(inv), grant: [...(inv.e.grant || [])], taskKeys: m.group && m.roomEvents?.has(inv.hash) ? (inv.e.task_keys||[]).filter((fp,i)=>m.epochs.get(fp)===inv.e.group.task_admissions?.[i]) : inv.e.task_keys || [], audience: inv.e.audience || "", until: inv.e.until || 0,
         external: m.group ? inv.e.group.host_role === "visitor" : !m.has(inv.e.host.person),
         ...(m.group ? {group:inv.e.group} : {}),
         ...(inv.e.host.agent_id ? { agent_id: inv.e.host.agent_id } : {}), note: inv.e.note, invited: inv.e.ts, state: "invited" });
     } else if (invites.size > 1) {
       Object.assign(info, { state: "conflict", conflict: "different invites share this participation id" });
+    }
+    info.member = !!m.group && info.role === "" && info.audience === "room" && !info.until;
+    info.inviters = info.inviter ? [info.inviter] : [];
+    info.shares = [];
+    for(const x of shares) {
+      if(!inv || x.e.prev!==info.invite || !["person","address","fingerprint","agent_id"].every(k=>(x.e.host?.[k]||"")===(inv.e.host?.[k]||"")) || !m.groupInvites?.has(x.hash) || x.e.audience!==info.audience) {info.held++;continue;}
+      info.shares.push(wire.eventJSON(x.e));const p=author(x.e.author)||priorAuthor(x);if(!info.inviters.some(i=>i.person===p.person))info.inviters.push(p);
+      for(const g of m.shareGrants?.get(x.hash)||[])if(!info.grant.some(r=>r.lid===g.lid&&r.fingerprint===g.fingerprint))info.grant.push(g);
     }
     const decided = [];
     for (const x of decisions) {
@@ -6803,7 +7003,8 @@ export class Engine {
     else if (decided.length > 1) Object.assign(info, { state: "conflict", decision: decided[0].hash, conflict: "the host decided more than once" });
     for (const x of dismisses) {
       const h = inv?.e.host;
-      if (!author(x.e.author) && !(info.role === "human" && decided.length === 1 && decided[0].e.type === "accept" && x.e.author.person === h.person && x.e.author.address === h.address && x.e.author.fingerprint === h.fingerprint)) { info.held++; continue; }
+      if (!author(x.e.author) && !priorAuthor(x) && !((info.role === "human" || info.member && info.external) && x.e.author.person === h.person && x.e.author.address === h.address && x.e.author.fingerprint === h.fingerprint)) { info.held++; continue; }
+      if(m.group && info.member && info.external && !priorAuthor(x) && ![info.host.person,info.inviter.person].includes(x.e.author.person) && !wire.groupMember(m.group.state,x.e.author.person)?.admin) {info.held++;continue;}
       if (!known.has(x.e.prev)) { info.held++; continue; }
       if (info.state !== "dismissed" || x.hash < info.dismissal) { info.dismissal = x.hash; info.dismissalEvent = wire.eventJSON(x.e); }
       info.state = "dismissed";
@@ -6881,7 +7082,7 @@ export class Engine {
       if (m) shared.push(m.id); else missing++;
     }
     const whose = hostHere ? "your" : label(info.host) + "'s";
-    const v = { pid: info.pid, state: info.state, host: this.personView(info.host), host_here: hostHere, inviter: this.personView(info.inviter),
+    const v = { member:!!info.member || !!groupPeople && !info.external,pids:[info.pid],inviters:(info.inviters||[]).map(p=>this.personView(p)),pid: info.pid, state: info.state, host: this.personView(info.host), host_here: hostHere, inviter: this.personView(info.inviter),
       ...(info.external ? { external: true } : {}),
       ...(info.agent_id ? { agent_id: info.agent_id } : {}),
       note: info.note, shared, missing, tasks_from: info.taskKeys.map((fp) => {
@@ -6908,7 +7109,8 @@ export class Engine {
     }
     if (info.held > 0) v.state_text += " Some of its records do not count here yet.";
     if (groupPeople) {
-      v.state_text=v.state_text.replaceAll("this DM","this group").replaceAll("either of you","current group members");
+      v.state_text=info.member && info.state==="active" && !info.held && !hostHere ? "Member of this group. Can be asked by every member; its owner decides what runs. Stays until explicitly removed." : v.state_text.replaceAll("this DM","this group").replaceAll("either of you","current group members");
+      if(info.member && info.external){v.can_dismiss=[info.host.person,info.inviter.person].includes(this.me.person)||!!groupPeople.find(p=>p.person===this.me.person)?.admin;v.state_text += " Runs on " + label(info.host) + "’s device, outside this group; that device receives every new message and file here until the agent is removed.";}
       if(role!=="member"){v.can_ask=false;v.can_dismiss=false;}
     } else if (info.external && !people.some((p) => p.person === this.me?.person && wire.validID(p.person) && p.person !== info.host.person)) { v.can_ask = false; v.can_dismiss = false; }
     return v;
@@ -6917,7 +7119,8 @@ export class Engine {
   // agentConv finds the conversation and participation of pid.
   async agentConv(pid) {
     const row = [...(await this.store.all("inbox")), ...(await this.store.all("outbox"))].find((m) => m.pid === pid && m.sub === "event" && m.conv);
-    const c = row && (await this.store.get("convs", row.conv) || await this.groupRecord(row.conv));
+    const conv = row?.conv || await this.store.get("kv", "room-pid/"+pid);
+    const c = conv && (await this.store.get("convs", conv) || await this.groupRecord(conv));
     if (!c) throw new Error("No such agent in a conversation here.");
     const info = this.resolveAgent(pid, await this.convEvents(c.id), await this.dmMembers(c));
     return { c, info };
@@ -6940,6 +7143,7 @@ export class Engine {
     let hpp = [...m.values()].find((p) => p.devices.some((d) => d.address === host));
     const external = !hpp;
     if (external) {
+      if(m.group && !wire.groupMember(m.group.state,this.me.person)?.admin)throw new Error("Only a group administrator can add an agent whose owner is outside this group.");
       if (!agent_id) throw new Error("An outside host needs an exact named agent.");
       const pin = await this.sendKey(host);
       hpp = await this.personOf(host, pin);
@@ -6958,23 +7162,27 @@ export class Engine {
     }
     for (const fp of tasks) if (![...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp))) throw new Error(fp + " is not the key of a member of that conversation.");
     const group=m.group?{seq:m.group.state.seq,hash:await wire.groupStateHash(m.group.state),host_role:external?"visitor":"member",...(external?{}:{host_admission:m.epochs.get(hp.fingerprint)}),...(tasks.length?{task_admissions:tasks.map(fp=>m.epochs.get(fp))}:{})}:null;
-    const e = await wire.signEvent(this.keys, { conv, pid: wire.newID(), type: "invite", ts: Math.floor(this.now() / 1000), author: {...this.author(),...(m.group?{group_admission:m.epochs.get(this.fp)}:{})},
+    const existing = m.group && (await this.agentsOf(c)).find(p=>["invited","active"].includes(p.state)&&p.host?.address===hp.address&&p.host.fingerprint===hp.fingerprint&&(p.agent_id||"")===agent_id);
+    const e = await wire.signEvent(this.keys, { conv, pid: existing ? existing.pid : wire.newID(), type: existing ? "share" : "invite",...(existing?{prev:existing.invite}:{}), ts: Math.floor(this.now() / 1000), author: {...this.author(),...(m.group?{group_admission:m.epochs.get(this.fp)}:{})},
       host: { person: hp.person, address: hp.address, fingerprint: hp.fingerprint, ...(selected ? { agent_id: selected.agent_id } : {}) }, grant: grant.length ? grant : null,
-      audience: "conversation", task_keys: tasks.length ? tasks : null, note: String(note).trim(),...(group?{group}:{}) });
+      audience: existing ? existing.audience : m.group ? "room" : "conversation", task_keys: existing ? null : tasks.length ? tasks : null, note: existing ? "" : String(note).trim(),...(group?{group:existing?{...group,task_admissions:undefined}:group}:{}) });
     await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(e), pid: e.pid });
+    if(!existing && m.group) { const scope=await wire.signEvent(this.keys,await wire.scopeOf(e,e.ts));await this.sendConv(c,{kind:"message",sub:"event",body:wire.eventJSON(scope),pid:e.pid}); }
     if (external) await this.sendGrantedExcerpts(c, e);
-    return { pid: e.pid, state: "invited" };
+    return this.agentView((await this.agentConv(e.pid)).info,[],null,m.group?[...m.values()]:null,"member");
   }
 
   // dismissAgent ends a participation, following the record it ends.
-  async dismissAgent(pid) {
+  async dismissAgent(pid,duplicates=true) {
     const { c, info } = await this.agentConv(pid);
+    if(duplicates && (c.kind==="group"||JSON.parse(c.root).kind==="group"))for(const other of await this.participationsOf(c))if(other.pid!==pid && !other.role && ["active","invited"].includes(other.state) && other.host?.address===info.host.address && other.host.fingerprint===info.host.fingerprint && (other.agent_id||"")===(info.agent_id||""))await this.dismissAgent(other.pid,false);
     if (info.role === "human") throw new Error("Use the human participation end action.");
-    if (!this.me || !(await this.dmMembers(c)).has(this.me.person)) throw new Error("This device does not speak for a member of that conversation.");
+    const members=await this.dmMembers(c);
+    if (!this.me || !members.has(this.me.person) && !(info.member && info.external && info.host?.person===this.me.person)) throw new Error("This device does not speak for a member of that conversation.");
+    if(members.group && info.member && info.external && ![info.host.person,info.inviter.person].includes(this.me.person) && !wire.groupMember(members.group.state,this.me.person)?.admin)throw new Error("Only a group administrator, the person who added this outside agent, or its owner can remove it.");
     let prev = info.decision;
     if (info.state === "invited") prev = info.invite;
     else if (!["active", "declined", "conflict"].includes(info.state) || !prev) throw new Error("The agent's participation is " + info.state + ".");
-    const members=await this.dmMembers(c);
     const e = await wire.signEvent(this.keys, { conv: c.id, pid, type: "dismiss", prev, ts: Math.floor(this.now() / 1000), author: {...this.author(),...(members.group?{group_admission:members.epochs.get(this.fp)}:{})} });
     await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(e), pid });
     return { pid, state: "dismissed" };
@@ -7227,7 +7435,7 @@ export class Engine {
     try { e = wire.parseEvent(body); } catch (err) { return "A record about an agent that cannot be read here."; }
     const me = this.me && this.me.person;
     const known=id=>(people||[peer]).filter(Boolean).find(p=>p.person===id);
-    const who = (id) => (id && id === me ? "You" : known(id)?.label || (people ? e.author?.person===id?e.author.address:"Outside host" : "Someone not in this DM"));
+    const who = (id) => (id && id === me ? "You" : known(id)?.label || (people ? "An outside agent's owner" : "Someone not in this DM"));
     const whose = (id) => (id && id === me ? "your" : known(id)?.label ? known(id).label+"'s" : "an outside host's");
     const room=people?"this group":"this DM";
     if (human || e.role === "human") { // liveagent.go humanEventText: people are invited, join, decline, leave or are removed
@@ -7243,8 +7451,9 @@ export class Engine {
       return "A participation record (" + e.type + ").";
     }
     switch (e.type) {
-    case "invite": case "scope": return who(e.author.person) + " invited " + (e.host ? whose(e.host.person) + " agent (on " + e.host.address + ")" : "an agent") + " into " + room + "."; // a scope is the invitation's public part
-    case "accept": return who(e.author.person) + " accepted: the agent joins " + room + ".";
+    case "invite": case "scope": return who(e.author.person) + " invited " + (e.host ? whose(e.host.person) + (people && e.group?.host_role==="visitor" ? " agent, whose owner is outside this group" : " agent") : "an agent") + " into " + room + "."; // a scope is the invitation's public part
+    case "share": return who(e.author.person) + " shared more selected messages with the agent already in " + room + ".";
+    case "accept": return who(e.author.person) + (people && !e.author.group_admission ? " accepted: this outside agent now receives every new message and file in this group until removed." : " accepted: the agent joins " + room + ".");
     case "decline": return who(e.author.person) + " declined the invitation for the agent.";
     case "dismiss": return who(e.author.person) + " dismissed the agent: it gets nothing more from " + room + ".";
     }

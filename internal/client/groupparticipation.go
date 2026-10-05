@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"slices"
 )
 
 func (m dmMembers) authorEpoch(au protocol.EventAuthor) bool {
@@ -38,7 +39,7 @@ func (m dmMembers) keyEpoch(fp string) string {
 
 // Scope is bound to original public proof, never a label or today's inferred host role.
 func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (bool, error) {
-	if ev.Group == nil || ev.Host == nil || !m.authorEpoch(ev.Author) {
+	if ev.Group == nil || ev.Host == nil || !m.authorEpoch(ev.Author) && !m.roomEvents[ev.Hash()] {
 		return false, nil
 	}
 	scope := ev.Group
@@ -50,6 +51,9 @@ func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (boo
 		return false, err
 	}
 	if c.Hash != scope.Hash || scope.Seq > m.group.State.Seq {
+		return false, nil
+	}
+	if scope.HostRole == "visitor" && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) && !slices.Contains(c.Admins, ev.Author.Person) {
 		return false, nil
 	}
 	_, member := m.persons[ev.Host.Person]
@@ -64,7 +68,7 @@ func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (boo
 		return false, nil
 	}
 	for i, fp := range ev.TaskKeys {
-		if current := m.keyEpoch(fp); current == "" || current != scope.TaskAdmissions[i] {
+		if current := m.keyEpoch(fp); !m.roomEvents[ev.Hash()] && (current == "" || current != scope.TaskAdmissions[i]) {
 			return false, nil
 		}
 	}
@@ -83,6 +87,8 @@ func (m dmMembers) bindGroupInvite(ev *protocol.ParticipationEvent) error {
 		if scope.HostAdmission == "" {
 			return ErrGroupContextPending
 		}
+	} else if ev.Type == protocol.EventInvite && !member.Admin {
+		return errors.New("only a group administrator can add an agent whose owner is outside this group")
 	}
 	for _, fp := range ev.TaskKeys {
 		epoch := m.keyEpoch(fp)
@@ -93,6 +99,17 @@ func (m dmMembers) bindGroupInvite(ev *protocol.ParticipationEvent) error {
 	}
 	ev.Group = scope
 	return nil
+}
+
+func (m dmMembers) mayRemoveAgent(info ParticipationInfo, author protocol.EventAuthor) bool {
+	if m.group == nil || !info.Member || !info.External {
+		return true
+	}
+	if author.Person == info.Host.Person || author.Person == info.Inviter.Person {
+		return true
+	}
+	member, ok := m.group.State.Member(author.Person)
+	return ok && member.Admin && m.authorEpoch(author)
 }
 func (m dmMembers) requestEpoch(sender, fp string, t *envelope.Target) bool {
 	if m.group == nil {
@@ -105,8 +122,8 @@ func (m dmMembers) requestEpoch(sender, fp string, t *envelope.Target) bool {
 // admission fence. Ordinary/history/file rows keep their existing interpretation.
 func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool, error) {
 	var in envelope.Inner
-	var state, required, fp, epoch, target string
-	err := a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(pid,''),kind,body,coalesce(sub,''),coalesce(origin,''),coalesce(reply_to,''),coalesce(agent_id,''),coalesce(target,''),state,coalesce(required_cap,''),coalesce(recipient_fp,''),coalesce(group_admission,''),coalesce(status,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &in.ReplyTo, &in.AgentID, &target, &state, &required, &fp, &epoch, &in.Status)
+	var state, required, fp, epoch, target, human string
+	err := a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(pid,''),kind,body,coalesce(sub,''),coalesce(origin,''),coalesce(reply_to,''),coalesce(agent_id,''),coalesce(target,''),state,coalesce(required_cap,''),coalesce(recipient_fp,''),coalesce(group_admission,''),coalesce(status,''),coalesce(human,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &in.ReplyTo, &in.AgentID, &target, &state, &required, &fp, &epoch, &in.Status, &human)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -131,6 +148,11 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 			return true, false, err
 		}
 	}
+	if human != "" {
+		if err = json.Unmarshal([]byte(human), &in.Human); err != nil {
+			return true, false, err
+		}
+	}
 	in.Replica = in.Sub == envelope.SubExcerpt
 	m, err := membersIn(a.store.db, in.Conv)
 	if errors.Is(err, ErrGroupContextPending) || errors.Is(err, errPersonConflict) {
@@ -147,6 +169,15 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		return true, false, err
 	}
 	allowed := m.device(env.To, fp) && epoch != "" && epoch == m.keyEpoch(fp) || info.External && env.To == info.Host.Address && fp == info.Host.Fingerprint && epoch == ""
+	if in.Human != nil {
+		err = humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), env.To, fp, false)
+		allowed = err == nil && (!m.device(env.To, fp) || epoch != "" && epoch == m.keyEpoch(fp))
+	}
+	if allowed && in.Human != nil && in.Human.AgentAuthor() && in.Target != nil {
+		var originState string
+		err = a.store.db.QueryRow(`SELECT state FROM inbox WHERE conv=? AND (id=? OR lid=?)`, in.Conv, in.ReplyTo, in.ReplyTo).Scan(&originState)
+		allowed = err == nil && originState == stateRunning
+	}
 	if allowed {
 		err = externalTurn(in, info, m, a.Address, a.Self().Fingerprint())
 		allowed = err == nil

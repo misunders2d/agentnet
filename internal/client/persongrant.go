@@ -163,9 +163,6 @@ func (a *Agent) personGrantStop(j job) string {
 	return ""
 }
 
-// TODO(integrate:P6): use questionApproved in roomChain's upstream question
-// checks, just as taskGranted already includes each upstream person's grant.
-
 // PermissionState is the effective local permission for this current peer key.
 func (a *Agent) PermissionState(address, key string) (questions, tasks bool, err error) {
 	questions, err = questionApproved(a.store.db, address, key)

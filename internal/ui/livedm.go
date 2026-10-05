@@ -366,6 +366,9 @@ func (l *Live) DM(id string) (DMThread, error) {
 				}
 			}
 
+			if m.Human != nil && m.Human.AgentAuthor() {
+				dm.AgentAuthorPID = m.Human.AuthorPID
+			}
 			dm.ExcerptPID, dm.ClaimedKey, dm.VerifiedAgent = m.ExcerptPID, m.Claimed, m.VerifiedAgent
 			if c.Kind == protocol.ConvKindGroup {
 				key := m.Key

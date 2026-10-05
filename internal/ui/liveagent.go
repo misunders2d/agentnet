@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ type dmPeople struct {
 	me, peer PersonView
 	role     string
 	group    bool
+	admins   map[string]bool
 	members  []PersonView
 	humans   map[string]client.ParticipationInfo // human participations of the DM, by PID
 	known    map[string]PersonView               // other persons pinned here, by id: names for outside hosts, nothing more (marked: outsider)
@@ -163,12 +165,18 @@ func (p dmPeople) who(id string) string {
 	}
 	if v, ok := p.byPerson(id); ok {
 		if p.outsider(id) {
+			if p.group {
+				return v.Label + " (outside this group)"
+			}
 			return v.Label + " (not in this DM)"
 		}
 		return v.Label
 	}
 	if p.role == "visitor" && len(p.members) < 2 { // an original not held here may be the author
 		return "A DM member"
+	}
+	if p.group {
+		return "An outside agent's owner"
 	}
 	return "Someone not in this DM"
 }
@@ -179,6 +187,9 @@ func (p dmPeople) whose(id string) string {
 	}
 	if v, ok := p.byPerson(id); ok {
 		if p.outsider(id) {
+			if p.group {
+				return v.Label + "'s"
+			}
 			return v.Label + " (not in this DM)'s"
 		}
 		return v.Label + "'s"
@@ -199,6 +210,22 @@ func (l *Live) conversationPeople(c client.ConversationInfo) dmPeople {
 	p := l.people(c.Peer)
 	p.role = c.Role
 	p.group = c.Kind == protocol.ConvKindGroup
+	if p.group {
+		p.admins = map[string]bool{}
+		if known, err := l.a.KnownPersons(); err == nil {
+			p.known = map[string]PersonView{}
+			for _, k := range known {
+				if k.State == PersonPinned {
+					p.known[k.Person] = personView(k)
+				}
+			}
+		}
+		if packet, err := l.a.GroupContext(c.ID); err == nil {
+			for _, member := range packet.State.EffectiveMembers(packet.Withdrawals) {
+				p.admins[member.Person] = member.Admin
+			}
+		}
+	}
 	if !p.group {
 		if infos, err := l.a.Participations(c.ID); err == nil {
 			for _, info := range infos {
@@ -240,24 +267,26 @@ func eventText(body string, p dmPeople) string {
 	room := "this DM"
 	if p.group {
 		room = "this group"
-		if _, known := p.byPerson(ev.Author.Person); !known {
-			who = ev.Author.Address
-		}
 	}
 	switch ev.Type {
 	case protocol.EventInvite, protocol.EventScope: // a scope is the invitation's public part
 		host := "an agent"
 		if ev.Host != nil {
 			host = p.whose(ev.Host.Person) + " agent (on " + ev.Host.Address + ")"
+			if p.group {
+				host = p.whose(ev.Host.Person) + " agent"
+			}
 			if p.group && ev.Group != nil && ev.Group.HostRole == "visitor" {
-				host = "an outside host's agent (on " + ev.Host.Address + ")"
+				host = p.whose(ev.Host.Person) + " agent, whose owner is outside this group"
 			}
 		}
 		return who + " invited " + host + " into " + room + "."
+	case protocol.EventShare:
+		return who + " shared more selected messages with the agent already in " + room + "."
 	case protocol.EventAccept:
 		if p.group {
 			if ev.Author.GroupAdmission == "" {
-				return "Outside host " + ev.Author.Address + " accepted participation in this group."
+				return who + " accepted: this outside agent now receives every new message and file in this group until removed."
 			}
 			return who + " accepted: the agent participates in this group."
 		}
@@ -344,6 +373,59 @@ func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([
 		}
 		out = append(out, agentView(info, p, msgs, l.namedAgentReady(info)))
 	}
+	if p.group {
+		unique := map[string]int{}
+		var merged []AgentView
+		for _, v := range out {
+			k := v.Host.Address + "/" + v.Host.Fingerprint + "/" + v.AgentID
+			if i, ok := unique[k]; ok && (merged[i].State == client.PartActive || merged[i].State == client.PartInvited) && (v.State == client.PartActive || v.State == client.PartInvited) {
+				old := merged[i]
+				if old.State != client.PartActive && v.State == client.PartActive || old.State == v.State && (len(v.Shared) > len(old.Shared) || len(v.Shared) == len(old.Shared) && (v.Invited.Before(old.Invited) || v.Invited.Equal(old.Invited) && v.PID < old.PID)) {
+					merged[i] = v
+					v = old
+				}
+				merged[i].PIDs = append(merged[i].PIDs, v.PIDs...)
+				for _, id := range v.Shared {
+					if !slices.Contains(merged[i].Shared, id) {
+						merged[i].Shared = append(merged[i].Shared, id)
+					}
+				}
+				for _, who := range v.TasksFrom {
+					if !slices.ContainsFunc(merged[i].TasksFrom, func(x PersonView) bool { return x.Person == who.Person }) {
+						merged[i].TasksFrom = append(merged[i].TasksFrom, who)
+					}
+				}
+				for _, who := range v.Inviters {
+					if !slices.ContainsFunc(merged[i].Inviters, func(x PersonView) bool { return x.Person == who.Person }) {
+						merged[i].Inviters = append(merged[i].Inviters, who)
+					}
+				}
+				continue
+			}
+			unique[k] = len(merged)
+			merged = append(merged, v)
+		}
+		for i := range merged {
+			grants := map[protocol.GrantRef]bool{}
+			for _, info := range infos {
+				if slices.Contains(merged[i].PIDs, info.PID) {
+					for _, ref := range info.Grant {
+						grants[ref] = true
+					}
+				}
+			}
+			merged[i].Missing = 0
+			for ref := range grants {
+				found := slices.ContainsFunc(msgs, func(m client.ConvMessage) bool {
+					return m.Sub == "" && m.LID == ref.LID && (m.Key == ref.Fingerprint && !m.Replica || m.ExcerptPID != "" && slices.Contains(merged[i].PIDs, m.ExcerptPID) && m.Claimed == ref.Fingerprint && m.History)
+				})
+				if !found {
+					merged[i].Missing++
+				}
+			}
+		}
+		out = merged
+	}
 	return out, nil
 }
 
@@ -355,9 +437,12 @@ func (l *Live) hasResponder() bool {
 }
 
 func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMessage, responder bool) AgentView {
-	v := AgentView{PID: info.PID, AgentID: info.AgentID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
+	v := AgentView{PID: info.PID, PIDs: []string{info.PID}, AgentID: info.AgentID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
 		Inviter: personView(info.Inviter), Note: info.Note, Shared: []string{}, TasksFrom: []PersonView{}, Held: info.Held}
-	v.External = info.External
+	v.External, v.Member = info.External, info.Member || p.group && !info.External
+	for _, inviter := range info.Inviters {
+		v.Inviters = append(v.Inviters, personView(inviter))
+	}
 	if info.Invited > 0 && info.Invited < maxClaimedUnix { // the inviter's claim: one no page could show is left out
 		v.Invited = time.Unix(info.Invited, 0)
 	}
@@ -365,7 +450,7 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 		found := false
 		for _, m := range msgs {
 			direct := m.Key == g.Fingerprint && !m.Replica
-			claimed := m.ExcerptPID == info.PID && m.Claimed == g.Fingerprint && m.SyncedFrom == info.Inviter.Address && m.History
+			claimed := m.ExcerptPID == info.PID && m.Claimed == g.Fingerprint && slices.ContainsFunc(info.Inviters, func(p client.PersonInfo) bool { return p.Address == m.SyncedFrom }) && m.History
 			if m.LID == g.LID && m.Sub == "" && (direct || claimed) {
 				v.Shared, found = append(v.Shared, m.ID), true
 				break
@@ -431,8 +516,15 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 		}
 	}
 	if p.group {
+		if info.Member && info.State == client.PartActive && info.Held == 0 && (!v.HostHere || responder) {
+			v.StateText = "Member of this group. Can be asked by every member; its owner decides what runs. Stays until explicitly removed."
+		}
+		if info.Member && info.External {
+			v.StateText += " Runs on " + info.Host.Label + "’s device, outside this group; that device receives every new message and file here until the agent is removed."
+			v.CanDismiss = p.me.Person == info.Host.Person || p.me.Person == info.Inviter.Person || p.admins[p.me.Person]
+		}
 		v.StateText = strings.ReplaceAll(strings.ReplaceAll(v.StateText, "this DM", "this group"), "either of you", "current group members")
-		if p.role == "visitor" && info.State == client.PartActive {
+		if p.role == "visitor" && !info.Member && info.State == client.PartActive {
 			v.StateText = "Invited agent context for this group. Only selected snapshots and requests addressed to this agent are supplied."
 		}
 	}
@@ -512,11 +604,33 @@ func (l *Live) DecideAgent(pid string, accept bool) (AgentView, error) {
 
 // DismissAgent implements Participants.
 func (l *Live) DismissAgent(pid string) (AgentView, error) {
-	if p, err := l.a.Participation(pid); err == nil && p.Role == protocol.RoleHuman {
+	p, err := l.a.Participation(pid)
+	if err != nil {
+		return AgentView{}, err
+	}
+	if p.Role == protocol.RoleHuman {
 		return AgentView{}, Refuse("Use the human participation end action, not an agent action.")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	c, _, people, err := l.dmOf(p.Conv)
+	if err != nil {
+		return AgentView{}, err
+	}
+	if c.Kind == protocol.ConvKindGroup && people.group {
+		infos, e := l.a.Participations(p.Conv)
+		if e != nil {
+			return AgentView{}, e
+		}
+		for _, other := range infos {
+			if other.PID == pid || other.Role != "" || other.Host.Address != p.Host.Address || other.Host.Fingerprint != p.Host.Fingerprint || other.AgentID != p.AgentID || other.State != client.PartActive && other.State != client.PartInvited {
+				continue
+			}
+			if _, e = l.a.DismissParticipation(ctx, other.PID); e != nil {
+				return AgentView{}, e
+			}
+		}
+	}
 	return l.agentResult(l.a.DismissParticipation(ctx, pid))
 }
 

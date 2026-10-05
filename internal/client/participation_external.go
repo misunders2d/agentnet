@@ -26,9 +26,78 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 	} else {
 		clear(m.hosts)
 	}
+	m.roomEvents = map[string]bool{}
+	m.roomAuthors = map[string]personRow{}
+	if m.group != nil {
+		rows, err := q.Query(`SELECT hash FROM room_membership_events WHERE conv=?`, m.group.State.Conv)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var h string
+			if err = rows.Scan(&h); err != nil {
+				rows.Close()
+				return err
+			}
+			m.roomEvents[h] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, ev := range events {
+			if !m.roomEvents[ev.Hash()] {
+				continue
+			}
+			p, ok, err := personByIDIn(q, ev.Author.Person)
+			if err != nil {
+				return err
+			}
+			if !ok || p.info.State != personSelf && p.info.State != personPinned || !p.has(ev.Author.Address, ev.Author.Fingerprint) {
+				continue
+			}
+			var n int
+			if err = q.QueryRow(`SELECT count(*) FROM person_chain WHERE person=? AND hash=?`, ev.Author.Person, ev.Author.Roster).Scan(&n); err != nil {
+				return err
+			}
+			if n > 0 {
+				m.roomAuthors[ev.Author.Person] = p
+			}
+		}
+	}
+	m.shareGrants = map[string][]protocol.GrantRef{}
+	for _, ev := range events {
+		if ev.Type != protocol.EventShare {
+			continue
+		}
+		for _, ref := range ev.Grant {
+			var n int
+			if err := q.QueryRow(`SELECT count(*) FROM room_turn_readers WHERE conv=? AND lid=? AND fingerprint=? AND person=? AND admission=?`, ev.Conv, ref.LID, ref.Fingerprint, ev.Author.Person, ev.Author.GroupAdmission).Scan(&n); err != nil {
+				return err
+			}
+			allowed := n > 0
+			if !allowed && m.group != nil {
+				member, ok := m.group.State.Member(ev.Author.Person)
+				if ok && member.Admission.Hash() == ev.Author.GroupAdmission {
+					for _, h := range member.Admission.History {
+						if h.LID == ref.LID && h.Author == ref.Fingerprint {
+							var hash string
+							if e := q.QueryRow(`SELECT content_hash FROM inbox WHERE conv=? AND lid=? AND coalesce(verified_by,claimed_fp)=?`, ev.Conv, ref.LID, ref.Fingerprint).Scan(&hash); e == nil && hash == h.Hash {
+								allowed = true
+							}
+						}
+					}
+				}
+			}
+			if allowed {
+				m.shareGrants[ev.Hash()] = append(m.shareGrants[ev.Hash()], ref)
+			}
+		}
+	}
 	m.groupInvites = map[string]bool{}
 	for _, ev := range events {
-		if (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) && m.group != nil { // a room scope carries its invite's binding
+		if (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope || ev.Type == protocol.EventShare) && m.group != nil { // a room scope carries its invite's binding
 			valid, err := m.verifyInviteEpoch(q, ev)
 			if err != nil {
 				return err
@@ -37,7 +106,7 @@ func (m *dmMembers) loadHosts(q dbq, events []protocol.ParticipationEvent) error
 		}
 	}
 	for _, ev := range events {
-		if ev.Type != protocol.EventInvite && ev.Type != protocol.EventScope || ev.Host == nil {
+		if ev.Type != protocol.EventInvite && ev.Type != protocol.EventScope && ev.Type != protocol.EventShare || ev.Host == nil {
 			continue
 		}
 		h := ev.Host
@@ -126,6 +195,10 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 			if !member || ev.Hash() != info.Scope {
 				return errors.New("scope is not its inviter's exact counted projection")
 			}
+		case protocol.EventShare:
+			if !member || ev.Prev != info.Invite || ev.Host == nil || ev.Host.Address != info.Host.Address || ev.Host.Fingerprint != info.Host.Fingerprint || ev.Host.AgentID != info.AgentID || !slices.Contains(info.Shares, ev.Hash()) {
+				return errors.New("share does not name the exact group agent membership")
+			}
 		case protocol.EventInvite:
 			_, author := m.author(ev.Author)
 			if !member || !author || ev.Hash() != info.Invite || ev.Author.Address != sender || ev.Author.Fingerprint != fp {
@@ -141,7 +214,7 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 			}
 		case protocol.EventDismiss:
 			_, author := m.author(ev.Author)
-			if (!member || !author) && !(info.Role == protocol.RoleHuman && host && ev.Hash() == info.Dismissal && info.Decision != "") {
+			if (!member || !author) && !((info.Role == protocol.RoleHuman || info.Member && info.External) && host && ev.Hash() == info.Dismissal) || !m.mayRemoveAgent(info, ev.Author) {
 				return errors.New("only a current DM member or exact accepted human host ends participation")
 			}
 			events := []string{info.Invite, info.Decision, info.Dismissal}
@@ -153,7 +226,7 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 		if info.Role == protocol.RoleHuman && !info.HumanActive() {
 			return errors.New("human selected context waits for exact acceptance")
 		}
-		if !member || sender != info.Inviter.Address || fp != info.Inviter.Fingerprint || !in.Replica || in.Kind != envelope.KindMessage || info.Held != 0 || info.State != PartInvited && info.State != PartActive {
+		if !member || !slices.ContainsFunc(info.Inviters, func(p PersonInfo) bool { return sender == p.Address && fp == p.Fingerprint }) || !in.Replica || in.Kind != envelope.KindMessage || info.Held != 0 || info.State != PartInvited && info.State != PartActive {
 			return errors.New("excerpt is not from the inviter for a live granted participation")
 		}
 		_, err := parseGrantedExcerpt(in, info)
@@ -164,6 +237,12 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 		}
 		switch in.Kind {
 		case envelope.KindQuestion, envelope.KindTask:
+			if in.Human != nil && in.Human.AgentAuthor() {
+				if in.Target == nil || in.Target.Address != info.Host.Address || in.Target.Fingerprint != info.Host.Fingerprint || in.Target.AgentID != info.AgentID {
+					return errors.New("room ask targets a different agent")
+				}
+				return nil
+			}
 			if !member || in.Target == nil || in.Target.Address != info.Host.Address || in.Target.Fingerprint != info.Host.Fingerprint || in.Target.AgentID != info.AgentID || !m.requestEpoch(sender, fp, in.Target) {
 				return errors.New("request does not name the exact invited agent")
 			}
@@ -207,32 +286,53 @@ func externalOutputRequest(q dbq, in envelope.Inner, info ParticipationInfo, m d
 	if decision != protocol.EventAccept {
 		return reasonInvalid, errors.New("external output participation was not accepted by its host")
 	}
-	rows, err := q.Query(`SELECT coalesce(conv,''), coalesce(pid,''), coalesce(lid,''), kind, coalesce(sub,''), coalesce(target,''), sender, coalesce(verified_by,claimed_fp,'')
+	rows, err := q.Query(`SELECT coalesce(conv,''), coalesce(pid,''), coalesce(lid,''), kind, coalesce(sub,''), coalesce(target,''), sender, coalesce(verified_by,claimed_fp,''), coalesce(human,'')
 		FROM inbox WHERE id=? OR lid=?
-		UNION ALL SELECT coalesce(conv,''), coalesce(pid,''), coalesce(lid,''), kind, coalesce(sub,''), coalesce(target,''), ?, ?
+		UNION ALL SELECT coalesce(conv,''), coalesce(pid,''), coalesce(lid,''), kind, coalesce(sub,''), coalesce(target,''), ?, ?, coalesce(human,'')
  FROM outbox WHERE id=? OR lid=?
- UNION ALL SELECT coalesce(json_extract(receiver,'$.remote.request.conv'),''),coalesce(json_extract(receiver,'$.remote.request.pid'),''),coalesce(json_extract(receiver,'$.remote.request.lid'),''),json_extract(receiver,'$.remote.request.kind'),'',coalesce(json_extract(receiver,'$.remote.request.target'),''),json_extract(receiver,'$.remote.request.from'),json_extract(receiver,'$.remote.request.from_key') FROM reply_receivers WHERE conv=? AND request_ref=? AND json_extract(receiver,'$.remote.role')='imported' AND json_extract(receiver,'$.remote.ready')=1`, in.ReplyTo, in.ReplyTo, self, selfFP, in.ReplyTo, in.ReplyTo, in.Conv, in.ReplyTo)
+ UNION ALL SELECT coalesce(json_extract(receiver,'$.remote.request.conv'),''),coalesce(json_extract(receiver,'$.remote.request.pid'),''),coalesce(json_extract(receiver,'$.remote.request.lid'),''),json_extract(receiver,'$.remote.request.kind'),'',coalesce(json_extract(receiver,'$.remote.request.target'),''),json_extract(receiver,'$.remote.request.from'),json_extract(receiver,'$.remote.request.from_key'), '' FROM reply_receivers WHERE conv=? AND request_ref=? AND json_extract(receiver,'$.remote.role')='imported' AND json_extract(receiver,'$.remote.ready')=1`, in.ReplyTo, in.ReplyTo, self, selfFP, in.ReplyTo, in.ReplyTo, in.Conv, in.ReplyTo)
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
 	var originalLID, originalKey string
+	var agentAuthors []struct{ pid, from, fp string }
 	found := false
 	for rows.Next() {
-		var conv, pid, lid, kind, sub, raw, from, fp string
-		if err := rows.Scan(&conv, &pid, &lid, &kind, &sub, &raw, &from, &fp); err != nil {
+		var conv, pid, lid, kind, sub, raw, from, fp, human string
+		if err := rows.Scan(&conv, &pid, &lid, &kind, &sub, &raw, &from, &fp, &human); err != nil {
 			return "", err
 		}
 		var target envelope.Target
+		var h envelope.HumanTurn
+		if human != "" {
+			if err := json.Unmarshal([]byte(human), &h); err != nil {
+				return "", err
+			}
+		}
+		agent := h.AgentAuthor()
+		if agent {
+			agentAuthors = append(agentAuthors, struct{ pid, from, fp string }{h.AuthorPID, from, fp})
+		}
 		if conv != in.Conv || pid != info.PID || sub != "" || kind != envelope.KindQuestion && kind != envelope.KindTask || !progress && replyKind(kind) != in.Kind ||
 			json.Unmarshal([]byte(raw), &target) != nil || target.Address != info.Host.Address || target.Fingerprint != info.Host.Fingerprint || target.AgentID != info.AgentID ||
-			!m.device(from, fp) || !m.requestEpoch(from, fp, &target) || lid == "" || found && (lid != originalLID || fp != originalKey) {
+			!agent && (!m.device(from, fp) || !m.requestEpoch(from, fp, &target)) || lid == "" || found && (lid != originalLID || fp != originalKey) {
 			return reasonInvalid, errors.New("external output does not match one exact member request and participation host")
 		}
 		found, originalLID, originalKey = true, lid, fp
 	}
 	if err := rows.Err(); err != nil {
 		return "", err
+	}
+	rows.Close()
+	for _, au := range agentAuthors {
+		p, err := participationIn(q, in.Conv, au.pid, m, self)
+		if err != nil {
+			return reasonProof, err
+		}
+		if !p.Claimable() || p.Host.Address != au.from || p.Host.Fingerprint != au.fp {
+			return reasonInvalid, errors.New("output requester agent no longer has its original authority")
+		}
 	}
 	if !found {
 		return reasonProof, errors.New("external output has no matching request proof yet")
@@ -317,8 +417,41 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	if out.Origin == "" {
 		out.Origin = envelope.OriginUI
 	}
+	if m.group != nil && out.sub == "" && out.human == nil && info.Member {
+		if out.Target == nil && out.ReplyTo != "" {
+			c, e := roomCauseIn(a.store.db, info.Conv, out.ReplyTo, a.Address, a.Self().Fingerprint())
+			if e != nil {
+				return ConvSent{}, e
+			}
+			if c.human != nil {
+				h, e := a.roomAudience(info.Conv, "")
+				if e != nil {
+					return ConvSent{}, e
+				}
+				captured := map[string]bool{}
+				for _, scope := range c.human.Audience {
+					captured[scope.PID] = true
+				}
+				h.Audience = slices.DeleteFunc(h.Audience, func(s envelope.HumanScope) bool { return !captured[s.PID] })
+				h.Proof = slices.DeleteFunc(h.Proof, func(e protocol.ParticipationEvent) bool { return !captured[e.PID] })
+				out.human = h
+			}
+		}
+		if out.human == nil {
+			h, e := a.roomAudience(info.Conv, "")
+			if e != nil {
+				return ConvSent{}, e
+			}
+			out.human = h
+		}
+	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: out.Kind, Body: out.Body,
-		ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID}
+		ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID, Human: out.human}
+	if in.Human != nil {
+		if err := humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), info.Host.Address, info.Host.Fingerprint, false); err != nil {
+			return ConvSent{}, err
+		}
+	}
 	if err := externalTurn(in, info, m, a.Address, a.Self().Fingerprint()); err != nil {
 		return ConvSent{}, err
 	}
@@ -360,6 +493,26 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 	seen := map[string]bool{}
 	for _, d := range devices {
 		seen[d.Address] = true
+	}
+	if in.Human != nil {
+		for _, scope := range in.Human.Audience {
+			p, e := participationIn(a.store.db, in.Conv, scope.PID, m, a.Address)
+			if e != nil {
+				return ConvSent{}, e
+			}
+			if seen[p.Host.Address] || p.Host.Address == a.Address {
+				continue
+			}
+			key, e := a.sendKey(ctx, p.Host.Address)
+			if e != nil {
+				return ConvSent{}, e
+			}
+			if key.Fingerprint() != p.Host.Fingerprint {
+				return ConvSent{}, errors.New("room audience host key changed")
+			}
+			devices = append(devices, key)
+			seen[key.Address] = true
+		}
 	}
 	if humanEndEvent(in, info) {
 		infos, err := a.Participations(info.Conv)
@@ -542,6 +695,13 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 		if err != nil {
 			return err
 		}
+		if in.Human != nil {
+			for _, copy := range copies {
+				if err := humanTurnAuthorization(tx, in, a.Address, a.Self().Fingerprint(), copy.env.To, copy.recipientFP, false); err != nil {
+					return err
+				}
+			}
+		}
 		if err := externalTurn(in, current, members, a.Address, a.Self().Fingerprint()); err != nil {
 			return &heldBack{err.Error()}
 		}
@@ -589,7 +749,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 					if adm.Hash() != copy.groupAdmission {
 						return ErrGroupContextPending
 					}
-				} else if copy.env.To != current.Host.Address || copy.recipientFP != current.Host.Fingerprint {
+				} else if in.Human == nil && (copy.env.To != current.Host.Address || copy.recipientFP != current.Host.Fingerprint) {
 					return errors.New("group: outside PID audience differs")
 				}
 			}

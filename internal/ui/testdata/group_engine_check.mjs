@@ -96,8 +96,35 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const remove=(await w.st.all('inbox')).map(r=>({s:'inbox',k:r.id}));if(remove.length)await w.st.write(remove);
   }
   await w.close();
+  // A new reader receives the original signed membership records quietly,
+  // with no earlier message body and no host-local permission grants.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  await w.receive(c['p6-bad-memberships']);
+  check((await w.st.get('held',wire.parseEnvelope(c['p6-bad-memberships'].envelope).id))?.reason==='invalid','membership carrier rejects altered original signature');
+  check(!await w.st.get('kv','room-memberships/'+conv),'rejected carrier installs no membership metadata');
+  await w.receive(c['p6-memberships']);
+  for(const pid of [v.participations['p6-source'],v.participations['p6-target']])check((await w.e.agentConv(pid)).info.member&&(await w.e.agentConv(pid)).info.state==='active','quiet original membership carrier restores same accepted PID');
+  check((await w.e.groupThread(conv)).messages.length===0,'membership carrier supplies no earlier body');
+  await w.reload();
+  check((await w.e.agentConv(v.participations['p6-target'])).info.member,'membership proof survives reload');
+  await w.close();
   w=await world();await w.receive(c.proof);await w.receive(c.context);
   const pv=v.participations;
+  for(const i of [0,1])for(const type of ['invite','scope','accept'])await w.receive(pv['p6-'+i+'-'+type]);
+  check((await w.e.agentConv(pv['p6-source'])).info.member && (await w.e.agentConv(pv['p6-target'])).info.member,'permanent group agent membership has no expiry');
+  await w.receive(pv['p6-ordinary']);check((await w.e.groupThread(conv)).messages.some(m=>m.body==='P6 future group message'),'native captured future group message is admitted without execution');
+  await w.receive(pv['p6-root']);await w.receive(pv['p6-ask']);await w.receive(pv['p6-status']);
+  let p6=await w.e.groupThread(conv),q=p6.messages.find(m=>m.lid===pv['p6-ask'].inner.lid);
+  check(q?.verified_agent && q.agent_author_pid===pv['p6-source'] && q.pid===pv['p6-target'],'agent asks retain verified author distinct from target');
+  check(q?.exec?.state==='awaiting','agent request owner approval is correlated to its exact request');
+  await w.receive(pv['p6-answer']);
+  p6=await w.e.groupThread(conv);
+  check(p6.messages.some(m=>m.body==='P6 verified agent answer'&&m.verified_agent&&m.reply_to===q.id),'captured group answer read and correlated');
+  await w.receive(pv['p6-wrong-correlation']);check((await w.st.get('held',pv['p6-wrong-correlation'].inner.id))?.reason==='invalid','output to a different agent request rejected');
+  await w.receive(pv['p6-wrong-author']);check((await w.st.get('held',pv['p6-wrong-author'].inner.id))?.reason==='invalid','claimed asking agent does not replace exact host author');
+  await w.receive(pv['p6-share']);check((await w.e.agentConv(pv['p6-target'])).info.grant.length===1,'signed sharing adds exact grant without a second membership');
+  await w.reload();p6=await w.e.groupThread(conv);check(p6.agents.filter(a=>a.pid===pv['p6-target']).length===1 && p6.agents.some(a=>a.pid===pv['p6-target']&&a.member),'browser reload keeps one permanent agent card');
+
   for(const role of ['member','visitor']){
    await w.receive(pv[role+'-invite']);await w.receive(pv[role+'-accept']);
    check((await w.e.agentConv(pv[role+'-pid'])).info.state==='active','native '+role+' named group participation consciously accepted');
@@ -239,7 +266,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   const selectedItem=await w.e.groupAgentSelection(outsideConv,selectedSource,selectedMembers);
   check(selectedSource.replica&&selectedItem.from_key===await wire.fingerprint(alicePub),'native ordinary own-linked replica selects exact original author');
   const selectedFile=await w.e.openFile(selectedSource.id,0,'in');check(new TextDecoder().decode(selectedFile.bytes)===outside['own-ordinary-file'].bytes,'native ordinary own-linked selected file exact bytes');
-  const inviteSend=w.e.sendConv.bind(w.e);let selectedInvite;w.e.sendConv=async(c,n)=>{selectedInvite=wire.parseEvent(n.body);return {id:wire.newID()};};
+  const inviteSend=w.e.sendConv.bind(w.e);let selectedInvite;w.e.sendConv=async(c,n)=>{const ev=wire.parseEvent(n.body);if(ev.type==="invite"||ev.type==="share")selectedInvite=ev;const id=wire.newID();await w.st.write([{s:"outbox",k:id,v:{...n,id,conv:c.id,to:alicePub.address,at:1700000100000}}]);return {id};};
   await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,share:[selectedSource.id]});
   check(selectedInvite.grant.length===1&&selectedInvite.grant[0].lid===selectedSource.lid&&selectedInvite.grant[0].fingerprint===selectedItem.from_key,'production invite retains native own-linked selected logical ID and original author');
   const selectedInfo={...(await w.e.agentConv(outside['own-pid'])).info,grant:selectedInvite.grant};

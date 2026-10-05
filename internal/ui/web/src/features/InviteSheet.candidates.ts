@@ -25,6 +25,7 @@ export interface Candidate {
   ownerName?: string;          // whose agent it is, for "waiting for Vitalii’s OK"
   agentId?: string;
   mine?: boolean;
+  alreadyHere?: boolean;
 }
 
 const LIVE = new Set(["active", "invited", "pending", "conflict"]);
@@ -106,8 +107,9 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
 
   if (o.agents && !cat.loading) { // agents appear together, once every list is in
     // One row per agent (its device and id; a device's default agent has no id), none already here.
-    const seen = new Set((t.agents || []).filter((a) => LIVE.has(a.state)).map((a) => a.host.address + "#" + (a.agent_id || "")));
-    const add = (c: Candidate) => { const k = c.host + "#" + (c.agentId || ""); if (!seen.has(k)) { seen.add(k); out.push(c); } };
+    const current = new Set((t.agents || []).filter((a) => LIVE.has(a.state)).map((a) => a.host.address + "#" + (a.agent_id || "")));
+    const seen = new Set<string>(group ? [] : current);
+    const add = (c: Candidate) => { const k = c.host + "#" + (c.agentId || ""); if (!seen.has(k)) { seen.add(k); if (group && current.has(k)) { c.alreadyHere = true; c.subtitle = "Already in this chat · share more messages"; } out.push(c); } };
     // This computer's named agents, then its default agent, which is always offered next to them.
     const self: T.PersonView = me || { person: "this computer", label: "", address: o.me.address, state: "" }; // "Your agent"
     for (const a of (cat.local || []).filter((a) => a.enabled)) add({

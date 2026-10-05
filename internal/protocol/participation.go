@@ -76,6 +76,9 @@ const (
 // AudienceConversation: the agent's outputs go to the DM (its members).
 const AudienceConversation = "conversation"
 
+// EventShare adds exact selected context to an existing group agent membership.
+const EventShare = "share"
+
 // AudienceRoom: a room participation (ROOM_V1 §1, CapRoom): a follower agent
 // (no role) of a DM or group, or a person guest of a group (RoleHuman, host
 // role visitor). While active it sees its grant and every turn captured for
@@ -182,6 +185,12 @@ func (e ParticipationEvent) Validate() error {
 		return errors.New("participation: only a room invitation and its scope have an end time")
 	}
 	switch e.Type {
+	case EventShare:
+		if !ValidHash(e.Prev) || e.Group == nil || e.Role != "" || e.Until != 0 || len(e.TaskKeys) != 0 || e.Note != "" {
+			return errors.New("participation: a share names an existing group agent and selected context only")
+		}
+		e.Type, e.Prev = EventInvite, ""
+		return e.Validate()
 	case EventInvite:
 		if e.Role != "" && e.Role != RoleHuman {
 			return errors.New("participation: unknown role")

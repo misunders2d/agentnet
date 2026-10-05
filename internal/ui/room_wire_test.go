@@ -421,3 +421,41 @@ func withField(m map[string]any, k string, v any) map[string]any {
 	out[k] = v
 	return out
 }
+
+func TestP6BrowserShareWireMatchesGo(t *testing.T) {
+	r := startRoomWire(t)
+	inv := r.invites()["group follower"]
+	ev := inv
+	ev.Type = protocol.EventShare
+	ev.Prev = inv.Hash()
+	ev.Until = 0
+	ev.TaskKeys = nil
+	ev.Note = ""
+	g := *ev.Group
+	g.TaskAdmissions = nil
+	ev.Group = &g
+	ev.Sign(r.bobID.Sign)
+	got := r.w.ok(map[string]any{"op": "parseEvent", "json": marshal(t, ev), "key": b64(r.bob.SignKey)})
+	if ev.Validate() != nil || got["hash"] != ev.Hash() {
+		t.Fatalf("signed share differs: %+v %v", got, ev.Validate())
+	}
+	for _, change := range []func(*protocol.ParticipationEvent){func(e *protocol.ParticipationEvent) { e.Prev = "" }, func(e *protocol.ParticipationEvent) { e.Note = "task consent" }, func(e *protocol.ParticipationEvent) { e.TaskKeys = []string{r.bob.Fingerprint()} }, func(e *protocol.ParticipationEvent) { e.Group = nil }, func(e *protocol.ParticipationEvent) { e.Until = 1 }} {
+		bad := ev
+		change(&bad)
+		bad.Sign(r.bobID.Sign)
+		if bad.Validate() == nil {
+			t.Fatal("Go accepted invalid share")
+		}
+		if v := r.w.call(map[string]any{"op": "parseEvent", "json": marshal(t, bad), "key": b64(r.bob.SignKey)}); v["error"] == nil {
+			t.Fatal("browser accepted invalid share")
+		}
+	}
+	raw := map[string]any{}
+	json.Unmarshal([]byte(marshal(t, ev)), &raw)
+	raw["author"] = withField(r.me, "group_admission", strings.Repeat("a", 64))
+	v := r.w.ok(map[string]any{"op": "event", "event": raw})
+	parsed, e := protocol.ParseParticipationEvent([]byte(v["json"].(string)))
+	if e != nil || parsed.Verify(r.dana.SignKey) != nil || parsed.Hash() != v["hash"] {
+		t.Fatalf("browser signed share: %v", e)
+	}
+}

@@ -31,10 +31,11 @@ var ErrGroupContextPending = errors.New("group: verified decryptable context una
 // Admission.History is the only selected-message grant, checked separately by
 // the existing verified history importer before any message is stored.
 type GroupContext struct {
-	Root        protocol.ConvRoot          `json:"root"`
-	Proof       []protocol.GroupState      `json:"proof"`
-	State       protocol.GroupState        `json:"state"`
-	Withdrawals []protocol.GroupWithdrawal `json:"withdrawals"`
+	Root        protocol.ConvRoot             `json:"root"`
+	Proof       []protocol.GroupState         `json:"proof"`
+	State       protocol.GroupState           `json:"state"`
+	Withdrawals []protocol.GroupWithdrawal    `json:"withdrawals"`
+	Memberships []protocol.ParticipationEvent `json:"memberships,omitempty"`
 }
 
 func (a *Agent) groupResolver(ctx context.Context, packet GroupContext) (protocol.GroupRosterResolver, error) {

@@ -340,6 +340,16 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	} else if j.progressEligible() {
 		cmd.Env = append(cmd.Env, ProgressRequestEnv+"="+j.ID, ProgressPeerEnv+"="+j.From)
 	}
+	if j.Receiver == nil && j.PID != "" {
+		info, e := a.Participation(j.PID)
+		if e != nil {
+			a.endJob(j.ID, stateNotRun, e.Error())
+			return
+		}
+		if info.Member && info.HostHere && info.Claimable() {
+			cmd.Env = append(cmd.Env, RoomRequestEnv+"="+j.ID)
+		}
+	}
 	if h.stdin {
 		cmd.Stdin = strings.NewReader(prompt)
 	}
@@ -524,10 +534,11 @@ const BackgroundEnv = "AGENTNET_BACKGROUND"
 const (
 	ProgressRequestEnv = "AGENTNET_REQUEST_ID"
 	ProgressPeerEnv    = "AGENTNET_REQUESTER"
+	RoomRequestEnv     = "AGENTNET_ROOM_REQUEST"
 )
 
 // runEnvNames are the values a run gets only from its own job.
-var runEnvNames = []string{BackgroundEnv, "AGENTNET_HOME", ProgressRequestEnv, ProgressPeerEnv, receiverBindingEnv}
+var runEnvNames = []string{BackgroundEnv, "AGENTNET_HOME", ProgressRequestEnv, ProgressPeerEnv, RoomRequestEnv, receiverBindingEnv}
 
 // progressEligible reports whether j's worker may send progress: a version 1
 // request (default responder or named executor) or a conversation

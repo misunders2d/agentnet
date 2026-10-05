@@ -163,6 +163,16 @@ coworkers who want to confirm they trust the right key. Also ask the Hub
 for this device's admin/member role; show unknown if unavailable or an older
 Hub does not report it. Address labels (including admin/) grant no role.`,
 
+	"room": `Usage: agentnet room ask --pid PID [--kind question|task] TEXT
+       agentnet room wait REQUEST_ID
+
+Available inside a running group-agent request (AGENTNET_ROOM_REQUEST).
+Ask another active group agent and wait for its correlated answer/result.
+The recipient's owner decides permission for every upstream origin. A question
+cannot assign a task. No platform ask-count or depth limits; stopping the
+originating run or removing its membership stops further asks and waits.
+Wait reads local stored replies only. Custody/delivery is never completion.`,
+
 	"send": `Usage: agentnet send [--file PATH]... [--fallback] [--wait 5s] [--reply-to ID] [--progress] ADDRESS[#SESSION] TEXT
 
 Send an end-to-end encrypted message. It goes straight to the recipient when

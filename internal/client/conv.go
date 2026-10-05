@@ -391,7 +391,8 @@ type ConvOutgoing struct {
 	sub     string                                 // envelope.SubEvent for participation events (participation.go)
 	status  string                                 // an agent output's status (agentjob.go)
 	claim   func(tx *sql.Tx, replyID string) error // decides, with the outbox write, that it may be stored (agentjob.go)
-	selfJob bool                                   // a request to this device's own agent: its job is recorded with it
+	human   *envelope.HumanTurn
+	selfJob bool // a request to this device's own agent: its job is recorded with it
 }
 
 // ConvSent is what became of a conversation message: one copy per device
@@ -512,6 +513,21 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 				return ConvSent{}, e
 			}
 			return a.sendExternalParticipation(ctx, root, raw, info, m)
+		}
+		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) {
+			infos, e := a.Participations(conv)
+			if e != nil {
+				return ConvSent{}, e
+			}
+			for _, p := range infos {
+				if p.Following() {
+					h, e := a.roomAudience(conv, "")
+					if e != nil {
+						return ConvSent{}, e
+					}
+					return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+				}
+			}
 		}
 		return a.sendGroupTurn(ctx, conv, m, binding)
 	}
@@ -998,9 +1014,12 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
 	}
 	if root.Kind == protocol.ConvKindGroup && in.PID != "" && in.Human != nil {
-		// A request or output to a group's captured audience: the group
-		// participation path does not read the audience (ROOM_V1 P3/P4).
-		return hold(reasonInvalid, "group: a request or output carrying a captured audience is not read yet")
+		for _, e := range in.Human.Proof {
+			if e.Role == protocol.RoleHuman {
+				return hold(reasonInvalid, "group human guest execution audience is not enabled")
+			}
+		}
+		return a.admitHumanTurn(ctx, env, in, root, sp, sender, fromQuarantine, hold)
 	}
 	if root.Kind == protocol.ConvKindGroup && in.PID != "" {
 		if handled, e := a.admitGroupVisitorInvite(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {
