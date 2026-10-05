@@ -82,6 +82,7 @@ export function api(host: Host) {
 
     // Me, my devices, my assistant
     createPerson: (label: string) => post<{ person: T.PersonView; note: string }>("/api/person", { label }),
+    setPersonPicture: (png: string) => post<T.PersonView>("/api/person/picture", { png }),
     renamePerson: (label: string) => post<T.PersonView>("/api/person/label", { label }),
 	googleAccess: () => get<T.GoogleAccess>("/api/google/access"),
 	changeGoogleAccess: (c: T.GoogleAccessChange) => post<unknown>("/api/google/access", c),

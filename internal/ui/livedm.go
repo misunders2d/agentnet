@@ -20,7 +20,7 @@ import (
 // DM); nothing merges people or conversations by name or address.
 
 func personView(p client.PersonInfo) PersonView {
-	return PersonView{Person: p.Person, Label: p.Label, Email: p.Email, Address: p.Address, Fingerprint: p.Fingerprint, State: p.State, Devices: deviceViews(p.Devices)}
+	return PersonView{Picture: p.Picture, PictureURL: pictureURL(p.Picture), Person: p.Person, Label: p.Label, Email: p.Email, Address: p.Address, Fingerprint: p.Fingerprint, State: p.State, Devices: deviceViews(p.Devices)}
 }
 
 // dmOverview adds this installation's person, the people and the DMs.
@@ -57,7 +57,7 @@ func (l *Live) dmOverview(o *Overview) error {
 	}
 	for _, p := range listed {
 		if !byAddress[p.Address] {
-			o.People = append(o.People, PersonView{Label: p.Label, Email: p.Email, Address: p.Address, State: PersonListed, Devices: deviceViews(p.Devices)})
+			o.People = append(o.People, PersonView{Label: p.Label, Email: p.Email, Picture: p.Picture, PictureURL: pictureURL(p.Picture), Address: p.Address, State: PersonListed, Devices: deviceViews(p.Devices)})
 		}
 	}
 	convs, err := l.a.Conversations()

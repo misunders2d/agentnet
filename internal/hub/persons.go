@@ -253,6 +253,12 @@ func (h *Hub) handlePutPerson(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", err.Error())
 		return
 	}
+	if roster.Picture != "" {
+		if _, err := h.pictureBytes(roster.Picture); err != nil {
+			writeError(w, http.StatusBadRequest, "", "picture is not stored on this Hub")
+			return
+		}
+	}
 	a, err := h.store.agent(caller)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")

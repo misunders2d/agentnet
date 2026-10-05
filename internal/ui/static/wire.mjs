@@ -1,3 +1,4 @@
+import { validatePicture } from "./pictures.mjs";
 // The AgentNet wire format for a browser device: the same signed requests,
 // joins, session ads, directory entries and envelopes as the Go client
 // (internal/protocol, internal/identity, internal/envelope), with WebCrypto
@@ -990,7 +991,7 @@ function strictRecord(json, max, what, fields) {
 function marshalRoster(r, withSig) {
   return '{"person":' + goString(r.person) + ',"label":' + goString(r.label) + ',"seq":' + goInt(r.seq, "seq") +
     ',"prev":' + goString(r.prev) + ',"devices":' + (r.devices ? "[" + r.devices.map(marshalPublic).join(",") + "]" : "null") +
-    (r.human_keys?.length ? ',"human_keys":[' + r.human_keys.map(goString).join(",") + ']' : "") + (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + (r.email ? ',"email":' + goString(r.email) : "") + "}";
+    (r.human_keys?.length ? ',"human_keys":[' + r.human_keys.map(goString).join(",") + ']' : "") + (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + (r.email ? ',"email":' + goString(r.email) : "") + (r.picture ? ',"picture":' + goString(r.picture) : "") + "}";
 }
 export const rosterJSON = (r) => marshalRoster(r, true);
 const rosterCanonical = (r) => utf8.encode(personDomain + marshalRoster(r, false));
@@ -1014,6 +1015,7 @@ export const checkJoin = (person, seq, prev, dev, join) => verifyBytes(dev.sign_
 // validateRoster is PersonRoster.Validate: its shape and bounds, and each
 // device's entry (not the signatures of the record or the chain).
 export async function validateRoster(r) {
+  if (r.picture && !validHash(r.picture)) throw new Error("person: invalid picture hash");
   if (r.email && !validEmail(r.email)) throw new Error("person: invalid email");
   if (!validID(r.person)) throw new Error("person: invalid id");
   validLabel(r.label);
@@ -1070,11 +1072,11 @@ export async function newRoster(keys, address, label, email = "") {
 // nextRoster is the step after prev with devices, signed by this device
 // (at address, a device of prev); join is an added device's consent (null
 // when none is added).
-export async function nextRoster(keys, address, prev, devices, join, label = prev.label, humanKeys = null) {
+export async function nextRoster(keys, address, prev, devices, join, label = prev.label, humanKeys = null, picture = prev.picture || "") {
   const by = await fingerprint(await publicEntry(keys, address));
   if (!(await rosterHas(prev, address, by))) throw new Error("person: this device is not in the roster it would follow");
   const kept=new Set(await Promise.all(devices.map(fingerprint)));
-  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, human_keys:humanKeys || (await rosterHumans(prev)).filter(fp=>kept.has(fp)), by, sig: null, join: join || null, email: prev.email || "" };
+  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, human_keys:humanKeys || (await rosterHumans(prev)).filter(fp=>kept.has(fp)), by, sig: null, join: join || null, email: prev.email || "", picture };
   await validateRoster(r);
   r.sig = await signBytes(keys, rosterCanonical(r));
   if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large");
@@ -1083,10 +1085,10 @@ export async function nextRoster(keys, address, prev, devices, join, label = pre
 
 export async function parseRoster(json) {
   const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array", human_keys:"array",
-    by: "string", sig: "string", join: "string", email: "string" });
+    by: "string", sig: "string", join: "string", email: "string", picture: "string" });
   const devices = f.devices ? await Promise.all(f.devices.map((d) => parsePublicShape(d))) : null;
   const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", devices, human_keys:f.human_keys || [], by: f.by || "",
-    sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null, email: f.email || "" };
+    sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null, email: f.email || "", picture: f.picture || "" };
   await validateRoster(r);
   fitsRecord(rosterJSON(r), MaxPersonRecord, "person");
   return r;
@@ -2153,3 +2155,6 @@ export async function validateReceiverRoute(n) {
  if(r.op==='delegate'||r.op==='catalog'&&!n.reply_to){if(r.host!==n.to)throw Error('receiver: setup must address its committed host');}else if(r.host!==n.from)throw Error('receiver: response must originate at its committed host');
  const o=await parseReceiverOperation(n.body,r,n.reply_to||'',n.attachments||[]);if(o.request&&o.request.from!==n.from)throw Error('receiver: delegate must originate at original author');
 }
+
+export { validatePicture };
+export const pictureHash = hashOf;

@@ -33,6 +33,8 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/profile", h.handleProfile)
 	mux.HandleFunc("PUT /v1/person", h.handlePutPerson)
+	mux.HandleFunc("PUT /v1/pictures/{hash}", h.handlePicturePut)
+	mux.HandleFunc("GET /v1/pictures/{hash}", h.handlePictureGet)
 	mux.HandleFunc("POST /v1/person/device-invite", h.handleDeviceInvite)
 	mux.HandleFunc("POST /v1/person/device-refuse", h.handleDeviceRefuse)
 	mux.HandleFunc("POST /v1/person/device-admin", h.handleDeviceAdmin) // personadmin.go: the person's grant

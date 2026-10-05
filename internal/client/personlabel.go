@@ -12,6 +12,10 @@ import (
 // roster step. Identity, devices, keys and local permissions are unchanged.
 // Hub acceptance precedes local pinning; an ambiguous response is not retried.
 func (a *Agent) RenamePerson(ctx context.Context, label string) (PersonInfo, error) {
+	return a.changePersonProfile(ctx, &label, nil)
+}
+
+func (a *Agent) changePersonProfile(ctx context.Context, label, picture *string) (PersonInfo, error) {
 	me, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return PersonInfo{}, err
@@ -31,12 +35,18 @@ func (a *Agent) RenamePerson(ctx context.Context, label string) (PersonInfo, err
 		if !ok || me.info.Person != person || !me.roster.Has(a.Address, a.Self().Fingerprint()) {
 			return PersonInfo{}, errors.New("this device no longer speaks for its person")
 		}
-		r := protocol.PersonRoster{Person: person, Label: label, Email: me.roster.Email, Seq: me.roster.Seq + 1, Prev: me.roster.Hash(), Devices: me.roster.Devices, HumanKeys: me.roster.Humans(), By: a.Self().Fingerprint()}
+		r := protocol.PersonRoster{Person: person, Label: me.roster.Label, Email: me.roster.Email, Picture: me.roster.Picture, Seq: me.roster.Seq + 1, Prev: me.roster.Hash(), Devices: me.roster.Devices, HumanKeys: me.roster.Humans(), By: a.Self().Fingerprint()}
+		if label != nil {
+			r.Label = *label
+		}
+		if picture != nil {
+			r.Picture = *picture
+		}
 		r.Sign(a.id.Sign)
 		if _, err = r.VerifyNext(me.roster); err != nil {
 			return PersonInfo{}, err
 		}
-		if me.roster.Label == label {
+		if me.roster.Label == r.Label && me.roster.Picture == r.Picture {
 			return me.info, nil
 		}
 		raw, err := json.Marshal(r)

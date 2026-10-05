@@ -85,7 +85,8 @@ type PersonRoster struct {
 	Join      []byte   `json:"join,omitempty"`
 	// Email is set only by Google enrollment. It is signed and immutable
 	// along the roster chain; omitted on existing invite-code persons.
-	Email string `json:"email,omitempty"`
+	Email   string `json:"email,omitempty"`
+	Picture string `json:"picture,omitempty"` // self-chosen public picture hash, never identity proof
 }
 
 // Canonical returns the bytes the signing device signs.
@@ -149,6 +150,9 @@ func JoinBytes(person string, seq int64, prev string, dev identity.Public) []byt
 
 // Validate checks the shape and bounds of r (not its signatures or chain).
 func (r PersonRoster) Validate() error {
+	if r.Picture != "" && !ValidHash(r.Picture) {
+		return errors.New("person: invalid picture hash")
+	}
 	if r.Email != "" {
 		if email, err := NormalizeEmail(r.Email); err != nil || email != r.Email {
 			return errors.New("person: invalid email")

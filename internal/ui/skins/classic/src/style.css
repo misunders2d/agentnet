@@ -774,3 +774,8 @@ button.reaction { cursor: pointer; }
 /* The agent’s needs-you turn stays readable at phone widths. */
 .agent-turn { margin-top: 8px; padding: 12px; border: 1px solid var(--attn-line); border-radius: 10px; }
 .agent-detail { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+
+/* Self-chosen profile pictures keep the existing avatar shape and fallback. */
+.avatar.profile-picture { position: relative; overflow: hidden; }
+.avatar.profile-picture > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.profile-picture-image { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
