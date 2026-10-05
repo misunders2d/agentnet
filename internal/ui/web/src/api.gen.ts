@@ -173,6 +173,8 @@ export interface ConvItem {
 }
 
 export interface CopyView {
+  own?: boolean;
+  person?: string;
   to: string;
   state: string;
   detail?: string;
@@ -185,6 +187,7 @@ export interface DMDraft {
   body: string;
   reply_to?: string;
   files?: string[];
+  quote?: string;
 }
 
 export interface DMMessage {
@@ -226,6 +229,9 @@ export interface DMMessage {
   job_detail?: string;
   event_type?: string;
   event_by?: string;
+  quote?: string;
+  sent_at?: string;
+  delivery?: string;
 }
 
 export interface DMSummary {
@@ -323,6 +329,7 @@ export interface Draft {
   body: string;
   reply_to?: string;
   files?: string[];
+  quote?: string;
 }
 
 export interface ExecView {
@@ -414,7 +421,26 @@ export interface GuestAction {
   accept?: boolean;
 }
 
+export interface GuestCheck {
+  ready: boolean;
+  needs_update: GuestCheckPerson[] | null;
+  offline: string[] | null;
+  text: string;
+}
+
+export interface GuestCheckPerson {
+  label: string;
+  me: boolean;
+  role: string;
+}
+
+export interface GuestCheckRequest {
+  conv: string;
+  host: string;
+}
+
 export interface GuestView {
+  needs_update?: string[];
   pid: string;
   state: string;
   state_text: string;
@@ -542,6 +568,8 @@ export interface Message {
   deleted?: boolean;
   can?: string[];
   exec?: ExecView;
+  quote?: string;
+  sent_at?: string;
 }
 
 export interface NotifyView {
