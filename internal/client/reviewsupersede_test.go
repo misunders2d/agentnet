@@ -228,9 +228,10 @@ func TestDoctorNamesSteward(t *testing.T) {
 type supersedeCase struct {
 	Name    string `json:"name"`
 	Notices []struct {
-		From string `json:"from"`
-		TS   int64  `json:"ts"`
-		Body string `json:"body"`
+		From    string `json:"from"`
+		TS      int64  `json:"ts"`
+		Body    string `json:"body"`
+		Dismiss bool   `json:"dismiss,omitempty"` // the person dismisses it once stored
 	} `json:"notices"`
 	Open        []int `json:"open"`
 	CleanupOpen []int `json:"cleanup_open"`
@@ -248,18 +249,23 @@ func TestReviewSupersedeVectors(t *testing.T) {
 		return string(data)
 	}
 	type n = struct {
-		From string `json:"from"`
-		TS   int64  `json:"ts"`
-		Body string `json:"body"`
+		From    string `json:"from"`
+		TS      int64  `json:"ts"`
+		Body    string `json:"body"`
+		Dismiss bool   `json:"dismiss,omitempty"`
 	}
 	cases := []supersedeCase{
-		{Name: "newer replaces older", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0)}, {"bot/a", 11, report("bot/a", 200, 2, 0)}}, Open: []int{1}, CleanupOpen: []int{1}},
-		{Name: "late older stays resolved", Notices: []n{{"bot/a", 11, report("bot/a", 200, 2, 0)}, {"bot/a", 10, report("bot/a", 100, 1, 0)}}, Open: []int{0}, CleanupOpen: []int{0}},
-		{Name: "hosts apart", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0)}, {"bot/b", 11, report("bot/b", 50, 1, 0)}}, Open: []int{0, 1}, CleanupOpen: []int{0, 1}},
-		{Name: "settled clears", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0)}, {"bot/a", 11, report("bot/a", 200, 0, 0)}}, Open: []int{}, CleanupOpen: []int{1}},
-		{Name: "count report", Notices: []n{{"bot/a", 10, report("bot/a", 100, 0, 3)}, {"bot/a", 11, report("bot/a", 200, 0, 2)}}, Open: []int{1}, CleanupOpen: []int{1}},
-		{Name: "count text by envelope time", Notices: []n{{"bot/a", 300, "2 request(s) wait"}, {"bot/a", 10, report("bot/a", 200, 1, 0)}}, Open: []int{0}, CleanupOpen: []int{0}},
-		{Name: "same second: later stored", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0)}, {"bot/a", 10, report("bot/a", 100, 2, 0)}}, Open: []int{1}, CleanupOpen: []int{1}},
+		{Name: "newer replaces older", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0), false}, {"bot/a", 11, report("bot/a", 200, 2, 0), false}}, Open: []int{1}, CleanupOpen: []int{1}},
+		{Name: "late older stays resolved", Notices: []n{{"bot/a", 11, report("bot/a", 200, 2, 0), false}, {"bot/a", 10, report("bot/a", 100, 1, 0), false}}, Open: []int{0}, CleanupOpen: []int{0}},
+		{Name: "hosts apart", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0), false}, {"bot/b", 11, report("bot/b", 50, 1, 0), false}}, Open: []int{0, 1}, CleanupOpen: []int{0, 1}},
+		{Name: "settled clears", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0), false}, {"bot/a", 11, report("bot/a", 200, 0, 0), false}}, Open: []int{}, CleanupOpen: []int{1}},
+		{Name: "count report", Notices: []n{{"bot/a", 10, report("bot/a", 100, 0, 3), false}, {"bot/a", 11, report("bot/a", 200, 0, 2), false}}, Open: []int{1}, CleanupOpen: []int{1}},
+		{Name: "count text by envelope time", Notices: []n{{"bot/a", 300, "2 request(s) wait", false}, {"bot/a", 10, report("bot/a", 200, 1, 0), false}}, Open: []int{0}, CleanupOpen: []int{0}},
+		{Name: "same second: later stored", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0), false}, {"bot/a", 10, report("bot/a", 100, 2, 0), false}}, Open: []int{1}, CleanupOpen: []int{1}},
+		// Offline is normal: the person dismissed the newer card before a
+		// late, older notice came; it must not bring a stale card back.
+		{Name: "newer dismissed, late older", Notices: []n{{"bot/a", 11, report("bot/a", 200, 2, 0), true}, {"bot/a", 10, report("bot/a", 100, 1, 0), false}}, Open: []int{}, CleanupOpen: []int{}},
+		{Name: "older dismissed, newer", Notices: []n{{"bot/a", 10, report("bot/a", 100, 1, 0), true}, {"bot/a", 11, report("bot/a", 200, 2, 0), false}}, Open: []int{1}, CleanupOpen: []int{1}},
 	}
 	w := newWorld(t, "")
 	for _, c := range cases {
@@ -275,6 +281,11 @@ func TestReviewSupersedeVectors(t *testing.T) {
 				}
 				if err != nil {
 					t.Fatal(err)
+				}
+				if x.Dismiss {
+					if _, err := w.alice.store.db.Exec(`UPDATE inbox SET state = ? WHERE id = ?`, stateResolved, in.ID); err != nil {
+						t.Fatal(err)
+					}
 				}
 				ids = append(ids, in.ID)
 			}

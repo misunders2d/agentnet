@@ -33,27 +33,29 @@ func noticeSettled(body string) bool {
 
 // supersedeNotices runs in the transaction that stores review notice in:
 // it resolves the host's older open notices, and stores in resolved when a
-// newer one is open already, or when it settles the card.
+// newer one is here already (open, or dismissed by the person: a late,
+// older notice must not bring back a card), or when it settles the card.
 func supersedeNotices(tx *sql.Tx, in envelope.Inner) error {
 	at := noticeTime(in.Body, in.TS)
-	rows, err := tx.Query(`SELECT id, body, ts FROM inbox WHERE sender = ? AND id != ? AND state = ? AND conv IS NULL AND (`+receivedNotice+`)`,
-		in.From, in.ID, stateNeedHuman, envelope.KindMessage, envelope.StatusReviewNotice)
+	rows, err := tx.Query(`SELECT id, body, ts, state FROM inbox WHERE sender = ? AND id != ? AND conv IS NULL AND (`+receivedNotice+`)`,
+		in.From, in.ID, envelope.KindMessage, envelope.StatusReviewNotice)
 	if err != nil {
 		return err
 	}
 	var older []string
 	stale := noticeSettled(in.Body)
 	for rows.Next() {
-		var id, body string
+		var id, body, state string
 		var ts int64
-		if err := rows.Scan(&id, &body, &ts); err != nil {
+		if err := rows.Scan(&id, &body, &ts, &state); err != nil {
 			rows.Close()
 			return err
 		}
-		if at >= noticeTime(body, ts) {
-			older = append(older, id)
-		} else {
+		switch {
+		case at < noticeTime(body, ts):
 			stale = true // a newer snapshot is here already
+		case state == stateNeedHuman:
+			older = append(older, id)
 		}
 	}
 	rows.Close()
@@ -72,8 +74,9 @@ func supersedeNotices(tx *sql.Tx, in envelope.Inner) error {
 }
 
 // settleLeftoverNotices resolves, once per home, every open review notice
-// but the newest per host: those stored before notices superseded each
-// other (bounded recovery). It changes nothing a second time.
+// but the newest per host (open or dismissed): those stored before notices
+// superseded each other (bounded recovery). It changes nothing a second
+// time.
 func (s *store) settleLeftoverNotices() error {
 	const done = "review_notices_settled"
 	if v, err := s.config(done); err == nil && v == "1" {
@@ -84,33 +87,36 @@ func (s *store) settleLeftoverNotices() error {
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT id, sender, body, ts FROM inbox WHERE state = ? AND conv IS NULL AND (`+receivedNotice+`) ORDER BY arrival`,
-		stateNeedHuman, envelope.KindMessage, envelope.StatusReviewNotice)
+	rows, err := tx.Query(`SELECT id, sender, body, ts, state FROM inbox WHERE conv IS NULL AND (`+receivedNotice+`) ORDER BY arrival`,
+		envelope.KindMessage, envelope.StatusReviewNotice)
 	if err != nil {
 		return err
 	}
 	type notice struct {
-		id string
-		at int64
+		id   string
+		at   int64
+		open bool
 	}
 	newest := map[string]notice{}
 	var resolve []string
 	for rows.Next() {
-		var id, sender, body string
+		var id, sender, body, state string
 		var ts int64
-		if err := rows.Scan(&id, &sender, &body, &ts); err != nil {
+		if err := rows.Scan(&id, &sender, &body, &ts, &state); err != nil {
 			rows.Close()
 			return err
 		}
-		n := notice{id, noticeTime(body, ts)}
+		n := notice{id, noticeTime(body, ts), state == stateNeedHuman}
 		cur, ok := newest[sender]
 		switch {
 		case !ok:
 			newest[sender] = n
 		case n.at >= cur.at: // in arrival order: a later one of the same second is newer
-			resolve = append(resolve, cur.id)
+			if cur.open {
+				resolve = append(resolve, cur.id)
+			}
 			newest[sender] = n
-		default:
+		case n.open:
 			resolve = append(resolve, n.id)
 		}
 	}

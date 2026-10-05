@@ -16,11 +16,12 @@ for (const c of cases) {
   let inbox = [];
   c.notices.forEach((x, i) => {
     for (const op of e.noticeOps(inbox, row(x, i))) inbox = [...inbox.filter((r) => r.id !== op.k), op.v];
+    if (x.dismiss) inbox = inbox.map((r) => r.id === id(i) ? { ...r, resolved: true } : r); // the person dismisses it
   });
   const open = c.notices.map((_, i) => i).filter((i) => { const r = inbox.find((x) => x.id === id(i)); return r && !r.resolved; });
   // Stored before superseding: the one-time cleanup on load.
   const store = memoryStore();
-  await store.write(c.notices.map((x, i) => ({ s: 'inbox', k: id(i), v: row(x, i) })));
+  await store.write(c.notices.map((x, i) => ({ s: 'inbox', k: id(i), v: x.dismiss ? { ...row(x, i), resolved: true } : row(x, i) })));
   await store.write([{ s: 'kv', k: 'identity', v: { address: 'me/browser', keys: {}, fingerprint: 'f' } }]);
   const loaded = new Engine({ store, base: 'https://synthetic.invalid', fetch });
   await loaded.load();

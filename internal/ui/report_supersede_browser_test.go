@@ -36,7 +36,7 @@ func TestBrowserReportSupersedeMatchesGo(t *testing.T) {
 		Open        []int  `json:"open"`
 		CleanupOpen []int  `json:"cleanup_open"`
 	}
-	if err := json.Unmarshal(raw, &cases); err != nil || len(cases) < 7 {
+	if err := json.Unmarshal(raw, &cases); err != nil || len(cases) < 9 {
 		t.Fatalf("vectors: %d, %v", len(cases), err)
 	}
 	input, _ := json.Marshal(map[string]json.RawMessage{"cases": raw})

@@ -4711,35 +4711,36 @@ export class Engine {
   // noticeOps is client.supersedeNotices for review notice row about to be
   // stored: a snapshot from its host stands for all the host's earlier
   // ones (one card per host). The host's older open notices are resolved;
-  // the row itself is stored resolved when a newer one is open already (a
-  // late, older notice), or when it says nothing waits any more (no items,
-  // no count: the settled snapshot). A host's time is a version 2 report's
-  // at, else the envelope's ts; of the same second, the later stored wins.
+  // the row itself is stored resolved when a newer one is here already,
+  // open or dismissed (a late, older notice never brings a card back), or
+  // when it says nothing waits any more (no items, no count: the settled
+  // snapshot). A host's time is a version 2 report's at, else the
+  // envelope's ts; of the same second, the later stored wins.
   noticeOps(inbox, row) {
     if (inbox.some((r) => r.id === row.id)) return []; // stored already: as it stands (dismissed stays dismissed)
     const at = noticeTime(row);
     let resolved = noticeSettled(row);
     const ops = [];
     for (const r of inbox) {
-      if (r.id === row.id || r.from !== row.from || r.resolved || !isNotice(r)) continue;
-      if (at >= noticeTime(r)) ops.push({ s: "inbox", k: r.id, v: { ...r, resolved: true } });
-      else resolved = true;
+      if (r.id === row.id || r.from !== row.from || !isNotice(r)) continue;
+      if (at < noticeTime(r)) resolved = true;
+      else if (!r.resolved) ops.push({ s: "inbox", k: r.id, v: { ...r, resolved: true } });
     }
     ops.push({ s: "inbox", k: row.id, v: resolved ? { ...row, resolved: true } : row });
     return ops;
   }
 
   // settleLeftoverNotices is client.settleLeftoverNotices: once per store,
-  // every open review notice but the newest per host is resolved (notices
-  // stored before they superseded each other).
+  // every open review notice but the newest per host (open or dismissed)
+  // is resolved (notices stored before they superseded each other).
   async settleLeftoverNotices() {
     if (await this.store.get("kv", "notices_settled")) return;
     const newest = new Map(), ops = [];
-    for (const r of (await this.store.all("inbox")).filter((x) => isNotice(x) && !x.resolved).sort((x, y) => (x.at || 0) - (y.at || 0))) {
+    for (const r of (await this.store.all("inbox")).filter(isNotice).sort((x, y) => (x.at || 0) - (y.at || 0))) {
       const cur = newest.get(r.from);
       if (!cur) { newest.set(r.from, r); continue; }
-      if (noticeTime(r) >= noticeTime(cur)) { ops.push({ s: "inbox", k: cur.id, v: { ...cur, resolved: true } }); newest.set(r.from, r); }
-      else ops.push({ s: "inbox", k: r.id, v: { ...r, resolved: true } });
+      if (noticeTime(r) >= noticeTime(cur)) { if (!cur.resolved) ops.push({ s: "inbox", k: cur.id, v: { ...cur, resolved: true } }); newest.set(r.from, r); }
+      else if (!r.resolved) ops.push({ s: "inbox", k: r.id, v: { ...r, resolved: true } });
     }
     await this.store.write([...ops, { s: "kv", k: "notices_settled", v: true }]);
   }
