@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,26 +19,50 @@ import (
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
-type googleSetupFixture struct{}
+type googleSetupFixture struct {
+	mu     sync.Mutex
+	status SetupGoogleStatus
+	done   chan struct{}
+}
 
-func (googleSetupFixture) SetupState() SetupView {
+func (*googleSetupFixture) SetupState() SetupView {
 	return SetupView{State: "none", Device: "linux-laptop"}
 }
-func (googleSetupFixture) SetupInspect(string) SetupInvite { return SetupInvite{} }
-func (googleSetupFixture) SetupJoin(SetupJoin) (SetupResult, error) {
+func (*googleSetupFixture) SetupInspect(string) SetupInvite { return SetupInvite{} }
+func (*googleSetupFixture) SetupJoin(SetupJoin) (SetupResult, error) {
 	return SetupResult{}, Refuse("fixture")
 }
-func (googleSetupFixture) SetupStartAgain() (SetupView, error) { return SetupView{State: "none"}, nil }
-func (googleSetupFixture) SetupGoogle(hub string) error {
-	if hub != "https://workspace.example" {
+func (*googleSetupFixture) SetupStartAgain() (SetupView, error) { return SetupView{State: "none"}, nil }
+func (g *googleSetupFixture) SetupGoogle(hub string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if hub == "https://not-set.example" {
+		return Refuse("Google sign-in is not set up for this workspace yet. Use your invitation instead.")
+	}
+	if hub != "https://workspace.example" && hub != "https://cancel.example" {
 		return Refuse("workspace address")
+	}
+	g.done = make(chan struct{})
+	g.status = SetupGoogleStatus{State: "waiting"}
+	if hub == "https://workspace.example" {
+		g.status = SetupGoogleStatus{State: "error", Problem: "Fixture sign-in declined. Try again."}
+		close(g.done)
 	}
 	return nil
 }
-func (googleSetupFixture) SetupGoogleState() (SetupGoogleStatus, <-chan struct{}) {
-	done := make(chan struct{})
-	close(done)
-	return SetupGoogleStatus{State: "error", Problem: "Fixture sign-in declined. Try again."}, done
+func (g *googleSetupFixture) SetupGoogleState() (SetupGoogleStatus, <-chan struct{}) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.status, g.done
+}
+func (g *googleSetupFixture) SetupGoogleCancel() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.status.State == "waiting" {
+		g.status = SetupGoogleStatus{State: "error", Problem: "Google sign-in was cancelled. Try again."}
+		close(g.done)
+	}
+	return nil
 }
 
 func TestGoogleRendered(t *testing.T) {
@@ -55,10 +80,25 @@ func TestGoogleRendered(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bootstrap.Close()
-	for _, c := range []protocol.GoogleAccessChange{{Email: "operator@example.com", Admin: true}, {Email: "browser@example.com"}} {
+	for _, c := range []protocol.GoogleAccessChange{{Email: "operator@example.com", Admin: boolPointer(true)}, {Email: "browser@example.com"}, {Email: "alex@example.com"}} {
 		if err = bootstrap.ChangeGoogleAccess(ctx, c); err != nil {
 			t.Fatal(err)
 		}
+	}
+
+	if err = bootstrap.ChangeGoogleAccess(ctx, protocol.GoogleAccessChange{Domain: "example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	var domainMembers []*client.Agent
+	for _, email := range []string{"domain.wide@example.com", "domain.phone@example.com"} {
+		home := t.TempDir()
+		pub, _ := client.GoogleDevice(home, "domain-device")
+		member, e := client.JoinGoogle(ctx, home, client.GoogleOptions{Hub: inv.Hub, CertPEM: inv.CertPEM}, i.IDToken(t, pub, email, nil), "domain-device")
+		if e != nil {
+			t.Fatal(e)
+		}
+		domainMembers = append(domainMembers, member)
+		defer member.Close()
 	}
 	home := filepath.Join(t.TempDir(), "operator")
 	pub, _ := client.GoogleDevice(home, "laptop")
@@ -67,6 +107,20 @@ func TestGoogleRendered(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
+	peerHome := t.TempDir()
+	peerPub, _ := client.GoogleDevice(peerHome, "phone")
+	peer, err := client.JoinGoogle(ctx, peerHome, client.GoogleOptions{Hub: inv.Hub, CertPEM: inv.CertPEM}, i.IDToken(t, peerPub, "alex@example.com", map[string]any{"name": "Alex"}), "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	defer runDaemon(t, a)()
+	defer runDaemon(t, peer)()
+	waitFor(t, "peer capability publication", func() bool { _, err = a.CreateDM(ctx, peer.Address); return err == nil })
+	offer, err := a.NewDeviceLink(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	live := NewLive(a)
 	if v, err := live.Invites(); err != nil || v.CanInvite {
 		t.Fatalf("native code-invite UI: %+v %v", v, err)
@@ -79,7 +133,7 @@ func TestGoogleRendered(t *testing.T) {
 	native.Start()
 	defer native.Close()
 	setup := httptest.NewUnstartedServer(nil)
-	setup.Config.Handler = NewSetup(googleSetupFixture{}, setup.Listener.Addr().String(), testToken)
+	setup.Config.Handler = NewSetup(&googleSetupFixture{}, setup.Listener.Addr().String(), testToken)
 	setup.Start()
 	defer setup.Close()
 	// Only this disposable fixture emits credentials to the test browser.
@@ -89,7 +143,7 @@ func TestGoogleRendered(t *testing.T) {
 		w.Write([]byte(i.IDToken(t, identity.Public{}, "browser@example.com", map[string]any{"nonce": r.URL.Query().Get("nonce")})))
 	}))
 	defer signer.Close()
-	out := browserCheck(t, "testdata/google_browser_check.cjs", native.URL, inv.Hub, setup.URL, signer.URL, testToken)
+	out := browserCheck(t, "testdata/google_browser_check.cjs", native.URL, inv.Hub, setup.URL, signer.URL, testToken, offer.Code, code)
 	if !strings.Contains(out, "Google UI PASS") {
 		t.Fatalf("%s", out)
 	}
@@ -109,7 +163,15 @@ func TestGoogleRendered(t *testing.T) {
 			domain = true
 		}
 	}
+
+	for _, member := range domainMembers {
+		if _, e := member.Members(ctx); e == nil {
+			t.Fatal("rendered domain offboarding left device authenticated")
+		}
+	}
 	if !invited || !domain {
 		t.Fatal("rendered controls did not update real Hub policy")
 	}
 }
+
+func boolPointer(v bool) *bool { return &v }

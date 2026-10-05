@@ -108,6 +108,14 @@ func NewSetup(p SetupProvider, host, token string) http.Handler {
 		}
 		writeResult(w, struct{}{}, g.SetupGoogle(v.Hub))
 	})
+	mux.HandleFunc("POST /api/setup/google/cancel", func(w http.ResponseWriter, r *http.Request) {
+		g, ok := p.(interface{ SetupGoogleCancel() error })
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		writeResult(w, struct{}{}, g.SetupGoogleCancel())
+	})
 	mux.HandleFunc("GET /api/setup/google/events", func(w http.ResponseWriter, r *http.Request) {
 		g, ok := p.(SetupGoogleProvider)
 		if !ok {

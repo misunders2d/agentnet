@@ -76,7 +76,7 @@ export function read(code, now = Date.now()) {
 export async function landing(ui, link) {
   const p = platform();
   const cfg = ui.googleConfig ? await ui.googleConfig().catch(() => ({})) : {};
-  if (cfg.web_client_id || cfg.desktop_client_id) return googleLanding(ui, p, cfg);
+  if (!link?.code && !link?.damaged && (cfg.web_client_id || cfg.desktop_client_id)) return googleLanding(ui, p, cfg);
   const code = link && !link.damaged ? link.code : "";
   const problem = link && link.damaged ? "This link could not be opened. Paste the invitation below, or ask the sender for a new link." : "";
   if (isPhone(p)) return phone(ui, p, code, problem);

@@ -559,6 +559,7 @@ export class Engine {
     const pub = await wire.publicEntry(keys, prepared.address);
     let first = pending.first ? await wire.parseRoster(pending.first) : null, link = pending.link;
     if (pending.address && (pending.address !== prepared.address || pending.email !== prepared.email)) throw new Error("Use the same Google account to finish joining.");
+    if (link && !prepared.enrolled && link.expires <= Math.floor(this.now() / 1000)) { first = null; link = null; }
     if (!first && !link) {
       if (!prepared.head) first = await wire.newRoster(keys, prepared.address, prepared.name, prepared.email);
       else {
@@ -570,9 +571,14 @@ export class Engine {
       }
       await put(this.store, "kv", "google_joining", { keys, address: prepared.address, email: prepared.email, first: first ? wire.rosterJSON(first) : null, link });
     }
-    await this.call("POST", "/v1/google/join", await wire.googleRequest(keys, token, pub, first, link), { signed: false });
+    try {
+      await this.call("POST", "/v1/google/join", await wire.googleRequest(keys, token, pub, first, link), { signed: false });
+    } catch (e) {
+      if (["roster_stale", "too_many_devices", "bad_step"].includes(e.code)) await put(this.store, "kv", "google_joining", { keys });
+      throw e;
+    }
     const fingerprint = await wire.fingerprint(pub);
-    const ownLink = link && { state: "pending", person: link.person, approver: link.approver.address, approver_key: link.approver.fingerprint, expires: link.expires, seq: link.seq + 1 };
+    const ownLink = link && { google: true, state: "pending", person: link.person, approver: link.approver.address, approver_key: link.approver.fingerprint, expires: link.expires, seq: link.seq + 1 };
     const identity = { address: prepared.address, keys, fingerprint, joined: this.now() };
     this.address = identity.address; this.keys = keys; this.fp = fingerprint;
     const me = first && { ...(await this.personRecord([first], "self", null)), published: true };
@@ -678,7 +684,7 @@ export class Engine {
       await wire.verifyFirst(steps[0]);
       for (let i = 1; i < steps.length; i++) await wire.verifyNext(steps[i], steps[i - 1]);
       const step = steps.find((r) => r.seq === s.seq);
-      if (!step || step.by !== s.approver_key || !(await wire.rosterHas(step, this.address, this.fp))) {
+      if (!step || (!s.google && step.by !== s.approver_key) || !(await wire.rosterHas(step, this.address, this.fp))) {
         throw new Error("the person's roster does not name this device in the step its approver signed");
       }
       if (!(await wire.rosterHas(steps[steps.length - 1], this.address, this.fp))) throw new Error("this device is no longer in its person's roster");
@@ -701,7 +707,7 @@ export class Engine {
   // fingerprint are the one device a view is about: this one for your own
   // person, else the first current device.
   personView(p, extra) {
-    return p && { person: p.person, label: p.label, email: p.email || "", address: p.address, fingerprint: p.fingerprint, state: p.state,
+    return p && { person: p.person, label: p.label, email: p.state === "conflict" ? "" : p.email || "", address: p.address, fingerprint: p.fingerprint, state: p.state,
       devices: (p.devices || []).map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint, this: d.address === this.address })),
       ...extra };
   }
@@ -892,7 +898,7 @@ export class Engine {
 
   async onGoogleLinkEvent(ev) {
     const l = ev.google, me = this.me;
-    if (!me?.email || l.email !== me.email || l.person !== me.person || l.approver.address !== this.address || l.approver.fingerprint !== this.fp ||
+    if (!me?.email || l.email !== me.email || l.person !== me.person || !(await wire.rosterHas(await wire.parseRoster(me.json), this.address, this.fp)) || !(await wire.rosterHas(await wire.parseRoster(me.json), l.approver.address, l.approver.fingerprint)) ||
       l.seq !== me.seq || l.roster !== me.hash || l.offer !== ev.offer || !wire.validID(ev.offer) || !Number.isSafeInteger(l.expires) ||
       l.expires <= Math.floor(this.now() / 1000) || l.expires > Math.floor(this.now() / 1000) + wire.MaxLinkTTL) return;
     const dev = await wire.parsePublic(ev.device), join = wire.unb64(ev.join, "join");
@@ -1383,6 +1389,13 @@ export class Engine {
       throw new Hold("proof_pending", "person " + person + ": " + e.message);
     }
     const p = await this.personRecord(steps, "pinned", null);
+    const peers = [this.me, ...(await this.store.all("persons"))].filter(Boolean);
+    if (p.email && peers.some(other => other.person !== p.person && other.email === p.email)) {
+      p.state = "conflict";
+      await put(this.store, "persons", p.person, p);
+      this.changed();
+      throw new Hold("invalid", "Another account claims this email; the earlier person stays pinned.");
+    }
     await put(this.store, "persons", p.person, p);
     await this.pinDevices(p);
     return p;

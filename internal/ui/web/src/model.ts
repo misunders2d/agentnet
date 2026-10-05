@@ -130,7 +130,7 @@ export const niceDevice = (address: string) => {
   return d ? d.charAt(0).toUpperCase() + d.slice(1) : d;
 };
 
-export const personName = (p: T.PersonView | undefined | null) => (p && ((p.label || "Someone") + (p.email ? " · " + p.email : ""))) || "Someone";
+export const personName = (p: T.PersonView | undefined | null) => (p && (p.label || "Someone")) || "Someone";
 
 /** possessive: "Vitalii" → "Vitalii's"; "you" for this installation's person. */
 export const owner = (p: T.PersonView | undefined | null, me?: T.PersonView | null) =>

@@ -446,6 +446,7 @@ type appSetup struct {
 	stateMu      sync.Mutex
 	state        string // client.EnrollNone …
 	googleDone   chan struct{}
+	googleStop   func()
 	googleStatus ui.SetupGoogleStatus
 }
 

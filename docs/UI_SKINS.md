@@ -309,13 +309,17 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   the page is the app's window (the app updates as a whole: offer the new
   version of the app, never a terminal command). Google membership (P8):
   GET `/api/google/access` answers `{workspace_url, enabled, can_admin,
-  emails[{email, admin, denied}], domains[]}`. Only `can_admin` may edit:
+  emails[{email, admin, denied, domain_member}], domains[]}`. Only `can_admin` may edit:
   POST the same route with one `{email}` or `{domain}`, plus `remove` and
-  `admin` booleans. Removal of an email blocks domain admission too and
+  `admin` (optional promotion only; an invite never demotes an admin). Removal of an email blocks domain admission too and
   revokes its active and pending devices. Offer Invite by email and Allow
   everyone at @domain in Workspaces; the Get AgentNet link uses
-  `workspace_url`. A person's optional `email` is part of their signed,
-  immutable roster binding; show it with their editable name. Later-device
+  `workspace_url`. A person's optional `email` is checked only by the workspace relay and
+  trusted on first sight, like the M1 first-contact key limit. Roster
+  signatures preserve the claim; they do not independently prove Google
+  ownership. Show email only in profile/people details as verified by this
+  workspace. Keep key-change warnings; a second pinned person claiming
+  that email is a conflict and its email is hidden. Later-device
   Google sign-in uses the existing one-tap device approval. With Google
   enabled, `/api/invites` hides code invites; codes remain an admin CLI
   fallback. Without Google configured, the existing invitation UI works:

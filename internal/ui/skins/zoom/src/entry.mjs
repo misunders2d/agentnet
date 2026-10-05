@@ -1,3 +1,4 @@
+function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
 const mounted = new WeakMap();
@@ -128,7 +129,7 @@ async function loadOverview() {
   if (!state.version) state.version = o.version;
   else if (o.version && o.version !== state.version) updated(o.version);
   $("demo").hidden = !o.demo;
-  $("me").textContent = o.person ? o.person.label + (o.person.email ? " · " + o.person.email : "") : "This device";
+  $("me").textContent = o.person ? o.person.label : "This device";
   $("me").title = "Key " + o.me.fingerprint;
   const m = machineLines(o);
   $("machine").textContent = m.summary;
@@ -1386,7 +1387,7 @@ function hubOf(h) {
   if (h.kind === "person") {
     const dms = (o.dms || []).filter((d) => personKey(d.peer) === h.key);
     const p = (o.people || []).find((x) => personKey(x) === h.key) || (dms[0] && dms[0].peer);
-    return p ? { label: p.label + (p.email ? " · " + p.email : ""), person: p, dms, count: dms.length } : null;
+    return p ? { label: p.label, person: p, dms, count: dms.length } : null;
   }
   const c = contactsOf(o.threads || []).find((x) => x.peer === h.key);
   return c ? { label: c.peer, contact: c, count: c.conversations.length + c.singles.length } : null;
@@ -1435,11 +1436,12 @@ function renderHub() {
   }
   if (x.person) {
     const p = x.person;
-    fill($("conv-name"), p.label + (p.email ? " · " + p.email : ""));
+    fill($("conv-name"), p.label);
     $("conv-topic").textContent = "Person · " + plural(x.dms.length, "DM", "DMs") + " · each DM is a separate conversation";
-    $("conv-presence").textContent = "The name they give · " + (devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address) +
+    $("conv-presence").textContent = "The name they give · " + (devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "on " + niceGoogleDevice(p.address)) +
       " · " + (personStateText[p.state] || p.state);
     fill($("hub"),
+      p.email && el("p", { class: "hint" }, p.email + " · verified by this workspace"),
       deviceDisclosure(p),
       (p.agents || []).map((a) => el("p", { class: "hint agent-link" }, agentLinkText(a, p))),
       x.dms.length ? el("ul", { class: "thread-list hub-list", "aria-label": "DMs with " + p.label }, x.dms.map((d) => dmRow(d, (id) => openDM(id))))
@@ -2121,7 +2123,7 @@ function renderAgents(t) {
   fill(box, el("div", { class: "participant-list" },
     humanGroup(t) && t.frozen && el("span", {class: "hint"}, groupMemberCount(t)),
     people.map(p => el("span", { class: "participant" }, avatar(p.label || p.address, "sm"), p.state === "self" ? "You" : p.label)),
-    (t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => el("button", { type: "button", class: "participant human-participant", title: g.host.address + " · participation " + g.pid, onclick: () => dialog({ title: g.host.label + " · human participation", body: [guestCard(g, t)], ok: "Close", run: async () => {} }) }, avatar(g.host.label || g.host.address, "sm"), g.host_here ? "You" : g.host.label, el("span", { class: "tag" }, g.state === "active" ? "Guest" : g.state === "dismissed" ? "Ended here" : g.state))),
+    (t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => el("button", { type: "button", class: "participant human-participant", title: g.host.address + " · participation " + g.pid, onclick: () => dialog({ title: g.host.label + " · human participation", body: [guestCard(g, t)], ok: "Close", run: async () => {} }) }, avatar(g.host.label || "Someone", "sm"), g.host_here ? "You" : g.host.label, el("span", { class: "tag" }, g.state === "active" ? "Guest" : g.state === "dismissed" ? "Ended here" : g.state))),
     t.agents.filter(a => !["dismissed", "declined"].includes(a.state)).map(a => el("button", {
       type: "button", class: "participant assistant-participant", title: (a.agent_id || a.pid) + " · " + a.host.address + " · participation " + a.pid,
       onclick: () => dialog({title: agentName(a), body: [agentCard(a, t)], ok: "Close", run: async () => {}})
@@ -2146,12 +2148,12 @@ function participantsDialog(t) {
 
 function guestCard(g, t) {
   return el("div", { class: "agent-card " + g.state },
-    el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Guest"), el("strong", {}, g.host.label || g.host.address)),
+    el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Guest"), el("strong", {}, g.host.label || "Someone")),
     g.needs_update?.length && el("p",{class:"hint"},"Waiting for "+g.needs_update.map(label=>label===state.overview.person?.label?"your other device":label).join(", ")+" to update AgentNet"),
     guestUpdateTargets(g,t).map(p => el("button", {type:"button",class:"btn",onclick:()=>askGuestUpdate(p).catch(e=>announce(e.message))}, "Ask "+p.label+" to update")),
     el("p", {}, g.state === "active" ? "Joined this conversation." : g.state === "dismissed" ? "No longer in the active audience here. Other devices may still be updating." : g.state === "invited" ? "Invitation waiting for a response." : g.state_text),
     el("p", { class: "hint" }, "Invited by " + g.inviter.label),
-    el("details", { class: "tech" }, el("summary", {}, "Details"), el("p", {}, "Device: " + g.host.address), el("p", { class: "mono" }, "Participation: " + g.pid)),
+    el("details", { class: "tech" }, el("summary", {}, "Details"), el("p", {}, "Device: " + niceGoogleDevice(g.host.address)), el("p", { class: "mono" }, "Participation: " + g.pid)),
     el("p", { class: "hint" }, g.shared.length ? plural(g.shared.length, "selected earlier message", "selected earlier messages") + ". Available attached files are included only after acceptance." : "No earlier messages or files selected."),
     el("details", {class:"tech"}, el("summary", {}, "Sharing and leaving"), el("p", {}, "Only selected earlier context and new conversation messages are shared while present. No assistant runs automatically. Leaving or removing ends future local access, not previously received copies. Other devices may still be updating. No automatic expiry.")),
     el("div", { class: "agent-actions" },
@@ -2183,9 +2185,9 @@ function inviteHumanDialog(t, address = "") {
   host.value = address; // chosen from @ (an exact directory entry), still editable here
   const candidates = directory().current ? directory().members.filter(p => !addresses.has(p.address)) : [];
   const updateNote=el("p",{class:"hint",role:"status"});let checkedHost="";
-  const checkHost=async()=>{const chosen=host.value.trim();checkedHost="";updateNote.textContent="Checking their app…";try{const v=await api("/api/dm/guest/check",{conv:t.id,host:chosen},transport);if(current()&&host.value.trim()===chosen){checkedHost=chosen;updateNote.textContent=v.text||"";$("dialog-ok").textContent=v.needs_update?.some(p=>p.role==="guest")?"Invite · waits for update":"Invite person";}}catch(e){if(current()&&host.value.trim()===chosen)updateNote.textContent="Could not check "+chosen.split("/")[0]+"’s app. Try again.";}};
+  const checkHost=async()=>{const chosen=host.value.trim();checkedHost="";updateNote.textContent="Checking their app…";try{const v=await api("/api/dm/guest/check",{conv:t.id,host:chosen},transport);if(current()&&host.value.trim()===chosen){checkedHost=chosen;updateNote.textContent=v.text||"";$("dialog-ok").textContent=v.needs_update?.some(p=>p.role==="guest")?"Invite · waits for update":"Invite person";}}catch(e){if(current()&&host.value.trim()===chosen)updateNote.textContent="Could not check this person’s app. Try again.";}};
   host.addEventListener("change",checkHost);
-  const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address;void checkHost(); } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
+  const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address;void checkHost(); } }, el("strong", {}, p.label || "Someone"), " · ", el("small", {}, niceGoogleDevice(p.address))));
   const ref = m => m.lid || m.id;
   const share = t.messages.filter(m => !m.event && !m.excerpt_pid && !m.deleted).slice(-30).map(m => choice("checkbox", "guest-share", ref(m), el("span", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 70) || "(files only)"), (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size))))));
   const fileConsent = choice("checkbox", "guest-file-consent", "yes", "Share files attached to the earlier messages I select with this person after acceptance.");
@@ -2204,7 +2206,7 @@ function inviteHumanDialog(t, address = "") {
       const address = host.value.trim(), selected = share.filter(c => c.input.checked).map(c => c.input.value);
       if (!address || addresses.has(address)) throw new Error("Choose the exact address of someone outside this private DM.");
       if (t.messages.some(m => selected.includes(ref(m)) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected context includes files. Confirm file sharing, or deselect those messages.");
-      if(checkedHost!==address){await checkHost();if(checkedHost!==address)throw Error("Could not check "+address.split("/")[0]+"’s app. Try again.");}
+      if(checkedHost!==address){await checkHost();if(checkedHost!==address)throw Error("Could not check this person’s app. Try again.");}
       await api("/api/dm/guest/invite", { conv: t.id, host: address, share: selected, note: note.value }, transport);
       if (current()) { announce("Human invited. No earlier context or files leave before acceptance."); await loadDM(); }
     } });
@@ -2312,7 +2314,7 @@ function mentionPeople(t) {
   const account = (address) => (address || "").split("/")[0];
   for (const p of (originals || []).filter(Boolean)) {
     if (p.state === "self" || (me && p.person === me) || !p.person || !mentionName(p.label)) continue;
-    seen.set("person:" + p.person, { kind: "person", name: mentionName(p.label), ref: { kind: "person", id: p.person }, role: humanGroup(t) ? (p.admin ? "Group admin" : "Group member") : "In this conversation", more: "account " + account(p.address), title: p.address || "" });
+    seen.set("person:" + p.person, { kind: "person", name: mentionName(p.label), ref: { kind: "person", id: p.person }, role: humanGroup(t) ? (p.admin ? "Group admin" : "Group member") : "In this conversation", more: "account " + account(p.address), title: niceGoogleDevice(p.address) || "" });
   }
   for (const g of t.guests || []) if (g.state === "active" && !g.host_here && mentionName(g.host?.label)) seen.set("guest:" + g.pid, { kind: "person", name: mentionName(g.host.label), ref: { kind: "guest", id: g.pid }, role: "Guest", more: (g.inviter?.label ? "invited by " + g.inviter.label + " · " : "") + "account " + account(g.host.address), title: g.host.address + " · participation " + g.pid });
   const people = [...seen.values()], named = {};
@@ -2326,8 +2328,8 @@ function mentionInvites(t, query) {
   if (rights.people && query) {
     const inside = new Set([...(humanGroup(t) ? t.members : [state.overview?.person, t.peer]).filter(Boolean).flatMap(p => [p.person, p.address, ...(p.devices || []).map(d => d.address)]),
       ...(t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => g.host?.address)]);
-    const pool = humanGroup(t) ? (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !inside.has(p.person)).map(p => ({ name: p.label, person: p.person, title: p.address }))
-      : directory().current ? directory().members.filter(p => !inside.has(p.address)).map(p => ({ name: p.label || p.address.split("/")[0], address: p.address, title: p.address })) : [];
+    const pool = humanGroup(t) ? (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !inside.has(p.person)).map(p => ({ name: p.label, person: p.person, title: niceGoogleDevice(p.address) }))
+      : directory().current ? directory().members.filter(p => !inside.has(p.address)).map(p => ({ name: p.label || "Someone", address: p.address, title: niceGoogleDevice(p.address) })) : [];
     for (const p of pool.filter(p => p.name && p.name.toLowerCase().includes(query)).slice(0, 5)) out.push({ kind: "invite-person", ...p });
   }
   if (rights.people) out.push({ kind: "invite-people" });
@@ -2736,7 +2738,7 @@ function searchItems(q, threads, open) {
     ...people.map((p) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.person(p, e.currentTarget) },
       el("span", { class: "result-kind" }, "Person"),
       el("span", { class: "result-main" }, el("span", { class: "result-title" }, p.label, p.person && el("span", { class: "hint", title: "Person ID: " + p.person }, " · @" + p.person.slice(0, 8))),
-        el("span", { class: "hint" }, "via " + p.address + " · " + (personStateText[p.state] || p.state)))))),
+        el("span", { class: "hint" }, "on " + niceGoogleDevice(p.address) + " · " + (personStateText[p.state] || p.state)))))),
     dms.length > 0 && el("li", { class: "result-head" }, dms.some(humanGroup) ? plural(dms.length, "conversation", "conversations") : plural(dms.length, "DM", "DMs")),
     ...dms.map((d) => el("li", {}, el("button", { type: "button", class: "result", onclick: (e) => open.dm(d, e.currentTarget) },
       el("span", { class: "result-kind" }, humanGroup(d) ? "Group" : "DM"),
@@ -4241,7 +4243,7 @@ function renderProfile(o) {
   const p = o.person;
   $("profile-initial").textContent = (p ? p.label : o.me.address).charAt(0).toUpperCase();
   fill($("profile-card"), p ? el("div", { class: "profile-card" }, avatar(p.label),
-    el("div", {}, el("h3", {}, p.label), p.email && el("p", { class: "hint" }, p.email), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
+    el("div", {}, el("h3", {}, p.label), p.email && el("p", { class: "hint" }, p.email + " · verified by this workspace"), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
       p.person && el("p", { class: "hint", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8))))
     : setupChoice());
   fill($("profile-devices"), p ? deviceDisclosure(p, (addr) => { $("settings").close(); openHub({ kind: "device", key: addr }); }) : null,
@@ -4970,7 +4972,7 @@ const Zoom = {
       el("ul", { class: "person-cards" }, self, people.map((p) => {
         const theirs = dms.filter((d) => d.peer.person && d.peer.person === p.person);
         const held = theirs.reduce((n, d) => n + d.held, 0), unread = theirs.reduce((n, d) => n + d.unread, 0);
-        const status = [devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "via " + p.address, personStateText[p.state] || p.state, theirs.length && plural(theirs.length, "DM", "DMs"),
+        const status = [devicesOf(p).length > 1 ? "on " + devicesOf(p).map((d) => d.name).join(", ") : "on " + niceGoogleDevice(p.address), personStateText[p.state] || p.state, theirs.length && plural(theirs.length, "DM", "DMs"),
           held && held + " held", unread && unread + " new"].filter(Boolean).join(" · ");
         const b = el("button", { type: "button", class: "person-card" + (p.state === "conflict" ? " danger" : ""), "aria-label": p.label + ", " + status },
           avatar(p.label || p.address, "node-face"), el("span", { class: "node-name" }, p.label), el("span", { class: "node-status" }, status));
@@ -5011,7 +5013,7 @@ const Zoom = {
     const online = presenceOf(p.address);
     return el("div", { class: "zoom-person" },
       el("header", { class: "zoom-head" }, avatar(p.label || p.address), el("div", {}, el("h2", {}, p.label),
-        el("p", { class: "hint" }, "The name they give · via " + p.address + " · " + (personStateText[p.state] || p.state) +
+        el("p", { class: "hint" }, "The name they give · on " + niceGoogleDevice(p.address) + " · " + (personStateText[p.state] || p.state) +
           (online ? " · their computer is " + online : "")))),
       deviceDisclosure(p, (addr, from) => this.go(1, { peer: addr, person: null }, from)),
       el("div", { class: "zoom-contact" },

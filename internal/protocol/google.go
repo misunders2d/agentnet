@@ -12,6 +12,11 @@ import (
 	"github.com/misunders2d/agentnet/internal/identity"
 )
 
+const (
+	CodeTooManyDevices = "too_many_devices"
+	CodeBadStep        = "bad_step"
+)
+
 // GoogleConfig contains only public OAuth client identifiers. Desktop
 // authorization codes are exchanged by the relay; no client secret or
 // Google session is stored on the device.
@@ -102,6 +107,7 @@ func (r GoogleRequest) Verify() error {
 }
 
 type GooglePrepared struct {
+	Enrolled bool             `json:"enrolled,omitempty"`
 	Email    string           `json:"email"`
 	Name     string           `json:"name"`
 	Address  string           `json:"address"`
@@ -128,15 +134,16 @@ type GoogleAccess struct {
 	Domains      []string      `json:"domains"`
 }
 type GoogleEmail struct {
-	Email  string `json:"email"`
-	Admin  bool   `json:"admin"`
-	Denied bool   `json:"denied"`
+	DomainMember bool   `json:"domain_member"`
+	Email        string `json:"email"`
+	Admin        bool   `json:"admin"`
+	Denied       bool   `json:"denied"`
 }
 type GoogleAccessChange struct {
 	Email  string `json:"email,omitempty"`
 	Domain string `json:"domain,omitempty"`
 	Remove bool   `json:"remove"`
-	Admin  bool   `json:"admin"`
+	Admin  *bool  `json:"admin,omitempty"`
 }
 
 // GoogleExchange is signed before the relay exchanges a Desktop OAuth

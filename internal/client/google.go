@@ -125,21 +125,26 @@ func JoinGoogle(ctx context.Context, home string, o GoogleOptions, token, name s
 		if json.Unmarshal([]byte(saved), &intent) != nil || intent.Public.Address != prepared.Address || intent.Public.Fingerprint() != pub.Fingerprint() || intent.Public.BoxRecipient != pub.BoxRecipient {
 			return nil, errors.New("Google enrollment intent changed; use the same Google account to retry")
 		}
-		req.First, req.Link = intent.First, intent.Link
-	} else if prepared.Head == nil {
-		r := protocol.PersonRoster{Person: protocol.NewID(), Label: prepared.Name, Email: prepared.Email, Devices: []identity.Public{req.Public}}
-		r.Sign(id.Sign)
-		if err = r.VerifyFirst(); err != nil {
-			return nil, err
+		if intent.Link == nil || prepared.Enrolled || intent.Link.Expires > time.Now().Unix() {
+			req.First, req.Link = intent.First, intent.Link
 		}
-		req.First = &r
-	} else {
-		h := prepared.Head
-		ap := prepared.Approver
-		if h.Email != prepared.Email || h.Validate() != nil || ap == nil || !h.Has(ap.Address, ap.Fingerprint()) {
-			return nil, errors.New("invalid existing Google person")
+	}
+	if req.First == nil && req.Link == nil {
+		if prepared.Head == nil {
+			r := protocol.PersonRoster{Person: protocol.NewID(), Label: prepared.Name, Email: prepared.Email, Devices: []identity.Public{req.Public}}
+			r.Sign(id.Sign)
+			if err = r.VerifyFirst(); err != nil {
+				return nil, err
+			}
+			req.First = &r
+		} else {
+			h := prepared.Head
+			ap := prepared.Approver
+			if h.Email != prepared.Email || h.Validate() != nil || ap == nil || !h.Has(ap.Address, ap.Fingerprint()) {
+				return nil, errors.New("invalid existing Google person")
+			}
+			req.Link = &protocol.GoogleLink{Email: prepared.Email, Person: h.Person, Seq: h.Seq, Roster: h.Hash(), Approver: protocol.LinkApprover{Address: ap.Address, Fingerprint: ap.Fingerprint()}, Expires: time.Now().Unix() + protocol.MaxLinkTTL, Offer: protocol.NewID(), Join: ed25519.Sign(id.Sign, protocol.JoinBytes(h.Person, h.Seq+1, h.Hash(), req.Public))}
 		}
-		req.Link = &protocol.GoogleLink{Email: prepared.Email, Person: h.Person, Seq: h.Seq, Roster: h.Hash(), Approver: protocol.LinkApprover{Address: ap.Address, Fingerprint: ap.Fingerprint()}, Expires: time.Now().Unix() + protocol.MaxLinkTTL, Offer: protocol.NewID(), Join: ed25519.Sign(id.Sign, protocol.JoinBytes(h.Person, h.Seq+1, h.Hash(), req.Public))}
 	}
 	// Never marshal a token or an authorization signature into local storage.
 	intent := req
@@ -151,6 +156,12 @@ func JoinGoogle(ctx context.Context, home string, o GoogleOptions, token, name s
 	}
 	req.Sign(id.Sign)
 	if err = c.do(ctx, "POST", "/v1/google/join", req, nil); err != nil {
+		var he *HubError
+		if errors.As(err, &he) && (he.Code == protocol.CodeRosterStale || he.Code == protocol.CodeTooManyDevices || he.Code == protocol.CodeBadStep) {
+			if e := st.deleteConfig("google_intent"); e != nil {
+				return nil, e
+			}
+		}
 		return nil, err
 	}
 	saved := map[string]string{"enrolled": "1"}
@@ -162,7 +173,7 @@ func JoinGoogle(ctx context.Context, home string, o GoogleOptions, token, name s
 		saved["person_published"] = req.First.Hash()
 	} else {
 		l := req.Link
-		state, _ := json.Marshal(LinkStatus{State: LinkPending, Person: l.Person, Approver: l.Approver.Address, ApproverKey: l.Approver.Fingerprint, Expires: l.Expires, Seq: l.Seq + 1})
+		state, _ := json.Marshal(LinkStatus{Google: true, State: LinkPending, Person: l.Person, Approver: l.Approver.Address, ApproverKey: l.Approver.Fingerprint, Expires: l.Expires, Seq: l.Seq + 1})
 		saved["link"] = string(state)
 	}
 	if err = st.setConfig(saved); err != nil {
@@ -184,7 +195,7 @@ func (a *Agent) takeGoogleLinkRequest(ev protocol.LinkEvent) error {
 	if err != nil {
 		return err
 	}
-	if !ok || me.roster.Email == "" || l.Email != me.roster.Email || l.Person != me.info.Person || l.Approver.Address != a.Address || l.Approver.Fingerprint != a.Self().Fingerprint() || l.Offer != ev.Offer || !protocol.ValidID(ev.Offer) || l.Expires <= time.Now().Unix() || l.Expires > time.Now().Unix()+protocol.MaxLinkTTL ||
+	if !ok || me.roster.Email == "" || l.Email != me.roster.Email || l.Person != me.info.Person || !me.roster.Has(a.Address, a.Self().Fingerprint()) || !me.roster.Has(l.Approver.Address, l.Approver.Fingerprint) || l.Offer != ev.Offer || !protocol.ValidID(ev.Offer) || l.Expires <= time.Now().Unix() || l.Expires > time.Now().Unix()+protocol.MaxLinkTTL ||
 		l.Seq != me.info.Seq || l.Roster != me.info.Roster || ev.Device.Verify() != nil || !ed25519.Verify(ev.Device.SignKey, protocol.JoinBytes(l.Person, l.Seq+1, l.Roster, ev.Device), ev.Join) {
 		return ErrLinkForged
 	}

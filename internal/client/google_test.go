@@ -194,6 +194,11 @@ func TestGoogleAdmissionAndDesktopExchange(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "external")
 	pub, _ := GoogleDevice(home, "desk")
 	token := i.IDToken(t, pub, "external@example.net", map[string]any{"hd": nil})
+	if b, e := JoinGoogle(ctx, home, o, token, "desk"); e == nil {
+		b.Close()
+		t.Fatal("third-party historical email verification admitted")
+	}
+	token = i.IDToken(t, pub, "external@example.net", nil)
 	a, err := JoinGoogle(ctx, home, o, token, "desk")
 	if err != nil {
 		t.Fatal(err)

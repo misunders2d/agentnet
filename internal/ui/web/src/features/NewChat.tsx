@@ -19,6 +19,7 @@ import { chatItems, type ListItem } from "./ChatList.words";
 export interface Candidate {
   key: string;
   name: string;
+  email?: string;
   address: string;          // the device the conversation is started through
   seed: string;
   online: boolean | null;   // null: the server's list does not say now
@@ -41,7 +42,7 @@ export function candidates(o: T.Overview | null): { people: Candidate[]; server:
     const devices = (p.devices || []).map((d) => d.address);
     for (const a of devices.concat(p.address)) known.add(a);
     return {
-      key: "p:" + (p.person || p.address), name: personName(p), address: p.address, seed: p.person || p.address,
+      key: "p:" + (p.person || p.address), name: personName(p), email: p.email, address: p.address, seed: p.person || p.address,
       online: presence(o, devices.length ? devices : [p.address]), checked: p.state === "pinned", conflict: p.state === "conflict", serverOnly: false,
       chat: chats.find((d) => reaches(d, p))?.id,
     };
@@ -92,6 +93,7 @@ export function CandidateRow({ c, busy, disabled, onPick }: { c: Candidate; busy
       className="flex min-h-14 w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-sunken disabled:opacity-60 disabled:hover:bg-transparent">
       <PersonAvatar name={c.name} seed={c.seed} size={40} online={c.online} />
       <span className="min-w-0 flex-1">
+        {c.email && <span className="block truncate text-sm text-muted">{c.email} · verified by this workspace</span>}
         <span className="flex items-center gap-2">
           <span className="truncate font-bold">{c.name}</span>
           {!c.checked && !c.conflict && <Tag tone="muted" className="shrink-0">Not checked</Tag>}

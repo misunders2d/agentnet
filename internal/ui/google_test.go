@@ -158,4 +158,34 @@ func TestGoogleBrowserEnrollmentAndDeviceApproval(t *testing.T) {
 	if other.api("/api/overview", nil)["person"].(map[string]any)["email"] != "person@example.com" {
 		t.Fatal("later browser lost email")
 	}
+	fourthHome := t.TempDir()
+	fourthPub, _ := client.GoogleDevice(fourthHome, "fourth")
+	fourth, err := client.JoinGoogle(ctx, fourthHome, client.GoogleOptions{Hub: inv.Hub, CertPEM: inv.CertPEM}, i.IDToken(t, fourthPub, "person@example.com", nil), "fourth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fourth.Close()
+	other.until("Google request on non-selected browser", func() bool {
+		links, _ := other.api("/api/overview", nil)["links"].([]any)
+		for _, value := range links {
+			link := value.(map[string]any)
+			if link["state"] == "pending" {
+				id = link["id"].(string)
+				return true
+			}
+		}
+		return false
+	})
+	other.api("/api/device/decide", map[string]any{"id": id, "accept": true})
+	if _, err = fourth.AwaitLink(ctx); err != nil {
+		t.Fatal("approval by non-selected browser:", err)
+	}
+
+}
+
+func TestGoogleReviewBrowserRetryAndEmailConflict(t *testing.T) {
+	w := startEngineNode(t, t.TempDir())
+	if w.ok(map[string]any{"op": "googleReviewProbes"})["passed"] != true {
+		t.Fatal("browser Google review probes failed")
+	}
 }

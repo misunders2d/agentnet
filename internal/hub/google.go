@@ -30,6 +30,10 @@ CREATE TABLE google_people(email TEXT PRIMARY KEY, subject TEXT NOT NULL, person
 var errGoogleAccess = errors.New("this email is not invited to this workspace; ask its admin")
 
 func googleAllowed(q querier, c googleauth.Claims) (bool, error) {
+	_, domain, _ := strings.Cut(c.Email, "@")
+	if c.Domain != domain && domain != "gmail.com" && domain != "googlemail.com" {
+		return false, errGoogleAccess
+	}
 	var admin, denied bool
 	err := q.QueryRow(`SELECT admin, denied FROM google_emails WHERE email = ?`, c.Email).Scan(&admin, &denied)
 	if err == nil {
@@ -41,7 +45,6 @@ func googleAllowed(q querier, c googleauth.Claims) (bool, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
-	_, domain, _ := strings.Cut(c.Email, "@")
 	// Google is authoritative for Workspace domains only when hd agrees.
 	// A third-party Google account cannot claim the company's domain.
 	if c.Domain != domain {
@@ -147,6 +150,7 @@ func (h *Hub) handleGooglePrepare(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal([]byte(raw), &dev)
 		if dev.Fingerprint() == req.Public.Fingerprint() && dev.BoxRecipient == req.Public.BoxRecipient {
 			p.Address = address
+			p.Enrolled = true
 			rows.Close()
 			writeJSON(w, 200, p)
 			return
@@ -187,11 +191,11 @@ func googleError(w http.ResponseWriter, err error) {
 	case errors.Is(err, errRosterStale):
 		writeError(w, 409, protocol.CodeRosterStale, errRosterStale.Error())
 	case errors.Is(err, errTooManyDevices):
-		writeError(w, 409, "", errTooManyDevices.Error())
+		writeError(w, 409, protocol.CodeTooManyDevices, errTooManyDevices.Error())
 	case errors.Is(err, errAddressTaken):
 		writeError(w, 409, protocol.CodeAddressTaken, "device name is taken; sign in again")
 	case errors.Is(err, errBadStep):
-		writeError(w, 400, "", "invalid Google person or device consent")
+		writeError(w, 400, protocol.CodeBadStep, "invalid Google person or device consent")
 	default:
 		writeError(w, 500, "", "storage error")
 	}
@@ -210,7 +214,7 @@ func (h *Hub) handleGoogleJoin(w http.ResponseWriter, r *http.Request) {
 	if changed {
 		if inviter != "" {
 			h.linksGen.Add(1)
-			h.streams.notify(inviter)
+			h.streams.notifyAll() // each active device replays only its own person's pending requests
 		} else {
 			h.membersChanged()
 		}
@@ -267,7 +271,7 @@ func (s *store) enrollGoogle(c googleauth.Claims, req protocol.GoogleRequest) (s
 		if len(raw) > protocol.MaxPersonRecord {
 			return "", false, errBadStep
 		}
-		if _, err := tx.Exec(`INSERT INTO agents(address,label,public,admin,created_at,person_id) VALUES(?,?,?,?,?,?)`, req.Public.Address, label, string(data), admin, now, r.Person); err != nil {
+		if _, err := tx.Exec(`INSERT INTO agents(address,label,public,admin,created_at,person_id,linked) VALUES(?,?,?,?,?,?,1)`, req.Public.Address, label, string(data), admin, now, r.Person); err != nil {
 			return "", false, err
 		}
 		if _, err := tx.Exec(`INSERT INTO persons(person,seq,hash,record) VALUES(?,0,?,?)`, r.Person, r.Hash(), string(raw)); err != nil {
@@ -318,7 +322,7 @@ func (s *store) enrollGoogle(c googleauth.Claims, req protocol.GoogleRequest) (s
 	}
 	ev, _ := json.Marshal(protocol.LinkEvent{Offer: l.Offer, Device: req.Public, Join: l.Join, Google: l})
 	if _, err := tx.Exec(`INSERT INTO agents(address,label,public,admin,created_at,linked,pending_person,pending_inviter,pending_until,pending_event) VALUES(?,?,?,0,?,1,?,?,?,?)`,
-		req.Public.Address, label, string(data), now, person, approver.Address, l.Expires, string(ev)); err != nil {
+		req.Public.Address, label, string(data), now, person, approver.Address, l.Expires+protocol.PendingGrace, string(ev)); err != nil {
 		return "", false, err
 	}
 	return approver.Address, true, tx.Commit()
@@ -336,14 +340,17 @@ func (h *Hub) handleGoogleAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	v := protocol.GoogleAccess{WorkspaceURL: h.cfg.PublicURL, Enabled: h.cfg.GoogleWebClientID != "" || h.cfg.GoogleDesktopClientID != "", CanAdmin: a.Admin, Emails: []protocol.GoogleEmail{}, Domains: []string{}}
 	if a.Admin {
-		rows, err := h.store.db.Query(`SELECT email,admin,denied FROM google_emails ORDER BY email`)
+		rows, err := h.store.db.Query(`SELECT email,admin,denied,domain_member FROM (
+ SELECT email,admin,denied,0 AS domain_member FROM google_emails
+ UNION ALL SELECT g.email,0,0,1 FROM google_people g WHERE NOT EXISTS (SELECT 1 FROM google_emails e WHERE e.email=g.email)
+) ORDER BY email`)
 		if err != nil {
 			googleError(w, err)
 			return
 		}
 		for rows.Next() {
 			var e protocol.GoogleEmail
-			if err := rows.Scan(&e.Email, &e.Admin, &e.Denied); err != nil {
+			if err := rows.Scan(&e.Email, &e.Admin, &e.Denied, &e.DomainMember); err != nil {
 				rows.Close()
 				googleError(w, err)
 				return
@@ -386,7 +393,7 @@ func (h *Hub) handleGoogleAccessChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c protocol.GoogleAccessChange
-	if decodeStrict(body, &c) != nil || (c.Email == "") == (c.Domain == "") || c.Domain != "" && c.Admin {
+	if decodeStrict(body, &c) != nil || (c.Email == "") == (c.Domain == "") || c.Domain != "" && c.Admin != nil {
 		writeError(w, 400, "", "choose one email or domain")
 		return
 	}
@@ -426,9 +433,9 @@ func (s *store) changeGoogleAccess(c protocol.GoogleAccessChange) ([]string, err
 			_, err = tx.Exec(`INSERT OR IGNORE INTO google_domains(domain) VALUES(?)`, c.Domain)
 		}
 	} else {
-		_, err = tx.Exec(`INSERT INTO google_emails(email,admin,denied) VALUES(?,?,?) ON CONFLICT(email) DO UPDATE SET admin=excluded.admin,denied=excluded.denied`, c.Email, c.Admin && !c.Remove, c.Remove)
+		_, err = tx.Exec(`INSERT INTO google_emails(email,admin,denied) VALUES(?,?,?) ON CONFLICT(email) DO UPDATE SET admin=CASE WHEN excluded.denied THEN 0 WHEN ? THEN 1 ELSE google_emails.admin END,denied=excluded.denied`, c.Email, c.Admin != nil && *c.Admin && !c.Remove, c.Remove, c.Admin)
 		if err == nil && c.Remove {
-			rows, e := tx.Query(`SELECT address FROM agents WHERE revoked_at IS NULL AND (person_id IN (SELECT person FROM google_people WHERE email=?) OR pending_person IN (SELECT person FROM google_people WHERE email=?))`, c.Email, c.Email)
+			rows, e := tx.Query(`SELECT address FROM agents WHERE revoked_at IS NULL AND (person_id IN (SELECT person FROM google_people WHERE email=?) OR pending_person IN (SELECT person FROM google_people WHERE email=?) OR label=?)`, c.Email, c.Email, protocol.GoogleLabel(c.Email))
 			if e != nil {
 				return nil, e
 			}
@@ -453,7 +460,8 @@ func (s *store) changeGoogleAccess(c protocol.GoogleAccessChange) ([]string, err
 					return nil, err
 				}
 			}
-		} else if err == nil {
+			_, err = tx.Exec(`DELETE FROM google_people WHERE email=?`, c.Email)
+		} else if err == nil && c.Admin != nil && *c.Admin {
 			_, err = tx.Exec(`UPDATE agents SET admin=? WHERE person_id IN (SELECT person FROM google_people WHERE email=?) AND revoked_at IS NULL`, c.Admin, c.Email)
 		}
 	}

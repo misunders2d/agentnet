@@ -460,6 +460,7 @@ func (a *Agent) RemoveDevice(ctx context.Context, address string) error {
 
 // LinkStatus is the new device's side of a link.
 type LinkStatus struct {
+	Google      bool   `json:"google,omitempty"`
 	State       string `json:"state"` // "" (no link), pending, linked, refused, expired, stale, failed
 	Detail      string `json:"detail,omitempty"`
 	Person      string `json:"person,omitempty"`
@@ -628,7 +629,7 @@ func (a *Agent) finishLink(ctx context.Context) (LinkStatus, error) {
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &step)
 	}
-	if !ok || me.info.Person != s.Person || err != nil || step.By != s.ApproverKey || !step.Has(a.Address, a.Self().Fingerprint()) {
+	if !ok || me.info.Person != s.Person || err != nil || (!s.Google && step.By != s.ApproverKey) || !step.Has(a.Address, a.Self().Fingerprint()) {
 		s.State, s.Detail = LinkFailed, "the person's roster does not name this device in the step its approver signed"
 		a.setLinkState(s)
 		return s, ErrLinkCrossPerson

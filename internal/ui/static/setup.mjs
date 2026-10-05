@@ -81,17 +81,22 @@ function googleForm(hub = "") {
   const address = el("input", { id: "google-hub", type: "url", value: hub, placeholder: "https://your-workspace.example", autocomplete: "url", required: true });
   const error = el("p", { class: "error", role: "alert" });
   const button = el("button", { type: "submit", class: "btn primary join-go" }, "Sign in with Google");
+  const cancel = el("button", { type: "button", class: "btn", hidden: true }, "Cancel sign-in");
+  cancel.addEventListener("click", async () => { try { await call("/api/setup/google/cancel", {}); } catch (e) { error.textContent = e.message; } });
   const form = el("form", { class: "join-form" }, el("label", { for: "google-hub" }, "Workspace address"), address,
-    el("p", { class: "hint" }, "Use your invited Google email. Another device of yours must approve each later device."), error, button);
+    el("p", { class: "hint" }, "Use your invited Google email. Another device of yours must approve each later device."), error, button, cancel);
   form.addEventListener("submit", async ev => {
     ev.preventDefault(); if (button.disabled) return; button.disabled = true; error.textContent = "";
     try {
       await call("/api/setup/google", { hub: address.value.trim() });
+      cancel.hidden = false;
       error.textContent = "Continue in your browser. Return here after Google sign-in.";
       const events = new EventSource("/api/setup/google/events");
-      events.onmessage = event => { events.close(); const result = JSON.parse(event.data); if (result.state === "joined") location.replace("/"); else { error.textContent = result.problem; button.disabled = false; } };
+      events.onmessage = event => { events.close(); cancel.hidden = true; const result = JSON.parse(event.data); if (result.state === "joined") location.replace("/"); else { error.textContent = result.problem; button.disabled = false; } };
       events.onerror = () => { events.close(); location.replace("/"); };
-    } catch (e) { error.textContent = e.message; button.disabled = false; }
+    } catch (e) { error.textContent = e.message; button.disabled = false; cancel.hidden = true;
+      if (e.message.includes("not set up")) { const details = panel.querySelector("details"); if (details) { details.open = true; panel.querySelector("#setup-code")?.focus(); } else welcome(e.message); }
+    }
   });
   return form;
 }
@@ -124,7 +129,7 @@ function ended() {
 }
 
 async function inspect(code) {
-  if (code.startsWith("google-signin=")) { const hub = code.slice("google-signin=".length); show("Welcome to AgentNet", googleForm(hub)); return; }
+  if (code.startsWith("google-signin=")) { const hub = code.slice("google-signin=".length); welcome(""); panel.querySelector("#google-hub").value = hub; return; }
   let inv;
   try { inv = await call("/api/setup/inspect", { code }); } catch (e) { welcome(e.message); return; }
   if (inv.problem) { welcome(inv.problem); return; }
