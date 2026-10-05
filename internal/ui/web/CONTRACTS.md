@@ -46,7 +46,7 @@ host, including its documented additions (`onSkinsChange`,
 | `features/AssistantSetup.folders.tsx` | `FolderField({ label, value, onChange, disabled?, hint? })` and `FolderSheet(...)`: a folder on this computer chosen by browsing GET `/api/folders` (read-only), never a typed path; a folder that can't be read still offers Up and Home | AssistantSetup, Settings (Your agent), Agents (New agent sheet, Connect an agent) |
 | `features/Reminders.tsx` | `Reminders()` (the list at the top of Chats), `RemindSheet`, `ReminderLine`, `openReminder`, `reminderFrom`, `latestReceived` | ChatList, Message, Conversation header |
 | `features/GroupAdmin.tsx` | `GroupChangeSheet`, `MemberMenu`, `GroupFooter`, `groupRights(t, o)`, `useGroupChange(t)` | RoomPanel, Conversation header |
-| `features/Trust.tsx` | `TrustSheet`, `TrustNotice` (the composer while sending is paused), `DeviceGrantConfirm`, `codeGroups` | Composer, OKs (held back), Conversation header, AgentsView permissions |
+| `features/Trust.tsx` | `TrustSheet`, `TrustNotice` (the composer while sending is paused), `DeviceGrantConfirm` | Composer, OKs (held back), Conversation header, AgentsView permissions |
 
 A screen may add private helper files named after it (for example
 `features/Message.reactions.tsx`). Do not edit another screen's files or the
@@ -87,7 +87,9 @@ sender, so it is never drawn as that person.
   "lens" in the normal flow; put technical details behind a Details toggle.
   People and devices are named (`personName`, `nameOf`, `deviceWords`), never
   shown as addresses like admin/pixel, and no screen tells the person to run
-  a terminal command (a key to compare is shown as a code, in groups of four).
+  a terminal command (a key to compare is shown as a code, written exactly as
+  Settings → Your devices → Details → Key shows it, so both sides read the
+  same groups).
 - **A standalone skin:** only the host API; never `fetch('/api…')`,
   `EventSource`, page globals (`window.agentnet…`) or anything outside the
   root: no `document.body`/`documentElement` writes (theme, `lang`, classes,

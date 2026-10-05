@@ -17,9 +17,6 @@ import { Sheet } from "../ui/Sheet";
 import { Confirm } from "./Message.actions";
 import { capital, deviceWords } from "./Approvals.words";
 
-/** codeGroups shows a key's code in groups of four, as people read it aloud. */
-export const codeGroups = (fp: string) => (fp.replace(/[^0-9a-f]/gi, "").match(/.{1,4}/g) || []).join(" ");
-
 /** TrustSheet: compare the new code with what its owner says, then trust exactly it. */
 export function TrustSheet({ open, onOpenChange, thread }: { open: boolean; onOpenChange: (o: boolean) => void; thread: T.Thread }) {
   const store = useApp();
@@ -48,8 +45,8 @@ export function TrustSheet({ open, onOpenChange, thread }: { open: boolean; onOp
         Ask its owner for their code in person or on a call, not in a chat here, and compare it. They find it in AgentNet under Settings → Your devices → Details → Key.
       </p>
       <dl className="mt-3 grid gap-2">
-        <Code label="Code you had" value={thread.key.pinned ? codeGroups(thread.key.pinned) : "none kept"} muted />
-        <Code label="New code" value={codeGroups(expect)} />
+        <Code label="Code you had" value={thread.key.pinned || "none kept"} muted />
+        <Code label="New code" value={expect} />
       </dl>
       <label className="mt-4 flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl stroke bg-surface px-3 py-2 has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink">
         <input type="checkbox" className="sr-only" checked={same} onChange={(e) => setSame(e.target.checked)} />
@@ -61,6 +58,8 @@ export function TrustSheet({ open, onOpenChange, thread }: { open: boolean; onOp
   );
 }
 
+/** Code shows a key's code exactly as Settings → Your devices → Details → Key
+ *  writes it (its own dash-separated groups), so both sides compare the same text. */
 function Code({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
   return (
     <div className={"rounded-2xl px-3.5 py-2.5 " + (muted ? "bg-sunken" : "bg-surface stroke")}>
