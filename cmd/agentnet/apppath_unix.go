@@ -12,11 +12,6 @@ import (
 	"time"
 )
 
-const (
-	pathStart = "__AGENTNET_PATH_START__"
-	pathEnd   = "__AGENTNET_PATH_END__"
-)
-
 // loginShellPath asks the person's login shell for its PATH: `$SHELL -l -c`
 // (a login shell reads the profile files; -i is not used, since that loads
 // aliases and job control and can wait for a terminal), bounded by timeout.

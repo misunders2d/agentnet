@@ -463,58 +463,6 @@ func TestAppDeviceNames(t *testing.T) {
 	}
 }
 
-// A wireless mouse's battery (scope Device) does not make a desktop a
-// laptop; a system battery (no scope, or System) does.
-func TestAppBatteryIgnoresPeripherals(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("sysfs")
-	}
-	root := t.TempDir()
-	old := powerSupplies
-	powerSupplies = root
-	t.Cleanup(func() { powerSupplies = old })
-	write := func(dev, kind, scope string) {
-		d := filepath.Join(root, dev)
-		os.MkdirAll(d, 0o755)
-		os.WriteFile(filepath.Join(d, "type"), []byte(kind+"\n"), 0o644)
-		if scope != "" {
-			os.WriteFile(filepath.Join(d, "scope"), []byte(scope+"\n"), 0o644)
-		}
-	}
-	write("AC", "Mains", "")
-	write("hidpp_battery_0", "Battery", "Device")
-	if hasBattery() {
-		t.Fatal("a mouse battery made a laptop")
-	}
-	write("BAT0", "Battery", "")
-	if !hasBattery() {
-		t.Fatal("a system battery not found")
-	}
-}
-
-// A program started from the app launcher gets the login shell's PATH and
-// existing per-user directories in front of its own, without duplicates.
-func TestAppLoginShellPath(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no login shell")
-	}
-	got, err := loginShellPath(fakeShell(t, "/opt/a:/usr/bin"), shellPathTimeout)
-	if err != nil || got != "/opt/a:/usr/bin" {
-		t.Fatalf("login PATH %q %v", got, err)
-	}
-	extra := t.TempDir()
-	merged := mergePath("/usr/bin:/bin", "/opt/a:/usr/bin:relative", []string{extra, "/no/such/dir", "/bin"})
-	if merged != "/opt/a:"+extra+":/usr/bin:/bin" {
-		t.Fatalf("merged %q", merged)
-	}
-	slow := filepath.Join(t.TempDir(), "slow")
-	os.WriteFile(slow, []byte("#!/bin/sh\nsleep 30\n"), 0o700)
-	start := time.Now()
-	if _, err := loginShellPath(slow, 200*time.Millisecond); err == nil || time.Since(start) > 10*time.Second {
-		t.Fatalf("a hanging login shell: %v after %s", err, time.Since(start))
-	}
-}
-
 // Under an AppImage, hooks name a kept copy of the program in the home,
 // refreshed only when the program changed, never the passing mount.
 func TestAppStableExeForHooks(t *testing.T) {

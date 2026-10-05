@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// pathStart and pathEnd mark the PATH in a login shell's answer.
+const (
+	pathStart = "__AGENTNET_PATH_START__"
+	pathEnd   = "__AGENTNET_PATH_END__"
+)
+
 // mergePath returns current with the entries of login it lacks, then the
 // existing directories among extra it still lacks, put in front, without
 // duplicates: a program started from the app launcher gets a bare PATH,
