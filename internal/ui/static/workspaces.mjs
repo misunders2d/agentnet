@@ -57,7 +57,7 @@ export class WorkspaceShell {
   const prefix="/workspaces/"+id+"/"+entry.binding.handle;
   const thisShell=this;
   const check=()=>{if(entry.blockedError)throw entry.blockedError;if(!entry.connected||this.members.get(id)!==entry)throw new Error("Stale workspace handle");};
-  const call=async(p,body)=>{check();route(p);if(body?.files?.some(f=>f&&typeof f==="object"&&f.workspace!==id))throw new Error("File belongs to another workspace");return entry.engine?entry.engine.api(p,body):json(this.fetch,prefix+p,body);};
+  const call=async(p,body)=>{check();route(p);if(body?.files?.some(f=>f&&typeof f==="object"&&f.workspace!==id))throw new Error("File belongs to another workspace");return entry.engine?entry.engine.api(p,body):json(this.fetch,prefix+p,body).then(v=>qualifyPictureURLs(v,prefix));};
   const provider = entry.engine ? entry.engine.driveService?.() : daemonDriveProvider(call, (p, init) => {
    check(); route(p); return thisShell.fetch(prefix + p, init);
   });
@@ -300,4 +300,13 @@ export function workspacePush(id,{navigator:nav=globalThis.navigator,Notificatio
   }
  };
  return adapter;
+}
+
+// Pictures follow the captured membership, exactly like host.api/file. Raw
+// daemon URLs otherwise point at the default workspace when another is open.
+function qualifyPictureURLs(value, prefix) {
+ if (!value || typeof value !== "object") return value;
+ if (typeof value.picture_url === "string" && /^\/api\/picture\/[a-f0-9]{64}$/.test(value.picture_url)) value.picture_url = prefix + value.picture_url;
+ for (const child of Object.values(value)) if (child && typeof child === "object") qualifyPictureURLs(child,prefix);
+ return value;
 }

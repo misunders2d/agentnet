@@ -23,6 +23,7 @@ out="$here/../static/skins/comic"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cp -R "$here/package.json" "$here/package-lock.json" "$here/tsconfig.json" "$here/src" "$here/package.mjs" "$work/"
+cp "$here/../static/pictures.mjs" "$here/../static/pictures.d.mts" "$work/src/"
 cp "$here/../static/optimistic.mjs" "$here/../static/optimistic.d.mts" "$work/src/"
 cd "$work"
 npm ci --ignore-scripts --no-audit --no-fund >/dev/null

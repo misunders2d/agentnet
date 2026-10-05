@@ -68,6 +68,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/simulate", s.simulate)
 	mux.HandleFunc("POST /api/person", s.person)
 	mux.HandleFunc("POST /api/person/label", s.renamePerson)
+	mux.HandleFunc("POST /api/person/picture", s.setPicture)
+	mux.HandleFunc("GET /api/picture/{hash}", s.getPicture)
 	mux.HandleFunc("POST /api/device/{what}", s.device)
 	mux.HandleFunc("GET /api/dm", s.dm)
 	mux.HandleFunc("POST /api/dm/new", s.newDM)
@@ -168,6 +170,9 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			}
 			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			limit := int64(maxBody)
+			if r.URL.Path == "/api/person/picture" {
+				limit = 90 << 10
+			}
 			switch {
 			case (r.URL.Path == "/api/upload" || r.URL.Path == "/api/drive/upload") && mt == "application/octet-stream": // a file's bytes, handed to this computer's AgentNet (or its Drive space)
 				limit = maxUpload
@@ -223,7 +228,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
 		"assistant-setup.mjs":  "text/javascript; charset=utf-8",
 		"assistant-setup.css":  "text/css; charset=utf-8",
-		"drivespace.mjs":       "text/javascript; charset=utf-8", "drivespace.css": "text/css; charset=utf-8", "workspaces.mjs": "text/javascript; charset=utf-8", "workspaces.css": "text/css; charset=utf-8", "teams.mjs": "text/javascript; charset=utf-8", "typing.mjs": "text/javascript; charset=utf-8", "local-skins.mjs": "text/javascript; charset=utf-8", "optimistic.mjs": "text/javascript; charset=utf-8", "sw.js": "text/javascript; charset=utf-8"}
+		"drivespace.mjs":       "text/javascript; charset=utf-8", "drivespace.css": "text/css; charset=utf-8", "workspaces.mjs": "text/javascript; charset=utf-8", "workspaces.css": "text/css; charset=utf-8", "teams.mjs": "text/javascript; charset=utf-8", "typing.mjs": "text/javascript; charset=utf-8", "local-skins.mjs": "text/javascript; charset=utf-8", "optimistic.mjs": "text/javascript; charset=utf-8", "pictures.mjs": "text/javascript; charset=utf-8", "sw.js": "text/javascript; charset=utf-8"}
 	ct, ok := types[name]
 	if !ok {
 		http.NotFound(w, r)

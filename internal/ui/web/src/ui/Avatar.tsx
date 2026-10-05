@@ -1,6 +1,10 @@
 // Avatars: people are circles with their initials on a warm tint; agents are
 // rounded squares with a robot face (our own drawing) and one of eight
 // hues picked from their key; guests get a dashed coral ring everywhere.
+import { useState } from "react";
+import { useApp } from "../context";
+import { useStore } from "../store";
+import { avatarPicture } from "../pictures.mjs";
 import { hue, initials } from "../model";
 
 const PEOPLE = ["#FFB4A2", "#B5E3C4", "#A8D8FF", "#FFD6A5", "#D9C2FF", "#FFC6E0", "#C7F0E8", "#F6E3A1"];
@@ -9,13 +13,16 @@ const AGENTS = ["#8E7BFF", "#43C59E", "#F2A93B", "#4CB4E7", "#E86FA6", "#9BCB45"
 type Size = 20 | 24 | 28 | 32 | 36 | 40 | 48 | 56 | 72;
 
 export function PersonAvatar({ name, seed, size = 40, online, guest, me }: { name: string; seed: string; size?: Size; online?: boolean | null; guest?: boolean; me?: boolean }) {
+  const overview = useStore(useApp(), s => s.overview);
+  const picture = avatarPicture(overview, seed, name);
+  const [failed, setFailed] = useState("");
   const bg = PEOPLE[hue(seed)];
   const fs = Math.round(size * 0.4);
   return (
     <span className="relative inline-flex shrink-0" aria-hidden="true" data-size={size}>
       <span className={"grid place-items-center rounded-full font-display font-bold text-[#1B1530] select-none stroke" + (guest ? " [outline:2px_dashed_var(--an-guest)] outline-offset-2" : "")}
         style={{ width: size, height: size, background: bg, fontSize: fs }} data-me={me ? "" : undefined}>
-        {initials(name)}
+        {picture && picture !== failed ? <img src={picture} alt="" className="h-full w-full rounded-full object-cover" onError={() => setFailed(picture)} /> : initials(name)}
       </span>
       {online != null && size >= 28 && <Presence online={online} size={size} />}
     </span>

@@ -42,9 +42,10 @@ var ErrService = errors.New("this installation is a service: it speaks as itself
 
 // PersonInfo is a person as this installation knows it.
 type PersonInfo struct {
-	Person string `json:"person"`
-	Label  string `json:"label"` // the person's own claim, not verified
-	Email  string `json:"email,omitempty"`
+	Person  string `json:"person"`
+	Label   string `json:"label"` // the person's own claim, not verified
+	Email   string `json:"email,omitempty"`
+	Picture string `json:"picture,omitempty"`
 	// Address and Fingerprint are the one device this view is about: this
 	// installation for its own person, the host or author device of a
 	// participation, otherwise the person's first current device.
@@ -113,6 +114,7 @@ func scanPersonIn(q dbq, where string, args ...any) (personRow, bool, error) {
 	}
 	if p.info.State != personConflict {
 		p.info.Email = p.roster.Email
+		p.info.Picture = p.roster.Picture
 	}
 	added := map[string]int64{}
 	if rows, err := q.Query(`SELECT address, added FROM person_devices WHERE person = ?`, p.info.Person); err == nil {
@@ -636,7 +638,7 @@ func (a *Agent) ListedPersons() ([]PersonInfo, error) {
 			continue
 		}
 		seen[r.Person] = true
-		p := PersonInfo{Person: r.Person, Label: r.Label, Email: r.Email, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
+		p := PersonInfo{Person: r.Person, Label: r.Label, Email: r.Email, Picture: r.Picture, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
 		if other := emails[r.Email]; r.Email != "" && other != "" && other != r.Person {
 			p.Email = ""
 			p.State = personConflict

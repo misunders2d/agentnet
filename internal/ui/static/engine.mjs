@@ -452,6 +452,9 @@ export class Engine {
     this.now = now || (() => Date.now());
     this.seq = 0;
     this.listeners = new Set();
+    this.pictureGeneration = 0;
+    this.pictureURLs = new Map();
+    this.pictureLoads = new Map();
     this.pubs = new Map(); // address -> parsed directory entry, from the pins
     this.members = { listed: "unknown", current: false, at: 0, list: [], truncated: false };
     this.workspaceName = ""; // the workspace's own name its admin set, as last listed (kept: kv "workspace")
@@ -816,7 +819,7 @@ export class Engine {
   // fingerprint are the one device a view is about: this one for your own
   // person, else the first current device.
   personView(p, extra) {
-    return p && { person: p.person, label: p.label, email: p.state === "conflict" ? "" : p.email || "", address: p.address, fingerprint: p.fingerprint, state: p.state,
+    return p && { person: p.person, label: p.label, email: p.state === "conflict" ? "" : p.email || "", ...(p.state !== "conflict" && p.picture ? { picture: p.picture, picture_url: this.pictureURL(p.picture) } : {}), address: p.address, fingerprint: p.fingerprint, state: p.state,
       devices: (p.devices || []).map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint, human:(p.human_keys || []).includes(d.fingerprint), this: d.address === this.address })),
       ...extra };
   }
@@ -845,7 +848,7 @@ export class Engine {
       const h = await wire.rosterHash(st);
       if (!steps2.some((x) => x.hash === h)) steps2.push({ hash: h, devices: await Promise.all(st.devices.map(async (d) => d.address + "|" + (await wire.fingerprint(d)))) });
     }
-    return { person: r.person, label: r.label, email: r.email || "", seq: r.seq, human_keys:await wire.rosterHumans(r), hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
+    return { person: r.person, label: r.label, email: r.email || "", picture: r.picture || "", seq: r.seq, human_keys:await wire.rosterHumans(r), hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
       address: one.address, fingerprint: one.fingerprint, state, published: before ? !!before.published : false };
   }
 
@@ -908,19 +911,30 @@ export class Engine {
       for (const a of added.keys()) if (!addresses.has(a)) added.delete(a);
       for (const a of addresses) if (!added.has(a)) added.set(a, r.seq);
     }
-    return { person: p.person, label: p.label, email: p.email || "", address: this.address, fingerprint: this.fp, roster: p.hash, seq: p.seq, state: p.state,
+    return { person: p.person, label: p.label, email: p.email || "", ...(p.picture ? { picture: p.picture } : {}), address: this.address, fingerprint: this.fp, roster: p.hash, seq: p.seq, state: p.state,
       devices: p.devices.map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint,
         ...(d.address === this.address ? { this: true } : {}), added: added.get(d.address) })) };
   }
 
-  async renamePerson(label) {
-    wire.validLabel(label); // no trimming or label-to-identity inference
+  async renamePerson(label) { return this.changePersonProfile(label, undefined); }
+
+  async setPersonPicture(png) {
+    const bytes = png ? wire.unb64(png, "picture") : new Uint8Array();
+    let hash = "";
+    if (bytes.length) { wire.validatePicture(bytes); hash = await wire.pictureHash(bytes); await this.callBytes("PUT", "/v1/pictures/" + hash, bytes); }
+    return this.changePersonProfile(undefined, hash);
+  }
+
+  async changePersonProfile(label, picture) {
+    if (label !== undefined) wire.validLabel(label); // no trimming or label-to-identity inference
     const person = this.me?.person;
     if (!person) throw new Error("Set up your person first.");
     for (let attempt = 0; attempt < 2; attempt++) {
       const { head: prev, steps } = await this.personLabelHead(person);
-      if (prev.label === label) return this.personLabelInfo(this.me, steps);
-      const next = await wire.nextRoster(this.keys, this.address, prev, prev.devices, null, label);
+      const name = label === undefined ? prev.label : label;
+      const photo = picture === undefined ? prev.picture || "" : picture;
+      if (prev.label === name && (prev.picture || "") === photo) return this.personLabelInfo(this.me, steps);
+      const next = await wire.nextRoster(this.keys, this.address, prev, prev.devices, null, name, null, photo);
       await wire.verifyNext(next, prev);
       try { await this.call("PUT", "/v1/person", wire.rosterJSON(next)); }
       catch (e) {
@@ -941,6 +955,32 @@ export class Engine {
       return this.personLabelInfo(me, [...steps, next]);
     }
     throw new Error("Display label change was not confirmed. Refresh your person before retrying.");
+  }
+
+  pictureURL(hash) {
+    if (!wire.validHash(hash)) return "";
+    if (this.pictureURLs.has(hash)) return this.pictureURLs.get(hash);
+    if (!this.pictureLoads.has(hash)) {
+      const load = this.loadPicture(hash).then(url => { this.pictureURLs.set(hash, url); this.changed(); }).catch(() => {}).finally(() => { if (this.pictureLoads.get(hash) === load) this.pictureLoads.delete(hash); });
+      this.pictureLoads.set(hash, load);
+    }
+    return "";
+  }
+  async loadPicture(hash) {
+    if (this.pictureURLs.has(hash)) return this.pictureURLs.get(hash);
+    const generation = this.pictureGeneration;
+    const asURL = bytes => { if (generation !== this.pictureGeneration) throw Error("Picture view closed"); const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" })); this.pictureURLs.set(hash,url); return url; };
+    let png = await this.store.get("kv", "picture:" + hash);
+    if (png) { try { const b = wire.unb64(png, "picture"); wire.validatePicture(b); if (await wire.pictureHash(b) === hash) return asURL(b); } catch {} }
+    const resp = await this.fetch(this.base + "/v1/pictures/" + hash, { cache: "force-cache", signal: this.sendAbort.signal });
+    if (!resp.ok || !resp.body) throw Error("Picture unavailable");
+    const reader = resp.body.getReader(), parts = []; let n = 0;
+    try { for (;;) { const { value, done } = await reader.read(); if (done) break; n += value.length; if (n > 65536) throw Error("Picture too large"); parts.push(value); } } catch (e) { await reader.cancel().catch(() => {}); throw e; }
+    const bytes = new Uint8Array(n); let at = 0; for (const part of parts) { bytes.set(part, at); at += part.length; }
+    wire.validatePicture(bytes);
+    if (await wire.pictureHash(bytes) !== hash) throw Error("Picture hash mismatch");
+    png = wire.b64(bytes); await put(this.store, "kv", "picture:" + hash, png);
+    return asURL(bytes);
   }
 
   // ---- your devices: this one approves a new device of your person
@@ -4421,6 +4461,10 @@ export class Engine {
   }
 
   stop() {
+    this.pictureGeneration++;
+    this.pictureLoads.clear();
+    for (const url of this.pictureURLs.values()) URL.revokeObjectURL(url);
+    this.pictureURLs.clear();
     this.running = false;
     this.resetTyping();
     if (this.abort) this.abort.abort();
@@ -4750,7 +4794,7 @@ export class Engine {
         const prof = await this.profile(m.address);
         const r = await wire.parseRoster(prof.person);
         if (r.person === ref.id && (await wire.rosterHash(r)) === ref.hash) {
-          this.listed.set(ref.hash, { person: r.person, label: r.label,
+          this.listed.set(ref.hash, { person: r.person, label: r.label, picture: r.picture || "",
             devices: await Promise.all(r.devices.map(async (d) => ({ address: d.address, fingerprint: await wire.fingerprint(d) }))) });
         }
       } catch (e) { /* not shown */ }
@@ -5988,7 +6032,7 @@ export class Engine {
       const l = m.person && this.listed && this.listed.get(m.person.hash);
       if (!l || listedSeen.has(l.person) || persons.some((p) => p.person === l.person)) continue;
       listedSeen.add(l.person);
-      people.push({ label: l.label, address: l.devices[0].address, state: "listed",
+      people.push({ label: l.label, ...(l.picture ? { picture: l.picture, picture_url: this.pictureURL(l.picture) } : {}), address: l.devices[0].address, state: "listed",
         devices: l.devices.map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint })) });
     }
     const inbox = await this.store.all("inbox");
@@ -7925,6 +7969,9 @@ export class Engine {
     case "/api/dm/agent/dismiss": return this.dismissAgent(body.pid);
     case "/api/dm/agent/ask": return this.askAgent(body);
     case "/api/dm/agent/decide": throw new Error("This browser runs no agent: an agent is accepted on the computer that runs it.");
+    case "/api/person/picture":
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(k=>k!=="png") || typeof body.png !== "string") throw Error("Choose a picture.");
+      return this.setPersonPicture(body.png);
     case "/api/person/label":
       if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => k !== "label") || typeof body.label !== "string") throw new Error("Choose a display label.");
       return this.renamePerson(body.label);

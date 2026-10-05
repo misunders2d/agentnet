@@ -314,7 +314,7 @@ func (a *Agent) decideLink(ctx context.Context, id string, accept, native, agent
 	if err := json.Unmarshal([]byte(pub), &dev); err != nil {
 		return err
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Seq: me.info.Seq + 1, Prev: me.info.Roster,
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Picture: me.roster.Picture, Seq: me.info.Seq + 1, Prev: me.info.Roster,
 		Devices: append(append([]identity.Public(nil), me.roster.Devices...), dev), HumanKeys: me.roster.Humans(), By: a.Self().Fingerprint(), Join: join}
 	if !agentHost {
 		r.HumanKeys = append(r.HumanKeys, dev.Fingerprint())
@@ -456,7 +456,7 @@ func (a *Agent) RemoveDevice(ctx context.Context, address string) error {
 	case len(keep) == 0:
 		return errors.New("the last device of a person cannot be removed")
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, HumanKeys: slices.DeleteFunc(me.roster.Humans(), func(fp string) bool {
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Picture: me.roster.Picture, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, HumanKeys: slices.DeleteFunc(me.roster.Humans(), func(fp string) bool {
 		return !slices.ContainsFunc(keep, func(d identity.Public) bool { return d.Fingerprint() == fp })
 	}), By: a.Self().Fingerprint()}
 	r.Sign(a.id.Sign)

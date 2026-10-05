@@ -13,6 +13,8 @@ import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
 import { Card, copyText, Details, Fact, GroupLabel, Hint, input, PageHead, Skeleton, Tile } from "./Settings.parts";
+import { usePortal } from "../owned";
+import { openPictureEditor } from "../pictures.mjs";
 import { QrCode } from "./Settings.qr";
 
 /** The words for this device's own request to join a person (Overview.link). */
@@ -69,6 +71,7 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
 
 function Rename({ person }: { person: T.PersonView }) {
   const store = useApp();
+  const portal = usePortal();
   const [name, setName] = useState(person.label);
   const [busy, setBusy] = useState(false);
   useEffect(() => setName(person.label), [person.label]); // a rename from another device shows here
@@ -98,6 +101,10 @@ function Rename({ person }: { person: T.PersonView }) {
           {person.published === false && <Hint className="mt-2">Not on your server yet: AgentNet adds you when it connects.</Hint>}
         </div>
       </div>
+      {person.state === "self" && <div className="flex flex-wrap gap-2 p-4">
+        <Button onClick={async () => { if (await openPictureEditor({ into: portal, current: person.picture_url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Choose picture</Button>
+        {person.picture && <Button disabled={busy} onClick={async () => { setBusy(true); await store.run(a => a.setPersonPicture(""), "Picture removed."); setBusy(false); }}>Remove picture</Button>}
+      </div>}
       {person.state === "self" && (
         <form onSubmit={save} className="space-y-2.5 p-4">
           <label htmlFor="settings-name" className="block font-semibold">Your name</label>
