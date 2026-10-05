@@ -214,6 +214,16 @@ const holdText = (reason, peer) => (holdCode(reason) !== "unverified" ? holdWord
 // quarantineItem is one held message as the overview lists it (ui.QuarantineItem, live.go quarantineItems).
 export const quarantineItem = (h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at) });
 
+// deviceWords is client.DeviceWords: a device address in words, as every
+// screen shows it ("bohdan/windows-laptop" → "Windows laptop", "admin/iphone"
+// → "iPhone"; vectors: internal/ui/testdata/device_words.json).
+const deviceSpecial = { iphone: "iPhone", ipad: "iPad", imac: "iMac", mac: "Mac", macbook: "MacBook" };
+export function deviceWords(address) {
+  const s = String(address || ""), i = s.indexOf("/");
+  return (i < 0 ? s : s.slice(i + 1)).split("-").filter(Boolean)
+    .map((w, j) => deviceSpecial[w.toLowerCase()] || (j === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
+}
+
 export function outText(state, peer, detail = "") {
   switch (state) {
   case "receiver_waiting": return detail || "Waiting for the selected reply receiver to accept this exact request.";
@@ -394,6 +404,8 @@ export class Engine {
     this.listeners = new Set();
     this.pubs = new Map(); // address -> parsed directory entry, from the pins
     this.members = { listed: "unknown", current: false, at: 0, list: [], truncated: false };
+    this.workspaceName = ""; // the workspace's own name its admin set, as last listed (kept: kv "workspace")
+    this.agentDevices = []; // devices that, as last listed, say they run an agent (kept: kv "agent_devices")
     this.connected = false;
     this.revoked = false;
     this.running = false;
@@ -420,6 +432,9 @@ export class Engine {
     }
     this.me = (await this.store.get("kv", "person")) || null;
     this.link = (await this.store.get("kv", "link")) || null; // this device's own request to join a person, if it joined with a link
+    this.workspaceName = wire.validWorkspaceName(await this.store.get("kv", "workspace"));
+    const agents = await this.store.get("kv", "agent_devices");
+    this.agentDevices = Array.isArray(agents) ? agents.filter(wire.validAddress) : [];
     await this.loadErased();
     if (this.erased.size) this.scheduleErase(); // after a restart: what a crash left untold or unerased
     return !!id;
@@ -4252,6 +4267,7 @@ export class Engine {
       let m;
       try { m = JSON.parse(data); } catch (e) { this.members = { ...this.members, current: false }; await this.refreshTyping(false); this.changed(); return; }
       this.members = { listed: "listed", current: true, at: this.now(), list: Array.isArray(m.members) ? m.members : [], truncated: !!m.truncated };
+      await this.keepMemberFacts(m);
       // A member's person reference that is ahead of the step pinned here is
       // followed (verified step by step); others' claimed names are read
       // once per step for the people list, never trusted.
@@ -4275,6 +4291,83 @@ export class Engine {
       this.flushOutbox().catch(() => {});
       this.flushReceipts().catch(() => {});
     }
+  }
+
+  // keepMemberFacts keeps what the member list says that this device shows
+  // offline too (client.keepMemberFacts): the workspace's own name, and the
+  // other devices that say they run an agent. A name that is not a
+  // workspace name is ignored (the list and the name known before stay).
+  async keepMemberFacts(m) {
+    const raw = typeof m.workspace === "string" ? m.workspace : "", name = wire.validWorkspaceName(raw);
+    if ((name || !raw.trim()) && name !== this.workspaceName) {
+      this.workspaceName = name;
+      await put(this.store, "kv", "workspace", name || undefined);
+    }
+    const agents = this.members.list.filter((x) => x && x.agent === true && x.address !== this.address && wire.validAddress(x.address)).map((x) => x.address).sort();
+    if (agents.join(" ") !== this.agentDevices.join(" ")) {
+      this.agentDevices = agents;
+      await put(this.store, "kv", "agent_devices", agents);
+    }
+  }
+
+  // relayHost is the host name of this device's relay: what people see for
+  // a workspace its admin has not named.
+  relayHost() {
+    try { return new URL(this.base).hostname; } catch (e) { return ""; }
+  }
+
+  // canAdmin reads this device's own role on its relay (the own profile's
+  // self_role): one signal for every admin-only screen. Unknown is no.
+  async canAdmin() {
+    const [label, name] = String(this.address || "").split("/");
+    if (!label || !name) return false;
+    try { return (await this.call("GET", "/v1/agents/" + label + "/" + name + "/profile")).self_role === "admin"; } catch (e) { return false; }
+  }
+
+  // workspaceInfo answers GET /api/workspace (liveworkspacename.go).
+  async workspaceInfo() {
+    return { name: this.workspaceName, server: this.relayHost(), can_rename: await this.canAdmin() };
+  }
+
+  // renameWorkspace answers POST /api/workspace/name: the name for every
+  // member, admin only; only an empty name clears it (spaces alone are no
+  // name, refused as Go refuses them).
+  async renameWorkspace(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => k !== "name") || typeof body.name !== "string") throw new Error("Enter a readable workspace name, up to 120 characters. Nothing changed.");
+    const name = body.name === "" ? "" : wire.validWorkspaceName(body.name);
+    if (body.name !== "" && !name) throw new Error("Enter a readable workspace name, up to 120 characters. Nothing changed.");
+    let out;
+    try { out = await this.call("PUT", "/v1/admin/workspace", { name }); } catch (e) {
+      if (e && e.status === 403) throw new Error("Only an admin of this workspace can rename it for everyone.");
+      if (e && e.status === 400) throw new Error("Enter a readable workspace name, up to 120 characters. Nothing changed.");
+      throw new Error("Cannot rename the workspace now: " + (e && e.message || "the server did not answer"));
+    }
+    this.workspaceName = wire.validWorkspaceName(out && out.name);
+    await put(this.store, "kv", "workspace", this.workspaceName || undefined);
+    this.changed();
+    return this.workspaceInfo();
+  }
+
+  // peerWordsFn names devices in the page's sentences (MEL-525), as
+  // client.PeerWords does: "your Pixel" for another device of this person,
+  // `another person, who calls themselves "Vitalii" (Desk)` for a device
+  // a pinned person record names, with the
+  // key's first group when that name is also this person's or another
+  // pinned person's, and the device in words otherwise; never the address.
+  async peerWordsFn() {
+    const pinned = (await this.store.all("persons")).filter((p) => p && p.state === "pinned");
+    const count = new Map(), key = (l) => String(l || "").toLowerCase();
+    for (const p of [...(this.me ? [this.me] : []), ...pinned]) count.set(key(p.label), (count.get(key(p.label)) || 0) + 1);
+    return (address) => {
+      if (!wire.validAddress(address)) return address;
+      if (address === this.address) return "this device";
+      const device = deviceWords(address);
+      if (this.me && (this.me.devices || []).some((d) => d.address === address)) return "your " + device;
+      const p = pinned.find((x) => (x.devices || []).some((d) => d.address === address));
+      if (!p || !p.label) return device;
+      const d = p.devices.find((x) => x.address === address);
+      return "another person, who calls themselves " + JSON.stringify(p.label) + " (" + device + (count.get(key(p.label)) > 1 && d && d.fingerprint ? " · " + String(d.fingerprint).split("-")[0] : "") + ")";
+    };
   }
 
   // fillListed reads, once per roster step, the person record of members
@@ -4490,7 +4583,7 @@ export class Engine {
         remote.reason = "The server's storage summary was not understood; its usage and policy remain unknown.";
       } else { remote.status = "available"; remote.usage = u; }
     } catch (e) {
-      if (e && e.status === 404) { remote.status = "unsupported"; remote.reason = "This server does not report storage usage."; }
+      if (e && e.status === 404) { remote.status = "unsupported"; remote.reason = "The workspace's server does not report storage usage."; }
       else remote.reason = "Storage usage could not be verified with the server.";
     }
     return { local, remote };
@@ -4828,11 +4921,11 @@ export class Engine {
   // and nothing here can make one up. Each item carries the host's answer
   // to this device's decision on it, from this report at this attempt
   // (client.decisionResults).
-  reportItems(inbox, outbox = []) {
+  reportItems(inbox, outbox = [], words = (a) => a) {
     const out = [];
     for (const m of inbox) {
       if (m.v !== 1 || m.control || m.kind !== "message" || m.status !== "review_notice" || m.reply_to || (m.attachments || []).length || m.resolved) continue;
-      const item = { id: m.id, peer: m.from, kind: "message", why: "A report from " + m.from, excerpt: firstLine(m.body), at: iso(m.at), notice: true };
+      const item = { id: m.id, peer: m.from, kind: "message", why: "A report from " + words(m.from), excerpt: firstLine(m.body), at: iso(m.at), notice: true };
       try {
         const v = JSON.parse(m.body);
         if (v && v.v === 2 && Array.isArray(v.items) && typeof v.host === "string" && (!v.host || v.host === m.from)) { // a machine reports only its own requests
@@ -5465,6 +5558,7 @@ export class Engine {
     const inbox = await this.store.all("inbox");
     const outbox = await this.store.all("outbox");
     const pinned = persons.filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
+    const words = await this.peerWordsFn(); // sentences name a person and device, never the address
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
     const needsYou = [], heldTurns = []; // what waits for this person (client.PageReview), by conversation
     for (const c of await this.store.all("convs")) {
@@ -5474,7 +5568,7 @@ export class Engine {
       const originals = member ? [] : [...(await this.dmMembers(c)).values()];
       if (!member) msgs = msgs.filter(m => m.sub !== "event" || participations.some(p => p.pid === m.pid && (p.role !== "human" || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))));
       msgs = await this.oneRowPerRecord(msgs, new Map(participations.filter(p => p.role === "human").map(p => [p.pid, p])));
-      this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns);
+      this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns, words);
       if (this.erasedConv(c.id) && !msgs.some((m) => !m.sub)) continue; // deleted here, and no later turn: not listed until one comes
       for (const info of participations.filter(p => p.role !== "human")) {
         if (!info.host) continue;
@@ -5501,7 +5595,7 @@ export class Engine {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox));
       const view=await this.groupThread(conv), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root}).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
-      this.needsYouOf(conv,parts.filter(p=>p.role!=="human"),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns);
+      this.needsYouOf(conv,parts.filter(p=>p.role!=="human"),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:visible.length?firstLine(visible.at(-1).body):"",last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
@@ -5519,9 +5613,10 @@ export class Engine {
       .map((r) => ({ id: r.id, address: r.address, name: r.address.split("/")[1], fingerprint: r.fingerprint, requested_at: iso(r.requested_at * 1000), expires: iso(r.expires * 1000), state: r.state }));
     return {
       demo: false, seq: this.seq, version: this.version, release: "",
-      me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true },
+      me: { address: this.address, fingerprint: this.fp, responder: "", responder_dir: "", browser: true, agent: false }, // a browser runs no agent
+      workspace: { name: this.workspaceName, server: this.relayHost() }, agent_devices: [...this.agentDevices],
       device: { online: this.connected, revoked: this.revoked, persisted: this.storage ? this.storage.persisted : null },
-      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox")), needs_you: needsYou, held: heldTurns, quarantine: held.map(quarantineItem),
+      threads, topics, topic_list: true, review: this.reportItems(await this.store.all("inbox"), await this.store.all("outbox"), words), needs_you: needsYou, held: heldTurns, quarantine: held.map(h => ({ ...quarantineItem(h), reason: holdText(h.reason, words(h.from)) })),
       directory: { status: this.members.listed, current: this.members.current, at: this.members.at ? iso(this.members.at) : undefined,
         truncated: this.members.truncated, members: this.members.list.filter((m) => m.address !== this.address)
           .map((m) => ({ address: m.address, presence: this.members.current ? m.presence : "", joined: iso((m.joined || 0) * 1000) })) },
@@ -5571,6 +5666,7 @@ export class Engine {
     const assistants = new Set((await this.agentsOf(c)).filter(p => p.decision).map(p => p.pid)); // an assistant a guest learned from its public scope and acceptance
     if (!member && guests.some(g => g.host_here)) msgs = msgs.filter(m => m.sub !== "event" || guests.some(g => g.pid === m.pid) || assistants.has(m.pid)); // shared records of an unaccepted participation stay out of a guest's timeline
     const guestActive = !member && guests.some(g => g.host_here && g.state === "active" && !g.held);
+    const words = await this.peerWordsFn(); // sentences name a person and device, never the address
     // A guest or visitor sees both verified original people (client.Conversations Members).
     const originals = member ? [] : [...(await this.dmMembers(c)).values()];
     const parts = new Map((await this.participationsOf(c)).map(p => [p.pid, p]));
@@ -5596,7 +5692,7 @@ export class Engine {
           synced_from: m.history ? m.synced_from : "",
           attachments: await Promise.all((m.attachments || []).map(async (a, i) => ({ index: i, name: wire.safeName(a.name), size: a.size, ...(here ? await this.sentState(a) : this.fileState(a)) }))),
           ...(event ? {} : m.excerpt_pid ? { can: [], reactions: [] } : await ctlView(m, here)), ...(event || m.excerpt_pid ? {} : execView(m, here)),
-          state_text: event ? "" : here ? outText(m.state, m.state === "waiting" ? (await this.shownCopies(m.copies)).find(c=>c.to===m.lagging)?.person || peer?.label || "someone" : m.lagging || (peer ? peer.address : ""), m.detail) : state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : state === "manual" ? "Replied by hand" : "" };
+          state_text: event ? "" : here ? outText(m.state, words(m.lagging || (peer ? peer.address : "")), m.detail) : state === "conv_held" ? "Held for you: nothing runs it. Answer here if you want to." : state === "manual" ? "Replied by hand" : "" };
       })) };
   }
 
@@ -6555,15 +6651,16 @@ export class Engine {
   // participation resolves here and its host last said (a status reaches
   // only a request this browser sent). This browser runs no agent, so each
   // is read-only: decided on decide_on, never here or by opening it. Person
-  // turns held for the person go to held: they are answered here.
-  needsYouOf(conv, infos, msgs, ctls, needsYou, held) {
+  // turns held for the person go to held: they are answered here. Its
+  // sentences name devices with words (peerWordsFn), never the address.
+  needsYouOf(conv, infos, msgs, ctls, needsYou, held, words = (a) => a) {
     const mine = (h) => !!h && !!this.me && h.person === this.me.person && h.address !== this.address;
     for (const info of infos) {
       if (info.role === "human" || info.state !== "invited" || !mine(info.host)) continue;
       // Listed when its first record reached this browser (msgs are oldest
       // first); the inviter's own time is only its claim.
       const first = msgs.find((m) => m.sub === "event" && m.pid === info.pid);
-      needsYou.push({ reason: "agent_invite", conv, pid: info.pid, peer: info.inviter ? info.inviter.address : "", why: (info.inviter ? info.inviter.label : "Someone") + " invited your agent on " + info.host.address + ". Decide there: this browser runs no agent.",
+      needsYou.push({ reason: "agent_invite", conv, pid: info.pid, peer: info.inviter ? info.inviter.address : "", why: (info.inviter ? info.inviter.label : "Someone") + " invited your agent on " + words(info.host.address) + ". Decide there: this browser runs no agent.",
         excerpt: firstLine(info.note), at: first ? iso(first.at) : isoClaim(info.invited) || iso(this.now()), decide_on: info.host.address });
     }
     for (const m of msgs) {
@@ -6578,7 +6675,7 @@ export class Engine {
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
       if (!e || !["awaiting", "needs_human", "interrupted"].includes(e.state)) continue; // client.PageReview's states
       needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted" }[e.state], conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
-        why: "Decide on " + e.host + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
+        why: "Decide on " + words(e.host) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
     }
   }
 
@@ -6988,6 +7085,7 @@ export class Engine {
       return view;
     };
     const heldText = "Held for you: nothing runs in this browser. Answer it here if you want to.";
+    const peerWords = (await this.peerWordsFn())(peer); // the sentences name a person and device, never the address
     const topic = this.topicSummary(g, await this.topicLocals(), Math.floor(this.now() / 1000), pin);
     return { id: g[0].id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
       messages: await Promise.all(g.map(async (m) => {
@@ -7001,7 +7099,7 @@ export class Engine {
           author: m.agent_id ? { label: "Agent " + m.agent_id, about: "Named executor asserted by host " + m.from + "; its host key and request bind this ID." }
             : inbound ? { label: m.from, about: "Signed with " + m.from + "'s key. Whether a person or one of their agents wrote it is not recorded." }
             : { label: "You", about: "Sent from this browser." },
-          state_text: inbound ? (m.state === "held" ? heldText : m.state === "answered" ? "You answered it here." : "") : outText(m.state, peer, m.detail) };
+          state_text: inbound ? (m.state === "held" ? heldText : m.state === "answered" ? "You answered it here." : "") : outText(m.state, peerWords, m.detail) };
       })) };
   }
 
@@ -7124,6 +7222,8 @@ export class Engine {
     case "/api/file/request": return this.requestFile(body.id, Number(body.index));
     case "/api/message/react": case "/api/message/edit": case "/api/message/delete": return this.messageControl(u.pathname.split("/").pop(), body || {});
     case "/api/storage": return this.storageSummary();
+    case "/api/workspace": return this.workspaceInfo();
+    case "/api/workspace/name": return this.renameWorkspace(body);
     case "/api/drive": return this.driveService().drive(body === undefined ? { conv: u.searchParams.get("conv") || "", action: "status" } : body);
     case "/api/drive/upload": return this.driveService().driveUpload(body.conv, body.file, !!body.confirm);
     case "/api/drive/service": return this.driveService(); // the page's panel needs the consent entry points bound to its clicks (user gesture)

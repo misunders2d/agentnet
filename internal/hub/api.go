@@ -29,6 +29,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("PUT /v1/person", h.handlePutPerson)
 	mux.HandleFunc("POST /v1/person/device-invite", h.handleDeviceInvite)
 	mux.HandleFunc("POST /v1/person/device-refuse", h.handleDeviceRefuse)
+	mux.HandleFunc("POST /v1/person/device-admin", h.handleDeviceAdmin) // personadmin.go: the person's grant
 	mux.HandleFunc("GET /v1/persons/{id}/chain", h.handleChain)
 	mux.HandleFunc("PUT /v1/caps", h.handlePutCaps)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
@@ -57,6 +58,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
 	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
+	mux.HandleFunc("PUT /v1/admin/workspace", h.handleWorkspacePut) // hub/workspace.go; the name rides the member list
 	mux.HandleFunc("GET /v1/notify", h.handleNotifyInfo)
 	mux.HandleFunc("GET /v1/notify/prefs", h.handleNotifyPrefsGet)
 	mux.HandleFunc("PUT /v1/notify/prefs", h.handleNotifyPrefsPut)
@@ -357,6 +359,12 @@ func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Address == caller {
 		writeError(w, http.StatusBadRequest, "", "an admin cannot revoke itself")
+		return
+	}
+	me, err := h.store.agent(caller)
+	target, targetErr := h.store.agent(req.Address)
+	if err != nil || targetErr == nil && me.linked && target.Admin && !target.linked {
+		writeError(w, http.StatusForbidden, "", "a granted admin cannot revoke an invite admin")
 		return
 	}
 	if err := h.store.revoke(req.Address); err != nil {

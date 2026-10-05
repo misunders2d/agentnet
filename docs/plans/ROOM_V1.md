@@ -72,7 +72,7 @@ Membership does not change:
 **Advertising rule:** a binary advertises `rm1` only once it enforces **every** reader rule in §2.2–2.5. Senders can switch features on later, so no later phase needs another capability.
 
 The same release also adds:
-- **Implication.** `Profile.Supports` (`person.go:527`) and the engine treat `rm1` as also implying apx1, agi1, hgp1, agr1, prg1, grp1, rcv1 and clr1. Later releases can then drop those tokens; pre-rm1 senders would only hold copies.
+- **Implication.** `Profile.Supports` (`person.go:527`) and the engine treat `rm1` as also implying apx1, agi1, hgp1, agr1, prg1, grp1, rcv1 and clr1. Later releases can then drop those tokens; pre-rm1 senders would only hold copies. (MEL-529: native daemons no longer list rcv1, which rm1 implies, so 15 static names plus the state hint `agent1` fit the 16. `agent1`, `protocol.CapAgent`, says only "this session's program runs an agent" (a responder or an enabled named agent): a hint for display and offers, never implied by rm1, never asked for a send, never listed by a browser.)
 - **Parse headroom.** Raise the parse limit to 32 in Go, `wire.mjs:807` and the relay, while devices still advertise at most 16. Old clients ignore records they cannot parse, so a 17-token device would look as if it supports nothing (`person.go:533`).
 
 ### 2.2 Participation events

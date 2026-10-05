@@ -359,6 +359,7 @@ with ADDRESS#SESSION.`,
        agentnet person approve [--native] ID
        agentnet person refuse ID
        agentnet person untrust ADDRESS
+       agentnet person admin|unadmin ADDRESS
        agentnet person remove ADDRESS
 
 One person can use up to eight devices, each with its own keys. person shows
@@ -393,6 +394,13 @@ a browser. untrust ADDRESS removes a device; to trust it again, link it
 again. person marks trusted devices. A device whose key changes is no
 longer trusted. Invites stored before this version first ran here still
 wait for your accept.
+
+Your other devices are never Hub admins on their own. On a device that is
+one, admin ADDRESS lets another of your linked devices change company
+settings too (the workspace name, invites, release notices, storage), and
+unadmin ADDRESS takes it back. Give it to your phone, not to a computer
+that runs agents: its agents use that device's keys. Removing the device
+ends it; a device an admin invite made admin keeps its role.
 
 remove ADDRESS removes a device from your person. A device admitted through
 linking is also revoked from the Hub; one admitted separately by an admin
@@ -766,6 +774,7 @@ were abandoned, and direct uploads never attached to a message.
        agentnet admin revoke ADDRESS
        agentnet admin release set --url URL [--note TEXT] VERSION
        agentnet admin release show | clear
+       agentnet admin workspace [show] | set NAME | clear
 
 Run on an admin agent. LABEL is the invited person's AgentNet name (e.g.
 bob): use the name your person gave for this invitation, or ask them who is
@@ -780,6 +789,9 @@ invite prints a self-contained invitation for the person LABEL (their
 address becomes LABEL/NAME, NAME chosen by them when joining): project and install links,
 install-from-source steps for Linux, macOS and Windows, join/daemon/doctor
 steps, how to confirm back to you, and the private single-use invite code.
+Give the whole text to the coding agent on their computer, privately. The
+label is your statement about who they are. revoke immediately cuts ADDRESS
+off.
 
 release set recommends a client version to every member: running daemons
 get it at once, others when they next connect. Each person gets one
@@ -789,9 +801,14 @@ shown to people only, never to models. Setting the same version and URL
 again announces nothing new. It is a recommendation: receiving it downloads
 and installs nothing (members update with agentnet update when they choose).
 Versions are compared only for equality.
-Give the whole text to the coding agent on their computer, privately. The
-label is your statement about who they are. revoke immediately cuts ADDRESS
-off.
+
+workspace set names the workspace for every member (e.g. Mellanni): their
+devices show it at once, or when they next connect, with no reinstall or
+rejoin; each person may still give it their own label on their devices.
+1–120 readable characters. clear removes it (devices then show the relay's
+host name); show prints the current name. A label only: the workspace's
+identity never changes. Your other devices (your phone) may set it only
+after you grant them the role: agentnet help person, person admin.
 
   --ttl D    how long the invite is valid: more than 0, at most 720h (others are refused)
   --admin    the invited agent becomes an admin too

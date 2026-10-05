@@ -303,6 +303,19 @@ Build with the version stamp (`scripts/build.sh`, or `go build -ldflags
 made after and the revision (`--tags`: release tags are lightweight); a plain
 `go build` reports `dev`.
 
+**Naming the workspace.** A Hub admin runs `agentnet admin workspace set
+NAME` (for example `Mellanni`; or `show`, `clear`), or uses Settings →
+Workspaces → Name for everyone in the app. Every member's devices show the
+name with the member list, at once on an open connection or when they next
+connect, with no reinstall or rejoin; it is kept for offline use. With no
+name set they show the relay's host name. Each person can still give it
+their own label on their devices. It is a label, never identity, and a
+company setting: the person's own tap, refused inside agent runs. A
+person's other devices are not admins on their own: to let the owner's
+phone rename it too, run `agentnet person admin ADDRESS` (the phone's
+address, from `agentnet person`) on the admin device, and `person unadmin
+ADDRESS` to take it back. Do not grant it to a computer that runs agents.
+
 **Recommending a client version.** A Hub admin runs `agentnet admin release
 set --url https://… [--note TEXT] VERSION` (or `show`, `clear`). Running
 daemons get it on their open connection at once, others when they next

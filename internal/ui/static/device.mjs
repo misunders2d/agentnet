@@ -95,13 +95,13 @@ async function workspaces(engine) {
   try {
     memberships = new ws.BrowserMemberships({ shell, Engine, openIDB, locks: navigator.locks, storage: localStorage, fetch: (u, o) => fetch(u, o),
       decodeInvite, newID, allowOrigin, pushFor: (id) => { const a = ws.workspacePush(id); pushAdapters.set(id, a); return a; } });
-    memberships.adoptDefault(engine, { name: "This server" }); // the device enrolled here, as it is: its store, lock and stream stay
+    memberships.adoptDefault(engine, { name: "" }); // the device enrolled here, as it is: its store, lock and stream stay; no label of its own (the workspace's name shows)
   } catch (e) { problems.push("Joined workspaces could not be read here: " + e.message); memberships = null; }
-  if (!shell.members.has("default")) shell.register({ id: "default", handle: newID(), name: "This server", endpoint: location.origin, address: engine.address, realm: "", state: "enrolled" }, engine);
+  if (!shell.members.has("default")) shell.register({ id: "default", handle: newID(), name: "", endpoint: location.origin, address: engine.address, realm: "", state: "enrolled" }, engine);
   if (memberships) {
     for (const r of memberships.records) { // each on its own: one that cannot start now (its server unreachable) keeps the others going
       if (r.state !== "enrolled" || shell.members.has(r.id)) continue;
-      try { await memberships.start(r); } catch (e) { problems.push(r.name + ": " + e.message); }
+      try { await memberships.start(r); } catch (e) { problems.push((r.name || new URL(r.endpoint).host) + ": " + e.message); }
     }
   }
   window.agentnetWorkspaces = {

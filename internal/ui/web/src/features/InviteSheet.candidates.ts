@@ -4,7 +4,7 @@
 // stated local reason, a mention in the recent messages.
 import { useEffect, useState } from "react";
 import type { Api, T } from "../api";
-import { agentName, agentWhere, deviceKind, personName, timeOf, type DeviceKind } from "../model";
+import { agentName, agentWhere, bringInDevices, deviceKind, personName, runsAgent, timeOf, type DeviceKind } from "../model";
 import { isMine, online, speaker } from "./RoomPanel.model";
 
 export type Route = "agent" | "guest" | "group";
@@ -58,13 +58,14 @@ export function useCatalogs(api: Api, addresses: string[], enabled: boolean): Ca
   return enabled ? c : { ...c, loading: false };
 }
 
-/** The devices whose published agents are worth asking about here. */
+/** The devices whose published agents are worth asking about here: only
+ *  devices that run an agent (a phone or a browser publishes none). */
 export function catalogHosts(t: T.DMThread, o: T.Overview): string[] {
   const out = new Set<string>();
   const people = [...(t.members || []), t.peer, ...(o.people || []).filter((p) => p.state === "pinned")];
   for (const p of people) {
     if (!p || isMine(o, p.address)) continue;
-    for (const d of p.devices?.length ? p.devices : [{ address: p.address }]) if (!isMine(o, d.address)) out.add(d.address);
+    for (const d of p.devices?.length ? p.devices : [{ address: p.address }]) if (!isMine(o, d.address) && runsAgent(d.address, o)) out.add(d.address);
   }
   return [...out].sort();
 }
@@ -72,8 +73,9 @@ export function catalogHosts(t: T.DMThread, o: T.Overview): string[] {
 export interface Pool { candidates: Candidate[]; peopleNote: string; pick: string }
 
 /** pool lists the candidates for t, people first, each with what an invite
- *  would do. invitations are this computer's group invitations (for "already invited"). */
-export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<string, string>, invitations: T.GroupInvitationView[] = []): Pool {
+ *  would do. invitations are this computer's group invitations (for "already
+ *  invited"); platform is the host's ("browser": no agent of its own to offer). */
+export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<string, string>, invitations: T.GroupInvitationView[] = [], platform = "daemon"): Pool {
   const me = o.person;
   const group = t.kind === "group";
   const admin = group && (t.members || []).some((m) => m.person && m.person === me?.person && m.admin);
@@ -114,12 +116,13 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
       host: a.record.host, agentId: a.record.id, mine: true,
       unavailable: a.responder && !a.responder.ready ? "Not set up on this computer yet." : undefined,
     });
-    add({
+    if (platform !== "browser") add({ // a browser runs no agent: nothing of its own to bring in
       key: "a:" + o.me.address + "#", kind: "agent", name: agentName(undefined, names, self, self), seed: o.me.address,
       subtitle: agentWhere(self, o.me.address, self), online: true, device: deviceKind(o.me.address), host: o.me.address, mine: true,
       unavailable: o.me.responder ? undefined : "Not set up on this computer yet.",
     });
-    // Members' agents: each published agent, or the device's own when it publishes none.
+    // Members' agents: each published agent, or a device's own default agent
+    // when it runs one and publishes none (model.bringInDevices).
     const members = (group ? t.members || [] : [t.peer]).filter((p) => p && !isMine(o, p.address));
     const known = new Map<string, T.PersonView>();
     for (const p of [...members, ...(o.people || [])]) for (const d of p.devices?.length ? p.devices : [{ address: p.address }]) if (!known.has(d.address)) known.set(d.address, p);
@@ -132,10 +135,9 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
       });
     }
     for (const p of members) {
-      if (cat.remote[p.address]?.length) continue;
-      add({
-        key: "a:" + p.address + "#", kind: "agent", name: agentName(undefined, names, p, me), seed: p.address,
-        subtitle: agentLine(p, me, p.address, online(o, p.address)), online: online(o, p.address), device: deviceKind(p.address), host: p.address, ownerName: personName(p),
+      for (const address of bringInDevices(p, o, cat.remote)) add({
+        key: "a:" + address + "#", kind: "agent", name: agentName(undefined, names, p, me), seed: address,
+        subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, ownerName: personName(p),
       });
     }
   }

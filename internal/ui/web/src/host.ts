@@ -10,6 +10,8 @@ export interface Workspace {
   realm: string;
   handle?: string;
   state: string;
+  /** The workspace's own name its admin set, as last listed ("Mellanni"); name is this device's own label ("" for none). */
+  hub_name?: string;
 }
 
 /** A catalog entry (host.skins): a built-in, installed or browser-local package. */
@@ -74,5 +76,8 @@ export interface Host {
     // handle; it is not selected).
     disconnected?(): Promise<Workspace[]>;
     reconnect?(id: string): Promise<Host>;
+    // Present where the host can keep this device's own label of a
+    // membership: name "" clears it (the workspace's own name shows).
+    rename?(id: string, name: string): Promise<Workspace>;
   };
 }

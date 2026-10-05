@@ -3,8 +3,8 @@ package client
 import (
 	"errors"
 	"strings"
-	"unicode"
-	"unicode/utf8"
+
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // ErrWorkspaceName and ErrDeviceName refuse a name before anything is
@@ -14,17 +14,23 @@ var (
 	ErrDeviceName    = errors.New("device name must be lowercase letters, digits and dashes, starting with a letter, at most 32 characters (like laptop or work-phone)")
 )
 
-// workspaceName is name as a display alias, or ErrWorkspaceName.
+// workspaceName is name as a local label: "" (none: the workspace's own
+// name shows) or a workspace name (protocol.ValidWorkspaceName), else
+// ErrWorkspaceName.
 func workspaceName(name string) (string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" || utf8.RuneCountInString(name) > 120 || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+	if strings.TrimSpace(name) == "" {
+		return "", nil
+	}
+	name, ok := protocol.ValidWorkspaceName(name)
+	if !ok {
 		return "", ErrWorkspaceName
 	}
 	return name, nil
 }
 
-// Rename changes only this installation's existing display alias. Identity,
-// realm, endpoint, state, enrollment, grants and histories remain untouched.
+// Rename changes only this installation's existing local label; an empty
+// name clears it. Identity, realm, endpoint, state, enrollment, grants and
+// histories remain untouched.
 func (w *Workspaces) Rename(id, name string) (Workspace, error) {
 	name, err := workspaceName(name)
 	if err != nil {

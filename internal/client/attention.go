@@ -141,6 +141,7 @@ func (a *Agent) messageAttention(ev HookEvent) (Attention, error) {
 		return at(text, top), err
 	}
 	items, err := a.store.arrivalsAfterReceiver(pos, attentionItems+1, ev.ReplySession)
+	items = a.named(items)
 	if err != nil {
 		return Attention{}, err
 	}
@@ -203,6 +204,7 @@ func (a *Agent) overview() (string, error) {
 		return b.String(), nil
 	}
 	recent, err := a.store.recentArrivals(attentionRecent)
+	recent = a.named(recent)
 	if err != nil {
 		return "", err
 	}
@@ -221,6 +223,17 @@ type arrivalItem struct {
 	replyTo, replyKind              string // replyKind is set when replyTo is a message we sent
 	received                        int64
 	files                           int
+	key                             string // the fingerprint that verified it
+	who                             string // the sender in words (Sender.Ref), when named
+}
+
+// named words each item's sender as a person when this device can prove
+// it (Sender), from what it holds: hook lines make no Hub request.
+func (a *Agent) named(items []arrivalItem) []arrivalItem {
+	for i := range items {
+		items[i].who = a.senderHere(items[i].sender, items[i].key).Ref()
+	}
+	return items
 }
 
 func (it arrivalItem) line() string {
@@ -229,7 +242,11 @@ func (it arrivalItem) line() string {
 	if it.status != "" {
 		fmt.Fprintf(&b, " (%s)", it.status)
 	}
-	fmt.Fprintf(&b, " from %s at %s", it.sender, time.Unix(it.received, 0).Format(time.DateTime))
+	from := it.sender
+	if it.who != "" {
+		from = it.who
+	}
+	fmt.Fprintf(&b, " from %s at %s", from, time.Unix(it.received, 0).Format(time.DateTime))
 	if it.replyKind != "" {
 		fmt.Fprintf(&b, ", replying to your %s %s", it.replyKind, it.replyTo)
 	}
@@ -244,7 +261,7 @@ func (it arrivalItem) line() string {
 
 const arrivalSelect = `SELECT i.arrival, i.id, i.sender, i.kind, coalesce(i.status, ''), i.state, coalesce(i.reply_to, ''),
 	coalesce(json_extract(o.envelope, '$.kind'), ''), i.received_at,
-	(SELECT count(*) FROM attachments f WHERE f.message_id = i.id)
+	(SELECT count(*) FROM attachments f WHERE f.message_id = i.id), coalesce(i.verified_by, '')
 	FROM inbox i LEFT JOIN outbox o ON o.id = i.reply_to AND o.recipient = i.sender`
 
 func (s *store) scanArrivals(rows *sql.Rows, err error) ([]arrivalItem, error) {
@@ -256,7 +273,7 @@ func (s *store) scanArrivals(rows *sql.Rows, err error) ([]arrivalItem, error) {
 	for rows.Next() {
 		var it arrivalItem
 		if err := rows.Scan(&it.arrival, &it.id, &it.sender, &it.kind, &it.status, &it.state, &it.replyTo,
-			&it.replyKind, &it.received, &it.files); err != nil {
+			&it.replyKind, &it.received, &it.files, &it.key); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

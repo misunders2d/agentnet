@@ -38,7 +38,7 @@ func TestWorkspaceRenamePersistsOnlyLocalAlias(t *testing.T) {
 	if !bytes.Equal(keyBefore, keyAfter) {
 		t.Fatal("rename changed keys")
 	}
-	for _, name := range []string{" ", "name\nline", strings.Repeat("a", 121)} {
+	for _, name := range []string{"name\nline", "c1\u0085c1", strings.Repeat("a", 121)} {
 		if _, err := again.Rename(DefaultWorkspace, name); err == nil {
 			t.Fatal("invalid name accepted")
 		}
@@ -46,6 +46,16 @@ func TestWorkspaceRenamePersistsOnlyLocalAlias(t *testing.T) {
 	final, _ := again.List()
 	if !reflect.DeepEqual(after, final) {
 		t.Fatal("refusal changed registry")
+	}
+	// An empty label clears it: the workspace's own name shows again.
+	cleared, err := again.Rename(DefaultWorkspace, "  ")
+	if err != nil || cleared.Name != "" {
+		t.Fatalf("clear: %+v %v", cleared, err)
+	}
+	if reopened, _ := OpenWorkspaces(w.bobHome); reopened != nil {
+		if items, _ := reopened.List(); items[0].Name != "" {
+			t.Fatalf("cleared label came back: %q", items[0].Name)
+		}
 	}
 	if _, err := again.Rename(strings.Repeat("b", 32), "Other"); err == nil {
 		t.Fatal("unknown membership renamed")

@@ -326,6 +326,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 			t.Frozen = c.Peer.Address + " published a different person record than the one kept here, so this conversation is frozen: nothing more is sent in it."
 		}
 		people := l.conversationPeople(c)
+		words := l.a.PeerWords() // sentences name a person and device, never the address
 		if t.Guests, err = l.guestViews(id); err != nil {
 			return DMThread{}, err
 		}
@@ -355,7 +356,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		}
 		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
-				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, laggingCopy(m, c.Peer.Address), m.Detail),
+				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
 				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
 			if m.State == "waiting" {
 				label := addressLabels[laggingCopy(m, c.Peer.Address)]
@@ -401,7 +402,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 				dm.Actions, dm.JobDetail = AgentActions(m.Kind, m.State), m.JobDetail
 			case m.PID != "" && m.Dir == "out" && m.Job != "":
 				dm.Actions, dm.JobDetail = AgentActions(m.Kind, m.Job), m.JobDetail
-				if text := DMStateText("in", m.Kind, m.Job, c.Peer.Address, ""); text != "" {
+				if text := DMStateText("in", m.Kind, m.Job, words(c.Peer.Address), ""); text != "" {
 					dm.StateText = "Your agent: " + strings.ToLower(text[:1]) + text[1:]
 				}
 			}

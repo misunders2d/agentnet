@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -227,12 +227,14 @@ func openStore(path string) (*store, error) {
 
 type agent struct {
 	Public        identity.Public
-	Admin         bool
+	Admin         bool // an admin invite made it one, or its person granted it (personadmin.go)
 	Revoked       bool
 	RevokedReason string // "refused" or "expired" for a device link nobody approved; "removed" from its person
 	Pending       bool   // joined with a device invite, waiting for its person's approval: not a member
 	PendingUntil  int64  // unix seconds: after this nobody can approve it any more
 	Person        string // the person it speaks for, if any
+	linked        bool
+	grantedBy     string
 }
 
 func (s *store) agent(address string) (agent, error) { return agentIn(s.db, address) }
@@ -240,13 +242,21 @@ func (s *store) agent(address string) (agent, error) { return agentIn(s.db, addr
 func agentIn(q interface {
 	QueryRow(string, ...any) *sql.Row
 }, address string) (agent, error) {
+	a, err := rawAgentIn(q, address)
+	if err == nil && a.Admin && a.linked {
+		a.Admin, err = deviceAdminHolds(q, address, a, map[string]bool{})
+	}
+	return a, err
+}
+
+func rawAgentIn(q querier, address string) (agent, error) {
 	var a agent
 	var pub string
 	var revoked sql.NullInt64
-	var reason, pending, person sql.NullString
+	var reason, pending, person, grantedBy sql.NullString
 	var until sql.NullInt64
-	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
-		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person)
+	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id, linked, admin_granted_by FROM agents WHERE address = ?`, address).
+		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person, &a.linked, &grantedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, errNotFound
 	}
@@ -254,6 +264,7 @@ func agentIn(q interface {
 		return a, err
 	}
 	a.Revoked, a.RevokedReason, a.Pending, a.PendingUntil, a.Person = revoked.Valid, reason.String, pending.Valid, until.Int64, person.String
+	a.grantedBy = grantedBy.String
 	return a, json.Unmarshal([]byte(pub), &a.Public)
 }
 
@@ -262,12 +273,18 @@ type enrolledMember struct {
 	address string
 	joined  int64               // unix seconds
 	person  *protocol.PersonRef // the newest roster step of its person, if any
+	agent   bool                // its newest caps record lists protocol.CapAgent (a hint)
 }
 
 // members lists up to limit unrevoked agents, most recently enrolled first,
 // and whether more exist.
 func (s *store) members(limit int) ([]enrolledMember, bool, error) {
-	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash FROM agents a LEFT JOIN persons p ON p.person = a.person_id
+	// The agent hint comes from the device's newest signed caps record,
+	// not its last session's: a stream sets last_session on connect, before
+	// that session publishes, and the hint must not flicker on reconnect.
+	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash,
+		(SELECT c.record FROM caps c WHERE c.address = a.address ORDER BY c.ts DESC, c.session LIMIT 1)
+		FROM agents a LEFT JOIN persons p ON p.person = a.person_id
 		WHERE a.revoked_at IS NULL AND a.pending_person IS NULL ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`, limit+1)
 	if err != nil {
 		return nil, false, err
@@ -276,10 +293,14 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	var out []enrolledMember
 	for rows.Next() {
 		var m enrolledMember
-		var person, hash sql.NullString
+		var person, hash, caps sql.NullString
 		var seq sql.NullInt64
-		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash); err != nil {
+		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash, &caps); err != nil {
 			return nil, false, err
+		}
+		if caps.Valid {
+			rec, err := protocol.ParseCapsRecord([]byte(caps.String))
+			m.agent = err == nil && rec.Has(protocol.CapAgent) // unreadable: no hint
 		}
 		if person.Valid {
 			m.person = &protocol.PersonRef{ID: person.String, Seq: seq.Int64, Hash: hash.String}
@@ -459,6 +480,9 @@ func (s *store) revoke(address string) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errNotFound
+	}
+	if err := revokeDeviceAdminGrants(tx, address); err != nil {
+		return err
 	}
 	if err := dropNotify(tx, address); err != nil { // its notification state goes with it
 		return err

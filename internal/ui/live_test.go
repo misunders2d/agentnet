@@ -458,7 +458,7 @@ func TestLiveHumanDMs(t *testing.T) {
 	})
 	eventually("the receipt of a DM message sent from the page", func() bool {
 		d, _ := live.DM(d1)
-		return d.Messages[0].State == "delivered" && d.Messages[0].StateText == "Delivered to "+alice.Address
+		return d.Messages[0].State == "delivered" && d.Messages[0].StateText == "Delivered to Alice (Laptop)" // a person and device, never the address
 	})
 	d, _ := live.DM(d2)
 	q := d.Messages[1]

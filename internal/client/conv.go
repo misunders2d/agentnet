@@ -132,18 +132,64 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // requires). Every session of a device advertises the same list: the
 // relay takes a device to support only what ALL its live sessions do, so a
 // session that said less (link.go's waiting one) would keep senders
-// holding controls, Drive records and statuses for it. It is at most
-// protocol.MaxAdvertisedCaps long; rm1 (protocol.CapRoom) says this program
-// enforces every room reader rule (ROOM_V1 §2.1).
-var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapReplyReceiver, protocol.CapRoom, protocol.CapTyping}
+// holding controls, Drive records and statuses for it. With the agent
+// hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
+// rm1 (protocol.CapRoom) says this program enforces every room reader rule
+// (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
+var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapRoom, protocol.CapTyping}
+
+// capsPublisher is the one publisher of this run's capability records:
+// the daemon's and link.go's waiting session share the session id, and the
+// relay keeps a session's record only when its ts is newer, so every
+// record gets a ts above the last one.
+type capsPublisher struct {
+	mu        sync.Mutex
+	lastTS    int64
+	published bool // a record reached the relay this run
+	agent     bool // the agent hint of that record
+}
+
+// advertisedCaps is ownCaps plus the agent hint (protocol.CapAgent) while
+// this device runs an agent, sorted.
+func (a *Agent) advertisedCaps() (caps []string, agent bool) {
+	caps = slices.Clone(ownCaps)
+	if agent = a.AdvertisesAgent(); agent {
+		caps = append(caps, protocol.CapAgent)
+		slices.Sort(caps)
+	}
+	return caps, agent
+}
+
+// putCaps publishes the signed capability record of session.
+func (a *Agent) putCaps(ctx context.Context, session string) error {
+	p := &a.capsPub
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	caps, agent := a.advertisedCaps()
+	p.lastTS = max(time.Now().Unix(), p.lastTS+1)
+	rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: caps, TS: p.lastTS}
+	rec.Sign(a.id.Sign)
+	if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
+		return err
+	}
+	p.published, p.agent = true, agent
+	return nil
+}
+
+// agentHintStale reports whether the published agent hint no longer says
+// what AdvertisesAgent does (a responder or named agent was set or removed).
+func (a *Agent) agentHintStale() bool {
+	p := &a.capsPub
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.published && p.agent != a.AdvertisesAgent()
+}
 
 // publishOwn publishes this run's capability record and, once per roster,
 // this installation's person.
 func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 	if slices.Contains(feats, protocol.FeatureCaps) && a.session != "" {
-		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: ownCaps, TS: time.Now().Unix()}
-		rec.Sign(a.id.Sign)
-		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
+		if err := a.putCaps(ctx, a.session); err != nil {
 			return err
 		}
 	}

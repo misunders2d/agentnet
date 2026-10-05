@@ -2,7 +2,7 @@
 // you allow it. Everything is read from the server's views; the phase of a
 // request comes from its actions[] (what may be done now) and stored state.
 import type { T } from "../api";
-import { agentName, agentWhere, chatName, firstLine, isMine, nameOf, niceDevice, personName, personOf, plain } from "../model";
+import { agentName, agentWhere, askerWords, chatName, deviceWho, firstLine, isMine, nameOf, niceDevice, personName, personOf, plain, whoName } from "../model";
 
 // The words shared with the chat list live in model.ts; re-exported for this screen's files.
 export { Reason, chatName, chatOf, convTitle, decidable, isMine, nameOf, personOf, senderOf } from "../model";
@@ -12,11 +12,12 @@ export type Req = T.DMMessage | T.Message;
 export const isThreadMsg = (m: Req): m is T.Message => "author" in m;
 const isRequest = (m: Req) => m.kind === "question" || m.kind === "task";
 
-/** "your Phone", "Vitalii’s Desk": a device in a sentence (its name as shown everywhere). */
+/** "your Phone", "Vitalii’s Desk": a device in a sentence (its name as shown
+ *  everywhere; a look-alike name with its key, model.deviceWho). */
 export function deviceWords(address: string, o: T.Overview | null) {
-  if (isMine(address, o)) return "your " + niceDevice(address);
-  const p = personOf(address, o);
-  return p ? personName(p) + "’s " + niceDevice(address) : niceDevice(address);
+  const w = deviceWho(address, o);
+  if (w.relation === "own" || w.relation === "this") return "your " + w.device;
+  return w.relation === "person" ? whoName(w) + "’s " + w.device : w.device;
 }
 
 export const capital = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
@@ -58,6 +59,13 @@ export interface Asker { name: string; title: string; sub: string; person: strin
 export function askerOf(m: Req, o: T.Overview | null, names: Record<string, string>, dm?: T.DMThread | null): Asker {
   if (isThreadMsg(m)) {
     if (m.dir === "out") return { name: "You", title: "You", sub: "", person: "You", seed: o?.person?.person || o?.me.address || "me", agent: false, you: true };
+    // A device that runs no agent is its person: "Question from you · Pixel", "Vitalii asked your agent".
+    const w = askerWords(m.from, o, names);
+    if (!w.agent) {
+      const p = deviceWho(m.from, o).person;
+      return w.you ? { name: "You", title: "You", sub: "From " + w.device, person: "You", seed: o?.person?.person || o?.me.address || "me", agent: false, you: true }
+        : { name: w.name, title: w.name, sub: "From " + w.device, person: w.name, seed: p?.person || p?.address || m.from, agent: false, you: false };
+    }
     const a = peerAgent(m.from, o, names, m.agent_id);
     return { name: a.name, title: a.title, sub: a.sub, person: a.owner || a.name, seed: m.agent_id || m.from, agent: true, you: false };
   }

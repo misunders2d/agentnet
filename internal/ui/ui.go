@@ -107,6 +107,35 @@ type Overview struct {
 	Link    *LinkState    `json:"link,omitempty"`
 	Links   []LinkRequest `json:"links,omitempty"`
 	History []HistoryCopy `json:"history,omitempty"`
+
+	// The workspace as people see it (MEL-524): the name its admin set and
+	// the relay's host name, the fallback when none is set.
+	Workspace *WorkspaceView `json:"workspace,omitempty"`
+	// AgentDevices are the other devices that, as last listed, say they run
+	// an agent (MEL-529): the only "runs an agent" signal for skins, kept
+	// offline. A hint for display and offers, never authority.
+	AgentDevices []string `json:"agent_devices"`
+}
+
+// WorkspaceView is the workspace's own name ("" when its admin set none)
+// and its relay's host name.
+type WorkspaceView struct {
+	Name   string `json:"name"`
+	Server string `json:"server"`
+}
+
+// WorkspaceInfoView answers GET /api/workspace: the workspace view and
+// whether this device may rename it for everyone (it is a Hub admin, or a
+// device of a person who is; unknown counts as no).
+type WorkspaceInfoView struct {
+	WorkspaceView
+	CanRename bool `json:"can_rename"`
+}
+
+// WorkspaceNameChange is POST /api/workspace/name: the name for everyone;
+// an empty name clears it.
+type WorkspaceNameChange struct {
+	Name string `json:"name"`
 }
 
 // Roles an installation has (Overview.Role).
@@ -662,6 +691,7 @@ type Me struct {
 	Fingerprint  string `json:"fingerprint"`
 	Responder    string `json:"responder"`     // harness, or "" when questions and tasks wait for the person
 	ResponderDir string `json:"responder_dir"` // where the responder runs
+	Agent        bool   `json:"agent"`         // this device runs an agent (a responder or a named agent): what it tells others
 }
 
 // ThreadSummary is one row of the thread list.
@@ -1170,7 +1200,7 @@ func ReviewWhy(kind, state, peer, detail string) string {
 		return detail
 	}
 	why := strings.TrimPrefix(StateText("in", kind, state, peer), "Needs you: ")
-	if strings.HasPrefix(why, peer) {
+	if strings.HasPrefix(why, peer) && strings.Contains(peer, "/") {
 		return why // an address keeps its case
 	}
 	return capitalize(why)

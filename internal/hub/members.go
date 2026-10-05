@@ -26,9 +26,9 @@ func (h *Hub) members() (protocol.Members, error) {
 	if err != nil {
 		return protocol.Members{}, err
 	}
-	out := protocol.Members{Members: make([]protocol.Member, 0, len(rows)), Truncated: truncated}
+	out := protocol.Members{Members: make([]protocol.Member, 0, len(rows)), Truncated: truncated, Workspace: h.currentWorkspaceName()}
 	for _, r := range rows {
-		out.Members = append(out.Members, protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined, Person: r.person})
+		out.Members = append(out.Members, protocol.Member{Address: r.address, Presence: h.presence.state(r.address), Joined: r.joined, Person: r.person, Agent: r.agent})
 	}
 	return out, nil
 }

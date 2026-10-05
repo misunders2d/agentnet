@@ -59,6 +59,9 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 	if r, err := l.a.Responder(); err == nil && r != nil {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir
 	}
+	o.Me.Agent, o.AgentDevices = l.a.AdvertisesAgent(), l.a.AgentDevices()
+	o.Workspace = &WorkspaceView{Name: l.a.WorkspaceName(), Server: l.a.RelayHost()}
+	words := l.a.PeerWords() // people never see addresses in sentences
 	o.Release = recommended(l.a.Release())
 	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
 	if n, err := l.notifyView(); err == nil {
@@ -106,14 +109,14 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 		return o, err
 	}
 	for _, c := range review.Conv {
-		o.NeedsYou = append(o.NeedsYou, convItem(c))
+		o.NeedsYou = append(o.NeedsYou, convItem(c, words))
 	}
 	countDecisions(&o)
 	for _, c := range review.Held {
-		o.Held = append(o.Held, convItem(c))
+		o.Held = append(o.Held, convItem(c, words))
 	}
 	for _, m := range review.Device {
-		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail),
+		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, words(m.From), m.Detail),
 			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))}
 		if item.Notice {
 			if r, ok := l.a.NoticeReport(m); ok {
@@ -130,6 +133,9 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 		return o, err
 	}
 	o.Quarantine = quarantineItems(q)
+	for i := range o.Quarantine {
+		o.Quarantine[i].Reason = holdReason(q[i].Reason, words(q[i].Sender))
+	}
 	return o, nil
 }
 
@@ -159,16 +165,17 @@ func countDecisions(o *Overview) {
 }
 
 // convItem is a conversation item waiting for the person, as the page
-// lists it, with the decisions this installation takes on it.
-func convItem(c client.ConvReview) ConvItem {
+// lists it, with the decisions this installation takes on it. words names
+// its sender for the sentence (client.PeerWords).
+func convItem(c client.ConvReview, words func(string) string) ConvItem {
 	v := ConvItem{Reason: c.Reason, Conv: c.Conv, PID: c.PID, ID: c.ID, Peer: c.From, Kind: c.Kind, Excerpt: excerpt(c.Body), At: c.At, Unread: c.Unread}
 	switch c.Reason {
 	case client.ReviewInvite:
 		v.Why, v.Actions = c.Detail, []string{DoAccept, DoDecline}
 	case client.ReviewHeldTurn:
-		v.Why = DMStateText("in", c.Kind, c.State, c.From, c.Detail)
+		v.Why = DMStateText("in", c.Kind, c.State, words(c.From), c.Detail)
 	default:
-		v.Why, v.Actions = ReviewWhy(c.Kind, c.State, c.From, c.Detail), AgentActions(c.Kind, c.State)
+		v.Why, v.Actions = ReviewWhy(c.Kind, c.State, words(c.From), c.Detail), AgentActions(c.Kind, c.State)
 	}
 	return v
 }
@@ -260,6 +267,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 			replied[m.ReplyTo] = true
 		}
 	}
+	peer := l.a.PeerWords()(c.Peer) // the sentences name a person and device, never the address
 	for _, m := range c.Messages {
 		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, At: m.At, SentAt: shownSent(m.SentAt, m.At),
 			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, Controls: m.Controls, Exec: m.Exec}
@@ -282,15 +290,15 @@ func (l *Live) Thread(id string) (Thread, error) {
 		if m.AgentID != "" {
 			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}
 		}
-		v.StateText = StateText(m.Dir, m.Kind, m.State, c.Peer)
-		switch Next(m.Dir, m.Kind, m.State, c.Peer, replied[m.ID]) {
+		v.StateText = StateText(m.Dir, m.Kind, m.State, peer)
+		switch Next(m.Dir, m.Kind, m.State, peer, replied[m.ID]) {
 		case "you":
 			v.Next = "Needs you"
 		case "your responder":
 			v.Next = "Your responder is on it"
 		case "":
 		default:
-			v.Next = "Waiting on " + c.Peer
+			v.Next = "Waiting on " + peer
 		}
 		t.Messages = append(t.Messages, v)
 	}

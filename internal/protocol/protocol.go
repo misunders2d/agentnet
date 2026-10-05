@@ -439,6 +439,11 @@ type Member struct {
 	// newest step the Hub holds. A receiver fetches and verifies the chain
 	// (GET /v1/persons/{id}/chain) only when it is newer than its own pin.
 	Person *PersonRef `json:"person,omitempty"`
+	// Agent is the relay's reading of the device's newest signed capability
+	// record: it lists CapAgent, so the device says its program runs an
+	// agent. A hint for display and offers only: it grants nothing and no
+	// send decision may use it.
+	Agent bool `json:"agent,omitempty"`
 }
 
 // PersonRef names one step of a person's roster chain.
@@ -454,6 +459,11 @@ type PersonRef struct {
 type Members struct {
 	Members   []Member `json:"members"`
 	Truncated bool     `json:"truncated"`
+	// Workspace is the name the Hub's admin gave the workspace, if any (a
+	// label, never identity: the realm id is that). It is not checked by
+	// Valid: a receiver ignores a name ValidWorkspaceName refuses and keeps
+	// the list.
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // MaxMembers bounds one member list, keeping it below MaxBody (a member

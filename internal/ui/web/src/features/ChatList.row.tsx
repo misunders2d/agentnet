@@ -39,7 +39,7 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
   const avatar = item.kind === "agent" ? <AgentAvatar seed={item.avatarSeed} size={48} mood={mood} device={deviceKind(item.avatarSeed)} />
     : item.kind === "group" ? <GroupAvatar names={groupFaces(summary, me, item)} seed={item.avatarSeed} size={48} />
     : <PersonAvatar name={item.title} seed={item.avatarSeed} size={48} online={presence(overview, peerDevices)} />;
-  const subtitle = guestHere ? "You’re a guest here" : item.kind === "agent" ? item.subtitle || "" : "";
+  const subtitle = guestHere ? "You’re a guest here" : item.kind === "agent" || item.open.kind === "thread" ? item.subtitle || "" : ""; // a device thread says whose device it is
 
   // Phones show one screen at a time: only the desktop column marks the open chat; a
   // phone outlines the chat being opened, at once, while it loads.

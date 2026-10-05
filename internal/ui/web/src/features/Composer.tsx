@@ -10,7 +10,7 @@ import { Popover } from "@base-ui/react/popover";
 import { IconAlertCircle, IconAt, IconCloudOff, IconLock } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
-import { agentName, firstLine, niceDevice, participants, personName } from "../model";
+import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, threadAuthor, whoName } from "../model";
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
@@ -25,11 +25,15 @@ import { TrustNotice } from "./Trust";
 const EMPTY: Draft = { text: "" };
 
 /** Who a send goes to: the conversation, an agent asked in it, the device of
- *  a device conversation, or (answered by hand) a request received from it. */
+ *  a device conversation (its agent asked; or, for a person's device that
+ *  runs no agent, a plain message: ask false), nothing (your own device that
+ *  runs no agent: only its requests are answered, by hand), or (answered by
+ *  hand) a request received from it. model.deviceTarget decides which. */
 type Target =
   | { kind: "conversation" }
   | { kind: "agent"; pid: string; name: string; seed: string; canAsk: boolean; why?: string }
-  | { kind: "device"; name: string; seed: string }
+  | { kind: "device"; name: string; seed: string; ask: boolean }
+  | { kind: "none"; note: string }
   | { kind: "answer"; id: string; task: boolean };
 
 export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread }) {
@@ -87,8 +91,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const handled = !!thread && !!draft.replyTo && !answerable && answering.current.has(draft.replyTo);
 
   const target: Target = useMemo(() => {
-    if (thread) return answerable ? { kind: "answer", id: answerable.id, task: answerable.kind === "task" }
-      : { kind: "device", name: deviceAgent(thread.peer, overview, names), seed: thread.peer };
+    if (thread) {
+      if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
+      const to = deviceTarget(thread.peer, overview); // a device that runs no agent cannot be asked
+      return to.kind === "agent" ? { kind: "device", name: deviceAgent(thread.peer, overview, names), seed: thread.peer, ask: true }
+        : to.kind === "person" ? { kind: "device", name: to.name, seed: thread.peer, ask: false }
+        : { kind: "none", note: to.note };
+    }
     if (dm && draft.agent) {
       const a = (dm.agents || []).find((x) => x.pid === draft.agent);
       const p = participants(dm, overview, names).find((x) => x.pid === draft.agent);
@@ -97,7 +106,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     }
     return { kind: "conversation" };
   }, [dm, thread, draft.agent, answerable?.id, answerable?.kind, overview, names]);
-  const asking = target.kind === "agent" || target.kind === "device";
+  const asking = target.kind === "agent" || (target.kind === "device" && target.ask);
   const doIt = asking && !!draft.doIt;
   const latest = (): Draft => store.get().drafts[conv] ?? EMPTY;
 
@@ -109,6 +118,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       : { title: "You can read this chat but not write in it", detail: dm?.frozen })
     : dm?.frozen ? { title: "Nothing more can be sent here", detail: dm.frozen }
     : thread?.key.pending ? { title: "Sending is paused", detail: "This agent’s identity changed. Check it before writing again." }
+    : target.kind === "none" ? { title: "Nothing to ask here", detail: target.note + " To answer one of its requests yourself, choose Reply on it." }
     : null;
 
   const files = draft.files || [];
@@ -247,6 +257,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const sent = d.files || [];
     const progress = (s: string) => setBusy((b) => ({ ...b, [c]: s }));
     const title = here ? (here.kind === "group" ? here.title || "the group" : personName(here.peer)) : to.kind === "device" ? to.name : "that chat";
+    if (to.kind === "none") return;
     progress("");
     setNotice(null);
     typing.stop();
@@ -272,7 +283,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
-          r = await store.api.send({ to: device.peer, kind: d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
+          const kind = to.kind === "device" && !to.ask ? "message" : d.doIt ? "task" : "question"; // a person's device: a plain message
+          r = await store.api.send({ to: device.peer, kind, body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
           if (d.newTopic && r) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
         } else r = await store.api.sendDM({ conv: c, body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
       } finally {
@@ -349,7 +361,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // ---- what the composer says
   const replyMsg = draft.replyTo && target.kind !== "agent" ? messageOf(draft.replyTo, words, dm, thread) : undefined;
   const placeholder = target.kind === "answer" ? (target.task ? "Write your reply" : "Write your answer")
-    : target.kind !== "conversation" ? (doIt ? "Tell " + target.name + " what to do" : "Ask " + target.name)
+    : target.kind === "device" && !target.ask ? "Message " + target.name
+    : target.kind === "agent" || target.kind === "device" ? (doIt ? "Tell " + target.name + " what to do" : "Ask " + target.name)
     : visitor ? "Type @ to ask an agent"
     : humanGuest ? "Message everyone here"
     : dm?.kind === "group" ? "Message " + (dm.title || "the group")
@@ -361,7 +374,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     : needsAgent ? { text: "You’re here because of your agent. Type @ to ask it something.", kind: "info" }
     : conn === "lost" || conn === "gone" ? { text: "You’re offline. What you send waits here and goes when you’re back online.", kind: "offline" }
     : null;
-  const sendLabel = target.kind === "conversation" ? "Send" : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
+  const sendLabel = target.kind === "conversation" || target.kind === "none" || (target.kind === "device" && !target.ask) ? "Send"
+    : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
     : doIt ? "Do it: send " + target.name + " a task" : "Ask " + target.name;
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
@@ -398,7 +412,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           onCancel={() => { write({ ...latest(), newTopic: false }); focusField(); }} />
       )}
       <FilesTray files={files} lim={lim} busy={sending} onRemove={removeFile} />
-      {(target.kind === "agent" || target.kind === "device") && !handled && (
+      {(target.kind === "agent" || (target.kind === "device" && target.ask)) && !handled && (
         <IntentRow name={target.name} seed={target.seed} doIt={doIt} disabled={gone} onChoose={(v) => { choose(v); focusField(); }}
           onStop={target.kind === "agent" ? () => { stopAsking(); focusField(); } : undefined}
           note={gone && target.kind === "agent" ? target.name + " can’t be asked now" + (target.why ? " (" + target.why.replace(/\.$/, "") + ")" : "") + ". Remove the mention to write to everyone instead."
@@ -496,8 +510,9 @@ function messageOf(id: string, w: Words, dm?: T.DMThread, thread?: T.Thread): { 
     return { who, text: m.deleted ? "Deleted message" : firstLine(m.text || m.body, 90) || ((m.attachments || []).length ? "Files" : "") };
   }
   const m = (thread?.messages || []).find((x) => x.id === id);
-  if (!m) return undefined;
-  // Whether a person or their agent wrote it is not recorded: it is the device conversation's agent.
-  const who = m.dir === "out" ? "yourself" : inSentence(deviceAgent(m.from, w.overview, w.names, m.agent_id));
+  if (!m || !thread) return undefined;
+  // Who wrote it as model.threadAuthor says: your own phone is you, a person's device that person, an agent device its agent.
+  const a = threadAuthor(m, w.overview, w.names, thread.peer, thread.messages || []);
+  const who = a.mine ? "yourself" : a.agent ? inSentence(a.name) : a.name;
   return { who, text: m.deleted ? "Deleted message" : firstLine(m.text || m.body, 90) || ((m.files || []).length ? "Files" : "") };
 }

@@ -45,6 +45,17 @@ export const validStateToken = (s) => typeof s === "string" && /^[a-z_]{1,32}$/.
 export const MaxCiphertext = 256 << 10;  // envelope.MaxCiphertext
 export const MaxAttachments = 8;         // envelope.MaxAttachments
 export const CapReplyReceiver = "rcv1"; // additive selected return route; not advertised
+// protocol.CapAgent: a state hint, "this session's program runs an agent".
+// A browser never runs one, so it never lists it; it grants nothing.
+export const CapAgent = "agent1";
+// validWorkspaceName is protocol.ValidWorkspaceName: the name trimmed, or
+// "" when it is not 1-120 characters with no control character (C0, DEL,
+// C1: Go's unicode.IsControl).
+export function validWorkspaceName(s) {
+  if (typeof s !== "string") return "";
+  const name = s.trim();
+  return name && [...name].length <= 120 && !/[\u0000-\u001f\u007f-\u009f]/.test(name) ? name : "";
+}
 // envelope.StatusProgress: a version 1 plain-text nonterminal update replying
 // to one exact request (never an answer); protocol.CapProgress reads it.
 export const StatusProgress = "progress", CapProgress = "prg1";

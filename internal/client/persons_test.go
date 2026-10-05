@@ -387,6 +387,45 @@ func TestHubRole(t *testing.T) {
 	}
 }
 
+// A phone linked to the admin's person is a member until the person
+// grants it the role from the admin device; the grant is only for another
+// device of their own person, and a member's grant is refused.
+func TestSetDeviceAdmin(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone := linked(t, w.alice)
+	ctx := tctx(t)
+	if role, err := phone.HubRole(ctx); err != nil || role != protocol.RoleMember {
+		t.Fatalf("the linked phone before any grant: %q %v", role, err)
+	}
+	for _, bad := range []string{w.alice.Address, w.bob.Address} {
+		if err := w.alice.SetDeviceAdmin(ctx, bad, true); err == nil {
+			t.Fatalf("granted %s, not another device of alice's person", bad)
+		}
+	}
+	if err := phone.SetDeviceAdmin(ctx, w.alice.Address, false); err == nil || !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("the phone without the role changed alice's: %v", err)
+	}
+	if err := w.alice.SetDeviceAdmin(ctx, phone.Address, true); err != nil {
+		t.Fatal(err)
+	}
+	if role, err := phone.HubRole(ctx); err != nil || role != protocol.RoleAdmin {
+		t.Fatalf("the granted phone: %q %v", role, err)
+	}
+	if err := w.alice.SetDeviceAdmin(ctx, phone.Address, false); err != nil {
+		t.Fatal(err)
+	}
+	if role, _ := phone.HubRole(ctx); role != protocol.RoleMember {
+		t.Fatalf("taken back: %q", role)
+	}
+	bobPhone := linked(t, w.bob)
+	if err := w.bob.SetDeviceAdmin(ctx, bobPhone.Address, true); err == nil || !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("a member granted the role: %v", err)
+	}
+}
+
 // cannedRT answers requests whose path contains match with body (200),
 // as an older relay would; everything else goes through.
 type cannedRT struct {

@@ -573,9 +573,7 @@ func (a *Agent) pendingStream(ctx context.Context, query, session string) (linke
 		// A member's stream: activated before this stream connected. The
 		// Hub counts this session as live for a while: say what it reads,
 		// as a daemon's session does, so nobody waits on it.
-		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: ownCaps, TS: time.Now().Unix()}
-		rec.Sign(a.id.Sign)
-		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
+		if err := a.putCaps(ctx, session); err != nil {
 			a.Logf("capabilities of the waiting session: %v", err)
 		}
 		return true, nil

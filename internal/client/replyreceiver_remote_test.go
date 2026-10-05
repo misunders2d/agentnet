@@ -28,21 +28,17 @@ func TestReceiverNormalCapabilityProfileAndUnsupportedPeer(t *testing.T) {
 		if json.Unmarshal(raw, &record) != nil {
 			t.Fatal("invalid normal profile capability record")
 		}
-		count := 0
-		for _, name := range record.Caps {
-			if name == protocol.CapReplyReceiver {
-				count++
-			}
-		}
-		if count != 1 || record.Verify(w.bob.Self().SignKey) != nil {
-			t.Fatalf("normal signed profile must advertise rcv1 once: %v", record.Caps)
+		// rcv1 is read through rm1, which implies it: the record says it
+		// reads rcv1 and no longer lists it on its own.
+		if !record.Reads(protocol.CapReplyReceiver) || slices.Contains(record.Caps, protocol.CapReplyReceiver) || record.Verify(w.bob.Self().SignKey) != nil {
+			t.Fatalf("normal signed profile must read rcv1 through rm1: %v", record.Caps)
 		}
 	}
 	if e := w.alice.requireParticipationCaps(tctx(t), w.bob.Self(), protocol.CapReplyReceiver); e != nil {
 		t.Fatal(e)
 	}
 	// An older session remains unsupported even after current local activation.
-	old := protocol.CapsRecord{Address: w.bob.Address, Session: profile.Sessions[0], Caps: without(ownCaps, protocol.CapReplyReceiver), TS: time.Now().Unix() + 100}
+	old := protocol.CapsRecord{Address: w.bob.Address, Session: profile.Sessions[0], Caps: without(without(ownCaps, protocol.CapRoom), protocol.CapReplyReceiver), TS: time.Now().Unix() + 100}
 	old.Sign(w.bob.id.Sign)
 	if e := w.bob.hub.do(tctx(t), "PUT", "/v1/caps", old, nil); e != nil {
 		t.Fatal(e)

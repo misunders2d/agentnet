@@ -158,7 +158,7 @@ func TestAttentionPerSession(t *testing.T) {
 		t.Fatalf("first try: %q", at.Text)
 	}
 	got := shown(t, w.alice, "A", "PostToolUse")
-	for _, want := range []string{r1.ID, r2.ID, "replying to your question " + q.ID, "answer from " + w.bob.Address, "agentnet conversation ID"} {
+	for _, want := range []string{r1.ID, r2.ID, "replying to your question " + q.ID, "answer from the device " + w.bob.Address + " at", "agentnet conversation ID"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("A lacks %q: %s", want, got)
 		}

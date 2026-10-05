@@ -95,6 +95,11 @@ type Hub struct {
 	syncDir    func(dir string) error
 	done       chan struct{}
 	closeOnce  sync.Once
+
+	// workspace is the admin's workspace name ("" when none), changed under
+	// workspaceMu (workspace.go).
+	workspace   atomic.Pointer[string]
+	workspaceMu sync.Mutex
 }
 
 // Open prepares the data directory, database, TLS certificate, and — for a
@@ -172,6 +177,9 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	if err == nil {
 		err = h.loadRelease()
+	}
+	if err == nil {
+		err = h.loadWorkspaceName()
 	}
 	if err == nil {
 		err = h.prepareBlobs()

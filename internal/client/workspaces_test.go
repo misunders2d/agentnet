@@ -133,7 +133,6 @@ func TestWorkspacesJoinRefusesBadNamesBeforeRecording(t *testing.T) {
 	}
 	for _, c := range []struct{ name, agent string }{
 		{"\u0007" + strings.Repeat("N", 400) + "\n<b>x</b>", "laptop"},
-		{"   ", "laptop"},
 		{"Other", "Laptop!"},
 		{"Other", ""},
 	} {
@@ -147,6 +146,10 @@ func TestWorkspacesJoinRefusesBadNamesBeforeRecording(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(w.bobHome, "workspaces")); len(entries) != 0 {
 		t.Fatalf("refused joins left homes: %d", len(entries))
+	}
+	// No label is fine: the workspace's own name shows.
+	if item, err := registry.Join(tctx(t), "", "   ", code, "laptop"); err != nil || item.Name != "" || item.State != "enrolled" {
+		t.Fatalf("join without a label: %+v %v", item, err)
 	}
 }
 

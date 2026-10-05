@@ -439,6 +439,12 @@ const CapHeadless = "hdl1"
 // revisions, retractions of messages).
 const CapControl = "ctl3"
 
+// CapAgent is a state hint, not something a session reads: this session's
+// program runs an agent (a responder or an enabled named agent), so people
+// may ask it. Discovery only: it is never in RoomImplies, never asked by
+// Supports for a send, and grants nothing. Browsers never list it.
+const CapAgent = "agent1"
+
 // Bounds of a capability record: what a reader parses, and what a device
 // advertises (ROOM_V1 §2.1: parse headroom).
 const (

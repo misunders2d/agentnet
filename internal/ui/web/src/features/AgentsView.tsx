@@ -7,7 +7,7 @@ import { Switch } from "@base-ui/react/switch";
 import { IconChevronRight, IconDevices, IconPlus, IconSettings } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, agentWhere, deviceKind, niceDevice, personName } from "../model";
+import { agentName, agentWhere, deviceKind, niceDevice, personName, runsAgent } from "../model";
 import { useStore, type Store } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -237,7 +237,7 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
 // only sends reports here is not one: it is in ReportsNote.
 function OtherDevices({ o }: { o: T.Overview }) {
   const store = useApp();
-  const mine = latestThreads(o).filter((t) => isMine(t.peer, o) && t.peer !== o.me.address && !t.notice_only);
+  const mine = latestThreads(o).filter((t) => isMine(t.peer, o) && t.peer !== o.me.address && !t.notice_only && runsAgent(t.peer, o)); // a phone is you, not an agent
   if (!mine.length) return null;
   return (
     <ul className="flex flex-col gap-2">
@@ -295,7 +295,7 @@ function Others({ o }: { o: T.Overview }) {
       });
     }
   }
-  for (const t of latestThreads(o).filter((t) => !t.notice_only && !isMine(t.peer, o) && !rows.some((r) => r.address === t.peer && !r.agentId))) {
+  for (const t of latestThreads(o).filter((t) => !t.notice_only && !isMine(t.peer, o) && runsAgent(t.peer, o) && !rows.some((r) => r.address === t.peer && !r.agentId))) {
     const p = (o.people || []).find((x) => x.address === t.peer || (x.devices || []).some((d) => d.address === t.peer)) || null;
     rows.push({ key: t.peer, seed: t.peer, address: t.peer, owner: p, open: () => void store.open({ kind: "thread", id: t.id, peer: t.peer }), where: "Talks with your agent directly", state: "active", conv: "", pid: "" });
   }
