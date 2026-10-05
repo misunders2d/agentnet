@@ -18,7 +18,7 @@ func TestAgentPromptNamesGuestAskerAndReaders(t *testing.T) {
 	if err := w.bob.Approve(carol.Address); err != nil {
 		t.Fatal(err)
 	}
-	guest := "Person of " + carol.Address + " (" + carol.Address + ")"
+	guest := "a guest whose chosen name is \"Person of " + carol.Address + "\" (" + carol.Address + ")"
 	readers := "It also reaches the guests present now, outside people invited only temporarily: " + guest + "."
 
 	q, err := carol.AskAgent(tctx(t), ap.PID, envelope.KindQuestion, "guest asks the assistant")

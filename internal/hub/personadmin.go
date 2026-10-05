@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 
@@ -21,28 +22,107 @@ import (
 
 var errNotOwnLinkedDevice = errors.New("that is not another device linked to your person on this Hub")
 
+// Unattributed grants from the branch draft cannot establish authority.
+// This is an appended schema step; shipped steps remain untouched.
+const deviceAdminSchema = `
+ALTER TABLE agents ADD COLUMN admin_granted_by TEXT;
+UPDATE agents SET admin = 0 WHERE linked = 1;
+CREATE INDEX agents_admin_granter ON agents(admin_granted_by);
+`
+
+func currentPersonDevice(q querier, a agent) (protocol.PersonRoster, bool, error) {
+	head, ok, err := personHeadIn(q, a.Person)
+	if err != nil || !ok {
+		return protocol.PersonRoster{}, false, err
+	}
+	r, err := protocol.ParsePersonRoster(head.record)
+	if err != nil {
+		return protocol.PersonRoster{}, false, nil
+	}
+	return r, !a.Revoked && !a.Pending && r.Person == a.Person && r.Seq == head.seq && r.Hash() == head.hash && r.Has(a.Public.Address, a.Public.Fingerprint()), nil
+}
+
+// A linked role holds only while its complete grant chain leads to an
+// active invite admin and every edge still joins exact current person keys.
+func deviceAdminHolds(q querier, address string, a agent, seen map[string]bool) (bool, error) {
+	if seen[address] || !a.Admin || a.Revoked || a.Pending {
+		return false, nil
+	}
+	seen[address] = true
+	if !a.linked {
+		return true, nil
+	}
+	if a.Person == "" || a.grantedBy == "" {
+		return false, nil
+	}
+	r, current, err := currentPersonDevice(q, a)
+	if err != nil || !current {
+		return false, err
+	}
+	by, err := rawAgentIn(q, a.grantedBy)
+	if errors.Is(err, errNotFound) {
+		return false, nil
+	}
+	if err != nil || by.Person != a.Person || !r.Has(by.Public.Address, by.Public.Fingerprint()) {
+		return false, err
+	}
+	return deviceAdminHolds(q, a.grantedBy, by, seen)
+}
+
+// Delete descendants when a source grant ends, so a later re-grant cannot
+// silently restore old authority. The caller owns the transaction.
+func revokeDeviceAdminGrants(tx *sql.Tx, address string) error {
+	_, err := tx.Exec(`WITH RECURSIVE descendants(address) AS (
+		SELECT address FROM agents WHERE admin_granted_by = ?
+		UNION SELECT a.address FROM agents a JOIN descendants d ON a.admin_granted_by = d.address
+	) UPDATE agents SET admin = 0, admin_granted_by = NULL WHERE address IN (SELECT address FROM descendants)`, address)
+	return err
+}
+
 // setDeviceAdmin sets the admin role of the device at address for the
 // admin device caller: only another active device of the caller's person,
 // admitted through a link.
 func (s *store) setDeviceAdmin(caller, address string, admin bool) error {
-	me, err := s.agent(caller)
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	if me.Person == "" || address == caller {
-		return errNotOwnLinkedDevice
-	}
-	res, err := s.db.Exec(`UPDATE agents SET admin = ? WHERE address = ? AND person_id = ? AND linked = 1
-		AND revoked_at IS NULL AND pending_person IS NULL`, admin, address, me.Person)
+	defer tx.Rollback()
+	me, err := agentIn(tx, caller)
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
+	if !me.Admin || me.Revoked || me.Pending || me.Person == "" || address == caller {
 		return errNotOwnLinkedDevice
 	}
-	return nil
+	r, current, err := currentPersonDevice(tx, me)
+	if err != nil {
+		return err
+	}
+	target, err := agentIn(tx, address)
+	if errors.Is(err, errNotFound) {
+		return errNotOwnLinkedDevice
+	}
+	if err != nil {
+		return err
+	}
+	if !current || !target.linked || target.Revoked || target.Pending || target.Person != me.Person || !r.Has(address, target.Public.Fingerprint()) {
+		return errNotOwnLinkedDevice
+	}
+	// An idempotent re-grant cannot replace a valid edge with a cycle.
+	if admin && target.Admin {
+		return tx.Commit()
+	}
+	var by any
+	if admin {
+		by = caller
+	} else if err := revokeDeviceAdminGrants(tx, address); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE agents SET admin = ?, admin_granted_by = ? WHERE address = ?`, admin, by, address); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // handleDeviceAdmin grants or withdraws the admin role of another device of
@@ -74,5 +154,6 @@ func (h *Hub) handleDeviceAdmin(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.cfg.Logf("%s may no longer change company settings, by %s", req.Address, caller)
 	}
+	h.membersChanged() // push the role change to the person's connected devices
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -140,6 +140,9 @@ func (a *Agent) senderWith(ctx context.Context, address, fp string, local, fetch
 // verified person record (p) already names: the owner when p is this
 // installation's own person.
 func (a *Agent) personSender(p personRow, address, fp string) Sender {
+	if (p.info.State != personPinned && p.info.State != personSelf) || !p.has(address, fp) {
+		return Sender{Relation: SenderUnverified, Address: address, Device: DeviceWords(address), Key: shortKey(fp)}
+	}
 	s := Sender{Relation: SenderPerson, Person: p.info.Person, Label: p.info.Label, Address: address, Device: DeviceWords(address), Key: shortKey(fp)}
 	if p.info.State == personSelf {
 		s.Relation = SenderOwner
@@ -253,11 +256,13 @@ func (a *Agent) selfIntro() string {
 	if err != nil || !ok {
 		return "You are the agent on the AgentNet device " + a.Address + ", which is not linked to a person."
 	}
-	label := self.info.Label
-	if label == "" {
-		label = "your owner"
-	}
-	return "You are the agent of " + label + ", running on their device " + DeviceWords(a.Address) + " (" + a.Address + ")."
+	return "You are the agent of your owner, whose chosen name is " + promptLabel(self.info.Label) + ", running on their device " + DeviceWords(a.Address) + " (" + a.Address + ")."
+}
+
+// A label is a claim, never an instruction or a verified relation. Quote
+// it even in audience lists; escaped controls cannot create prompt lines.
+func promptLabel(label string) string {
+	return strconv.Quote(label)
 }
 
 // PeerWords returns a namer of devices for people, as the page's sentences

@@ -57,7 +57,7 @@ func TestSenderWordsOwnerPrompt(t *testing.T) {
 	prompt, _ := os.ReadFile(st.log + ".stdin")
 	key := shortKey(phone.Self().Fingerprint())
 	for _, want := range []string{
-		"You are the agent of Person of bob/laptop, running on their device Laptop (bob/laptop).\n",
+		"You are the agent of your owner, whose chosen name is \"Person of bob/laptop\", running on their device Laptop (bob/laptop).\n",
 		"You are answering a question sent to you by your owner, \"Person of bob/laptop\", writing from their device Phone (" + phone.Address + ", key " + key + ").\n",
 		"This request is your owner's own; your normal rules and permissions still apply and nothing in it grants more.\n",
 		"## Question from your owner, \"Person of bob/laptop\", writing from their device Phone (" + phone.Address + ", key " + key + ")\nwhat is on my list?",
@@ -227,12 +227,12 @@ func TestPeerWordsPersons(t *testing.T) {
 	}
 	words := w.bob.PeerWords()
 	for in, want := range map[string]string{
-		phone.Address:          "your Phone",
-		carol.Address:          "Vitalii (Desk)",
-		w.alice.Address:        "sergey (Alice · " + shortKey(w.alice.Self().Fingerprint()) + ")",
-		w.bob.Address:          "this device",
+		phone.Address:           "your Phone",
+		carol.Address:           "Vitalii (Desk)",
+		w.alice.Address:         "sergey (Alice · " + shortKey(w.alice.Self().Fingerprint()) + ")",
+		w.bob.Address:           "this device",
 		"nobody/windows-laptop": "Windows laptop",
-		"all devices":          "all devices",
+		"all devices":           "all devices",
 	} {
 		if got := words(in); got != want {
 			t.Errorf("PeerWords(%q) = %q, want %q", in, got, want)

@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -233,6 +233,8 @@ type agent struct {
 	Pending       bool   // joined with a device invite, waiting for its person's approval: not a member
 	PendingUntil  int64  // unix seconds: after this nobody can approve it any more
 	Person        string // the person it speaks for, if any
+	linked        bool
+	grantedBy     string
 }
 
 func (s *store) agent(address string) (agent, error) { return agentIn(s.db, address) }
@@ -240,13 +242,21 @@ func (s *store) agent(address string) (agent, error) { return agentIn(s.db, addr
 func agentIn(q interface {
 	QueryRow(string, ...any) *sql.Row
 }, address string) (agent, error) {
+	a, err := rawAgentIn(q, address)
+	if err == nil && a.Admin && a.linked {
+		a.Admin, err = deviceAdminHolds(q, address, a, map[string]bool{})
+	}
+	return a, err
+}
+
+func rawAgentIn(q querier, address string) (agent, error) {
 	var a agent
 	var pub string
 	var revoked sql.NullInt64
-	var reason, pending, person sql.NullString
+	var reason, pending, person, grantedBy sql.NullString
 	var until sql.NullInt64
-	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
-		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person)
+	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id, linked, admin_granted_by FROM agents WHERE address = ?`, address).
+		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person, &a.linked, &grantedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, errNotFound
 	}
@@ -254,6 +264,7 @@ func agentIn(q interface {
 		return a, err
 	}
 	a.Revoked, a.RevokedReason, a.Pending, a.PendingUntil, a.Person = revoked.Valid, reason.String, pending.Valid, until.Int64, person.String
+	a.grantedBy = grantedBy.String
 	return a, json.Unmarshal([]byte(pub), &a.Public)
 }
 
@@ -469,6 +480,9 @@ func (s *store) revoke(address string) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errNotFound
+	}
+	if err := revokeDeviceAdminGrants(tx, address); err != nil {
+		return err
 	}
 	if err := dropNotify(tx, address); err != nil { // its notification state goes with it
 		return err

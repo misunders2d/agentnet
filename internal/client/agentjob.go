@@ -446,10 +446,10 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	if err != nil {
 		return "", err
 	}
-	host, other := info.Host.Label, "the other person"
+	host, other := promptLabel(info.Host.Label), "the other person"
 	for _, p := range m.persons {
 		if p.info.Person != info.Host.Person {
-			other = p.info.Label
+			other = promptLabel(p.info.Label)
 		}
 	}
 	// The asker is named from the request's exact key (or the guest scope
@@ -465,7 +465,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	asker := "someone who is neither a member nor a guest here (" + j.From + ")"
 	switch {
 	case j.Local:
-		asker = Sender{Relation: SenderSelf, Label: host, Address: a.Address}.Words()
+		asker = Sender{Relation: SenderSelf, Label: info.Host.Label, Address: a.Address}.Words()
 	case author != nil:
 		asker = guestName(*author) + ", an outside person present in this conversation only temporarily, as a guest"
 	default:
@@ -474,6 +474,10 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 				continue
 			}
 			s := a.personSender(p, j.From, j.Key)
+			if s.Relation == SenderUnverified {
+				asker = s.Words()
+				continue
+			}
 			if p.info.Person == info.Host.Person {
 				s.Relation = SenderOwner
 			} else if s.Relation != SenderPerson {
@@ -497,7 +501,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 	if m.group != nil {
 		var audience []string
 		for _, p := range m.persons {
-			audience = append(audience, p.info.Label)
+			audience = append(audience, promptLabel(p.info.Label))
 		}
 		slices.Sort(audience)
 		fmt.Fprintf(&b, "You are the agent of %s, running on their device %s. Your owner accepted bounded participation in the group between %s. Replies go only to its current human members and this exact invited host.%s Use selected grants and this PID's addressed turns only; no ambient room history or other assistants' sessions.\n", host, hostAt, strings.Join(audience, ", "), also)
@@ -505,7 +509,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		var audience []string
 		for _, member := range m.root.Members {
 			p := m.persons[member.Person]
-			audience = append(audience, p.info.Label)
+			audience = append(audience, promptLabel(p.info.Label))
 		}
 		fmt.Fprintf(&b, "You are the agent of %s, running on their device %s. %s accepted bounded participation in the direct conversation between %s; your reply is sent to those two members.%s You are an invited external agent, with selected snapshots and addressed turns only, not ordinary room membership or ambient history access.\n", host, hostAt, host, strings.Join(audience, " and "), also)
 	} else {
@@ -602,7 +606,7 @@ func guestName(g ParticipationInfo) string {
 	if g.Host.Label == "" {
 		return "a guest (" + g.Host.Address + ")"
 	}
-	return g.Host.Label + " (" + g.Host.Address + ")"
+	return "a guest whose chosen name is " + promptLabel(g.Host.Label) + " (" + g.Host.Address + ")"
 }
 
 // heldBack is why an output was not stored for sending.
@@ -862,6 +866,7 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 	}
 	// Speakers by device and exact key, worded from their verified record.
 	names := map[string]string{}
+	claims := map[string]string{}
 	for _, p := range m.persons {
 		for _, d := range p.roster.Devices {
 			s := a.personSender(p, d.Address, d.Fingerprint())
@@ -869,6 +874,7 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 				s.Relation = SenderOwner
 			}
 			names[d.Address+"|"+d.Fingerprint()] = s.Name()
+			claims[d.Address+"|"+d.Fingerprint()] = promptLabel(p.info.Label) + " on " + DeviceWords(d.Address)
 		}
 	}
 	c := ParticipationContext{PID: info.PID, Note: info.Note, State: info.State, Grant: info.Grant, Limit: limit}
@@ -887,14 +893,7 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 		if msg.ExcerptPID != "" {
 			ref.Fingerprint = msg.Claimed
 		}
-		who := names[msg.From+"|"+msg.Key]
-		if who == "" && msg.Claimed != "" {
-			who = names[msg.From+"|"+msg.Claimed]
-		}
-		if who == "" {
-			who = "someone"
-		}
-		who += " (" + msg.From + ")"
+		who := contextSpeaker(msg, names, claims)
 		// Shown as the conversation shows it now: a deleted turn is only
 		// noted, an edited one gives its current text (the request the
 		// agent runs is not among these lines: its admitted text is the
@@ -957,4 +956,19 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 		c.Messages = []ConvMessage{}
 	}
 	return c, nil
+}
+
+func contextSpeaker(msg ConvMessage, names, claims map[string]string) string {
+	who := names[msg.From+"|"+msg.Key]
+	if msg.Claimed != "" || msg.ExcerptPID != "" {
+		who = claims[msg.From+"|"+msg.Claimed]
+		if who == "" {
+			who = "a claimed speaker"
+		}
+		who += " (as shared by " + msg.SyncedFrom + ", not verified here)"
+	}
+	if who == "" {
+		who = "someone"
+	}
+	return who + " (" + msg.From + ")"
 }

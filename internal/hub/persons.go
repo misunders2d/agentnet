@@ -190,6 +190,12 @@ func (s *store) putPersonStep(caller identity.Public, raw []byte, r protocol.Per
 				continue
 			}
 			res.removed = append(res.removed, d.Address)
+			if err := revokeDeviceAdminGrants(tx, d.Address); err != nil {
+				return res, err
+			}
+			if _, err := tx.Exec(`UPDATE agents SET admin = 0, admin_granted_by = NULL WHERE address = ? AND linked = 1`, d.Address); err != nil {
+				return res, err
+			}
 			if _, err := tx.Exec(`UPDATE agents SET person_id = NULL WHERE address = ? AND person_id = ?`, d.Address, r.Person); err != nil {
 				return res, err
 			}
