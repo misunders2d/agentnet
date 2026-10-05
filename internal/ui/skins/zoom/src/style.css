@@ -850,3 +850,6 @@ button.reaction { cursor: pointer; }
 }
 
 .zoom-content .person-cards { align-items: flex-start; }
+
+.mc-stack { min-width: 0; max-width: min(70%, 620px); }
+.mc-stack .mc-bubble { max-width: 100%; }

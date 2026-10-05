@@ -198,6 +198,11 @@ async function staysModal(page, role, what) {
 }
 let sent = 0;
 
+const messageShot = async (page, skin) => {
+  await page.waitForTimeout(300); // capture the settled message view after its transition
+  if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS, 'contract-'+skin+'-'+page.viewportSize().width+'-message.png')});
+};
+
 // What each skin must show and do, through its own words.
 const journeys = {
   comic: async (page) => {
@@ -247,6 +252,7 @@ const journeys = {
     await page.locator('#conv-list button.contact').first().waitFor();
     await page.evaluate(()=>window.__openDevice());
     await page.locator('#timeline .msg').first().waitFor();
+    await messageShot(page,'classic');
     const text='Classic contract send '+(++sent);
     await page.locator('#body').fill(text);await page.locator('#composer').evaluate(form=>form.requestSubmit());
     await page.locator('#timeline').getByText(text,{exact:true}).waitFor();
@@ -254,11 +260,13 @@ const journeys = {
   zoom: async (page) => {
     await page.locator('#zoom .thread-row').first().waitFor();
     await page.evaluate(()=>window.__openDevice());await page.locator('#zoom .zoom-message').waitFor();
+    await messageShot(page,'zoom');
     await page.keyboard.press('Escape');await page.locator('#zoom .mini-chat').waitFor();
     const text='Zoom contract send '+(++sent);
     await page.locator('#zoom').getByRole('button',{name:'Write in this conversation…',exact:true}).click();
     await page.locator('#write-body').fill(text);await page.locator('#dialog-ok').click();
     await page.locator('#zoom .mini-chat').getByText(text,{exact:true}).waitFor();
+    await messageShot(page,'zoom-chat');
     await page.locator('#zoom .mc-bubble').filter({hasText:text}).click();
     await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('#zoom .zoom-layer').length===1);
     await page.locator('#zoom .zoom-message').focus();

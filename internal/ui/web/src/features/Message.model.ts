@@ -162,7 +162,7 @@ export function requestState(m: AnyMsg, all: AnyMsg[]): { text: string; tone: "o
     if (w) return { text: w, tone: tone(m.state || "") };
   }
   if ((m.actions || []).includes("cancel")) return { text: "Working…", tone: "work" };
-  const d = deliveryWord(m.state || "");
+  const d = deliveryWord(("delivery" in m ? m.delivery : undefined) ?? m.state ?? "");
   return { text: d, tone: ["failed", "expired", "quarantined"].includes(m.state || "") ? "bad" : "muted" };
 }
 

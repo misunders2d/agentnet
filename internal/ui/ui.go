@@ -335,8 +335,11 @@ type DMMessage struct {
 	// A participation record's type (invite, accept, decline, dismiss or
 	// scope) and its author (their person's label as known here, or their
 	// device's address), plainly, so a page never parses Event.
-	EventType string `json:"event_type,omitempty"`
-	EventBy   string `json:"event_by,omitempty"`
+	EventType string    `json:"event_type,omitempty"`
+	EventBy   string    `json:"event_by,omitempty"`
+	Quote     string    `json:"quote,omitempty"`
+	SentAt    time.Time `json:"sent_at"`
+	Delivery  string    `json:"delivery,omitempty"`
 }
 
 // AgentActions are the decisions this device's person can take on a
@@ -374,6 +377,8 @@ type FileLimits struct {
 
 // CopyView is one device's copy of a message you sent.
 type CopyView struct {
+	Own    bool   `json:"own,omitempty"`
+	Person string `json:"person,omitempty"`
 	To     string `json:"to"`
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
@@ -608,16 +613,14 @@ type DMDraft struct {
 	Body          string                  `json:"body"`
 	ReplyTo       string                  `json:"reply_to,omitempty"`
 	Files         []string                `json:"files,omitempty"`
+	Quote         string                  `json:"quote,omitempty"`
 }
 
 // DMStateText is what the page says about a DM message's state.
 func DMStateText(dir, kind, state, peer, detail string) string {
 	if dir == "out" {
 		if state == "waiting" {
-			if detail == "" {
-				detail = peer + " cannot read conversations now"
-			}
-			return "Kept here, not sent yet: " + detail
+			return "Waiting for " + peer + " to update AgentNet"
 		}
 		return StateText("out", kind, state, peer)
 	}
@@ -868,7 +871,9 @@ type Message struct {
 	// stands (client.ExecView): from the executing device only, never from
 	// delivery or presence; absent when it never said. Stale: that device
 	// is not connected now.
-	Exec *client.ExecView `json:"exec,omitempty"`
+	Exec   *client.ExecView `json:"exec,omitempty"`
+	Quote  string           `json:"quote,omitempty"`
+	SentAt time.Time        `json:"sent_at"`
 }
 
 // Controls is what reactions, edits and deletion did to a message, as
@@ -906,6 +911,7 @@ type Draft struct {
 	Body          string                  `json:"body"`
 	ReplyTo       string                  `json:"reply_to,omitempty"`
 	Files         []string                `json:"files,omitempty"` // ids of files the page handed over (Files.StageFile)
+	Quote         string                  `json:"quote,omitempty"`
 }
 
 // Sent is the outcome of Send.

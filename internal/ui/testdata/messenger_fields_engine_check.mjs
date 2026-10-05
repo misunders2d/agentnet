@@ -138,4 +138,27 @@ const shown = (view, body) => view.messages.find((m) => m.body === body);
   e.stop();
 }
 
+// P3: a quote resolves only a unique reference here, independent of threading.
+{
+  const f = await fixture(), {e, store} = f;
+  const parent = id(), copy = id(), lid = id(), clash = id(), ref = id();
+  await store.write([
+    {s:"outbox",k:parent,v:sent(f,{id:parent,lid,body:"parent",to:f.peerAddress,state:"delivered"})},
+    {s:"outbox",k:copy,v:sent(f,{id:copy,lid,body:"parent",to:"self/other",own:true,state:"custody"})},
+    {s:"inbox",k:clash,v:received(f,{id:clash,lid,body:"clashing logical id"})},
+    {s:"inbox",k:ref,v:received(f,{id:ref,lid:id(),body:"explicit quote",quote:copy,reply_to:clash,ts:Math.floor(now/1000)-86400})},
+  ]);
+  const view = await e.dm(f.conv), m = shown(view,"explicit quote"), p = shown(view,"parent");
+  check(m.quote === p.id && m.reply_to === clash,"quote names the exact copy without changing the thread head");
+  check(p.delivery === "delivered","a closed own device cannot hold the other person's delivery tick");
+  check(m.sent_at === new Date((Math.floor(now/1000)-86400)*1000).toISOString() && m.at === new Date(now).toISOString(),"sent claim and arrival stay separate");
+  await store.write([{s:"inbox",k:ref,v:received(f,{id:ref,lid:id(),body:"explicit quote",quote:lid})}]);
+  check(shown(await e.dm(f.conv),"explicit quote").quote === lid,"ambiguous logical quote is not mapped to another message");
+  for(const ts of [0,253370764800,Math.floor(now/1000)+1]) {
+    await store.write([{s:"inbox",k:ref,v:received(f,{id:ref,lid:id(),body:"guarded time",ts})}]);
+    check(shown(await e.dm(f.conv),"guarded time").sent_at === new Date(now).toISOString(),"bad sent claim falls back to arrival");
+  }
+  e.stop();
+}
+
 console.log("PASS messenger fields engine checks: " + checks);

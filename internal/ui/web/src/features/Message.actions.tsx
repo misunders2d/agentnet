@@ -11,7 +11,7 @@ import {
   IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown,
 } from "@tabler/icons-react";
 import { useApp } from "../context";
-import { plain, timeOf } from "../model";
+import { MESSAGES, deviceName, plain, timeOf } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
 import { Markdown } from "./Markdown";
@@ -249,9 +249,11 @@ const copyIcon = (state: string) =>
 
 export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx; who: string }) {
   const copies = isThreadMsg(m) ? [] : (m.copies || []);
-  const at = new Date(m.at);
+  const at = new Date(m.sent_at || m.at);
   const origin = (m as { origin?: string }).origin || "";
   const rows: [string, string][] = [
+    ["Sent", at.toLocaleString()],
+    ...(Date.parse(m.at)-at.getTime()>=MESSAGES.ARRIVED_NOTE_AFTER*1000?[["Arrived here",new Date(m.at).toLocaleString()] as [string,string]]:[]),
     ["Message", m.id],
     ["Kind", m.kind],
     ["Stored state", m.state || "—"],
@@ -266,7 +268,7 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
   ];
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Message details"
-      description={(m.dir === "out" ? "Sent " : "Received ") + at.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) + " at " + timeOf(m.at)}>
+      description={"Sent " + at.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) + " at " + timeOf(m.sent_at || m.at)}>
       <div className="flex flex-col gap-4 pb-2">
         {m.dir === "out" && copies.length > 0 && (
           <section>
@@ -276,8 +278,8 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
                 <li key={c.to} className="flex items-center gap-3 px-3.5 py-2.5">
                   <span aria-hidden="true">{copyIcon(c.state)}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block font-semibold">{capital(deviceWords(c.to, ctx.overview))}</span>
-                    <span className="block text-[13px] text-text-2">{copyText(c.state)}{c.detail ? " · " + c.detail : ""}</span>
+                    <span className="block font-semibold">{capital(c.own?"your "+deviceName(c.to):(c.person||"Someone")+"’s "+deviceName(c.to))}</span>
+                    <span className="block text-[13px] text-text-2">{copyText(c.state)}</span>
                   </span>
                 </li>
               ))}

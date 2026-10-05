@@ -8,6 +8,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"net/http"
 	"slices"
+	"strings"
 )
 
 // GuestAction is separate from agent actions; receiving it grants no authority.
@@ -21,6 +22,7 @@ type GuestAction struct {
 	Accept *bool    `json:"accept,omitempty"`
 }
 type GuestView struct {
+	NeedsUpdate     []string   `json:"needs_update,omitempty"`
 	PID             string     `json:"pid"`
 	State           string     `json:"state"`
 	StateText       string     `json:"state_text"`
@@ -93,7 +95,7 @@ type guestEnd struct {
 }
 
 func guestView(info client.ParticipationInfo, member bool, end guestEnd) GuestView {
-	v := GuestView{PID: info.PID, State: info.State, StateText: info.State, Host: personView(info.Host), HostHere: info.HostHere, Inviter: personView(info.Inviter), Shared: []string{}, Held: info.Held}
+	v := GuestView{NeedsUpdate: info.NeedsUpdate, PID: info.PID, State: info.State, StateText: info.State, Host: personView(info.Host), HostHere: info.HostHere, Inviter: personView(info.Inviter), Shared: []string{}, Held: info.Held}
 	for _, ref := range info.Grant {
 		v.Shared = append(v.Shared, ref.LID)
 	}
@@ -213,7 +215,7 @@ func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error
 	if c.Action != "invite" {
 		info, err = l.a.Participation(c.PID)
 		if err != nil {
-			return GuestView{}, Refuse(sentence(err))
+			return GuestView{}, Refuse(l.updateSentence(err))
 		}
 		if info.Role != protocol.RoleHuman {
 			return GuestView{}, Refuse("This action requires a human participation, not an agent.")
@@ -237,23 +239,13 @@ func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error
 		err = errors.New("unknown human participation action")
 	}
 	if err != nil {
-		return GuestView{}, Refuse(sentence(err))
+		return GuestView{}, Refuse(l.updateSentence(err))
 	}
 	ends, err := l.guestEnds(info.Conv, []client.ParticipationInfo{info})
 	if err != nil {
 		return GuestView{}, err
 	}
-	if c.Action == "end" {
-		// As a send does, one receipt wait per copy: every device of the DM
-		// storing the end settles the audience.
-		for _, id := range ends[info.PID].held {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), receiptWait+l.timeout)
-				defer cancel()
-				l.a.Status(ctx, id, receiptWait)
-			}()
-		}
-	}
+
 	return guestView(info, l.guestMember(info.Conv), ends[info.PID]), nil
 }
 func (s *Server) changeHuman(action string) http.HandlerFunc {
@@ -288,4 +280,76 @@ func (s *Server) changeHuman(action string) http.HandlerFunc {
 		}
 		writeJSON(w, result)
 	}
+}
+
+type GuestCheckPerson struct {
+	Label string `json:"label"`
+	Me    bool   `json:"me"`
+}
+type GuestCheck struct {
+	Ready       bool               `json:"ready"`
+	NeedsUpdate []GuestCheckPerson `json:"needs_update"`
+	Offline     []string           `json:"offline"`
+	Text        string             `json:"text"`
+}
+type GuestCheckRequest struct {
+	Conv string `json:"conv"`
+	Host string `json:"host"`
+}
+type HumanInviteChecker interface {
+	CheckHuman(context.Context, GuestCheckRequest) (GuestCheck, error)
+}
+
+func (l *Live) CheckHuman(ctx context.Context, c GuestCheckRequest) (GuestCheck, error) {
+	support, err := l.a.HumanInviteSupport(ctx, c.Conv, c.Host)
+	if err != nil {
+		return GuestCheck{}, Refuse(l.updateSentence(err))
+	}
+	v := GuestCheck{Ready: true, NeedsUpdate: []GuestCheckPerson{}, Offline: []string{}}
+	var setup, update []string
+	for _, p := range support {
+		switch p.State {
+		case "update", "not set up":
+			v.NeedsUpdate = append(v.NeedsUpdate, GuestCheckPerson{Label: p.Label, Me: p.Me})
+			v.Ready = false
+			if p.State == "not set up" {
+				setup = append(setup, p.Label)
+			} else {
+				update = append(update, p.Label)
+			}
+		case "offline":
+			v.Offline = append(v.Offline, p.Label)
+		}
+	}
+	var text []string
+	if len(setup) > 0 {
+		text = append(text, strings.Join(setup, ", ")+" needs to set up AgentNet before joining.")
+	}
+	if len(update) > 0 {
+		text = append(text, strings.Join(update, ", ")+" needs to update AgentNet before joining.")
+	}
+	if len(v.NeedsUpdate) > 0 {
+		text = append(text, "The invitation waits and reaches them once their app is ready.")
+	} else if len(v.Offline) > 0 {
+		text = append(text, "The invitation reaches them when their app reconnects.")
+	}
+	v.Text = strings.Join(text, " ")
+	return v, nil
+}
+func (s *Server) checkHuman(w http.ResponseWriter, r *http.Request) {
+	var c GuestCheckRequest
+	if !readJSON(w, r, &c) {
+		return
+	}
+	p, ok := s.p.(HumanInviteChecker)
+	if !ok {
+		writeErr(w, Refuse("This app cannot check the invitation yet."))
+		return
+	}
+	v, err := p.CheckHuman(r.Context(), c)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, v)
 }

@@ -11,7 +11,7 @@ import { AgentAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
-import { callName, exposure, lineOf, plural, shortName, speaker, type Guest, type Waiting } from "./RoomPanel.model";
+import { callName, exposure, guestUpdatePeople, lineOf, plural, shortName, speaker, type Guest, type Waiting } from "./RoomPanel.model";
 
 export type Act = (g: Guest, what: "accept" | "decline" | "dismiss" | "cancel" | "leave") => void;
 
@@ -71,7 +71,8 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
 export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy: boolean; onAct: Act }) {
   const [seeing, setSeeing] = useState(false);
   const mine = g.can.decide;
-  const waitFor = g.kind === "agent" ? (g.hostHere ? "Waiting for your OK" : "Waiting for " + g.hostName + "’s OK") : g.hostHere ? "You’re invited to help" : "Waiting for " + g.name + " to join";
+  const waiting=(t.guests||[]).find(x=>x.pid===g.pid)?.needs_update||[];
+  const waitFor = waiting.length?"Waiting for "+waiting.join(", ")+" to update AgentNet":g.kind === "agent" ? (g.hostHere ? "Waiting for your OK" : "Waiting for " + g.hostName + "’s OK") : g.hostHere ? "You’re invited to help" : "Waiting for " + g.name + " to join";
   return (
     <article aria-label={g.name + ", invited"} className={"pop-in rounded-2xl p-3 " + (mine ? "stroke bg-surface shadow-pop" : "border-2 border-dashed border-outline/40")}>
       <div className="flex items-center gap-3">
@@ -99,6 +100,7 @@ export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; bu
         {mine && <Button size="sm" variant="act" disabled={busy} onClick={() => onAct(g, "accept")}>{g.kind === "agent" ? "Let it join" : "Join"}</Button>}
         {mine && <Button size="sm" disabled={busy} onClick={() => onAct(g, "decline")}>Decline</Button>}
         <Button size="sm" variant="ghost" icon={<IconEye size={18} />} onClick={() => setSeeing(true)}>{g.kind === "agent" ? "What it would see" : g.hostHere ? "What you’d see" : "What " + g.name + " would see"}</Button>
+        {waiting.length>0 && <AskUpdate t={t} pid={g.pid} />}
         {!mine && (g.can.dismiss || g.can.end) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => onAct(g, "cancel")}>Cancel invite</Button>}
       </div>
       <WhatTheySaw t={t} g={g} open={seeing} onOpenChange={setSeeing} pending />
@@ -179,4 +181,17 @@ function SawList({ t, shared }: { t: T.DMThread; shared: T.DMMessage[] }) {
       })}
     </ol>
   );
+}
+
+function AskUpdate({ t, pid }: { t: T.DMThread; pid: string }) {
+  const store = useApp(), o = useStore(store, s => s.overview);
+  const guest = (t.guests || []).find(g => g.pid === pid);
+  if (!guest) return null;
+  const people = guestUpdatePeople(guest.needs_update || [], [guest.host, t.peer, ...(t.members || []), o?.person], o?.person?.person);
+  return <>{people.map(p => <Button key={p.person || p.address} size="sm" onClick={() => void store.run(async api => {
+    const existing = o?.dms?.find(d => d.peer.person === p.person || d.peer.address === p.address);
+    const id = existing?.id || (await api.newDM(p.address)).id;
+    await store.open({kind: "dm", id});
+    store.setDraft(id, {...store.draft(id), text: "Could you update AgentNet? I'd like to bring you into a chat." + (o?.release ? " Get AgentNet: https://github.com/misunders2d/agentnet/releases" : "")});
+  })}>Ask {p.label} to update</Button>)}</>;
 }

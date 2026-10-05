@@ -315,7 +315,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 		out.Origin = envelope.OriginUI
 	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: out.Kind, Body: out.Body,
-		ReplyTo: out.ReplyTo, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID}
+		ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID}
 	if err := externalTurn(in, info, m, a.Address, a.Self().Fingerprint()); err != nil {
 		return ConvSent{}, err
 	}
@@ -676,7 +676,7 @@ func (a *Agent) sendGrantedExcerpts(ctx context.Context, invite protocol.Partici
 		if msg == nil {
 			continue
 		} // receiver reports missing selected context honestly
-		original := envelope.Inner{ID: msg.ID, From: msg.From, LID: msg.LID, TS: msg.At, Kind: msg.Kind, Body: msg.Controls.Shown(msg.Body), ReplyTo: msg.ReplyTo, Origin: msg.Origin, Emotion: msg.Emotion, Target: msg.Target, PID: msg.PID, AgentID: msg.AgentID}
+		original := envelope.Inner{ID: msg.ID, From: msg.From, LID: msg.LID, TS: msg.At, Kind: msg.Kind, Body: msg.Controls.Shown(msg.Body), ReplyTo: msg.ReplyTo, Quote: msg.Quote, Origin: msg.Origin, Emotion: msg.Emotion, Target: msg.Target, PID: msg.PID, AgentID: msg.AgentID}
 		for _, f := range msg.Attachments {
 			original.Attachments = append(original.Attachments, envelope.Attachment{Name: f.Name, Size: f.Size, SHA256: f.SHA256})
 		}

@@ -191,7 +191,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if err != nil {
 			return err
 		}
-		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1), Files: files, ReplyReceiver: receiver, ReplyTo: *replyTo}
+		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1), Files: files, ReplyReceiver: receiver, ReplyTo: *replyTo, Quote: *replyTo}
 		if *question {
 			m.Kind = envelope.KindQuestion
 		}
@@ -372,7 +372,15 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 		} else if m.Origin != "" {
 			who += " [" + m.Origin + "]"
 		}
-		state := m.State
+		state := m.Delivery
+		if state == "" {
+			state = m.State
+		}
+		if len(m.Copies) > 0 {
+			for _, c := range m.Copies {
+				state += "; " + c.To + ": " + c.State
+			}
+		}
 		if m.Detail != "" {
 			state += ": " + m.Detail
 		}
@@ -389,7 +397,12 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 		if m.PID != "" {
 			kind += " pid " + m.PID
 		}
-		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
+		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(func() int64 {
+			if m.Sent > 0 && m.Sent < 253370764800 && m.Sent <= m.At {
+				return m.Sent
+			}
+			return m.At
+		}(), 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
 		text := shownText(m.Body, m.Controls)
 		if m.Sub == envelope.SubEvent {
 			text = eventLine(m.Body) // the record in words, not its signed JSON

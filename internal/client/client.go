@@ -313,13 +313,15 @@ type SendResult struct {
 
 // Outgoing is a message to send.
 type Outgoing struct {
-	To       string // person/agent, or person/agent#session for one running daemon
-	Body     string
-	ReplyTo  string
-	Files    []string
-	Named    []OutgoingFile // more files, each with the name it is shown under (a page's staged uploads)
-	Fallback bool           // if the addressed session has ended, deliver to the agent's inbox
-	Kind     string         // envelope.KindMessage (default), KindQuestion or KindTask
+	To        string // person/agent, or person/agent#session for one running daemon
+	Body      string
+	ReplyTo   string
+	Quote     string
+	TopicDone bool
+	Files     []string
+	Named     []OutgoingFile // more files, each with the name it is shown under (a page's staged uploads)
+	Fallback  bool           // if the addressed session has ended, deliver to the agent's inbox
+	Kind      string         // envelope.KindMessage (default), KindQuestion or KindTask
 	// Wait, if positive, waits up to this long for the recipient's receipt
 	// after the Hub takes custody (one request, woken by the receipt).
 	Wait    time.Duration
@@ -393,6 +395,13 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	if err != nil {
 		return SendResult{}, err
 	}
+	if m.Quote != "" {
+		var peer string
+		err := a.store.db.QueryRow(`SELECT sender FROM inbox WHERE id=? AND conv IS NULL UNION ALL SELECT recipient FROM outbox WHERE id=? AND conv IS NULL`, m.Quote, m.Quote).Scan(&peer)
+		if err != nil || peer != to {
+			return SendResult{}, errors.New("quote stays within its device conversation")
+		}
+	}
 	peer, err := a.sendKey(ctx, to)
 	if err != nil {
 		return SendResult{}, err
@@ -413,7 +422,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	}
 	in := envelope.Inner{
 		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback, Status: m.Status,
+		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, TopicDone: m.TopicDone, Session: session, Fallback: m.Fallback, Status: m.Status,
 		Target: m.Target, AgentID: m.AgentID,
 	}
 	if namedAgentFields(in) {

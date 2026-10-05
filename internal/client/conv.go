@@ -332,6 +332,7 @@ type ConvOutgoing struct {
 	Kind          string // message (default), question or task
 	Body          string
 	ReplyTo       string
+	Quote         string
 	Origin        string           // envelope.OriginUI (default) or "agent:<harness>"
 	Emotion       string           // required with an agent origin
 	Target        *envelope.Target // the one execution recipient of a question or task, if any
@@ -362,6 +363,7 @@ type ConvCopy struct {
 	To     string `json:"to"`
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
+	Person string `json:"person,omitempty"`
 	Own    bool   `json:"own,omitempty"` // in a conversation's view: to another device of this person
 }
 
@@ -501,6 +503,13 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if m.Origin == "" && m.sub != envelope.SubDriveSpace { // a dedicated record carries no origin
 		m.Origin = envelope.OriginUI
 	}
+	if m.Quote != "" {
+		if c, err := a.store.convOf(m.Quote); err != nil {
+			return ConvSent{}, err
+		} else if c != conv {
+			return ConvSent{}, errors.New("quote stays within its conversation")
+		}
+	}
 	if m.ReplyTo != "" { // a reply stays within its own conversation
 		if c, err := a.store.convOf(m.ReplyTo); err != nil {
 			return ConvSent{}, err
@@ -616,7 +625,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
-			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
+			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
 			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID}
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid

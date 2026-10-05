@@ -1988,26 +1988,53 @@ function renderDMBody(scrollToEnd) {
 // A named agent's report refers to its host's request copy. Other audience
 // copies carry that same logical ID; resolve only in this conversation and
 // exact participation/host/agent, never by a similar body or another grant.
-function dmReplyParent(m, t) {
-  if (!m.reply_to) return null;
-  if (humanGroup(t)) { const found = t.messages.filter(x => x.id === m.reply_to || x.lid === m.reply_to); return found.length === 1 ? found[0] : null; }
-  if (!(m.pid && m.agent_id && (m.kind === "answer" || m.kind === "result"))) {
-    const exact = t.messages.find(x => x.id === m.reply_to); // a device's own copy id, as before
+function dmReplyParent(m, t, ref = m.quote) {
+  if (!ref) return null;
+  if (humanGroup(t)) { const found = t.messages.filter(x => x.id === ref || x.lid === ref); return found.length === 1 ? found[0] : null; }
+  if (ref === m.quote || !(m.pid && m.agent_id && (m.kind === "answer" || m.kind === "result"))) {
+    const exact = t.messages.find(x => x.id === ref); // a device's own copy id, as before
     if (exact) return exact;
-    const logical = t.messages.filter(x => x.lid === m.reply_to); // a human-audience reply names the parent's LID
+    const logical = t.messages.filter(x => x.lid === ref); // a human-audience reply names the parent's LID
     return logical.length === 1 ? logical[0] : null;
   }
-  const candidates = t.messages.filter(x => (x.id === m.reply_to || x.lid === m.reply_to) &&
+  const candidates = t.messages.filter(x => (x.id === ref || x.lid === ref) &&
     x.pid === m.pid && !x.event && !x.excerpt_pid && (x.kind === "question" || x.kind === "task") &&
     x.target && x.target.address === m.from && x.target.agent_id === m.agent_id);
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+
+function sentWhen(m) {
+  const sent = m.sent_at || m.at, day = new Date(sent);
+  if (day.toDateString() === new Date(m.at).toDateString()) return when(sent);
+  return day.toLocaleDateString([], {month: "short", day: "numeric"}) + " · " + day.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+}
+function messageReference(m,t) {
+ const output=["answer","result"].includes(m.kind)||m.status==="progress"||m.verified_agent&&m.kind==="message",ref=m.quote||output&&m.reply_to;
+ if(!ref)return null;const parent=dmReplyParent(m,t,ref),previous=(t.messages||[]).slice(0,(t.messages||[]).indexOf(m)).filter(x=>!x.event).at(-1);
+ if(output&&!m.quote&&parent===previous)return null;
+ const line=parent?parent.deleted?"Message deleted":firstLine(shownText(parent),90):"a message not shown here";
+ return el("button",{type:"button",class:"replyref",onclick:()=>parent&&flash(parent.id)},(m.quote?"Reply to: ":m.kind==="message"?"↳ update on ":"↳ answer to ")+line);
+}
+function guestUpdateTargets(g,t) {
+  const all = [g.host, t.peer, ...(t.members || []), state.overview.person].filter(Boolean);
+  const people = [...new Map(all.map(p => [p.person || p.address, p])).values()];
+  return people.filter(p => p.person !== state.overview.person?.person && p.state !== "self" && (g.needs_update || []).includes(p.label) && people.filter(x => x.label === p.label).length === 1);
+}
+async function askGuestUpdate(p) {
+  const existing = (state.overview.dms || []).find(d => d.peer?.person === p.person || d.peer?.address === p.address);
+  const id = existing?.id || (await api("/api/dm/new", {address: p.address})).id;
+  $("dialog").close();
+  await loadOverview(); await openDM(id);
+  $("body").value = "Could you update AgentNet? I'd like to bring you into a chat." + (state.overview.release ? " Get AgentNet: https://github.com/misunders2d/agentnet/releases" : "");
+  grow(); keepDraft(); $("body").focus();
 }
 
 // dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
 // shown as that: a person's name is their claim, an agent is marked.
 function dmMsg(m, t, prev) {
   if (m.event) {
-    return el("li", { id: "m-" + m.id, class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.at }, when(m.at)));
+    return el("li", { id: "m-" + m.id, class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
   }
   const mine = m.dir === "out";
   const agent = !!m.agent_id || (m.origin || "").startsWith("agent:");
@@ -2023,15 +2050,13 @@ function dmMsg(m, t, prev) {
     to && el("span", { class: "tag" }, "To " + to.charAt(0).toLowerCase() + to.slice(1)),
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.unread && el("span", { class: "tag unread" }, "New"),
-    el("time", { datetime: m.at }, when(m.at)));
-  const parent = dmReplyParent(m, t);
+    el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
   const bubble = el("div", { class: "bubble", tabindex: "-1" });
   return el("li", { id: "m-" + m.id, class: "msg " + m.dir + (cont ? " cont" : "") + (held || acts.length ? " needs" : "") },
     !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(humanGroup(t) || (dmHumanGuest(t) && !m.excerpt_pid) || (t.guests || []).some(g => g.host.address === m.from) ? author : t.peer.label || m.from, "sm")),
     el("div", { class: "col" }, meta,
       fill(bubble,
-        m.reply_to && (parent ? el("span", { class: "replyref" }, "Reply to: " + (parent.deleted ? "(deleted message)" : firstLine(shownText(parent), 90) || "(files only: " + (parent.attachments || []).map(f => f.name).join(", ") + ")"))
-          : el("span", { class: "replyref" }, "Reply to a message not shown here")),
+        messageReference(m,t),
         (m.deleted || shownText(m)) && bodyOf(m),
         !m.deleted && fileChips(humanGroup(t) && (m.synced_from || m.via) ? {...m,dir:"in"} : m, m.attachments)),
       reactionsRow(m, t.id),
@@ -2040,7 +2065,7 @@ function dmMsg(m, t, prev) {
         m.job_detail && el("p", { class: "hint" }, m.job_detail),
         el("div", { class: "acts" }, acts.map((a, i) => actionButton(a, m, t, i === 0)))),
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
-      el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && m.state_text && el("span", {}, m.state_text),
+      el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && (m.delivery||m.state_text) && el("span", {}, m.dir==="out"&&m.delivery?(copyWord[m.delivery]||m.delivery):m.state_text),
         !t.frozen && !dmVisitor(t) && !m.excerpt_pid && !m.deleted && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
         reminderLine(m),
         dmDetails(m),
@@ -2060,15 +2085,17 @@ function dmDetails(m) {
       m.claimed_key && [el("dt", {}, "Claimed author key"), el("dd", { class: "mono" }, m.claimed_key)],
       m.excerpt_pid && m.synced_from && [el("dt", {}, "Forwarded by"), el("dd", {}, m.synced_from)],
       namedDetails(m),
-      el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
+      el("dt", {}, "Sent"), el("dd", {}, new Date(m.sent_at || m.at).toLocaleString()),
       el("dt", {}, "Device"), el("dd", {}, m.from),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
+      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},copyWord[m.delivery]||m.delivery)],
+      m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
       !m.excerpt_pid && m.synced_from && [el("dt", {}, "Copied here"), el("dd", {}, "from your " + myDeviceName(m.synced_from) + " when this device was added. Who wrote it is that device's word, not checked here; nothing runs it.")],
       (m.copies || []).length > 1 && [el("dt", {}, "Copies"), el("dd", {}, el("ul", { class: "copy-list" }, m.copies.map((c) =>
-        el("li", {}, c.to + ": " + (copyWord[c.state] || c.state) + (c.detail ? " (" + c.detail + ")" : "")))))],
+        el("li", {}, (c.own?"your ":(c.person||"Someone")+"’s ") + (c.to.split("/")[1]||"device") + ": " + (copyWord[c.state] || c.state)))))],
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")],
       controlDetails(m)));
 }
@@ -2203,6 +2230,8 @@ function participantsDialog(t) {
 function guestCard(g, t) {
   return el("div", { class: "agent-card " + g.state },
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Guest"), el("strong", {}, g.host.label || g.host.address)),
+    g.needs_update?.length && el("p",{class:"hint"},"Waiting for "+g.needs_update.join(", ")+" to update AgentNet"),
+    guestUpdateTargets(g,t).map(p => el("button", {type:"button",class:"btn",onclick:()=>askGuestUpdate(p).catch(e=>announce(e.message))}, "Ask "+p.label+" to update")),
     el("p", {}, g.state === "active" ? "Joined this conversation." : g.state === "dismissed" ? "No longer in the active audience here. Other devices may still be updating." : g.state === "invited" ? "Invitation waiting for a response." : g.state_text),
     el("p", { class: "hint" }, "Invited by " + g.inviter.label),
     el("details", { class: "tech" }, el("summary", {}, "Details"), el("p", {}, "Device: " + g.host.address), el("p", { class: "mono" }, "Participation: " + g.pid)),
@@ -2236,14 +2265,18 @@ function inviteHumanDialog(t, address = "") {
   const host = el("input", { id: "guest-host", type: "text", placeholder: "person/device, e.g. carol/desk", autocomplete: "off", spellcheck: "false", maxlength: "65" });
   host.value = address; // chosen from @ (an exact directory entry), still editable here
   const candidates = directory().current ? directory().members.filter(p => !addresses.has(p.address)) : [];
-  const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address; } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
+  const updateNote=el("p",{class:"hint",role:"status"});let checkedHost="";
+  const checkHost=async()=>{const chosen=host.value.trim();checkedHost="";updateNote.textContent="Checking their app…";try{const v=await api("/api/dm/guest/check",{conv:t.id,host:chosen},transport);if(current()&&host.value.trim()===chosen){checkedHost=chosen;updateNote.textContent=v.text||"";$("dialog-ok").textContent=v.needs_update?.length?"Invite · waits for update":"Invite person";}}catch(e){if(current()&&host.value.trim()===chosen)updateNote.textContent=e.message;}};
+  host.addEventListener("change",checkHost);
+  const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address;void checkHost(); } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
   const ref = m => m.lid || m.id;
   const share = t.messages.filter(m => !m.event && !m.excerpt_pid && !m.deleted).slice(-30).map(m => choice("checkbox", "guest-share", ref(m), el("span", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 70) || "(files only)"), (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size))))));
   const fileConsent = choice("checkbox", "guest-file-consent", "yes", "Share files attached to the earlier messages I select with this person after acceptance.");
   share.forEach(c => c.input.addEventListener("change", () => { fileConsent.input.checked = false; }));
   const note = el("input", { id: "guest-note", type: "text", maxlength: "200", autocomplete: "off" });
   fileConsent.input.addEventListener("change", () => { if (fileConsent.input.checked && $("dialog-error").textContent === "Selected context includes files. Confirm file sharing, or deselect those messages.") $("dialog-error").textContent = ""; });
-  dialog({ title: "Invite person", body: [
+  if(address)void checkHost();
+  dialog({ title: "Invite person", body: [updateNote,
     el("p", {}, "Selected earlier messages and files are shared after they join. They’ll also receive new messages while they’re here."),
     el("label", { for: "guest-host", class: "field-label" }, "Person’s address"), host, el("div", { class: "agent-actions" }, picks),
     el("fieldset", { class: "choices" }, el("legend", {}, "Earlier context to share after acceptance"), share.length ? share.map(c => c.row) : el("p", { class: "hint" }, "No earlier messages."), el("p", { class: "hint" }, "None unless selected. Unselected earlier text and files remain private.")), fileConsent.row,
@@ -2254,6 +2287,7 @@ function inviteHumanDialog(t, address = "") {
       const address = host.value.trim(), selected = share.filter(c => c.input.checked).map(c => c.input.value);
       if (!address || addresses.has(address)) throw new Error("Choose the exact address of someone outside this private DM.");
       if (t.messages.some(m => selected.includes(ref(m)) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected context includes files. Confirm file sharing, or deselect those messages.");
+      if(checkedHost!==address){await checkHost();if(checkedHost!==address)throw Error("Check their app before inviting.");}
       await api("/api/dm/guest/invite", { conv: t.id, host: address, share: selected, note: note.value }, transport);
       if (current()) { announce("Human invited. No earlier context or files leave before acceptance."); await loadDM(); }
     } });
@@ -2646,7 +2680,7 @@ async function sendDM() {
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
       r = agent ? await api("/api/dm/agent/ask", { pid: agent, kind, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
-        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
+        : await api("/api/dm/send", { conv: t.id, ...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
       : r.state === "queued" ? "Queued: it goes out when the server is reachable." : "Sent.");
@@ -3297,9 +3331,7 @@ function renderMsg(m, byId, prev, t) {
   const refWord = m.kind === "answer" ? "Answer to: " : m.kind === "result" ? "Result for: " : "Reply to: ";
 
   const bubble = el("div", { class: "bubble", tabindex: "-1" },
-    m.reply_to && (parent
-      ? el("button", { type: "button", class: "replyref", onclick: () => flash(parent.id) }, refWord + (parent.deleted ? "(deleted message)" : firstLine(shownText(parent), 90)))
-      : el("span", { class: "replyref" }, "Reply to an earlier message not stored here")),
+    messageReference(m,t),
     bodyOf(m),
     !m.deleted && fileChips(m, m.files));
 
@@ -3310,7 +3342,7 @@ function renderMsg(m, byId, prev, t) {
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.status && m.status !== "done" && el("span", { class: "tag" }, statusWord[m.status] || m.status),
     m.unread && el("span", { class: "tag unread" }, "New"),
-    el("time", { datetime: m.at }, when(m.at)));
+    el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
 
   let panel = null;
   if (report) {
@@ -3343,9 +3375,11 @@ function details(m) {
     el("dl", {},
       el("dt", {}, "Written by"), el("dd", {}, m.author.about),
       namedDetails(m),
-      el("dt", {}, "Sent"), el("dd", {}, new Date(m.at).toLocaleString()),
+      el("dt", {}, "Sent"), el("dd", {}, new Date(m.sent_at || m.at).toLocaleString()),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
+      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},copyWord[m.delivery]||m.delivery)],
+      m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],
       m.responder && [el("dt", {}, "Handled by"), el("dd", {}, m.responder === "manual" ? "a reply by hand" : "your responder (" + m.responder + ")")],

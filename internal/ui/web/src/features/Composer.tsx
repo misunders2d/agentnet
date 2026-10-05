@@ -269,9 +269,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
-          r = await store.api.send({ to: device.peer, kind: d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : reply || last?.id, files: fileIds });
+          r = await store.api.send({ to: device.peer, kind: d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
           if (d.newTopic && r) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
-        } else r = await store.api.sendDM({ conv: c, body, reply_to: reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
+        } else r = await store.api.sendDM({ conv: c, body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
       } finally {
         forgetStaged(c, sent); // a send takes the files it names, sent or refused
       }

@@ -253,7 +253,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 		}
 	}
 	for _, m := range c.Messages {
-		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, At: m.At,
+		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, At: m.At, SentAt: shownSent(m.SentAt, m.At),
 			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, Controls: m.Controls, Exec: m.Exec}
 		if m.Read != nil && !*m.Read {
 			v.Unread = true
@@ -371,30 +371,11 @@ func (l *Live) Send(d Draft) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
-	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Kind: d.Kind, Named: files, Target: target, ReplyReceiver: receiver})
+	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Kind: d.Kind, Named: files, Target: target, ReplyReceiver: receiver})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}
-	l.awaitReceipt(res)
 	return Sent{ID: res.ID, State: res.State, Path: res.Path, Detail: res.Detail}, nil
-}
-
-// receiptWait is how long a send from the page waits for the recipient's
-// receipt, as agentnet send does by default.
-const receiptWait = 5 * time.Second
-
-// awaitReceipt waits once, in the background, for the receipt of a message
-// the Hub holds. A delivery is stored and so pushed to the page; the page
-// does not wait for it and nothing is asked again afterwards.
-func (l *Live) awaitReceipt(res client.SendResult) {
-	if res.Path != protocol.PathRelay || res.State != protocol.StateCustody {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), receiptWait+l.timeout)
-		defer cancel()
-		l.a.Status(ctx, res.ID, receiptWait)
-	}()
 }
 
 // Act implements Provider.
@@ -408,9 +389,7 @@ func (l *Live) Act(x Action) (string, error) {
 		if strings.TrimSpace(x.Body) == "" {
 			return "", Refuse("Write a reply first.")
 		}
-		var res client.SendResult
-		res, err = l.a.Reply(ctx, x.ID, x.Body)
-		l.awaitReceipt(res)
+		_, err = l.a.Reply(ctx, x.ID, x.Body)
 		note = "Reply sent."
 	case DoAccept:
 		err = l.a.Accept(x.ID)
@@ -420,9 +399,7 @@ func (l *Live) Act(x Action) (string, error) {
 		sender, fp, err = l.a.AcceptAlways(x.ID)
 		note = fmt.Sprintf("Accepted. Later tasks from %s's key %s run without asking.", sender, shortFP(fp))
 	case DoDecline:
-		var res client.SendResult
-		res, err = l.a.Decline(ctx, x.ID, strings.TrimSpace(x.Reason))
-		l.awaitReceipt(res)
+		_, err = l.a.Decline(ctx, x.ID, strings.TrimSpace(x.Reason))
 		note = "Declined."
 	case DoResolve:
 		err = l.a.Resolve(x.ID)
@@ -460,7 +437,19 @@ func (l *Live) Act(x Action) (string, error) {
 
 // sentence turns a client error into text for the person. Client errors are
 // written for people already; this only makes the first letter upper case.
-func sentence(err error) string { return capitalize(err.Error()) }
+func sentence(err error) string {
+	var update *client.NeedsUpdateError
+	if errors.As(err, &update) {
+		return "This person's app needs an update first."
+	}
+	return capitalize(strings.TrimPrefix(err.Error(), "cannot be retried: "))
+}
+func shownSent(sent, arrival time.Time) time.Time {
+	if sent.Unix() <= 0 || sent.Unix() >= maxClaimedUnix || sent.After(arrival) {
+		return arrival
+	}
+	return sent
+}
 
 func capitalize(s string) string {
 	if s == "" {
@@ -474,4 +463,21 @@ func shortFP(fp string) string {
 		return fp[:23] + "…"
 	}
 	return fp
+}
+
+// Preserve machine-readable capability errors internally; the page uses names.
+func (l *Live) updateSentence(err error) string {
+	var update *client.NeedsUpdateError
+	if errors.As(err, &update) {
+		if people, e := l.a.KnownPersons(); e == nil {
+			for _, p := range people {
+				for _, d := range p.Devices {
+					if d.Address == update.Address {
+						return p.Label + "’s app needs an update first."
+					}
+				}
+			}
+		}
+	}
+	return sentence(err)
 }

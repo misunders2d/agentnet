@@ -128,6 +128,8 @@ type Inner struct {
 	// ReceiverRoute commits a selected own-device return route, never execution authority.
 	ReceiverRoute *ReceiverRoute `json:"receiver_route,omitempty"`
 	Human         *HumanTurn     `json:"human,omitempty"`
+	Quote         string         `json:"quote,omitempty"`
+	TopicDone     bool           `json:"topic_done,omitempty"`
 }
 
 // Ref names one earlier message exactly: its id (a device message's
@@ -583,6 +585,12 @@ func AgentOrigin(origin string) bool { return strings.HasPrefix(origin, OriginAg
 // checkVersion2 validates the version 2 fields of in (or their absence in
 // version 1).
 func checkVersion2(in Inner) error {
+	if in.Quote != "" && (!validID(in.Quote) || in.Quote == in.ID || in.V == Version3 || in.Sub != "" || in.Status != "" || AgentOrigin(in.Origin) || (in.Kind != KindMessage && in.Kind != KindQuestion && in.Kind != KindTask)) {
+		return errors.New("quote belongs only on a person's turn and must name another message")
+	}
+	if in.TopicDone && (in.V != Version || in.Conv != "" || in.Status != StatusDone || (in.Kind != KindAnswer && in.Kind != KindResult)) {
+		return errors.New("topic_done belongs only on a completed device-thread answer or result")
+	}
 	// Progress replies to one request in plain text: in version 1 (a named
 	// executor's progress names it), or as a conversation participation's
 	// nonterminal output with its PID (and its agent, when named).

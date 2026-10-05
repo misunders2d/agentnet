@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -565,23 +565,36 @@ func (s *store) messageState(id, requester string) (sender, recipient, state str
 // setDisposition records the recipient's receipt. custody may become
 // delivered or quarantined, quarantined may become delivered, and delivered
 // is final, so repeated or reordered acks cannot downgrade a message.
-func (s *store) setDisposition(id, recipient, state string) (string, error) {
-	res, err := s.db.Exec(`UPDATE messages SET state = ?, delivered_at = coalesce(delivered_at, ?)
-		WHERE id = ? AND recipient = ? AND (state = ? OR (state = ? AND ? = ?))`,
-		state, time.Now().Unix(), id, recipient,
-		protocol.StateCustody, protocol.StateQuarantined, state, protocol.StateDelivered)
+func (s *store) setDisposition(id, recipient, state string) (current, sender string, changed bool, err error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return "", err
+		return
 	}
-	if n, _ := res.RowsAffected(); n == 1 {
-		return state, nil
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE messages SET state = ?, delivered_at = coalesce(delivered_at, ?) WHERE id = ? AND recipient = ? AND (state = ? OR (state = ? AND ? = ?))`, state, time.Now().Unix(), id, recipient, protocol.StateCustody, protocol.StateQuarantined, state, protocol.StateDelivered)
+	if err != nil {
+		return
 	}
-	var current string
-	err = s.db.QueryRow(`SELECT state FROM messages WHERE id = ? AND recipient = ?`, id, recipient).Scan(&current)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return
+	}
+	changed = n == 1
+	err = tx.QueryRow(`SELECT state, sender FROM messages WHERE id = ? AND recipient = ?`, id, recipient).Scan(&current, &sender)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", errNotFound
+		err = errNotFound
 	}
-	return current, err
+	if err != nil {
+		return
+	}
+	if changed {
+		_, err = tx.Exec(`INSERT INTO receipts(sender,id,state) VALUES(?,?,?)`, sender, id, current)
+		if err != nil {
+			return
+		}
+	}
+	err = tx.Commit()
+	return
 }
 
 type blobRow struct {
@@ -705,8 +718,60 @@ func (s *store) setBlobState(id, state string) error {
 
 // expireSession marks undelivered messages addressed only to an ended
 // session as expired, so their senders learn they were not delivered.
-func (s *store) expireSession(recipient, session string) error {
-	_, err := s.db.Exec(`UPDATE messages SET state = ? WHERE recipient = ? AND session = ? AND fallback = 0 AND state = ?`,
-		protocol.StateExpired, recipient, session, protocol.StateCustody)
-	return err
+func (s *store) expireSession(recipient, session string) ([]string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT DISTINCT sender FROM messages WHERE recipient=? AND session=? AND fallback=0 AND state=?`, recipient, session, protocol.StateCustody)
+	if err != nil {
+		return nil, err
+	}
+	var senders []string
+	for rows.Next() {
+		var sender string
+		if err = rows.Scan(&sender); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		senders = append(senders, sender)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.Exec(`INSERT INTO receipts(sender,id,state) SELECT sender,id,? FROM messages WHERE recipient=? AND session=? AND fallback=0 AND state=?`, protocol.StateExpired, recipient, session, protocol.StateCustody)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.Exec(`UPDATE messages SET state=? WHERE recipient=? AND session=? AND fallback=0 AND state=?`, protocol.StateExpired, recipient, session, protocol.StateCustody)
+	if err != nil {
+		return nil, err
+	}
+	return senders, tx.Commit()
+}
+
+const receiptSchema = `CREATE TABLE receipts(seq INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL); CREATE INDEX receipts_sender ON receipts(sender, seq);`
+
+func (s *store) receiptMax() (n int64, err error) {
+	err = s.db.QueryRow(`SELECT coalesce(max(seq),0) FROM receipts`).Scan(&n)
+	return
+}
+func (s *store) receiptsFor(sender string, cursor int64) ([]protocol.ReceiptEvent, error) {
+	rows, err := s.db.Query(`SELECT id,state,seq FROM receipts WHERE sender=? AND seq>? ORDER BY seq LIMIT ?`, sender, cursor, protocol.ReceiptBatch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []protocol.ReceiptEvent
+	for rows.Next() {
+		var r protocol.ReceiptEvent
+		if err = rows.Scan(&r.ID, &r.State, &r.Seq); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

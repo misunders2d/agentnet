@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/agent/decide", s.decideAgent)
 	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
 	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
+	mux.HandleFunc("POST /api/dm/guest/check", s.checkHuman)
 	mux.HandleFunc("POST /api/dm/guest/invite", s.changeHuman("invite"))
 	mux.HandleFunc("POST /api/dm/guest/decide", s.changeHuman("decide"))
 	mux.HandleFunc("POST /api/dm/guest/end", s.changeHuman("end"))

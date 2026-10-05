@@ -34,6 +34,7 @@ export function api(host: Host) {
     changeAgents: (c: T.AgentCatalogChange) => post<T.AgentCatalogChangeResult>("/api/agents", c),
 
     // People invited to help in a DM
+    checkGuest: (c: T.GuestCheckRequest) => post<T.GuestCheck>("/api/dm/guest/check", c),
     inviteGuest: (a: T.GuestAction) => post<T.GuestView>("/api/dm/guest/invite", a),
     decideGuest: (pid: string, accept: boolean) => post<T.GuestView>("/api/dm/guest/decide", { pid, accept }),
     endGuest: (pid: string) => post<T.GuestView>("/api/dm/guest/end", { pid }),

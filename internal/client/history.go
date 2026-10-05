@@ -66,11 +66,12 @@ type HistoryItem struct {
 	GroupAdmission string                  `json:"group_admission,omitempty"` // only direct live admission, vouched for by an own linked device
 	ReceiverRoute  *envelope.ReceiverRoute `json:"receiver_route,omitempty"`  // provenance only; history never installs a delegation
 	Human          *envelope.HumanTurn     `json:"human,omitempty"`           // unchanged captured audience; never recomputed
+	Quote          string                  `json:"quote,omitempty"`
 }
 
 // inner is the item as the message it records.
 func (h HistoryItem) inner(conv string) envelope.Inner {
-	in := envelope.Inner{V: envelope.Version2, ID: h.ID, From: h.From, TS: h.TS, Kind: h.Kind, Body: h.Body, ReplyTo: h.ReplyTo,
+	in := envelope.Inner{V: envelope.Version2, ID: h.ID, From: h.From, TS: h.TS, Kind: h.Kind, Body: h.Body, ReplyTo: h.ReplyTo, Quote: h.Quote,
 		Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true, AgentID: h.AgentID, ReceiverRoute: h.ReceiverRoute, Human: h.Human}
 	if envelope.IsControl(h.Sub) { // a control travels as history with its target reference
 		in.V, in.Ref = envelope.Version3, h.Ref
@@ -82,7 +83,7 @@ func (h HistoryItem) inner(conv string) envelope.Inner {
 }
 
 func itemOf(in envelope.Inner, key string, at int64) HistoryItem {
-	h := HistoryItem{V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo,
+	h := HistoryItem{V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, Quote: in.Quote,
 		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at, Ref: in.Ref, AgentID: in.AgentID, ReceiverRoute: in.ReceiverRoute, Human: in.Human}
 	for _, a := range in.Attachments {
 		h.Attachments = append(h.Attachments, envelope.Attachment{Name: a.Name, Size: a.Size, SHA256: a.SHA256})
@@ -782,13 +783,13 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 	if !contextOnly {
 		rows, err := a.store.db.Query(`
 		SELECT conv, ms, id, dir, sender, coalesce(verified_by, claimed_fp, ''), ts, kind, body, coalesce(reply_to, ''), coalesce(status, ''), coalesce(sub, ''),
-		       coalesce(origin, ''), coalesce(emotion, ''), coalesce(target, ''), coalesce(pid, ''), lid, coalesce(ref_id, ''), coalesce(ref_fp, ''), coalesce(agent_id, '') FROM (
+		       coalesce(origin, ''), coalesce(emotion, ''), coalesce(target, ''), coalesce(pid, ''), lid, coalesce(ref_id, ''), coalesce(ref_fp, ''), coalesce(agent_id, ''),coalesce(quote,'') FROM (
 		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
-		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id
+		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id,quote
 		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('history', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
 		     AND NOT `+erasedInFor("inbox")+`
 		  UNION ALL
-		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN (coalesce(o.pid,'') <> '' OR o.sub='status') AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id
+		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN (coalesce(o.pid,'') <> '' OR o.sub='status') AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote
 		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
 		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND NOT `+erasedOut+`)
 		WHERE (conv, ms, id) > (?, ?, ?) AND conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context)
@@ -801,7 +802,7 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 			var ms int64
 			var in envelope.Inner
 			if err := rows.Scan(&conv, &ms, &in.ID, &dir, &in.From, &key, &in.TS, &in.Kind, &in.Body, &in.ReplyTo, &in.Status, &in.Sub,
-				&in.Origin, &in.Emotion, &target, &in.PID, &in.LID, &refID, &refFP, &in.AgentID); err != nil {
+				&in.Origin, &in.Emotion, &target, &in.PID, &in.LID, &refID, &refFP, &in.AgentID, &in.Quote); err != nil {
 				rows.Close()
 				return false, err
 			}

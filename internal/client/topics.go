@@ -141,11 +141,7 @@ func deriveTopic(g []threadRow, l topicLocal, now int64) topicVerdict {
 			replied[r.replyTo] = true
 		}
 	}
-	var request *threadRow // the topic's latest request
-	for i, r := range g {
-		if r.kind == envelope.KindQuestion || r.kind == envelope.KindTask {
-			request = &g[i]
-		}
+	for _, r := range g {
 		if topicOpen(r, replied[r.id]) {
 			v.Pending = true
 		}
@@ -160,16 +156,9 @@ func deriveTopic(g []threadRow, l topicLocal, now int64) topicVerdict {
 	case live && l.Mark == topicMarkDone:
 		v.DoneBy = DoneByYou
 	case live && l.Mark == topicMarkOpen:
-	case request != nil && !v.Pending && last.replyTo == request.id && last.status == envelope.StatusDone &&
+	case !v.Pending && last.topicDone && last.status == envelope.StatusDone &&
 		(last.kind == envelope.KindAnswer || last.kind == envelope.KindResult):
 		v.DoneBy, v.Conclusion = DoneByAgent, last.id
-		// Sent from here to a request received here that the person took
-		// over (Reply: state manual): their own words, not the agent's.
-		// A requester cannot tell (a v1 reply does not say who wrote it),
-		// so there it stays the agent's (docs/plans/TOPICS.md).
-		if !last.in && request.in && request.state == stateManual {
-			v.DoneBy = DoneByYou
-		}
 	}
 	v.State = TopicActive
 	if v.DoneBy != "" {
