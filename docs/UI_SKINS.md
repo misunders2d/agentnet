@@ -230,8 +230,16 @@ still runs with the page's full trust.
 | `host.selectSkin(id)` | Reloads into a skin from `host.skins`. The current skin must preserve or explicitly resolve unsent drafts first. |
 | `host.manageLocalSkins(root)` | Optional (present where the browser can store skins). Draws the host's browser-local skin manager (import files or a folder, the stored skins, Remove) into an element the skin owns; returns its teardown, which empties that element. Consent stays the host's: a stored skin asks for trust when chosen. |
 | `host.reconnect()` | Optional, present only on this computer's program with workspaces. After the program restarted and retired this membership's handle, binds the same membership again (only when the program still names it with the endpoint, realm, address and key it proved in its own overview) and mounts the skin again over the new binding. Resolves without remounting when the binding still holds. Nothing under way is retargeted or replayed: staged files and sends stay with the old binding, so a skin keeps text drafts and asks for files again. |
-| `host.workspace` | The membership this host is bound to: `{id, name, endpoint, address, realm, state}`. A host never changes membership: what a skin holds when an operation starts (a send, a staged file, a file open) stays bound to it. |
-| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}`. `has(id)` is by local registration only, never by anything a message or notification says. Optional, present only on this computer's program (never in a browser enrollment), so check before use: `disconnected()` resolves the memberships disconnected here, each `{id, name, endpoint, address, realm, state}` (`list()` leaves them out); `reconnect(id)` routes one of them again, as the same membership with the same keys and history under a new handle, and refuses one whose identity changed. It does not select it. |
+| `host.workspace` | The membership this host is bound to: `{id, name, endpoint, address, realm, state, hub_name?}`. `name` is this device's own label for it (`""` for none); `hub_name` is the workspace's own name its admin set, as last listed. A host never changes membership: what a skin holds when an operation starts (a send, a staged file, a file open) stays bound to it. |
+| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}`. `has(id)` is by local registration only, never by anything a message or notification says. Optional, present only on this computer's program (never in a browser enrollment), so check before use: `disconnected()` resolves the memberships disconnected here, each `{id, name, endpoint, address, realm, state}` (`list()` leaves them out); `reconnect(id)` routes one of them again, as the same membership with the same keys and history under a new handle, and refuses one whose identity changed. It does not select it. Optional, present where the host can keep it (this computer's program, or a browser with its enrollments): `rename(id, name)` sets this device's own label of a connected membership and resolves its updated entry; `name` `""` clears it, and 1–120 readable characters (no control character) are refused otherwise. It renames nothing on the server and fires no `onChange`. |
+
+**Naming a workspace.** Show a workspace by, in this order: this device's own
+label (`name`, unless it is a placeholder such as `""`, "Current workspace",
+"This computer" or "This server"); the workspace's own name its admin set
+(`overview.workspace.name` for the current one, `hub_name` for others); the
+relay's host name (`overview.workspace.server`, or the endpoint's host);
+"AgentNet" only when none of these says anything. Comic and the host's bar
+say the same.
 
 ### Workspaces
 
@@ -391,6 +399,26 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   reports in it are refused.
   A notification's `#msg=<id>` (optionally `&conv=…&dir=in|out`) lands on that
   message and does nothing else.
+- Workspace name: `overview.workspace` `{name, server}` is the workspace's own
+  name its admin set (`""` for none) and the relay's host name. GET
+  `/api/workspace` adds `can_rename` (this device holds the Hub's admin role,
+  its own or its person's; unknown is false). POST `/api/workspace/name`
+  `{name}` renames it for every member (an empty name clears it); a member is
+  refused "Only an admin of this workspace can rename it for everyone." It is
+  a company setting: offer it only on the person's own tap, never from an
+  agent. Members get the new name with the member list, without reloading.
+- Who runs an agent: `me.agent` (this device) and `overview.agent_devices`
+  (the other devices that, as last listed, say they run one; kept offline)
+  are the only "runs an agent" signal. Show a device as an agent, and offer
+  Ask, Do it or Bring in toward it, only when it says so: a phone or a
+  browser never does, and its messages are its person's. Both are hints for
+  display and offers; nothing a skin does with them grants anything.
+- People, not addresses: name a device by its person and device
+  ("Vitalii · Phone", "You · Pixel"; the device in words, dashes as spaces);
+  keep addresses for verified-detail panels. When a person's name is also
+  another person's (or yours), or the server only lists them, add the device
+  key's first group so a look-alike cannot pass as someone else. The page's
+  own sentences (`state_text`, `why`, `reason`) already name people this way.
 - Storage: GET `/api/storage` (read-only; `local.areas[]` with known usage or an
   `unknown` reason, `local.complete`, `remote.status` available | unsupported |
   unavailable with the Hub's own-usage report). Show unknown as unknown, never
