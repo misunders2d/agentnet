@@ -1,6 +1,6 @@
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
 import { topicControls } from './topics.mjs';
-import { pendingSends, sendID } from "/assets/optimistic.mjs";
+import { pendingSends, sendID } from "./optimistic.mjs";
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
 const mounted = new WeakMap();

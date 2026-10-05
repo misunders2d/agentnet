@@ -17,7 +17,8 @@ export default {
     "assistant-setup.css",
     "qr.mjs",
     "icon.png",
-    "topics.mjs"
+    "topics.mjs",
+    "optimistic.mjs"
   ]
 }
 ;
