@@ -73,6 +73,9 @@ await assert.rejects(e.api("/api/workspace/name", { name: "a\nb" }), /readable w
 role = "admin";
 info = await e.api("/api/workspace");
 assert.equal(info.can_rename, true);
+const puts = calls.filter((c) => c === "PUT /v1/admin/workspace").length;
+await assert.rejects(e.api("/api/workspace/name", { name: "   " }), /readable workspace name/, "spaces alone are refused, as in Go, not a clear");
+assert.equal(calls.filter((c) => c === "PUT /v1/admin/workspace").length, puts, "a refused name never reaches the relay");
 info = await e.api("/api/workspace/name", { name: " Acme " });
 assert.equal(info.name, "Acme");
 assert(calls.includes("PUT /v1/admin/workspace"));

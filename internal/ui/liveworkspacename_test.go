@@ -83,8 +83,10 @@ func TestWorkspaceNameRoutes(t *testing.T) {
 	if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&v) != nil || v.Name != "Mellanni" || !v.CanRename {
 		t.Fatalf("GET: %d %+v", resp.StatusCode, v)
 	}
-	if resp := do(t, ts, "POST", "/api/workspace/name", `{"name":"a\nb"}`, post(ts)); resp.StatusCode != 409 {
-		t.Fatalf("invalid name: %d", resp.StatusCode)
+	for _, bad := range []string{`{"name":"a\nb"}`, `{"name":"   "}`} { // only "" clears, as in the engine
+		if resp := do(t, ts, "POST", "/api/workspace/name", bad, post(ts)); resp.StatusCode != 409 {
+			t.Fatalf("invalid name %s: %d", bad, resp.StatusCode)
+		}
 	}
 	if resp := do(t, ts, "POST", "/api/workspace/name", `{"name":"Acme"}`, post(ts)); resp.StatusCode != 200 {
 		t.Fatalf("rename: %d", resp.StatusCode)

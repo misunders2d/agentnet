@@ -4241,11 +4241,12 @@ export class Engine {
   }
 
   // renameWorkspace answers POST /api/workspace/name: the name for every
-  // member, admin only; an empty name clears it.
+  // member, admin only; only an empty name clears it (spaces alone are no
+  // name, refused as Go refuses them).
   async renameWorkspace(body) {
     if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => k !== "name") || typeof body.name !== "string") throw new Error("Enter a readable workspace name, up to 120 characters. Nothing changed.");
-    const name = body.name.trim() ? wire.validWorkspaceName(body.name) : "";
-    if (body.name.trim() && !name) throw new Error("Enter a readable workspace name, up to 120 characters. Nothing changed.");
+    const name = body.name === "" ? "" : wire.validWorkspaceName(body.name);
+    if (body.name !== "" && !name) throw new Error("Enter a readable workspace name, up to 120 characters. Nothing changed.");
     let out;
     try { out = await this.call("PUT", "/v1/admin/workspace", { name }); } catch (e) {
       if (e && e.status === 403) throw new Error("Only an admin of this workspace can rename it for everyone.");
