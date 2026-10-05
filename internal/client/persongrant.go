@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -200,4 +201,26 @@ func (a *Agent) PersonGrantForPeer(address, key string) (person string, question
 		err = nil
 	}
 	return
+}
+
+// coveredByPerson refuses to report a device revocation as done when the
+// device had no grant of its own and a person grant of that kind still
+// covers it: the person's ID is what stops it.
+func coveredByPerson(q querier, address, kind string) error {
+	if kind != "questions" && kind != "tasks" {
+		return errors.New("invalid permission kind")
+	}
+	var person, label string
+	err := q.QueryRow(`SELECT pg.person, ps.label FROM person_grants pg JOIN persons ps ON ps.person=pg.person JOIN person_devices pd ON pd.person=pg.person WHERE pd.address=? AND pg.`+kind+`=1`, address).Scan(&person, &label)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	flag := ""
+	if kind == "tasks" {
+		flag = "--tasks "
+	}
+	return fmt.Errorf("%s is covered by the permission for %s (person %s); stop it with: agentnet unapprove %s%s", address, strconv.Quote(label), person, flag, person)
 }

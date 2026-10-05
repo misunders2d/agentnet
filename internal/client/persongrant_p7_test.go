@@ -368,3 +368,31 @@ func TestP7RunningHarnessStopsOnDeviceRemoval(t *testing.T) {
 		t.Fatal("removed device received an answer")
 	}
 }
+
+// Revoking one device of a person whose grant covers it says so instead of
+// reporting a revocation that did not happen.
+func TestP7DeviceRevokeUnderPersonGrantRefused(t *testing.T) {
+	w, r := p7Person(t)
+	if e := w.bob.Approve(r.Person); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := w.bob.GrantTasks(r.Person); e != nil {
+		t.Fatal(e)
+	}
+	if e := w.bob.Unapprove(w.alice.Address); e == nil || !strings.Contains(e.Error(), r.Person) {
+		t.Fatalf("device unapprove under a person grant: %v", e)
+	}
+	if _, e := w.bob.RevokeTasks(w.alice.Address); e == nil || !strings.Contains(e.Error(), "--tasks "+r.Person) {
+		t.Fatalf("device task revoke under a person grant: %v", e)
+	}
+	var q, tk bool
+	if e := w.bob.store.db.QueryRow(`SELECT questions, tasks FROM person_grants WHERE person=?`, r.Person).Scan(&q, &tk); e != nil || !q || !tk {
+		t.Fatalf("person grant changed: %v %v %v", q, tk, e)
+	}
+	if e := w.bob.Unapprove(r.Person); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := w.bob.RevokeTasks(r.Person); e != nil {
+		t.Fatal(e)
+	}
+}

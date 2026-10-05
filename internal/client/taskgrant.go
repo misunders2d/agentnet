@@ -225,8 +225,14 @@ func (a *Agent) RevokeTasks(address string) (running []string, err error) {
 			return nil, err
 		}
 	} else {
-		if _, err = tx.Exec(`DELETE FROM task_grants WHERE address=?`, target); err != nil {
+		res, err := tx.Exec(`DELETE FROM task_grants WHERE address=?`, target)
+		if err != nil {
 			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			if err = coveredByPerson(tx, target, "tasks"); err != nil {
+				return nil, err
+			}
 		}
 		if err = demoteGranted(tx, target, "", "the task grant was revoked"); err != nil {
 			return nil, err

@@ -390,8 +390,14 @@ func (a *Agent) Unapprove(address string) error {
 			return err
 		}
 	} else {
-		if _, err = tx.Exec(`DELETE FROM approvals WHERE address=?`, target); err != nil {
+		res, err := tx.Exec(`DELETE FROM approvals WHERE address=?`, target)
+		if err != nil {
 			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			if err = coveredByPerson(tx, target, "questions"); err != nil {
+				return err
+			}
 		}
 	}
 	if err = demotePersonJobs(tx); err != nil {

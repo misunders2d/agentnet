@@ -214,7 +214,7 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
 
       {change.sheet}
       {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
-      {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={th.peer} thread={th} />}
+      {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={grant === "revoke_tasks" ? (th.task_target || th.peer) : grant === "unapprove" ? (th.question_target || th.peer) : th.peer} thread={th} />}
       <Confirm open={del} onOpenChange={setDel} ok="Delete" onOk={remove}
         title={th ? "Delete this topic from this device?" : "Delete this conversation from your devices?"}>
         {th ? <p>It’s stored on this device only, so it’s deleted here and nowhere else. {title} keeps its copy.</p> : <>
