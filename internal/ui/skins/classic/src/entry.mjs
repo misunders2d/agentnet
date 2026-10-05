@@ -1,6 +1,45 @@
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
 const mounted = new WeakMap();
+// ---- people words (MEL-529, MEL-525) -------------------------------------
+// Pure helpers over the host's overview: a device is an agent only when it
+// says it runs one (overview.agent_devices; me.agent for this one); people
+// see a person and a device, never an address (the address stays in the
+// title, as a verified detail); a name shared with another person, or only
+// listed by the server, shows its key's first group. The same rules as
+// Comic's model.ts and the vectors in internal/ui/testdata/device_words.json.
+const deviceSpecial = { iphone: "iPhone", ipad: "iPad", imac: "iMac", mac: "Mac", macbook: "MacBook" };
+function deviceWords(address) {
+  const s = String(address || ""), i = s.indexOf("/");
+  return (i < 0 ? s : s.slice(i + 1)).split("-").filter(Boolean)
+    .map((w, j) => deviceSpecial[w.toLowerCase()] || (j === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
+}
+function runsAgentIn(o, address) {
+  if (!o || !address) return false;
+  if (address === o.me.address) return !!o.me.agent;
+  return (o.agent_devices || []).includes(address);
+}
+const shortKeyOf = (fp) => String(fp || "").replace(/^SHA256:/i, "").trim().split(/[-\s]/)[0] || "";
+// whoParts: { name, device, key } for a device address ("You", "Pixel", "").
+function whoParts(o, address) {
+  const device = deviceWords(address);
+  if (!o) return { name: address, device: "", key: "" };
+  if (address === o.me.address) return { name: "You", device, key: "" };
+  const holds = (p) => !!p && (p.address === address || (p.devices || []).some((d) => d.address === address));
+  const p = holds(o.person) ? o.person : (o.people || []).find(holds);
+  if (!p) return { name: device || address, device: "", key: "" };
+  if (o.person && (p === o.person || (p.person && p.person === o.person.person))) return { name: "You", device, key: "" };
+  const label = String(p.label || "").trim().toLowerCase(), same = (x) => (x.person && x.person === p.person) || x.address === p.address;
+  const clash = !!label && [o.person, ...(o.people || [])].some((x) => x && !same(x) && String(x.label || "").trim().toLowerCase() === label);
+  const fp = ((p.devices || []).find((d) => d.address === address) || {}).fingerprint || (p.address === address ? p.fingerprint : "") || "";
+  return { name: p.label || device, device, key: clash || p.state === "listed" ? shortKeyOf(fp) : "" };
+}
+// whoTextIn: "Vitalii · Phone", "You · Pixel", "Sergey · 19c77bce · Box".
+function whoTextIn(o, address) {
+  const w = whoParts(o, address);
+  return [w.name, w.key, w.device].filter(Boolean).join(" · ");
+}
+// ---- end of people words
 export async function mount(root, host) {
   if (host.version !== 1) throw new Error('Classic requires AgentNet host API v1');
   await unmount(root);
@@ -107,10 +146,13 @@ const statusWord = { declined: "Declined", failed: "Failed", timeout: "Timed out
   review_notice: "Report" };
 
 // Addresses are person/agent: the person leads, the agent is secondary.
+// A device as people see it: the person (or "You"), then the device; the
+// address is its title, as a verified detail.
+const runsAgent = (addr) => runsAgentIn(state.overview, addr);
+const whoText = (addr) => whoTextIn(state.overview, addr);
 function who(addr) {
-  const i = addr.indexOf("/");
-  if (i < 0) return el("span", { class: "who" }, addr);
-  return el("span", { class: "who" }, addr.slice(0, i), el("span", { class: "who-agent" }, addr.slice(i)));
+  const w = whoParts(state.overview, addr);
+  return el("span", { class: "who", title: addr }, w.name, (w.key || w.device) && el("span", { class: "who-agent" }, " · " + [w.key, w.device].filter(Boolean).join(" · ")));
 }
 
 function avatar(addr, cls) {
@@ -842,7 +884,7 @@ function chooseMember(addr) {
 function memberRow(m) {
   const recent = Date.now() - new Date(m.joined) < 7 * 24 * 3600e3;
   return el("li", {}, el("button", { type: "button", class: "result member", onclick: () => chooseMember(m.address) },
-    el("span", { class: "result-kind" }, "Agent"),
+    el("span", { class: "result-kind" }, runsAgent(m.address) ? "Agent" : "Person"),
     el("span", { class: "result-main" }, who(m.address),
       el("span", { class: "hint" }, recent ? "joined " + when(m.joined) : "no conversation yet")),
     presenceBadge(m.address)));
@@ -1502,7 +1544,7 @@ function renderHub() {
   state.hubUp = up ? { kind: "person", key: personKey(owner) } : null;
   $("hub-back").hidden = !up;
   if (up) $("hub-back").textContent = "\u2039 " + owner.label;
-  $("conv-topic").textContent = (owner ? (owner.state === "self" ? "Your device" : owner.label + "'s device") : "Device") + " · " + [plural(c.conversations.length, "conversation", "conversations"),
+  $("conv-topic").textContent = (owner ? (owner.state === "self" ? "Your device" : owner.label + "'s device") : "Device") + (runsAgent(c.peer) ? " · runs an agent" : "") + " · " + [plural(c.conversations.length, "conversation", "conversations"),
     c.singles.length && plural(c.singles.length, "single message", "single messages")].filter(Boolean).join(" · ");
   $("conv-presence").textContent = peerPresence(c.peer) || "";
   fill($("hub"), contactBody(c, (id) => openThread(id)));
@@ -2861,7 +2903,7 @@ function searchItems(q, threads, open) {
         el("span", { class: "hint" }, "with " + d.peer.label + " · " + when(d.last_at))), dmFlags(d)))),
     agents.length + listed.length > 0 && el("li", { class: "result-head" }, plural(agents.length + listed.length, "agent", "agents")),
     ...agents.map((c) => el("li", {}, el("button", { type: "button", class: "result", onclick: () => open.contact(c) },
-      el("span", { class: "result-kind" }, "Agent"), el("span", { class: "result-main" }, who(c.peer),
+      el("span", { class: "result-kind" }, runsAgent(c.peer) ? "Agent" : "Person"), el("span", { class: "result-main" }, who(c.peer),
         el("span", { class: "hint" }, " · " + plural(c.conversations.length, "conversation", "conversations"))), presenceBadge(c.peer), counts(c)))),
     ...listed.map(memberRow),
     conversations.length > 0 && el("li", { class: "result-head" }, plural(conversations.length, "conversation or message", "conversations or messages")),
@@ -3927,7 +3969,7 @@ function renderTarget() {
   }
   const t = state.data;
   if (!t) { set("", "", "Send"); return; }
-  if (state.answering) { set(t.peer, "· your answer to their " + (kindTag[state.answering.kind] || "message").toLowerCase(), "Send answer"); return; }
+  if (state.answering) { set(whoText(t.peer), "· your answer to their " + (kindTag[state.answering.kind] || "message").toLowerCase(), "Send answer"); return; }
   const last = t.messages[t.messages.length - 1], k = kindValue();
   if (state.deviceAgentID && k !== "message") {
     const id = state.deviceAgentID, agent = state.targetCatalog && (state.targetCatalog.agents || []).find(a => a.id === id);
@@ -3935,9 +3977,10 @@ function renderTarget() {
     set(name, deviceAgentMissing() ? "· unavailable; draft kept" : k === "task" ? "· task permission still required" : "· a question for this agent",
       (k === "task" ? "Give task to " : "Ask ") + (agent ? agent.label : "selected agent")); return;
   }
-  set(t.peer, (last ? "· continues “" + lineOf(last, 40) + "”" : "· a new conversation") +
+  const to = whoText(t.peer);
+  set(to, (last ? "· continues “" + lineOf(last, 40) + "”" : "· a new conversation") +
     (k === "task" ? " · as a task they accept first" : k === "question" ? " · as a question their responder may answer" : ""),
-    k === "task" ? "Give task to " + t.peer : k === "question" ? "Ask " + t.peer : "Send to " + t.peer);
+    k === "task" ? "Give task to " + to : k === "question" ? "Ask " + to : "Send to " + to);
 }
 
 // A draft is bound to the conversation and target it was started for
@@ -4051,13 +4094,17 @@ function syncComposer() {
   }
   $("kind").hidden = false;
   $("attach").hidden = !filesAllowed();
-  for (const r of root.querySelectorAll('input[name="kind"]')) { const l = r.closest && r.closest("label"); if (l) l.hidden = false; }
   const t = state.data;
+  // Question and Task only toward a device that runs an agent: a phone or a
+  // browser is its person, who gets a message.
+  const asks = !!t && runsAgent(t.peer);
+  for (const r of root.querySelectorAll('input[name="kind"]')) { const l = r.closest && r.closest("label"); if (l) l.hidden = r.value !== "message" && !asks; }
+  if (t && !asks && kindValue() !== "message" && !state.answering) setKind("message");
   const blocked = !t || !!t.key.pending;
   $("body").disabled = blocked;
   $("send").disabled = blocked || state.sending || deviceAgentMissing();
   $("kind").disabled = blocked || !!state.answering;
-  $("body").placeholder = !t ? "" : t.key.pending ? "Sending is blocked until you trust the new key" : "Write to " + t.peer;
+  $("body").placeholder = !t ? "" : t.key.pending ? "Sending is blocked until you trust the new key" : "Write to " + whoText(t.peer);
   renderTarget();
 }
 
