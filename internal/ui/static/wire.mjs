@@ -450,6 +450,8 @@ function marshalInner(n) {
   if (n.human) s += ',"human":' + humanJSON(n.human);
   if (n.quote) s += ',"quote":' + goString(n.quote);
   if (n.topic_done) s += ',"topic_done":true';
+  if (n.topic) s += ',"topic":'+goString(n.topic);
+  if (n.topic_event) s += ',"topic_event":'+topicEventJSON(n.topic_event);
   return s + "}";
 }
 
@@ -613,9 +615,16 @@ const goBlank = (s) => /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029
 // checkV2 is envelope.checkVersion2: the conversation fields, only in
 // version 2, and their shapes. (The pid rules follow the core as it is now;
 // participation is still in review there.)
+export function topicEventJSON(e) { return '{"action":'+goString(e.action)+(e.seen?.length?',"seen":['+e.seen.map(goString).join(',')+']':'')+'}'; }
+export function parseTopicEvent(e) { const v=strict(e,"topic event",{action:"string",seen:"array"}); if(!["create","done","open"].includes(v.action)||v.seen?.some(id=>typeof id!=="string"||!validID(id)))throw Error("invalid topic action");return {action:v.action,...(v.seen?.length?{seen:v.seen}:{})}; }
+export function checkTopic(n) {
+ if(n.topic && (n.v!==Version2||!validID(n.topic)||n.sub))throw Error("topic belongs only on a conversation turn");
+ if(n.topic_event){parseTopicEvent(n.topic_event);if(!n.topic||n.kind!=="message"||n.target||agentOrigin(n.origin)||n.status||n.attachments?.length)throw Error("topic event belongs only on a human conversation message");}
+ if(n.topic_done&&(![Version,Version2].includes(n.v)||n.status!=="done"||!["answer","result"].includes(n.kind)||n.v===Version2&&(!n.topic||!n.pid||!agentOrigin(n.origin))))throw Error("topic_done belongs only on a completed agent answer or result");
+}
 async function checkV2(n) {
   if (n.quote && (!validID(n.quote) || n.quote === n.id || n.v === Version3 || n.sub || n.status || agentOrigin(n.origin) || !["message","question","task"].includes(n.kind))) throw new Error("quote belongs only on a person's turn and must name another message");
-  if (n.topic_done && (n.v !== Version || n.conv || n.status !== "done" || !["answer","result"].includes(n.kind))) throw new Error("topic_done belongs only on a completed device-thread answer or result");
+  checkTopic(n);
   // Progress replies to one request in plain text: in version 1 (a named
   // executor's progress names it), or as a participation's nonterminal output.
   if (n.status === StatusProgress && (n.v !== Version && (n.v !== Version2 || !n.pid) || n.kind !== "message" || !n.reply_to || goBlank(n.body) || n.attachments.length || n.target || n.receiver_route || (n.human && n.v !== Version2) || n.sub)) throw new Error("progress is a plain-text update replying to one request, in version 1 or as a participation's output");
@@ -729,7 +738,7 @@ export async function seal(m, keys, recipient) {
     reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status"),
     conv: m.conv || "", lid: m.lid || "", root: m.root || "", sub: m.sub || "", replica: !!m.replica,
     origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "",
-    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null, quote: m.quote || "", topic_done: !!m.topic_done };
+    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null, quote: m.quote || "", topic_done: !!m.topic_done, topic:m.topic||"",topic_event:m.topic_event?parseTopicEvent(m.topic_event):null };
   await checkV2(inner);
   if (v === Version2 && agentOrigin(inner.origin) && inner.sub === "" && !inner.emotion) throw new Error("an agent's turn must carry an emotion");
   const e = new Encrypter();
@@ -802,7 +811,7 @@ export async function open(json, keys, selfAddress, sender) {
   const f = strict(v, "inner", { v: "int", id: "string", from: "string", to: "string", ts: "int", kind: "string", body: "string",
     reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string",
     conv: "string", lid: "string", root: "object", sub: "string", replica: "boolean", origin: "string", emotion: "string",
-    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object", quote: "string", topic_done: "boolean" });
+    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object", quote: "string", topic_done: "boolean", topic:"string",topic_event:"object" });
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
   const ref = f.ref ? strict(f.ref, "ref", { id: "string", fingerprint: "string" }) : null;
   const fan = f.fan ? f.fan.map((x) => { const y = strict(x, "fan", { person: "string", roster: "string" }); return { person: y.person || "", roster: y.roster || "" }; }) : null;
@@ -813,7 +822,7 @@ export async function open(json, keys, selfAddress, sender) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.receiver_route ? { receiver_route: parseReceiverRoute(f.receiver_route) } : {}),
-    ...(f.human ? { human: parseHumanTurn(f.human) } : {}), quote: f.quote || "", topic_done: !!f.topic_done,
+    ...(f.human ? { human: parseHumanTurn(f.human) } : {}), quote: f.quote || "", topic_done: !!f.topic_done,topic:f.topic||"",topic_event:f.topic_event?parseTopicEvent(f.topic_event):null,
     ref: ref ? { id: ref.id || "", fingerprint: ref.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => {
       const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
@@ -1204,14 +1213,15 @@ export function historyJSON(h) {
   }
   s += ',"at":' + goInt(h.at, "time");
   if (h.ref) s += ',"ref":{"id":' + goString(h.ref.id) + ',"fingerprint":' + goString(h.ref.fingerprint) + "}";
-  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + (h.quote ? ',"quote":' + goString(h.quote) : "") + "}";
+  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + (h.quote ? ',"quote":' + goString(h.quote) : "") + (h.topic_done?',"topic_done":true':"") + (h.topic?',"topic":'+goString(h.topic):"") + (h.topic_event?',"topic_event":'+topicEventJSON(h.topic_event):"") + "}";
 }
 
 // parseHistory reads a history item strictly (as the core's decodeStrict).
 export function parseHistory(json) {
   const f = strict(JSON.parse(json), "history item", { v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
     kind: "string", body: "string", reply_to: "string", status: "string", sub: "string", origin: "string", emotion: "string",
-    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string" });
+    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string",topic_done:"boolean",topic:"string",topic_event:"object" });
+  checkTopic({...f,v:Version2});
   if (f.quote && (!validID(f.quote) || f.quote===f.id || f.sub || f.status || agentOrigin(f.origin) || !["message","question","task"].includes(f.kind))) throw Error("history quote belongs only on a person's turn");
   if (f.group_admission && !validHash(f.group_admission)) throw Error("a malformed group admission stamp");
   if (f.v !== 1 || !validID(f.id) || !validID(f.lid) || !validAddress(f.from || "") || !validFingerprint(f.from_key || "")) throw new Error("a malformed history item");
@@ -1240,7 +1250,7 @@ export function parseHistory(json) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.group_admission ? { group_admission: f.group_admission } : {}),
-    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}), ...(f.quote ? {quote:f.quote} : {}),
+    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}), ...(f.quote ? {quote:f.quote} : {}),...(f.topic?{topic:f.topic}:{}),...(f.topic_done?{topic_done:true}:{}),...(f.topic_event?{topic_event:parseTopicEvent(f.topic_event)}:{}),
     attachments: (f.attachments || []).map((a) => { const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
       return { name: text(x.name || "", "attachment name"), size: x.size || 0, sha256: x.sha256 || "" }; }) };
 }
@@ -1584,6 +1594,9 @@ export function groupHistoryContentHash(conv,n) {
   if(n.receiver_route)json+=',"ReceiverRoute":'+receiverRouteJSON(n.receiver_route);
   if(n.human)json+=',"Human":'+humanJSON(n.human);
   if(n.quote)json+=',"Quote":'+goString(n.quote);
+  if(n.topic_done)json+=',"TopicDone":true';
+  if(n.topic)json+=',"Topic":'+goString(n.topic);
+  if(n.topic_event)json+=',"TopicEvent":'+topicEventJSON(n.topic_event);
   return hashOf(utf8.encode(json+'}'));
 }
 export function parseGroupInvitation(json) {

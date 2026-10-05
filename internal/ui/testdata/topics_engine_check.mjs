@@ -5,7 +5,7 @@
 // changes as the daemon does. Real Engine over a memory store, no network.
 // stdin: {vectors, constants} from topics_browser_test.go.
 import assert from 'node:assert/strict';
-import { Engine, memoryStore, deriveTopic, TOPICS } from '../static/engine.mjs';
+import { Engine, memoryStore, deriveTopic, TOPICS, chatTopicAssignments, summarizeChatTopics } from '../static/engine.mjs';
 
 let checks = 0;
 const check = (v, why) => { assert.ok(v, why); checks++; };
@@ -23,6 +23,15 @@ for (const c of vectors.cases) {
     status: m.status || '', topic_done:!!m.topic_done, notice: !!m.notice, selected: !!m.selected }));
   const got = deriveTopic(facts, c.local || null, vectors.now);
   same(got, Object.fromEntries(Object.entries(c.want).filter(([, v]) => v !== '' && v !== undefined)), c.name);
+}
+
+// Optional DM/group topics use the same fixture data as Go.
+for(const c of vectors.chat_cases){
+ const msgs=c.messages.map(m=>({...m,ts:m.sent,to:m.dir==='out'?'bob/desk':undefined,at:m.sent*1000}));
+ same(Object.fromEntries(chatTopicAssignments(msgs)),c.assigned,c.name+' assignment');
+ const locals=new Map(Object.entries(c.local).map(([id,l])=>['chat/'+id,l]));
+ const got=summarizeChatTopics('chat',msgs,locals,vectors.now).map(t=>({ID:t.id,State:t.state,Count:t.count,DoneBy:t.done_by||'',Pending:t.pending}));
+ same(got,c.want,c.name+' shared derivation');
 }
 
 // 3. Routes, on a browser device holding many topics with one agent.
@@ -154,7 +163,7 @@ clock = now + 8 * day;
 check((await topicOf(a.id)).state === 'archived' && (await topicOf(held.id)).state === 'active', 'eight days later');
 clock = now;
 for (const [what, body, re] of [['done', { peer: bob, id: 'f'.repeat(32) }, /No such topic/], ['done', { peer: bob, id: result.id }, /No such topic/],
-  ['done', { peer: bob, id: a.id, extra: 1 }, /Bad request/], ['archive', { peer: bob, id: a.id }, /Unknown request|No such topic change/]]) {
+  ['done', { peer: bob, id: a.id, extra: 1 }, /Bad request/], ['bogus', { peer: bob, id: a.id }, /Unknown request|No such topic change/]]) {
   await refuses(() => engine.api('/api/topic/' + what, body), re, 'refuses ' + what + ' ' + JSON.stringify(body));
 }
 check(changes > writesBefore && network === 0, 'changes are announced; nothing touched the network');

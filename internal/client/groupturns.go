@@ -284,7 +284,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			if person.roster.Person != me.roster.Person {
 				fan = append(fan, envelope.Fan{Person: person.roster.Person, Roster: person.roster.Hash()})
 			}
-			in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: lid, From: a.Address, To: device.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: raw, Body: m.Body, ReplyTo: reply, Quote: quote, Origin: m.Origin, Emotion: m.Emotion, Replica: person.roster.Person == me.roster.Person, Fan: fan}
+			in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: lid, From: a.Address, To: device.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: raw, Body: m.Body, ReplyTo: reply, Quote: quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Origin: m.Origin, Emotion: m.Emotion, Replica: person.roster.Person == me.roster.Person, Fan: fan}
 			copies = append(copies, outCopy{in: in, state: stateQueued, required: protocol.CapGroup, recipientFP: key.Fingerprint(), groupAdmission: admission.Hash()})
 			if waiting != "" {
 				copies[len(copies)-1].state, copies[len(copies)-1].why = stateConvWaiting, waiting

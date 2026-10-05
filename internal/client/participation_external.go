@@ -446,7 +446,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 		}
 	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: out.Kind, Body: out.Body,
-		ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID, Human: out.human}
+		ReplyTo: out.ReplyTo, Quote: out.Quote, Topic: out.Topic, TopicEvent: out.TopicEvent, TopicDone: out.TopicDone, Conv: info.Conv, LID: protocol.NewID(), Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID, Human: out.human}
 	if in.Human != nil {
 		if err := humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), info.Host.Address, info.Host.Fingerprint, false); err != nil {
 			return ConvSent{}, err

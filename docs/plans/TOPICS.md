@@ -1,4 +1,4 @@
-# Topics: an agent's separate conversations
+# Topics in every chat
 
 Status: owner decisions of 2026-10-04 (final), built in the client
 (`internal/client/topics.go`), the page API (`internal/ui/livetopics.go`), the
@@ -13,11 +13,34 @@ by reply links, rebuilt from the messages on every read. Its id is its
 earliest message; its automatic title is that message's first line. Each
 topic is a separate reply chain, so the agent answers it in a fresh session.
 **Topics stay per agent** (owner): one agent is one row in the chat list,
-its topics are inside it. DMs and groups are not topics.
+its topics are inside it. People DMs and groups have an optional set of topics
+inside their chat and keep a main flow for messages without a topic.
 
 Real use is many short topics (one agent: about 10 a day, half with one
 message, most over in minutes), so the design has to stay fast and tidy at
 thousands of topics.
+
+## People chats: main flow and optional topics
+
+New topic makes the next message start a separate flow. Make a topic on a
+main-flow message promotes that message and its reply descendants. Opening a
+topic filters its messages and sends follow-ups into that topic; Main flow
+returns to quick messages. Quotes remain separate from reply links.
+
+An optional signed, encrypted `topic` reference names the flow. Promotions
+and shared Done/Reopen are ordinary human messages with `topic_event`
+`{action: create|done|open, seen?: [logical ids]}`. Done covers the exact held
+turns; an unseen turn reopens the topic even if its signed time is older.
+Actions name the previous held action to preserve causal order; concurrent
+branches use stable signed time and logical-id ordering. Everyone sees who
+marked it done; any participant may reopen it. Creation and shared actions
+reset the quiet interval. An agent asked in a topic replies in it, and only
+its explicit `topic: done` trailer closes it.
+
+Names and manual archive stay local. A new shared action or topic message
+ends a local archive. Delete for me erases only that topic for this person's
+devices through the existing erasure mechanism; other people keep copies.
+Device-chat deletion and Done/Reopen remain local to this device.
 
 ## Lifecycle: active → done → archived
 
@@ -57,7 +80,7 @@ line of its first message). Search finds both names.
 
 ## Where the person's changes live
 
-A name, Mark done and Reopen are stored **locally on this device**, like
+For agent device chats, a name, Mark done and Reopen are stored **locally on this device**, like
 read marks (`topic_state` in the client's SQLite, `kv` `topic/…` rows in the
 browser device's IndexedDB). There is no cross-device sync in this release:
 another device of the same person shows the automatic title and the derived
@@ -84,6 +107,16 @@ Deleting a topic (this device only) also forgets what was set on it.
   phone: a full-screen sheet.
 - The chat list's search also finds topics by name or last line, archived
   ones too, through the same paged route; "Show more topics" pages on.
+
+All topics in Comic, Classic and Zoom offers checkboxes on desktop and phone.
+Select several topics, then Delete for me, Mark done or Archive. One
+confirmation starts a six-second Undo interval; no mutation is sent until
+that interval ends. Undo or closing the view cancels the pending action.
+Bulk Done carries each selected topic's displayed count, keeping messages
+that arrived during Undo active. In people chats it emits one shared event
+per topic. Each topic
+retains its normal archive/deletion scope. A partial failure reports how
+many topics changed and leaves the remaining topics unchanged.
 
 ## Changing it
 
@@ -125,6 +158,23 @@ engine.mjs), held to the same vectors
   `{peer, id, count}` (`count`: the messages the page showed; omitted, all):
   the same guarded action path as every POST (cookie, same origin, JSON);
   `id` is the topic's id.
+
+People-chat additions use the same routes and tunables:
+
+- `/api/dm` adds `topics[]`; each message carries its derived `topic` and
+  optional `topic_event`. A people-chat summary has `conv` and can have
+  `done_by: person`, with `concluded_by` naming the signed action's device.
+- `/api/topics?conv=...` lists that DM/group's topics, with the same filters,
+  search and paging. Cursors remain opaque and scoped to the conversation.
+- `/api/dm/send` and `/api/dm/agent/ask` accept optional `topic` (`new` starts
+  a flow); an ordinary reply inherits its parent's topic.
+- `/api/topic/create` `{conv,id}` promotes a held logical message; other
+  changes accept `{conv,id,count?,title?}`. Bulk Done/Archive/Delete accepts
+  `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}` (up to the existing page maximum).
+
+Storage appends `topic` and `topic_event` inbox/outbox columns and reuses
+`topic_done` and `topic_state`; signed history and selected-content hashes
+carry the optional fields. No backfill, service or dependency is added.
 
 ## Testing a world with old history
 

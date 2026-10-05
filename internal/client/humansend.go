@@ -110,7 +110,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if err != nil {
 		return ConvSent{}, err
 	}
-	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: out.Body, ReplyTo: out.ReplyTo, Quote: out.Quote, Conv: root.ID(), LID: protocol.NewID(), Root: raw, PID: h.AuthorPID, Human: h, Origin: out.Origin}
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: out.Body, ReplyTo: out.ReplyTo, Quote: out.Quote, Topic: out.Topic, TopicEvent: out.TopicEvent, TopicDone: out.TopicDone, Conv: root.ID(), LID: protocol.NewID(), Root: raw, PID: h.AuthorPID, Human: h, Origin: out.Origin}
 	if request || output {
 		in.Kind, in.PID, in.Target, in.AgentID, in.Status, in.Emotion = out.Kind, out.PID, out.Target, out.AgentID, out.status, out.Emotion
 		if request && in.Target != nil {

@@ -379,6 +379,9 @@ type ConvOutgoing struct {
 	Body          string
 	ReplyTo       string
 	Quote         string
+	Topic         string
+	TopicEvent    *envelope.TopicEvent
+	TopicDone     bool
 	Origin        string           // envelope.OriginUI (default) or "agent:<harness>"
 	Emotion       string           // required with an agent origin
 	Target        *envelope.Target // the one execution recipient of a question or task, if any
@@ -453,6 +456,16 @@ type outCopy struct {
 // to this person's own devices are replicas (history: never executed),
 // except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
+	var err error
+	if m.Topic, err = a.outgoingTopic(conv, m.Topic, m.ReplyTo); err != nil {
+		return ConvSent{}, err
+	}
+	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) && !envelope.AgentOrigin(m.Origin) {
+		m.ReplyTo, err = a.chatTopicHead(conv, m.Topic)
+		if err != nil {
+			return ConvSent{}, err
+		}
+	}
 	binding, err := a.prepareReplyReceiver(m.ReplyReceiver)
 	if err != nil {
 		return ConvSent{}, err
@@ -575,11 +588,23 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		m.Quote = parent
 	}
-	if m.ReplyTo != "" { // a reply stays within its own conversation
-		if c, err := a.store.convOf(m.ReplyTo); err != nil {
-			return ConvSent{}, err
+	if m.ReplyTo != "" && m.claim == nil && !envelope.AgentOrigin(m.Origin) { // human replies use a logical parent
+		parent, known, e := humanReplyParent(a.store.db, conv, m.ReplyTo)
+		if e != nil {
+			return ConvSent{}, e
+		}
+		if !known {
+			return ConvSent{}, errors.New("a reply stays within its conversation")
+		}
+		m.ReplyTo = parent
+	}
+
+	if m.ReplyTo != "" && (m.claim != nil || envelope.AgentOrigin(m.Origin)) {
+		// Agent output authorization still names the held request's physical ID.
+		if c, e := a.store.convOf(m.ReplyTo); e != nil {
+			return ConvSent{}, e
 		} else if c != conv {
-			return ConvSent{}, fmt.Errorf("message %s is not in this conversation: a reply stays within its conversation", m.ReplyTo)
+			return ConvSent{}, errors.New("a reply stays within its conversation")
 		}
 	}
 	if len(m.Files) > 0 {
@@ -690,7 +715,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
-			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
+			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
 			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID}
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid
