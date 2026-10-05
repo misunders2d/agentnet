@@ -2583,7 +2583,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -6173,7 +6173,7 @@ export class Engine {
         const state = m.state === "conv_held" && !this.heldOpen(m, msgs) ? "manual" : m.state; // answered here (client.turnClosesHeld)
         const event = m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
         const ev = event ? this.eventFields(m.body, [peer, ...originals], pinned) : null;
-        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
+        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
@@ -6517,7 +6517,7 @@ export class Engine {
       if (prepared) await this.receiverSupport(d.address, pin);
       const pub = await this.pubOf(pin), sealed = [];
       for (const f of plain) sealed.push({ ...await wire.encryptFile(f.bytes, f.name, pub), uploaded: false });
-      const id = isHost ? lid : recs.length || request ? wire.newID() : firstID, own = this.me.devices.some(x => x.address === d.address), inner = { v: 2, id, from: this.address, to: d.address, ts: Math.floor(at / 1000), kind: turn.kind, body: n.body,topic:n.topic||"",topic_event:n.topic_event||null, quote:n.quote||"",reply_to: n.reply_to || "", origin: "ui", conv: c.id, lid, root: c.root, fan, replica: own, pid: turn.pid, ...(request ? { target: turn.target } : {}), human: h, attachments: sealed.map(f => f.attachment), receiver_route: prepared?.route };
+      const id = isHost ? lid : recs.length || request ? wire.newID() : firstID, own = this.me.devices.some(x => x.address === d.address), inner = { v: 2, id, from: this.address, to: d.address, ts: Math.floor(at / 1000), kind: turn.kind, body: n.body,topic:n.topic||"",topic_event:n.topic_event||null, quote:n.quote||"",reply_to: n.reply_to || "", origin: "ui", conv: c.id, lid, root: c.root, fan, replica: own && !isHost, pid: turn.pid, ...(request ? { target: turn.target } : {}), human: h, attachments: sealed.map(f => f.attachment), receiver_route: prepared?.route };
       if(c.kind==="group") {
         inner.fan=[{person:this.me.person,roster:this.me.hash}];
         const reader=[...evidence.members.values()].find(p=>p.devices.some(x=>x.address===d.address&&x.fingerprint===d.fingerprint));
@@ -7527,6 +7527,73 @@ export class Engine {
     return this.sendConv(c, { id: sendID, queued: true, kind, body, topic,reply_to:replyTo,files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
   }
 
+  // Do it confirms only this device's own question, exact answer bytes and
+  // executor. The ordinary send paths retain the recipient's task policy.
+  async proposalCandidate(id) {
+    if (!this.me || this.me.state !== "self" || !this.me.devices?.some(d=>d.address===this.address && d.fingerprint===this.fp) || !(this.me.human_keys || []).includes(this.fp)) throw Error("Only an approved current human device confirms a proposal.");
+    const p = await this.store.get("inbox", id);
+    if (!p || p.kind !== "answer" || p.status !== wire.StatusProposal || p.control || p.sub || p.history || p.replica && !p.conv || !p.fp || wire.blank(p.body)) throw Error("That is not a proposal you can confirm here.");
+    const ref = p.conv ? p.lid : p.id;
+    if (await this.store.get("erased", erasedKey(p.conv || "", p.fp, ref))) throw Error("This proposal was deleted here.");
+    const pin = await this.store.get("pins", p.from);
+    if (!pin || pin.pending || pin.fingerprint !== p.fp) throw Error("The proposal's host key changed.");
+    const rows = [...await this.store.all("inbox"), ...await this.store.all("outbox")];
+    if (rows.some(r => r.control && (r.conv || "") === (p.conv || "") && r.ref?.id === ref && r.ref.fingerprint === p.fp && [wire.SubRevision, wire.SubRetraction].includes(r.sub))) throw Error("The proposal was edited or deleted after it was made.");
+    const q = (await this.store.all("outbox")).find(r => !r.control && !r.aside && r.kind === "question" && r.id === p.reply_to && (r.conv || "") === (p.conv || ""));
+    if (!q || (q.pid || "") !== (p.pid || "") || (q.topic || "") !== (p.topic || "")) throw Error("Only the device that asked the question confirms its proposal.");
+    if (q.target ? q.target.address !== p.from || q.target.fingerprint !== p.fp || (q.target.agent_id || "") !== (p.agent_id || "") : p.agent_id || p.conv || q.to !== p.from || q.fp !== p.fp) throw Error("The proposal differs from the question's exact executor.");
+    let c, info;
+    if (p.conv) {
+      ({ c, info } = await this.agentConv(p.pid));
+      if (c.id !== p.conv || info.state !== "active" || info.held || info.host.address !== p.from || info.host.fingerprint !== p.fp || (info.agent_id || "") !== (q.target.agent_id || "")) throw Error("The proposal's exact agent is no longer active here.");
+    }
+    return { p, q, c, info };
+  }
+
+  async proposalActions(m) {
+    if (m.kind !== "answer" || m.status !== wire.StatusProposal) return [];
+    try {
+      const {p} = await this.proposalCandidate(m.id);
+      return await this.confirmedProposal(p) ? [] : ["do_it"];
+    } catch { return []; }
+  }
+
+  async confirmedProposal(p) {
+    const ref = p.conv ? p.lid : p.id;
+    return (await this.store.all("outbox")).find(r => !r.control && !r.aside && r.kind === "task" && (r.conv || "") === (p.conv || "") && r.reply_to === ref && r.body === p.body && (r.pid || "") === (p.pid || "") && (!p.conv ? r.to === p.from : r.target?.address === p.from && r.target.fingerprint === p.fp && (r.target.agent_id || "") === (p.agent_id || "")));
+  }
+
+  async confirmProposal(id) {
+    this.confirmingProposals ??= new Map();
+    if (this.confirmingProposals.has(id)) return this.confirmingProposals.get(id);
+    const run = this.confirmProposalOnce(id);
+    this.confirmingProposals.set(id, run);
+    try { return await run; } finally { this.confirmingProposals.delete(id); }
+  }
+
+  async confirmProposalOnce(id) {
+    const {p,q,c,info} = await this.proposalCandidate(id);
+    const kept = await this.confirmedProposal(p);
+    if (kept) return {note:"This proposal was already sent as a task."};
+    // The existing durable send correlation also deduplicates concurrent
+    // engines/retries after reload. No new identity, grant or queue.
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(["confirm-proposal", this.fp, p.conv || "", p.lid || p.id, p.fp]))));
+    const sendID = Array.from(digest.slice(0,16), b=>b.toString(16).padStart(2,"0")).join("");
+    try {
+      if (!c) await this.sendV1({id:sendID,queued:true,to:p.from,kind:"task",body:p.body,replyTo:p.id,files:[],status:"",target:q.target || null});
+      else {
+        const n = {id:sendID,queued:true,kind:"task",body:p.body,topic:p.topic || "",reply_to:p.lid,pid:p.pid,origin:"ui",target:q.target,files:[]};
+        const members = await this.dmMembers(c);
+        const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(x=>x.role==="human" && x.state==="active" && !x.held && x.host?.address===this.address && x.host.fingerprint===this.fp);
+        if (!members.has(this.me?.person) && !guest) throw Error("Only a current member or accepted guest confirms this proposal.");
+        const human = !members.group && await this.humanPlan(c,guest?.pid || "");
+        if (human) await this.sendHumanTurn(c,n,human,info);
+        else await this.sendConv(c,n);
+      }
+    } catch(e) { if (!(await this.confirmedProposal(p))) throw e; }
+    return {note:"Task saved; sending to the same agent."};
+  }
+
   // ---- notifications (docs/revival/NOTIFY.md): off until the person turns
   // them on. The service worker shows every alert; this page never shows
   // one. The relay alerts only for senders this device allows, in
@@ -7813,7 +7880,7 @@ export class Engine {
           reply_to: m.reply_to || "",quote:m.quote||"",sent_at:sentAt(m), at: iso(m.at), state: m.state, status: m.status || "", detail: m.detail || "", unread: inbound && !m.read,
           files: await Promise.all((m.attachments || []).map(async (a) => ({ name: wire.safeName(a.name), size: a.size, ...(inbound ? this.fileState(a) : await this.sentState(a)) }))),
           ...ctlView(m), ...execView(m),
-          actions: inbound && m.state === "held" && !(pin && pin.pending) ? ["reply"] : [], // a held question or task: answered here by hand
+          actions: m.status === wire.StatusProposal ? await this.proposalActions(m) : inbound && m.state === "held" && !(pin && pin.pending) ? ["reply"] : [], // a held question or task: answered here by hand
           author: m.agent_id ? { label: "Agent " + m.agent_id, about: "Named executor asserted by host " + m.from + "; its host key and request bind this ID." }
             : inbound ? { label: m.from, about: "Signed with " + m.from + "'s key. Whether a person or one of their agents wrote it is not recorded." }
             : { label: "You", about: "Sent from this browser." },
@@ -7935,7 +8002,7 @@ export class Engine {
 
   // api answers the page's requests as the daemon's page API does.
   async api(path, body) {
-    const sending = ["/api/send", "/api/dm/send", "/api/dm/agent/ask"].includes(path) || path === "/api/act" && body?.do === "reply";
+    const sending = ["/api/send", "/api/dm/send", "/api/dm/agent/ask"].includes(path) || path === "/api/act" && ["reply", "do_it"].includes(body?.do);
     if (sending && this.closing) throw Error("This workspace is closing. Your draft is kept.");
     const request = this.apiResult(path, body);
     if (sending) { this.sendRequests ??= new Set(); this.sendRequests.add(request); }
@@ -8044,6 +8111,7 @@ export class Engine {
     case "/api/device/service": throw new Error("A browser is always a person's device: a service joins from a computer with AgentNet.");
     case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : this.refreshThread(body.id);
     case "/api/act":
+      if (body.do === "do_it") return this.confirmProposal(body.id);
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
       if (body.do === "reply") return this.replyV1(body.id, body.body, body.send_id);
       if (body.do === "resolve") return await this.dismissDeviceAdminNotice(body.id) || this.dismissReport(body.id);

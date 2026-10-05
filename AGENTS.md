@@ -45,9 +45,11 @@ program, `agentnet`, that is both the laptop client and the Hub.
   reruns failed or interrupted work. Self-invite consent (owner
   decision D3, docs/plans/ROOM_V1.md §5) is the one invite accepted without
   a click: the host person's own agent, invited from the host device or an
-  own device the person trusted there with `person approve --native` (never
-  a browser), with task keys only of trusted own devices, which may then
-  give it tasks; that trust too is local only. Either way the harness's normal
+  own device trusted there with `person approve --native`, with task keys
+  only of trusted own devices. Separately, the person's own approved human
+  devices, phones included (risk recorded on MEL-525), may confirm their
+  own agent's exact bound proposal without a second approval. Agent-host
+  keys have no such right; that trust too is local only. Either way the harness's normal
   permissions apply — nothing is bypassed. Workers never touch the user's
   open sessions.
 - **Fail closed:** TLS is never skipped (pinned certificate or system CAs),

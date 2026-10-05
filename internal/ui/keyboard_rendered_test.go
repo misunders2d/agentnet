@@ -20,12 +20,12 @@ import (
 // newest message stays in view. iOS (only the visual viewport shrinks, a
 // stand-in visualViewport here): the host sets --an-viewport-h and
 // --an-keyboard, the page and the message box fit above the keyboard, and
-// a sheet sits on it; Classic and Zoom fit too. Choosing Answer or Do it
-// opens no keyboard unless the person was typing, and Reply from a
+// a sheet sits on it; Classic and Zoom fit too. No up-front execution
+// toggle appears. Reply from a
 // message's sheet, or on the card of a task waiting for the person's OK,
 // puts the cursor in the field inside the tap itself; the phone emoji
 // picker and the host's own sheets sit on the iOS keyboard too. On a
-// desktop a choice still returns the cursor to the field. Opt-in: needs an
+// desktop the composer focuses its field. Opt-in: needs an
 // installed Playwright (AGENTNET_PLAYWRIGHT) and Chromium (AGENTNET_CHROMIUM
 // or /usr/bin/chromium).
 func TestKeyboardViewportRendered(t *testing.T) {

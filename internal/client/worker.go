@@ -71,15 +71,10 @@ func needsHuman(out string) (why string, ok bool) {
 	return rest, kind == outcomeNeedsHuman
 }
 
-// proposalEligible reports whether j's run may answer with a proposal: a
-// device-thread question's own run for a requester (not a follow-up, a
-// selected receiver's continuation or this person's own local request).
-// TODO(integrate:P3/P5-519): a conversation's question (PID) proposes only
-// once a conversation proposal can be confirmed there (v2 ConfirmProposal
-// and the page's Do it); until then its run hands an action to the person
-// (needs_human), as before.
+// A question's own run may propose, including a conversation's local
+// question. A follow-up or selected receiver has no human confirmation path.
 func (j job) proposalEligible() bool {
-	return j.Kind == envelope.KindQuestion && j.PID == "" && !j.followUp() && j.Receiver == nil && !j.Local
+	return j.Kind == envelope.KindQuestion && !j.followUp() && j.Receiver == nil && (!j.Local || j.PID != "")
 }
 
 func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
@@ -477,7 +472,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		why := ""
 		switch {
 		case !j.proposalEligible():
-			why = r.Harness + " proposed an action, which only a device-thread question's answer can carry, so nothing was sent. Its proposal:\n" + rest
+			why = r.Harness + " proposed an action, which only a question's own answer can carry, so nothing was sent. Its proposal:\n" + rest
 		case stdout.truncated:
 			why = r.Harness + " proposed an action, but its text was cut off, so nothing was sent. What it wrote:\n" + rest
 		case strings.TrimSpace(rest) == "":

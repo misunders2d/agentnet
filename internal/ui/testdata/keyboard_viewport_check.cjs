@@ -65,7 +65,7 @@ const frames = (p, n = 3) => p.evaluate((n) => new Promise((done) => { const go 
 async function openChat(p, name) {
   await p.goto(url);
   await p.waitForSelector('section[aria-label="Chats"]', { timeout: 20000 });
-  await p.getByRole('button', { name: /no person linked/ }).first().click();
+  await p.getByRole('button', { name: /Not linked to a person/ }).first().click();
   await p.waitForFunction((n) => {
     const sr = document.getElementById('skin').shadowRoot;
     const scope = sr.querySelector('[data-card]:not([aria-hidden])') || sr.querySelector('main') || sr;
@@ -95,12 +95,9 @@ async function android(browser, scheme) {
   assert.equal(m.focused, false, name + ': opening a chat on a phone does not open the keyboard');
   assert.deepEqual(m.focus, [], name + ': nothing focused the field on open');
 
-  // Choosing an intent without typing opens no keyboard.
-  await p.getByRole('radio', { name: 'Do it' }).tap();
-  m = await measure(p);
-  assert.equal(await p.getByRole('radio', { name: 'Do it' }).getAttribute('aria-checked'), 'true', name + ': Do it is chosen');
-  assert.equal(m.focused, false, name + ': Do it chosen without typing: the field stays unfocused (no keyboard)');
-  assert.deepEqual(m.focus, [], name + ': Do it chosen without typing: no focus() at all');
+  // Agent messages are read-only questions; no up-front execution toggle.
+  assert.equal(await p.getByRole('radio', { name: 'Do it' }).count(), 0, name + ': no task toggle');
+  assert.equal(await p.getByRole('radio', { name: 'Answer', exact: true }).count(), 0, name + ': no answer toggle');
 
   // Typing, the keyboard opens: the page shrinks above it (resizes-content).
   await field(p).tap();
@@ -115,10 +112,9 @@ async function android(browser, scheme) {
   assert.equal(m.vh + m.kb, '', name + ': the page itself shrank, so the host sets nothing');
   await snap(p, 'android-' + scheme + '-typing');
 
-  // A choice while typing keeps the keyboard (and the cursor) in place.
-  await p.getByRole('radio', { name: 'Answer' }).tap();
+  // Continued typing keeps the keyboard and cursor in place.
   m = await measure(p);
-  assert.ok(m.focused, name + ': Answer chosen while typing: the field keeps the cursor');
+  assert.ok(m.focused, name + ': typing retains the cursor');
   assert.ok(m.focus.every((f) => !f.preventScroll), name + ': no preventScroll on a touch screen: ' + JSON.stringify(m.focus));
   assert.ok(m.form <= PHONE.height - KEYBOARD && m.gap <= 1, name + ': still above the keyboard, newest in view: ' + JSON.stringify(m));
 
@@ -270,11 +266,7 @@ async function desktop(browser) {
   let m = await openChat(p, name);
   assert.equal(m.coarse, false, name + ': a fine pointer');
   assert.ok(m.focused, name + ': opening a chat puts the cursor in the field');
-  await field(p).evaluate((ta) => ta.blur());
-  await p.getByRole('radio', { name: 'Do it' }).click();
-  m = await measure(p);
-  assert.ok(m.focused, name + ': a choice returns the cursor to the field');
-  assert.deepEqual(m.focus, [{ micro: false, tap: true, preventScroll: true }], name + ': in the click, without scrolling');
+  assert.equal(await p.getByRole('radio', { name: 'Do it' }).count(), 0, name + ': no up-front task toggle');
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();
   console.log('ok', name);

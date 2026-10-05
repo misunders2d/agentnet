@@ -151,7 +151,7 @@ function answerTo(m: AnyMsg, all: AnyMsg[]) {
 export function requestState(m: AnyMsg, all: AnyMsg[]): { text: string; tone: "ok" | "work" | "wait" | "bad" | "muted" } {
   const answer = answerTo(m, all);
   // A proposal (MEL-521) answers with a task the agent may not run itself:
-  // nothing was done. TODO(integrate:P4 page slice): its Do it button.
+  // nothing was done. Confirmation comes from the host's actions[] list.
   if (answer && "status" in answer && answer.status === "proposal") return { text: "Suggested a task · not run", tone: "wait" };
   if (answer) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
   const e = m.exec;

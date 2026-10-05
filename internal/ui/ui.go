@@ -423,6 +423,7 @@ type DMThread struct {
 
 // DMMessage is one message of a DM.
 type DMMessage struct {
+	Status         string                    `json:"status,omitempty"`
 	Topic          string                    `json:"topic,omitempty"`
 	TopicEvent     *envelope.TopicEvent      `json:"topic_event,omitempty"`
 	AgentAuthorPID string                    `json:"agent_author_pid,omitempty"`
@@ -470,8 +471,9 @@ type DMMessage struct {
 	Exec       *client.ExecView `json:"exec,omitempty"` // a request: where its executing device last said it stands
 	// A request to this device's agent: what its person can do with it
 	// here (accept, cancel, resolve), and what the run left to say.
-	Actions   []string `json:"actions,omitempty"`
-	JobDetail string   `json:"job_detail,omitempty"`
+	Actions   []string             `json:"actions,omitempty"`
+	JobDetail string               `json:"job_detail,omitempty"`
+	Proposal  *client.ProposalView `json:"proposal,omitempty"`
 	// A participation record's type (invite, accept, decline, dismiss or
 	// scope) and its author (their person's label as known here, or their
 	// device's address), plainly, so a page never parses Event.
@@ -1136,6 +1138,7 @@ type Action struct {
 
 // Actions the page can request.
 const (
+	DoIt           = "do_it"         // confirm the stored proposal, with its original target and bytes
 	DoReply        = "reply"         // answer a received item by hand (takes it over)
 	DoAccept       = "accept"        // run a task once, let the responder answer a held question, or run again
 	DoAcceptAlways = "accept_always" // run this task and grant its verified person (or exact device key)

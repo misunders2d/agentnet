@@ -146,7 +146,7 @@ func ownDeviceHolds(q querier, address, fp string) (bool, error) {
 // it. A task the person accepted is not pending (it is accepted) and stays.
 func demoteLapsedOwnTasks(tx *sql.Tx, why string) error {
 	rows, err := tx.Query(`UPDATE inbox SET state = ?, detail = ?, notified = 0, review_sent = 0
-		WHERE kind = ? AND state = ? AND conv IS NULL AND NOT `+taskGrantHolds+` AND NOT `+ownTaskHolds+` RETURNING id`,
+		WHERE kind = ? AND state = ? AND conv IS NULL AND NOT `+taskGrantHolds+` AND NOT `+ownTaskHolds+` AND NOT `+ownProposalHolds+` RETURNING id`,
 		stateAwaiting, "not run without asking: "+why+"; accept ID runs it once", envelope.KindTask, statePending)
 	if err != nil {
 		return err

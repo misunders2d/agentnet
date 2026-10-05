@@ -344,4 +344,65 @@ for (const oldAfterReload of [false, true]) {
   check(wire.parseCaps(ad.body).caps.includes(wire.CapRoom) && wire.parseCaps(ad.body).caps.length <= wire.MaxAdvertisedCaps, "room reader advertises rm1 within 16 names (ROOM_V1 §2.1)");
   e.stop();
 }
+// Proposals: exact selected executor/bytes, only the original asker, and a
+// durable single task after concurrent taps or an engine reload (MEL-521).
+{
+ const f=await fixture(), {e}=f;
+ const asked=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"Should we restart?",agent_id:f.agentA.id});
+ const body="Restart the deploy.\nThen verify it.";
+ const answer=await f.receive(await f.fromPeer({reply_to:asked.id,status:wire.StatusProposal,body,agent_id:f.agentA.id}));
+ check((await e.thread(asked.id)).messages.find(m=>m.id===answer).actions.includes("do_it"),"original asker sees Do it in the device chat");
+ await Promise.all([e.api("/api/act",{do:"do_it",id:answer}),e.api("/api/act",{do:"do_it",id:answer})]);
+ let tasks=(await f.store.all("outbox")).filter(r=>r.kind==="task");
+ check(tasks.length===1 && tasks[0].body===body && tasks[0].reply_to===answer && tasks[0].target.agent_id===f.agentA.id,"double tap keeps one exact task to original executor");
+ const taskID=tasks[0].id;
+ await e.load(); await e.api("/api/act",{do:"do_it",id:answer});
+ tasks=(await f.store.all("outbox")).filter(r=>r.kind==="task");
+ check(tasks.length===1 && tasks[0].id===taskID && !(await e.thread(asked.id)).messages.find(m=>m.id===answer).actions.length,"reload confirmation returns existing task and removes action");
+ e.stop();
+}
+for (const bad of ["edited","retracted","replica","history","other-key","other-agent","other-question"]) {
+ const f=await fixture(), {e}=f;
+ const q=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
+ const answer=await f.receive(await f.fromPeer({reply_to:q.id,status:wire.StatusProposal,body:"Exact task",agent_id:f.agentA.id}));
+ const p=await f.store.get("inbox",answer), request=await f.store.get("outbox",q.id);
+ if (bad==="edited" || bad==="retracted") await f.store.write([{s:"inbox",k:id(),v:{id:id(),control:true,from:p.from,fp:p.fp,sub:bad==="edited"?wire.SubRevision:wire.SubRetraction,ref:{id:answer,fingerprint:p.fp}}}]);
+ else if (bad==="other-key" || bad==="other-agent") await f.store.write([{s:"outbox",k:q.id,v:{...request,target:{...request.target,...(bad==="other-key"?{fingerprint:e.fp}:{agent_id:f.agentB.id})}}}]);
+ else await f.store.write([{s:"inbox",k:answer,v:{...p,...(bad==="other-question"?{reply_to:id()}:{[bad]:true})}}]);
+ await refuses(()=>e.api("/api/act",{do:"do_it",id:answer}));
+ check(!(await f.store.all("outbox")).some(r=>r.kind==="task"),bad+" cannot mint a confirmation task");
+ e.stop();
+}
+{
+ const f=await fixture(), {e}=f, pid=id();
+ const inv=await wire.signEvent(e.keys,{conv:f.conv,pid,type:"invite",ts:Math.floor(now/1000),author:e.author(),host:{person:f.peer.person,address:f.peerAddress,fingerprint:f.peer.fingerprint,agent_id:f.agentA.id},audience:"conversation"});
+ await e.sendConv(f.c,{kind:"message",body:wire.eventJSON(inv),sub:"event",pid});
+ const accept=await wire.signEvent(f.peerKeys,{conv:f.conv,pid,type:"accept",prev:await wire.eventHash(inv),ts:Math.floor(now/1000),author:{person:f.peer.person,roster:f.peer.hash,address:f.peerAddress,fingerprint:f.peer.fingerprint}});
+ await f.receive(await f.fromPeer({v:2,kind:"message",conv:f.conv,lid:id(),root:f.c.root,sub:"event",pid,body:wire.eventJSON(accept)}));
+ const seed=await e.sendDM({conv:f.conv,body:"Deployment topic",topic:"new"});
+ const topic=(await f.store.get("outbox",seed.id)).topic;
+ const asked=await e.askAgent({pid,kind:"question",body:"Should we restart?",topic});
+ const body="Restart exactly.\nVerify afterwards.";
+ const answer=await f.receive(await f.fromPeer({v:2,conv:f.conv,lid:id(),root:f.c.root,pid,reply_to:asked.id,status:wire.StatusProposal,body,topic,agent_id:f.agentA.id,origin:"agent:stub",emotion:"plain"}));
+ check((await e.dm(f.conv)).messages.find(m=>m.id===answer)?.actions.includes("do_it"),"conversation topic shows Do it to original asker");
+ await Promise.all([e.confirmProposal(answer),e.confirmProposal(answer)]);
+ const tasks=(await f.store.all("outbox")).filter(r=>r.kind==="task");
+ check(tasks.length===1 && tasks[0].conv===f.conv && tasks[0].pid===pid && tasks[0].topic===topic && tasks[0].body===body && tasks[0].reply_to===(await f.store.get("inbox",answer)).lid,"confirmation remains in exact conversation/participation/topic");
+ await e.confirmProposal(answer);
+ check((await f.store.all("outbox")).filter(r=>r.kind==="task").length===1,"conversation confirmation retry does not mint more copies");
+ e.stop();
+}
+// The confirmation surface itself belongs only to a current approved human
+// device. Agent-host keys and a removed/frozen own device cannot tap Do it.
+for (const state of ["agent-host","removed","frozen"]) {
+ const f=await fixture(), {e}=f;
+ const q=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
+ const answer=await f.receive(await f.fromPeer({reply_to:q.id,status:wire.StatusProposal,body:"Exact task",agent_id:f.agentA.id}));
+ if(state==="agent-host") e.me={...e.me,human_keys:[]};
+ else if(state==="removed") e.me={...e.me,devices:[]};
+ else e.me={...e.me,state:"conflict"};
+ await refuses(()=>e.confirmProposal(answer),/approved current human/);
+ check(!(await f.store.all("outbox")).some(r=>r.kind==="task"),state+" refuses before sending");
+ e.stop();
+}
 console.log("named-agent engine checks passed: " + checks);

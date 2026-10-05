@@ -757,6 +757,13 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 		if duplicate != "" {
 			state = stateNotRun
 		}
+		if duplicate == "" && state == stateAwaiting {
+			if own, err := ownHumanDeviceHolds(tx, in.From, verifiedBy); err != nil {
+				return err
+			} else if own {
+				state = statePending
+			}
+		}
 	}
 	in = tombstoned(tx, in, verifiedBy) // a message deleted before it arrived here keeps no text
 	res, err := tx.Exec(insertInbox, inboxArgs(in, state, verifiedBy)...)
@@ -1118,7 +1125,7 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
    attempts = attempts + 1, last_attempt_at = unixepoch()
    WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
     OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
-     OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+`)))))
+     OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`)))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     ORDER BY received_at, id LIMIT 1)
    RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,'')`,

@@ -44,7 +44,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	var x ParticipationInfo
 	switch {
 	case request:
-		if out.Kind != envelope.KindQuestion && out.Kind != envelope.KindTask || out.PID == "" || out.PID == h.AuthorPID || out.AgentID != "" || out.sub != "" || envelope.AgentOrigin(out.Origin) || out.claim != nil {
+		if out.Kind != envelope.KindQuestion && out.Kind != envelope.KindTask || out.PID == "" || out.PID == h.AuthorPID || out.AgentID != "" || out.sub != "" || envelope.AgentOrigin(out.Origin) || out.claim != nil && out.Origin != envelope.OriginUI {
 			return ConvSent{}, errors.New("human: an addressed request names its assistant only")
 		}
 		// Its local reply receiver binds the exact host copy (addConvOutbox);
@@ -289,7 +289,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 				return ErrGroupContextPending
 			}
 		}
-		if out.claim != nil { // an output: the worker's claim decides with this write
+		if out.claim != nil { // worker output or human confirmation: its claim decides with this write
 			if err := out.claim(tx, replyID); err != nil {
 				return err
 			}

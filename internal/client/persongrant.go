@@ -104,7 +104,7 @@ func demotePersonJobs(tx *sql.Tx) error {
 	if _, err := tx.Exec(`UPDATE inbox SET state=?,detail='automatic question permission ended; accept it once',notified=0,review_sent=0 WHERE conv IS NULL AND kind='question' AND state=? AND NOT `+questionApprovalHolds, stateHeld, statePending); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE inbox SET state=?,detail='standing task permission ended; accept it once',notified=0,review_sent=0 WHERE conv IS NULL AND kind='task' AND state=? AND NOT (`+taskGrantHolds+` OR `+ownTaskHolds+`)`, stateAwaiting, statePending); err != nil {
+	if _, err := tx.Exec(`UPDATE inbox SET state=?,detail='standing task permission ended; accept it once',notified=0,review_sent=0 WHERE conv IS NULL AND kind='task' AND state=? AND NOT (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`)`, stateAwaiting, statePending); err != nil {
 		return err
 	}
 	_, err := tx.Exec(`DELETE FROM reported WHERE item IN (SELECT id FROM inbox WHERE state IN (?,?) AND review_sent=0)`, stateHeld, stateAwaiting)
