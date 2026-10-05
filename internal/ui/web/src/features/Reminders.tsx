@@ -174,7 +174,11 @@ function ReminderRow({ r, o, names }: { r: T.ReminderView; o: T.Overview | null;
         {face}
         <span className="min-w-0 flex-1">
           <span className="block truncate font-bold">{firstLine(r.title, REMIND.titleMax) || "A message"}</span>
-          <span className={"block truncate text-[13px] " + (r.overdue ? "font-semibold" : "text-text-2")}>From {from} · {r.overdue ? "due since " : ""}{dueText(r.due)}</span>
+          {/* When first: it is what the list is for; who sent it may be cut short. */}
+          <span className={"flex min-w-0 gap-1 text-[13px] " + (r.overdue ? "font-semibold" : "text-text-2")}>
+            <span className="shrink-0 tnum">{r.overdue ? "Due " + dueText(r.due) : cap(dueText(r.due))}</span>
+            <span className="min-w-0 truncate">· From {from}</span>
+          </span>
         </span>
       </button>
       <button type="button" aria-label={"Reminder done: " + (firstLine(r.title, 40) || "a message")} title="Done"
@@ -195,3 +199,4 @@ export function latestReceived(msgs: (T.DMMessage | T.Message)[]): Remindable | 
   return null;
 }
 
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
