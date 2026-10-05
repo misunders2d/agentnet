@@ -183,8 +183,11 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       await draft.waitFor({ state: 'hidden', ...T });
       assert.equal(await p.evaluate(() => __p24.newGroups), 1, 'retry keeps created group');
       assert.deepEqual(await p.evaluate(() => __p24.invites.map(i => i.target)), ['b'.repeat(64), 'c'.repeat(64)], 'no duplicate successful invitation');
+      if (width >= 1024) {
+        assert.equal(await p.getByRole('navigation', { name: 'Main', includeHidden: true }).getByRole('button', { name: 'Chats', exact: true, includeHidden: true }).getAttribute('aria-current'), 'page', 'creating a group from Teams leaves Settings for Chats');
+      }
       // New group opens Bring in. The team selection is also present there.
-      const bring = p.getByRole('dialog', { name: /Bring/ });
+      const bring = p.getByRole('dialog', { name: 'Bring someone in', exact: true });
       await bring.getByText('Choose people from teams', { exact: true }).waitFor(T);
       await bring.getByRole('button', { name: 'Close', exact: true }).click();
       // Existing group: reviewed people can receive reviewed history too.

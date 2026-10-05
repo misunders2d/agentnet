@@ -262,6 +262,7 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack
       if (!store.isActive()) return;
       onCreated();
       await store.open({ kind: "dm", id });
+      store.showTab("chats");
       store.openInvite(id);
     } catch (e) { if (store.isActive()) setError(errorText(e) + (id ? " The group is already created; retry only the remaining invitations." : "")); }
     finally { setBusy(false); void store.refetch(); }
