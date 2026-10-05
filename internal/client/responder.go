@@ -18,7 +18,7 @@ type Responder struct {
 	Harness string        `json:"harness"`           // a key of Harnesses
 	Dir     string        `json:"dir"`               // working directory; the harness's own instructions for it apply
 	Context []string      `json:"context,omitempty"` // files whose text is given with every question
-	Timeout time.Duration `json:"timeout"`           // wall-clock limit per question or task
+	Timeout time.Duration `json:"timeout"`           // the person's own wall-clock limit per question or task; 0: none
 }
 
 // harness is how one installed coding agent is run headless, in its own
@@ -192,8 +192,10 @@ func validateResponder(r *Responder) error {
 			return err
 		}
 	}
-	if r.Timeout <= 0 {
-		r.Timeout = 5 * time.Minute
+	// No platform limit on agent work: a run takes as long as it takes
+	// unless the person set a limit of their own (Timeout > 0).
+	if r.Timeout < 0 {
+		r.Timeout = 0
 	}
 	return nil
 }

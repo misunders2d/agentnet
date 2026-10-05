@@ -4275,7 +4275,7 @@ async function renderNamedAgents(note = "", host = currentHost, gen = state.gen,
         el("label", { for: "named-harness", class: "field-label" }, "Local program"), harness,
         el("label", { for: "named-dir", class: "field-label" }, "Works in"), dir,
         el("p", { class: "hint" }, "Choose the program and folder this agent works in. Saving also tries to make it available to others. Installed program and folder checks do not test sign-in or model availability. Saving does not run the agent."),
-        entry && el("p", { class: "hint" }, "Its timeout and context files are kept.")],
+        entry && el("p", { class: "hint" }, "Its context files (and any time limit you set) are kept.")],
       run: async () => {
         if (!harness.value || !dir.value.trim() || (!entry && !label.value.trim())) throw new Error("Choose an installed program, an absolute working folder and a display label for a new agent.");
         await change({ action: entry ? "update" : "create", ...(entry ? { id: entry.record.id } : { label: label.value.trim() }), harness: harness.value, dir: dir.value.trim() });
@@ -4290,7 +4290,7 @@ async function renderNamedAgents(note = "", host = currentHost, gen = state.gen,
       return el("section", { class: "named-agent-card", "aria-label": "Local agent " + namedAgentLabel(entry.record.id, view.host, records) },
         el("strong", { title: entry.record.id + " · " + view.host + " (host-signed agent)" }, namedAgentLabel(entry.record.id, view.host, records)), el("p", {}, "On " + view.host),
         el("p", { class: "hint" }, !entry.enabled ? "Disabled on this computer. Earlier messages remain." : r ? "Program: " + r.harness + " · " + r.dir + (r.ready ? " · program/folder checks pass" : " · not ready: " + (r.problem || "check program and folder")) : "Program settings unavailable."),
-        r && el("p", { class: "hint" }, "Timeout: " + r.timeout + " seconds · Context files: " + ((r.context || []).join(", ") || "none")),
+        r && el("p", { class: "hint" }, (r.timeout_seconds ? "Your time limit: " + r.timeout_seconds + " seconds · " : "") + "Context files: " + ((r.context || []).join(", ") || "none")),
         el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn", onclick: () => edit(entry) }, "Configure…"),
           entry.enabled && el("button", { type: "button", class: "text-btn", onclick: () => dialog({ title: "Disable " + namedAgentLabel(entry.record.id, view.host, records) + "?", ok: "Disable locally",
             body: [el("p", {}, "Disables this agent on this computer and tries to update the agent list for others. Earlier messages remain. Drafts for this agent keep their recipient.")], run: () => change({ action: "disable", id: entry.record.id }) }) }, "Disable…")));

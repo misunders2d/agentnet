@@ -983,7 +983,11 @@ func runResponder(a *client.Agent, args []string) error {
 			}
 			return nil
 		}
-		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, r.Timeout)
+		limit := "none"
+		if r.Timeout > 0 {
+			limit = r.Timeout.String()
+		}
+		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, limit)
 		for _, c := range r.Context {
 			fmt.Printf("context %s\n", c)
 		}
@@ -1003,7 +1007,7 @@ func runResponder(a *client.Agent, args []string) error {
 		var r client.Responder
 		fs.StringVar(&r.Harness, "harness", "", "responder: "+strings.Join(client.HarnessNames(), ", "))
 		fs.StringVar(&r.Dir, "dir", "", "working directory (its agent instructions apply)")
-		fs.DurationVar(&r.Timeout, "timeout", 5*time.Minute, "limit per question or task")
+		fs.DurationVar(&r.Timeout, "timeout", 0, "your own limit per question or task (0: none; AgentNet sets none)")
 		fs.Func("context", "file given with every question (repeatable)", func(p string) error { r.Context = append(r.Context, p); return nil })
 		if err := fs.Parse(args[1:]); err != nil {
 			return err

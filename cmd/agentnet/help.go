@@ -664,7 +664,7 @@ holds (active, or inactive because the key changed or a change is pending).
 Changes nothing.`,
 
 	"responder": `Usage: agentnet responder list
-       agentnet responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]
+       agentnet responder set --harness NAME --dir DIR [--context FILE]... [--timeout D]
        agentnet responder show
        agentnet responder off
 
@@ -718,7 +718,8 @@ nothing is sent: the item becomes needs_human with the rest as the reason
 (see agentnet help inbox).
 
   --context FILE   text given with every question (repeatable)
-  --timeout D      limit per question or task (default 5m)
+  --timeout D      your own limit per question or task (default none:
+                   AgentNet puts no time limit on agent work)
 
 Example:
   agentnet responder set --harness claude --dir ~/work/project --context ~/notes/team.md`,

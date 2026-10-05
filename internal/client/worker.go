@@ -167,7 +167,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 	args := append(append(plan.args, lookup.args...), j.run.args(h)...)
-	runCtx, cancel := context.WithTimeout(ctx, r.Timeout)
+	runCtx, cancel := context.WithCancel(ctx)
+	if r.Timeout > 0 { // the person's own limit; AgentNet sets none
+		runCtx, cancel = context.WithTimeout(ctx, r.Timeout)
+	}
 	defer cancel()
 
 	// A cancel request from another process arrives as a wake-up. A request
