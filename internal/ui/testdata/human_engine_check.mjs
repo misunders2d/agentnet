@@ -346,5 +346,29 @@ for (const ending of ['original', 'self']) {
   const guest=await a.checkHuman({conv,host:c.address});
   check(guest.needs_update.some(p=>p.role==='guest')&&guest.text.includes('before joining'),'guest wording');
 }
+// MEL-545: the browser's badge and read action use the same displayed rows,
+// including guest turns, while hidden participation copies stay uncounted.
+{
+  const w = await world(), { alice: a, bob: b, carol: c, conv } = w;
+  const invited = await a.changeHuman('invite', { conv, host: c.address });
+  await w.drain(b); await w.drain(c);
+  await c.changeHuman('decide', { pid: invited.pid, accept: true });
+  await w.drain(a); await w.drain(b);
+  await c.sendDM({ conv, pid: invited.pid, body: 'UNREAD GUEST TURN' });
+  await w.drain(a); await w.drain(b);
+  await b.sendDM({ conv, body: 'OWN LATEST REPLY' });
+  await w.drain(a); await w.drain(c);
+  for (const e of [a, b, c]) {
+    const thread = await e.dm(conv);
+    check(thread.messages.some(m => m.body === 'UNREAD GUEST TURN'), 'guest turn appears for each participant');
+    check(thread.messages.filter(m => m.dir === 'out').every(m => !m.unread), 'own messages never unread');
+    check((await e.overview()).dms.find(d => d.id === conv).unread > 0, 'unseen rows still count');
+    await e.markRead(thread.messages.filter(m => m.unread).map(m => m.id));
+    check((await e.overview()).dms.find(d => d.id === conv).unread === 0, 'read guest chat has no badge');
+  }
+  await c.sendDM({ conv, pid: invited.pid, body: 'NEXT UNSEEN GUEST TURN' });
+  await w.drain(a); await w.drain(b);
+  for (const e of [a, b]) check((await e.overview()).dms.find(d => d.id === conv).unread === 1, 'later unseen guest turn adds one unread');
+  check((await c.overview()).dms.find(d => d.id === conv).unread === 0, 'own later guest turn stays read');
+}
 console.log('human engine isolated lifecycle checks passed: ' + checks);
-
