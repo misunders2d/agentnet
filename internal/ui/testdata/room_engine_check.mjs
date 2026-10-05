@@ -94,11 +94,15 @@ assert.notEqual(e.resolveAgent(permanent.pid,pevents,pm).state,"active","cached 
 console.log("PASS P6 permanent membership: accepted consent persists after inviter leaves; changed keys stay held");
 
 // Record every hosted membership on an ordinary group turn, including another
-// PID than the event that just arrived. The reader fence uses the exact epoch.
+// PID than the event that just arrived. P26: a received turn's reader fence
+// uses its verified signed fan, not the members present at arrival.
 const second=invite({group:permanent.group}), secondEvents=[await rec(second),await rec(await wire.scopeOf(second,sec-50)),await rec(await accept(second))];
 const all=[...pevents,...secondEvents], cm=members(true);
 for(const x of all)cm.groupInvites.add(x.hash);
-const ops=await e.roomStoredOps(conv,[],{lid:id("d")},fp("a"),all,cm);
+const turn={lid:id("d"),fan:[{person:alice.person,roster:h64("a")},{person:bob.person,roster:h64("b")}]};
+const unproven=await e.roomStoredOps(conv,[],{lid:turn.lid},fp("a"),all,cm);
+assert.equal(unproven.filter(o=>o.k.startsWith('room-reader/')).length,0,'missing signed fan fabricates no readers');
+const ops=await e.roomStoredOps(conv,[],turn,fp("a"),all,cm);
 assert.equal(ops.filter(o=>o.k.startsWith('room-event/')).length,6,'all permanent consents saved from ordinary turn');
 assert.equal(ops.filter(o=>o.k.startsWith('room-reader/')).length,2,'exact admissions saved for the turn');
 assert(ops.some(o=>o.k===e.roomReaderKey(conv,{lid:id("d"),fingerprint:fp("a")},bob.person,h64("2"))));
