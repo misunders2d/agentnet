@@ -33,7 +33,7 @@ export function OpenCard({ face, children, onOpen, label, current, actions, deta
   face: ReactNode; children: ReactNode; onOpen: () => void; label: string; current?: boolean; actions?: ReactNode; detail?: ReactNode;
 }) {
   return (
-    <article className={"rounded-2xl bg-surface stroke shadow-pop-sm" + (current ? ring : "")}>
+    <article className={"min-w-0 w-full rounded-2xl bg-surface stroke shadow-pop-sm [overflow-wrap:anywhere]" + (current ? ring : "")}>
       <button type="button" data-open onClick={onOpen} aria-label={label} aria-current={current || undefined}
         className={"group press flex w-full gap-3 rounded-2xl p-3.5 text-left" + (actions ? " pb-2" : "")}>
         {face}
