@@ -160,7 +160,7 @@ func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 // listed session reads it.
 func (a *Agent) convSupport(ctx context.Context, address string, key identity.Public, feats []string) (ok bool, why string, notify bool) {
 	if !slices.Contains(feats, protocol.FeatureEnv2) || !slices.Contains(feats, protocol.FeatureCaps) {
-		return false, "your Hub cannot carry conversations (it needs an update)", false
+		return false, WaitServerUpdate + "your Hub cannot carry conversations (it needs an update)", false
 	}
 	label, name, err := protocol.SplitAddress(address)
 	if err != nil {
@@ -168,13 +168,13 @@ func (a *Agent) convSupport(ctx context.Context, address string, key identity.Pu
 	}
 	var prof protocol.Profile
 	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
-		return false, "cannot ask the Hub what " + address + " can read: " + err.Error(), false
+		return false, WaitServerUnavailable + "cannot ask the Hub what " + address + " can read: " + err.Error(), false
 	}
 	if r, err := protocol.ParsePersonRoster(prof.Person); err == nil { // fresh evidence, checked before anything is sent
 		a.observeRef(ctx, &protocol.PersonRef{ID: r.Person, Seq: r.Seq, Hash: r.Hash()})
 	}
 	if !prof.Supports(address, key.SignKey, protocol.CapEnv2) || !prof.Supports(address, key.SignKey, protocol.CapPerson) {
-		return false, address + " needs to update AgentNet before it can take part in conversations (an older program, or it has not connected since updating)", false
+		return false, WaitPeerUpdate + address + " needs to update AgentNet before it can take part in conversations (an older program, or it has not connected since updating)", false
 	}
 	return true, "", slices.Contains(feats, protocol.FeatureNotify) && prof.Supports(address, key.SignKey, protocol.CapNotify)
 }
@@ -504,11 +504,14 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		m.Origin = envelope.OriginUI
 	}
 	if m.Quote != "" {
-		if c, err := a.store.convOf(m.Quote); err != nil {
+		parent, known, err := humanReplyParent(a.store.db, conv, m.Quote)
+		if err != nil {
 			return ConvSent{}, err
-		} else if c != conv {
+		}
+		if !known {
 			return ConvSent{}, errors.New("quote stays within its conversation")
 		}
+		m.Quote = parent
 	}
 	if m.ReplyTo != "" { // a reply stays within its own conversation
 		if c, err := a.store.convOf(m.ReplyTo); err != nil {
@@ -642,7 +645,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			}
 			c.in.Attachments = append(c.in.Attachments, att)
 		}
-		supported, why, notify := false, "cannot reach the Hub", false
+		supported, why, notify := false, WaitServerUnavailable+"cannot reach the Hub", false
 		if ferr == nil {
 			supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
 			if supported && m.sub == envelope.SubDriveSpace { // a dedicated record: only devices that read it

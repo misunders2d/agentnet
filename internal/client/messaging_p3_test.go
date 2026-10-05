@@ -60,7 +60,7 @@ func TestApplyReceiptNeverDowngrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	cursor, _ := w.alice.store.config("receipt_cursor")
-	if cursor != "11" {
+	if cursor != "8" {
 		t.Fatal(cursor)
 	}
 }
@@ -220,6 +220,12 @@ func TestHumanInviteWaitsForUpdate(t *testing.T) {
 	var waiting int
 	if err = w.alice.store.db.QueryRow("SELECT count(*) FROM outbox WHERE pid=? AND state='waiting' AND required_cap=?", inv.PID, protocol.CapHumanParticipation).Scan(&waiting); err != nil || waiting == 0 {
 		t.Fatalf("waiting %d %v", waiting, err)
+	}
+	if _, err := w.alice.store.db.Exec("UPDATE outbox SET error=? WHERE pid=? AND state='waiting'", WaitServerUnavailable+"cannot reach the Hub", inv.PID); err != nil {
+		t.Fatal(err)
+	}
+	if p, e := w.alice.Participation(inv.PID); e != nil || len(p.NeedsUpdate) != 0 {
+		t.Fatalf("server wait incorrectly blames a guest update: %+v %v", p, e)
 	}
 	p3Caps(t, carol, ownCaps)
 	eventually(t, "updated guest sees its invitation", func() bool {

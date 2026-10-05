@@ -588,7 +588,7 @@ func (s *store) setDisposition(id, recipient, state string) (current, sender str
 		return
 	}
 	if changed {
-		_, err = tx.Exec(`INSERT INTO receipts(sender,id,state) VALUES(?,?,?)`, sender, id, current)
+		_, err = tx.Exec(`INSERT INTO receipts(sender,id,state,seq) SELECT ?,?,?,coalesce(max(seq),0)+1 FROM receipts WHERE sender=?`, sender, id, current, sender)
 		if err != nil {
 			return
 		}
@@ -742,7 +742,7 @@ func (s *store) expireSession(recipient, session string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.Exec(`INSERT INTO receipts(sender,id,state) SELECT sender,id,? FROM messages WHERE recipient=? AND session=? AND fallback=0 AND state=?`, protocol.StateExpired, recipient, session, protocol.StateCustody)
+	_, err = tx.Exec(`INSERT INTO receipts(sender,id,state,seq) SELECT m.sender,m.id,?,coalesce((SELECT max(r.seq) FROM receipts r WHERE r.sender=m.sender),0)+row_number() OVER (PARTITION BY m.sender ORDER BY m.seq) FROM messages m WHERE m.recipient=? AND m.session=? AND m.fallback=0 AND m.state=?`, protocol.StateExpired, recipient, session, protocol.StateCustody)
 	if err != nil {
 		return nil, err
 	}
@@ -753,10 +753,10 @@ func (s *store) expireSession(recipient, session string) ([]string, error) {
 	return senders, tx.Commit()
 }
 
-const receiptSchema = `CREATE TABLE receipts(seq INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL); CREATE INDEX receipts_sender ON receipts(sender, seq);`
+const receiptSchema = `CREATE TABLE receipts(seq INTEGER NOT NULL, sender TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(sender,seq));`
 
-func (s *store) receiptMax() (n int64, err error) {
-	err = s.db.QueryRow(`SELECT coalesce(max(seq),0) FROM receipts`).Scan(&n)
+func (s *store) receiptMax(sender string) (n int64, err error) {
+	err = s.db.QueryRow(`SELECT coalesce(max(seq),0) FROM receipts WHERE sender=?`, sender).Scan(&n)
 	return
 }
 func (s *store) receiptsFor(sender string, cursor int64) ([]protocol.ReceiptEvent, error) {

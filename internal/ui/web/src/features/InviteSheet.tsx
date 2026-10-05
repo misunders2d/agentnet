@@ -241,7 +241,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       ) : (
         <Button variant="act" size="lg" disabled={!ready} onClick={bring} className="min-h-14 text-[17px]"
           icon={c ? <CandidateAvatar c={c} size={28} /> : undefined}>
-          {!c ? "Choose who to bring in" : busy ? "Bringing " + shownName + " in…" : route === "guest" && guestCheck && !guestCheck.ready ? "Invite " + shownName + " — waits for update" : "Bring " + shownName + " in" + (now ? " now" : "")}
+          {!c ? "Choose who to bring in" : busy ? "Bringing " + shownName + " in…" : route === "guest" && guestCheck?.needs_update?.some(p => p.role === "guest") ? "Invite " + shownName + " — waits for update" : "Bring " + shownName + " in" + (now ? " now" : "")}
         </Button>
       )}
       {c && route && <p className="mt-2.5 pb-1 text-center text-[13px] font-semibold leading-snug text-muted">{consentText(c, route)}</p>}

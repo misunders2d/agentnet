@@ -80,7 +80,7 @@ export async function openIDB(name = "agentnet") {
           if (c.scope) {
             const rows = [];
             for (let cursor = await tx.objectStore(c.s).openCursor(); cursor; cursor = await cursor.continue()) {
-              if (scopeRow(cursor.value, c.scope)) rows.push({ k: cursor.primaryKey, v: cursor.value });
+              if (scopeRow(cursor.value, c.scope)) rows.push({ k: cursor.primaryKey, v: authorityValue(c.s, cursor.value) });
             }
             if (JSON.stringify(rows) !== JSON.stringify(c.rows)) throw new StoreConflict();
             continue;
@@ -116,7 +116,7 @@ export function memoryStore() {
     prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
     async write(ops, checks = []) {
       for (const c of checks) {
-        const actual = c.scope ? [...data[c.s].entries()].filter(([, v]) => scopeRow(v, c.scope)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => ({ k, v })) : data[c.s].get(c.k);
+        const actual = c.scope ? [...data[c.s].entries()].filter(([, v]) => scopeRow(v, c.scope)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => ({ k, v: authorityValue(c.s, v) })) : data[c.s].get(c.k);
         if (JSON.stringify(actual) !== JSON.stringify(c.scope ? c.rows : c.v)) throw new StoreConflict();
       }
       for (const o of ops) {
@@ -139,6 +139,13 @@ const roomAgentScope = (e) => !e.role && e.audience === "room";
 // request arriving during signature verification must invalidate that read.
 // A shared human record copy (forwarded) is a carrier: its record already
 // counts from the row it came from, so it is never authority or a room turn.
+// Delivery progress never changes the signed authority of an outbox row.
+const authorityValue = (store, row) => {
+  if (store !== "outbox") return structuredClone(row);
+  const {state, detail, delivery, path, ...authority} = row;
+  if (authority.files) authority.files = authority.files.map(({uploaded, ct, ...file}) => file);
+  return structuredClone(authority);
+};
 const scopeRow = (row, scope) => !row.forwarded && ["conv", "pid", "sub", "lid"].every((k) => scope[k] === undefined || row[k] === scope[k]);
 
 const put = (st, s, k, v) => st.write([{ s, k, v }]);
@@ -182,10 +189,14 @@ const holdWords = {
 };
 const holdText = (reason, peer) => (holdWords[reason] ? holdWords[reason](peer) : "It did not verify, so its content is not shown.");
 
-function outText(state, peer, detail) {
+export function outText(state, peer, detail = "") {
   switch (state) {
   case "receiver_waiting": return detail || "Waiting for the selected reply receiver to accept this exact request.";
-  case "waiting": return "Waiting for " + peer + " to update AgentNet";
+  case "waiting":
+    if (detail.startsWith("peer_update: ")) return peer === "You" || peer === "your other device" ? "Your other device needs to update AgentNet" : "Waiting for " + peer + " to update AgentNet";
+    if (detail.startsWith("server_update: ")) return "Your server needs an update before this can be sent";
+    if (detail.startsWith("server_unavailable: ")) return "Cannot reach your server; retries automatically";
+    return "Kept here, not sent yet" + (detail ? ": " + detail : "");
   case "queued": return "Waiting to send; retries automatically";
   case "custody": return "On the server; delivery to " + peer + " not confirmed yet";
   case "delivered": return "Delivered to " + peer;
@@ -1369,7 +1380,7 @@ export class Engine {
   // followed first.
   async supports(address, pin) {
     const f = await this.features();
-    if (!f.includes("env2") || !f.includes("caps") || !f.includes("person2")) return [false, "your server cannot carry conversations (it needs an update)"];
+    if (!f.includes("env2") || !f.includes("caps") || !f.includes("person2")) return [false, "server_update: your server cannot carry conversations (it needs an update)"];
     const prof = await this.profile(address);
     if (prof && prof.person) {
       try {
@@ -1381,7 +1392,7 @@ export class Engine {
     }
     const key = (await this.pubOf(pin)).sign_key;
     if (!(await wire.profileSupports(prof || {}, address, key, wire.CapEnv2)) || !(await wire.profileSupports(prof || {}, address, key, wire.CapPerson))) {
-      return [false, address + " needs to update AgentNet to read this conversation (or has not connected since updating)"];
+      return [false, "peer_update: " + address + " needs to update AgentNet to read this conversation (or has not connected since updating)"];
     }
     return [true, "", f.includes("notify1") && (await wire.profileSupports(prof, address, key, "notify1"))];
   }
@@ -1465,7 +1476,7 @@ export class Engine {
     const attention = origin === "ui" && sub === "" && ["message", "question", "task"].includes(kind);
     const plain = [];
     for (const f of files) plain.push({ name: wire.safeName(f.name), bytes: f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(await f.arrayBuffer()) });
-    if(quote&&!(await this.convMessages(c.id,await this.store.all("inbox"),await this.store.all("outbox"))).some(m=>m.id===quote||m.lid===quote||m.copies?.some(c=>c.id===quote)))throw Error("Quote stays within its conversation.");
+    quote = await this.logicalReply(c.id, quote, true, "Conversation");
     const prepared = await this.prepareReceiverRequest(receiver, { id: target ? lid : firstID, lid, conv: c.id, root: c.root, ts: Math.floor(at/1000), kind, body, quote,reply_to: replyTo, origin, target, pid }, plain, checks);
     const recs = [];
     // A turn is for the other person (as client.SendConv): a changed key
@@ -1480,11 +1491,11 @@ export class Engine {
         [ok, why, notify] = await this.supports(dev.address, pin);
         if (ok && sub === wire.SubDriveSpace) [ok, why] = await this.ctlSupport(dev.address, pin, wire.CapDrive); // a Drive space record goes only to devices that read it; the others wait for it
         if (ok && required_cap) {
-          try { await this.requireAgentIdentity(dev.address, pin); } catch (e) { ok = false; why = retryable(e) ? "cannot reach your server" : e.message; }
+          try { await this.requireAgentIdentity(dev.address, pin); } catch (e) { ok = false; why = retryable(e) ? "server_unavailable: cannot reach your server" : e.code?.endsWith("_unsupported") ? "peer_update: " + e.message : e.message; }
         }
       } catch (e) {
         if (this.revoked) throw new Error("This device was removed from its server: nothing more is sent or received here.");
-        why = "cannot reach your server";
+        why = "server_unavailable: cannot reach your server";
       }
       if (prepared) await this.receiverSupport(dev.address, pin);
       const recipient = await this.pubOf(pin);
@@ -1586,7 +1597,7 @@ export class Engine {
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
       if (e.code === "receiver_unsupported" || rec.conv && ["agent_identity_unsupported", "human_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
-        rec.state = "waiting"; rec.detail = e.message;
+        rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
       } else if (retryable(e)) {
         rec.detail = e.message;
       } else {
@@ -1741,8 +1752,10 @@ export class Engine {
     // Old unmarked history lacks the plaintext used to determine its receiver
     // requirement. Keep its ciphertext and refuse only this row, without
     // inventing a capability or stopping unrelated queued deliveries.
-    const next = missingHistoryProof ? { ...current, state: "failed", detail: "History copy lacks its durable capability proof; encrypted copy kept, not sent." }
-      : current.receiver_redacted ? { ...current, state: rec.state } : ["delivered","quarantined","expired"].includes(current.state) && ["queued","custody","waiting","failed"].includes(rec.state) ? { ...rec, state: current.state, detail: current.detail } : rec;
+    const protectedState = ["delivered","expired"].includes(current.state) || current.state === "quarantined" && rec.state !== "delivered";
+    let next = missingHistoryProof ? { ...current, state: "failed", detail: "History copy lacks its durable capability proof; encrypted copy kept, not sent." }
+      : current.receiver_redacted ? { ...current, state: rec.state } : rec;
+    if (protectedState) next = {...next,state:current.state,detail:current.detail};
     try { await this.store.write([{ s: "outbox", k: rec.id, v: next }], [{ s: "outbox", k: rec.id, v: current }]); }
     catch (e) {
       if (e instanceof StoreConflict) return custody || !rec.required_receiver_cap && !wire.receiverRequirement(rec) ? this.receiverOutboxProgress(rec, custody) : false; // record proven custody against the new redacted row
@@ -4117,8 +4130,8 @@ export class Engine {
     if (event === "receipt") {
       let r;try{r=JSON.parse(data);}catch{return;}
       if(!r||Object.keys(r).some(k=>!["id","state","seq"].includes(k))||!wire.validID(r.id)||!Number.isSafeInteger(r.seq)||r.seq<=0||!["delivered","quarantined","expired"].includes(r.state))return;
-      const row=await this.store.get("outbox",r.id),cursor=await this.store.get("kv","receipt-cursor"),old=cursor||0;
-      const ops=[{s:"kv",k:"receipt-cursor",v:Math.max(old,r.seq)}];if(row&&(["queued","custody"].includes(row.state)||row.state==="quarantined"&&r.state==="delivered"))ops.push({s:"outbox",k:r.id,v:{...row,state:r.state,detail:""}});
+      const row=await this.store.get("outbox",r.id),cursor=await this.store.get("kv","receipt-cursor");
+      const ops=[{s:"kv",k:"receipt-cursor",v:r.seq}];if(row&&(["queued","custody"].includes(row.state)||row.state==="quarantined"&&r.state==="delivered"))ops.push({s:"outbox",k:r.id,v:{...row,state:r.state,detail:""}});
       try { await this.store.write(ops,[{s:"outbox",k:r.id,v:row},{s:"kv",k:"receipt-cursor",v:cursor}]); } catch(e) { if(e instanceof StoreConflict)return this.dispatch(event,data);throw e; }this.changed();
     } else if (event === "message") {
       await this.onMessage(data);
@@ -5022,7 +5035,7 @@ export class Engine {
         const pin = (await this.store.get("pins", dev.address)) || (await this.sendKey(dev.address).catch(() => null)); // a device just linked may not be pinned yet
         if (!pin || pin.pending || pin.fingerprint !== dev.fingerprint) continue; // a changed key is never used
         let ok = false, why = "";
-        try { [ok, why] = await this.ctlSupport(dev.address, pin, wire.CapConvClear); } catch (e) { why = "cannot reach your server"; }
+        try { [ok, why] = await this.ctlSupport(dev.address, pin, wire.CapConvClear); } catch (e) { why = "server_unavailable: cannot reach your server"; }
         const id = wire.newID();
         const envelope = await wire.seal({ v: wire.Version3, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind: "message", sub: wire.SubClear, body, ref, conv, lid, replica: true, fan }, this.keys, await this.pubOf(pin));
         recs.push({ v: 3, control: true, id, conv, lid, to: dev.address, fp: this.fp, own: true, person: this.me.person, kind: "message", sub: wire.SubClear, body, ref, at, aside: true,
@@ -5221,11 +5234,11 @@ export class Engine {
   async ctlSupport(address, pin, cap = wire.CapControl) {
     const what = cap === wire.CapHeadless ? "operator decisions" : cap === wire.CapDrive ? "Drive space records" : cap === wire.CapConvClear ? "conversation deletions" : "reactions, edits or deletions";
     const f = await this.features();
-    if (!f.includes("env3") || !f.includes("caps")) return [false, "your server cannot carry " + what + " (it needs an update)"];
+    if (!f.includes("env3") || !f.includes("caps")) return [false, "server_update: your server cannot carry " + what + " (it needs an update)"];
     let prof = null;
     try { prof = await this.profile(address); } catch (e) { if (retryable(e)) throw e; }
     const key = (await this.pubOf(pin)).sign_key;
-    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, address + " cannot " + (cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
+    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, "peer_update: " + address + " cannot " + (cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
     return [true, ""];
   }
 
@@ -5314,7 +5327,7 @@ export class Engine {
       const pin = await this.store.get("pins", dev.address);
       if (!pin || pin.fingerprint !== dev.fingerprint || pin.pending) continue; // a changed key is never used
       let ok = false, why = "";
-      try { [ok, why] = await this.ctlSupport(dev.address, pin); } catch (e) { why = "cannot reach your server"; }
+      try { [ok, why] = await this.ctlSupport(dev.address, pin); } catch (e) { why = "server_unavailable: cannot reach your server"; }
       if (!ok) { skipped.push(dev.address + ": " + why); continue; }
       const recipient = await this.pubOf(pin);
       const id = wire.newID();
@@ -5678,7 +5691,8 @@ export class Engine {
   // with x, a request addressed to assistant participation x: its exact host
   // gets the executable copy (its ID is the request's LID) and alone decides
   // whether it runs; everyone else keeps the inert turn.
-  async sendHumanTurn(c, n, h, x = null) {
+  async sendHumanTurn(c, n, h, x = null, attempt = 0) {
+    const original = n;
     n = { ...n, reply_to: await this.logicalReply(c.id, n.reply_to, true, "Conversation"),quote:await this.logicalReply(c.id,n.quote,true,"Conversation") }; // client.humanReply: the LID every audience device keeps
     const request = !!x;
     if (request && (!["question", "task"].includes(n.kind) || !n.target || n.receiver)) throw new Error("An addressed request names its assistant only.");
@@ -5708,7 +5722,12 @@ export class Engine {
     }
     if (!recs.length) throw new Error("No authorized human audience device.");
     for (const r of recs) { const gate = await this.humanGate(c, r, checks); if (gate.why) throw new Error(gate.why); }
-    await this.commitReceiverCopies(recs, prepared, checks); await this.keepSent(plain); this.changed();
+    try { await this.commitReceiverCopies(recs, prepared, checks); }
+    catch (e) {
+      if (e instanceof StoreConflict && attempt < 3) return this.sendHumanTurn(c, original, h, x, attempt + 1);
+      throw e;
+    }
+    await this.keepSent(plain); this.changed();
     if (prepared) await this.post(prepared.delegation); else for (const r of recs) await this.post(r);
     const least = copyOrder(recs);
     return { id: recs[0].id, lid, state: least.state, detail: least.detail, copies: recs.map(r => ({ id: r.id, to: r.to, state: r.state, detail: r.detail })) };
@@ -5787,33 +5806,34 @@ export class Engine {
     const members = await this.dmMembers(c), pin = await this.sendKey(body.host), person = await this.personOf(body.host, pin);
     if (!person.devices.some(d => d.address === body.host && d.fingerprint === pin.fingerprint) || !["self", "pinned"].includes(person.state)) throw Error("Host has no current pinned person/device proof.");
     members.set(person.person, person);
-    const v = {ready: true, needs_update: [], offline: [], text: ""}, setup = [], update = [];
-    for (const p of members.values()) {
+    const v = {ready: true, needs_update: [], offline: [], text: ""}, text = [];
+    for (const p of [...members.values()].sort((a,b) => a.label.localeCompare(b.label))) {
+      const role = p.person === this.me.person ? "me" : p.person === person.person ? "guest" : "member";
       let state = "ok", offline = false;
       for (const d of p.devices) {
+        if (role === "guest" && d.address !== body.host) continue;
         const pin = await this.sendKey(d.address), before = pin;
         if (!pin || pin.pending || pin.fingerprint !== d.fingerprint) throw Error("Human participant key is not currently pinned.");
         const profile = await this.profile(d.address), pub = await this.pubOf(pin), after = await this.store.get("pins", d.address);
         if (!after || after.pending || after.fingerprint !== before.fingerprint) throw Error("Human participant key changed.");
         if (!profile.sessions?.length) state = "not set up";
         else if (state !== "not set up" && !await wire.profileSupports(profile, d.address, pub.sign_key, wire.CapHumanParticipation)) state = "update";
-        offline ||= !profile.live;
+        offline = role === "guest" && d.address === body.host && !profile.live;
       }
       if (state !== "ok") {
         v.ready = false;
-        v.needs_update.push({label: p.label, me: p.person === this.me.person});
-        (state === "not set up" ? setup : update).push(p.label);
-      } else if (offline) v.offline.push(p.label);
+        v.needs_update.push({label: p.label, me: role === "me", role});
+        const action = state === "not set up" ? "AgentNet set up" : "an AgentNet update";
+        text.push(role === "me" ? "One of your other devices needs " + action + "." : role === "member" ? p.label + "'s app needs " + action + " to keep this chat working with a guest. That person's copy waits until then." : p.label + "'s app needs " + action + " before joining. The invitation waits until then.");
+      } else if (offline) {
+        v.offline.push(p.label);
+        text.push(p.label + " is not connected now; the invitation reaches them when their app reconnects.");
+      }
     }
-    v.needs_update.sort((a, b) => a.label.localeCompare(b.label)); v.offline.sort(); setup.sort(); update.sort();
-    const text = [];
-    if (setup.length) text.push(setup.join(", ") + " needs to set up AgentNet before joining.");
-    if (update.length) text.push(update.join(", ") + " needs to update AgentNet before joining.");
-    if (v.needs_update.length) text.push("The invitation waits and reaches them once their app is ready.");
-    else if (v.offline.length) text.push("The invitation reaches them when their app reconnects.");
     v.text = text.join(" ");
     return v;
   }
+
   async shownCopies(copies) { const people=[this.me,...await this.store.all("persons")].filter(Boolean);return (copies||[]).map(c=>({...c,person:c.own?"You":people.find(p=>p.person===c.person||p.devices.some(d=>d.address===c.to))?.label||"Someone"})); }
 
   async inviteHuman({ conv, host, share = [], note = "" }) {
@@ -6067,7 +6087,7 @@ export class Engine {
     if (!pin || pin.pending || pin.fingerprint !== dev.fingerprint) return;
     let ok = false, detail = "";
     try { await this.requireHumanSupport(dev.address, pin); [ok, detail] = await this.supports(dev.address, pin); }
-    catch (e) { if (!retryable(e)) return; detail = "cannot reach your server"; }
+    catch (e) { if (!retryable(e)) return; detail = "server_unavailable: cannot reach your server"; }
     const members = await this.dmMembers(c), fan = [...members.values()].map(p => ({ person: p.person, roster: p.hash }));
     const id = wire.newID(), lid = wire.newID(), at = this.now();
     const inner = { v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind: "message", body, conv: c.id, root: c.root, lid, sub: "event", pid: x.pid, replica: false, fan, attachments: [] };
@@ -6167,7 +6187,7 @@ export class Engine {
       if (!pin || pin.pending || pin.fingerprint !== dev.fingerprint) throw new Error("Participation recipient key is no longer pinned.");
       let ok = false, detail = "";
       try { if (info.role === "human") await this.requireHumanSupport(dev.address, pin); else await this.requireAgentIdentity(dev.address, pin, info.external?wire.CapExternalParticipation:wire.agentRequirement(n)); if(members.group)await this.groupSupport(dev.address,pin); [ok, detail] = await this.supports(dev.address, pin); }
-      catch (e) { if(e.code==="human_unsupported"){ok=false;detail="Waiting for an AgentNet update";}else{if (!retryable(e)) throw e; detail = "cannot reach your server";} }
+      catch (e) { if(e.code==="human_unsupported"){ok=false;detail="peer_update: " + e.message;}else{if (!retryable(e)) throw e; detail = "server_unavailable: cannot reach your server";} }
       if(prepared)await this.receiverSupport(dev.address,pin);
       const recipient = await this.pubOf(pin), sealed = [];
       for (const f of plain) sealed.push({ ...await wire.encryptFile(f.bytes, f.name, recipient), uploaded: false });
@@ -6301,7 +6321,7 @@ export class Engine {
     const rows = [];
     for (const s of ["inbox", "outbox"]) {
       const matching = (await this.store.all(s)).filter((r) => scopeRow(r, scope));
-      if (checks) checks.push({ s, scope, rows: matching.map((v) => ({ k: v.id, v: structuredClone(v) })).sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0) });
+      if (checks) checks.push({ s, scope, rows: matching.map((v) => ({ k: v.id, v: authorityValue(s, v) })).sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0) });
       rows.push(...matching);
     }
     return rows;
@@ -6402,7 +6422,7 @@ export class Engine {
   // agentsOf resolves every participation of conv c.
   async participationsOf(c) {
     const m = await this.dmMembers(c), evs = await this.convEvents(c.id);
-    const waiting=(await this.store.all("outbox")).filter(r=>r.conv===c.id&&r.state==="waiting"&&r.required_cap===wire.CapHumanParticipation),persons=[this.me,...await this.store.all("persons")].filter(Boolean);
+    const waiting=(await this.store.all("outbox")).filter(r=>r.conv===c.id&&r.state==="waiting"&&r.required_cap===wire.CapHumanParticipation&&r.detail?.startsWith("peer_update: ")),persons=[this.me,...await this.store.all("persons")].filter(Boolean);
     return [...new Set(evs.map((x) => x.e.pid))].map(pid=>{const p=this.resolveAgent(pid,evs,m);p.needs_update=[...new Set(waiting.filter(r=>r.pid===pid).map(r=>persons.find(p=>p.devices.some(d=>d.address===r.to))?.label||"Someone"))];return p;});
   }
   async agentsOf(c) { return (await this.participationsOf(c)).filter(p => p.role !== "human"); }

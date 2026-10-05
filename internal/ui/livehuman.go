@@ -285,6 +285,7 @@ func (s *Server) changeHuman(action string) http.HandlerFunc {
 type GuestCheckPerson struct {
 	Label string `json:"label"`
 	Me    bool   `json:"me"`
+	Role  string `json:"role"`
 }
 type GuestCheck struct {
 	Ready       bool               `json:"ready"`
@@ -305,37 +306,37 @@ func (l *Live) CheckHuman(ctx context.Context, c GuestCheckRequest) (GuestCheck,
 	if err != nil {
 		return GuestCheck{}, Refuse(l.updateSentence(err))
 	}
+	return guestCheckOf(support), nil
+}
+
+func guestCheckOf(support []client.HumanSupport) GuestCheck {
 	v := GuestCheck{Ready: true, NeedsUpdate: []GuestCheckPerson{}, Offline: []string{}}
-	var setup, update []string
+	var text []string
 	for _, p := range support {
-		switch p.State {
-		case "update", "not set up":
-			v.NeedsUpdate = append(v.NeedsUpdate, GuestCheckPerson{Label: p.Label, Me: p.Me})
+		if p.State == "update" || p.State == "not set up" {
 			v.Ready = false
+			v.NeedsUpdate = append(v.NeedsUpdate, GuestCheckPerson{Label: p.Label, Me: p.Me, Role: p.Role})
+			action := "an AgentNet update"
 			if p.State == "not set up" {
-				setup = append(setup, p.Label)
-			} else {
-				update = append(update, p.Label)
+				action = "AgentNet set up"
 			}
-		case "offline":
+			switch p.Role {
+			case "me":
+				text = append(text, "One of your other devices needs "+action+".")
+			case "member":
+				text = append(text, p.Label+"'s app needs "+action+" to keep this chat working with a guest. That person's copy waits until then.")
+			case "guest":
+				text = append(text, p.Label+"'s app needs "+action+" before joining. The invitation waits until then.")
+			}
+		} else if p.State == "offline" && p.Role == "guest" {
 			v.Offline = append(v.Offline, p.Label)
+			text = append(text, p.Label+" is not connected now; the invitation reaches them when their app reconnects.")
 		}
 	}
-	var text []string
-	if len(setup) > 0 {
-		text = append(text, strings.Join(setup, ", ")+" needs to set up AgentNet before joining.")
-	}
-	if len(update) > 0 {
-		text = append(text, strings.Join(update, ", ")+" needs to update AgentNet before joining.")
-	}
-	if len(v.NeedsUpdate) > 0 {
-		text = append(text, "The invitation waits and reaches them once their app is ready.")
-	} else if len(v.Offline) > 0 {
-		text = append(text, "The invitation reaches them when their app reconnects.")
-	}
 	v.Text = strings.Join(text, " ")
-	return v, nil
+	return v
 }
+
 func (s *Server) checkHuman(w http.ResponseWriter, r *http.Request) {
 	var c GuestCheckRequest
 	if !readJSON(w, r, &c) {

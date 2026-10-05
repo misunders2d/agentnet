@@ -384,7 +384,7 @@ func (f *Fixture) Send(d Draft) (Sent, error) {
 	} else {
 		f.threads = append(f.threads, t)
 	}
-	m := f.add(t, &Message{Dir: "out", Kind: kind, At: f.now(), State: f.outState(d.To), Path: "relay", Body: body, ReplyTo: d.ReplyTo})
+	m := f.add(t, &Message{Dir: "out", Kind: kind, At: f.now(), State: f.outState(d.To), Path: "relay", Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote})
 	f.bump()
 	return Sent{ID: m.ID, State: m.State, Path: m.Path}, nil
 }
@@ -597,7 +597,7 @@ func (f *Fixture) SendDM(x DMDraft) (Sent, error) {
 		if d.id == x.Conv {
 			f.nextID++
 			m := DMMessage{ID: fmt.Sprintf("dmm%04d", f.nextID), Dir: "out", From: f.me.Address, Kind: KindMessage, Body: body,
-				ReplyTo: x.ReplyTo, Origin: "ui", State: "delivered", StateText: DMStateText("out", KindMessage, "delivered", d.peer.Address, ""), At: f.now()}
+				ReplyTo: x.ReplyTo, Quote: x.Quote, Origin: "ui", State: "delivered", StateText: DMStateText("out", KindMessage, "delivered", d.peer.Address, ""), At: f.now()}
 			d.msgs = append(d.msgs, m)
 			f.bump()
 			return Sent{ID: m.ID, State: m.State}, nil

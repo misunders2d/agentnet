@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -533,8 +533,9 @@ func (s *store) releaseUploads(messageID string) error {
 func (s *store) setOutboxState(id, state, errText, path string) error {
 	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, ''), path = coalesce(nullif(?, ''), path)
 		WHERE id = ? AND NOT (state = ? AND ? IN (?, ?, ?))
-		AND NOT (state IN ('delivered','quarantined','expired') AND ? IN ('queued','custody','waiting','failed'))`,
-		state, errText, path, id, stateNotDelivered, state, stateQueued, stateConvWaiting, stateFailed, state)
+		AND NOT (state IN ('delivered','expired') AND ? <> state)
+		AND NOT (state='quarantined' AND ? NOT IN ('quarantined','delivered'))`,
+		state, errText, path, id, stateNotDelivered, state, stateQueued, stateConvWaiting, stateFailed, state, state)
 	return s.done(err)
 }
 
@@ -1302,3 +1303,5 @@ func (s *store) replyTo(id, peer string) (string, error) {
 }
 
 const messagingSchema = `ALTER TABLE inbox ADD COLUMN quote TEXT; ALTER TABLE outbox ADD COLUMN quote TEXT; ALTER TABLE inbox ADD COLUMN topic_done INTEGER NOT NULL DEFAULT 0; ALTER TABLE outbox ADD COLUMN topic_done INTEGER NOT NULL DEFAULT 0;`
+
+const deliveryPersonSchema = `ALTER TABLE outbox ADD COLUMN recipient_person TEXT;`

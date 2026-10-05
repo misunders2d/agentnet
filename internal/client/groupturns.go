@@ -198,7 +198,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	waiting := ""
 	for _, member := range packet.State.Members {
 		if _, err = a.refreshPerson(ctx, member.Person, false); hubUnreachable(err) {
-			waiting = "cannot reach the Hub: " + err.Error()
+			waiting = WaitServerUnavailable + "cannot reach the Hub: " + err.Error()
 			break
 		} else if err != nil {
 			return ConvSent{}, err

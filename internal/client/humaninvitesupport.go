@@ -12,6 +12,7 @@ import (
 type HumanSupport struct {
 	Label string
 	Me    bool
+	Role  string
 	State string
 }
 
@@ -48,8 +49,17 @@ func (a *Agent) HumanInviteSupport(ctx context.Context, conv, host string) ([]Hu
 	var out []HumanSupport
 	for _, person := range persons {
 		v := HumanSupport{Label: person.info.Label, Me: person.info.State == personSelf, State: "ok"}
+		v.Role = "member"
+		if v.Me {
+			v.Role = "me"
+		} else if person.info.Person == p.info.Person {
+			v.Role = "guest"
+		}
 		offline := false
 		for _, d := range person.roster.Devices {
+			if v.Role == "guest" && d.Address != host {
+				continue
+			}
 			label, device, _ := protocol.SplitAddress(d.Address)
 			var profile protocol.Profile
 			if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+device+"/profile", nil, &profile); err != nil {
@@ -59,7 +69,7 @@ func (a *Agent) HumanInviteSupport(ctx context.Context, conv, host string) ([]Hu
 			if state == "not set up" || state == "update" && v.State != "not set up" {
 				v.State = state
 			}
-			offline = offline || !profile.Live
+			offline = v.Role == "guest" && d.Address == host && !profile.Live
 		}
 		if v.State == "ok" && offline {
 			v.State = "offline"

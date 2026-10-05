@@ -582,11 +582,19 @@ type Target struct {
 // AgentOrigin reports whether origin says an agent wrote the turn.
 func AgentOrigin(origin string) bool { return strings.HasPrefix(origin, OriginAgentPrefix) }
 
+// CheckQuote validates the quote rule shared by envelopes and retained history.
+func CheckQuote(in Inner) error {
+	if in.Quote != "" && (!validID(in.Quote) || in.Quote == in.ID || in.V == Version3 || in.Sub != "" || in.Status != "" || AgentOrigin(in.Origin) || (in.Kind != KindMessage && in.Kind != KindQuestion && in.Kind != KindTask)) {
+		return errors.New("quote belongs only on a person's turn and must name another message")
+	}
+	return nil
+}
+
 // checkVersion2 validates the version 2 fields of in (or their absence in
 // version 1).
 func checkVersion2(in Inner) error {
-	if in.Quote != "" && (!validID(in.Quote) || in.Quote == in.ID || in.V == Version3 || in.Sub != "" || in.Status != "" || AgentOrigin(in.Origin) || (in.Kind != KindMessage && in.Kind != KindQuestion && in.Kind != KindTask)) {
-		return errors.New("quote belongs only on a person's turn and must name another message")
+	if err := CheckQuote(in); err != nil {
+		return err
 	}
 	if in.TopicDone && (in.V != Version || in.Conv != "" || in.Status != StatusDone || (in.Kind != KindAnswer && in.Kind != KindResult)) {
 		return errors.New("topic_done belongs only on a completed device-thread answer or result")

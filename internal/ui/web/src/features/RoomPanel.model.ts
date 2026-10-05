@@ -233,3 +233,7 @@ export function guestUpdatePeople(waiting: string[], candidates: (T.PersonView |
   const people = [...new Map(candidates.filter((p): p is T.PersonView => !!p).map(p => [p.person || p.address, p])).values()];
   return people.filter(p => p.person !== self && p.state !== "self" && waiting.includes(p.label) && people.filter(x => x.label === p.label).length === 1);
 }
+
+export function guestUpdateDraft(member: boolean) {
+  return (member ? "Could you update AgentNet? Our chat needs it for a guest to join." : "Could you update AgentNet? I'd like to bring you into a chat.") + " Get AgentNet: https://github.com/misunders2d/agentnet/releases";
+}

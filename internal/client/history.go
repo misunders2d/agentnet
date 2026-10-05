@@ -349,6 +349,9 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 		return hold(reasonConflict, errPersonConflict.Error())
 	}
 	orig := item.inner(in.Conv)
+	if err := envelope.CheckQuote(orig); err != nil {
+		return hold(reasonInvalid, err.Error())
+	}
 	if err := receiverHistoryRoute(a.store.db, orig, item.FromKey); err != nil {
 		return hold(reasonInvalid, err.Error())
 	}

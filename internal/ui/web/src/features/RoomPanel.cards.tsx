@@ -11,7 +11,7 @@ import { AgentAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
-import { callName, exposure, guestUpdatePeople, lineOf, plural, shortName, speaker, type Guest, type Waiting } from "./RoomPanel.model";
+import { callName, exposure, guestUpdateDraft, guestUpdatePeople, lineOf, plural, shortName, speaker, type Guest, type Waiting } from "./RoomPanel.model";
 
 export type Act = (g: Guest, what: "accept" | "decline" | "dismiss" | "cancel" | "leave") => void;
 
@@ -71,8 +71,9 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
 export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy: boolean; onAct: Act }) {
   const [seeing, setSeeing] = useState(false);
   const mine = g.can.decide;
+  const store = useApp(), me = useStore(store, s => s.overview?.person?.label);
   const waiting=(t.guests||[]).find(x=>x.pid===g.pid)?.needs_update||[];
-  const waitFor = waiting.length?"Waiting for "+waiting.join(", ")+" to update AgentNet":g.kind === "agent" ? (g.hostHere ? "Waiting for your OK" : "Waiting for " + g.hostName + "’s OK") : g.hostHere ? "You’re invited to help" : "Waiting for " + g.name + " to join";
+  const waitFor = waiting.length?"Waiting for "+waiting.map(label => label === me ? "your other device" : label).join(", ")+" to update AgentNet":g.kind === "agent" ? (g.hostHere ? "Waiting for your OK" : "Waiting for " + g.hostName + "’s OK") : g.hostHere ? "You’re invited to help" : "Waiting for " + g.name + " to join";
   return (
     <article aria-label={g.name + ", invited"} className={"pop-in rounded-2xl p-3 " + (mine ? "stroke bg-surface shadow-pop" : "border-2 border-dashed border-outline/40")}>
       <div className="flex items-center gap-3">
@@ -192,6 +193,6 @@ function AskUpdate({ t, pid }: { t: T.DMThread; pid: string }) {
     const existing = o?.dms?.find(d => d.peer.person === p.person || d.peer.address === p.address);
     const id = existing?.id || (await api.newDM(p.address)).id;
     await store.open({kind: "dm", id});
-    store.setDraft(id, {...store.draft(id), text: "Could you update AgentNet? I'd like to bring you into a chat." + (o?.release ? " Get AgentNet: https://github.com/misunders2d/agentnet/releases" : "")});
+    store.setDraft(id, {...store.draft(id), text: guestUpdateDraft(t.peer.person === p.person || t.peer.address === p.address)});
   })}>Ask {p.label} to update</Button>)}</>;
 }

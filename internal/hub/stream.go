@@ -142,7 +142,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "", "invalid receipt cursor")
 			return
 		}
-		max, e := h.store.receiptMax()
+		max, e := h.store.receiptMax(caller)
 		if e != nil {
 			writeError(w, http.StatusInternalServerError, "", "storage error")
 			return

@@ -473,7 +473,7 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub, refID, refFP, in.AgentID, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE outbox SET quote=nullif(?,''),topic_done=? WHERE id=?`, in.Quote, in.TopicDone, env.ID); err != nil {
+		if _, err := tx.Exec(`UPDATE outbox SET quote=nullif(?,''),topic_done=?,recipient_person=(SELECT person FROM person_devices WHERE address=?) WHERE id=?`, in.Quote, in.TopicDone, env.To, env.ID); err != nil {
 			return err
 		}
 		if i == 0 {
@@ -665,13 +665,13 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
-		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts
+		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, ''
 		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
 		   AND NOT `+erasedIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),o.created_at
+		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),o.created_at,coalesce(o.recipient_person,'')
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+`
 		ORDER BY ms, 1`, conv, self, selfFP, conv, selfFP)
@@ -683,10 +683,10 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 	sent := map[string]int{} // logical id of a message sent here: its index in out
 	for rows.Next() {
 		var m ConvMessage
-		var target, to string
+		var target, to, person string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person); err != nil {
 			return nil, err
 		}
 		if target != "" {
@@ -698,7 +698,10 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		}
 		switch {
 		case m.Dir == "out":
-			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to], Person: persons[to]}
+			if person == "" {
+				person = persons[to]
+			}
+			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to], Person: person}
 			if i, ok := sent[m.LID]; ok {
 				out[i].Copies = append(out[i].Copies, c)
 				if rank(c.State) < rank(out[i].State) {

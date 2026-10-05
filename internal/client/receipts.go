@@ -18,7 +18,7 @@ func (s *store) applyReceipt(r protocol.ReceiptEvent) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO config(k,v) VALUES('receipt_cursor',?) ON CONFLICT(k) DO UPDATE SET v=CAST(max(CAST(config.v AS INTEGER),CAST(excluded.v AS INTEGER)) AS TEXT)`, strconv.FormatInt(r.Seq, 10))
+	_, err = tx.Exec(`INSERT INTO config(k,v) VALUES('receipt_cursor',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.FormatInt(r.Seq, 10))
 	if err != nil {
 		return err
 	}

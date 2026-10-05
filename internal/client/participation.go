@@ -392,7 +392,7 @@ func participationIn(q dbq, conv, pid string, m dmMembers, self string) (Partici
 	info := resolve(conv, pid, events, m)
 	info.HostHere = info.Host.Address == self && info.Host.State == personSelf
 	if info.Role == protocol.RoleHuman {
-		rows, err := q.Query(`SELECT DISTINCT coalesce(p.label,'Someone') FROM outbox o LEFT JOIN person_devices d ON d.address=o.recipient LEFT JOIN persons p ON p.person=d.person WHERE o.pid=? AND o.state='waiting' AND o.required_cap=?`, pid, protocol.CapHumanParticipation)
+		rows, err := q.Query(`SELECT DISTINCT coalesce(p.label,'Someone') FROM outbox o LEFT JOIN person_devices d ON d.address=o.recipient LEFT JOIN persons p ON p.person=d.person WHERE o.pid=? AND o.state='waiting' AND o.required_cap=? AND instr(coalesce(o.error,''),?)=1`, pid, protocol.CapHumanParticipation, WaitPeerUpdate)
 		if err != nil {
 			return ParticipationInfo{}, err
 		}

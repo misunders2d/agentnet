@@ -64,3 +64,8 @@ func (s *store) devicePersons() (map[string]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// Persist a stable cause with the diagnostic text; UI never guesses from prose.
+const WaitPeerUpdate = "peer_update: "
+const WaitServerUpdate = "server_update: "
+const WaitServerUnavailable = "server_unavailable: "

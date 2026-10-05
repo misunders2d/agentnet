@@ -40,7 +40,7 @@ func TestReceivedShowsSentTime(t *testing.T) {
 	}
 }
 func TestPageWordsNoJargonP3(t *testing.T) {
-	words := []string{sentence(&client.NeedsUpdateError{Address: "vitalii/vitalii", Cap: protocol.CapHumanParticipation}), DMStateText("out", "message", "waiting", "Vitalii", "cannot be retried: vitalii/vitalii cannot read hgp1")}
+	words := []string{sentence(&client.NeedsUpdateError{Address: "vitalii/vitalii", Cap: protocol.CapHumanParticipation}), DMStateText("out", "message", "waiting", "Vitalii", client.WaitPeerUpdate+"vitalii/vitalii cannot read hgp1")}
 	for _, s := range words {
 		for _, bad := range []string{"vitalii/vitalii", "capabilit", "retried", "hgp1"} {
 			if strings.Contains(strings.ToLower(s), bad) {

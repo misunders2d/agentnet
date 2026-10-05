@@ -338,7 +338,7 @@ type DMMessage struct {
 	EventType string    `json:"event_type,omitempty"`
 	EventBy   string    `json:"event_by,omitempty"`
 	Quote     string    `json:"quote,omitempty"`
-	SentAt    time.Time `json:"sent_at"`
+	SentAt    time.Time `json:"sent_at,omitzero"`
 	Delivery  string    `json:"delivery,omitempty"`
 }
 
@@ -620,7 +620,21 @@ type DMDraft struct {
 func DMStateText(dir, kind, state, peer, detail string) string {
 	if dir == "out" {
 		if state == "waiting" {
-			return "Waiting for " + peer + " to update AgentNet"
+			switch {
+			case strings.HasPrefix(detail, client.WaitPeerUpdate):
+				if peer == "You" || peer == "your other device" {
+					return "Your other device needs to update AgentNet"
+				}
+				return "Waiting for " + peer + " to update AgentNet"
+			case strings.HasPrefix(detail, client.WaitServerUpdate):
+				return "Your server needs an update before this can be sent"
+			case strings.HasPrefix(detail, client.WaitServerUnavailable):
+				return "Cannot reach your server; retries automatically"
+			case detail != "":
+				return "Kept here, not sent yet: " + detail
+			default:
+				return "Kept here, not sent yet"
+			}
 		}
 		return StateText("out", kind, state, peer)
 	}
@@ -873,7 +887,7 @@ type Message struct {
 	// is not connected now.
 	Exec   *client.ExecView `json:"exec,omitempty"`
 	Quote  string           `json:"quote,omitempty"`
-	SentAt time.Time        `json:"sent_at"`
+	SentAt time.Time        `json:"sent_at,omitzero"`
 }
 
 // Controls is what reactions, edits and deletion did to a message, as

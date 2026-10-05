@@ -73,6 +73,14 @@ const host = Object.freeze({
   skins: [{ api: 1, id: 'comic', name: 'Comic', builtin: true }, { api: 1, id: 'example', name: 'Example', digest: '0'.repeat(64) }], onSkinsChange() { return () => {}; },
   selectSkin() { throw new Error('Switching is not part of this check'); },
 });
+window.__openP3 = async () => {
+ const overview=await json('/api/overview');
+ for(const dm of overview.dms) {
+  const view=await json('/api/dm?id='+dm.id),m=view.messages.find(m=>m.body==='P3 QUOTED TEXT');
+  if(m) {openHandler(m.id,'message',{conv:dm.id,dir:'out'});return m.id;}
+ }
+ throw Error('prepared P3 quote fixture not found');
+};
 window.__openDevice = async () => {
  if (!window.__openKinds.includes('message')) throw new Error('skin did not take message notifications');
  const overview = await json('/api/overview'), thread = overview.threads.find(t => t.peer === 'bob/desk' && t.count > 1 && !t.notice_only);
@@ -199,6 +207,9 @@ async function staysModal(page, role, what) {
 let sent = 0;
 
 const messageShot = async (page, skin) => {
+  const times=await page.locator('time[datetime]').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('datetime')));
+  assert.ok(times.length>0,skin+': rendered sent time exists');
+  assert.ok(times.every(t=>Date.parse(t)>0),skin+': no year-one sent time');
   await page.waitForTimeout(300); // capture the settled message view after its transition
   if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS, 'contract-'+skin+'-'+page.viewportSize().width+'-message.png')});
 };
@@ -311,6 +322,21 @@ const journeys = {
         }
       });
       if (journey) await journey(page);
+      if(process.env.AGENTNET_P3_REVIEW && p.manifest.id!=='notebook') {
+        try {
+          const id=await page.evaluate(()=>window.__openP3());
+          const quoted=page.locator(p.manifest.id==='comic'?'[data-mid="'+id+'"]':p.manifest.id==='classic'?'#m-'+id:'.zoom-message');
+          await quoted.waitFor();assert.match(await quoted.textContent(),/P3 QUOTED TEXT/,p.manifest.id+': quoted message');
+          const reference=p.manifest.id==='comic'?quoted.getByRole('button').filter({hasText:'P3 PARENT TEXT'}):quoted.locator('.replyref');
+          await reference.waitFor();assert.equal(await reference.count(),1,p.manifest.id+': exactly one explicit quote');
+          assert.match(await reference.textContent(),/P3 PARENT TEXT/,p.manifest.id+': quoted text');
+          await page.getByText('Cannot reach your server; retries automatically',{exact:false}).first().waitFor();
+          await messageShot(page,p.manifest.id+'-p3');
+        } catch(e) {
+          if(process.env.AGENTNET_SCREENSHOTS) await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,'contract-'+p.manifest.id+'-p3-'+w+'-FAIL.png')});
+          throw Error(p.manifest.id+' at '+w+': '+e.message);
+        }
+      }
       if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.AGENTNET_SCREENSHOTS, 'contract-' + p.manifest.id + '-' + w + '.png') });
       // A/B/A: unmount, mount again, unmount, mount again.
       const left1 = await page.evaluate(() => window.__unmount());

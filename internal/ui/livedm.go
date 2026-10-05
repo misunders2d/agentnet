@@ -359,10 +359,13 @@ func (l *Live) DM(id string) (DMThread, error) {
 				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
 			if m.State == "waiting" {
 				label := addressLabels[laggingCopy(m, c.Peer.Address)]
+				if laggingCopy(m, c.Peer.Address) == "all devices" {
+					label = "your other device"
+				}
 				if label == "" {
 					label = "someone"
 				}
-				dm.StateText = DMStateText(m.Dir, m.Kind, m.State, label, "")
+				dm.StateText = DMStateText(m.Dir, m.Kind, m.State, label, m.Detail)
 			}
 			for i := range dm.Copies {
 				if dm.Copies[i].Own {

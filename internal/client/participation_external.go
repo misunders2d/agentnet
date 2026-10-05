@@ -253,6 +253,9 @@ func parseGrantedExcerpt(in envelope.Inner, info ParticipationInfo) (HistoryItem
 	if !slices.Contains([]string{envelope.KindMessage, envelope.KindQuestion, envelope.KindTask, envelope.KindAnswer, envelope.KindResult}, h.Kind) || !slices.Contains(info.Grant, protocol.GrantRef{LID: h.LID, Fingerprint: h.FromKey}) {
 		return h, errors.New("excerpt does not match an exact signed grant reference")
 	}
+	if err := envelope.CheckQuote(h.inner(in.Conv)); err != nil {
+		return h, err
+	}
 	if len(h.Attachments) > envelope.MaxAttachments {
 		return h, errors.New("too many excerpt files")
 	}
@@ -494,7 +497,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 			c.recipientFP = key.Fingerprint()
 		}
 		if ferr != nil {
-			c.state, c.why = stateConvWaiting, ferr.Error()
+			c.state, c.why = stateConvWaiting, WaitServerUnavailable+ferr.Error()
 		} else if ok, why, _ := a.convSupport(ctx, dev.Address, key, feats); !ok {
 			c.state, c.why = stateConvWaiting, why
 		}

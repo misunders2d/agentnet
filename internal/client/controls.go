@@ -323,7 +323,7 @@ func (a *Agent) ctlSupport(ctx context.Context, address string, key identity.Pub
 // control (protocol.CapControl or CapHeadless): each is checked by name.
 func (a *Agent) capSupport(ctx context.Context, address string, key identity.Public, feats []string, cap string) (bool, string) {
 	if !slices.Contains(feats, protocol.FeatureEnv3) || !slices.Contains(feats, protocol.FeatureCaps) {
-		return false, "your Hub cannot carry reactions, edits or deletions (it needs an update)"
+		return false, WaitServerUpdate + "your Hub cannot carry reactions, edits or deletions (it needs an update)"
 	}
 	label, name, err := protocol.SplitAddress(address)
 	if err != nil {
@@ -331,14 +331,14 @@ func (a *Agent) capSupport(ctx context.Context, address string, key identity.Pub
 	}
 	var prof protocol.Profile
 	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
-		return false, "cannot ask the Hub what " + address + " can read: " + err.Error()
+		return false, WaitServerUnavailable + "cannot ask the Hub what " + address + " can read: " + err.Error()
 	}
 	if !prof.Supports(address, key.SignKey, cap) {
 		what := "reactions, edits or deletions"
 		if cap == protocol.CapHeadless {
 			what = "execution status or operator decisions"
 		}
-		return false, address + " cannot read " + what + " yet (an older program, or it has not connected since updating)"
+		return false, WaitPeerUpdate + address + " cannot read " + what + " yet (an older program, or it has not connected since updating)"
 	}
 	return true, ""
 }

@@ -2021,12 +2021,16 @@ function guestUpdateTargets(g,t) {
   const people = [...new Map(all.map(p => [p.person || p.address, p])).values()];
   return people.filter(p => p.person !== state.overview.person?.person && p.state !== "self" && (g.needs_update || []).includes(p.label) && people.filter(x => x.label === p.label).length === 1);
 }
+function guestUpdateDraft(member) {
+  return (member ? "Could you update AgentNet? Our chat needs it for a guest to join." : "Could you update AgentNet? I'd like to bring you into a chat.") + " Get AgentNet: https://github.com/misunders2d/agentnet/releases";
+}
 async function askGuestUpdate(p) {
+  const member = state.dmData?.peer?.person === p.person || state.dmData?.peer?.address === p.address;
   const existing = (state.overview.dms || []).find(d => d.peer?.person === p.person || d.peer?.address === p.address);
   const id = existing?.id || (await api("/api/dm/new", {address: p.address})).id;
   $("dialog").close();
   await loadOverview(); await openDM(id);
-  $("body").value = "Could you update AgentNet? I'd like to bring you into a chat." + (state.overview.release ? " Get AgentNet: https://github.com/misunders2d/agentnet/releases" : "");
+  $("body").value = guestUpdateDraft(member);
   grow(); keepDraft(); $("body").focus();
 }
 
@@ -2065,7 +2069,7 @@ function dmMsg(m, t, prev) {
         m.job_detail && el("p", { class: "hint" }, m.job_detail),
         el("div", { class: "acts" }, acts.map((a, i) => actionButton(a, m, t, i === 0)))),
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
-      el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && (m.delivery||m.state_text) && el("span", {}, m.dir==="out"&&m.delivery?(copyWord[m.delivery]||m.delivery):m.state_text),
+      el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && (m.delivery||m.state_text) && el("span", {}, m.dir==="out"&&m.delivery?(deliveryText(m)):m.state_text),
         !t.frozen && !dmVisitor(t) && !m.excerpt_pid && !m.deleted && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
         reminderLine(m),
         dmDetails(m),
@@ -2089,7 +2093,7 @@ function dmDetails(m) {
       el("dt", {}, "Device"), el("dd", {}, m.from),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
-      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},copyWord[m.delivery]||m.delivery)],
+      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
@@ -2107,7 +2111,10 @@ function myDeviceName(address) {
   return d ? d.name : address;
 }
 
-const copyWord = { delivered: "delivered", custody: "on your server", queued: "queued here", waiting: "kept here, not sent yet", failed: "failed" };
+function deliveryText(m) {
+  return ["waiting","quarantined","expired","failed"].includes(m.delivery) && m.state_text ? m.state_text : copyWord[m.delivery] || m.delivery;
+}
+const copyWord = { delivered: "delivered", custody: "on your server", queued: "queued here", waiting: "kept here, not sent yet", failed: "not sent", quarantined: "they could not verify it", expired: "not delivered: that session ended first" };
 
 // agentLinkText says which agent a person's device runs, and where it is
 // in DMs here. The link is the invitation's host: that person and device.
@@ -2230,7 +2237,7 @@ function participantsDialog(t) {
 function guestCard(g, t) {
   return el("div", { class: "agent-card " + g.state },
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Guest"), el("strong", {}, g.host.label || g.host.address)),
-    g.needs_update?.length && el("p",{class:"hint"},"Waiting for "+g.needs_update.join(", ")+" to update AgentNet"),
+    g.needs_update?.length && el("p",{class:"hint"},"Waiting for "+g.needs_update.map(label=>label===state.overview.person?.label?"your other device":label).join(", ")+" to update AgentNet"),
     guestUpdateTargets(g,t).map(p => el("button", {type:"button",class:"btn",onclick:()=>askGuestUpdate(p).catch(e=>announce(e.message))}, "Ask "+p.label+" to update")),
     el("p", {}, g.state === "active" ? "Joined this conversation." : g.state === "dismissed" ? "No longer in the active audience here. Other devices may still be updating." : g.state === "invited" ? "Invitation waiting for a response." : g.state_text),
     el("p", { class: "hint" }, "Invited by " + g.inviter.label),
@@ -2266,7 +2273,7 @@ function inviteHumanDialog(t, address = "") {
   host.value = address; // chosen from @ (an exact directory entry), still editable here
   const candidates = directory().current ? directory().members.filter(p => !addresses.has(p.address)) : [];
   const updateNote=el("p",{class:"hint",role:"status"});let checkedHost="";
-  const checkHost=async()=>{const chosen=host.value.trim();checkedHost="";updateNote.textContent="Checking their app…";try{const v=await api("/api/dm/guest/check",{conv:t.id,host:chosen},transport);if(current()&&host.value.trim()===chosen){checkedHost=chosen;updateNote.textContent=v.text||"";$("dialog-ok").textContent=v.needs_update?.length?"Invite · waits for update":"Invite person";}}catch(e){if(current()&&host.value.trim()===chosen)updateNote.textContent=e.message;}};
+  const checkHost=async()=>{const chosen=host.value.trim();checkedHost="";updateNote.textContent="Checking their app…";try{const v=await api("/api/dm/guest/check",{conv:t.id,host:chosen},transport);if(current()&&host.value.trim()===chosen){checkedHost=chosen;updateNote.textContent=v.text||"";$("dialog-ok").textContent=v.needs_update?.some(p=>p.role==="guest")?"Invite · waits for update":"Invite person";}}catch(e){if(current()&&host.value.trim()===chosen)updateNote.textContent="Could not check "+chosen.split("/")[0]+"’s app. Try again.";}};
   host.addEventListener("change",checkHost);
   const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address;void checkHost(); } }, el("strong", {}, p.label || p.address.split("/")[0]), " · ", el("small", {}, p.address)));
   const ref = m => m.lid || m.id;
@@ -2287,7 +2294,7 @@ function inviteHumanDialog(t, address = "") {
       const address = host.value.trim(), selected = share.filter(c => c.input.checked).map(c => c.input.value);
       if (!address || addresses.has(address)) throw new Error("Choose the exact address of someone outside this private DM.");
       if (t.messages.some(m => selected.includes(ref(m)) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected context includes files. Confirm file sharing, or deselect those messages.");
-      if(checkedHost!==address){await checkHost();if(checkedHost!==address)throw Error("Check their app before inviting.");}
+      if(checkedHost!==address){await checkHost();if(checkedHost!==address)throw Error("Could not check "+address.split("/")[0]+"’s app. Try again.");}
       await api("/api/dm/guest/invite", { conv: t.id, host: address, share: selected, note: note.value }, transport);
       if (current()) { announce("Human invited. No earlier context or files leave before acceptance."); await loadDM(); }
     } });
@@ -3378,7 +3385,7 @@ function details(m) {
       el("dt", {}, "Sent"), el("dd", {}, new Date(m.sent_at || m.at).toLocaleString()),
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
-      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},copyWord[m.delivery]||m.delivery)],
+      m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],

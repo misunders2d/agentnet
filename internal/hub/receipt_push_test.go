@@ -29,7 +29,7 @@ func TestReceiptLogAtomicAndSenderOnly(t *testing.T) {
 		t.Fatalf("foreign receipts: %+v %v", other, err)
 	}
 	// Session expiry logs every message with its own sequence, exactly once.
-	ids := []string{sendMessage(t, h, a, b), sendMessage(t, h, c, b)}
+	ids := []string{sendMessage(t, h, a, b), sendMessage(t, h, a, b), sendMessage(t, h, c, b)}
 	for _, id := range ids {
 		if _, err = h.store.db.Exec("UPDATE messages SET session='ended',fallback=0 WHERE id=?", id); err != nil {
 			t.Fatal(err)
@@ -39,17 +39,21 @@ func TestReceiptLogAtomicAndSenderOnly(t *testing.T) {
 	if err != nil || len(senders) != 2 {
 		t.Fatalf("%v %v", senders, err)
 	}
-	max, _ := h.store.receiptMax()
+	expired, err := h.store.receiptsFor(a.addr, 2)
+	if err != nil || len(expired) != 2 || expired[0].Seq != 3 || expired[1].Seq != 4 {
+		t.Fatalf("expiry sequence: %+v %v", expired, err)
+	}
+	max, _ := h.store.receiptMax(a.addr)
 	if max != 4 {
 		t.Fatalf("max=%d", max)
 	}
 	h.store.expireSession(b.addr, "ended")
-	again, _ := h.store.receiptMax()
+	again, _ := h.store.receiptMax(a.addr)
 	if again != max {
 		t.Fatal("expiry replay appended duplicate receipts")
 	}
 	for i := 0; i < protocol.ReceiptBatch+3; i++ {
-		if _, err = h.store.db.Exec("INSERT INTO receipts(sender,id,state) VALUES(?,?,'delivered')", a.addr, protocol.NewID()); err != nil {
+		if _, err = h.store.db.Exec("INSERT INTO receipts(sender,id,state,seq) SELECT ?,?,'delivered',coalesce(max(seq),0)+1 FROM receipts WHERE sender=?", a.addr, protocol.NewID(), a.addr); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -58,12 +62,17 @@ func TestReceiptLogAtomicAndSenderOnly(t *testing.T) {
 		t.Fatalf("batch %d %v", len(batch), err)
 	}
 	rest, err := h.store.receiptsFor(a.addr, batch[len(batch)-1].Seq)
-	if err != nil || len(rest) != 6 {
+	if err != nil || len(rest) != 7 {
 		t.Fatalf("rest %d %v", len(rest), err)
 	}
 }
 func TestReceiptStreamOptInAndCursor(t *testing.T) {
 	h, a, b, c := blobHub(t, 1<<30)
+	// Another sender's activity must not affect this sender's clamp or sequence.
+	for i := 0; i < 4; i++ {
+		foreign := sendMessage(t, h, c, b)
+		b.call(t, h, "POST", "/v1/messages/"+foreign+"/ack", protocol.AckRequest{State: "delivered"})
+	}
 	id := sendMessage(t, h, a, b)
 	b.call(t, h, "POST", "/v1/messages/"+id+"/ack", protocol.AckRequest{State: "delivered"})
 	srv := httptest.NewTLSServer(h.routes())
@@ -74,7 +83,7 @@ func TestReceiptStreamOptInAndCursor(t *testing.T) {
 		query  string
 		want   bool
 		code   int
-	}{{"sender", a, "&receipts=0", true, 200}, {"foreign", c, "&receipts=0", false, 200}, {"absent", a, "", false, 200}, {"restore clamp", a, "&receipts=999", true, 200}, {"negative", a, "&receipts=-1", false, 400}, {"empty", a, "&receipts=", false, 400}, {"non decimal", a, "&receipts=1.2", false, 400}} {
+	}{{"sender", a, "&receipts=0", true, 200}, {"foreign", c, "&receipts=4", false, 200}, {"absent", a, "", false, 200}, {"restore clamp", a, "&receipts=999", true, 200}, {"sender clamp", a, "&receipts=2", true, 200}, {"negative", a, "&receipts=-1", false, 400}, {"empty", a, "&receipts=", false, 400}, {"non decimal", a, "&receipts=1.2", false, 400}} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
 			defer cancel()
@@ -114,5 +123,19 @@ func TestReceiptStreamOptInAndCursor(t *testing.T) {
 				t.Fatalf("receipt=%v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestReceiptSequencesArePrivatePerSender(t *testing.T) {
+	h, a, b, c := blobHub(t, 1<<30)
+	for _, sender := range []member{a, c, c, a} {
+		id := sendMessage(t, h, sender, b)
+		b.call(t, h, "POST", "/v1/messages/"+id+"/ack", protocol.AckRequest{State: "delivered"})
+	}
+	for _, sender := range []member{a, c} {
+		rows, err := h.store.receiptsFor(sender.addr, 0)
+		if err != nil || len(rows) != 2 || rows[0].Seq != 1 || rows[1].Seq != 2 {
+			t.Fatalf("%s: %+v %v", sender.addr, rows, err)
+		}
 	}
 }

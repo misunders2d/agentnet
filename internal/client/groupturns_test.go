@@ -341,7 +341,7 @@ func TestGroupTurnWaitsWhileHubUnreachable(t *testing.T) {
 	})
 	path, data := writeFile(t, t.TempDir(), "tiny.csv", 2000)
 	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "while the Hub is down", Files: []OutgoingFile{{Path: path, Name: "tiny.csv"}}})
-	if err != nil || sent.State != stateConvWaiting || len(sent.Copies) != 2 || !strings.HasPrefix(sent.Detail, "cannot reach the Hub") || strings.Contains(sent.Detail, "workspace identity") {
+	if err != nil || sent.State != stateConvWaiting || len(sent.Copies) != 2 || !strings.HasPrefix(sent.Detail, WaitServerUnavailable+"cannot reach the Hub") || strings.Contains(sent.Detail, "workspace identity") {
 		t.Fatalf("group send without the Hub: %+v %v", sent, err)
 	}
 	if r, err := alice.Cleanup(false); err != nil || r.SpoolFiles != 0 {
