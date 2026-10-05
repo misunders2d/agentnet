@@ -3,6 +3,43 @@
 One program, `agentnet`, is both the laptop client and the Hub. Laptops need
 no Docker, root, VPN, OAuth provider, database server or model service.
 
+## People: the AgentNet app
+
+People install **the AgentNet app** like any app and open it from its icon.
+It runs this computer's AgentNet itself (the `agentnet` program comes inside
+it), starts with the computer hidden in the tray, and keeps running when its
+window is closed (tray: Open AgentNet, Start when I log in, Quit AgentNet).
+An invitation link opens a page that offers the app for the device it is
+opened on; the app then opens with the invitation, shows the server it is
+for, and joins on one click. Devices are named automatically.
+
+| System | Installer (on the releases page) | Notes |
+| --- | --- | --- |
+| Linux | `AgentNet-linux-x86_64.AppImage` | Any distribution with FUSE 2: make it executable and open it; it adds itself to the app launcher. `.deb` and `.rpm` are there too. |
+| Windows | `AgentNet-windows-x64-setup.exe` | Per user, no admin rights. Not signed yet: Windows says "Windows protected your PC" → More info → Run anyway. |
+| macOS | `AgentNet-macos-universal.dmg` | Built but **not yet tested on a real Mac**; not signed, so macOS blocks it until it is allowed in System Settings. |
+| Android, iPhone | — | Open the invitation link in the browser and add AgentNet to the home screen (iPhone: paste the invitation in the home-screen app). |
+
+The app's window uses one loopback address per home, kept across starts
+(`ui-addr` in the home; `127.0.0.1:17443` when free). `agentnet ui` opens the
+app. The command line below stays for coding agents, servers and advanced
+use, on the same home and identity. `desktop/build.sh` builds the app (Go,
+Rust and Node; see the script); the release workflow builds it for all three
+systems.
+
+**Moving from a daemon you started yourself** (a systemd service, a
+LaunchAgent, a logon task): nothing to do at first. While that daemon runs,
+the app shows its page and opens nothing itself (it never touches the home's
+database then). To let the app take over, stop and disable the daemon, for
+example `systemctl --user disable --now agentnet` (and remove a drop-in that
+added `--ui`); the app notices within seconds and serves the same home on the
+same address. The app's window keeps its own storage: a skin chosen and
+drafts typed in a browser at that address are not carried over (the app
+opens on Comic once). Notification clicks from the old daemon open a
+browser; the app's own open its window.
+
+## Agents, servers and advanced use: the agentnet program
+
 **Release binaries**: use the
 [latest release](https://github.com/misunders2d/agentnet/releases/latest);
 its notes say what it covers and what remains limited, and every release is on

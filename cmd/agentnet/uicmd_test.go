@@ -128,7 +128,7 @@ func TestDaemonUIAddressStaysOutOfTheLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	if err := runUI(context.Background(), home, nil, &out); err != nil || out.String() != "Open: "+url+"\n" {
+	if err := runUI(context.Background(), home, nil, &out); err != nil || out.String() != "Open: "+url+"\nGet the AgentNet app to open it from your apps: "+getAppURL+"\n" {
 		t.Fatalf("ui printed %q: %v", out.String(), err)
 	}
 	// The token opens the page; the address alone does not.

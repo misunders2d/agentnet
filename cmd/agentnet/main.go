@@ -85,6 +85,8 @@ func run(args []string) error {
 		return runHooks(*home, rest)
 	case "ui":
 		return runUI(ctx, *home, rest, os.Stdout)
+	case "app": // the AgentNet app's own program (app.go); it opens the home itself
+		return runApp(ctx, *home, rest, os.Stdin, os.Stdout)
 	}
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
