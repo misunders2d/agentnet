@@ -853,3 +853,7 @@ button.reaction { cursor: pointer; }
 
 .mc-stack { min-width: 0; max-width: min(70%, 620px); }
 .mc-stack .mc-bubble { max-width: 100%; }
+
+/* The agent’s needs-you turn stays readable at phone widths. */
+.agent-turn { margin-top: 8px; padding: 12px; border: 1px solid var(--attn-line); border-radius: 10px; }
+.agent-detail { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }

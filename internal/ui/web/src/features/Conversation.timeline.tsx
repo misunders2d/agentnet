@@ -137,7 +137,8 @@ function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
 function flash(box: HTMLElement, id: string, smooth: boolean) {
   const el = box.querySelector<HTMLElement>("[data-mid=\"" + CSS.escape(id) + "\"]");
   if (!el) return false;
-  el.scrollIntoView({ block: "center", behavior: smooth && !reduced() ? "smooth" : "auto" });
+  const target = el.querySelector<HTMLElement>("[data-agent-needs-you]") || el;
+  target.scrollIntoView({ block: target === el ? "center" : "start", behavior: smooth && !reduced() ? "smooth" : "auto" });
   el.animate([{ backgroundColor: "color-mix(in srgb, var(--an-act) 40%, transparent)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
   return true;
 }

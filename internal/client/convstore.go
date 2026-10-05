@@ -704,13 +704,18 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 			c := ConvCopy{ID: m.ID, To: to, State: m.State, Detail: m.Detail, Own: own[to], Person: person}
 			if i, ok := sent[m.LID]; ok {
 				out[i].Copies = append(out[i].Copies, c)
+				// The local job belongs to one copy. Keep its full result and
+				// actionable id even when another copy sorted first.
+				if m.Job != "" {
+					out[i].ID, out[i].Job, out[i].JobDetail = m.ID, m.Job, m.JobDetail
+				}
 				if rank(c.State) < rank(out[i].State) {
 					out[i].State, out[i].Detail = c.State, c.Detail
 				}
 				// Its id is a copy to someone else when there is one, so a
 				// status of the id shown is about them, never about one of
 				// this person's own devices.
-				if !c.Own && out[i].Copies[0].Own && out[i].ID == out[i].Copies[0].ID {
+				if out[i].Job == "" && !c.Own && out[i].Copies[0].Own && out[i].ID == out[i].Copies[0].ID {
 					out[i].ID = c.ID
 				}
 				continue

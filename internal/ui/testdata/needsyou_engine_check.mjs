@@ -62,3 +62,26 @@ assert.deepEqual(heldIds([heldTurn, turn(7, { own: true, fp: "a".repeat(8), orig
 assert.deepEqual(heldIds([heldTurn, turn(7, { kind: "question", target: { address: "admin/laptop", fingerprint: "a".repeat(8) } })]), [heldTurn.id], "a request to an agent answers nothing");
 assert.deepEqual(heldIds([turn(7, { at: received - 1000 }), heldTurn]), [heldTurn.id], "an earlier turn answers nothing");
 console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out; requests listed as their host reports them, interrupted included; held turns answered by the person's later turn");
+
+// Full private output stays whole, bound to the current own executor/key,
+// the original request/key, and the latest report snapshot.
+const hostFP = "a".repeat(8), full = "Which branch?\n\nUse release.\n" + "長い行🙂".repeat(150);
+e.me.devices = [{address:active.host.address,fingerprint:hostFP}];
+await e.store.write([{s:"pins",k:active.host.address,v:{fingerprint:hostFP}}]);
+const request = {...req,target:{address:active.host.address,fingerprint:hostFP}};
+const reportItem = {id:request.lid,from:e.address,key:e.fp,kind:"task",state:"needs_human",conv:true,excerpt:full,actionable:false};
+const notice = {id:"9".repeat(32),at:now,v:1,kind:"message",status:"review_notice",from:active.host.address,fp:hostFP,body:JSON.stringify({v:2,at:1759500000,host:active.host.address,items:[reportItem]})};
+const reports = await e.ownNeedsYouReports([notice], []);
+assert.equal(e.needsYouText(request,reports),full,"the whole multi-paragraph message survives");
+assert.equal(e.reportItems([notice])[0].report.items[0].actionable,false,"read-only visibility grants nothing");
+assert.equal(e.needsYouText({...request,target:{...request.target,fingerprint:"b".repeat(8)}},reports),"","changed target key");
+assert.equal(e.needsYouText({...request,lid:"0".repeat(32)},reports),"","another request");
+assert.equal(e.needsYouText({...request,fp:"b".repeat(8)},reports),"","another requester's key");
+const settled = {...notice,id:"8".repeat(32),body:JSON.stringify({v:2,at:1759500001,host:active.host.address,items:[]})};
+assert.equal(e.needsYouText(request,await e.ownNeedsYouReports([notice,settled],[])),"","settled snapshot clears stale needs-you");
+await e.store.write([{s:"pins",k:active.host.address,v:{fingerprint:hostFP,pending:{}}}]);
+assert.deepEqual(await e.ownNeedsYouReports([notice],[]),[],"pending host key is blocked");
+await e.store.write([{s:"pins",k:active.host.address,v:{fingerprint:hostFP}}]);
+e.me.devices=[];
+assert.deepEqual(await e.ownNeedsYouReports([notice],[]),[],"removed own device is blocked");
+console.log("PASS full needs-you reports: whole text, exact current owner and request keys, read-only, latest snapshot, pending/removal fences");

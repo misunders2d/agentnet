@@ -370,7 +370,10 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 		// from another device of this person (Via) is a received copy.
 		a.markOpenable(msgs[i].Attachments, msgs[i].Dir == "out" && msgs[i].Via == "")
 	}
-	return msgs, a.decorateConv(conv, msgs)
+	if err := a.decorateConv(conv, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, a.privateNeedsYou(msgs)
 }
 
 // ConvOutgoing is a message to send in a conversation.
