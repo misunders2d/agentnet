@@ -5,6 +5,13 @@ const assert=require('node:assert/strict'),path=require('node:path');
  const browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
  try{for(const skin of ['comic','classic','zoom'])for(const width of [1280,390]){
   const origin=new URL(process.env.P7_URL).origin,context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];
+  const act=async(action,button)=>{
+   const [response]=await Promise.all([page.waitForResponse(r=>{
+    if(new URL(r.url()).pathname!=='/api/act'||r.request().method()!=='POST')return false;
+    const body=r.request().postDataJSON();return body.do===action&&body.id===process.env.P7_PERSON;
+   }),button.click()]);
+   assert(response.ok(),skin+width+': '+action+' exact person request: '+response.status());
+  };
   await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
   page.on('pageerror',e=>errors.push(String(e)));
   await context.request.post(origin+'/p7/reset');
@@ -24,7 +31,7 @@ const assert=require('node:assert/strict'),path=require('node:path');
   await page.evaluate(async()=>{const root=document.querySelector('#skin')?.shadowRoot;await Promise.all((root?.getAnimations({subtree:true})||[]).filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
   if(process.env.AGENTNET_SCREENSHOTS)await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,'p7-'+skin+'-'+width+'.png')});
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),skin+width+': horizontal overflow');
-  await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/act' && r.request().method()==='POST'),confirm.click()]);
+  await act('approve',confirm);
   const acts=await (await context.request.get(origin+'/p7/actions')).json();assert.equal(acts.at(-1).id,process.env.P7_PERSON,skin+width+': exact person ID');
   if(skin==='comic'){
    if(width<700)await page.getByRole('button',{name:/Back to chats/}).click();
@@ -39,7 +46,8 @@ const assert=require('node:assert/strict'),path=require('node:path');
    await page.getByText('agentnet unapprove --tasks PERSON-or-ADDRESS',{exact:true}).scrollIntoViewIfNeeded();
    await page.evaluate(async()=>{await document.fonts.ready;const root=document.querySelector('#skin')?.shadowRoot;await Promise.all((root?.getAnimations({subtree:true})||[]).filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
    if(process.env.AGENTNET_SCREENSHOTS)await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,'p7-permissions-details-'+width+'.png')});
-   await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/act'&&r.request().method()==='POST'),off.click()]);
+   await off.click();
+   await act('unapprove',page.getByRole('button',{name:'Stop automatic answers',exact:true}));
    const revoked=await (await context.request.get(origin+'/p7/actions')).json();assert.equal(revoked.at(-1).id,process.env.P7_PERSON);assert.equal(revoked.at(-1).do,'unapprove');
   }
   assert.deepEqual(errors,[],skin+width+': page errors');await context.close();console.log(skin,width,'person decision PASS');
