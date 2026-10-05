@@ -265,3 +265,25 @@ schema. Verify this with synthetic databases before accepting upgrade safety.
 Explicit exclusion added by the owner: `agentnet tui`, both standalone and
 possible Herdr integration, is a separate post-release debate and does not
 block this release. See [DECISIONS §8](DECISIONS.md#8-terminal-messenger-request-post-release-sep-30).
+
+## 2026-10-05 fixes: agent interaction (P4: MEL-537, MEL-532, MEL-521 backend)
+
+- MEL-537: `agentnet ask` from a Claude Code, Codex or Pi session is never
+  refused, for a missing channel or for transcript size; the answer goes to a
+  live session receiver or to this computer's inbox, announced by every
+  session's hooks. `ask` waits for the answer and prints it (`--answer-wait`,
+  default 90s), woken by the daemon's new owner-only `changes.sock`; no
+  polling. An ended session's undelivered answers go to the inbox.
+- MEL-532: stewards. A person named once on a server (`person service
+  --steward`, `operator grant --person`) decides its OKs from every device of
+  theirs; DM/group requests too; cards name who decides; the newest report
+  replaces older ones and an empty one clears the card. Existing servers need
+  `agentnet operator grant --person ADDRESS` once, run by the owner.
+- Responders have no default time limit (owner rule: no platform limits);
+  a limit the person set is still honoured. A responder configured before
+  keeps the 5m the old default stored until `responder set` again.
+- MEL-521 (backend, device threads): a question's run that needs an action
+  answers with the exact task it proposes (status `proposal`); `agentnet do
+  ID` confirms it as a task. A task from another of your own devices runs as
+  yours (device threads). The Comic composer change and conversation
+  proposals follow P3.

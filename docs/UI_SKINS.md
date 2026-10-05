@@ -326,6 +326,24 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   The host applies a decision only on a report it sent that operator and still
   holds: once the host has deleted its chat with the operator, decisions on the
   reports in it are refused.
+  A report to a device that may not decide has no items, only `count` and
+  `deciders[{person,label}|{address}]`: say who decides them from their own
+  devices ("Sergey decides these from his devices"; "You decide these" when
+  this device's person is among them; nobody: whoever installed that machine
+  can name a steward there), never "decide on that machine", and no command
+  on the card. An item with `conv` is a DM or group request: offer no
+  Answer for it. A task carrying out an agent's proposal has `proposal`
+  `{question_id, question, asker, proposal_id, proposal, confirmed_by}` (first
+  lines): show the question, the proposal and who confirmed it. The newest
+  report from a host replaces the older ones (the host keeps one open card);
+  a report with no items and no count says nothing waits any more and arrives
+  already resolved. A decision's `result` shows on whichever report of that
+  host lists the same request and attempt.
+- Proposals (MEL-521): an answer with `status` `proposal` is an agent's offer,
+  never run: its body is exactly the task it proposes. Show it as a
+  suggestion; confirming it (the CLI's `agentnet do ID`) sends exactly that
+  stored text as a task, under the usual task approval. A review item for
+  such a task carries `proposal` as above.
   A notification's `#msg=<id>` (optionally `&conv=…&dir=in|out`) lands on that
   message and does nothing else.
 - Storage: GET `/api/storage` (read-only; `local.areas[]` with known usage or an
