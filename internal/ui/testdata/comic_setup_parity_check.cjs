@@ -162,7 +162,9 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       await draft.getByRole('list', { name: 'Selected team people' }).getByText('Carol', { exact: true }).waitFor(T);
       assert.equal(await p.evaluate(() => __p24.invites.length), 0, 'snapshot sends no invitation');
       await draft.getByRole('button', { name: 'Remove Carol', exact: true }).click();
-      await draft.getByLabel('Team', { exact: true }).selectOption('d'.repeat(64));
+      // The wrapping label's raw text includes option names. Match the
+      // select's accessible name, which excludes its own option contents.
+      await draft.getByRole('combobox', { name: 'Team', exact: true }).selectOption('d'.repeat(64));
       await p.evaluate(() => __p24.failTeams(true));
       await draft.getByText(/These are the last verified teams/).waitFor(T);
       assert.equal(await draft.getByRole('button', { name: 'Add team’s people', exact: true }).isDisabled(), true, 'stale directory cannot expand a snapshot');
@@ -190,7 +192,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       await p.getByRole('button', { name: width < 1024 ? 'Bring someone in' : 'Bring in', exact: true }).click();
       const existing = p.getByRole('dialog', { name: 'Bring someone in', exact: true });
       const bulk = existing.getByRole('region', { name: 'Invite team people' });
-      await bulk.getByLabel('Team', { exact: true }).selectOption('d'.repeat(64));
+      await bulk.getByRole('combobox', { name: 'Team', exact: true }).selectOption('d'.repeat(64));
       await bulk.getByRole('button', { name: 'Add team’s people', exact: true }).click();
       await bulk.getByRole('button', { name: 'Remove Carol', exact: true }).click();
       await bulk.getByLabel('Share reviewed history with these people', { exact: true }).check();
