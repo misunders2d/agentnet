@@ -10,6 +10,8 @@ mod deeplink;
 #[cfg(target_os = "linux")]
 mod linux;
 mod sidecar;
+#[cfg(any(windows, test))]
+mod win_autostart;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -22,7 +24,9 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::{DownloadEvent, NewWindowResponse};
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
+#[cfg(not(windows))]
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -93,8 +97,8 @@ fn main() {
                 })
                 .build()?;
             *app.state::<Shell>().splash.lock().unwrap() = window.url().ok();
-            tray(app.handle())?;
             first_autostart(app.handle());
+            tray(app.handle())?;
             #[cfg(target_os = "linux")]
             if let Ok(appimage) = std::env::var("APPIMAGE") {
                 if let Some(data) = linux::data_home() {
@@ -366,7 +370,7 @@ fn stop_program(app: &AppHandle) {
 
 fn tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open AgentNet", true, None::<&str>)?;
-    let at_login = app.autolaunch().is_enabled().unwrap_or(false);
+    let at_login = autostart_enabled(app);
     let login = CheckMenuItem::with_id(app, "login", "Start when I log in", true, at_login, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit AgentNet", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &login, &PredefinedMenuItem::separator(app)?, &quit])?;
@@ -378,10 +382,11 @@ fn tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "open" => show(app),
             "login" => {
-                let on = !app.autolaunch().is_enabled().unwrap_or(false);
-                let _ = if on { app.autolaunch().enable() } else { app.autolaunch().disable() };
-                chose_autostart(app);
-                let _ = login_item.set_checked(app.autolaunch().is_enabled().unwrap_or(on));
+                let on = !autostart_enabled(app);
+                if set_autostart(app, on).is_ok() {
+                    chose_autostart(app);
+                }
+                let _ = login_item.set_checked(autostart_enabled(app));
             }
             "quit" => {
                 let h = app.clone();
@@ -414,14 +419,37 @@ fn chose_autostart(app: &AppHandle) {
     }
 }
 
+fn autostart_enabled(_app: &AppHandle) -> bool {
+    #[cfg(windows)]
+    { win_autostart::is_enabled() }
+    #[cfg(not(windows))]
+    { _app.autolaunch().is_enabled().unwrap_or(false) }
+}
+
+fn set_autostart(_app: &AppHandle, on: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    { win_autostart::set_enabled(on, AUTOSTART_ARG).map_err(|e| e.to_string()) }
+    #[cfg(not(windows))]
+    {
+        if on { _app.autolaunch().enable() } else { _app.autolaunch().disable() }
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// first_autostart starts AgentNet with the computer from its first run on
 /// (the person's later choice in the tray stands).
 fn first_autostart(app: &AppHandle) {
+    // Repair an enabled entry from the unquoted dependency. A disabled
+    // entry and a saved choice stay disabled.
+    #[cfg(windows)]
+    if autostart_enabled(app) {
+        let _ = set_autostart(app, true);
+    }
     let Ok(dir) = app.path().app_config_dir() else { return };
     if dir.join(AUTOSTART_CHOSEN).exists() {
         return;
     }
-    if app.autolaunch().enable().is_ok() {
+    if set_autostart(app, true).is_ok() {
         chose_autostart(app);
     }
 }
