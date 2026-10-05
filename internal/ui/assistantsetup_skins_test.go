@@ -21,7 +21,9 @@ func runNodeCheck(t *testing.T, script string) {
 
 // TestComicAssistantSetupModel runs Comic's setup rules (which tools start
 // ticked, the agent each tool gets, apply before any agent change, reuse on
-// a rerun, stop on a changed agent, folder entries) in node.
+// a rerun, stop on a changed agent, "ready" only when the server says so,
+// no agent list where nothing can be set up, folder entries, and a way out
+// of a folder that can't be read) in node.
 func TestComicAssistantSetupModel(t *testing.T) {
 	runNodeCheck(t, "testdata/assistant_setup_model_check.mjs")
 }

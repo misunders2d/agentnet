@@ -8,8 +8,9 @@ export type { T };
 
 // TODO(integrate:P1): GET /api/folders?path= is P1's route (livefolders.go,
 // MEL-534): an absolute folder (home by default), its parent, home, Windows
-// drive roots and its subfolders, read-only. Replace these two types with
-// the generated T.FoldersView once P1 lands. Subfolders may come as names or
+// drive roots and its subfolders, read-only, at most MaxFolders of them
+// (truncated says some were left out). Replace these two types with the
+// generated T.FoldersView once P1 lands. Subfolders may come as names or
 // as {name, path}; features/AssistantSetup.model.ts folderEntries reads both.
 export interface FoldersView {
   path: string;
@@ -17,6 +18,7 @@ export interface FoldersView {
   home?: string;
   roots?: string[];
   dirs: (string | FolderEntry)[] | null;
+  truncated?: boolean;
 }
 export interface FolderEntry { name: string; path: string }
 

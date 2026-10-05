@@ -98,12 +98,31 @@ export interface SetupCalls {
   changeAgents: (c: T.AgentCatalogChange) => Promise<T.AgentCatalogChangeResult>;
 }
 
+/** A named agent the setup saved or kept. ready is the server's own check
+ *  (its program is installed here and its folder exists); problem is the
+ *  server's reason when it is not. */
+export interface SavedAgent { label: string; ready: boolean; problem: string }
+
 export interface Applied {
   view: T.AssistantSetupView;          // the tool list after the change
   catalog: T.AgentCatalogView;
   picks: Map<string, AgentPick>;       // each saved agent, by tool
-  agents: string[];                    // the named agents saved or kept, by name
+  agents: SavedAgent[];                // the named agents saved or kept
   shared: boolean | null;              // null: no agent to share; false: saved here, others can't see it yet
+}
+
+/** savedLine: what the result says about one saved agent. "Ready" only
+ *  when the server checked that it can start here; otherwise only "saved". */
+export const savedLine = (a: SavedAgent) =>
+  a.ready ? "Your agent " + a.label + " is ready." : "Your agent " + a.label + " is saved, but it can’t start on this computer yet.";
+
+/** readSetup reads the tool list first, and the agent list only where this
+ *  installation can set something up (local). Elsewhere the server's own
+ *  note is what the person sees, so no second call is made. */
+export async function readSetup(calls: SetupCalls): Promise<{ view: T.AssistantSetupView; catalog: T.AgentCatalogView | null }> {
+  const view = await calls.setup();
+  if (!view.local) return { view, catalog: null };
+  return { view, catalog: await calls.agents() };
 }
 
 /** applySetup applies exactly the reviewed change, then gives each chosen
@@ -115,7 +134,7 @@ export async function applySetup(calls: SetupCalls, chosen: T.AssistantSetupHarn
   const wanted = chosen.map((h) => ({ harness: h.id, pick: { ...pickFor(picks, h, catalog) }, agent: canHaveAgent(catalog, h.id) }));
   const view = await calls.setup({ action: "apply", harnesses: chosen.map((h) => h.id), review_id: reviewID });
   let now = await calls.agents();
-  const saved = new Map(picks), names: string[] = [];
+  const saved = new Map(picks), names: SavedAgent[] = [];
   for (const w of wanted.filter((x) => x.agent)) {
     const p = w.pick, label = p.label.trim(), dir = p.dir.trim();
     const exact = p.id ? (now.agents || []).find((a) => a.record.id === p.id) : undefined;
@@ -129,8 +148,10 @@ export async function applySetup(calls: SetupCalls, chosen: T.AssistantSetupHarn
       agent = r.agent;
     }
     saved.set(w.harness, pickOf(agent));
-    names.push(agent.record.label);
     now = await calls.agents();
+    // Ready as the server sees it now, not because the save went through.
+    const id = agent.record.id, seen = (now.agents || []).find((a) => a.record.id === id) || agent;
+    names.push({ label: agent.record.label, ready: !!seen.responder?.ready, problem: seen.responder?.problem || "" });
   }
   let shared: boolean | null = null;
   if (names.length) shared = !!(await calls.changeAgents({ action: "publish" })).published;
@@ -148,6 +169,37 @@ export function folderEntries(v: FoldersView): FolderEntry[] {
   const sep = v.path.includes("\\") && !v.path.includes("/") ? "\\" : "/";
   const base = v.path.endsWith(sep) ? v.path : v.path + sep;
   return (v.dirs || []).map((d) => (typeof d === "string" ? { name: d, path: base + d } : d));
+}
+
+/** parentFolder: the folder that holds path, worked out from the path alone
+ *  ("" at a root). Used only when the server can't read path, so that
+ *  folder still has a way up; the server checks wherever it leads. */
+export function parentFolder(path: string): string {
+  const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  let p = path;
+  while (p.length > 1 && p.endsWith(sep)) p = p.slice(0, -1);
+  const i = p.lastIndexOf(sep);
+  if (i < 0) return "";
+  const head = p.slice(0, i);
+  if (/^[A-Za-z]:$/.test(head)) return head + sep;   // C:\Users -> C:\
+  if (/[^\\/]/.test(head)) return head;             // an ordinary folder
+  return sep === "/" && i === 0 && p.length > 1 ? "/" : "";   // /home -> /; a root has none
+}
+
+/** A place the folder browser can still go to. No path: the server's own
+ *  default folder (home). */
+export interface FolderStep { kind: "up" | "home" | "root"; label: string; path?: string }
+
+/** folderWayOut: where browsing can go when a folder can't be read (it was
+ *  deleted, or it is closed to this person): up from it, home, and the
+ *  drives last shown. Retrying the same folder is never the only way on. */
+export function folderWayOut(failed: string | undefined, last: FoldersView | null | undefined): FolderStep[] {
+  const out: FolderStep[] = [];
+  const up = failed ? parentFolder(failed) : "";
+  if (up) out.push({ kind: "up", label: "Up", path: up });
+  if (failed && failed !== last?.home) out.push({ kind: "home", label: "Home" });
+  for (const r of last?.roots || []) if (r !== failed && r !== up) out.push({ kind: "root", label: r, path: r });
+  return out;
 }
 
 /** folderName: the last part of a path, for a short label ("projects"). */

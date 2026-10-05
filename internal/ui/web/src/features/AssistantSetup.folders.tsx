@@ -9,7 +9,7 @@ import { errorText, type FoldersView } from "../api";
 import { useApp } from "../context";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
-import { folderEntries, folderName } from "./AssistantSetup.model";
+import { folderEntries, folderName, folderWayOut, type FolderStep } from "./AssistantSetup.model";
 import { Failed, Hint } from "./Settings.parts";
 
 /** FolderField: the chosen folder in words, and a button that opens the
@@ -40,29 +40,32 @@ export function FolderField({ label, value, onChange, disabled, hint }: {
 }
 
 /** FolderSheet browses folders from start (or home) and returns the one
- *  the person opens and picks. */
+ *  the person opens and picks. A folder that can't be read (deleted, or
+ *  closed to this person) still leaves a way on: Up, Home, the drives. */
 export function FolderSheet({ open, onOpenChange, start, title, onPick }: {
   open: boolean; onOpenChange: (open: boolean) => void; start?: string; title: string; onPick: (path: string) => void;
 }) {
   const store = useApp();
   const [path, setPath] = useState<string | undefined>(start || undefined);
   const [v, setV] = useState<FoldersView | null>(null);
+  const [last, setLast] = useState<FoldersView | null>(null);   // the last folder shown
   const [error, setError] = useState("");
   const [tries, setTries] = useState(0);
   const gen = useRef(0);
   // Each opening starts where the field is (or at home).
-  useEffect(() => { if (open) { setPath(start || undefined); setV(null); setError(""); } }, [open]);
+  useEffect(() => { if (open) { setPath(start || undefined); setV(null); setLast(null); setError(""); } }, [open]);
   useEffect(() => {
     if (!open) return;
     const mine = ++gen.current;
     setError("");
     store.api.folders(path).then(
-      (r) => { if (gen.current === mine) setV(r); },
+      (r) => { if (gen.current === mine) { setV(r); setLast(r); } },
       (e) => { if (gen.current === mine) setError(errorText(e)); });
     return () => { gen.current++; };
   }, [open, path, tries]);
   // Opening another folder forgets the one shown, so "Use" never picks a folder no longer on screen.
-  const go = (p: string) => { setV(null); setPath(p); };
+  // No path: the server's own default folder (home).
+  const go = (p?: string) => { setV(null); setPath(p); };
   const shown = error ? null : v;
   const dirs = shown ? folderEntries(shown) : [];
   return (
@@ -76,7 +79,10 @@ export function FolderSheet({ open, onOpenChange, start, title, onPick }: {
         </div>
       }>
       {error ? (
-        <Failed text={error} retry={() => setTries((n) => n + 1)} />
+        <div className="space-y-3">
+          <Failed text={error} retry={() => setTries((n) => n + 1)} />
+          <Steps steps={folderWayOut(path, last)} go={go} />
+        </div>
       ) : !shown ? (
         <p aria-busy="true" className="py-3 text-[15px] text-muted">Reading folders…</p>
       ) : (
@@ -107,8 +113,21 @@ export function FolderSheet({ open, onOpenChange, start, title, onPick }: {
           ) : (
             <p className="px-1 text-[15px] text-muted">No folders inside this one.</p>
           )}
+          {shown.truncated && <Hint className="px-1">Some folders in here aren’t shown.</Hint>}
         </div>
       )}
     </Sheet>
+  );
+}
+
+const STEP_ICON = { up: IconArrowUp, home: IconHome, root: IconDeviceDesktop };
+
+/** Steps: the ways on from a folder that couldn't be read. */
+function Steps({ steps, go }: { steps: FolderStep[]; go: (path?: string) => void }) {
+  if (!steps.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {steps.map((s) => { const Icon = STEP_ICON[s.kind]; return <Button key={s.kind + (s.path || "")} size="sm" icon={<Icon size={18} />} onClick={() => go(s.path)}>{s.label}</Button>; })}
+    </div>
   );
 }

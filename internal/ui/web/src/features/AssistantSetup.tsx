@@ -17,8 +17,8 @@ import { useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import {
-  agentsFor, applySetup, browserDevice, canHaveAgent, NAME_MAX, pickFor, pickOf, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady,
-  type AgentPick, type SetupCalls, type Stage,
+  agentsFor, applySetup, browserDevice, canHaveAgent, NAME_MAX, pickFor, pickOf, readSetup, savedLine, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady,
+  type AgentPick, type SavedAgent, type SetupCalls, type Stage,
 } from "./AssistantSetup.model";
 import { FolderField } from "./AssistantSetup.folders";
 import { Card, Details, Fact, Hint, input } from "./Settings.parts";
@@ -26,8 +26,11 @@ import { Card, Details, Fact, Hint, input } from "./Settings.parts";
 const tone = (state: string) =>
   state === "connected" ? "ok" as const : state === "detected" || state === "needs_activation" ? "agent" as const : state === "needs_setup" ? "act" as const : state === "error" ? "danger" as const : "muted" as const;
 
+const CARD_TITLE = "Connect your coding sessions";
+const them = (n: number) => (n === 1 ? "it" : "them");
+
 const TITLE: Record<Stage, string> = {
-  home: "Connect your coding sessions",
+  home: CARD_TITLE,
   choose: "Choose what to connect",
   review: "Check the changes",
   saved: "Connected",
@@ -47,7 +50,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [picks, setPicks] = useState<Map<string, AgentPick>>(new Map());
   const [review, setReview] = useState<T.AssistantSetupView | null>(null);
-  const [done, setDone] = useState<{ agents: string[]; shared: boolean | null } | null>(null);
+  const [done, setDone] = useState<{ agents: SavedAgent[]; shared: boolean | null } | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const alive = useRef(true);
@@ -63,10 +66,12 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
     if (busy) return;
     setBusy("read"); setError("");
     try {
-      const [v, c] = await Promise.all([calls.setup(), calls.agents()]);
+      const { view: v, catalog: c } = await readSetup(calls);
       if (!alive.current) return;
-      setView(v); setCatalog(c); setPicks(new Map()); setChosen(startChosen(v)); setReview(null); setDone(null);
-      setBusy(""); setStage("choose");
+      setView(v); setBusy("");
+      if (!v.local) return;   // this installation sets nothing up: its note is shown instead
+      setCatalog(c); setPicks(new Map()); setChosen(startChosen(v)); setReview(null); setDone(null);
+      setStage("choose");
     } catch (e) { fail(e); }
   };
   useEffect(() => { if (start && !browser) void read(); }, []);
@@ -116,18 +121,18 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
   const setPick = (id: string, p: AgentPick) => setPicks((m) => new Map(m).set(id, p));
   const toggle = (id: string, on: boolean) => setChosen((s) => { const n = new Set(s); if (on) n.add(id); else n.delete(id); return n; });
 
-  const head = (
+  const head = (title: string) => (
     <div className="flex items-start gap-3">
       <span aria-hidden="true" className="grid size-10 shrink-0 place-items-center rounded-xl stroke bg-agent text-agent-ink"><IconPlugConnected size={22} /></span>
-      <h3 ref={heading} tabIndex={-1} className="min-w-0 flex-1 pt-1 font-display text-[20px] font-bold leading-tight outline-none">{TITLE[stage]}</h3>
+      <h3 ref={heading} tabIndex={-1} className="min-w-0 flex-1 pt-1 font-display text-[20px] font-bold leading-tight outline-none">{title}</h3>
     </div>
   );
 
   if (browser || (view && !view.local)) {
     return (
       <Card className="p-4">
-        <section aria-label="Connect your coding sessions" className="space-y-2">
-          {head}
+        <section aria-label={CARD_TITLE} className="space-y-2">
+          {head(CARD_TITLE)}
           <p className="text-[15px] text-text-2">
             {browser ? "A browser can’t look for programs or change them. Connect your Claude Code, Codex or Pi sessions in the AgentNet app on the computer they run on." : view?.note || "This installation can’t look for programs or change them."}
           </p>
@@ -138,8 +143,8 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
   return (
     <Card className="p-4">
-      <section aria-label="Connect your coding sessions" aria-busy={!!busy} className="space-y-4">
-        {head}
+      <section aria-label={CARD_TITLE} aria-busy={!!busy} className="space-y-4">
+        {head(TITLE[stage])}
 
         {stage === "home" && <>
           <p className="text-[15px] text-text-2">When a Claude Code, Codex or Pi session on this computer asks someone through AgentNet, the answer comes back to that same session. Run this again after you install or remove one.</p>
@@ -204,16 +209,20 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
               </li>
             ))}
           </ul>
-          {done && done.agents.length > 0 && (
-            <p className="text-[15px]">
-              {done.agents.length === 1
-                ? "Your agent " + done.agents[0] + " is ready. Add it to a conversation to use it there; your approvals still apply."
-                : "Your agents " + done.agents.join(", ") + " are ready. Add them to a conversation to use them there; your approvals still apply."}
-            </p>
-          )}
+          {done && done.agents.length > 0 && <>
+            <ul className="space-y-1.5">
+              {done.agents.map((a, i) => (
+                <li key={i + ":" + a.label} className="text-[15px]">
+                  {savedLine(a)}
+                  {!a.ready && a.problem && <Details><p>{a.problem}</p></Details>}
+                </li>
+              ))}
+            </ul>
+            <p className="text-[15px] text-text-2">Add {them(done.agents.length)} to a conversation to use {them(done.agents.length)} there; your approvals still apply.</p>
+          </>}
           {done?.shared === false && (
             <p className="flex flex-wrap items-center gap-x-3 rounded-2xl bg-guest-bg px-3.5 py-2 text-[14px] font-semibold text-guest-ink">
-              Saved here, but others can’t see {done.agents.length === 1 ? "it" : "them"} yet.
+              Saved here, but others can’t see {them(done.agents.length)} yet.
               <button type="button" disabled={!!busy} className="min-h-11 font-bold underline underline-offset-2" onClick={share}>{busy === "share" ? "Sharing…" : "Share again"}</button>
             </p>
           )}
