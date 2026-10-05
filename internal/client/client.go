@@ -67,6 +67,7 @@ type Agent struct {
 	members        memberState                // the Hub's member list from the push stream (members.go)
 	session        string                     // this run's session id (Run); "" outside Run
 	convWork       convWork                   // conversation upkeep due on the next sync (conv.go)
+	capsPub        capsPublisher              // this run's capability records (conv.go)
 	agentSweep     agentSweep                 // the worker's look at requests to its agent (agentjob.go)
 	alertWake      chan struct{}              // wakes the desktop alert loop (alerts.go)
 	openConv       func(conv string) []string // RunOptions.OpenConv

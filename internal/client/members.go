@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,6 +116,7 @@ func (a *Agent) onMembers(data []byte) {
 	}
 	a.members.view = MemberView{Listed: MembersListed, Members: m, At: time.Now(), Current: true}
 	a.members.mu.Unlock()
+	a.keepMemberFacts(m) // before the bump below, so a page reads them
 	connected := 0
 	for _, e := range m.Members {
 		if e.Presence == protocol.PresenceConnected {
@@ -133,4 +135,93 @@ func (a *Agent) onMembers(data []byte) {
 	if a.kick != nil {
 		a.kick()
 	}
+}
+
+// keepMemberFacts keeps what the member list says that this device shows
+// offline too: the workspace name and which other devices run an agent.
+// Each is written only when it changed. A name ValidWorkspaceName refuses
+// is ignored (the list is kept, and so is the name known before).
+func (a *Agent) keepMemberFacts(m protocol.Members) {
+	name, ok := protocol.ValidWorkspaceName(m.Workspace)
+	if m.Workspace != "" && !ok {
+		a.Logf("hub workspace name ignored: not 1–120 readable characters")
+	} else if old, _ := a.store.config("workspace_name"); name != old {
+		var err error
+		if name == "" {
+			err = a.store.deleteConfig("workspace_name")
+		} else {
+			err = a.store.setConfig(map[string]string{"workspace_name": name})
+		}
+		if err != nil {
+			a.Logf("keeping the workspace name: %v", err)
+		}
+	}
+	agents := []string{}
+	for _, e := range m.Members {
+		if e.Agent && e.Address != a.Address {
+			agents = append(agents, e.Address)
+		}
+	}
+	slices.Sort(agents)
+	raw, _ := json.Marshal(agents)
+	if old, _ := a.store.config("agent_devices"); string(raw) != old {
+		if err := a.store.setConfig(map[string]string{"agent_devices": string(raw)}); err != nil {
+			a.Logf("keeping the agent devices: %v", err)
+		}
+	}
+}
+
+// WorkspaceName is the name the Hub's admin gave this workspace, as last
+// listed (kept offline), or "" when none is set.
+func (a *Agent) WorkspaceName() string {
+	v, _ := a.store.config("workspace_name")
+	return v
+}
+
+// AgentDevices are the other devices that, as last listed, say they run an
+// agent (the relay's reading of their signed capability records). A hint
+// for display and offers only: it grants nothing.
+func (a *Agent) AgentDevices() []string {
+	out := []string{}
+	if v, err := a.store.config("agent_devices"); err == nil {
+		json.Unmarshal([]byte(v), &out)
+	}
+	return out
+}
+
+// HubWorkspace asks the Hub for the workspace name now ("" when none, or
+// when the Hub sent one that is not a workspace name).
+func (a *Agent) HubWorkspace(ctx context.Context) (string, error) {
+	m, err := a.Members(ctx)
+	if err != nil {
+		return "", err
+	}
+	name, _ := protocol.ValidWorkspaceName(m.Workspace)
+	return name, nil
+}
+
+// SetWorkspaceName names the workspace for every member (admin only); an
+// empty name clears it. The name is kept here at once; members learn it
+// from the member list.
+func (a *Agent) SetWorkspaceName(ctx context.Context, name string) (string, error) {
+	if strings.TrimSpace(name) != "" {
+		var ok bool
+		if name, ok = protocol.ValidWorkspaceName(name); !ok {
+			return "", ErrWorkspaceName
+		}
+	} else {
+		name = ""
+	}
+	var out protocol.WorkspaceNameRequest
+	if err := a.hub.do(ctx, "PUT", "/v1/admin/workspace", protocol.WorkspaceNameRequest{Name: name}, &out); err != nil {
+		return "", err
+	}
+	var err error
+	if out.Name == "" {
+		err = a.store.deleteConfig("workspace_name")
+	} else {
+		err = a.store.setConfig(map[string]string{"workspace_name": out.Name})
+	}
+	a.store.changed()
+	return out.Name, err
 }

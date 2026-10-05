@@ -58,7 +58,7 @@ func OpenWorkspaces(home string) (*Workspaces, error) {
 		}
 		defer a.Close()
 		realm, _ := a.RealmID()
-		r.Items = []Workspace{{ID: DefaultWorkspace, Name: "Current workspace", Endpoint: a.hub.base, Address: a.Address, Realm: realm, State: "enrolled"}}
+		r.Items = []Workspace{{ID: DefaultWorkspace, Name: "", Endpoint: a.hub.base, Address: a.Address, Realm: realm, State: "enrolled"}}
 		return nil
 	})
 	return w, err

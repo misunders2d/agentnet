@@ -525,6 +525,10 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.wakeStatus() // a status another process noted (noteStatus)
 		a.changes.bump()
 		a.convWork.due(convHistory | convServe | convFetch | convRetry | convRelease) // convRetry: a local participation record shares its public scope with guests now
+		// A responder or named agent was set or removed: say so.
+		if a.agentHintStale() {
+			a.convWork.due(convPublish)
+		}
 		a.kickNow()
 	})
 	if err != nil {

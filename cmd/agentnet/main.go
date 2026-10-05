@@ -822,9 +822,39 @@ func runAdminRelease(ctx context.Context, a *client.Agent, args []string) error 
 	return nil
 }
 
+// runAdminWorkspace shows, sets or clears the workspace name every member
+// sees ("Mellanni"); setting and clearing are admin only.
+func runAdminWorkspace(ctx context.Context, a *client.Agent, args []string) error {
+	usage := errors.New("usage: admin workspace [show] | admin workspace set NAME | admin workspace clear")
+	var name string
+	var err error
+	switch {
+	case len(args) == 0 || len(args) == 1 && args[0] == "show":
+		name, err = a.HubWorkspace(ctx)
+	case len(args) == 1 && args[0] == "clear":
+		name, err = a.SetWorkspaceName(ctx, "")
+	case len(args) == 2 && args[0] == "set":
+		if strings.TrimSpace(args[1]) == "" {
+			return usage
+		}
+		name, err = a.SetWorkspaceName(ctx, args[1])
+	default:
+		return usage
+	}
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		fmt.Println("no workspace name set (members see the relay's host name)")
+		return nil
+	}
+	fmt.Printf("workspace name %s\n", name)
+	return nil
+}
+
 func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: admin invite|revoke|release ...")
+		return errors.New("usage: admin invite|revoke|release|workspace ...")
 	}
 	switch args[0] {
 	case "invite":
@@ -881,6 +911,8 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		return nil
 	case "release":
 		return runAdminRelease(ctx, a, args[1:])
+	case "workspace":
+		return runAdminWorkspace(ctx, a, args[1:])
 	}
 	return fmt.Errorf("unknown admin command %q", args[0])
 }

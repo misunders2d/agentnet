@@ -208,6 +208,22 @@ func (a *Agent) ResponderChosen() (bool, error) {
 	return err == nil, nil
 }
 
+// AdvertisesAgent reports whether this device runs an agent people may
+// ask: a default responder, or a named agent with a responder. It is what
+// the agent hint (protocol.CapAgent) says; it grants nothing.
+func (a *Agent) AdvertisesAgent() bool {
+	if r, _ := a.Responder(); r != nil {
+		return true
+	}
+	entries, _ := a.LocalAgents()
+	for _, e := range entries {
+		if e.Responder != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Responder returns the selected responder, or nil when none is selected.
 func (a *Agent) Responder() (*Responder, error) {
 	v, err := a.store.config("responder")

@@ -766,6 +766,7 @@ were abandoned, and direct uploads never attached to a message.
        agentnet admin revoke ADDRESS
        agentnet admin release set --url URL [--note TEXT] VERSION
        agentnet admin release show | clear
+       agentnet admin workspace [show] | set NAME | clear
 
 Run on an admin agent. LABEL is the invited person's AgentNet name (e.g.
 bob): use the name your person gave for this invitation, or ask them who is
@@ -789,6 +790,13 @@ shown to people only, never to models. Setting the same version and URL
 again announces nothing new. It is a recommendation: receiving it downloads
 and installs nothing (members update with agentnet update when they choose).
 Versions are compared only for equality.
+
+workspace set names the workspace for every member (e.g. Mellanni): their
+devices show it at once, or when they next connect, with no reinstall or
+rejoin; each person may still give it their own label on their devices.
+1–120 readable characters. clear removes it (devices then show the relay's
+host name); show prints the current name. A label only: the workspace's
+identity never changes.
 Give the whole text to the coding agent on their computer, privately. The
 label is your statement about who they are. revoke immediately cuts ADDRESS
 off.

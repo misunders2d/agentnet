@@ -90,6 +90,8 @@ func guardedCommands(dir string) [][]string {
 		{"admin", "invite", "carol"},
 		{"admin", "revoke", "peer/desk"},
 		{"admin", "release"},
+		{"admin", "workspace", "set", "Mellanni"}, // a company setting: the person's own tap
+		{"admin", "workspace", "clear"},
 		{"ui"},
 		{"update", "--status"},
 		{"hooks", "install", "claude", "--file", filepath.Join(dir, "settings.json")},
