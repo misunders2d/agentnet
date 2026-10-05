@@ -105,6 +105,17 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		}
 		fmt.Fprintf(stdout, "%sd\n", args[0])
 		return nil
+	case (args[0] == "admin" || args[0] == "unadmin") && len(args) == 2 && !strings.HasPrefix(args[1], "-"):
+		grant := args[0] == "admin"
+		if err := a.SetDeviceAdmin(ctx, args[1], grant); err != nil {
+			return err
+		}
+		if grant {
+			fmt.Fprintf(stdout, "%s may now change company settings (workspace name, invites, release notices, storage); agentnet person unadmin %s takes it back\n", args[1], args[1])
+		} else {
+			fmt.Fprintf(stdout, "%s may no longer change company settings\n", args[1])
+		}
+		return nil
 	case args[0] == "untrust" && len(args) == 2:
 		if err := a.UntrustOwnDevice(args[1]); err != nil {
 			return err

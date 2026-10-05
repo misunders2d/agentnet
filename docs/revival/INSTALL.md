@@ -310,9 +310,11 @@ name with the member list, at once on an open connection or when they next
 connect, with no reinstall or rejoin; it is kept for offline use. With no
 name set they show the relay's host name. Each person can still give it
 their own label on their devices. It is a label, never identity, and a
-company setting: the person's own tap, refused inside agent runs. A device
-a person links (their phone) holds that person's admin role while another
-of their devices is an admin, so the owner's phone may rename it too.
+company setting: the person's own tap, refused inside agent runs. A
+person's other devices are not admins on their own: to let the owner's
+phone rename it too, run `agentnet person admin ADDRESS` (the phone's
+address, from `agentnet person`) on the admin device, and `person unadmin
+ADDRESS` to take it back. Do not grant it to a computer that runs agents.
 
 **Recommending a client version.** A Hub admin runs `agentnet admin release
 set --url https://… [--note TEXT] VERSION` (or `show`, `clear`). Running

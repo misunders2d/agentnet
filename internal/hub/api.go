@@ -29,6 +29,7 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("PUT /v1/person", h.handlePutPerson)
 	mux.HandleFunc("POST /v1/person/device-invite", h.handleDeviceInvite)
 	mux.HandleFunc("POST /v1/person/device-refuse", h.handleDeviceRefuse)
+	mux.HandleFunc("POST /v1/person/device-admin", h.handleDeviceAdmin) // personadmin.go: the person's grant
 	mux.HandleFunc("GET /v1/persons/{id}/chain", h.handleChain)
 	mux.HandleFunc("PUT /v1/caps", h.handlePutCaps)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)

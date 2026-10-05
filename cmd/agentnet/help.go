@@ -359,6 +359,7 @@ with ADDRESS#SESSION.`,
        agentnet person approve [--native] ID
        agentnet person refuse ID
        agentnet person untrust ADDRESS
+       agentnet person admin|unadmin ADDRESS
        agentnet person remove ADDRESS
 
 One person can use up to eight devices, each with its own keys. person shows
@@ -393,6 +394,13 @@ a browser. untrust ADDRESS removes a device; to trust it again, link it
 again. person marks trusted devices. A device whose key changes is no
 longer trusted. Invites stored before this version first ran here still
 wait for your accept.
+
+Your other devices are never Hub admins on their own. On a device that is
+one, admin ADDRESS lets another of your linked devices change company
+settings too (the workspace name, invites, release notices, storage), and
+unadmin ADDRESS takes it back. Give it to your phone, not to a computer
+that runs agents: its agents use that device's keys. Removing the device
+ends it; a device an admin invite made admin keeps its role.
 
 remove ADDRESS removes a device from your person. A device admitted through
 linking is also revoked from the Hub; one admitted separately by an admin

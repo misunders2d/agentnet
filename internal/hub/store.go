@@ -227,7 +227,7 @@ func openStore(path string) (*store, error) {
 
 type agent struct {
 	Public        identity.Public
-	Admin         bool // its own, or its person's (agentIn)
+	Admin         bool // an admin invite made it one, or its person granted it (personadmin.go)
 	Revoked       bool
 	RevokedReason string // "refused" or "expired" for a device link nobody approved; "removed" from its person
 	Pending       bool   // joined with a device invite, waiting for its person's approval: not a member
@@ -245,14 +245,7 @@ func agentIn(q interface {
 	var revoked sql.NullInt64
 	var reason, pending, person sql.NullString
 	var until sql.NullInt64
-	// A device of a person holds that person's admin role: its own invite
-	// made it admin, or another active device of its person is. Only the
-	// Hub's own records count (person_id is set by the device's own first
-	// roster step or by a link its person's device signed), and it ends
-	// with the link: removed from the person, or that device revoked.
-	err := q.QueryRow(`SELECT public, admin OR (person_id IS NOT NULL AND pending_person IS NULL AND EXISTS (
-		SELECT 1 FROM agents b WHERE b.person_id = agents.person_id AND b.admin = 1 AND b.revoked_at IS NULL AND b.pending_person IS NULL)),
-		revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
+	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
 		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, errNotFound

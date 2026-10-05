@@ -30,9 +30,10 @@ const (
 	renameInvalid  = "Enter a readable workspace name, up to 120 characters. Nothing changed."
 )
 
-// canAdmin reports whether this device holds the Hub's admin role (its own,
-// or its person's): one signal for every admin-only screen. Unknown (the
-// Hub not reached) counts as no.
+// canAdmin reports whether this device holds the Hub's admin role (an admin
+// invite made it one, or its person granted it: hub/personadmin.go): one
+// signal for every admin-only screen. Unknown (the Hub not reached) counts
+// as no.
 func (l *Live) canAdmin(ctx context.Context) bool {
 	role, err := l.a.HubRole(ctx)
 	return err == nil && role == protocol.RoleAdmin

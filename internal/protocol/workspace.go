@@ -29,3 +29,12 @@ func ValidWorkspaceName(name string) (string, bool) {
 type WorkspaceNameRequest struct {
 	Name string `json:"name"`
 }
+
+// DeviceAdminRequest gives another device of the caller's own person the
+// Hub admin role, or takes it back (POST /v1/person/device-admin, from a
+// device that holds the role). It is the person's own decision: a person's
+// devices never inherit the role.
+type DeviceAdminRequest struct {
+	Address string `json:"address"`
+	Admin   bool   `json:"admin"`
+}

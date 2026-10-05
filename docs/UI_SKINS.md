@@ -401,8 +401,9 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   message and does nothing else.
 - Workspace name: `overview.workspace` `{name, server}` is the workspace's own
   name its admin set (`""` for none) and the relay's host name. GET
-  `/api/workspace` adds `can_rename` (this device holds the Hub's admin role,
-  its own or its person's; unknown is false). POST `/api/workspace/name`
+  `/api/workspace` adds `can_rename` (this device holds the Hub's admin role:
+  an admin invite made it one, or its person granted it with `agentnet
+  person admin`; a person's devices never inherit it; unknown is false). POST `/api/workspace/name`
   `{name}` renames it for every member (an empty name clears it); a member is
   refused "Only an admin of this workspace can rename it for everyone." It is
   a company setting: offer it only on the person's own tap, never from an

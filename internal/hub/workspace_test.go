@@ -177,27 +177,33 @@ func TestMembersAgentHint(t *testing.T) {
 	}
 }
 
-// A device linked into a person holds that person's admin role: the
-// admin's phone may name the workspace and reads self_role admin. A member's
-// phone does not, and the role ends when the admin device is revoked.
-func TestPersonDevicesInheritAdmin(t *testing.T) {
+// A person's devices do not inherit the admin role: a device linked into
+// the admin's person, the phone or a device that runs agents, stays a
+// member and is refused admin calls until the person grants it from a
+// device that holds the role. Only that device's own person's linked,
+// active devices can be changed, never the admin's own invite role; the
+// grant can be taken back and ends when the device is removed.
+func TestPersonDeviceAdminIsTheirGrant(t *testing.T) {
 	h, _, _ := testHub(t)
 	boss := enrollAdmin(t, h, "boss")
 	bob := joinMember(t, h, "bob")
+	rosters := map[string]protocol.PersonRoster{boss.addr: personOf(t, h, boss), bob.addr: personOf(t, h, bob)}
 	link := func(owner member, addr string) member {
 		t.Helper()
-		r0 := personOf(t, h, owner)
+		r := rosters[owner.addr]
 		offer := protocol.NewID()
 		secret := deviceInvite(t, h, owner, offer)
 		id, _ := identity.Generate()
-		phone := member{id, addr}
-		if c, e := joinLinked(t, h, secret, addr, offer, r0, id); c != http.StatusCreated {
+		dev := member{id, addr}
+		if c, e := joinLinked(t, h, secret, addr, offer, r, id); c != http.StatusCreated {
 			t.Fatalf("join: %d %+v", c, e)
 		}
-		if c, e := put(t, h, owner, step(r0, owner, &phone, owner.id.Public(owner.addr), id.Public(addr))); c != http.StatusNoContent {
+		next := step(r, owner, &dev, append(append([]identity.Public{}, r.Devices...), id.Public(addr))...)
+		if c, e := put(t, h, owner, next); c != http.StatusNoContent {
 			t.Fatalf("activation: %d %+v", c, e)
 		}
-		return phone
+		rosters[owner.addr] = next
+		return dev
 	}
 	role := func(m member) string {
 		t.Helper()
@@ -210,23 +216,83 @@ func TestPersonDevicesInheritAdmin(t *testing.T) {
 		json.Unmarshal(b, &p)
 		return p.SelfRole
 	}
-	bossPhone, bobPhone := link(boss, "boss/phone"), link(bob, "bob/phone")
-	if r := role(bossPhone); r != protocol.RoleAdmin {
-		t.Fatalf("the admin's phone reads %q", r)
+	rename := func(m member, name string) int {
+		t.Helper()
+		c, _ := m.call(t, h, "PUT", "/v1/admin/workspace", protocol.WorkspaceNameRequest{Name: name})
+		return c
 	}
-	if c, b := bossPhone.call(t, h, "PUT", "/v1/admin/workspace", protocol.WorkspaceNameRequest{Name: "Mellanni"}); c != http.StatusOK {
-		t.Fatalf("the admin's phone may name the workspace: %d %s", c, b)
+	grant := func(by member, address string, admin bool) int {
+		t.Helper()
+		c, _ := by.call(t, h, "POST", "/v1/person/device-admin", protocol.DeviceAdminRequest{Address: address, Admin: admin})
+		return c
 	}
-	if r := role(bobPhone); r != protocol.RoleMember {
-		t.Fatalf("a member's phone reads %q", r)
+	phone, zen, bobPhone := link(boss, "boss/phone"), link(boss, "boss/zenbook"), link(bob, "bob/phone")
+	putCapsAs(t, h, zen, protocol.NewID(), time.Now().Unix(), protocol.CapAgent, protocol.CapEnv2) // it runs an agent
+
+	for _, d := range []member{phone, zen, bobPhone} {
+		if r := role(d); r != protocol.RoleMember {
+			t.Fatalf("%s reads %q before any grant", d.addr, r)
+		}
+		if c := rename(d, "Mine"); c != http.StatusForbidden {
+			t.Fatalf("%s named the workspace without a grant: %d", d.addr, c)
+		}
 	}
-	if c, _ := bobPhone.call(t, h, "PUT", "/v1/admin/workspace", protocol.WorkspaceNameRequest{Name: "Mine"}); c != http.StatusForbidden {
-		t.Fatalf("a member's phone named the workspace: %d", c)
+	if c := grant(phone, zen.addr, true); c != http.StatusForbidden {
+		t.Fatalf("a device without the role granted it: %d", c)
 	}
-	if err := h.store.revoke(boss.addr); err != nil {
-		t.Fatal(err)
+	if c := grant(bob, bobPhone.addr, true); c != http.StatusForbidden {
+		t.Fatalf("a member granted the role: %d", c)
 	}
-	if a, err := h.store.agent(bossPhone.addr); err != nil || a.Admin {
-		t.Fatalf("the phone kept admin after its admin device was revoked: %+v %v", a.Admin, err)
+	for _, addr := range []string{bobPhone.addr, boss.addr, bob.addr, "boss/nobody"} {
+		if c := grant(boss, addr, true); c != http.StatusConflict {
+			t.Fatalf("granted %s, not another linked device of the admin's person: %d", addr, c)
+		}
+	}
+	// A device still waiting for its person's approval cannot be granted.
+	pendingID, _ := identity.Generate()
+	offer := protocol.NewID()
+	if c, e := joinLinked(t, h, deviceInvite(t, h, boss, offer), "boss/tablet", offer, rosters[boss.addr], pendingID); c != http.StatusCreated {
+		t.Fatalf("pending join: %d %+v", c, e)
+	}
+	if c := grant(boss, "boss/tablet", true); c != http.StatusConflict {
+		t.Fatalf("granted a pending device: %d", c)
+	}
+
+	// The person's grant on the admin device: the phone only.
+	if c := grant(boss, phone.addr, true); c != http.StatusNoContent {
+		t.Fatalf("grant: %d", c)
+	}
+	if r := role(phone); r != protocol.RoleAdmin {
+		t.Fatalf("the granted phone reads %q", r)
+	}
+	if c := rename(phone, "Mellanni"); c != http.StatusOK {
+		t.Fatalf("the granted phone may name the workspace: %d", c)
+	}
+	if r := role(zen); r != protocol.RoleMember || rename(zen, "Zen") != http.StatusForbidden {
+		t.Fatalf("the agent device gained the role from the phone's grant: %q", r)
+	}
+	// The phone cannot take the role of the device whose invite made it admin.
+	if c := grant(phone, boss.addr, false); c != http.StatusConflict {
+		t.Fatalf("the phone changed the admin invite's role: %d", c)
+	}
+	if a, _ := h.store.agent(boss.addr); !a.Admin {
+		t.Fatal("the admin lost its role")
+	}
+	// Taken back, and again: removal from the person ends it.
+	if c := grant(boss, phone.addr, false); c != http.StatusNoContent || role(phone) != protocol.RoleMember {
+		t.Fatalf("withdraw: %d", c)
+	}
+	if c := grant(boss, phone.addr, true); c != http.StatusNoContent {
+		t.Fatalf("grant again: %d", c)
+	}
+	r := rosters[boss.addr]
+	if c, e := put(t, h, boss, step(r, boss, nil, boss.id.Public(boss.addr), zen.id.Public(zen.addr))); c != http.StatusNoContent {
+		t.Fatalf("remove: %d %+v", c, e)
+	}
+	if c := rename(phone, "Gone"); c == http.StatusOK {
+		t.Fatal("a removed phone still named the workspace")
+	}
+	if a, _ := h.store.agent(phone.addr); !a.Revoked {
+		t.Fatalf("the removed phone was not revoked: %+v", a)
 	}
 }
