@@ -51,6 +51,18 @@ export const TOPICS = {
 // Arrival notes use seconds; message ordering still uses arrival.
 export const MESSAGES = Object.freeze({ ARRIVED_NOTE_AFTER: 60 });
 
+/** Reminder tunables (MEL-528, "Remind me…"): the quick times offered and
+ *  how the list at the top of Chats behaves. Change them here; there is no
+ *  setting. How far ahead a reminder may be set is the server's
+ *  (client/remind.go maxReminderAhead). */
+export const REMIND = {
+  soon: [30, 120] as readonly number[], // minutes ahead of the quick choices: "In 30 minutes", "In 2 hours"
+  morning: 9,         // hour of "Tomorrow at 9:00" (this device's time)
+  customAhead: 60,    // minutes ahead the "At a time I choose" field starts at
+  listMax: 4,         // reminders shown at the top of Chats before "Show all"
+  titleMax: 90,       // characters of a reminded message's first line in the list
+} as const;
+
 export type TopicState = "active" | "done" | "archived";
 
 /** Topic is one of an agent's separate conversations (a device thread): each
@@ -396,4 +408,36 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   }
 }
 
-// Message presentation tunables, in seconds.
+// ---- reminders ("Remind me later", on received messages; daemon only) ------
+
+/** reminderOf: the pending reminder on message id, when this device keeps reminders. */
+export const reminderOf = (o: T.Overview | null, id: string) =>
+  (o?.remind && (o.reminders || []).find((r) => r.message === id)) || undefined;
+
+/** dueText says when, on this device's clock: "today 15:00", "tomorrow 09:00", "Tue 7 Oct 09:00". */
+export function dueText(when: string | Date, now = new Date()): string {
+  const d = new Date(when);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return "today " + time;
+  const next = new Date(now);
+  next.setDate(now.getDate() + 1);
+  if (d.toDateString() === next.toDateString()) return "tomorrow " + time;
+  const year = d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" as const };
+  return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", ...year }) + " " + time;
+}
+
+/** timeZone names this device's time zone ("Europe/Kyiv"), or "" when the browser does not say. */
+export function timeZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
+}
+
+/** reminderTimes: the quick choices of "Remind me…", from now. */
+export function reminderTimes(now = new Date()): { label: string; at: Date }[] {
+  const soon = REMIND.soon.map((m) => ({ label: m < 60 ? "In " + m + " minutes" : "In " + m / 60 + (m === 60 ? " hour" : " hours"), at: new Date(now.getTime() + m * 60e3) }));
+  const morning = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, REMIND.morning, 0);
+  return [...soon, { label: "Tomorrow at " + REMIND.morning + ":00", at: morning }];
+}
+
+/** localInput is d as a datetime-local field's value, in this device's time. */
+export const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
+
