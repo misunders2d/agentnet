@@ -109,7 +109,18 @@ func (l *Live) dmOverview(o *Overview) error {
 		people := l.conversationPeople(c)
 		shown := shownRows(msgs, people) // its rows as the conversation shows them (DM)
 		s := DMSummary{ID: c.ID, Role: c.Role, Peer: personView(c.Peer), Created: time.Unix(c.Created, 0), Mine: c.Creator == l.a.Address,
-			Count: len(shown), Unread: len(unread[c.ID]), LastAt: time.Unix(c.Created, 0)}
+			Count: len(shown), LastAt: time.Unix(c.Created, 0)}
+		// The badge counts rows the open timeline can mark read. Hidden
+		// participation copies and this person's own turns add no unread.
+		isUnread := map[string]bool{}
+		for _, id := range unread[c.ID] {
+			isUnread[id] = true
+		}
+		for _, m := range shown {
+			if m.Dir == "in" && isUnread[m.ID] {
+				s.Unread++
+			}
+		}
 		s.Kind, s.Frozen = c.Kind, c.Frozen
 		if c.Role == "visitor" && c.Kind == protocol.ConvKindDM {
 			views, e := l.guestViews(c.ID)
@@ -354,7 +365,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
-				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
+				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: m.Dir == "in" && isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
 
 			for i := range dm.Copies {
 				if dm.Copies[i].Own {
