@@ -96,6 +96,41 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const remove=(await w.st.all('inbox')).map(r=>({s:'inbox',k:r.id}));if(remove.length)await w.st.write(remove);
   }
   await w.close();
+  // Receiving a delayed turn cannot turn the current roster into proof
+  // that the newly admitted person held that old sealed copy.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  await w.receive(c['p26-proof']);await w.receive(c['p26-context']);
+  {
+   const pv=v.participations,old=pv['p26-before-join'].inner,authorFP=await wire.fingerprint(alicePub);
+   check(!(await w.st.all('inbox')).some(r=>r.lid===old.lid),'delayed pre-join turn has not arrived');
+   for(const type of ['invite','scope','accept'])await w.receive(pv['p6-0-'+type]);
+   await w.receive(pv['p26-before-join']);
+   check(!!await w.st.get('inbox',old.id),'pre-join sealed turn admitted after later membership');
+   const packet=await w.e.groupCurrentState(conv),ref={lid:old.lid,fingerprint:authorFP};
+   for(const p of packet.state.members) {
+    const reader=!!await w.st.get('kv',w.e.roomReaderKey(conv,ref,p.person,await wire.groupAdmissionHash(p.admission)));
+    check(reader===old.fan.some(f=>f.person===p.person),'received copy proves only signed fan '+p.person);
+   }
+   check(!old.human,'pre-agent turn carries no consent for future agent context');
+   await w.receive(pv['p26-share-late-reader']);
+   const denied=(await w.e.agentConv(pv['p6-source'])).info,share=pv['p26-share-late-reader'].inner;
+   check(!!await w.st.get('inbox',share.id)&&denied.shares.includes(share.body),'valid current member share recorded under exact admission');
+   check(denied.grant.length===0,'new member cannot share an unreceived pre-join turn');
+   await w.receive(pv['p26-share-author']);
+   const positive=(await w.e.agentConv(pv['p6-source'])).info;
+   check(positive.grant.length===1&&positive.grant[0].lid===old.lid,'verified original author may still share selected earlier turn');
+   await w.receive(pv['p26-no-fan']);
+   check(!!await w.st.get('inbox',pv['p26-no-fan'].inner.id),'legacy group copy admitted without fabricating reader proof');
+   const legacy={lid:pv['p26-no-fan'].inner.lid,fingerprint:authorFP};
+   for(const p of packet.state.members)check(!await w.st.get('kv',w.e.roomReaderKey(conv,legacy,p.person,await wire.groupAdmissionHash(p.admission))),'missing fan grants no inferred reader '+p.person);
+   await w.reload();check((await w.e.agentConv(pv['p6-source'])).info.grant.length===1,'reader proof and accepted exact share survive reload');
+   // Exercise the real sealed outbox path, with fixture transport only.
+   w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};
+   const sent=await w.e.sendDM({conv,body:'P26 sender exact sealed roster'}),copies=(await w.st.all('outbox')).filter(r=>r.lid===sent.lid);
+   check(copies.length===packet.state.members.length-1&&copies.every(r=>r.envelope&&r.group_admission),'sender seals copies for every exact current recipient');
+   for(const p of packet.state.members)check(!!await w.st.get('kv',w.e.roomReaderKey(conv,{lid:sent.lid,fingerprint:w.e.fp},p.person,await wire.groupAdmissionHash(p.admission))),'sender retains exact sealed roster reader '+p.person);
+  }
+  await w.close();
   // Current authority is independent of the sequence chosen by an inviter.
   w=await world();for(let i=0;i<=4;i++)await w.receive(c['proof'+'x'.repeat(i)]);await w.receive(c.contextxxxx);
   {

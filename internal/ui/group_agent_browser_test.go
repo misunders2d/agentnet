@@ -285,7 +285,7 @@ func groupParticipationEngineVectors(t *testing.T, root protocol.ConvRoot, state
 	source, target := roomParts[0], roomParts[1]
 	seal("p6-ordinary", envelope.Inner{Kind: envelope.KindMessage, Body: "P6 future group message", Origin: envelope.OriginUI, Human: human}, alice, ap)
 	rootID, askID := protocol.NewID(), protocol.NewID()
-	seal("p6-root", envelope.Inner{Kind: envelope.KindQuestion, LID: rootID, PID: source.PID, Body: "Ask the other agent", Origin: envelope.OriginUI, Target: &envelope.Target{Address: ap.Address, Fingerprint: ap.Fingerprint(), AgentID: source.Host.AgentID, GroupAdmission: am.Admission.Hash()}, Human: human}, alice, ap)
+	seal("p6-root", envelope.Inner{Kind: envelope.KindQuestion, LID: rootID, PID: source.PID, Fan: []envelope.Fan{{Person: ar.Person, Roster: ar.Hash()}}, Body: "Ask the other agent", Origin: envelope.OriginUI, Target: &envelope.Target{Address: ap.Address, Fingerprint: ap.Fingerprint(), AgentID: source.Host.AgentID, GroupAdmission: am.Admission.Hash()}, Human: human}, alice, ap)
 	authored := *human
 	authored.AuthorPID = source.PID
 	ask := envelope.Inner{Kind: envelope.KindQuestion, LID: askID, PID: target.PID, ReplyTo: rootID, Body: "P6 correlated agent ask", Emotion: "neutral", Origin: envelope.OriginAgentPrefix + "fixture", Target: &envelope.Target{Address: dp.Address, Fingerprint: dp.Fingerprint(), AgentID: target.Host.AgentID}, Human: &authored}
