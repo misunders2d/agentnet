@@ -61,6 +61,10 @@ jobs:
           export AGENTNET_CHROME="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium)"
           test -n "$AGENTNET_CHROME"
           go test -race -count=1 -timeout 90s -run '^TestDeviceStoreInChrome$' -v ./internal/ui/static
+  # The AgentNet app's installers for the three systems (desktop.yml).
+  desktop:
+    if: ${{ !inputs.windows_task_probe }}
+    uses: ./.github/workflows/desktop.yml
   container:
     if: ${{ !inputs.windows_task_probe }}
     runs-on: ubuntu-latest

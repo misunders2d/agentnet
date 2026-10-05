@@ -16,3 +16,11 @@
 
 # The messenger source's dependencies (web/dev.sh links a cache here)
 /internal/ui/web/node_modules
+
+# The desktop app's build (desktop/build.sh): tools, Rust output, the
+# bundled agentnet program and generated schemas
+/desktop/node_modules/
+/desktop/src-tauri/target/
+/desktop/src-tauri/binaries/
+/desktop/src-tauri/gen/
+/desktop/out/

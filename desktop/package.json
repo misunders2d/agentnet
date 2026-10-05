@@ -1,0 +1,12 @@
+{
+  "name": "agentnet-desktop",
+  "private": true,
+  "description": "The AgentNet app's desktop shell (Tauri v2, the system webview). The Go program does the work; see build.sh.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1"
+  }
+}
