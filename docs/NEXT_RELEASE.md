@@ -11,7 +11,9 @@ downloads and final installer checks are not confirmed by this record.
 - **One app on each computer.** Install AgentNet and open its icon. It keeps
   working in the tray when you close the window. The app installs the
   `agentnet` command too; people do not need terminal commands to use it.
-  Phones keep the browser/home-screen app.
+  The Windows installer makes that command available to coding agents in
+  new terminal sessions. Windows login startup handles account and install
+  folder names with spaces. Phones keep the browser/home-screen app.
 - **Sign in with Google.** In a workspace that enables Google sign-in, use
   the account your workspace allows. Adding another device still needs an
   OK from an existing human device of yours. Signing in does not give
@@ -32,18 +34,35 @@ downloads and final installer checks are not confirmed by this record.
   the group and receive the reply. The owner's approvals still decide
   what an agent may answer or do. New group agents receive future group
   messages and files, including when their owner is outside the group;
-  earlier history is shared only when selected.
+  earlier history is shared only when selected. Only a current group admin
+  can invite an agent whose owner is outside the group. Valid removals reach
+  members who join later or were offline; old admin rights do not authorize
+  a new invitation. Being in the group today does not prove someone received
+  an earlier message or may share it with an agent.
 - **Approve a person across their devices.** Approve Sergey once for
   questions or tasks, and it covers his current verified devices and ones
   he links later. Removing a device ends its access once the removal is
   verified. Changed keys and conflicting identities still pause access.
-  A person's own human devices can add devices; an agent-only host cannot.
+  Each approval belongs to the exact verified person ID; names never choose
+  who receives permission. A person's own human devices can add devices;
+  an agent-only host cannot.
+- **Your profile picture (MEL-520).** Choose a picture, crop it, preview it and save
+  it in Comic, Classic or Zoom, including on a phone. You can also use a
+  chat image as your picture, replace it or remove it. Other people see it
+  beside your messages and profile. Pictures are public on the workspace's
+  server; removing one from your profile does not erase the uploaded image.
+- **More controls in Comic.** Set a computer as a service or bot, manage
+  teams, and connect Google Drive or save a chat file to a project space.
+  Choosing a reply receiver or an existing agent session remains in Classic
+  and Zoom; Comic still lacks those controls. See the
+  [remaining Comic gap](COMIC_PARITY_GAPS.md).
 - **Read the whole request when an agent needs you.** Its full explanation
   is visible to the people responsible for deciding, in the chat and on
   the OKs card, with readable long text on a
   narrow screen. Work in progress stays visible; stalled work is called
-  out. If a question needs an action, the agent can propose it for you to
-  confirm with Do it.
+  out. Ask again retries a question; Mark as handled clears it without
+  sending a reply or starting work.
+- **MEL-521 — PLACEHOLDER (Claude to fill after merge): Do it / no Answer–Do it toggle. Not claimed here yet.**
 - **Send keeps you writing.** Your sent draft clears immediately, one
   Sending bubble shows progress, and you can write the next message while
   delivery continues. A failed send keeps a way to retry without replacing
@@ -63,8 +82,8 @@ per-user installer, and a universal Mac `.dmg` for Intel and Apple silicon.
 See the [installation guide](revival/INSTALL.md). Installers are unsigned.
 Mac installation and use are untested on a real Mac; Windows installer and
 real desktop behavior are also not qualified by these local test reports.
-The latest recorded Linux app build completed, but AppImage packaging did
-not finish in that check. Published installer downloads still need checking.
+Published installer downloads and real install/open/tray/startup behavior
+still need checking. Local builds and tests do not establish those results.
 
 Google sign-in was tested with a local stand-in, not a real Google account.
 Older identities are not converted to Google identities: Google-enabled
@@ -77,7 +96,11 @@ redesign. Remaining group-agent work and live acceptance stay tracked in
 **MEL-542**. Older limited guest invitations are not silently expanded to
 new group membership. An outside-owner agent requires a current group
 admin's invitation; if that inviting admin leaves or loses admin rights,
-a current admin must add it again.
+a current admin must add it again. The later group fixes do not rewrite
+previously stored history-sharing permissions. Some older views can still
+need a fresh authorized removal if its author lost admin rights before the
+removal arrived. Custom agent pictures are not included; the new picture
+controls are for people.
 
 ---
 
