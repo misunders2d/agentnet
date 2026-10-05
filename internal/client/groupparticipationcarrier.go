@@ -165,12 +165,16 @@ func (a *Agent) admitGroupVisitorInvite(ctx context.Context, env envelope.Envelo
 	if in.Sub != envelope.SubEvent {
 		return false, nil
 	}
-	ev, err := checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
+	ev, err := protocol.ParseParticipationEvent([]byte(in.Body))
 	if err != nil {
 		return true, hold(reasonInvalid, err.Error())
 	}
 	if ev.Type != protocol.EventInvite || ev.Group == nil || ev.Group.HostRole != "visitor" || ev.Host == nil || ev.Host.Address != a.Address || ev.Host.Fingerprint != a.Self().Fingerprint() || ev.Host.Person != me.info.Person {
 		return false, nil
+	}
+	ev, err = checkParticipationEvent(in, sender.Fingerprint(), sender.SignKey)
+	if err != nil {
+		return true, hold(reasonInvalid, err.Error())
 	}
 	if ev.Author.Person != sp.info.Person || !sp.has(env.From, sender.Fingerprint()) {
 		return true, hold(reasonInvalid, "group: visitor inviter exact person differs")

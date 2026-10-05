@@ -259,6 +259,60 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 		carriers["p6-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash())
 		carriers["p6-nonadmin-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), bob)
 		carriers["p6-outsider-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), dana)
+		// Original author rights still apply when an administrator vouches for
+		// a carried end, and when a member forwards the host's signed bytes.
+		for _, mode := range []string{"host", "inviter", "admin", "non-admin", "wrong-parent", "bad-signature"} {
+			who, public, person, state := dana, dr.Devices[0], dr, s0
+			if mode == "inviter" || mode == "wrong-parent" {
+				who, public, person = alice, ap, ar
+			}
+			if mode == "admin" || mode == "non-admin" {
+				who, public, person = bob, bp, rr
+				if mode == "admin" {
+					state = states[3]
+				}
+			}
+			end := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: membershipRecords[3].PID, Type: protocol.EventDismiss, Prev: membershipRecords[5].Hash(), TS: 1700000110, Author: protocol.EventAuthor{Person: person.Person, Roster: person.Hash(), Address: public.Address, Fingerprint: public.Fingerprint()}}
+			if member, ok := state.Member(person.Person); ok {
+				end.Author.GroupAdmission = member.Admission.Hash()
+			}
+			if mode == "wrong-parent" {
+				end.Prev = strings.Repeat("f", 64)
+			}
+			end.Sign(who.Sign)
+			if mode == "bad-signature" {
+				end.Sig = slices.Clone(end.Sig)
+				end.Sig[0] ^= 1
+			}
+			carriers["p20-"+mode] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: state, Memberships: append(slices.Clone(membershipRecords), end)}, state.Seq, state.Hash())
+			if mode == "host" || mode == "non-admin" || mode == "bad-signature" {
+				in := envelope.Inner{V: 2, ID: protocol.NewID(), From: ap.Address, To: browser.Address, TS: end.TS, Kind: envelope.KindMessage, Conv: root.ID(), Root: json.RawMessage(marshal(t, root)), LID: protocol.NewID(), PID: end.PID, Sub: envelope.SubEvent, Body: marshal(t, end)}
+				recipient, _ := browser.Recipient()
+				env, err := envelope.Seal(in, alice.Sign, recipient)
+				if err != nil {
+					t.Fatal(err)
+				}
+				participations["p20-forward-"+mode] = map[string]any{"envelope": marshal(t, env), "inner": in}
+			}
+		}
+		decline := membershipRecords[5]
+		decline.Type = protocol.EventDecline
+		decline.Sign(dana.Sign)
+		declinedEnd := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: decline.PID, Type: protocol.EventDismiss, Prev: decline.Hash(), TS: 1700000110, Author: membershipRecords[3].Author}
+		declinedEnd.Sign(alice.Sign)
+		for _, ev := range []protocol.ParticipationEvent{decline, declinedEnd} {
+			who, from := dana, dr.Devices[0]
+			if ev.Type == protocol.EventDismiss {
+				who, from = alice, ap
+			}
+			in := envelope.Inner{V: 2, ID: protocol.NewID(), From: from.Address, To: browser.Address, TS: ev.TS, Kind: envelope.KindMessage, Conv: root.ID(), Root: json.RawMessage(marshal(t, root)), LID: protocol.NewID(), PID: ev.PID, Sub: envelope.SubEvent, Body: marshal(t, ev)}
+			recipient, _ := browser.Recipient()
+			env, err := envelope.Seal(in, who.Sign, recipient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			participations["p20-declined-"+ev.Type] = map[string]any{"envelope": marshal(t, env), "inner": in}
+		}
 		// Bob held admin at slot 3, then lost it at slot 4 without a new admission.
 		backdated := membershipRecords[3]
 		currentBob, _ := states[4].Member(rr.Person)

@@ -44,7 +44,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    throw Error('unexpected fixture fetch '+u.pathname);
   };
   const recovery=new Set(),track=engine=>{const run=engine.recoverGroupIntents.bind(engine);engine.recoverGroupIntents=(...args)=>{const work=run(...args);recovery.add(work);work.then(()=>recovery.delete(work),()=>recovery.delete(work));return work;};};
-  const drain=async()=>{if(e.retrying)await e.retrying;while(recovery.size)await Promise.allSettled([...recovery]);};
+  const drain=async()=>{if(e.retrying)await e.retrying;if(e.disclosing)await e.disclosing;while(recovery.size)await Promise.allSettled([...recovery]);};
   let e=new Engine({store:st,base:'http://127.0.0.1:1',fetch});track(e);e.keys=keys;e.address=address;e.fp=await wire.fingerprint(pub);e.realm=root.realm;
   for(const raw of [...v.challenge.rosters,v.invited_roster]){const r=await wire.parseRoster(raw);await wire.verifyFirst(r);const p=await e.personRecord([r],r.person===roster.person?'self':'pinned',null);if(r.person===roster.person){e.me=p;await st.write([{s:'kv',k:'person',v:p}]);}else await st.write([{s:'persons',k:p.person,v:p}]);await e.pinDevices(p);}
   await st.write([{s:'kv',k:'identity',v:{keys,address,fingerprint:e.fp}}]);
@@ -118,6 +118,75 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    check((await w.e.groupThread(conv)).agents.length===0&&!(await w.e.groupCurrent(conv)).memberships?.length,'untrusted '+who+' replay creates no group agent or stored membership payload');
    w.e.groupSupport=async()=>{};await w.e.sendDM({conv,body:'AFTER_REMOVED_OUTSIDE_HOST'});
    check((await w.st.all('outbox')).every(r=>r.to!==v.invited_roster.devices[0].address),'untrusted '+who+' replay makes no copy to outside host');
+   await w.close();
+  }
+  // Ends count in a late member's first carrier, only under the original
+  // author's removal right; a carrier publisher cannot confer that right.
+  for(const mode of ['host','inviter','admin','non-admin','wrong-parent','bad-signature']) {
+   w=await world();const last=mode==='admin'?3:0;
+   for(let i=0;i<=last;i++)await w.receive(c['proof'+'x'.repeat(i)]);
+   await w.receive(c['context'+'x'.repeat(last)]);
+   await w.receive(c['p20-'+mode]);
+   const valid=['host','inviter','admin'].includes(mode),id=wire.parseEnvelope(c['p20-'+mode].envelope).id;
+   check(!!await w.st.get('held',id)===!valid,'carried '+mode+' end requires original removal authority and exact parent/signature');
+   if(valid) {
+    check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','late member imports '+mode+' dismissal');
+    const record=await w.e.groupRecord(conv),events=await w.e.convEvents(conv),members=await w.e.dmMembers(record,events);
+    const proof=await w.e.roomMemberships(record,events,members);
+    check(proof.some(e=>e.pid===v.participations['p6-target']&&e.type==='dismiss'),'next carrier retains counted '+mode+' end');
+    await w.reload();check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','carried '+mode+' end survives reload');
+    w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};await w.e.sendDM({conv,body:'AFTER_CARRIED_END'});
+    check((await w.st.all('outbox')).every(r=>r.to!==v.invited_roster.devices[0].address),'carried '+mode+' end prevents future outside copy');
+   } else check(!await w.st.get('kv','room-memberships/'+conv),'invalid '+mode+' end installs no lifecycle authority');
+   await w.close();
+  }
+  // A declined-then-dismissed agent never had a carried acceptance.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  for(const name of ['p6-1-invite','p6-1-scope','p20-declined-decline','p20-declined-dismiss'])await w.receive(v.participations[name]);
+  {
+   const record=await w.e.groupRecord(conv),events=await w.e.convEvents(conv),members=await w.e.dmMembers(record,events);
+   check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','declined membership can end without becoming active');
+   check((await w.e.roomMemberships(record,events,members)).length===0,'producer omits never-accepted dismissed membership');
+   await w.e.discloseHumanAudience();check((await w.st.all('outbox')).length===0,'never-accepted membership has no automatic end fan-out');
+  }
+  await w.close();
+  // Previously counted former-admin ends stay local, without poisoning a
+  // newly published context or forwarding a bare acceptance as active again.
+  w=await world();for(let i=0;i<=3;i++)await w.receive(c['proof'+'x'.repeat(i)]);await w.receive(c.contextxxx);await w.receive(c['p20-admin']);
+  await w.receive(c.proofxxxx);await w.receive(c.contextxxxx);
+  {
+   const record=await w.e.groupRecord(conv),events=await w.e.convEvents(conv),members=await w.e.dmMembers(record,events),proof=await w.e.roomMemberships(record,events,members);
+   check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','originally counted admin end remains locally counted after demotion');
+   check(proof.length===3&&proof.every(e=>e.pid!==v.participations['p6-target']),'producer omits former-admin end and its acceptance together');
+   const fresh=await world();for(let i=0;i<=4;i++)await fresh.receive(c['proof'+'x'.repeat(i)]);
+   const packet={root,state:states[4],memberships:proof},carried=await fresh.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON(packet)),4,records[4].hash);
+   await fresh.receive(carried);
+   check(!await fresh.st.get('held',wire.parseEnvelope(carried.envelope).id)&&(await fresh.e.groupCurrent(conv)).state.seq===4,'former-admin end cannot poison valid new context carrier');
+   await fresh.close();
+  }
+  await w.close();
+  // A delayed end follows an already carried acceptance without requiring a
+  // new group publication. An unrelated author or changed signature cannot.
+  for(const mode of ['host','non-admin','bad-signature']) {
+   w=await world();await w.receive(c.proof);await w.receive(c.context);await w.receive(c['p6-memberships']);
+   await w.receive(v.participations['p20-forward-'+mode]);
+   const valid=mode==='host',info=(await w.e.agentConv(v.participations['p6-target'])).info;
+   check(info.state===(valid?'dismissed':'active'),'forwarded '+mode+' exact counted end authority');
+   check(!!await w.st.get('held',wire.parseEnvelope(v.participations['p20-forward-'+mode].envelope).id)===!valid,'forwarded '+mode+' author signature checked before admission');
+   if(valid) {
+    await w.e.discloseHumanAudience();
+    const endRows=()=>w.st.all('outbox').then(rows=>rows.filter(r=>r.pid===info.pid&&r.sub==='event'&&wire.parseEvent(r.body).type==='dismiss'));
+    const before=await endRows();
+    check(before.length===2&&before.every(r=>r.recipient_fp&&r.group_admission&&r.required_cap===wire.CapGroup),'counted end queues exact current member copies');
+    await w.e.discloseHumanAudience();await w.e.discloseHumanAudience();
+    check((await endRows()).length===before.length,'end retry idempotent per exact member key/admission');
+    const nativeEnd=v.participations['p20-forward-host'].inner.body;
+    check(before.every(r=>r.body===nativeEnd),'end forwarding retains exact native signed bytes');
+    const gated=before[0],pin=await w.st.get('pins',gated.to);
+    await w.st.write([{s:'pins',k:gated.to,v:{...pin,pending:{fingerprint:'changed-key'}}}]);
+    check(!!(await w.e.externalGate(await w.e.groupRecord(conv),gated,[])).why,'queued end holds on recipient key change');
+    await w.st.write([{s:'pins',k:gated.to,v:pin}]);
+   }
    await w.close();
   }
   // A new reader receives the original signed membership records quietly,

@@ -3028,7 +3028,15 @@ export class Engine {
     if(!identity||identity.revoked||identity.address!==this.address||identity.fingerprint!==this.fp||root.realm!==this.realm)throw new Hold("invalid","Group PID exact identity/realm differs.");
     let record=null;
     if(n.sub==="event") {
-      try{record=await this.eventRecord(n.body);const e=record.e;if(n.kind!=="message"||e.conv!==n.conv||e.pid!==n.pid||e.author.address!==env.from||e.author.fingerprint!==pin.fingerprint)throw Error("Group event sender/scope differs.");await wire.verifyEvent(e,(await this.pubOf(pin)).sign_key);}
+      try{record=await this.eventRecord(n.body);const e=record.e;if(n.kind!=="message"||e.conv!==n.conv||e.pid!==n.pid)throw Error("Group event scope differs.");
+        let authorPin=pin;
+        if(e.author.address!==env.from||e.author.fingerprint!==pin.fingerprint) {
+          if(e.type!=="dismiss")throw Error("Group event sender differs.");
+          authorPin=await this.sendKey(e.author.address);
+          const author=await this.personOf(e.author.address,authorPin);
+          if(authorPin.fingerprint!==e.author.fingerprint||author.person!==e.author.person||!author.hashes.includes(e.author.roster))throw Error("Forwarded group end author proof differs.");
+        }
+        await wire.verifyEvent(e,(await this.pubOf(authorPin)).sign_key);}
       catch(e){throw new Hold("invalid",e.message);}
       if(record.e.host) {const h=record.e.host,hp=await this.sendKey(h.address);if(hp.fingerprint!==h.fingerprint||(await this.personOf(h.address,hp)).person!==h.person)throw new Hold("invalid","Group invitation host differs from pinned proof.");}
     }
@@ -4142,6 +4150,7 @@ export class Engine {
       }
     } finally {
       this.retrying = null;
+      this.discloseHumanAudience(); // group ends also follow fresh membership evidence
     }
   }
 
@@ -6218,17 +6227,26 @@ export class Engine {
     const selected=new Set();
     for(const pid of new Set(events.map(x=>x.e.pid))) {
       const p=this.resolveAgent(pid,events,members);
-      if(p.member && follows(p))for(const hash of [p.invite,p.scope,p.decision])if(hash)selected.add(hash);
-      if(p.member && follows(p))for(const raw of p.shares)selected.add(await wire.eventHash(wire.parseEvent(raw)));
+      if(!p.member || p.held || !(p.state==="active" || p.state==="dismissed" && p.decision && p.dismissal))continue;
+      if(events.find(x=>x.hash===p.decision)?.e.type!=="accept")continue;
+      if(p.state==="dismissed" && !await this.roomMembershipMayDismiss(members.group,(events.find(x=>x.hash===p.invite)||events.find(x=>x.hash===p.scope))?.e,events.find(x=>x.hash===p.dismissal)?.e))continue;
+      for(const hash of [p.invite,p.scope,p.decision,p.dismissal])if(hash)selected.add(hash);
+      for(const raw of p.shares)selected.add(await wire.eventHash(wire.parseEvent(raw)));
     }
     return events.filter(x=>selected.has(x.hash)).map(x=>x.e);
+  }
+
+  async roomMembershipMayDismiss(packet,inv,e) {
+    if(!inv?.host || !inv.group || e?.type!=="dismiss")return false;
+    const member=wire.groupMember(packet.state,e.author.person),host=e.author.person===inv.host.person&&e.author.address===inv.host.address&&e.author.fingerprint===inv.host.fingerprint;
+    return host || e.author.person===inv.author.person || member && !await wire.groupWithdrawn(packet.state,member,packet.withdrawals||[]) && e.author.group_admission===await wire.groupAdmissionHash(member.admission) && (inv.group.host_role==="member" || member.admin);
   }
 
   async roomMembershipOps(packet,checks) {
     if(!packet.memberships?.length)return [];
     const conv=packet.state.conv, grouped=new Map(), ops=[], kept=await this.groupRead(checks,"kv","room-memberships/"+conv)||[];
     for(const e of packet.memberships) {
-      if(e.conv!==conv || e.role || !["invite","scope","accept","share"].includes(e.type))throw new Hold("invalid","Unrelated membership carrier record.");
+      if(e.conv!==conv || e.role || !["invite","scope","accept","share","dismiss"].includes(e.type))throw new Hold("invalid","Unrelated membership carrier record.");
       const p=await this.groupRead(checks,e.author.person===this.me.person?"kv":"persons",e.author.person===this.me.person?"person":e.author.person),pin=await this.sendKey(e.author.address),pub=await this.pubOf(pin);
       if(!p || p.state==="conflict" || !p.hashes.includes(e.author.roster) || !p.devices.some(d=>d.address===e.author.address&&d.fingerprint===e.author.fingerprint) || pin.fingerprint!==e.author.fingerprint)throw new Hold("proof_pending","Membership author exact proof missing.");
       try{await wire.verifyEvent(e,pub.sign_key);}catch(err){throw new Hold("invalid",err.message);}
@@ -6250,7 +6268,11 @@ export class Engine {
       }
       const exact=e=>e.prev===invite&&e.author.person===inv.host.person&&e.author.address===inv.host.address&&e.author.fingerprint===inv.host.fingerprint;
       if(!evs.some(e=>e.type==="accept"&&exact(e)))throw new Hold("invalid","Membership needs exact host consent.");
+      const accepts=await Promise.all(evs.filter(e=>e.type==="accept"&&exact(e)).map(wire.eventHash));
       for(const e of evs) {
+        if(e.type==="dismiss") {
+          if(!await this.roomMembershipMayDismiss(packet,inv,e) || e.prev!==invite&&!accepts.includes(e.prev))throw new Hold("invalid","Membership dismissal needs an authorized author and exact invitation or acceptance.");
+        }
         if(e.type==="accept"&&!exact(e) || e.type==="scope"&&!wire.sameScope(e,await wire.scopeOf(inv,e.ts)) || e.type==="share"&&(e.prev!==invite||!["person","address","fingerprint","agent_id"].every(k=>(e.host?.[k]||"")===(inv.host[k]||""))))throw new Hold("invalid","Membership scope differs.");
         const hash=await wire.eventHash(e), raw=wire.eventJSON(e);
         if(!kept.includes(raw))kept.push(raw);
@@ -6426,7 +6448,7 @@ export class Engine {
     const request = !!x;
     if (request && (!["question", "task"].includes(n.kind) || !n.target || n.receiver)) throw new Error("An addressed request names its assistant only.");
     const checks = [], evidence = await this.humanEvidence(c, h, checks);
-    const root = wire.parseRoot(c.root), fan = c.kind==="group" ? [] : root.members.map(m => ({ person: m.person, roster: evidence.members.get(m.person).hash }));
+    const root = c.kind==="group" ? wire.parseGroupRoot(c.root) : wire.parseRoot(c.root), fan = c.kind==="group" ? [] : root.members.map(m => ({ person: m.person, roster: evidence.members.get(m.person).hash }));
     const groupAdmission=c.kind==="group"?evidence.members.epochs.get(this.fp):"";
     if(c.kind==="group"&&!groupAdmission)throw Error("Only a current human member writes an ordinary group turn.");
     const hosts = [...evidence.scopes.values()].map(p => p.host.devices.find(d => d.address === p.host.address && d.fingerprint === p.host.fingerprint));
@@ -6709,6 +6731,7 @@ export class Engine {
     if (!info.invite || (!info.external || members.size !== 2) && !members.group || n.pid !== info.pid) throw new Hold("proof_pending", "participation has incomplete pinned evidence");
     if (n.sub === "event") {
       const ev = wire.parseEvent(n.body);
+      if(members.group && member && (ev.author.address!==address || ev.author.fingerprint!==fp) && ev.type==="dismiss" && info.state==="dismissed" && !info.held && info.dismissalEvent===wire.eventJSON(ev))return;
       if (ev.author.address !== address || ev.author.fingerprint !== fp) throw new Hold("invalid", "event is not its sending device's own");
       const author = members.get(ev.author.person);
       const memberAuthor = member && author?.hashes.includes(ev.author.roster) && author.devices.some((d) => d.address === address && d.fingerprint === fp) && (!members.group || members.epochs.get(fp)===ev.author.group_admission);
@@ -6809,8 +6832,44 @@ export class Engine {
     this.disclosing = (this.disclosing || Promise.resolve()).then(() => this.discloseHumanPass()).catch(() => {});
     return this.disclosing;
   }
+  // A counted room end follows new member admissions even when its original
+  // fan-out preceded their join. Store one exact signed copy per key/admission.
+  async discloseRoomConv(c) {
+    const events=await this.convEvents(c.id), members=await this.dmMembers(c,events);
+    if(!members.group || !members.epochs.get(this.fp))return;
+    const ends=[...new Set(events.map(x=>x.e.pid))].map(pid=>this.resolveAgent(pid,events,members)).filter(p=>p.member&&!p.held&&p.state==="dismissed"&&p.decision&&p.dismissal);
+    for(const end of ends)for(const person of members.values())for(const dev of person.devices) {
+      if(dev.address===this.address)continue;
+      const checks=[],currentEvents=await this.convEvents(c.id,checks),currentMembers=await this.dmMembers(c,currentEvents,checks),info=this.resolveAgent(end.pid,currentEvents,currentMembers);
+      if(!currentMembers.epochs.get(this.fp) || !info.member || info.held || info.state!=="dismissed" || info.dismissal!==end.dismissal)continue;
+      if(currentEvents.find(x=>x.hash===info.decision)?.e.type!=="accept")continue;
+      if(!await this.roomMembershipMayDismiss(currentMembers.group,(currentEvents.find(x=>x.hash===info.invite)||currentEvents.find(x=>x.hash===info.scope))?.e,currentEvents.find(x=>x.hash===info.dismissal)?.e))continue;
+      const admission=currentMembers.epochs.get(dev.fingerprint),pin=await this.groupRead(checks,"pins",dev.address);
+      if(!admission || !pin || pin.pending || pin.fingerprint!==dev.fingerprint)continue;
+      const body=wire.eventJSON(currentEvents.find(x=>x.hash===info.dismissal).e);
+      const rows=await this.authorityRows({conv:c.id,pid:info.pid,sub:"event"},checks);
+      if(rows.some(r=>r.to===dev.address&&r.recipient_fp===dev.fingerprint&&r.group_admission===admission&&r.body===body))continue;
+      let ok=false,detail="";
+      try { await this.groupSupport(dev.address,pin);[ok,detail]=await this.supports(dev.address,pin); }
+      catch(e) { detail=retryable(e)?"server_unavailable: cannot reach your server":"peer_update: "+e.message; }
+      const target=[...currentMembers.values()].find(p=>p.devices.some(d=>d.address===dev.address&&d.fingerprint===dev.fingerprint));
+      if(!target)continue;
+      const id=wire.newID(),lid=wire.newID(),at=this.now(),fan=[{person:this.me.person,roster:this.me.hash},...(target.person!==this.me.person?[{person:target.person,roster:target.hash}]:[])];
+      const inner={v:2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",body,conv:c.id,root:c.root,lid,pid:info.pid,sub:"event",origin:"ui",replica:false,fan,attachments:[]};
+      const rec={...inner,at,own:target.person===this.me.person,recipient_fp:dev.fingerprint,group_admission:admission,required_cap:wire.CapGroup,envelope:await wire.seal(inner,this.keys,await this.pubOf(pin)),state:ok?"queued":"waiting",detail};
+      const gate=await this.externalGate(c,rec,checks);
+      if(gate.why)continue;
+      await this.store.write([{s:"outbox",k:id,v:rec}],checks);this.changed();
+      if(rec.state==="queued")await this.post(rec);
+    }
+  }
   async discloseHumanPass() {
     if (!this.me) return;
+    // Quiet group carriers live in kv, without adding visible conversation rows.
+    for(const g of await this.store.all("kv"))if(g.root&&g.context&&Array.isArray(g.records)) {
+      try { const packet=wire.parseGroupContext(g.context);await this.discloseRoomConv({id:packet.state.conv,kind:"group",root:g.root}); }
+      catch(e) { /* incomplete/frozen group evidence stays held until the next retry */ }
+    }
     for (const c of await this.store.all("convs")) {
       let root; try { root = wire.parseRoot(c.root); } catch (e) { continue; }
       if (c.kind === "group" || root.kind !== "dm" || !wire.rootMember(root, this.me.person)) continue;

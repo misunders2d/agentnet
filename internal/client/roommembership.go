@@ -52,17 +52,45 @@ func roomMembershipProof(q dbq, packet GroupContext) ([]protocol.ParticipationEv
 			return nil, e
 		}
 		p := resolve(packet.State.Conv, pid, evs, m)
-		if !p.Member || !p.Following() {
+		if !p.Member || !p.Following() && !(p.Held == 0 && p.State == PartDismissed && p.Decision != "" && p.Dismissal != "") {
 			continue
+		}
+		if p.State == PartDismissed {
+			var invite, end protocol.ParticipationEvent
+			accepted := false
+			for _, ev := range evs {
+				if ev.Hash() == p.Invite || ev.Hash() == p.Scope && invite.Type == "" {
+					invite = ev
+				}
+				if ev.Hash() == p.Dismissal {
+					end = ev
+				}
+				accepted = accepted || ev.Hash() == p.Decision && ev.Type == protocol.EventAccept
+			}
+			// A previously counted end can outlive its author's admin role.
+			// Do not let unverifiable historical authority poison a new
+			// context, or send an acceptance without its counted end.
+			if !accepted || !roomMembershipMayDismiss(packet, invite, end) {
+				continue
+			}
 		}
 		for _, ev := range evs {
 			h := ev.Hash()
-			if h == p.Invite || h == p.Scope || h == p.Decision || slices.Contains(p.Shares, h) {
+			if h == p.Invite || h == p.Scope || h == p.Decision || h == p.Dismissal || slices.Contains(p.Shares, h) {
 				proof = append(proof, ev)
 			}
 		}
 	}
 	return proof, nil
+}
+
+func roomMembershipMayDismiss(packet GroupContext, invite, end protocol.ParticipationEvent) bool {
+	if invite.Host == nil || invite.Group == nil || end.Type != protocol.EventDismiss {
+		return false
+	}
+	member, current := packet.State.Member(end.Author.Person)
+	host := end.Author.Person == invite.Host.Person && end.Author.Address == invite.Host.Address && end.Author.Fingerprint == invite.Host.Fingerprint
+	return host || end.Author.Person == invite.Author.Person || current && !packet.State.Withdrawn(member, packet.Withdrawals) && end.Author.GroupAdmission == member.Admission.Hash() && (invite.Group.HostRole == "member" || member.Admin)
 }
 
 // Memberships are extra lifecycle claims, not part of the signed group state.
@@ -85,7 +113,7 @@ func admitRoomMembershipProof(tx *sql.Tx, packet GroupContext) error {
 	}
 	byPID := map[string][]protocol.ParticipationEvent{}
 	for _, ev := range packet.Memberships {
-		if ev.Conv != packet.State.Conv || ev.Validate() != nil || ev.Role != "" || ev.Type != protocol.EventInvite && ev.Type != protocol.EventScope && ev.Type != protocol.EventAccept && ev.Type != protocol.EventShare {
+		if ev.Conv != packet.State.Conv || ev.Validate() != nil || ev.Role != "" || ev.Type != protocol.EventInvite && ev.Type != protocol.EventScope && ev.Type != protocol.EventAccept && ev.Type != protocol.EventShare && ev.Type != protocol.EventDismiss {
 			return errors.New("group: membership carrier has unrelated records")
 		}
 		p, ok, err := personByIDIn(tx, ev.Author.Person)
@@ -141,18 +169,26 @@ func admitRoomMembershipProof(tx *sql.Tx, packet GroupContext) error {
 				return errors.New("group: outside agent invitation needs a group administrator")
 			}
 		}
-		accepted := false
+		accepts := []string{}
 		for _, ev := range events {
 			if ev.Type == protocol.EventAccept && ev.Prev == invite.Hash() && ev.Author.Person == invite.Host.Person && ev.Author.Address == invite.Host.Address && ev.Author.Fingerprint == invite.Host.Fingerprint {
-				accepted = true
+				accepts = append(accepts, ev.Hash())
 			} else if ev.Type == protocol.EventAccept {
 				return errors.New("group: membership carrier has unrelated consent")
 			}
 		}
-		if !accepted {
+		if len(accepts) == 0 {
 			return errors.New("group: membership carrier needs exact host consent")
 		}
 		for _, ev := range events {
+			if ev.Type == protocol.EventDismiss {
+				// A carried end must have the same removal right as a direct
+				// event. Marking room_membership_events makes it count later,
+				// so the carrier's witness alone must never grant that right.
+				if !roomMembershipMayDismiss(packet, *invite, ev) || ev.Prev != invite.Hash() && !slices.Contains(accepts, ev.Prev) {
+					return errors.New("group: membership dismissal needs an authorized author and exact invitation or acceptance")
+				}
+			}
 			if ev.Type == protocol.EventScope && !ev.Projects(*invite) || ev.Type == protocol.EventShare && (ev.Prev != invite.Hash() || ev.Host == nil || *ev.Host != *invite.Host || ev.Audience != invite.Audience) {
 				return errors.New("group: membership carrier scope differs")
 			}

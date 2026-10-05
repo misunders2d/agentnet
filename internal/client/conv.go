@@ -89,6 +89,7 @@ func (a *Agent) convSync(ctx context.Context) {
 	if work&(convRetry|convRetryMore) != 0 {
 		a.recoverHumanExcerpts(ctx)
 		a.discloseHumanAudience(ctx)
+		a.discloseRoomDismissals(ctx, feats)
 		if work&convRetry != 0 {
 			a.convWork.mu.Lock()
 			a.convWork.pos = heldPos{}
