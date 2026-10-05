@@ -141,7 +141,8 @@ async function phone(browser) {
   const snap = async (what) => { if (shots) { await p.waitForTimeout(400); await p.screenshot({ path: shots + '/parity-' + name + '-' + what + '.png' }); } }; // after sheets settle
   await p.goto(url);
   await p.waitForSelector('section[aria-label="Chats"]', T);
-  await p.getByRole('button', { name: /no person linked/ }).first().click();
+  // P2 names the peer device; its person-link status is a separate subtitle.
+  await p.getByRole('list', { name: 'Chats', exact: true }).getByRole('button', { name: /^Laptop\b/ }).click();
   const msg = p.locator('[data-mid="' + first + '"]');
   await msg.waitFor(T);
   // The message's actions (a long-press opens the same sheet).
