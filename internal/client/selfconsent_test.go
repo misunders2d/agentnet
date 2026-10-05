@@ -436,14 +436,8 @@ func TestSelfConsentLinkedDevices(t *testing.T) {
 	if err := host.UntrustOwnDevice(host.Address); err == nil {
 		t.Fatal("the host untrusted itself")
 	}
-	// The phone was never in the trust set, but it is one of the person's
-	// devices: untrusting it narrows its device-thread tasks here.
-	if err := host.UntrustOwnDevice(phone.Address); err != nil {
-		t.Fatal(err)
-	}
-	waits(invite(phone))
-	if err := host.UntrustOwnDevice("nobody/none"); err == nil {
-		t.Fatal("untrusted a device that is not one of yours")
+	if err := host.UntrustOwnDevice(phone.Address); err == nil {
+		t.Fatal("untrusted a device that was never trusted")
 	}
 }
 

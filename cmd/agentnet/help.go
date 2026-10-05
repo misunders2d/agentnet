@@ -239,7 +239,8 @@ something), the agent answers with the exact task it proposes instead
 ("proposes an action (not run)"; ID is that answer). do sends exactly that
 text, as stored, as a task replying to it, to the same agent; there it runs
 under the usual task approval (it waits for their OK unless they let your
-tasks run; on your own devices it runs at once). Confirming again shows the
+tasks run; on your own computer it runs at once when that computer trusts
+this one: person approve --native). Confirming again shows the
 task already sent; nothing runs twice. Refused for a proposal edited or
 deleted after it was made, one from a key whose change is pending, and
 from any device but the one that asked. Confirm with the person first
@@ -426,7 +427,9 @@ rejects it. Approval makes it you and grants access to your chats. Never
 approve a device you did not just ask to link. Private keys are not copied.
 
 Invites of your own agents need no accept when a trusted device of yours
-sends them (see agentnet help dm). This device trusts itself, and a device
+sends them (see agentnet help dm), and a task a trusted device of yours sends
+this device's agent runs without asking, as your own (its harness's normal
+permissions apply). This device trusts itself, and a device
 you approve with approve --native ID: say --native only for a computer that
 joined with the join command (running AgentNet), never for a browser. A
 browser's code comes from the server, so a browser must never be trusted;

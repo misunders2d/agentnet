@@ -309,17 +309,6 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 	if _, err := tx.Exec(`DELETE FROM person_devices WHERE person = ?`, person); err != nil {
 		return res, err
 	}
-	if state == personSelf {
-		// A device this person removed: its tasks here no longer run as
-		// the person's own (ownDeviceHolds).
-		for addr := range old {
-			if !slices.ContainsFunc(cur.Devices, func(d identity.Public) bool { return d.Address == addr }) {
-				if err := demoteOwnDevice(tx, addr, "that device is no longer one of yours"); err != nil {
-					return res, err
-				}
-			}
-		}
-	}
 	for _, d := range cur.Devices {
 		added, ok := old[d.Address]
 		if !ok {
@@ -333,6 +322,18 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 			return res, err
 		}
 		if _, err := tx.Exec(`INSERT INTO person_devices(address, person, fingerprint, added) VALUES(?, ?, ?, ?)`, d.Address, person, d.Fingerprint(), added); err != nil {
+			return res, err
+		}
+	}
+	if head.info.State == personSelf || state == personSelf {
+		// This installation's own person changed: a device it removed (or
+		// whose key changed) no longer gives tasks here as the person's
+		// own, nor does any once this device left (ownDeviceHolds).
+		why := "that device is no longer one of yours"
+		if res.left {
+			why = "this device is no longer one of your devices"
+		}
+		if err := demoteLapsedOwnTasks(tx, why); err != nil {
 			return res, err
 		}
 	}

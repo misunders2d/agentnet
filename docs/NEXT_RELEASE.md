@@ -286,6 +286,9 @@ block this release. See [DECISIONS §8](DECISIONS.md#8-terminal-messenger-reques
   5m sets it again.
 - MEL-521 (backend, device threads): a question's run that needs an action
   answers with the exact task it proposes (status `proposal`); `agentnet do
-  ID` confirms it as a task. A task from another of your own devices runs as
-  yours (device threads). The Comic composer change and conversation
+  ID` confirms it as a task. A task from another computer of yours that this
+  one trusts (`person approve --native`, the self-consent trust set) runs as
+  yours (device threads); one from a browser or phone key waits for the OK
+  here until the owner answers P4 question 1 (widening it is one predicate
+  condition, selfconsent.go). The Comic composer change and conversation
   proposals follow P3.
