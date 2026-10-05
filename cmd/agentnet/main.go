@@ -106,6 +106,8 @@ func run(args []string) error {
 		return runSend(ctx, a, rest, false)
 	case "ask", "task":
 		return runSendKind(ctx, a, cmd, rest)
+	case "do":
+		return runDo(ctx, a, rest)
 	case "accept", "approve", "unapprove":
 		if len(rest) == 2 && ((cmd == "accept" && rest[0] == "--always") || (cmd != "accept" && rest[0] == "--tasks")) {
 			return runTaskGrant(a, cmd, rest[1])
@@ -177,7 +179,7 @@ func run(args []string) error {
 	case "responder":
 		return runResponder(a, rest)
 	case "operator":
-		return runOperator(a, rest)
+		return runOperator(ctx, a, rest, os.Stdout)
 	case "team":
 		return runTeam(ctx, a, rest, os.Stdout, os.Stderr)
 	case "group":
@@ -936,11 +938,16 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	returnSelection := receiverFlags(fs)
 	remoteAgent := fs.String("agent", "", "exact named remote executor AgentID, independent of reply receiver")
 	replyTo := fs.String("reply-to", "", "continue a conversation: the id of a message you sent to or received from ADDRESS")
+	answerDefault := client.AskAnswerWait // asked here, answered here (MEL-537)
+	if kind == "task" {
+		answerDefault = 0
+	}
+	answerFor := answerWaitFlag(fs, answerDefault)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--answer-wait D] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
 	}
 	beyond := ""
 	if *remoteAgent != "" {
@@ -988,7 +995,7 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 		return err
 	}
 	printResult(r, *wait)
-	return nil
+	return awaitAnswer(ctx, a, r.ID, "agentnet conversation "+r.ID, answerWait(answerFor), receiver, os.Stdout, os.Stderr)
 }
 
 func runResponder(a *client.Agent, args []string) error {
@@ -1020,7 +1027,11 @@ func runResponder(a *client.Agent, args []string) error {
 			}
 			return nil
 		}
-		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, r.Timeout)
+		limit := "none"
+		if r.Timeout > 0 {
+			limit = r.Timeout.String()
+		}
+		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, limit)
 		for _, c := range r.Context {
 			fmt.Printf("context %s\n", c)
 		}
@@ -1040,7 +1051,7 @@ func runResponder(a *client.Agent, args []string) error {
 		var r client.Responder
 		fs.StringVar(&r.Harness, "harness", "", "responder: "+strings.Join(client.HarnessNames(), ", "))
 		fs.StringVar(&r.Dir, "dir", "", "working directory (its agent instructions apply)")
-		fs.DurationVar(&r.Timeout, "timeout", 5*time.Minute, "limit per question or task")
+		fs.DurationVar(&r.Timeout, "timeout", 0, "your own limit per question or task (0: none; AgentNet sets none)")
 		fs.Func("context", "file given with every question (repeatable)", func(p string) error { r.Context = append(r.Context, p); return nil })
 		if err := fs.Parse(args[1:]); err != nil {
 			return err

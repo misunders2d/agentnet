@@ -42,7 +42,7 @@ func TestCLIConversationAndHooks(t *testing.T) {
 	c.hook("alice", "codex", session("S2", "SessionStart"))
 
 	os.WriteFile(filepath.Join(c.dir, "spec.txt"), []byte("spec v1"), 0o600)
-	q := strings.Fields(c.run("--home", "alice", "ask", "--file", "spec.txt", "bob/desk", "SECRET-Q which port?"))[0]
+	q := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "--file", "spec.txt", "bob/desk", "SECRET-Q which port?"))[0]
 	ids := []string{q}
 	waitFor(t, "question at bob", func() bool { return len(c.inbox("bob")) == 1 })
 	for i, turn := range []struct{ home, peer string }{{"bob", "alice"}, {"alice", "bob"}, {"bob", "alice"}, {"alice", "bob"}, {"bob", "alice"}} {

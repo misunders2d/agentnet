@@ -495,6 +495,18 @@ func bindReplyReceiverInput(tx *sql.Tx, in envelope.Inner, fp string) error {
 	if !eligible {
 		return nil
 	}
+	// The asking session has ended: its answer waits in this computer's
+	// inbox, where the next session's hooks announce it (MEL-537), never
+	// bound to a session that cannot take it. A question or task in reply
+	// stays bound, as releaseEndedInputs keeps it: never the person's OK
+	// item nor answered automatically.
+	if in.Kind != envelope.KindQuestion && in.Kind != envelope.KindTask {
+		if ended, e := endedLiveSession(tx, binding); e != nil {
+			return e
+		} else if ended {
+			return nil
+		}
+	}
 	_, err = tx.Exec(`INSERT OR IGNORE INTO reply_receiver_inputs(binding,inbox_id) VALUES(?,?)`, binding, in.ID)
 	if err != nil {
 		return err

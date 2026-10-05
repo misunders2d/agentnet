@@ -135,6 +135,19 @@ func (a *Agent) declineConv(id, reason string) (SendResult, error) {
 	return SendResult{ID: id, State: stateDeclined}, nil
 }
 
+// acceptableCond is what Accept takes (with acceptableArgs): a device
+// request waiting for acceptance or approval, or one to rerun; or, in a
+// conversation, a request to this device's agent (its participation's,
+// not a replica) waiting for its person, or one to rerun. An operator's
+// accept from a report takes the same (headless.go admitDecision).
+const acceptableCond = `conv IS NULL AND
+		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
+		OR pid IS NOT NULL AND replica = 0 AND ((kind IN (?, ?) AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))`
+
+var acceptableArgs = []any{envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
+	envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman,
+	envelope.KindTask, envelope.KindQuestion, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman}
+
 // Accept lets the worker run a task awaiting acceptance, answer a held
 // question, or explicitly rerun one that was interrupted, failed, cancelled
 // or marked needs_human. A rerun starts afresh; it does not resume the
@@ -158,12 +171,8 @@ func (a *Agent) Accept(id string) error {
 		notifyDaemon(a.home)
 		return nil
 	}
-	acceptable := []any{id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
-		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman,
-		envelope.KindTask, envelope.KindQuestion, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman}
-	const acceptableWhere = ` WHERE id = ? AND (conv IS NULL AND
-		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
-		OR pid IS NOT NULL AND replica = 0 AND ((kind IN (?, ?) AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?))))`
+	acceptable := append([]any{id}, acceptableArgs...)
+	const acceptableWhere = ` WHERE id = ? AND (` + acceptableCond + `)`
 	var n int
 	if err := a.store.db.QueryRow(`SELECT count(*) FROM inbox`+acceptableWhere, acceptable...).Scan(&n); err != nil {
 		return err

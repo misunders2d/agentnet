@@ -61,7 +61,7 @@ func TestCLIDMAgent(t *testing.T) {
 		return pid
 	}
 	pid := invite()
-	q := strings.Fields(c.run("--home", "alice", "dm", "ask-agent", pid, "what failed?"))[0]
+	q := strings.Fields(c.run("--home", "alice", "dm", "ask-agent", "--answer-wait", "0", pid, "what failed?"))[0]
 	waitFor(t, "the agent's answer at alice", func() bool {
 		return regexp.MustCompile(`in bob/desk \[agent:claude, happy\] answer pid ` + pid + ` \(\)  [0-9a-f]{32} lid [0-9a-f]{32}\n  release notes look fine`).
 			MatchString(dmShow(c, "alice", conv))
@@ -78,7 +78,7 @@ func TestCLIDMAgent(t *testing.T) {
 	// A dismissal by the other person while the agent works: the run stops,
 	// nothing is sent, the output stays with bob.
 	pid2 := invite()
-	slow := strings.Fields(c.run("--home", "alice", "dm", "ask-agent", pid2, "slow-question"))[0]
+	slow := strings.Fields(c.run("--home", "alice", "dm", "ask-agent", "--answer-wait", "0", pid2, "slow-question"))[0]
 	waitFile(t, filepath.Join(stubDir, "claude.started"))
 	c.run("--home", "alice", "dm", "dismiss-agent", pid2)
 	waitFor(t, "the run to stop at bob", func() bool {
@@ -87,7 +87,7 @@ func TestCLIDMAgent(t *testing.T) {
 	if strings.Contains(dmShow(c, "alice", conv), "reply "+slow) || strings.Count(dmShow(c, "alice", conv), "release notes look fine") != 1 {
 		t.Fatalf("alice got output after dismissing:\n%s", dmShow(c, "alice", conv))
 	}
-	if out, err := c.try("--home", "alice", "dm", "ask-agent", pid2, "again?"); err == nil {
+	if out, err := c.try("--home", "alice", "dm", "ask-agent", "--answer-wait", "0", pid2, "again?"); err == nil {
 		t.Fatalf("asked a dismissed agent: %s", out)
 	}
 }

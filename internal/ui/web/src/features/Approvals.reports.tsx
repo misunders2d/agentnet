@@ -1,8 +1,10 @@
 // Reports from other computers: another device of yours (or a server you
 // look after) said requests wait for a person there. A report is that
-// device's snapshot, never a live queue. Deciding happens there, unless it
-// marked an item actionable for this device (a granted operator): then the
+// device's snapshot, never a live queue; its newest one replaces the older
+// ones. A steward's devices get the requests by name, each actionable: the
 // decision goes to that device, which applies it only if nothing changed.
+// Any other device is told how many wait and who decides them from their
+// own devices (MEL-532): never "go to that machine".
 import { useEffect, useState } from "react";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { IconChevronDown, IconDevices } from "@tabler/icons-react";
@@ -30,6 +32,30 @@ const stateWords: Record<string, string> = {
 const label = (d: Decision, again: boolean) =>
   ({ accept: again ? "Run again there" : "Allow there", decline: "Decline there", reply: "Answer there", resolve: "Close there", cancel: "Stop there" })[d];
 
+/** Who decides a host's requests, as its report says: a sentence for the
+ * card, never a command or "decide on that device", and nothing the report
+ * does not say. A report naming the requests went to a device that decides
+ * them (a steward's or an operator's); a count report names who does
+ * (nobody yet when it names no one); a count-text notice says neither. */
+export function decidersWords(report: T.Report | undefined, host: string, o: T.Overview | null): string {
+  const where = deviceWords(host, o);
+  if (!report) return capital(where) + " didn’t say who decides these.";
+  const items = report.items || [];
+  if (items.length > 0) {
+    return items.some((x) => x.actionable)
+      ? "You decide these from this device: they’re in OKs, under Reports from other computers."
+      : capital(where) + " listed these but didn’t let this device decide them.";
+  }
+  if (!report.count) return "Nothing waits there any more.";
+  const who = report.deciders || [];
+  const me = o?.person?.person;
+  if (me && who.some((d) => d.person === me)) return "You decide these; this device gets them by name in " + where + "’s next report.";
+  if (who.length === 0) return "Nobody can decide these from their devices yet. Whoever installed " + where + " can name a steward on that machine.";
+  const names = who.map((d) => (d.person ? d.label || "Someone" : capital(deviceWords(d.address || "", o))));
+  const list = names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+  return list + (names.length === 1 ? " decides" : " decide") + " these from their devices.";
+}
+
 export function Reports({ notices, o }: { notices: T.ReviewItem[]; o: T.Overview }) {
   const hosts = [...new Set(notices.map((n) => n.peer))];
   return (
@@ -41,7 +67,7 @@ export function Reports({ notices, o }: { notices: T.ReviewItem[]; o: T.Overview
         <IconChevronDown size={20} className="shrink-0 transition-transform duration-200 group-data-[panel-open]:rotate-180" aria-hidden="true" />
       </Collapsible.Trigger>
       <Collapsible.Panel className="overflow-hidden px-4 pb-4">
-        <p className="text-[14px] text-text-2">Another device said something waits for a person there. You decide on that device, unless it lets you decide from here.</p>
+        <p className="text-[14px] text-text-2">Another computer said requests wait for a person there. Each card says who decides them from their own devices.</p>
         <div className="pt-3">
           <ul className="flex flex-col gap-3">
             {hosts.map((h) => <HostReport key={h} host={h} notices={notices.filter((n) => n.peer === h)} o={o} />)}
@@ -61,26 +87,27 @@ function HostReport({ host, notices, o }: { host: string; notices: T.ReviewItem[
   const latest = withReport[0];
   const newest = [...notices].sort((a, b) => b.at.localeCompare(a.at))[0];
   const items = latest?.report?.items || [];
+  const waiting = items.length || latest?.report?.count || 0;
   const where = deviceWords(host, o);
   const dismiss = async () => {
     setBusy(true);
     for (const n of notices) await store.run((api) => api.act({ do: "resolve", id: n.id }));
-    store.toast("Dismissed on this computer. Anything still waiting stays on " + where + ".", "ok");
+    store.toast("Dismissed here. A newer report from " + where + " shows again if requests still wait.", "ok");
     setBusy(false);
   };
   return (
     <li className="rounded-2xl bg-surface p-3.5 stroke">
       <div className="flex items-baseline gap-2">
-        <p className="flex-1 font-bold leading-snug">{capital(where)}: {latest ? (items.length === 1 ? "1 request waits" : items.length + " requests wait") : "something waits for a person"}</p>
+        <p className="flex-1 font-bold leading-snug">{capital(where)}: {latest && waiting ? (waiting === 1 ? "1 request waits" : waiting + " requests wait") : "something waits for a person"}</p>
         <time dateTime={newest.at} className="tnum shrink-0 text-[13px] text-muted">{when(newest.at)}</time>
       </div>
-      {latest ? (
+      {latest && items.length > 0 ? (
         <div className="pt-2">
           <ul className="flex flex-col gap-2">
-            {items.map((x) => <ReportRow key={x.id} x={x} host={host} report={latest.id} o={o} />)}
+            {items.map((x) => <ReportRow key={x.id} x={x} host={host} report={latest} o={o} />)}
           </ul>
         </div>
-      ) : <p className="pt-1 text-[14px] text-text-2">It didn’t say which requests. Decide on {where}.</p>}
+      ) : <p className="pt-1 text-[14px] text-text-2">{decidersWords(latest?.report, host, o)}</p>}
       <button type="button" disabled={busy} onClick={dismiss}
         className="mt-2 -ml-2 inline-flex min-h-11 items-center rounded-xl px-2 text-[14px] font-bold text-text-2 underline decoration-ink/30 underline-offset-4 hover:bg-sunken disabled:opacity-50">
         {notices.length > 1 ? "Dismiss these reports" : "Dismiss this report"}
@@ -89,17 +116,26 @@ function HostReport({ host, notices, o }: { host: string; notices: T.ReviewItem[
   );
 }
 
-function ReportRow({ x, host, report, o }: { x: Item; host: string; report: string; o: T.Overview }) {
+function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.ReviewItem; o: T.Overview }) {
   const store = useApp();
   const [pick, setPick] = useState<Decision | null>(null);
   const decided = x.result && !x.result.refused;
-  const acts = x.actionable && !decided ? byState[x.state] || [] : [];
+  // A DM or group request is decided here, never answered by hand: its
+  // answer belongs in that conversation.
+  const acts = x.actionable && !decided ? (byState[x.state] || []).filter((d) => !(x.conv && d === "reply")) : [];
   const again = ["interrupted", "failed", "cancelled"].includes(x.state);
   const from = x.from ? capital(deviceWords(x.from, o)) : "Someone";
   return (
     <li className="rounded-xl bg-sunken px-3 py-2.5">
       <p className="text-[15px] leading-snug"><b>{from}</b> {x.kind === "task" ? "gave it a task" : x.kind === "question" ? "asked it something" : "sent a " + kindWord(x.kind)} · {stateWords[x.state] || x.state}</p>
       <p className="pt-0.5 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]">{x.excerpt ? "“" + x.excerpt + "”" : "Its text isn’t shared with this device."}</p>
+      {x.state === "running" && <p role="status" className="pt-1 text-[13px] text-text-2">{x.blocker === "seems_stuck" ? "Seems stuck · " : "Running · "}since {new Date(typeof x.since === "number" ? x.since * 1000 : x.since).toLocaleString()}</p>}
+      {x.proposal && <details className="mt-2 text-[14px] [overflow-wrap:anywhere]">
+        <summary>How this task was chosen</summary>
+        <p>{deviceWords(x.proposal.asker, o)} asked: {x.proposal.question}</p>
+        <p>Your agent suggested: {x.proposal.proposal}</p>
+        <p>{deviceWords(x.proposal.confirmed_by, o)} chose Do it. This uses only their usual task approval.</p>
+      </details>}
       {x.result && (
         <p className={"mt-1 text-[13px] font-semibold " + (x.result.refused ? "text-danger" : "text-ok-ink")}>
           {x.result.refused ? "Not applied: " + x.result.refused : "Sent from here. Now it " + (stateWords[x.result.state] || "is " + x.result.state) + " there."}
@@ -109,10 +145,10 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: stri
         <div className="mt-2 flex flex-wrap gap-2">
           {acts.map((d, i) => <Button key={d} size="sm" variant={i === 0 ? "act" : "outline"} onClick={() => setPick(d)}>{label(d, again)}</Button>)}
         </div>
-      ) : !decided && <p className="pt-1 text-[13px] text-muted">Decide on {deviceWords(host, o)}.</p>}
+      ) : !decided && <p className="pt-1 text-[13px] text-muted">{x.actionable ? "Nothing to decide on it right now." : "This device can’t decide it."}</p>}
       <OperatorSheet open={!!pick} decision={pick} x={x} where={deviceWords(host, o)} again={again}
         onOpenChange={(v) => { if (!v) setPick(null); }}
-        onSend={(text) => store.run((api) => api.decide({ host, id: x.id, key: x.key, action: pick!, expect: x.state, attempt: x.attempt, text, report }), "Sent to " + deviceWords(host, o) + ".")} />
+        onSend={(text) => store.run((api) => api.decide({ host, id: x.id, key: x.key, action: pick!, expect: x.state, attempt: x.attempt, text, report: report.id }), "Sent to " + deviceWords(host, o) + ".")} />
     </li>
   );
 }

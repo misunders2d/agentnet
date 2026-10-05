@@ -240,6 +240,19 @@ Run it as an ordinary member: a separate OS user with its own home,
 `agentnet join` with an invite, `agentnet daemon`. It never uses the Hub's
 `/data` or its keys.
 
+A company agent nobody sits at needs someone who decides its waiting
+requests (OKs) from their own devices. Name that person, its steward, once,
+on the server, at install:
+
+    agentnet person service --steward sergey/laptop
+
+`sergey/laptop` is any one device of that person: every device of theirs,
+the phone included and devices they add later, then gets the requests by
+name in OKs and decides them there. The command prints the person and the
+devices it found: check them. An agent installed before this release needs
+it once, run by its owner: `agentnet operator grant --person ADDRESS`
+(`agentnet doctor` says when nobody can decide; see `agentnet help operator`).
+
 ## Storage
 
 Maintenance commands need the Hub stopped (they share its lock and refuse

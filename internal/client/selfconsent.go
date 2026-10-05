@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
 // Self-invite consent (owner decision D3, docs/plans/ROOM_V1.md §5): an
@@ -72,7 +75,10 @@ func (a *Agent) SelfConsentTrust() ([]TrustedDevice, error) {
 }
 
 // UntrustOwnDevice removes the device at address from the trust set; this
-// device itself always stays in it.
+// device itself always stays in it. Its invites of this person's agents
+// wait for a click again, and its tasks to this device's agent wait for the
+// person's OK again (ownDeviceHolds), those pending now included. To trust
+// it again, the person links it again (there is no person trust: see X4).
 func (a *Agent) UntrustOwnDevice(address string) error {
 	if address == a.Address {
 		return errors.New("this device always trusts itself: its own invites are its person's")
@@ -86,8 +92,81 @@ func (a *Agent) UntrustOwnDevice(address string) error {
 		if i < 0 {
 			return fmt.Errorf("%s is not in the trust set", address)
 		}
-		return putConfigJSON(tx, selfConsentKey, slices.Delete(added, i, i+1))
+		if err := putConfigJSON(tx, selfConsentKey, slices.Delete(added, i, i+1)); err != nil {
+			return err
+		}
+		return demoteLapsedOwnTasks(tx, "you untrusted that device of yours")
 	})
+}
+
+// Own devices (owner rule 2026-10-05, "my devices are me"; D9 for device
+// threads): a task sent to this device's agent in a device thread by
+// another device of this installation's own person runs without asking, as
+// the person's own work, when that device is one this host trusts: in the
+// trust set above, by the exact key its person's signed roster, pinned
+// here, lists for it, which verified the task, with no key change pending.
+// This is the same trust that lets its invites of the person's agents in
+// without a click (AGENTS.md: trusted own devices may give the agent
+// tasks), so X4 holds here too: a browser or phone device of the person is
+// never in it, and its tasks wait for the person's OK on this device. Owner
+// question 1 of the P4 spec (should a phone's "Do it" start at once?) is
+// open; until it is answered, this stays closed, and widening it to every
+// roster device is dropping the trust-set condition below. A device the
+// person untrusts here, removes from the roster, or whose key changes no
+// longer holds, nor does any device once this one leaves its person: their
+// pending tasks wait for the OK again (demoteLapsedOwnTasks). Nothing
+// received grants it. The harness's normal task permissions still apply.
+
+// ownDeviceHoldsFor is that condition for an address and a verifying
+// fingerprint, as SQL expressions: the single own-device predicate.
+const ownDeviceHoldsFor = `EXISTS (SELECT 1 FROM persons pr JOIN person_devices d ON d.person = pr.person
+	JOIN peers p ON p.address = d.address
+	WHERE pr.state = 'self' AND d.address = %s AND d.fingerprint = %s AND p.pending IS NULL
+	  AND EXISTS (SELECT 1 FROM json_each(coalesce((SELECT v FROM config WHERE k = 'self_consent'), '[]')) n
+	    WHERE json_extract(n.value, '$.address') = d.address AND json_extract(n.value, '$.fingerprint') = d.fingerprint))`
+
+// ownTaskHolds is ownDeviceHoldsFor for an inbox row.
+var ownTaskHolds = fmt.Sprintf(ownDeviceHoldsFor, "inbox.sender", "inbox.verified_by")
+
+// ownDeviceHolds reports whether a task from address verified by fp is
+// this person's own and may run without asking.
+func ownDeviceHolds(q querier, address, fp string) (bool, error) {
+	if fp == "" {
+		return false, nil
+	}
+	var ok bool
+	err := q.QueryRow(`SELECT `+fmt.Sprintf(ownDeviceHoldsFor, "?", "?"), address, fp).Scan(&ok)
+	return ok, err
+}
+
+// demoteLapsedOwnTasks moves the device-thread tasks waiting to run here
+// for which neither the own-device rule nor a task grant (taskgrant.go)
+// holds any more back to awaiting the person, saying why, so none is left
+// pending where the worker no longer claims it and the person cannot see
+// it. A task the person accepted is not pending (it is accepted) and stays.
+func demoteLapsedOwnTasks(tx *sql.Tx, why string) error {
+	rows, err := tx.Query(`UPDATE inbox SET state = ?, detail = ?, notified = 0, review_sent = 0
+		WHERE kind = ? AND state = ? AND conv IS NULL AND NOT `+taskGrantHolds+` AND NOT `+ownTaskHolds+` RETURNING id`,
+		stateAwaiting, "not run without asking: "+why+"; accept ID runs it once", envelope.KindTask, statePending)
+	if err != nil {
+		return err
+	}
+	var ids []any
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(ids) == 0 {
+		return err
+	}
+	// Back in review: reported afresh to each recipient.
+	_, err = tx.Exec(`DELETE FROM reported WHERE item IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, ids...)
+	return err
 }
 
 // markSelfConsentSince records, once, when this home first ran a build

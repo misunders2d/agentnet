@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ import (
 // runPerson shows or sets up this installation's person and its devices
 // (agentnet help person).
 func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
-	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve [--native|--agent-host] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
+	usage := errors.New("usage: person | person create NAME | person rename NAME | person service [--steward ADDRESS] | person link | person links | person approve [--native|--agent-host] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
 	if len(args) == 0 {
 		p, ok, err := a.Person()
 		if err != nil {
@@ -74,6 +75,29 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 			return err
 		}
 		fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+		fmt.Fprintln(stdout, "name who decides its waiting requests from their own devices: agentnet operator grant --person ADDRESS")
+		return nil
+	case args[0] == "service" && len(args) == 3 && args[1] == "--steward":
+		// At install: a service and its steward, named once on this machine
+		// (MEL-532). The steward is checked before anything changes.
+		if role, _ := a.Role(); role != "service" {
+			if _, ok, err := a.Person(); err != nil {
+				return err
+			} else if ok {
+				return errors.New("this installation already speaks for a person")
+			}
+		}
+		g, err := a.GrantOperatorPerson(ctx, args[2])
+		if err != nil {
+			return err
+		}
+		if err := a.SetService(); err != nil {
+			a.RevokeOperatorPerson(g.Person)
+			return err
+		}
+		fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+		printSteward(stdout, g, "is its steward: each of their devices decides its waiting requests from its messenger, devices they add later included")
+		fmt.Fprintf(stdout, "check that this is the person you mean; revoke: agentnet operator revoke --person %s\n", g.Person)
 		return nil
 	case args[0] == "link" && len(args) == 1:
 		o, err := a.NewDeviceLink(ctx)
@@ -126,7 +150,7 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		if err := a.UntrustOwnDevice(args[1]); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "untrusted %s: its invites of your own agents here wait for your accept again\n", args[1])
+		fmt.Fprintf(stdout, "untrusted %s: its invites of your own agents here, and its tasks to your agent here, wait for your OK again\n", args[1])
 		return nil
 	case args[0] == "remove" && len(args) == 2:
 		if err := a.RemoveDevice(ctx, args[1]); err != nil {
@@ -194,8 +218,12 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		replyTo := fs.String("reply-to", "", "reply to exact same-conversation physical/logical reference")
 		var files []client.OutgoingFile
 		fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, client.OutgoingFile{Path: p}); return nil })
+		answerFor := answerWaitFlag(fs, -1) // -1: the kind's default, below
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() < 1 || fs.NArg() > 2 || (fs.NArg() == 1 && len(files) == 0) || (*question && *task) {
-			return errors.New("usage: dm send [--question|--task] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
+			return errors.New("usage: dm send [--question|--task] [--answer-wait D] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
+		}
+		if *answerFor < 0 && *question {
+			*answerFor = client.AskAnswerWait
 		}
 		beyond := ""
 		if !*question && !*task {
@@ -224,7 +252,10 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			line += " (" + sent.Detail + ")"
 		}
 		fmt.Fprintln(stdout, line)
-		return nil
+		if !*question && !*task {
+			return nil // a plain message expects no answer
+		}
+		return awaitAnswer(ctx, a, sent.ID, "agentnet dm show "+fs.Arg(0), answerWait(answerFor), receiver, stdout, os.Stderr)
 	case "invite":
 		fs := flag.NewFlagSet("dm invite", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -332,12 +363,15 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fs.SetOutput(io.Discard)
 		task := fs.Bool("task", false, "a task instead of a question")
 		returnSelection := receiverFlags(fs)
+		answerFor := answerWaitFlag(fs, -1) // -1: the kind's default, below
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
-			return errors.New("usage: dm ask-agent [--task] PID TEXT")
+			return errors.New("usage: dm ask-agent [--task] [--answer-wait D] PID TEXT")
 		}
 		kind := envelope.KindQuestion
 		if *task {
 			kind = envelope.KindTask
+		} else if *answerFor < 0 {
+			*answerFor = client.AskAnswerWait
 		}
 		receiver, err := returnSelection.selected(a, true)
 		if err != nil {
@@ -352,7 +386,11 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			line += " (" + sent.Detail + ")"
 		}
 		fmt.Fprintln(stdout, line)
-		return nil
+		show := "agentnet dm agents (then dm show) for participation " + fs.Arg(0)
+		if p, e := a.Participation(fs.Arg(0)); e == nil {
+			show = "agentnet dm show " + p.Conv
+		}
+		return awaitAnswer(ctx, a, sent.ID, show, answerWait(answerFor), receiver, stdout, os.Stderr)
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
 }

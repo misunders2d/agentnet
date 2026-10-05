@@ -265,3 +265,33 @@ schema. Verify this with synthetic databases before accepting upgrade safety.
 Explicit exclusion added by the owner: `agentnet tui`, both standalone and
 possible Herdr integration, is a separate post-release debate and does not
 block this release. See [DECISIONS §8](DECISIONS.md#8-terminal-messenger-request-post-release-sep-30).
+
+## 2026-10-05 fixes: agent interaction (P4: MEL-537, MEL-532, MEL-521 backend)
+
+- MEL-537: `agentnet ask` from a Claude Code, Codex or Pi session is never
+  refused, for a missing channel or for transcript size; the answer goes to a
+  live session receiver or to this computer's inbox, announced by every
+  session's hooks. `ask` waits for the answer and prints it (`--answer-wait`,
+  default 90s), woken by the daemon's new owner-only `changes.sock`; no
+  polling. An ended session's undelivered answers go to the inbox.
+- MEL-532: stewards. A person named once on a server (`person service
+  --steward`, `operator grant --person`) decides its OKs from every device of
+  theirs; DM/group requests too; cards name who decides; the newest report
+  replaces older ones and an empty one clears the card. Existing servers need
+  `agentnet operator grant --person ADDRESS` once, run by the owner.
+- Responders have no default time limit (owner rule: no platform limits);
+  a limit the person set is still honoured. The 5m that earlier builds
+  stored as the default (default responder and named agents) is cleared
+  once when the new build first opens the home; a person who wants exactly
+  5m sets it again.
+- MEL-521 (backend, device threads): a device-thread question's run that
+  needs an action answers with the exact task it proposes (status
+  `proposal`); `agentnet do ID` confirms it as a task. The app shows it as
+  "suggested, not run" (its Do it button comes with P4's page slice); a
+  conversation's run hands the action to its person as before, until
+  conversation proposals can be confirmed. A task from another computer of yours that this
+  one trusts (`person approve --native`, the self-consent trust set) runs as
+  yours (device threads); one from a browser or phone key waits for the OK
+  here until the owner answers P4 question 1 (widening it is one predicate
+  condition, selfconsent.go). The Comic composer change and conversation
+  proposals follow P3.

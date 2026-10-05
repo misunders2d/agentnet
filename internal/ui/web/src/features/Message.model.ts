@@ -149,7 +149,11 @@ function answerTo(m: AnyMsg, all: AnyMsg[]) {
 /** requestState: how far a question or task got, only as its executor or the
  *  conversation proves it: an answer here, the executor's word, the local job. */
 export function requestState(m: AnyMsg, all: AnyMsg[]): { text: string; tone: "ok" | "work" | "wait" | "bad" | "muted" } {
-  if (answerTo(m, all)) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
+  const answer = answerTo(m, all);
+  // A proposal (MEL-521) answers with a task the agent may not run itself:
+  // nothing was done. TODO(integrate:P4 page slice): its Do it button.
+  if (answer && "status" in answer && answer.status === "proposal") return { text: "Suggested a task · not run", tone: "wait" };
+  if (answer) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
   const e = m.exec;
   if (e && e.state) {
     const w = word(e.state);

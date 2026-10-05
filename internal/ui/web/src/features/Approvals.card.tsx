@@ -17,6 +17,7 @@ import {
 } from "./Approvals.words";
 import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { focusComposer } from "./Composer.focus";
+import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
 
 export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null }) {
@@ -66,7 +67,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const named = mine.named;
   const notice = isThreadMsg(m) && m.kind === "message" && m.status === "review_notice";
   const conv = dm?.id || thread?.id || "";
-  const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
+	const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
+	const proposal = isThreadMsg(m) ? m.proposal : null;
 
   const permissionPerson = thread?.permission_person;
   const permissionName = permissionPerson ? personName(permissionPerson) : asker.name;
@@ -90,12 +92,12 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           <h3 id={"appr-" + m.id} className="font-display text-[19px] font-bold leading-snug">
             {notice ? capital(deviceWords(m.from, o)) + " has requests waiting for a person there" : capital(agent) + "’s follow-up needs a person"}
           </h3>
-          <p className="pt-1.5 text-text-2">{notice ? "Decide on that device. Nothing here can approve them." : said || requestText(m)}</p>
+          <p className="pt-1.5 text-text-2">{notice ? decidersWords(o?.review?.find((r) => r.id === m.id)?.report, m.from, o) : said || requestText(m)}</p>
           <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Close it"}</Button>
         </div>
         <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
           title={notice ? "Dismiss this report?" : "Close without replying?"}
-          body={notice ? "It's cleared on this computer only. The requests still wait for a person on " + deviceWords(m.from, o) + "." : "Nothing is sent to " + asker.name + "."}
+          body={notice ? "It's cleared on this computer only. A newer report from " + deviceWords(m.from, o) + " shows again if requests still wait." : "Nothing is sent to " + asker.name + "."}
           confirm={notice ? "Dismiss" : "Close it"} onConfirm={() => act({ do: "resolve", id: m.id }, notice ? "Report dismissed." : "Closed. Nothing was sent.")} />
       </Shell>
     );
@@ -129,6 +131,13 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {headlineOf(m) || (files ? "Files only" : "No text")}
           </h3>
         </div>
+
+        {phase === "running" && said && <p role="status" className="mx-4 mt-3 whitespace-pre-wrap text-[14px] text-text-2 [overflow-wrap:anywhere]">{said}</p>}
+        {proposal && <Details label="How this task was chosen" className="mx-4 mt-3">
+          <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{nameOf(proposal.asker, o)} asked: {proposal.question}</p>
+          <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">Your agent suggested: {proposal.proposal}</p>
+          <p className="mt-2">{nameOf(proposal.confirmed_by, o)} chose Do it. This uses only their usual task approval.</p>
+        </Details>}
 
         {phase === "needs_human" || (phase === "stopped" && said) ? (
           <div className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">

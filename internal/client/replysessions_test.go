@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -177,22 +178,35 @@ func TestReplySessionInactiveUnknownRealmBranchAndCancel(t *testing.T) {
 	if e := w.alice.CloseReplySession(call); e != nil {
 		t.Fatal(e)
 	}
-	binding, _ := nativeInput(t, w.alice, w.bob, r.Handle)
+	// A request bound to the ended session: its reply is not bound to a
+	// session that cannot take it; it waits in the plain inbox (MEL-537).
+	selected := ReplyReceiver{Kind: "live_session", SessionHandle: r.Handle}
+	sent, e := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "original local plan", ReplyReceiver: &selected})
+	if e != nil {
+		t.Fatal(e)
+	}
+	reply := receiverDirect(t, w.bob, w.alice, envelope.Inner{Kind: envelope.KindAnswer, Status: envelope.StatusDone, Body: "the answer", ReplyTo: sent.ID})
+	if e = w.alice.verifyAndStore(tctx(t), reply); e != nil {
+		t.Fatal(e)
+	}
 	rows := receiverBindings(t, w.alice)
-	if rows[0].State != "pending" || !strings.Contains(rows[0].Detail, "inactive") {
+	if len(rows) != 1 || rows[0].State != "pending" || !strings.Contains(rows[0].Detail, "inactive") || len(rows[0].Inputs) != 0 {
 		t.Fatalf("inactive route %+v", rows)
+	}
+	if items, e := w.alice.store.arrivalsAfter(0, 10); e != nil || !slices.ContainsFunc(items, func(it arrivalItem) bool { return it.id == reply.ID }) {
+		t.Fatalf("answer for an ended session is no plain arrival %+v %v", items, e)
 	}
 	if _, e := w.alice.TakeReplyReceiverInput(call); e == nil {
 		t.Fatal("inactive owner took")
 	}
-	if _, e := w.alice.store.db.Exec(`UPDATE reply_receivers SET canceled_at=1 WHERE id=?`, binding); e != nil {
+	if _, e := w.alice.store.db.Exec(`UPDATE reply_receivers SET canceled_at=1 WHERE id=?`, rows[0].ID); e != nil {
 		t.Fatal(e)
 	}
 	if e := w.alice.Approve(w.bob.Address); e != nil {
 		t.Fatal(e)
 	}
 	if job, ok, e := w.alice.store.claimJob("stub"); e != nil || ok {
-		t.Fatalf("canceled stolen %+v %v", job, e)
+		t.Fatalf("an answer became work %+v %v", job, e)
 	}
 	if _, e := w.alice.store.db.Exec(`UPDATE config SET v='foreign' WHERE k='realm_id'`); e != nil {
 		t.Fatal(e)

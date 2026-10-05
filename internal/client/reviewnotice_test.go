@@ -136,8 +136,10 @@ func TestReviewNoticeReachesNamedAgentOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "second notice", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 2 })
-	if b := notices(t, w.alice, w.bob.Address)[1].Body; !strings.HasPrefix(b, "2 request(s) wait") {
-		t.Fatalf("second notice = %q", b)
+	// A device that may not decide gets how many wait and who decides
+	// (nobody yet), never the requests (MEL-532).
+	if r, ok := ParseReport(notices(t, w.alice, w.bob.Address)[1].Body); !ok || r.Count != 2 || len(r.Items) != 0 || len(r.Deciders) != 0 {
+		t.Fatalf("second notice = %+v %v", r, ok)
 	}
 	if !reviewSent(t, w.bob, q2.ID) || st.count() != 0 {
 		t.Fatal("second item not marked, or something ran")
@@ -365,7 +367,17 @@ func TestReviewNoticeAgainAfterNeedsHuman(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "needs_human", func() bool { s, _ := w.bob.store.jobState(q.ID); return s == stateNeedHuman })
-	eventually(t, "second notice", func() bool { return len(notices(t, w.alice, w.bob.Address)) == 2 })
+	// Reported again: a newer snapshot names it waiting (one in between may
+	// have settled the card while it ran: MEL-532).
+	eventually(t, "second notice", func() bool {
+		ns := notices(t, w.alice, w.bob.Address)
+		open := mustNotices(t, w.alice)
+		if len(ns) < 2 || len(open) != 1 || open[0].ID == ns[0].ID {
+			return false
+		}
+		r, ok := ParseReport(open[0].Body)
+		return ok && r.Count == 1
+	})
 }
 
 // Follow-ups the local responder marked needs_human (answers, results,

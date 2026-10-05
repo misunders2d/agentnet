@@ -1,18 +1,17 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -53,8 +52,12 @@ type replySessionRecord struct {
 	Anchor          string `json:"anchor,omitempty"`
 	CloseReason     string `json:"close_reason,omitempty"`
 	CloseGeneration int64  `json:"close_generation,omitempty"`
-	Key             string `json:"key"`
-	Realm           string `json:"realm"`
+	// ChannelGeneration is the generation in which AgentNet's Claude channel
+	// started draining this registration (claudeReplyChannelOwner): only
+	// then is the session a receiver a question may name (nativeorigin.go).
+	ChannelGeneration int64  `json:"channel_generation,omitempty"`
+	Key               string `json:"key"`
+	Realm             string `json:"realm"`
 }
 type ReplySessionCall struct {
 	Handle      string `json:"handle"`
@@ -69,6 +72,10 @@ type liveInputClaim struct {
 	ID         string `json:"id"`
 	Token      string `json:"token"`
 	Generation int64  `json:"generation"`
+	// Offset is the native file's size when the input was first claimed:
+	// its receipt can only be written after it, so receipts are read from
+	// there (claudeNativeReceipt, codexNativeReceipt).
+	Offset int64 `json:"offset,omitempty"`
 }
 type ReplyReceiverDelivery struct {
 	BindingID     string  `json:"binding_id"`
@@ -112,74 +119,93 @@ func canonicalNativeFile(file string, allowMissingParent ...bool) (string, error
 }
 
 // nativeBranch reads metadata only into memory; no native text is copied into
-// AgentNet. Bounds fail closed. A lazy new native session may not have a file yet.
+// AgentNet. A lazy new native session may not have a file yet. The file is
+// streamed, with no cap on its size or record count (nativescan.go): ids and
+// parents are kept, and only the active branch's records are read again.
 func nativeBranch(file, sid, leaf string, missingOK bool) (map[string]json.RawMessage, error) {
-	f, err := os.Open(file)
-	if errors.Is(err, os.ErrNotExist) && missingOK {
-		return nil, nil
+	type node struct {
+		parent string
+		offset int64
 	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	entries := map[string]struct {
-		Parent string
-		Raw    json.RawMessage
-	}{}
-	scan := bufio.NewScanner(io.LimitReader(f, (32<<20)+1))
-	scan.Buffer(make([]byte, 4096), 2<<20)
-	total, count := 0, 0
+	entries := map[string]node{}
 	header := false
-	for scan.Scan() {
-		line := scan.Bytes()
-		total += len(line) + 1
-		count++
-		if total > 32<<20 || count > 100000 {
-			return nil, errors.New("native session metadata exceeds bound")
+	err := nativeRecords(file, 0, func(rec nativeRecord) error {
+		if rec.Oversize {
+			return nil // never part of a branch this code can read
 		}
 		var entry struct {
 			Type   string `json:"type"`
 			ID     string `json:"id"`
 			Parent string `json:"parentId"`
 		}
-		if err = json.Unmarshal(line, &entry); err != nil {
-			return nil, errors.New("native session metadata is invalid")
+		if json.Unmarshal(rec.Line, &entry) != nil {
+			return errors.New("native session metadata is invalid")
 		}
 		if entry.Type == "session" {
 			if header || entry.ID != sid {
-				return nil, errors.New("native session header does not match registered identity")
+				return errors.New("native session header does not match registered identity")
 			}
 			header = true
-			continue
+			return nil
 		}
 		if entry.ID == "" {
-			continue
+			return nil
 		}
 		if _, exists := entries[entry.ID]; exists {
-			return nil, errors.New("native session has duplicate entry identity")
+			return errors.New("native session has duplicate entry identity")
 		}
-		entries[entry.ID] = struct {
-			Parent string
-			Raw    json.RawMessage
-		}{entry.Parent, append(json.RawMessage(nil), line...)}
+		entries[entry.ID] = node{entry.Parent, rec.Offset}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) && missingOK {
+		return nil, nil
 	}
-	if err = scan.Err(); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	if !header {
 		return nil, errors.New("native session header absent")
 	}
-	branch := map[string]json.RawMessage{}
+	want := map[int64]string{}
+	seen := map[string]bool{}
 	for id := leaf; id != ""; {
-		if _, cycle := branch[id]; cycle {
+		if seen[id] {
 			return nil, errors.New("native branch is cyclic")
 		}
 		entry, ok := entries[id]
 		if !ok {
 			return nil, errors.New("native active branch is not yet persisted")
 		}
-		branch[id] = entry.Raw
-		id = entry.Parent
+		seen[id] = true
+		want[entry.offset] = id
+		id = entry.parent
+	}
+	branch := map[string]json.RawMessage{}
+	if len(want) == 0 {
+		return branch, nil
+	}
+	err = nativeRecords(file, 0, func(rec nativeRecord) error {
+		id, ok := want[rec.Offset]
+		if !ok || rec.Oversize {
+			return nil
+		}
+		var entry struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(rec.Line, &entry) != nil || entry.ID != id {
+			return errors.New("native session changed while it was read")
+		}
+		branch[id] = append(json.RawMessage(nil), rec.Line...)
+		if len(branch) == len(want) {
+			return errNativeStop
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(branch) != len(want) {
+		return nil, errors.New("native session changed while it was read")
 	}
 	return branch, nil
 }
@@ -312,6 +338,13 @@ func (a *Agent) RegisterReplySession(in ReplySessionRegistration) (ReplySessionO
 	r.Active = true
 	r.CloseReason = ""
 	r.CloseGeneration = 0
+	if in.Handle != "" {
+		// A resumed session is a new generation: what the previous one left
+		// undelivered goes to this computer's inbox.
+		if err = releaseEndedInputs(tx, r.Handle); err != nil {
+			return ReplySessionOwner{}, err
+		}
+	}
 	if err = saveReplySession(tx, r); err == nil {
 		err = tx.Commit()
 	}
@@ -378,6 +411,9 @@ func (a *Agent) CloseReplySession(in ReplySessionCall) error {
 		r.CloseReason = "shutdown"
 	}
 	r.CloseGeneration = r.Generation
+	if err = releaseEndedInputs(tx, r.Handle); err != nil {
+		return err
+	}
 	if err = saveReplySession(tx, r); err == nil {
 		err = tx.Commit()
 	}
@@ -479,15 +515,10 @@ func (a *Agent) TakeReplyReceiverInput(in ReplySessionCall) (*ReplyReceiverDeliv
 	if err != nil {
 		return nil, err
 	}
-	if r.Codex != nil {
-		if _, e := codexNativeEntries(r.File, r.SessionID); e != nil {
-			return nil, e
-		}
-	} else if r.Claude != nil {
-		if _, e := claudeNativeScan(r.File, r.SessionID, true, nil); e != nil {
-			return nil, e
-		}
-	} else if r.Anchor != "" {
+	// Owner, route and path are checked above; the whole Claude or Codex
+	// file was validated at registration, so a take never rereads it. Its
+	// receipt is read from the size it has now (liveInputClaim.Offset).
+	if r.Codex == nil && r.Claude == nil && r.Anchor != "" {
 		branch, e := nativeBranch(r.File, r.SessionID, in.Leaf, false)
 		if e != nil {
 			return nil, e
@@ -521,10 +552,17 @@ func (a *Agent) TakeReplyReceiverInput(in ReplySessionCall) (*ReplyReceiverDeliv
 	claim := liveInputClaim{ID: protocol.NewID(), Token: protocol.NewID(), Generation: r.Generation}
 	d.ReconcileOnly = raw != ""
 	if raw != "" {
+		claim = liveInputClaim{} // the first claim's own values, its offset included
 		if err = json.Unmarshal([]byte(raw), &claim); err != nil {
 			return nil, err
 		}
 		claim.Generation = r.Generation
+	} else if r.Codex != nil || r.Claude != nil {
+		if info, e := os.Stat(r.File); e == nil {
+			claim.Offset = info.Size()
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return nil, e
+		}
 	}
 	data, _ := json.Marshal(claim)
 	if string(data) != raw {
@@ -599,12 +637,12 @@ func (a *Agent) AckReplyReceiverInput(in ReplyReceiverAck) (bool, error) {
 		if err = tx.QueryRow(`SELECT sender,kind,body FROM inbox WHERE id=?`, in.InputID).Scan(&msg.From, &msg.Kind, &msg.Body); err != nil {
 			return false, err
 		}
-		accepted, e := codexNativeReceipt(r.File, r.SessionID, codexInputText(&ReplyReceiverDelivery{BindingID: in.BindingID, InputID: in.InputID, ClaimID: claim.ID, InputToken: claim.Token, RequestBody: body, Message: msg}))
+		accepted, e := codexNativeReceipt(r.File, r.SessionID, codexInputText(&ReplyReceiverDelivery{BindingID: in.BindingID, InputID: in.InputID, ClaimID: claim.ID, InputToken: claim.Token, RequestBody: body, Message: msg}), claim.Offset)
 		if e != nil || !accepted {
 			return false, e
 		}
 	} else if r.Claude != nil {
-		accepted, e := claudeNativeReceipt(r.File, r.SessionID, r.Claude.Source, in)
+		accepted, e := claudeNativeReceipt(r.File, r.SessionID, r.Claude.Source, in, claim.Offset)
 		if e != nil || !accepted {
 			return false, e
 		}
@@ -647,4 +685,94 @@ func (a *Agent) AckReplyReceiverInput(in ReplyReceiverAck) (bool, error) {
 	a.store.changed()
 	notifyDaemon(a.home)
 	return true, nil
+}
+
+// releaseEndedInputs hands what a native session left undelivered to this
+// computer's inbox when its registration ends or starts a new generation
+// (MEL-537): its bound answers, results and messages still pending with no
+// live claim leave their binding and get a fresh arrival number, so the
+// next session's hooks announce them as ordinary arrivals (attention.go).
+// They never enter review. A question or task sent in reply to the
+// session's request stays bound (released, it would become the person's OK
+// item or be answered automatically: MEL-537 says it never does), as do
+// claimed or accepted inputs: never redelivered silently, agentnet
+// receivers lists them. A binding with an explicit closed-session handoff
+// (--on-close-agent) keeps its inputs for it.
+func releaseEndedInputs(tx *sql.Tx, handle string) error {
+	rows, err := tx.Query(`SELECT x.binding, x.inbox_id FROM reply_receiver_inputs x JOIN reply_receivers b ON b.id=x.binding JOIN inbox i ON i.id=x.inbox_id
+		WHERE x.state='pending' AND x.live_claim IS NULL AND json_extract(b.receiver,'$.kind')='live_session' AND json_extract(b.receiver,'$.session_handle')=?
+		  AND coalesce(json_type(b.receiver,'$.on_close'),'')!='object' AND coalesce(json_extract(b.receiver,'$.remote.role'),'')!='origin'
+		  AND i.kind NOT IN (?, ?)
+		ORDER BY i.arrival`, handle, envelope.KindQuestion, envelope.KindTask)
+	if err != nil {
+		return err
+	}
+	type input struct{ binding, id string }
+	var inputs []input
+	for rows.Next() {
+		var in input
+		if err = rows.Scan(&in.binding, &in.id); err != nil {
+			rows.Close()
+			return err
+		}
+		inputs = append(inputs, in)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, in := range inputs {
+		if _, err = tx.Exec(`DELETE FROM reply_receiver_inputs WHERE binding=? AND inbox_id=? AND state='pending' AND live_claim IS NULL`, in.binding, in.id); err != nil {
+			return err
+		}
+		if err = renumberArrival(tx, in.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renumberArrival gives inbox row id the next arrival number, from the
+// counter the inbox_arrival trigger uses (store.go), so every session's
+// attention cursor sees it as new.
+func renumberArrival(tx *sql.Tx, id string) error {
+	if _, err := tx.Exec(`UPDATE config SET v = CAST(v AS INTEGER) + 1 WHERE k = 'arrival'`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`UPDATE inbox SET arrival = (SELECT CAST(v AS INTEGER) FROM config WHERE k = 'arrival') WHERE id = ?`, id)
+	return err
+}
+
+// endedLiveSession reports whether binding id selects a native session of
+// this home whose registration has ended, with no closed-session handoff:
+// an input arriving for it now goes to the plain inbox instead
+// (bindReplyReceiverInput), as releaseEndedInputs sends earlier ones.
+func endedLiveSession(q dbq, id string) (bool, error) {
+	var receiver string
+	if err := q.QueryRow(`SELECT receiver FROM reply_receivers WHERE id=?`, id).Scan(&receiver); err != nil {
+		return false, err
+	}
+	var b struct {
+		Kind    string          `json:"kind"`
+		Handle  string          `json:"session_handle"`
+		OnClose json.RawMessage `json:"on_close"`
+		Remote  *struct {
+			Role string `json:"role"`
+		} `json:"remote"`
+	}
+	if err := json.Unmarshal([]byte(receiver), &b); err != nil {
+		return false, err
+	}
+	if b.Kind != "live_session" || len(b.OnClose) > 0 && string(b.OnClose) != "null" || b.Remote != nil && b.Remote.Role == "origin" {
+		return false, nil
+	}
+	r, err := replySessionIn(q, b.Handle)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !r.Active, nil
 }

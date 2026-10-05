@@ -888,6 +888,10 @@ type ReviewItem struct {
 	// the host's answer to this device's last decision. A count-only
 	// notice has no Report and offers nothing but reading and dismissing.
 	Report *client.Report `json:"report,omitempty"`
+	// Proposal: a task that carries out an action this device's agent
+	// proposed (MEL-521): the question, the proposal and who confirmed
+	// it, for the person approving it. It grants nothing.
+	Proposal *client.ProposalView `json:"proposal,omitempty"`
 	// Reason ReasonSelfConsented (owner decision D3): a notice, not a
 	// received item, that this person's own agent AgentID ("" the default
 	// one) joined conversation Conv without their accept, invited from
@@ -1047,9 +1051,10 @@ type Message struct {
 	// stands (client.ExecView): from the executing device only, never from
 	// delivery or presence; absent when it never said. Stale: that device
 	// is not connected now.
-	Exec   *client.ExecView `json:"exec,omitempty"`
-	Quote  string           `json:"quote,omitempty"`
-	SentAt time.Time        `json:"sent_at,omitzero"`
+	Exec     *client.ExecView     `json:"exec,omitempty"`
+	Quote    string               `json:"quote,omitempty"`
+	SentAt   time.Time            `json:"sent_at,omitzero"`
+	Proposal *client.ProposalView `json:"proposal,omitempty"`
 }
 
 // Controls is what reactions, edits and deletion did to a message, as

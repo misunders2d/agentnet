@@ -30,6 +30,8 @@ case "$STUB_MODE" in
 askback) if grep -q "Riga" "$STUB_LOG.stdin"; then echo "Riga: bring a jacket"; else echo "Which city?"; fi ;;
 sleep) sleep 30 & echo $! > "$STUB_LOG.child"; wait ;;
 slow) sleep 1; echo "stub answer" ;;
+propose) printf 'AGENTNET: PROPOSE-TASK\nUpdate CHANGELOG.md: add the 0.8.0 entry.\n' ;;
+proposebig) printf 'AGENTNET: PROPOSE-TASK\n'; head -c 70000 /dev/zero | tr '\0' x ;;
 fail) echo "boom" >&2; exit 3 ;;
 *) echo "stub answer" ;;
 esac

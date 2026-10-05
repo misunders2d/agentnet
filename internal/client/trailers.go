@@ -10,10 +10,11 @@ const topicPromptText = "If this reply finishes the work of this topic and nothi
 
 // splitTrailers accepts each optional trailer once, in either order. A close
 // is a display hint on a successful nonempty reply, never work authority.
+// A proposal loses its formatting trailers but never closes the topic.
 func splitTrailers(text, status string) (string, *reactionChoice, bool) {
 	text = strings.TrimRight(text, " \t\r\n")
 	var reaction *reactionChoice
-	done := false
+	done, topicSeen := false, false
 	for n := 0; n < 2; n++ {
 		i := strings.LastIndexByte(text, '\n')
 		line := text[i+1:]
@@ -24,9 +25,9 @@ func splitTrailers(text, status string) (string, *reactionChoice, bool) {
 		if rest == "" {
 			break
 		}
-		if strings.EqualFold(strings.TrimSpace(line), "topic: done") && !done && status == envelope.StatusDone {
+		if strings.EqualFold(strings.TrimSpace(line), "topic: done") && !topicSeen && (status == envelope.StatusDone || status == envelope.StatusProposal) {
 			text = rest
-			done = true
+			topicSeen, done = true, status == envelope.StatusDone
 			continue
 		}
 		if reaction == nil {

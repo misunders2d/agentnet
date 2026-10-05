@@ -28,11 +28,16 @@ type remoteReviewAlerts struct {
 	Counts  map[string]int
 	Fresh   []string
 	Covered []string
+	Stalled bool
 }
 
 func reportPartition(host, key string) string { return host + "\x00" + key }
 func reportTransition(r storedReviewReport, it ReportItem) reviewTransition {
-	return reviewTransition{r.Host, r.Key, it.ID, it.Key, it.State, it.Attempt}
+	state := it.State
+	if it.State == stateRunning {
+		state += ":" + it.Blocker
+	}
+	return reviewTransition{r.Host, r.Key, it.ID, it.Key, state, it.Attempt}
 }
 
 func notificationReport(body, host, key string) (Report, bool) {
@@ -59,10 +64,10 @@ func notificationReport(body, host, key string) (Report, bool) {
 		if it.Kind != envelope.KindTask && it.Kind != envelope.KindQuestion && it.Kind != envelope.KindMessage {
 			return Report{}, false
 		}
-		if it.State != stateAwaiting && it.State != stateHeld && it.State != stateNeedHuman && it.State != stateInterrupt { // alertReviewStates
+		if it.State != stateAwaiting && it.State != stateHeld && it.State != stateNeedHuman && it.State != stateInterrupt && it.State != stateRunning { // alertReviewStates
 			return Report{}, false
 		}
-		if it.Blocker != blockerOf(it.Kind, it.State) {
+		if it.Blocker != blockerOf(it.Kind, it.State) && !(it.State == stateRunning && it.Blocker == BlockerStalled) {
 			return Report{}, false
 		}
 		seen[it.ID] = true
@@ -123,11 +128,14 @@ func (a *Agent) remoteReviewAlerts() (remoteReviewAlerts, error) {
 		}
 		for _, it := range r.Report.Items {
 			transition := reportTransition(r, it)
-			if !it.Actionable || settled[transition] {
+			if !it.Actionable || settled[transition] || it.State == stateRunning && it.Blocker != BlockerStalled {
 				continue
 			}
 			out.Counts[r.Host]++
 			if !covered[transition] {
+				if it.State == stateRunning && it.Blocker == BlockerStalled {
+					out.Stalled = true
+				}
 				raw, _ := json.Marshal(transition)
 				out.Fresh = append(out.Fresh, "remote\x00"+string(raw))
 			}

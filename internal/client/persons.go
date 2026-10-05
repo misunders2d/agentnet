@@ -357,6 +357,18 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 			return res, err
 		}
 	}
+	if head.info.State == personSelf || state == personSelf {
+		// This installation's own person changed: a device it removed (or
+		// whose key changed) no longer gives tasks here as the person's
+		// own, nor does any once this device left (ownDeviceHolds).
+		why := "that device is no longer one of yours"
+		if res.left {
+			why = "this device is no longer one of your devices"
+		}
+		if err := demoteLapsedOwnTasks(tx, why); err != nil {
+			return res, err
+		}
+	}
 	if err = demotePersonJobs(tx); err != nil {
 		return res, err
 	}
@@ -429,6 +441,11 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 	if err == nil && res.left {
 		a.Logf("this device is no longer a device of its person")
 		a.store.setConfig(map[string]string{"role": ""})
+	}
+	if err == nil && res.changed && stewardOf(a.store.db, person) {
+		// A steward's newer roster: a device it added gets the waiting
+		// requests by name now, one it removed stops deciding (MEL-532).
+		a.wakeWorker()
 	}
 	return res, err
 }

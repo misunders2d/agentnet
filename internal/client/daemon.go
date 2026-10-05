@@ -525,6 +525,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.Logf("run folders left by an earlier run: %v", err)
 	}
 	a.notifyTried, a.reviewTried, a.reviewGen, a.releaseTried = nil, nil, "", "" // a new run tries failed notices once more
+	a.reviewAgain.reset()
 	wake := make(chan struct{}, 1)
 	a.wakeWorker = func() {
 		select {
@@ -556,11 +557,25 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.Logf("local wake-up socket unavailable (%v); accept/cancel apply at the next Hub ping", err)
 		stopKicks = func() {}
 	}
+	// A command waiting for an answer here is woken by each local change
+	// (answerwait.go): it never polls.
+	stopChanges, err := listenChanges(a.home, a.Changed)
+	if err != nil {
+		a.Logf("local change socket unavailable (%v); a command waiting for an answer returns at once", err)
+		stopChanges = func() {}
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { defer close(done); a.worker(ctx, wake) }()
 	a.wakeWorker()
-	return func() { cancel(); <-done; stopKicks(); a.wakeWorker = func() {}; notify.Close() }, nil
+	return func() {
+		cancel()
+		<-done
+		stopKicks()
+		stopChanges()
+		a.wakeWorker = func() {}
+		notify.Close()
+	}, nil
 }
 
 // stopSurvivors stops the harnesses an earlier daemon left running (it
