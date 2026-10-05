@@ -789,6 +789,9 @@ invite prints a self-contained invitation for the person LABEL (their
 address becomes LABEL/NAME, NAME chosen by them when joining): project and install links,
 install-from-source steps for Linux, macOS and Windows, join/daemon/doctor
 steps, how to confirm back to you, and the private single-use invite code.
+Give the whole text to the coding agent on their computer, privately. The
+label is your statement about who they are. revoke immediately cuts ADDRESS
+off.
 
 release set recommends a client version to every member: running daemons
 get it at once, others when they next connect. Each person gets one
@@ -804,10 +807,8 @@ devices show it at once, or when they next connect, with no reinstall or
 rejoin; each person may still give it their own label on their devices.
 1–120 readable characters. clear removes it (devices then show the relay's
 host name); show prints the current name. A label only: the workspace's
-identity never changes.
-Give the whole text to the coding agent on their computer, privately. The
-label is your statement about who they are. revoke immediately cuts ADDRESS
-off.
+identity never changes. Your other devices (your phone) may set it only
+after you grant them the role: agentnet help person, person admin.
 
   --ttl D    how long the invite is valid: more than 0, at most 720h (others are refused)
   --admin    the invited agent becomes an admin too
