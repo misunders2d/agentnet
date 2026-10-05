@@ -119,7 +119,8 @@ func convAnswer(msgs []ConvMessage, request ConvMessage) (status string, at int6
 // execTerminal reports whether state is one a host reports last.
 func execTerminal(state string) bool {
 	switch state {
-	case envelope.StatusDone, envelope.StatusFailed, envelope.StatusTimeout, envelope.StatusCancelled, envelope.StatusDeclined, envelope.StatusInterrupted:
+	case envelope.StatusDone, envelope.StatusFailed, envelope.StatusTimeout, envelope.StatusCancelled, envelope.StatusDeclined, envelope.StatusInterrupted,
+		envelope.StatusProposal: // the question's last word: an offer, not a run
 		return true
 	}
 	return false

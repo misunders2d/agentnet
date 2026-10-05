@@ -180,6 +180,15 @@ const (
 	// feeds a selected receiver or counts as an answer.
 	StatusProgress = "progress"
 
+	// StatusProposal marks an answer whose whole body is the exact,
+	// self-contained task its agent proposes instead of an action its
+	// question run may not take (MEL-521). It is an offer: the asker may
+	// confirm it as a task, which then meets the recipient's normal task
+	// approval. It runs nothing and grants nothing. Only on an answer
+	// replying to one request (version 1, or a participation's output),
+	// with a non-blank plain body: no files, target, route or sub.
+	StatusProposal = "proposal"
+
 	// StatusReviewNotice on a plain message with no reply_to and no files
 	// says only that items wait for a person on the sender's machine. It is
 	// content-free and grants nothing: the recipient files it for its own
@@ -589,6 +598,12 @@ func checkVersion2(in Inner) error {
 	if in.Status == StatusProgress && (in.V != Version && (in.V != Version2 || in.PID == "") || in.Kind != KindMessage || in.ReplyTo == "" || strings.TrimSpace(in.Body) == "" ||
 		len(in.Attachments) != 0 || in.Target != nil || in.ReceiverRoute != nil || in.Human != nil && in.V != Version2 || in.Sub != "") { // a participation's progress may carry its captured human audience (human.go)
 		return errors.New("progress is a plain-text update replying to one request, in version 1 or as a participation's output")
+	}
+	// TODO(integrate:P3): once Inner carries quote and topic_done, a
+	// proposal carries neither (joint rule in the P3/P4 conflict map).
+	if in.Status == StatusProposal && (in.Kind != KindAnswer || in.ReplyTo == "" || strings.TrimSpace(in.Body) == "" || len(in.Attachments) != 0 ||
+		in.Target != nil || in.ReceiverRoute != nil || in.Sub != "" || in.V == Version3 || in.V == Version2 && in.PID == "") {
+		return errors.New("a proposal is an answer carrying one plain-text task, replying to one request, in version 1 or as a participation's output")
 	}
 	if err := validateHumanInner(in); err != nil {
 		return err

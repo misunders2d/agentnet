@@ -48,6 +48,9 @@ export const CapReplyReceiver = "rcv1"; // additive selected return route; not a
 // envelope.StatusProgress: a version 1 plain-text nonterminal update replying
 // to one exact request (never an answer); protocol.CapProgress reads it.
 export const StatusProgress = "progress", CapProgress = "prg1";
+// envelope.StatusProposal: an answer whose whole body is the exact task its
+// agent proposes (an offer the asker may confirm as a task; never a grant).
+export const StatusProposal = "proposal";
 // protocol.CapAgentReaction: this device reads an assistant's own reactions
 // (envelope.AssistantReaction).
 export const CapAgentReaction = "agr1";
@@ -545,6 +548,8 @@ async function checkV2(n) {
   // Progress replies to one request in plain text: in version 1 (a named
   // executor's progress names it), or as a participation's nonterminal output.
   if (n.status === StatusProgress && (n.v !== Version && (n.v !== Version2 || !n.pid) || n.kind !== "message" || !n.reply_to || goBlank(n.body) || n.attachments.length || n.target || n.receiver_route || (n.human && n.v !== Version2) || n.sub)) throw new Error("progress is a plain-text update replying to one request, in version 1 or as a participation's output");
+  // A proposal: an answer carrying one plain-text task (envelope.StatusProposal).
+  if (n.status === StatusProposal && (n.kind !== "answer" || !n.reply_to || goBlank(n.body) || n.attachments.length || n.target || n.receiver_route || n.sub || n.v === Version3 || n.v === Version2 && !n.pid)) throw new Error("a proposal is an answer carrying one plain-text task, replying to one request, in version 1 or as a participation's output");
   if (n.human && n.v === Version3) {
     // An assistant's reaction to an addressed request, to that request's
     // captured audience (envelope/human.go): its host is the author and a
