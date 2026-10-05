@@ -76,7 +76,7 @@ type Agent struct {
 	reviewTried  map[string]bool                                               // review items a review notice was attempted for, this run
 	reviewGen    string                                                        // review_to_gen those attempts were made under
 	reviewMu     sync.Mutex                                                    // one review notice pass at a time (the worker's, or one during a run)
-	reviewAgain  reviewAgain                                                   // operator devices skipped as not reading reports yet, looked at again on a member change (reviewnotice.go)
+	reviewAgain  reviewAgain                                                   // operator devices skipped as not reading reports yet, looked at again after a member list event (reviewnotice.go)
 	releaseTried string                                                        // release a notification was attempted for, this run
 
 	exe       string                       // the daemon's program file as started (RunOptions.Executable)

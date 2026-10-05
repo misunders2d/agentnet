@@ -161,7 +161,8 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	if a.reviewTried == nil {
 		a.reviewTried = map[string]bool{}
 	}
-	for _, to := range a.reviewAgain.take() { // skipped devices the Hub since showed changed
+	since := a.reviewAgain.begin()
+	for _, to := range a.reviewAgain.take() { // skipped devices a member list event since may concern
 		for k := range a.reviewTried {
 			if strings.HasPrefix(k, to+"\x00") {
 				delete(a.reviewTried, k)
@@ -289,10 +290,12 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 			// An operator gets the requests by name or nothing yet (a device
 			// just added may not have said what it reads): a count now would
 			// mark them told. Tried once, like any item: it is looked at
-			// again only when the Hub's member list shows that device
-			// changed (reviewAgain), a new item waits or the daemon starts
-			// again. A ping is no change: nothing polls the Hub.
-			a.reviewAgain.skip(to)
+			// again only after a Hub member list event (reviewAgain), when a
+			// new item waits or when the daemon starts again. A ping is no
+			// change: nothing polls the Hub.
+			if a.reviewAgain.skip(to, since) {
+				a.wakeWorker()
+			}
 			continue
 		}
 		claim := func(tx *sql.Tx, _ string) error {
@@ -369,44 +372,67 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 
 // reviewAgain holds the operator devices a review pass skipped because they
 // could not read reports yet (an older program, or one that has not
-// connected since it was linked or updated), and of those the ones the
-// Hub's member list since showed changed: connected, reconnected or on a
-// newer roster step (onMembers). Only those are looked at again before the
-// next daemon run; a ping changes nothing, so nothing polls the Hub.
+// connected or published what it reads since it was linked or updated).
+// Only a Hub member list event (pushed when a device connects, publishes its
+// capabilities or gets another roster step: onMembers) has the next pass
+// look at them again, or one that came while the skipping pass ran; a new
+// item or the daemon's next run does too. A ping changes nothing, so
+// nothing polls the Hub.
 type reviewAgain struct {
 	sync.Mutex
-	skipped map[string]bool
-	changed map[string]bool
+	events  uint64          // member list events this run
+	skipped map[string]bool // waiting for a member list event
+	changed map[string]bool // to look at again on the next pass
 }
 
-func (r *reviewAgain) skip(address string) {
+// begin is called as a pass starts; skip takes what it returns.
+func (r *reviewAgain) begin() uint64 {
 	r.Lock()
 	defer r.Unlock()
+	return r.events
+}
+
+// skip records address as skipped by the pass that began at since. It
+// reports whether a member list event came since then: the address is then
+// looked at again on the next pass (the caller wakes the worker), since
+// that event may have been its news.
+func (r *reviewAgain) skip(address string, since uint64) bool {
+	r.Lock()
+	defer r.Unlock()
+	if r.events != since {
+		if r.changed == nil {
+			r.changed = map[string]bool{}
+		}
+		r.changed[address] = true
+		return true
+	}
 	if r.skipped == nil {
 		r.skipped = map[string]bool{}
 	}
 	r.skipped[address] = true
+	return false
 }
 
-// note records the addresses whose member entry changed; it reports whether
-// one of them was skipped (the worker then looks again).
-func (r *reviewAgain) note(changed []string) bool {
+// note records a member list event; it reports whether a skipped device
+// is now to be looked at again (the worker is then woken).
+func (r *reviewAgain) note() bool {
 	r.Lock()
 	defer r.Unlock()
-	again := false
-	for _, address := range changed {
-		if r.skipped[address] {
-			delete(r.skipped, address)
-			if r.changed == nil {
-				r.changed = map[string]bool{}
-			}
-			r.changed[address], again = true, true
-		}
+	r.events++
+	if len(r.skipped) == 0 {
+		return false
 	}
-	return again
+	if r.changed == nil {
+		r.changed = map[string]bool{}
+	}
+	for address := range r.skipped {
+		r.changed[address] = true
+	}
+	r.skipped = nil
+	return true
 }
 
-// take returns the skipped devices that changed since, once.
+// take returns the skipped devices to look at again, once.
 func (r *reviewAgain) take() []string {
 	r.Lock()
 	defer r.Unlock()

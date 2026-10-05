@@ -312,10 +312,12 @@ func (c profileCount) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // A steward's device that cannot read reports yet (an older program, or
-// one that has not connected since it was linked) is skipped like a failed
-// notice: tried once per item, never again on every worker wake (each Hub
-// ping wakes the worker: that would poll the Hub). A member list showing
-// that device changed has the host look once more, and then it is told.
+// one that has not published what it reads since it was linked) is skipped
+// like a failed notice: tried once per item, never again on every worker
+// wake (each Hub ping wakes the worker: that would poll the Hub). A Hub
+// member list event (the Hub pushes one when a device connects or
+// publishes what it reads) has the host look once more, and once it reads
+// reports it is told.
 func TestNonCapableStewardDeviceNotPolled(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
@@ -347,30 +349,62 @@ func TestNonCapableStewardDeviceNotPolled(t *testing.T) {
 		host.store.db.QueryRow(`SELECT count(*) FROM reported WHERE item = ? AND recipient = ?`, task, a.Address).Scan(&n)
 		return n == 1
 	}
+	quiet := func(what string) int32 {
+		t.Helper()
+		n := lookups.Load()
+		for range 5 { // as five pings would wake the worker
+			host.sendReviewNotice(tctx(t))
+		}
+		if more := lookups.Load() - n; more != 0 {
+			t.Fatalf("%s: the Hub was asked about the phone %d more time(s) on wakes that changed nothing", what, more)
+		}
+		return n
+	}
 	host.sendReviewNotice(tctx(t))
-	first := lookups.Load()
+	first := quiet("first pass")
 	if first == 0 || told(phone) || !told(w.alice) {
 		t.Fatalf("first pass: %d phone lookup(s), phone told %v, laptop told %v", first, told(phone), told(w.alice))
 	}
-	for range 5 { // as five pings would wake the worker
-		host.sendReviewNotice(tctx(t))
+	members, _ := json.Marshal(protocol.Members{Members: []protocol.Member{{Address: phone.Address, Presence: protocol.PresenceConnected, Joined: 1}}})
+	// A member list event: looked at once more; still no reports read.
+	host.onMembers(members)
+	host.sendReviewNotice(tctx(t))
+	if again := quiet("after a member list event"); again == first || told(phone) {
+		t.Fatalf("a member list event: %d more lookup(s), phone told %v", again-first, told(phone))
 	}
-	if n := lookups.Load(); n != first {
-		t.Fatalf("the Hub was asked about the phone %d more time(s) on wakes that changed nothing", n-first)
-	}
-	// The Hub's member list says the phone is connected (as after an
-	// update): looked at once more, and now it reads reports.
+	// Now it reads reports (the Hub pushes the member list when it says so).
 	bare.Store(false)
-	raw, _ := json.Marshal(protocol.Members{Members: []protocol.Member{{Address: phone.Address, Presence: protocol.PresenceConnected, Joined: 1}}})
-	host.onMembers(raw)
+	host.onMembers(members)
 	host.sendReviewNotice(tctx(t))
-	again := lookups.Load()
-	if again == first || !told(phone) {
-		t.Fatalf("a member change: %d more lookup(s), phone told %v", again-first, told(phone))
+	if !told(phone) {
+		t.Fatal("the phone that reads reports now was not told")
 	}
-	host.onMembers(raw) // the same entry: no change
+	n := lookups.Load()
+	host.onMembers(members) // nothing is skipped any more
 	host.sendReviewNotice(tctx(t))
-	if n := lookups.Load(); n != again {
-		t.Fatalf("an unchanged member list looked again (%d more)", n-again)
+	if more := lookups.Load() - n; more != 0 {
+		t.Fatalf("a told device was looked up again (%d)", more)
+	}
+}
+
+// A member list event that comes while a pass is skipping a device may be
+// that device's news: the next pass looks again, without another event.
+func TestReviewAgainEventDuringPass(t *testing.T) {
+	var r reviewAgain
+	since := r.begin()
+	if r.note() {
+		t.Fatal("nothing was skipped yet")
+	}
+	if !r.skip("ops/phone", since) {
+		t.Fatal("an event during the pass did not bring the device back")
+	}
+	if got := r.take(); !slices.Equal(got, []string{"ops/phone"}) || len(r.take()) != 0 {
+		t.Fatalf("take %v", got)
+	}
+	if r.skip("ops/phone", r.begin()) || len(r.take()) != 0 {
+		t.Fatal("skipped without an event, yet looked at again")
+	}
+	if !r.note() || !slices.Equal(r.take(), []string{"ops/phone"}) {
+		t.Fatal("a later event did not bring it back")
 	}
 }
