@@ -52,8 +52,17 @@ func deviceAdminHolds(q querier, address string, a agent, seen map[string]bool) 
 	if !a.linked {
 		return true, nil
 	}
-	if a.Person == "" || a.grantedBy == "" {
+	if a.Person == "" {
 		return false, nil
+	}
+	if a.grantedBy == "" {
+		// A Google person's current devices hold the role the workspace's
+		// admin gave that email (google.go); no other linked device does.
+		if ok, err := googleEmailAdmin(q, a.Person); err != nil || !ok {
+			return false, err
+		}
+		_, current, err := currentPersonDevice(q, a)
+		return current, err
 	}
 	r, current, err := currentPersonDevice(q, a)
 	if err != nil || !current {
@@ -156,4 +165,15 @@ func (h *Hub) handleDeviceAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	h.membersChanged() // push the role change to the person's connected devices
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// googleEmailAdmin reports whether person signed in with Google under an
+// email the workspace's admin made an admin (and has not removed).
+func googleEmailAdmin(q querier, person string) (bool, error) {
+	var admin bool
+	err := q.QueryRow(`SELECT e.admin FROM google_people p JOIN google_emails e ON e.email = p.email WHERE p.person = ? AND e.denied = 0`, person).Scan(&admin)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return admin, err
 }
