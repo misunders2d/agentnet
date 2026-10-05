@@ -146,3 +146,20 @@ func TestAwaitReplyTimesOut(t *testing.T) {
 		t.Fatalf("canceled %v", err)
 	}
 }
+
+// In a conversation, the wait finds the answer the participation's agent
+// gave to the request (dm ask-agent).
+func TestAwaitReplyConversation(t *testing.T) {
+	st := installAgentStub(t)
+	w, conv, _, _ := agentWorld(t)
+	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
+	pid := participate(t, w, conv, nil, nil)
+	q, err := w.alice.AskAgentWithReceiver(tctx(t), pid, envelope.KindQuestion, "why did the deploy fail?", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := w.alice.AwaitReply(tctx(t), q.ID, 30*time.Second, nil)
+	if err != nil || r.Answer == nil || r.Answer.Kind != envelope.KindAnswer || r.Answer.From != w.bob.Address || r.Answer.Body != "the deploy failed at step 3" {
+		t.Fatalf("wait %+v %v", r.Answer, err)
+	}
+}
