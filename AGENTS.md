@@ -79,8 +79,9 @@ program, `agentnet`, that is both the laptop client and the Hub.
   `Co-authored-by: Claude <noreply@anthropic.com>`. Credit actual contributors;
   do not invent account emails for other assistants.
 - Tests: `go vet ./...` and `go test -race -count=1 -timeout 600s $(go list ./... | grep -v /internal/client$)`,
-  plus `./internal/client` in three runs of the same command with `-run '^Test[A-F]'`, `-run '^TestG'` and
-  `-run '^Test[H-Z]'` (under race the whole package needs ~1000 s; each part ~340 s). Never raise the timeout to make a run fit.
+  plus `./internal/client` in four runs of the same command with `-run '^Test[A-F]'`, `-run '^TestG'`,
+  `-run '^Test[H-P]'` and `-run '^Test[Q-Z]'` (781 tests; under race the package needs ~1500 s, each part
+  ~350-440 s on a quiet machine). Never raise the timeout to make a run fit.
   Add a focused regression for every bug. Tests that need a real model or
   infrastructure are opt-in (`AGENTNET_LIVE=claude`, `scripts/hub-container-test.sh`).
 - Claims must match evidence: cross-compiling is not running on that OS;

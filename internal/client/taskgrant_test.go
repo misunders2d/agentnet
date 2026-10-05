@@ -220,7 +220,14 @@ func TestTaskGrantRevokeAndKeyChange(t *testing.T) {
 	if !strings.Contains(detail, "revoked") {
 		t.Fatalf("detail: %q", detail)
 	}
-	if items, _ := w.bob.Review(); len(items) != 1 || items[0].ID != queued {
+	// The revoked task waits for review; the one still running stays visible
+	// there too (P4: running work is never hidden), nothing else does.
+	items, _ := w.bob.Review()
+	seen := map[string]bool{}
+	for _, it := range items {
+		seen[it.ID] = true
+	}
+	if !seen[queued] || len(items) > 2 || len(items) == 2 && !seen[running] {
 		t.Fatalf("revoked task not in review: %v", items)
 	}
 
