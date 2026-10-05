@@ -302,6 +302,21 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   only the actions listed. An edit never reruns anything; a deletion hides text
   and files and recalls nothing already read, saved or given to an agent.
 - Reminders: `/api/remind` and existing `/api/remind/{action}`.
+- Connecting coding sessions (MEL-528): GET `/api/assistant-setup` lists the
+  tools found on this computer `{local, harnesses[{id, label, detected,
+  configured, registered, supported, state, note, change?, next?, target?}],
+  note?}` (`state`: connected, needs_activation, detected, needs_setup,
+  not_detected, unsupported or error: write your own words for each and keep
+  `note` and `target` behind details). POST `{action: "review", harnesses}`
+  adds `review_id`; POST `{action: "apply", harnesses, review_id}` applies
+  exactly that reviewed change and refuses one that changed since. Then each
+  chosen tool that `/api/agents` lists as `found` gets its named agent through
+  POST `/api/agents` `{action: "create", label, harness, dir}` or `{action:
+  "update", id, harness, dir}` (reuse an agent with the same tool, name and
+  folder instead of making a second), and one `{action: "publish"}`.
+  `local: false` (nothing can be installed here): show `note`. The folder is
+  chosen by browsing GET `/api/folders?path=` (read-only), never typed. Setup
+  approves nobody, shares no history and keeps the default agent.
 - Topics (an agent's device threads, docs/plans/TOPICS.md): `overview.threads`
   lists every thread, archived topics too; a skin that pages topics itself
   asks `/api/overview?topics=1` and gets them without archived topics.
