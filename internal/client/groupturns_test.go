@@ -97,6 +97,7 @@ func groupTurnEnvelope(t *testing.T, a *Agent, id string) envelope.Envelope {
 }
 
 func TestGroupTurnsT1ThreePeopleAndLinkedCopies(t *testing.T) {
+	t.Parallel()
 	w, carol, p, _ := groupTurnsFixture(t)
 	people := []*Agent{w.alice, w.bob, carol}
 	all := slices.Clone(people)
@@ -184,6 +185,7 @@ func TestGroupTurnsT1ThreePeopleAndLinkedCopies(t *testing.T) {
 }
 
 func TestGroupTurnsT2LogicalRepliesOrderingAndRestart(t *testing.T) {
+	t.Parallel()
 	w, carol, p, stops := groupTurnsFixture(t)
 	stops[carol]()
 	parent, err := w.alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "parent"})
@@ -269,6 +271,7 @@ func TestGroupTurnsT2LogicalRepliesOrderingAndRestart(t *testing.T) {
 }
 
 func TestGroupTurnsT3FilesResumeAcrossSenderRestart(t *testing.T) {
+	t.Parallel()
 	var bobFaults *faults
 	w, carol, p, stops := groupTurnsFixture(t, func(a *Agent) {
 		if a.Address == "bob/laptop" {
@@ -326,6 +329,7 @@ func TestGroupTurnsT3FilesResumeAcrossSenderRestart(t *testing.T) {
 // wait, files spooled, with the true cause, and go out once the Hub is back
 // and each recipient's current record shows it may read them.
 func TestGroupTurnWaitsWhileHubUnreachable(t *testing.T) {
+	t.Parallel()
 	w, carol, p, stops := groupTurnsFixture(t)
 	stops[w.alice]()
 	home := w.alice.home
@@ -370,6 +374,7 @@ func TestGroupTurnWaitsWhileHubUnreachable(t *testing.T) {
 // devices pinned then; a device its person removed meanwhile never gets its
 // copy: the copy is released and sent only on current evidence.
 func TestGroupTurnKeptOfflineNotSentToRemovedDevice(t *testing.T) {
+	t.Parallel()
 	w, carol, p, stops := groupTurnsFixture(t)
 	phone, await, _ := linkPhone(t, w.bob, "phone")
 	request := pendingLink(t, w.bob)
@@ -440,6 +445,7 @@ func TestGroupTurnKeptOfflineNotSentToRemovedDevice(t *testing.T) {
 // person linked it meanwhile; the roster pinned here lists it) fails the
 // send with that cause, and nothing is kept: no part of the group gets it.
 func TestGroupTurnOfflineUnknownKeyNamesCause(t *testing.T) {
+	t.Parallel()
 	w, _, p, stops := groupTurnsFixture(t)
 	phone, await, _ := linkPhone(t, w.bob, "phone")
 	request := pendingLink(t, w.bob)
@@ -572,6 +578,7 @@ func notHandedOver(t *testing.T, a *Agent, id string) {
 // meanwhile, which the Hub does not revoke, never gets its copy, though the
 // roster pinned when the copy was made listed it.
 func TestGroupTurnKeptOfflineNotSentToUnrevokedRemovedDevice(t *testing.T) {
+	t.Parallel()
 	w, carol, p, _, alice, _, online := removedWhileOffline(t)
 	sent, err := alice.SendConv(tctx(t), p.State.Conv, ConvOutgoing{Body: "after both removals"})
 	laptop := keptCopyTo(t, sent, err, w.bob.Address)
@@ -582,6 +589,7 @@ func TestGroupTurnKeptOfflineNotSentToUnrevokedRemovedDevice(t *testing.T) {
 
 // The same for a DM kept while the Hub was out of reach.
 func TestDMKeptOfflineNotSentToUnrevokedRemovedDevice(t *testing.T) {
+	t.Parallel()
 	w, _, _, dm, alice, tablet, online := removedWhileOffline(t)
 	sent, err := alice.SendConv(tctx(t), dm, ConvOutgoing{Body: "after both removals"})
 	laptop := keptCopyTo(t, sent, err, w.bob.Address)
@@ -712,6 +720,7 @@ func TestGroupTurnsT4AtomicHeadsRemovalWithdrawalAndExactKey(t *testing.T) {
 }
 
 func TestGroupTurnsT5StaleFanAndUnsupportedOperations(t *testing.T) {
+	t.Parallel()
 	w, carol, p, stops := groupTurnsFixture(t)
 	stops[w.alice]()
 	aliceFaults := injectFaults(w.alice)

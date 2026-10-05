@@ -97,6 +97,7 @@ func TestHistoryToLinkedDevice(t *testing.T) {
 // the new device yet) is forwarded by the device that got it; a copy that
 // arrives directly later takes its place.
 func TestHistoryForwardsStaleFan(t *testing.T) {
+	t.Parallel()
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)

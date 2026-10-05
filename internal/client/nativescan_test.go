@@ -35,6 +35,7 @@ func claudeRow(t *testing.T, row map[string]any) []byte {
 // A long session never refuses (MEL-537): more than the old 100k records
 // and 32 MiB in all are read, one record at a time.
 func TestNativeScanNoTotalCap(t *testing.T) {
+	t.Parallel()
 	sid := "long-session"
 	file := filepath.Join(t.TempDir(), sid+".jsonl")
 	row := claudeRow(t, map[string]any{"type": "assistant", "sessionId": sid, "version": "2.1.287", "pad": strings.Repeat("x", 200)})

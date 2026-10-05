@@ -16,6 +16,7 @@ import (
 )
 
 func TestDriveSDKRefreshPersistenceConcurrency(t *testing.T) {
+	t.Parallel()
 	w, conv, _ := dmWithHistory(t)
 	p, _, err := w.alice.Person()
 	if err != nil {

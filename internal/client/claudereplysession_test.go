@@ -128,6 +128,7 @@ func TestClaudeReplyRegistryRefusesForeignRealmAndAmbiguity(t *testing.T) {
 }
 
 func TestClaudeReplyLazyParentPathFences(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"escaping_missing_target", "inside_profile_substitution", "wrong_sid", "changed_route", "foreign_file", "strict_defaults"} {
 		t.Run(scenario, func(t *testing.T) {
 			w := newWorld(t, "")

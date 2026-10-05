@@ -48,7 +48,9 @@ func linkPhone(t *testing.T, at *Agent, name string) (phone *Agent, awaited chan
 	if err != nil {
 		t.Fatal(err)
 	}
-	phone, err = JoinAndLink(tctx(t), t.TempDir(), o.Code, name)
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	phone, err = JoinAndLink(tctx(t), home, o.Code, name)
 	if err != nil {
 		t.Fatal(err)
 	}

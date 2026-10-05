@@ -16,6 +16,7 @@ import (
 )
 
 func TestDriveEncryptedStateOwnershipAndAgentGrants(t *testing.T) {
+	t.Parallel()
 	w, conv, _ := dmWithHistory(t)
 	enableDriveTestWorkspace(t, w)
 	alice, _, e := w.alice.Person()

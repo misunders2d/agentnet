@@ -48,6 +48,7 @@ func sealedCurrentProof(t *testing.T, writer *Agent, reader *Agent, packet Group
 }
 
 func TestGroupOriginalProofPagesResumeAndFreshCurrent(t *testing.T) {
+	t.Parallel()
 	w, initial, first := newGroupPublicationFixture(t)
 	reader := proofReader(t, w, "fresh-reader")
 	const steps = 1024

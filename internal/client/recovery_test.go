@@ -94,11 +94,16 @@ func tctx(t *testing.T) context.Context {
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
+	interval := 20 * time.Millisecond
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
-		time.Sleep(20 * time.Millisecond)
+		// Predicates often read and verify a whole conversation. Back off
+		// repeated reads while its daemon is still doing the work; retain
+		// the same predicate and overall deadline.
+		time.Sleep(interval)
+		interval = min(2*interval, 100*time.Millisecond)
 	}
 }
 
@@ -128,7 +133,8 @@ func newWorld(t *testing.T, publicURL string) *world {
 
 func mustJoin(t *testing.T, home, code, name string) *Agent {
 	t.Helper()
-	// Join creates the home (keys, SQLite schema) and then asks the Hub,
+	seedFixtureStore(t, home)
+	// Join creates fresh keys in the fixture home and then asks the Hub,
 	// all within its context: a longer budget than one request's for slow
 	// CI disks (Windows).
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

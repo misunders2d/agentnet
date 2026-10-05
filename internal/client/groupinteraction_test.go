@@ -16,6 +16,7 @@ import (
 )
 
 func TestGroupInteractionControlsThreePeople(t *testing.T) {
+	t.Parallel()
 	w, carol, packet, _ := groupTurnsFixture(t)
 	sent, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "original group text"})
 	if err != nil {
@@ -399,6 +400,7 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 }
 
 func TestGroupInteractionControlReorderedOriginal(t *testing.T) {
+	t.Parallel()
 	w, _, packet, stops := groupTurnsFixture(t)
 	stops[w.bob]()
 	msg, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "immutable original"})
@@ -677,6 +679,7 @@ func TestGroupInteractionTypingActualAudience(t *testing.T) {
 }
 
 func TestGroupInteractionLinkedControlHistory(t *testing.T) {
+	t.Parallel()
 	w, _, packet, stops := groupTurnsFixture(t)
 	sent, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "linked original"})
 	if err != nil {

@@ -45,6 +45,7 @@ func groupGovernanceDeliver(t *testing.T, from, to *Agent, env envelope.Envelope
 }
 
 func TestGroupGovernanceLinkedAdminAndTransfer(t *testing.T) {
+	t.Parallel()
 	w, carol, p, stops := groupTurnsFixture(t)
 	phone, await, _ := linkPhone(t, w.alice, "governance-phone")
 	if err := w.alice.DecideLink(tctx(t), pendingLink(t, w.alice).ID, true); err != nil {
