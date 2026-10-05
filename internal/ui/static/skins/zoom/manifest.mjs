@@ -18,7 +18,8 @@ export default {
     "qr.mjs",
     "icon.png",
     "topics.mjs",
-    "optimistic.mjs"
+    "optimistic.mjs",
+    "pictures.mjs"
   ]
 }
 ;

@@ -474,6 +474,8 @@ export interface GroupMemberView {
   person?: string;
   label: string;
   email?: string;
+  picture?: string;
+  picture_url?: string;
   address: string;
   fingerprint?: string;
   state: string;
@@ -751,6 +753,8 @@ export interface PersonView {
   person?: string;
   label: string;
   email?: string;
+  picture?: string;
+  picture_url?: string;
   address: string;
   fingerprint?: string;
   state: string;

@@ -1,4 +1,5 @@
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
+import { avatarPicture, openPictureEditor } from "./pictures.mjs";
 import { topicControls } from './topics.mjs';
 import { pendingSends, sendID } from "./optimistic.mjs";
 import { markup } from './template.mjs';
@@ -172,10 +173,12 @@ function who(addr) {
 }
 
 function avatar(addr, cls) {
+  const picture = avatarPicture(state.overview, addr);
+
   let h = 0;
   for (const c of addr.split("/")[0]) h = (h * 41 + c.charCodeAt(0)) >>> 0;
-  return el("span", { class: "avatar av" + (h % 6) + (cls ? " " + cls : ""), "aria-hidden": "true" },
-    addr.charAt(0).toUpperCase());
+  return el("span", { class: "avatar av" + (h % 6) + (cls ? " " + cls : "") + (picture ? " profile-picture" : ""), "aria-hidden": "true" },
+    addr.charAt(0).toUpperCase(), picture && el("img", { src: picture, alt: "", onerror: e => e.currentTarget.remove() }));
 }
 
 // ---- overview ---------------------------------------------------------------
@@ -436,6 +439,7 @@ async function openFile(id, i, name, button, slot, dir) {
         picture,
         el("div", { class: "file-viewer-actions" },
           el("a", { href: url, download: name, class: "text-btn" }, "Save " + name),
+          state.overview?.person && el("button", { type: "button", class: "btn", onclick: () => editProfilePicture("", url) }, "Use as my picture"),
           el("button", { type: "button", class: "btn", onclick: () => viewer.close() }, "Close preview")));
       root.append(viewer);
       viewer.addEventListener("close", () => {
@@ -4567,15 +4571,22 @@ function selectSection(section) {
   rerender();
 }
 
+async function editProfilePicture(current, src) {
+  const host = currentHost, gen = state.gen;
+  if (await openPictureEditor({ into: root, current, src, save: png => api("/api/person/picture", { png }, host) }) && gen === state.gen) { await loadOverview(); renderProfile(state.overview); }
+}
+
 function renderProfile(o) {
   const p = o.person;
-  $("profile-initial").textContent = (p ? p.label : o.me.address).charAt(0).toUpperCase();
+  fill($("profile-initial"), p?.picture_url ? el("img", { src: p.picture_url, alt: "", class: "profile-picture-image" }) : (p ? p.label : o.me.address).charAt(0).toUpperCase());
   fill($("profile-card"), p ? el("div", { class: "profile-card" }, avatar(p.label),
     el("div", {}, el("h3", {}, p.label), p.email && el("p", { class: "hint" }, p.email + " · verified by this workspace"), el("p", { class: "hint" }, "One person, " + plural(devicesOf(p).length, "device", "devices")),
       p.person && el("p", { class: "hint", title: "Person ID: " + p.person }, "@" + p.person.slice(0, 8))))
     : setupChoice());
   fill($("profile-devices"), p ? deviceDisclosure(p, (addr) => { $("settings").close(); openHub({ kind: "device", key: addr }); }) : null,
     p && p.state === "self" && el("button", { type: "button", class: "btn", onclick: () => renamePersonDialog(p) }, "Change display name"),
+    p && p.state === "self" && el("button", { type: "button", class: "btn", onclick: () => editProfilePicture(p.picture_url) }, "Choose picture"),
+    p && p.state === "self" && p.picture && el("button", { type: "button", class: "btn", onclick: async () => { try { await api("/api/person/picture", { png: "" }); await loadOverview(); renderProfile(state.overview); } catch(e) { dialog({ title: "Picture not removed", body: [el("p", {}, e.message)], ok: "Close", run: async () => {} }); } } }, "Remove picture"),
     p && el("button", { type: "button", class: "btn", onclick: () => { $("settings").close(); devicesDialog(); } }, "Manage your devices"));
 }
 
