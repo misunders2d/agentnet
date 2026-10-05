@@ -257,6 +257,56 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 			}
 		}
 		carriers["p6-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash())
+
+		// A pre-join copy reaches the host only after Dana's admission. Its
+		// signed fan proves Alice and the browser, never the new member.
+		p26Admission := protocol.GroupAdmission{Conv: s0.Conv, Realm: root.Realm, Person: dr.Person, Roster: dr.Hash(), Seq: 1, Prev: s0.Hash(), By: dr.Devices[0].Fingerprint()}
+		p26Admission.Sign(dana.Sign)
+		p26State := s0
+		p26State.Seq, p26State.Prev = 1, s0.Hash()
+		p26State.Members = append(slices.Clone(s0.Members), protocol.GroupMember{ConvMember: protocol.ConvMember{Person: dr.Person, Roster: dr.Hash()}, Admission: p26Admission})
+		slices.SortFunc(p26State.Members, func(a, b protocol.GroupMember) int { return strings.Compare(a.Person, b.Person) })
+		p26State.Sign(alice.Sign)
+		p26Resolve := func(person, hash string) (protocol.PersonRoster, bool) {
+			if person == dr.Person && hash == dr.Hash() {
+				return dr, true
+			}
+			return resolve(person, hash)
+		}
+		if err := p26State.Verify(root, &s0, p26Resolve, nil); err != nil {
+			t.Fatal("late reader state", err)
+		}
+		p26Commit := protocol.GroupCommit{Bootstrap: root.Creator.Fingerprint, V: 1, Conv: s0.Conv, Realm: s0.Realm, Seq: 1, Prev: s0.Hash(), Hash: p26State.Hash(), Admins: p26State.Admins(), Writer: ap.Address, Actor: s0.Actor, ActorRoster: s0.ActorRoster, Ciphertext: encrypt([]byte(marshal(t, client.GroupContext{Root: root, State: p26State})))}
+		p26Commit.Sign(alice.Sign)
+		if err := p26Commit.VerifyChain(root, &commits[0], p26Resolve); err != nil {
+			t.Fatal("late reader commit", err)
+		}
+		carriers["p26-proof"] = carrier(envelope.SubGroupProof, protocol.GroupJournalPage{Records: []protocol.GroupCommit{p26Commit}}, 1, p26State.Hash())
+		carriers["p26-context"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: p26State}, 1, p26State.Hash())
+		p26Seal := func(name string, in envelope.Inner, signer *identity.Identity, from identity.Public) {
+			in.V, in.ID, in.From, in.To, in.TS = 2, protocol.NewID(), from.Address, browser.Address, 1700000100
+			in.Conv, in.Root, in.LID = root.ID(), json.RawMessage(marshal(t, root)), protocol.NewID()
+			recipient, _ := browser.Recipient()
+			env, err := envelope.Seal(in, signer.Sign, recipient)
+			if err != nil {
+				t.Fatal(name, err)
+			}
+			participations[name] = map[string]any{"envelope": marshal(t, env), "inner": in}
+		}
+		p26Seal("p26-before-join", envelope.Inner{Kind: envelope.KindMessage, Body: "P26 pre-join private turn", Fan: []envelope.Fan{{Person: ar.Person, Roster: ar.Hash()}, {Person: br.Person, Roster: br.Hash()}}}, alice, ap)
+		p26Seal("p26-no-fan", envelope.Inner{Kind: envelope.KindMessage, Body: "P26 legacy copy without reader proof"}, alice, ap)
+		p26Turn := participations["p26-before-join"].(map[string]any)["inner"].(envelope.Inner)
+		p26Author, _ := s0.Member(ar.Person)
+		for _, mode := range []string{"late-reader", "author"} {
+			person, public, signer, admission := dr, dr.Devices[0], dana, p26Admission
+			if mode == "author" {
+				person, public, signer, admission = ar, ap, alice, p26Author.Admission
+			}
+			share := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: membershipRecords[0].PID, Type: protocol.EventShare, Prev: membershipRecords[0].Hash(), TS: 1700000110, Author: protocol.EventAuthor{Person: person.Person, Roster: person.Hash(), Address: public.Address, Fingerprint: public.Fingerprint(), GroupAdmission: admission.Hash()}, Host: membershipRecords[0].Host, Audience: protocol.AudienceRoom, Group: &protocol.ParticipationGroup{Seq: 1, Hash: p26State.Hash(), HostRole: "member", HostAdmission: p26Author.Admission.Hash()}, Grant: []protocol.GrantRef{{LID: p26Turn.LID, Fingerprint: ap.Fingerprint()}}}
+			share.Sign(signer.Sign)
+			p26Seal("p26-share-"+mode, envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: share.PID, Body: marshal(t, share)}, signer, public)
+		}
+
 		carriers["p6-nonadmin-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), bob)
 		carriers["p6-outsider-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), dana)
 		// Original author rights still apply when an administrator vouches for

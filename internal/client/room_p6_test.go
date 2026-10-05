@@ -35,7 +35,9 @@ func TestP6GroupMemberReuseAndNonInviter(t *testing.T) {
 		t.Fatal(err)
 	}
 	conv := packet.State.Conv
-	private, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "EARLIER_UNSELECTED"})
+	// The host's copy proves Carol as the original author. A third member
+	// cannot share somebody else's turn without separate receipt evidence.
+	private, err := carol.SendConv(tctx(t), conv, ConvOutgoing{Body: "EARLIER_UNSELECTED"})
 	if err != nil {
 		t.Fatal(err)
 	}

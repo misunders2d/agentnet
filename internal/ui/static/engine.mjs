@@ -6261,6 +6261,9 @@ export class Engine {
     const ops=[];
     for(const pid of new Set(events.map(x=>x.e.pid)))ops.push(...this.roomConsentOps(conv,events,this.resolveAgent(pid,events,members)));
     if(n && !n.sub)for(const p of members.values()) {
+      // A received copy proves its signed sender/receiver fan only. The
+      // sender's commit fences the exact sealed packet and retains its roster.
+      if(fp!==this.fp && !n.fan?.some(f=>f.person===p.person))continue;
       const admission=members.epochs.get(p.devices[0]?.fingerprint);
       if(admission)ops.push({s:"kv",k:this.roomReaderKey(conv,{lid:n.lid,fingerprint:fp},p.person,admission),v:true});
     }

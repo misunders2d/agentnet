@@ -185,11 +185,25 @@ func TestP6FixRemovedAudienceDoesNotKillOtherAnswer(t *testing.T) {
 
 func TestP6FixLateJoinMembershipAndShareVisibility(t *testing.T) {
 	stub := installAgentStub(t)
-	w, _, packet, _ := groupTurnsFixture(t)
+	w, carol, packet, stops := groupTurnsFixture(t)
 	conv := packet.State.Conv
-	private, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "UNSELECTED_BEFORE_DAVE"})
+	// Seal while Dave is absent and no agent has accepted future context.
+	stops[carol]()
+	injectFaults(carol).add("POST", "/v1/messages", 2, false)
+	private, err := carol.SendConv(tctx(t), conv, ConvOutgoing{Body: "UNSELECTED_BEFORE_DAVE"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(private.Copies) != 2 {
+		t.Fatalf("pre-join sealed recipients: %+v", private.Copies)
+	}
+	var n int
+	if err = w.bob.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND lid=?`, conv, private.LID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("turn reached host before late join: %d %v", n, err)
+	}
+	// The sender knows its exact sealed roster; this evidence must survive.
+	if err = carol.store.db.QueryRow(`SELECT count(*) FROM room_turn_readers WHERE conv=? AND lid=?`, conv, private.LID).Scan(&n); err != nil || n != len(packet.State.Members) {
+		t.Fatalf("sender sealed reader proof: %d %v", n, err)
 	}
 	member := p6Member(t, w.alice, w.bob, conv)
 	dave := proofReader(t, w, "dave")
@@ -203,6 +217,28 @@ func TestP6FixLateJoinMembershipAndShareVisibility(t *testing.T) {
 		t.Fatalf("late join duplicate: %+v %v", same, err)
 	}
 	eventually(t, "host knows late join", func() bool { p, e := w.bob.GroupContext(conv); return e == nil && p.State.Seq == next.State.Seq })
+	if err = carol.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "pre-join turn reaches host after admission", func() bool {
+		return w.bob.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND lid=?`, conv, private.LID).Scan(&n) == nil && n == 1
+	})
+	if err = dave.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND lid=?`, conv, private.LID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("late member received pre-join turn: %d %v", n, err)
+	}
+	if err = w.bob.store.db.QueryRow(`SELECT count(*) FROM room_context WHERE conv=? AND pid=? AND lid=?`, conv, member.PID, private.LID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("pre-agent turn became ambient context: %d %v", n, err)
+	}
+	davePerson, _, err := dave.store.selfPerson(dave.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.bob.store.db.QueryRow(`SELECT count(*) FROM room_turn_readers WHERE conv=? AND lid=? AND person=?`, conv, private.LID, davePerson.info.Person).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("late member gained unproven reader authority: %d %v", n, err)
+	}
+	if err = w.bob.store.db.QueryRow(`SELECT count(*) FROM room_turn_readers WHERE conv=? AND lid=?`, conv, private.LID).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("received fan must prove only author and host: %d %v", n, err)
+	}
 	m, err := dave.dmMembers(conv)
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +247,7 @@ func TestP6FixLateJoinMembershipAndShareVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev := protocol.ParticipationEvent{V: 1, Conv: conv, PID: member.PID, Type: protocol.EventShare, Prev: member.Invite, TS: time.Now().Unix(), Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: dave.Address, Fingerprint: dave.Self().Fingerprint()}, Host: &protocol.ParticipationHost{Person: member.Host.Person, Address: member.Host.Address, Fingerprint: member.Host.Fingerprint, AgentID: member.AgentID}, Grant: []protocol.GrantRef{{LID: private.LID, Fingerprint: w.alice.Self().Fingerprint()}}, Audience: protocol.AudienceRoom}
+	ev := protocol.ParticipationEvent{V: 1, Conv: conv, PID: member.PID, Type: protocol.EventShare, Prev: member.Invite, TS: time.Now().Unix(), Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: dave.Address, Fingerprint: dave.Self().Fingerprint()}, Host: &protocol.ParticipationHost{Person: member.Host.Person, Address: member.Host.Address, Fingerprint: member.Host.Fingerprint, AgentID: member.AgentID}, Grant: []protocol.GrantRef{{LID: private.LID, Fingerprint: carol.Self().Fingerprint()}}, Audience: protocol.AudienceRoom}
 	if err = m.bindGroupInvite(&ev); err != nil {
 		t.Fatal(err)
 	}

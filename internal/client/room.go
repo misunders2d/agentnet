@@ -36,6 +36,12 @@ func recordRoomContext(tx *sql.Tx, in envelope.Inner, fp, self string) error {
 	}
 	if in.Sub == "" {
 		for person := range m.persons {
+			// A received copy proves only its verified sender/receiver fan,
+			// never additional readers inferred from current membership.
+			// The sender's outbox commit checks the exact sealed group state.
+			if in.From != self && !slices.ContainsFunc(in.Fan, func(f envelope.Fan) bool { return f.Person == person }) {
+				continue
+			}
 			member, ok := m.group.State.Member(person)
 			if ok {
 				if _, err = tx.Exec(`INSERT OR IGNORE INTO room_turn_readers VALUES(?,?,?,?,?)`, in.Conv, in.LID, fp, person, member.Admission.Hash()); err != nil {
