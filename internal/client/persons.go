@@ -61,6 +61,7 @@ type DeviceInfo struct {
 	Name        string `json:"name"` // the device's name, the part after the "/"
 	Fingerprint string `json:"fingerprint"`
 	This        bool   `json:"this,omitempty"` // this installation
+	Human       bool   `json:"human"`          // may enroll devices; false for an agent host
 	Added       int64  `json:"added"`          // the roster step it was added at
 }
 
@@ -122,7 +123,7 @@ func scanPersonIn(q dbq, where string, args ...any) (personRow, bool, error) {
 	}
 	for _, d := range p.roster.Devices {
 		_, name, _ := protocol.SplitAddress(d.Address)
-		p.info.Devices = append(p.info.Devices, DeviceInfo{Address: d.Address, Name: name, Fingerprint: d.Fingerprint(), Added: added[d.Address]})
+		p.info.Devices = append(p.info.Devices, DeviceInfo{Address: d.Address, Name: name, Fingerprint: d.Fingerprint(), Human: p.roster.Human(d.Fingerprint()), Added: added[d.Address]})
 	}
 	if len(p.roster.Devices) > 0 {
 		p = p.at(p.roster.Devices[0].Address)
@@ -227,6 +228,17 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 			personConflict, string(raw), other, personPinned); err != nil {
 			return res, err
 		}
+		check, e := s.db.Begin()
+		if e != nil {
+			return res, e
+		}
+		if e = demotePersonJobs(check); e != nil {
+			check.Rollback()
+			return res, e
+		}
+		if e = check.Commit(); e != nil {
+			return res, e
+		}
 		s.changed()
 		return res, errPersonConflict
 	}
@@ -324,6 +336,9 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 		if _, err := tx.Exec(`INSERT INTO person_devices(address, person, fingerprint, added) VALUES(?, ?, ?, ?)`, d.Address, person, d.Fingerprint(), added); err != nil {
 			return res, err
 		}
+	}
+	if err = demotePersonJobs(tx); err != nil {
+		return res, err
 	}
 	return res, s.done(tx.Commit())
 }

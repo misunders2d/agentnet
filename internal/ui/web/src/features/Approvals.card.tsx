@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconBolt, IconCheck, IconClock, IconFileText, IconLock, IconPlayerStop, IconRefresh, IconShieldCheck, IconUser, IconEye, IconSparkles, IconArrowBackUp } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { deliveryWord, deviceKind, timeOf } from "../model";
+import { deliveryWord, deviceKind, personName, timeOf } from "../model";
 import { useOwned } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
@@ -68,6 +68,9 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const conv = dm?.id || thread?.id || "";
   const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
 
+  const permissionPerson = thread?.permission_person;
+  const permissionName = permissionPerson ? personName(permissionPerson) : asker.name;
+  const permissionTarget = permissionPerson?.person || m.from;
   const act = async (a: T.Action, ok: string) => {
     setBusy(a.do);
     await store.run((api) => api.act(a), ok);
@@ -158,7 +161,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {can("decline") && <Button variant="outline" size="lg" className="min-h-12!" disabled={!!busy} onClick={() => setSheet("decline")}>Decline</Button>}
             {can("reply") && replyHere && <TextButton onClick={reply} icon={<IconArrowBackUp size={18} />}>Answer it yourself</TextButton>}
             {can("accept_always") && <TextButton onClick={() => setSheet("always")} disabled={!!busy}>{named ? "Always allow " + asker.name + " → " + agent + "…" : "Always allow tasks from " + asker.name + "…"}</TextButton>}
-            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy}>Always answer questions from {asker.name}…</TextButton>}
+            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy}>Approve {permissionName}…</TextButton>}
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
@@ -184,17 +187,17 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
       <ConfirmSheet open={sheet === "always"} onOpenChange={(v) => setSheet(v ? "always" : null)}
         title={named ? "Always allow " + asker.name + " → " + agent + "?" : "Always allow tasks from " + asker.name + "?"}
-        body={asker.name + " can give " + agent + " any task without asking you. It ends if their key changes. Turn it off in Settings → Permissions."}
+        body={permissionName + (permissionPerson ? " can give tasks from all current and future verified devices. Removing a device ends its access; key changes and person conflicts block it." : " can give tasks from this exact device key without asking you.") + " Your agent's normal permissions still apply. Turn it off in Settings → Permissions."}
         confirm="Always allow" onConfirm={() => act({ do: "accept_always", id: m.id }, "Allowed. Later tasks from " + asker.name + " run without asking.")}
         other="Just once" onOther={allow}>
-        <TurnOff cmd={"agentnet unapprove --tasks " + m.from} what="Turns it off. Their tasks wait for you again." />
+        <TurnOff cmd={"agentnet unapprove --tasks " + permissionTarget} what="Turns it off. Their tasks wait for you again." />
       </ConfirmSheet>
       <ConfirmSheet open={sheet === "approve"} onOpenChange={(v) => setSheet(v ? "approve" : null)}
-        title={"Always answer questions from " + asker.name + "?"}
-        body={capital(agent) + " answers questions from " + asker.name + " without asking you, with your setup minus editing tools. Tools you already allow keep their effects. Tasks still wait for you. Turn it off in Settings → Permissions."}
-        confirm="Always answer" onConfirm={() => act({ do: "approve", id: m.from }, asker.name + "’s questions are answered automatically from now on.")}
+        title={"Approve " + permissionName + "?"}
+        body={capital(agent) + " answers questions from " + permissionName + (permissionPerson ? " on all current and future verified devices." : " on this device.") + " Removing a device or a person conflict ends person permission; key changes block until trusted. Your question settings apply; tools you already allow keep their effects. Tasks still wait for you."}
+        confirm={"Approve " + permissionName} onConfirm={() => act({ do: "approve", id: permissionTarget }, permissionName + "’s questions are answered automatically from now on.")}
         other="Just this one" onOther={allow}>
-        <TurnOff cmd={"agentnet unapprove " + m.from} what="Turns it off. Their questions wait for you again." />
+        <TurnOff cmd={"agentnet unapprove " + permissionTarget} what="Turns it off. Their questions wait for you again." />
       </ConfirmSheet>
       <DeclineSheet open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : null)} who={asker.person} kind={kind}
         onDecline={(reason) => act({ do: "decline", id: m.id, reason }, "Declined. " + asker.person + " is told.")} />

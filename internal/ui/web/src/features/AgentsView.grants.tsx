@@ -1,7 +1,7 @@
 // Standing permissions: who your agent answers or works for without asking
-// you. Read from each device conversation's own record (approved,
-// task_grant), so only devices your agent has talked with show; each can
-// be turned off here. Shown in Agents and in Settings → Permissions.
+// you. Read saved person and advanced device grants directly, including
+// people with no recent conversation and frozen grants that can be revoked.
+// Shown in Agents and in Settings → Permissions.
 import { useEffect, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
@@ -10,7 +10,7 @@ import { Button } from "../ui/Button";
 import { capital, deviceWords } from "./Approvals.words";
 import { DeviceGrantConfirm, type GrantChange } from "./Trust";
 
-export interface Grant { peer: string; thread: string; approved: boolean; tasks: string }
+export interface Grant { peer: string; approved: boolean; tasks: string; person?: string; label?: string; questionStatus?: string }
 
 /** The newest device conversation with each other device. */
 export function latestThreads(o: T.Overview | null) {
@@ -27,8 +27,25 @@ export function latestThreads(o: T.Overview | null) {
 const lastGrants = new WeakMap<object, Grant[]>();
 
 function readGrants(store: Store, o: T.Overview): Promise<Grant[]> {
-  return Promise.all(latestThreads(o).map((t) => store.api.thread(t.id).then((x) => ({ peer: t.peer, thread: t.id, approved: x.approved, tasks: x.task_grant }), () => null)))
-    .then((rows) => rows.filter((r): r is Grant => !!r));
+  return store.api.approvals().then(v => {
+    const rows = new Map<string, Grant>();
+    for (const q of v.questions || []) {
+      const key = q.person || q.address;
+      if (!key) continue;
+      rows.set(key, { peer:key, approved:true, tasks:"", person:q.person, label:q.label, questionStatus:q.status });
+    }
+    for (const t of v.tasks || []) {
+      const key=t.person || t.address, had=rows.get(key);
+      rows.set(key, { ...had, peer:key, approved:had?.approved || false, tasks:t.status, person:t.person, label:t.label });
+    }
+    const personOf = new Map<string, string>();
+    for (const p of o?.people || []) for (const d of p.devices || []) if (p.person) personOf.set(d.address, p.person);
+    for (const t of latestThreads(o)) {
+      const person = personOf.get(t.peer);
+      if (!rows.has(t.peer) && !(person && rows.get(person)?.approved)) rows.set(t.peer, { peer: t.peer, approved: false, tasks: "" });
+    }
+    return [...rows.values()];
+  });
 }
 
 /** warmGrants reads the grants once ahead of the first screen that shows them. */
@@ -38,7 +55,7 @@ export function warmGrants(store: Store) {
   void readGrants(store, o).then((g) => { if (!lastGrants.has(store)) lastGrants.set(store, g); });
 }
 
-/** useGrants reads each peer's newest device conversation once per change (null while first reading). */
+/** useGrants reads saved standing grants once per change (null while first reading). */
 export function useGrants(): Grant[] | null {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
@@ -62,18 +79,18 @@ export function Permissions({ grants }: { grants: Grant[] | null }) {
   const answers = grants.filter((g) => g.approved);
   const others = grants.filter((g) => !g.approved); // known devices whose questions wait: answered automatically once turned on, before they ask
   const tasks = grants.filter((g) => g.tasks);
-  const name = (g: Grant) => capital(deviceWords(g.peer, o));
+  const name = (g: Grant) => g.person ? g.label || "Verified person" : capital(deviceWords(g.peer, o));
   return (
     <article className="rounded-2xl bg-surface p-4 stroke">
       <Grants title="Answers questions automatically from" empty="Nobody: every question waits for your OK." what="automatic answers"
-        rows={answers.map((g) => ({ key: g.peer, name: name(g), note: "", on: true, run: () => setChange({ what: "unapprove", g }) }))} />
+        rows={answers.map((g) => ({ key: g.peer, name: name(g), note: g.person ? (g.questionStatus === "active" ? "All current and future verified devices" : "Paused: " + g.questionStatus) : "This device only", on: true, run: () => setChange({ what: "unapprove", g }) }))} />
       {others.length > 0 && (
         <Grants title="Their questions wait for you" empty="" what="automatic answers"
           rows={others.map((g) => ({ key: g.peer, name: name(g), note: "", on: false, run: () => setChange({ what: "approve", g }) }))} />
       )}
       <div className="my-3 border-t-2 border-dashed border-ink/15" />
       <Grants title="Does tasks without asking from" empty="Nobody: every task waits for your OK." what="tasks without asking"
-        rows={tasks.map((g) => ({ key: g.peer, name: name(g), note: g.tasks === "active" ? "" : "Paused: " + g.tasks, on: true, run: () => setChange({ what: "revoke_tasks", g }) }))} />
+        rows={tasks.map((g) => ({ key: g.peer, name: name(g), note: g.tasks === "active" ? (g.person ? "All current and future verified devices" : "This device only") : "Paused: " + g.tasks, on: true, run: () => setChange({ what: "revoke_tasks", g }) }))} />
       <p className="pt-3 text-[13px] text-muted">In chats, people can ask an agent you let in. Its tasks wait for your OK unless you said otherwise when it joined.</p>
       <DeviceGrantConfirm change={change?.what || null} onClose={() => setChange(null)} peer={change?.g.peer || ""} thread={{ task_grant: change?.g.tasks }} />
     </article>

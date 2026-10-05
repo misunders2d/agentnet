@@ -54,8 +54,8 @@ Questions and tasks sent to you:
              (accept --always ID: also let this sender's future tasks run)
   decline    refuse a task or question
   cancel     stop your responder's current work on a message
-  approve    answer an agent's questions automatically (unapprove to stop);
-             approve --tasks: run its tasks without asking, for its exact key
+  approve    approve a verified person for automatic answers (unapprove stops);
+             approve --tasks: let that person's verified devices give tasks
   approvals  list who is approved, with task keys and whether they still hold
   resolve    close an item marked needs_human or interrupted (no reply is sent)
   remind     remind me later about a received message (list, done, cancel)
@@ -356,7 +356,7 @@ with ADDRESS#SESSION.`,
        agentnet person service
        agentnet person link
        agentnet person links
-       agentnet person approve [--native] ID
+       agentnet person approve [--native|--agent-host] ID
        agentnet person refuse ID
        agentnet person untrust ADDRESS
        agentnet person admin|unadmin ADDRESS
@@ -388,7 +388,12 @@ you approve with approve --native ID: say --native only for a computer that
 joined with the join command (running AgentNet), never for a browser. A
 browser's code comes from the server, so a browser must never be trusted;
 nothing in a link request tells the two apart, so only your --native says
-so. approve ID without --native, approving on the page or on another
+so. For an agent-only host, person approve --agent-host ID links it with
+person permissions but no authority to add devices. Only an own human device
+may enroll devices or change the signed human enrollment keys. Existing
+unannotated roster steps do not imply that every device is human.
+
+approve ID without --native, approving on the page or on another
 device, and a request approved already add nothing, and no command trusts
 a browser. untrust ADDRESS removes a device; to trust it again, link it
 again. person marks trusted devices. A device whose key changes is no
@@ -617,28 +622,35 @@ agents need a release with review notices: an older recipient shows it as an
 ordinary message, and "delivered" never means a person saw it. Off by
 default; only the local user sets it.`,
 
-	"approve": `Usage: agentnet approve ADDRESS
-       agentnet unapprove ADDRESS
-       agentnet approve --tasks ADDRESS
-       agentnet unapprove --tasks ADDRESS
+	"approve": `Usage: agentnet approve PERSON-or-ADDRESS
+       agentnet unapprove PERSON-or-ADDRESS
+       agentnet approve --tasks PERSON-or-ADDRESS
+       agentnet unapprove --tasks PERSON-or-ADDRESS
 
-Approve: questions from ADDRESS are answered automatically by your responder.
-Unapprove: stop that; their questions still waiting go back to "held".
-Question approval never covers tasks.
+Choose a verified person ID or their unique pinned name (quote a name with
+spaces). Approve Sergey covers all current and future devices in Sergey's
+current verified roster. A display/listed name never proves membership.
+Removing a device ends its person access; changed keys block until trusted,
+and a conflicting/frozen person cannot use the grant. Grants stay local.
 
---tasks: tasks from ADDRESS run without asking, with your responder's normal
-task permissions, for the key you trust for ADDRESS now (its fingerprint is
-printed; compare it with the sender's agentnet whoami if unsure). Tasks
-already waiting still need accept ID; failed or interrupted ones are never
-rerun by this. If that agent's key changes, the grant stops holding and its
-tasks wait for you again, even after you trust the new key: grant again to
-renew. unapprove --tasks: its tasks not yet started wait for you again; ones
-running now are listed and may finish unless you cancel them. Nothing a
-sender writes, and no name, grants this.`,
+Questions use your responder's normal question setup; approval never covers
+tasks. --tasks lets that person's verified devices give tasks under your
+responder's normal task permissions. Already waiting tasks still need accept
+ID; failed/interrupted work never reruns because a grant changed.
+
+An exact device address remains an advanced device-only grant. Its task
+permission is for the currently pinned key only; a changed device key needs
+trust and a new device grant. accept --always ID grants the task's verified
+person when present, otherwise that exact device key.
+
+Unapprove [--tasks] stops the corresponding local grant. Not-yet-started
+requests wait again; running work may finish unless canceled. Explicit
+one-time accept and separate device grants remain independent decisions.
+Nothing received, no label and no address prefix ever creates a grant.`,
 
 	"approvals": `Usage: agentnet approvals
 
-List agents whose questions are answered automatically, and agents whose
+List persons and explicit devices whose questions are answered automatically, and those whose
 tasks run without asking, with the granted key and whether the grant still
 holds (active, or inactive because the key changed or a change is pending).
 Changes nothing.`,

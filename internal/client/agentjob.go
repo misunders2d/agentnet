@@ -148,8 +148,7 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 			return verdictRun, "", nil
 		}
 		if r.Kind == envelope.KindQuestion {
-			var n int
-			if err := q.QueryRow(`SELECT count(*) FROM approvals WHERE address = ?`, r.Sender).Scan(&n); err != nil || n > 0 {
+			if approved, err := questionApproved(q, r.Sender, r.Key); err != nil || approved {
 				return verdictRun, "", err
 			}
 			return verdictAsk, "a question for your agent from a guest you have not approved: accept it to run it once (agentnet accept ID)", nil

@@ -722,7 +722,7 @@ export class Engine {
   // person, else the first current device.
   personView(p, extra) {
     return p && { person: p.person, label: p.label, address: p.address, fingerprint: p.fingerprint, state: p.state,
-      devices: (p.devices || []).map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint, this: d.address === this.address })),
+      devices: (p.devices || []).map((d) => ({ address: d.address, name: d.address.split("/")[1], fingerprint: d.fingerprint, human:(p.human_keys || []).includes(d.fingerprint), this: d.address === this.address })),
       ...extra };
   }
 
@@ -750,7 +750,7 @@ export class Engine {
       const h = await wire.rosterHash(st);
       if (!steps2.some((x) => x.hash === h)) steps2.push({ hash: h, devices: await Promise.all(st.devices.map(async (d) => d.address + "|" + (await wire.fingerprint(d)))) });
     }
-    return { person: r.person, label: r.label, seq: r.seq, hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
+    return { person: r.person, label: r.label, seq: r.seq, human_keys:await wire.rosterHumans(r), hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
       address: one.address, fingerprint: one.fingerprint, state, published: before ? !!before.published : false };
   }
 
@@ -862,6 +862,7 @@ export class Engine {
   // only the link carries (the server never sees it). It opens this page.
   async newDeviceLink() {
     if (!this.me) throw new Error("Set up your person first.");
+    if(!await wire.rosterHuman(await wire.parseRoster(this.me.json),this.fp))throw Error("Only your own human devices may link another device; agent hosts cannot.");
     if (!this.me.published) {
       try {
         await this.publishPerson();
@@ -930,7 +931,7 @@ export class Engine {
   // signs the roster step that adds the device and publishes it; one the
   // server did not take yet stays approved and is published when this page
   // connects (never as a second, competing step).
-  async decideLink(id, accept) {
+  async decideLink(id, accept, agentHost = false) {
     const book = await this.linkBook();
     const r = book.requests[id];
     if (!r) throw new Error("No device link request " + id + " here.");
@@ -956,7 +957,10 @@ export class Engine {
       throw new Error("Your devices changed meanwhile: make a new link and try again.");
     }
     const prev = await wire.parseRoster(this.me.json);
-    const next = await wire.nextRoster(this.keys, this.address, prev, [...prev.devices, await wire.parsePublic(JSON.parse(r.device))], wire.unb64(r.join, "join"));
+    if(!await wire.rosterHuman(prev,this.fp))throw Error("Only your own human devices may approve another device; agent hosts cannot.");
+    const dev=await wire.parsePublic(JSON.parse(r.device)), humans=await wire.rosterHumans(prev);
+    if(!agentHost)humans.push(await wire.fingerprint(dev));
+    const next = await wire.nextRoster(this.keys, this.address, prev, [...prev.devices, dev], wire.unb64(r.join, "join"),prev.label,humans);
     await wire.verifyNext(next, prev);
     await this.setRequest(id, "approved", { roster: wire.rosterJSON(next) });
     return this.publishLink(id);
@@ -7118,7 +7122,8 @@ export class Engine {
     const heldText = "Held for you: nothing runs in this browser. Answer it here if you want to.";
     const peerWords = (await this.peerWordsFn())(peer); // the sentences name a person and device, never the address
     const topic = this.topicSummary(g, await this.topicLocals(), Math.floor(this.now() / 1000), pin);
-    return { id: g[0].id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
+    const permissionPerson=pin && !pin.pending ? [this.me,...await this.store.all("persons")].find(p=>p && ["self","pinned"].includes(p.state)&&p.devices.some(d=>d.address===peer&&d.fingerprint===pin.fingerprint)) : null;
+    return { ...(permissionPerson?{permission_person:this.personView(permissionPerson)}:{}), id: g[0].id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
       messages: await Promise.all(g.map(async (m) => {
         const inbound = m.dir === "in";
         return { id: m.id, dir: m.dir, from: inbound ? m.from : this.address, to: inbound ? this.address : m.to, kind: m.kind, body: m.body,
@@ -7336,7 +7341,7 @@ export class Engine {
       return this.renamePerson(body.label);
     case "/api/person": return this.createPerson(body.label);
     case "/api/device/link": return this.newDeviceLink();
-    case "/api/device/decide": return this.decideLink(body.id, !!body.accept);
+    case "/api/device/decide": return this.decideLink(body.id, !!body.accept, !!body.agent_host);
     case "/api/device/remove": return this.removeDevice(body.address);
     case "/api/device/service": throw new Error("A browser is always a person's device: a service joins from a computer with AgentNet.");
     case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : this.refreshThread(body.id);

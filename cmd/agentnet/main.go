@@ -1072,13 +1072,21 @@ func runTaskGrant(a *client.Agent, cmd, arg string) error {
 			return err
 		}
 		fmt.Printf("accept %s\n", arg)
-		fmt.Printf("tasks from %s (key %s) now run without asking; %s. Stop: agentnet unapprove --tasks %s\n", sender, fp, perms, sender)
+		if protocol.ValidID(sender) {
+			fmt.Printf("tasks from %q's current and future verified devices now run without asking; %s. Stop: agentnet unapprove --tasks %s\n", a.PermissionLabel(sender), perms, sender)
+		} else {
+			fmt.Printf("tasks from %s (key %s) now run without asking; %s. Stop: agentnet unapprove --tasks %s\n", sender, fp, perms, sender)
+		}
 	case "approve":
 		fp, err := a.GrantTasks(arg)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("tasks from %s (key %s) now run without asking; %s. Tasks already waiting still need accept ID. Stop: agentnet unapprove --tasks %s\n", arg, fp, perms, arg)
+		if protocol.ValidID(fp) {
+			fmt.Printf("tasks from %q's current and future verified devices now run without asking; %s. Tasks already waiting still need accept ID. Stop: agentnet unapprove --tasks %s\n", a.PermissionLabel(fp), perms, fp)
+		} else {
+			fmt.Printf("tasks from %s (key %s) now run without asking; %s. Tasks already waiting still need accept ID. Stop: agentnet unapprove --tasks %s\n", arg, fp, perms, arg)
+		}
 	case "unapprove":
 		running, err := a.RevokeTasks(arg)
 		if err != nil {
@@ -1123,6 +1131,18 @@ func runApprovals(a *client.Agent) error {
 	for _, t := range ts {
 		fmt.Printf("tasks      %s  key %s  %s\n", t.Address, t.Fingerprint, t.Status)
 	}
+	pgs, err := a.PersonGrants()
+	if err != nil {
+		return err
+	}
+	for _, g := range pgs {
+		if g.Questions {
+			fmt.Printf("questions  person %s %q (%s)\n", g.Person, g.Label, g.State)
+		}
+		if g.Tasks {
+			fmt.Printf("tasks      person %s %q (%s; current verified devices)\n", g.Person, g.Label, g.State)
+		}
+	}
 	// An agent of this device accepted into a conversation runs, without
 	// asking, the tasks of the member keys its invitation named: accepting
 	// it was that grant, which stands until it is dismissed.
@@ -1145,7 +1165,7 @@ func runApprovals(a *client.Agent) error {
 				strings.Join(taskGrantees(a, p), ", "), c.ID, p.PID, grantEnd(p))
 		}
 	}
-	if len(qs) == 0 && len(ts) == 0 && granted == 0 {
+	if len(qs) == 0 && len(ts) == 0 && len(pgs) == 0 && granted == 0 {
 		fmt.Println("none: every question and task waits for you")
 	}
 	return nil

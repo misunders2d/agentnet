@@ -255,6 +255,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 		for _, a := range approved {
 			if a == c.Peer {
 				t.Approved = true
+				t.QuestionTarget = c.Peer
 			}
 		}
 	}
@@ -262,8 +263,37 @@ func (l *Live) Thread(id string) (Thread, error) {
 		for _, g := range grants {
 			if g.Address == c.Peer {
 				t.TaskGrant = g.Status
+				t.TaskTarget = c.Peer
 			}
 		}
+	}
+	if person, qg, tg, e := l.a.PersonGrantForPeer(c.Peer, k.Pinned); e != nil {
+		return t, e
+	} else if person != "" {
+		if people, e := l.a.KnownPersons(); e != nil {
+			return t, e
+		} else {
+			for _, p := range people {
+				if p.Person == person {
+					v := personView(p)
+					t.PermissionPerson = &v
+					break
+				}
+			}
+		}
+		if qg {
+			t.Approved = true
+			t.QuestionTarget = person
+		}
+		if tg {
+			t.TaskGrant = "active"
+			t.TaskTarget = person
+		}
+	}
+	if questions, _, e := l.a.PermissionState(c.Peer, k.Pinned); e != nil {
+		return t, e
+	} else {
+		t.Approved = questions
 	}
 	replied := map[string]bool{}
 	for _, m := range c.Messages {
@@ -417,7 +447,11 @@ func (l *Live) Act(x Action) (string, error) {
 	case DoAcceptAlways:
 		var sender, fp string
 		sender, fp, err = l.a.AcceptAlways(x.ID)
-		note = fmt.Sprintf("Accepted. Later tasks from %s's key %s run without asking.", sender, shortFP(fp))
+		if protocol.ValidID(sender) {
+			note = "Accepted. Later tasks from " + l.a.PermissionLabel(sender) + "'s current and future verified devices run without asking."
+		} else {
+			note = fmt.Sprintf("Accepted. Later tasks from %s's key %s run without asking.", sender, shortFP(fp))
+		}
 	case DoDecline:
 		_, err = l.a.Decline(ctx, x.ID, strings.TrimSpace(x.Reason))
 		note = "Declined."
@@ -429,10 +463,10 @@ func (l *Live) Act(x Action) (string, error) {
 		note = "Stopping your responder."
 	case DoApprove:
 		err = l.a.Approve(x.ID)
-		note = x.ID + "'s future questions are answered automatically."
+		note = l.a.PermissionLabel(x.ID) + "'s future questions are answered automatically."
 	case DoUnapprove:
 		err = l.a.Unapprove(x.ID)
-		note = x.ID + "'s questions wait for you again."
+		note = l.a.PermissionLabel(x.ID) + "'s questions wait for you again."
 	case DoTrust:
 		if x.Key == "" {
 			return "", Refuse("Compare the fingerprint first: trust names the key you compared.")

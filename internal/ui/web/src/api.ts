@@ -21,6 +21,7 @@ export function api(host: Host) {
     // topics=1: archived topics are counted, not listed (they are paged through topics below).
     overview: () => get<T.Overview>("/api/overview?topics=1"),
     dm: (id: string) => get<T.DMThread>(q("/api/dm", { id })),
+    approvals: () => get<T.ApprovalsView>("/api/approvals"),
     thread: (id: string) => get<T.Thread>(q("/api/thread", { id })),
     refresh: (id: string) => post<T.Presence>("/api/refresh", { id }),
 

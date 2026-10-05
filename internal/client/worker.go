@@ -197,6 +197,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 					return
 				}
 			}
+			if why := a.personGrantStop(j); why != "" {
+				stopWhy = why
+				cancel()
+				return
+			}
 			if j.Receiver != nil {
 				if why := a.receiverStop(j); why != "" {
 					stopWhy = why
@@ -288,6 +293,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	cancel()
 	<-watchDone
+	if stopWhy == "" {
+		stopWhy = a.personGrantStop(j)
+	}
 	if events != nil {
 		events.flush()
 	}

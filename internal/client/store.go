@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -414,6 +414,9 @@ func (s *store) pin(p identity.Public) error {
 			return err
 		}
 	}
+	if err = demotePersonJobs(tx); err != nil {
+		return err
+	}
 	return s.done(tx.Commit())
 }
 
@@ -430,6 +433,9 @@ func (s *store) setPending(p identity.Public) error {
 		return err
 	}
 	if err := demoteGranted(tx, p.Address, "", "the sender's key may have changed"); err != nil {
+		return err
+	}
+	if err = demotePersonJobs(tx); err != nil {
 		return err
 	}
 	return s.done(tx.Commit())
@@ -663,11 +669,11 @@ func initialState(db querier, in envelope.Inner, verifiedBy string) (string, err
 	}
 	switch in.Kind {
 	case envelope.KindQuestion:
-		var n int
-		if err := db.QueryRow(`SELECT count(*) FROM approvals WHERE address = ?`, in.From).Scan(&n); err != nil {
+		approved, err := questionApproved(db, in.From, verifiedBy)
+		if err != nil {
 			return "", err
 		}
-		if n > 0 {
+		if approved {
 			return statePending, nil
 		}
 		return stateHeld, nil
@@ -1054,9 +1060,10 @@ type job struct {
 	Receiver *ReplyReceiverBinding // explicit local continuation, separate from wire author
 
 	// A request to this device's agent in a DM (agentjob.go).
-	Conv, PID, Key string // Key: the fingerprint that verified it
-	Target         *envelope.Target
-	Local          bool // asked here, by this device's own person
+	PermissionPerson string // a person grant's exact origin, for running membership fences
+	Conv, PID, Key   string // Key: the fingerprint that verified it
+	Target           *envelope.Target
+	Local            bool // asked here, by this device's own person
 
 	run *runDir // its run folder while it runs (runfiles.go)
 }
@@ -1085,7 +1092,7 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 		err = tx.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL,
    attempts = attempts + 1, last_attempt_at = unixepoch()
    WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
-    OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND sender IN (SELECT address FROM approvals))
+    OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
      OR (kind = ? AND `+taskGrantHolds+`))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     ORDER BY received_at, id LIMIT 1)
@@ -1105,6 +1112,26 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 			return job{}, false, err
 		}
 		changed = true
+		if j.Kind == envelope.KindQuestion || j.Kind == envelope.KindTask {
+			person, e := permissionPersonIn(tx, j.From, j.Key)
+			if e != nil {
+				return job{}, false, e
+			}
+			if person != "" {
+				kind := "questions"
+				if j.Kind == envelope.KindTask {
+					kind = "tasks"
+				}
+				var granted bool
+				e = tx.QueryRow(`SELECT `+kind+` FROM person_grants WHERE person=?`, person).Scan(&granted)
+				if e != nil && !errors.Is(e, sql.ErrNoRows) {
+					return job{}, false, e
+				}
+				if granted {
+					j.PermissionPerson = person
+				}
+			}
+		}
 		if target != "" {
 			j.Target = &envelope.Target{}
 			if json.Unmarshal([]byte(target), j.Target) != nil {

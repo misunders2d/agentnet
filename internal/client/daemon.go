@@ -450,6 +450,23 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 				return a.hold(env, reasonInvalid)
 			}
 		}
+		// A person grant needs verified membership before initialState, including
+		// a newly linked device. A current grant refreshes its signed chain at
+		// this request boundary; a Hub outage retries custody, never lends stale
+		// membership authority. This is not periodic polling.
+		if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
+			if p, e := a.personOfKey(ctx, in.From, sender); e == nil {
+				var grants int
+				if e = a.store.db.QueryRow(`SELECT count(*) FROM person_grants WHERE person=?`, p.info.Person).Scan(&grants); e != nil {
+					return e
+				}
+				if grants > 0 {
+					if _, e = a.refreshPerson(ctx, p.info.Person, false); e != nil {
+						return e
+					}
+				}
+			}
+		}
 		// The key that verified it is the evidence, not whatever is pinned
 		// by the time it is stored.
 		if err := a.store.addInbox(in, sender.Fingerprint()); err != nil {

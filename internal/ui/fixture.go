@@ -748,3 +748,39 @@ func (f *Fixture) HubWorkspaceName() string {
 	defer f.mu.Unlock()
 	return f.workspace.Name
 }
+
+// Approvals exposes the demo's existing in-memory device decisions through the
+// same host contract as the daemon. It never reads real grants or runs work.
+func (f *Fixture) Approvals() (ApprovalsView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v := ApprovalsView{Questions: []QuestionApproval{}, Tasks: []TaskGrantView{}, Participations: []ParticipationGrant{}}
+	var addresses []string
+	for address := range f.peers {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	for _, address := range addresses {
+		p := f.peers[address]
+		if p.approved {
+			v.Questions = append(v.Questions, QuestionApproval{Address: address})
+		}
+		if p.taskGrant != "" {
+			v.Tasks = append(v.Tasks, TaskGrantView{Address: address, Fingerprint: p.key.Pinned, Status: p.taskGrant})
+		}
+	}
+	return v, nil
+}
+func (f *Fixture) RevokeApproval(r ApprovalRevoke) (string, error) {
+	if r.Person != "" || r.PID != "" {
+		return "", Refuse("Choose an exact demo device grant.")
+	}
+	switch r.Kind {
+	case "question":
+		return f.Act(Action{Do: DoUnapprove, ID: r.Address})
+	case "task":
+		return f.Act(Action{Do: DoRevokeTasks, ID: r.Address})
+	default:
+		return "", Refuse("Choose an exact demo device grant.")
+	}
+}

@@ -333,9 +333,25 @@ func (a *Agent) daemonRuns() bool {
 	return false
 }
 
-// Approve lets questions from address be answered automatically.
+// Approve allows future questions from a verified person or explicit device.
 func (a *Agent) Approve(address string) error {
-	_, err := a.store.db.Exec(`INSERT OR IGNORE INTO approvals(address, added_at) VALUES(?, ?)`, address, time.Now().Unix())
+	target, err := a.PermissionTarget(address)
+	if err != nil {
+		return err
+	}
+	if isPersonTarget(target) {
+		tx, e := a.store.db.Begin()
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback()
+		if e = setPersonGrant(tx, target, "questions", true); e != nil {
+			return e
+		}
+		err = tx.Commit()
+	} else {
+		_, err = a.store.db.Exec(`INSERT OR IGNORE INTO approvals(address, added_at) VALUES(?, ?)`, target, time.Now().Unix())
+	}
 	if err == nil {
 		notifyDaemon(a.home)
 	}
@@ -345,28 +361,40 @@ func (a *Agent) Approve(address string) error {
 // Approvals counts the agents whose questions are answered automatically.
 func (a *Agent) Approvals() (int, error) {
 	var n int
-	err := a.store.db.QueryRow(`SELECT count(*) FROM approvals`).Scan(&n)
+	err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM approvals)+(SELECT count(*) FROM person_grants WHERE questions=1)`).Scan(&n)
 	return n, err
 }
 
 // NoApprovals is what a responder does with no agent approved.
-const NoApprovals = "no agent approved yet, so every question waits for you (agentnet inbox --review); approve one with agentnet approve ADDRESS only if the person asks"
+const NoApprovals = "no agent approved yet, so every question waits for you (agentnet inbox --review); approve one with agentnet approve PERSON-or-ADDRESS only if the person asks"
 
 // Unapprove stops automatic answers for address. Its questions still
 // waiting for the worker go back to held (the worker also re-checks approval
 // when it claims); ones you accepted explicitly stay accepted, and one
 // already running may finish unless cancelled.
 func (a *Agent) Unapprove(address string) error {
+	target, e := a.PermissionTarget(address)
+	if e != nil && !isPersonTarget(address) {
+		return e
+	}
+	if isPersonTarget(address) {
+		target = address
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM approvals WHERE address = ?`, address); err != nil {
-		return err
+	if isPersonTarget(target) {
+		if err = setPersonGrant(tx, target, "questions", false); err != nil {
+			return err
+		}
+	} else {
+		if _, err = tx.Exec(`DELETE FROM approvals WHERE address=?`, target); err != nil {
+			return err
+		}
 	}
-	if _, err := tx.Exec(`UPDATE inbox SET state = ? WHERE sender = ? AND kind = ? AND state = ?`,
-		stateHeld, address, envelope.KindQuestion, statePending); err != nil {
+	if err = demotePersonJobs(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

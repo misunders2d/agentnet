@@ -2942,8 +2942,8 @@ function renderPeerChips(t) {
     title: t.approved ? "Their questions are answered automatically by your responder" : "Their questions wait for you",
     onclick: () => approvalDialog(t) }, t.approved ? "I answer their questions" : "Their questions wait for me"));
   if (t.task_grant) {
-    chips.push(el("button", { type: "button", class: "peer-chip on", title: "Tasks from this exact key run without asking: " + t.task_grant,
-      onclick: () => revokeDialog(t) }, t.task_grant === "active" ? "Tasks: always (this key)" : "Tasks: grant on hold"));
+    chips.push(el("button", { type: "button", class: "peer-chip on", title: (t.task_target === t.permission_person?.person ? "Tasks from this person’s current verified devices run without asking: " : "Tasks from this exact key run without asking: ") + t.task_grant,
+      onclick: () => revokeDialog(t) }, t.task_grant === "active" ? (t.task_target === t.permission_person?.person ? "Tasks: always (this person)" : "Tasks: always (this key)") : "Tasks: grant on hold"));
   }
   fill($("peer-chips"), ...chips);
 }
@@ -3279,6 +3279,7 @@ const isReport = (m) => m.dir === "in" && m.kind === "message" && m.status === "
 function actionButton(a, m, t, primary) {
   let label = actionLabel[a];
   if (a === "resolve" && isReport(m)) label = "Dismiss report…";
+  if (a === "approve" && t.permission_person) label="Approve " + t.permission_person.label + "…";
   if (a === "accept" && m.kind === "question") label = "Let your responder answer…";
   if (a === "accept" && ["needs_human", "interrupted", "failed", "cancelled"].includes(m.state)) label = "Run your responder again…";
   return el("button", { type: "button", class: "act" + (primary ? " go" : ""), onclick: () => decide(a, m, t) }, label);
@@ -3311,8 +3312,8 @@ function decide(a, m, t) {
           el("dt", {}, "Permissions"), el("dd", {}, m.kind === "task"
             ? "Its normal permissions. It is not sandboxed and can change files."
             : "Question mode: your harness's own setup without editing tools or anything needing a new approval. Tools you already allow keep their effects."),
-          always && [el("dt", {}, "From now on"), el("dd", {}, "Later tasks from " + m.from + "'s current key also run without asking, until you revoke it.")]),
-        el("label", { class: "check" }, check, el("span", {}, always ? "I want this and later tasks from this key to run." : "I have read this and want it to run.")),
+          always && [el("dt", {}, "From now on"), el("dd", {}, "Later tasks from " + (t.permission_person?.label || deviceWords(m.from)) + (t.permission_person ? "’s current and future verified devices" : "’s current key") + " also run without asking, until you revoke it.")]),
+        el("label", { class: "check" }, check, el("span", {}, always ? (t.permission_person ? "I allow this person's current and future verified devices to give tasks." : "I want this and later tasks from this key to run.") : "I have read this and want it to run.")),
         el("p", { class: "hint" }, "In a terminal: agentnet accept " + (always ? "--always " : "") + m.id)],
       ok: always ? "Run and always accept" : "Run", gate: check, run: () => act({ do: a, id: m.id }),
     });
@@ -3343,22 +3344,21 @@ function decide(a, m, t) {
 }
 
 function approvalDialog(t) {
-  if (t.approved) {
-    return dialog({ title: "Stop answering " + t.peer + "'s questions automatically?",
-      body: [el("p", {}, "Their questions will wait for you again. Ones already running may finish unless you stop them.")],
-      ok: "Stop automatic answers", run: () => act({ do: "unapprove", id: t.peer }) });
-  }
-  return dialog({ title: "Answer " + t.peer + "'s questions automatically?",
-    body: [el("p", {}, "From now on your responder answers questions from " + t.peer + " without asking you, with your harness's own setup minus editing tools and anything needing a new approval; tools you already allow keep their effects. " +
-      (t.task_grant === "active" ? "Tasks are not affected: those from this key already run without asking, under the standing permission you gave." : "Tasks still wait for you.")),
-      el("p", {}, "Questions already waiting stay waiting: answer them or let your responder answer each one.")],
-    ok: "Answer automatically", run: () => act({ do: "approve", id: t.peer }) });
+  const person=t.permission_person, who=person?.label || deviceWords(t.peer), target=person?.person || t.peer;
+  if (t.approved) return dialog({ title:"Stop answering " + who + "’s questions automatically?",
+    body:[el("p",{},"Their questions wait for you again. A run already started may finish unless stopped.")],
+    ok:"Stop automatic answers",run:()=>act({do:"unapprove",id:t.question_target || target}) });
+  return dialog({ title:"Approve " + who + "?",
+    body:[el("p",{},"Your responder answers " + who + "’s questions " + (person ? "from all current and future verified devices." : "from this device only.") + " Removing a device ends person access; key changes and person conflicts block it. Your normal question settings apply; tools you already allow keep their effects. Tasks still wait for you."),
+      el("p",{},"Questions already waiting stay waiting; allow one separately."),el("p",{class:"hint"},"In a terminal: agentnet approve " + target)],
+    ok:"Approve " + who,run:()=>act({do:"approve",id:target}) });
 }
 
 function revokeDialog(t) {
-  dialog({ title: "Stop running " + t.peer + "'s tasks without asking?",
-    body: [el("p", {}, "Their tasks will wait for you again. A task already running is not stopped by this.")],
-    ok: "Revoke", run: () => act({ do: "revoke_tasks", id: t.peer }) });
+  const who=t.permission_person?.label || deviceWords(t.peer);
+  dialog({title:"Stop running " + who + "’s tasks without asking?",
+    body:[el("p",{},"Their tasks wait for you again. A task already running may finish unless stopped.")],
+    ok:"Revoke",run:()=>act({do:"revoke_tasks",id:t.task_target || t.peer}) });
 }
 
 function trustDialog(t) {

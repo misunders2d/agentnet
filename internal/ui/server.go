@@ -618,9 +618,10 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var v struct {
-		ID      string `json:"id"`
-		Accept  bool   `json:"accept"`
-		Address string `json:"address"`
+		ID        string `json:"id"`
+		Accept    bool   `json:"accept"`
+		AgentHost bool   `json:"agent_host,omitempty"`
+		Address   string `json:"address"`
 	}
 	if !readJSON(w, r, &v) {
 		return
@@ -633,6 +634,16 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		l, err := p.NewDeviceLink()
 		writeResult(w, l, err)
 	case "decide":
+		if v.AgentHost {
+			ap, ok := s.p.(interface{ ApproveAgentLink(string) (string, error) })
+			if !ok || !v.Accept {
+				writeErr(w, Refuse("Approve an agent host from your own human device."))
+				return
+			}
+			note, err := ap.ApproveAgentLink(v.ID)
+			writeResult(w, map[string]string{"note": note}, err)
+			return
+		}
 		note, err := p.DecideLink(v.ID, v.Accept)
 		writeResult(w, map[string]string{"note": note}, err)
 	case "remove":

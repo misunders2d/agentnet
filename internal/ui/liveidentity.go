@@ -55,7 +55,7 @@ func (l *Live) identityOverview(o *Overview) error {
 func deviceViews(devs []client.DeviceInfo) []DeviceView {
 	var out []DeviceView
 	for _, d := range devs {
-		out = append(out, DeviceView{Address: d.Address, Name: d.Name, Fingerprint: d.Fingerprint, This: d.This})
+		out = append(out, DeviceView{Address: d.Address, Name: d.Name, Fingerprint: d.Fingerprint, This: d.This, Human: d.Human})
 	}
 	return out
 }
@@ -185,4 +185,15 @@ func syncedFrom(m client.ConvMessage) string {
 		return m.SyncedFrom
 	}
 	return ""
+}
+
+// ApproveAgentLink makes the local human enrollment choice without allowing
+// the agent host to enroll further devices.
+func (l *Live) ApproveAgentLink(id string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
+	defer cancel()
+	if err := l.a.ApproveAgentLink(ctx, id); err != nil {
+		return "", Refuse(linkWords(err))
+	}
+	return "Agent host linked; it shares person permissions but cannot add devices.", nil
 }

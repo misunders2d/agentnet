@@ -277,7 +277,8 @@ type DeviceView struct {
 	Address     string `json:"address"`
 	Name        string `json:"name"` // the device's own name, as its address shows it
 	Fingerprint string `json:"fingerprint"`
-	This        bool   `json:"this,omitempty"` // this installation
+	This        bool   `json:"this,omitempty"`  // this installation
+	Human       bool   `json:"human,omitempty"` // may enroll devices; false for an agent host
 }
 
 // LinkRequest is a new device asking to join this person, until decided.
@@ -989,12 +990,15 @@ func holdCode(reason string) string {
 
 // Thread is one conversation with one peer.
 type Thread struct {
-	ID        string    `json:"id"`
-	Peer      string    `json:"peer"`
-	Key       PeerKey   `json:"key"`
-	Approved  bool      `json:"approved"`   // questions from this peer are answered automatically
-	TaskGrant string    `json:"task_grant"` // "" none, "active", or why a grant does not hold
-	Messages  []Message `json:"messages"`
+	ID               string      `json:"id"`
+	Peer             string      `json:"peer"`
+	Key              PeerKey     `json:"key"`
+	Approved         bool        `json:"approved"`                    // questions from this peer are answered automatically
+	PermissionPerson *PersonView `json:"permission_person,omitempty"` // verified current grant target
+	QuestionTarget   string      `json:"question_target,omitempty"`   // exact saved grant responsible
+	TaskTarget       string      `json:"task_target,omitempty"`
+	TaskGrant        string      `json:"task_grant"` // "" none, "active", or why a grant does not hold
+	Messages         []Message   `json:"messages"`
 	// Topic is this thread as a topic, archived or not (Topics providers).
 	Topic *ThreadSummary `json:"topic,omitempty"`
 }
@@ -1107,11 +1111,11 @@ type Action struct {
 const (
 	DoReply        = "reply"         // answer a received item by hand (takes it over)
 	DoAccept       = "accept"        // run a task once, let the responder answer a held question, or run again
-	DoAcceptAlways = "accept_always" // run this task and let later tasks from this exact key run
+	DoAcceptAlways = "accept_always" // run this task and grant its verified person (or exact device key)
 	DoDecline      = "decline"
 	DoResolve      = "resolve" // close a needs-human item without sending anything
 	DoCancel       = "cancel"
-	DoApprove      = "approve"   // ID = peer: answer its questions automatically
+	DoApprove      = "approve"   // ID = verified person or explicit device: answer future questions
 	DoUnapprove    = "unapprove" // ID = peer
 	DoTrust        = "trust"     // ID = peer: trust its changed key
 	DoRevokeTasks  = "revoke_tasks"

@@ -950,7 +950,7 @@ function strictRecord(json, max, what, fields) {
 function marshalRoster(r, withSig) {
   return '{"person":' + goString(r.person) + ',"label":' + goString(r.label) + ',"seq":' + goInt(r.seq, "seq") +
     ',"prev":' + goString(r.prev) + ',"devices":' + (r.devices ? "[" + r.devices.map(marshalPublic).join(",") + "]" : "null") +
-    (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + "}";
+    (r.human_keys?.length ? ',"human_keys":[' + r.human_keys.map(goString).join(",") + ']' : "") + (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + "}";
 }
 export const rosterJSON = (r) => marshalRoster(r, true);
 const rosterCanonical = (r) => utf8.encode(personDomain + marshalRoster(r, false));
@@ -991,6 +991,10 @@ export async function validateRoster(r) {
     addrs.add(d.address);
     fps.add(fp);
   }
+  const humans=await rosterHumans(r);
+  if(!humans.length)throw Error("person: keep at least one human device");
+  const hs=new Set();
+  for(const fp of humans){if(!fps.has(fp)||hs.has(fp))throw Error("person: human keys must name distinct current devices");hs.add(fp);}
 }
 
 // rosterDevice is the device of r with key fingerprint fp, or null.
@@ -998,6 +1002,13 @@ export async function rosterDevice(r, fp) {
   for (const d of r.devices) if ((await fingerprint(d)) === fp) return d;
   return null;
 }
+
+export async function rosterHumans(r) {
+  if(r.human_keys?.length)return [...r.human_keys];
+  if(r.seq===0&&r.devices.length===1)return [await fingerprint(r.devices[0])];
+  return await rosterDevice(r,r.by)?[r.by]:[];
+}
+export const rosterHuman=async(r,fp)=>(await rosterHumans(r)).includes(fp);
 
 // rosterHas reports whether the device at address with fingerprint fp is in r.
 export async function rosterHas(r, address, fp) {
@@ -1018,10 +1029,11 @@ export async function newRoster(keys, address, label) {
 // nextRoster is the step after prev with devices, signed by this device
 // (at address, a device of prev); join is an added device's consent (null
 // when none is added).
-export async function nextRoster(keys, address, prev, devices, join, label = prev.label) {
+export async function nextRoster(keys, address, prev, devices, join, label = prev.label, humanKeys = null) {
   const by = await fingerprint(await publicEntry(keys, address));
   if (!(await rosterHas(prev, address, by))) throw new Error("person: this device is not in the roster it would follow");
-  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, by, sig: null, join: join || null };
+  const kept=new Set(await Promise.all(devices.map(fingerprint)));
+  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, human_keys:humanKeys || (await rosterHumans(prev)).filter(fp=>kept.has(fp)), by, sig: null, join: join || null };
   await validateRoster(r);
   r.sig = await signBytes(keys, rosterCanonical(r));
   if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large");
@@ -1029,10 +1041,10 @@ export async function nextRoster(keys, address, prev, devices, join, label = pre
 }
 
 export async function parseRoster(json) {
-  const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array",
+  const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array", human_keys:"array",
     by: "string", sig: "string", join: "string" });
   const devices = f.devices ? await Promise.all(f.devices.map((d) => parsePublicShape(d))) : null;
-  const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", devices, by: f.by || "",
+  const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", devices, human_keys:f.human_keys || [], by: f.by || "",
     sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null };
   await validateRoster(r);
   fitsRecord(rosterJSON(r), MaxPersonRecord, "person");
@@ -1062,6 +1074,8 @@ export async function verifyNext(r, prev) {
     if (!old && added) throw new Error("person: more than one device added in one step");
     if (!old) added = d;
   }
+  const before=(await rosterHumans(prev)).sort(),after=(await rosterHumans(r)).sort();
+  if((added || JSON.stringify(before)!==JSON.stringify(after))&&!await rosterHuman(prev,r.by))throw Error("person: only an own human device may add devices or change human enrollment authority");
   if (!added) {
     if (r.join && r.join.length) throw new Error("person: a join without an added device");
     return null;

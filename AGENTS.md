@@ -35,10 +35,14 @@ program, `agentnet`, that is both the laptop client and the Hub.
   If an answer needs an action the harness may not take, the result is
   needs-human, not an invented answer. **Tasks** run only after the
   recipient accepts them (`accept ID`), or when the recipient has granted
-  that sender's exact verified key standing permission (`approve --tasks`,
-  `accept --always`); a grant is local only, never set by anything received
-  or by names, stops holding when that key changes (until granted again) and
-  never reruns failed or interrupted work. Self-invite consent (owner
+  that sender's verified person or exact device key standing permission
+  (`approve --tasks`, `accept --always`). Person grants cover current and
+  future devices of the current verified roster; removed devices lose that
+  access, pending key changes and frozen persons fail closed. Only own human
+  keys may enroll roster devices, never agent hosts. Grants are local only,
+  never set by received names or messages. Exact device grants need renewal
+  after a changed key is trusted. Neither kind of grant
+  reruns failed or interrupted work. Self-invite consent (owner
   decision D3, docs/plans/ROOM_V1.md §5) is the one invite accepted without
   a click: the host person's own agent, invited from the host device or an
   own device the person trusted there with `person approve --native` (never

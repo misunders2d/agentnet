@@ -18,7 +18,7 @@ import (
 // runPerson shows or sets up this installation's person and its devices
 // (agentnet help person).
 func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
-	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve [--native] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
+	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve [--native|--agent-host] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
 	if len(args) == 0 {
 		p, ok, err := a.Person()
 		if err != nil {
@@ -92,6 +92,12 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		for _, l := range links {
 			fmt.Fprintf(stdout, "%s  %s  %s  key %s  asked %s\n", l.ID, l.State, l.Address, l.Fingerprint, time.Unix(l.RequestedAt, 0).Format("2006-01-02 15:04"))
 		}
+		return nil
+	case args[0] == "approve" && len(args) == 3 && args[1] == "--agent-host":
+		if err := a.ApproveAgentLink(ctx, args[2]); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "agent host linked to your person; it shares your permissions but cannot add devices")
 		return nil
 	case args[0] == "approve" && len(args) == 3 && args[1] == "--native":
 		if err := a.ApproveNativeLink(ctx, args[2]); err != nil {

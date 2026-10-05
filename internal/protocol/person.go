@@ -39,14 +39,18 @@ import (
 //     device of seq n-1 that signed it. At most one device is added per
 //     step; an added device consents with join, its signature over
 //     JoinBytes (the person, seq, prev and its own entry), which it can make
-//     before the roster exists. Removing devices needs no join. A device
+//     before the roster exists. Only a previous human key can add a device
+//     or change human enrollment authority. Removing devices needs no join. A device
 //     keeps its address and keys: anything else is a removal and an
 //     addition.
 //
 // Canonical bytes (one line; sig and join are not part of them):
 //
 //	agentnet-person-v2\n{"person":"<32 hex>","label":"<label>","seq":<n>,"prev":"<64 hex or empty>",
-//	"devices":[{"address":…,"sign_key":…,"box_recipient":…,"box_sig":…},…],"by":"<fingerprint, omitted at seq 0>"}
+//	"devices":[{"address":…,"sign_key":…,"box_recipient":…,"box_sig":…},…],
+//	"human_keys":["<enrollment key>"],"by":"<fingerprint, omitted at seq 0>"}
+//
+// human_keys is omitted when empty; the first creator is its implicit human key.
 //
 // Limits: 1–MaxPersonDevices devices with distinct addresses and keys; a
 // label of 1–64 bytes of printable UTF-8; the signed record at most
@@ -73,9 +77,12 @@ type PersonRoster struct {
 	Seq     int64             `json:"seq"`
 	Prev    string            `json:"prev"`
 	Devices []identity.Public `json:"devices"`
-	By      string            `json:"by,omitempty"`
-	Sig     []byte            `json:"sig,omitempty"`
-	Join    []byte            `json:"join,omitempty"`
+	// HumanKeys are roster keys allowed to enroll devices. Agent hosts share
+	// person permissions, but cannot add devices or promote themselves.
+	HumanKeys []string `json:"human_keys,omitempty"`
+	By        string   `json:"by,omitempty"`
+	Sig       []byte   `json:"sig,omitempty"`
+	Join      []byte   `json:"join,omitempty"`
 }
 
 // Canonical returns the bytes the signing device signs.
@@ -106,6 +113,24 @@ func (r PersonRoster) Has(address, fp string) bool {
 	d, ok := r.Device(fp)
 	return ok && d.Address == address
 }
+
+// Humans returns the exact enrollment-authority keys. An unannotated first
+// roster has its creator; an unannotated later step has only its retained
+// signer. Other devices are never inferred to be human from names or caps.
+func (r PersonRoster) Humans() []string {
+	if len(r.HumanKeys) > 0 {
+		return slices.Clone(r.HumanKeys)
+	}
+	if r.Seq == 0 && len(r.Devices) == 1 {
+		return []string{r.Devices[0].Fingerprint()}
+	}
+	if _, ok := r.Device(r.By); ok {
+		return []string{r.By}
+	}
+	return nil
+}
+
+func (r PersonRoster) Human(fp string) bool { return slices.Contains(r.Humans(), fp) }
 
 // JoinBytes are what a device signs to join person at seq, after the roster
 // whose hash is prev, as the entry dev.
@@ -151,6 +176,17 @@ func (r PersonRoster) Validate() error {
 			return errors.New("person: a device is listed twice")
 		}
 		addrs[d.Address], fps[fp] = true, true
+	}
+	humans := r.Humans()
+	if len(humans) == 0 {
+		return errors.New("person: keep at least one human device")
+	}
+	seenHuman := map[string]bool{}
+	for _, fp := range humans {
+		if _, ok := r.Device(fp); !ok || seenHuman[fp] {
+			return errors.New("person: human keys must name distinct current devices")
+		}
+		seenHuman[fp] = true
 	}
 	return nil
 }
@@ -198,6 +234,12 @@ func (r PersonRoster) VerifyNext(prev PersonRoster) (added *identity.Public, err
 			d := d
 			added = &d
 		}
+	}
+	before, after := prev.Humans(), r.Humans()
+	slices.Sort(before)
+	slices.Sort(after)
+	if (added != nil || !slices.Equal(before, after)) && !prev.Human(r.By) {
+		return nil, errors.New("person: only an own human device may add devices or change human enrollment authority")
 	}
 	if added == nil {
 		if len(r.Join) > 0 {

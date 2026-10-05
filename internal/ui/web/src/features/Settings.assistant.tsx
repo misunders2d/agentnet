@@ -190,7 +190,7 @@ export function PermissionsSection({ titleRef }: { titleRef?: React.Ref<HTMLHead
       <div className="space-y-6">
         <Card className="divide-y divide-hairline">
           <Rule icon={<IconMessageQuestion size={20} />} title="Questions">Your agent answers by itself only for people you’ve approved. Everyone else’s questions wait for you in OKs.</Rule>
-          <Rule icon={<IconBolt size={20} />} title="Tasks">A task runs only after you OK it. If you chose Always allow for someone, their tasks run without asking, until their key changes.</Rule>
+          <Rule icon={<IconBolt size={20} />} title="Tasks">A task runs only after you OK it. If you chose Always allow for someone, their current and future verified devices can give tasks without asking. Removing a device ends its person access; key changes and frozen people block it.</Rule>
           <Rule icon={<IconLock size={20} />} title="Chat messages">Nothing anyone types in a chat can approve anything. Only you can, in OKs.</Rule>
         </Card>
         {isBrowser(store.host.platform, o) ? (
@@ -199,12 +199,12 @@ export function PermissionsSection({ titleRef }: { titleRef?: React.Ref<HTMLHead
           <section aria-labelledby="permissions-now">
             <GroupLabel id="permissions-now">Approved right now</GroupLabel>
             <Permissions grants={grants} />
-            <Hint className="mt-2 px-1">Only devices your agent has talked with directly show here. Anyone approved from a terminal shows there.</Hint>
+            <Hint className="mt-2 px-1">Saved person and advanced device permissions appear here, including those granted in a terminal.</Hint>
             <Details label="In a terminal" className="px-1">
               <div className="space-y-2 pt-1">
                 <Command cmd="agentnet approvals" what="Who’s approved, and whether it still holds" onCopied={copied} />
-                <Command cmd="agentnet unapprove ADDRESS" what="Stop answering their questions by itself" onCopied={copied} />
-                <Command cmd="agentnet unapprove --tasks ADDRESS" what="Turn off Always allow for their tasks" onCopied={copied} />
+                <Command cmd="agentnet unapprove PERSON-or-ADDRESS" what="Stop answering their questions by itself" onCopied={copied} />
+                <Command cmd="agentnet unapprove --tasks PERSON-or-ADDRESS" what="Turn off Always allow for their tasks" onCopied={copied} />
               </div>
             </Details>
           </section>
