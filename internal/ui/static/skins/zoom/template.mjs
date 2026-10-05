@@ -116,11 +116,10 @@ export const markup = `
           </button>
           <button type="button" id="mention-button" class="icon-btn" aria-label="Mention an added assistant" title="Mention an added assistant">@</button>
           <input type="file" id="file-input" multiple hidden>
-          <fieldset id="kind" class="kind">
+          <fieldset id="kind" class="kind" hidden>
             <legend class="sr-only">Send as</legend>
             <label><input type="radio" name="kind" value="message" checked><span>Message</span></label>
             <label><input type="radio" name="kind" value="question"><span>Question</span></label>
-            <label><input type="radio" name="kind" value="task"><span>Task</span></label>
           </fieldset>
           <button type="submit" id="send" class="send">
             <span id="send-label">Send</span>

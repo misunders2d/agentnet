@@ -200,6 +200,7 @@ export interface DMDraft {
 }
 
 export interface DMMessage {
+  status?: string;
   topic?: string;
   topic_event?: TopicEvent;
   agent_author_pid?: string;
@@ -239,6 +240,7 @@ export interface DMMessage {
   exec?: ExecView;
   actions?: string[];
   job_detail?: string;
+  proposal?: ProposalView;
   event_type?: string;
   event_by?: string;
   quote?: string;

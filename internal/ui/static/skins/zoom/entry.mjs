@@ -2691,7 +2691,7 @@ function failSend(id, key, ws, text, files, reply, answering, reason, mentions) 
 async function sendDM(retry) {
   const t = retry?.t || state.dmData;
   if (state.sending || !t || t.frozen || (dmHumanGuest(t) && !guestAuthor(t)) || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
-  const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:kindValue() === "task" ? "task" : "question"};
+  const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:"question"};
   const topic = retry ? retry.topic : topicFresh[t.id] ? sendID() : topicSelections[t.id] || "";
   const id = retry?.id || sendID(), mentions = retry?.mentions || (state.mentions || []).slice();
   if (!retry) trackMentions();
@@ -3028,7 +3028,7 @@ function continues(m, prev) {
     !(prev.actions && prev.actions.length) && !prev.summary && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
 }
 
-const decisionActions = ["accept", "accept_always", "decline", "approve", "resolve", "reply"];
+const decisionActions = ["accept", "accept_always", "decline", "approve", "resolve", "reply", "do_it"];
 
 // ---- message controls: reactions, edits, deletion (MEL-476, MEL-477, R08) ----
 //
@@ -3346,6 +3346,7 @@ function details(m) {
 }
 
 const actionLabel = {
+  do_it: "Do it",
   accept: "Accept and run…", accept_always: "Always accept from this key…", decline: "Decline…",
   approve: "Answer their questions automatically…", resolve: "Close without replying…", reply: "Reply", cancel: "Stop…",
 };
@@ -3381,6 +3382,7 @@ async function act(body, host) {
 }
 
 function decide(a, m, t) {
+  if (a === "do_it") return act({ do: a, id: m.id }).then(() => refetch(false)).catch(e => announce(e.message));
   if (a === "reply") return writeDialog(t, m);
   const quote = el("div", { class: "quote" }, mentionPlain(m.body));
   const from = el("dl", {}, el("dt", {}, "From"), el("dd", {}, m.from));
@@ -3550,6 +3552,7 @@ function clearTyping() { if (typingUI) typingUI.setScope(null); }
 const kindValue = () => root.querySelector('input[name="kind"]:checked').value;
 
 function setKind(kind) {
+  if (kind === "task") kind = "question";
   for (const r of root.querySelectorAll('input[name="kind"]')) r.checked = r.value === kind;
   kindHint();
   renderTarget();
@@ -3977,7 +3980,7 @@ function syncComposer() {
     $("send").disabled = blocked || state.sending || askGone();
     const a = state.dmAgent && agentOf(state.dmAgent);
     // Asking an agent: a question, or a task when the invitation lets you give it tasks.
-    $("kind").hidden = !state.dmAgent;
+    $("kind").hidden = true;
     $("kind").disabled = blocked || state.sending || askGone();
     for (const r of root.querySelectorAll('input[name="kind"]')) {
       const l = r.value === "message" && r.closest && r.closest("label");
@@ -3991,7 +3994,7 @@ function syncComposer() {
     renderTarget();
     return;
   }
-  $("kind").hidden = false;
+  $("kind").hidden = true;
   $("attach").hidden = !filesAllowed();
   const t = state.data;
   // Question and Task only toward a device that runs an agent: a phone or a
@@ -5172,6 +5175,8 @@ const Zoom = {
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, m.verified_agent ? el("span", {class:"avatar sm", "aria-hidden":"true"}, "🤖") : avatar(mine ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,d),bubble),
           m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
+          proposalCard(m.proposal),
+          (m.actions || []).includes("do_it") && el("div", {class:"acts"}, actionButton("do_it",m,d,true)),
           (m.delivery || m.state_text) && el("p", { class: "narr" }, m.dir === "out" && m.delivery ? deliveryText(m) : m.state_text));
       })),
       el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen || state.sending, onclick: () => dmWriteDialog(d) },
@@ -5193,6 +5198,8 @@ const Zoom = {
       !m.deleted && fileChips(m, m.attachments),
       reactionsRow(m, d.id), messageMenu(m, d.id, { querySelector: () => null }),
       m.state_text && el("p", { class: "hint" }, m.state_text),
+      proposalCard(m.proposal),
+      (m.actions || []).includes("do_it") && el("div", {class:"acts"}, actionButton("do_it",m,d,true)),
       det);
   },
 

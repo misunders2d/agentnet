@@ -2159,6 +2159,7 @@ function dmMsg(m, t, prev) {
         el("strong", {}, "Your agent couldn’t finish — it needs your answer"), el("p", {class:"agent-detail"}, m.job_detail),
         !acts.length && m.target && el("p", {class:"hint"}, "Open it on " + deviceWords(m.target.address))),
       acts.length > 0 && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text),
+        proposalCard(m.proposal),
         m.job_detail && !acts.includes("resolve") && m.exec?.state !== "needs_human" && el("p", {class:"hint"}, m.job_detail),
         el("div", { class: "acts" }, acts.map((a, i) => actionButton(a, m, t, i === 0)))),
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
@@ -2791,7 +2792,7 @@ function failSend(id, key, ws, text, files, reply, answering, reason, mentions) 
 async function sendDM(retry) {
   const t = retry?.t || state.dmData;
   if (state.sending || !t || t.frozen || (dmHumanGuest(t) && !guestAuthor(t)) || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
-  const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:kindValue() === "task" ? "task" : "question"};
+  const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:"question"};
   const topic = retry ? retry.topic : topicFresh[t.id] ? sendID() : topicSelections[t.id] || "";
   const id = retry?.id || sendID(), mentions = retry?.mentions || (state.mentions || []).slice();
   if (!retry) trackMentions();
@@ -3187,7 +3188,7 @@ function continues(m, prev) {
     !(prev.actions && prev.actions.length) && !prev.summary && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
 }
 
-const decisionActions = ["accept", "accept_always", "decline", "approve", "resolve", "reply"];
+const decisionActions = ["accept", "accept_always", "decline", "approve", "resolve", "reply", "do_it"];
 
 // ---- message controls: reactions, edits, deletion (MEL-476, MEL-477, R08) ----
 //
@@ -3553,6 +3554,7 @@ function details(m) {
 }
 
 const actionLabel = {
+  do_it: "Do it",
   accept: "Accept and run…", accept_always: "Always accept from this key…", decline: "Decline…",
   approve: "Answer their questions automatically…", resolve: "Close without replying…", reply: "Reply", cancel: "Stop…",
 };
@@ -3580,6 +3582,7 @@ async function act(body, host) {
 }
 
 function decide(a, m, t) {
+  if (a === "do_it") return act({ do: a, id: m.id }).then(() => refetch(false)).catch(e => announce(e.message));
   if (a === "reply") {
     setAnswering(m);
     $("body").focus();
@@ -3752,6 +3755,7 @@ function clearTyping() { if (typingUI) typingUI.setScope(null); }
 const kindValue = () => root.querySelector('input[name="kind"]:checked').value;
 
 function setKind(kind) {
+  if (kind === "task") kind = "question";
   for (const r of root.querySelectorAll('input[name="kind"]')) r.checked = r.value === kind;
   kindHint();
   renderTarget();
@@ -4179,7 +4183,7 @@ function syncComposer() {
     $("send").disabled = blocked || state.sending || askGone();
     const a = state.dmAgent && agentOf(state.dmAgent);
     // Asking an agent: a question, or a task when the invitation lets you give it tasks.
-    $("kind").hidden = !state.dmAgent;
+    $("kind").hidden = true;
     $("kind").disabled = blocked || state.sending || askGone();
     for (const r of root.querySelectorAll('input[name="kind"]')) {
       const l = r.value === "message" && r.closest && r.closest("label");
@@ -4193,7 +4197,7 @@ function syncComposer() {
     renderTarget();
     return;
   }
-  $("kind").hidden = false;
+  $("kind").hidden = true;
   $("attach").hidden = !filesAllowed();
   const t = state.data;
   // Question and Task only toward a device that runs an agent: a phone or a
