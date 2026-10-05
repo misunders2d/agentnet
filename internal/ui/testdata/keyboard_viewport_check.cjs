@@ -13,16 +13,20 @@ const KEYBOARD = 336, PHONE = { width: 390, height: 844 };
 // In the page before any script: every focus() that moves the cursor into
 // a text field (one already there is not counted), with whether it ran in a
 // microtask (after the tap's own handler returned: too late for iOS to open
-// its keyboard) and whether it asked not to scroll. (window.event is never
-// set for events in a shadow tree.)
+// its keyboard), whether it ran inside a click's own dispatch at all (from
+// the window's capture listener to its bubble listener: not a later frame
+// or timer) and whether it asked not to scroll. (window.event is never set
+// for events in a shadow tree.)
 function record() {
   const queue = window.queueMicrotask.bind(window);
-  let micro = 0;
+  let micro = 0, tap = false;
   window.queueMicrotask = (cb) => queue(() => { micro++; try { cb(); } finally { micro--; } });
+  addEventListener('click', () => { tap = true; setTimeout(() => { tap = false; }); }, true);
+  addEventListener('click', () => { tap = false; });
   const focus = HTMLTextAreaElement.prototype.focus;
   window.__focus = [];
   HTMLTextAreaElement.prototype.focus = function (o) {
-    if (this.getRootNode().activeElement !== this) window.__focus.push({ micro: micro > 0, preventScroll: !!(o && o.preventScroll) });
+    if (this.getRootNode().activeElement !== this) window.__focus.push({ micro: micro > 0, tap, preventScroll: !!(o && o.preventScroll) });
     return focus.call(this, o);
   };
 }
@@ -117,6 +121,19 @@ async function android(browser, scheme) {
   assert.ok(m.focused, name + ': Answer chosen while typing: the field keeps the cursor');
   assert.ok(m.focus.every((f) => !f.preventScroll), name + ': no preventScroll on a touch screen: ' + JSON.stringify(m.focus));
   assert.ok(m.form <= PHONE.height - KEYBOARD && m.gap <= 1, name + ': still above the keyboard, newest in view: ' + JSON.stringify(m));
+
+  // Reply on an approval card (the task waiting for this person's OK) puts
+  // the cursor in this conversation's own field inside the tap, also when
+  // the person was not typing (the keyboard closed).
+  await field(p).evaluate((ta) => ta.blur());
+  await p.setViewportSize(PHONE);
+  await frames(p);
+  await measure(p);
+  await p.getByRole('button', { name: 'Answer it yourself' }).tap();
+  m = await measure(p);
+  assert.ok(m.focused, name + ': the card’s Reply puts the cursor in this conversation’s field: ' + JSON.stringify(m));
+  assert.deepEqual(m.focus, [{ micro: false, tap: true, preventScroll: false }], name + ': the card’s Reply focuses inside the tap, scrolling the field into view');
+  assert.ok(await p.getByText(/^Answering /).isVisible(), name + ': the card’s reply shows (answering the task by hand)');
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();
   console.log('ok', name);
@@ -162,7 +179,7 @@ async function ios(browser, scheme) {
   await p.waitForTimeout(600); // the sheet is gone, and nothing took the focus back
   m = await measure(p);
   assert.ok(m.focused, name + ': Reply puts the cursor in the field: ' + JSON.stringify(m));
-  assert.deepEqual(m.focus, [{ micro: false, preventScroll: false }], name + ': Reply focuses inside the tap, scrolling the field into view');
+  assert.deepEqual(m.focus, [{ micro: false, tap: true, preventScroll: false }], name + ': Reply focuses inside the tap, scrolling the field into view');
   assert.equal(await p.getByRole('dialog').count(), 0, name + ': the sheet closed');
   assert.ok(await p.getByText(/^Replying to/).isVisible(), name + ': the reply shows');
   await p.evaluate((px) => window.__keyboard(px), KEYBOARD);
@@ -170,6 +187,35 @@ async function ios(browser, scheme) {
   m = await measure(p);
   assert.ok(m.form <= visible && m.gap <= 1, name + ': replying, still above the keyboard: ' + JSON.stringify(m));
   await snap(p, 'ios-' + scheme + '-reply');
+
+  // The whole emoji picker (a message's sheet, More reactions) is a fixed
+  // bottom popup too: its search opens the keyboard, and the popup sits on
+  // it, no taller than what it leaves (a smaller phone's taller keyboard
+  // too), so the search and the emoji under it stay in view.
+  await p.evaluate(() => window.__keyboard(0));
+  await p.getByRole('button', { name: 'Message actions' }).last().evaluate((b) => b.click());
+  await p.getByRole('dialog').getByRole('button', { name: 'More reactions' }).tap();
+  const picker = p.getByRole('dialog', { name: 'Choose a reaction' });
+  await picker.waitFor();
+  await p.waitForTimeout(400); // slid up, the sheet gone
+  await picker.getByLabel('Search emoji').tap();
+  for (const kb of [KEYBOARD, 480]) {
+    await p.evaluate((px) => window.__keyboard(px), kb);
+    await frames(p);
+    const e = await p.evaluate(() => {
+      const sr = document.getElementById('skin').shadowRoot, search = sr.querySelector('input[aria-label="Search emoji"]');
+      const box = (el) => { const r = el.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.bottom)]; };
+      return { popup: box(search.closest('[role="dialog"]')), search: box(search), list: box(sr.querySelector('[frimousse-viewport]')), typing: sr.activeElement === search, kb: document.documentElement.style.getPropertyValue('--an-keyboard') };
+    });
+    const left = PHONE.height - kb;
+    assert.ok(e.typing && e.kb === kb + 'px', name + ': searching emoji with the keyboard open: ' + JSON.stringify(e));
+    assert.ok(e.popup[0] >= 0 && e.popup[1] <= left, name + ': the emoji picker sits above a ' + kb + 'px keyboard: ' + JSON.stringify(e));
+    assert.ok(e.search[1] <= left && e.list[1] <= left && e.list[1] - e.list[0] >= 100, name + ': its search and emoji stay in view: ' + JSON.stringify(e));
+  }
+  await snap(p, 'ios-' + scheme + '-emoji');
+  await p.evaluate(() => window.__keyboard(0));
+  await picker.getByRole('button', { name: 'Close emoji' }).tap();
+  await picker.waitFor({ state: 'detached' });
 
   // Classic and Zoom are sized by the same host. Classic's message box sits
   // above the keyboard while typing; Zoom writes in a centred dialog of its
@@ -194,6 +240,20 @@ async function ios(browser, scheme) {
     assert.ok(k.html === visible && k.root <= visible, name + ' ' + skin + ': the skin fits above the keyboard: ' + JSON.stringify(k));
     if (skin === 'classic') assert.ok(k.typing && k.composer !== null && k.composer <= visible, name + ' classic: typing, the message box sits above the keyboard: ' + JSON.stringify(k));
     await snap(p, 'ios-' + scheme + '-' + skin);
+    // The host's own sheets over these skins (the switcher's "Join a
+    // workspace…": an invitation box and two fields) sit on the keyboard
+    // too. This fixture has one workspace, so the switcher offers no Join:
+    // its dialog is opened here as skinbar.mjs opens it, with that form.
+    const d = await p.evaluate(() => {
+      const dlg = document.getElementById('skin-bar').shadowRoot.querySelector('dialog');
+      dlg.innerHTML = '<form method="dialog"><h2>Join a workspace</h2><label>Invitation<textarea rows="3"></textarea></label>'
+        + '<label>What you call it<input></label><label>This device’s name there<input></label><div class="actions"><button class="btn act">Join</button><button class="btn">Cancel</button></div></form>';
+      dlg.showModal();
+      const r = dlg.getBoundingClientRect(), out = [Math.round(r.top), Math.round(r.bottom)];
+      dlg.close();
+      return out;
+    });
+    assert.ok(d[0] >= 0 && d[1] <= visible, name + ' ' + skin + ': the host’s sheet sits above the keyboard: ' + JSON.stringify(d));
   }
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();
@@ -214,7 +274,7 @@ async function desktop(browser) {
   await p.getByRole('radio', { name: 'Do it' }).click();
   m = await measure(p);
   assert.ok(m.focused, name + ': a choice returns the cursor to the field');
-  assert.deepEqual(m.focus, [{ micro: false, preventScroll: true }], name + ': in the click, without scrolling');
+  assert.deepEqual(m.focus, [{ micro: false, tap: true, preventScroll: true }], name + ': in the click, without scrolling');
   assert.deepEqual(errors, [], name + ': page errors');
   await ctx.close();
   console.log('ok', name);

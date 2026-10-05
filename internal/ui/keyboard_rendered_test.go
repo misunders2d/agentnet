@@ -22,7 +22,9 @@ import (
 // --an-keyboard, the page and the message box fit above the keyboard, and
 // a sheet sits on it; Classic and Zoom fit too. Choosing Answer or Do it
 // opens no keyboard unless the person was typing, and Reply from a
-// message's sheet puts the cursor in the field inside the tap itself. On a
+// message's sheet, or on the card of a task waiting for the person's OK,
+// puts the cursor in the field inside the tap itself; the phone emoji
+// picker and the host's own sheets sit on the iOS keyboard too. On a
 // desktop a choice still returns the cursor to the field. Opt-in: needs an
 // installed Playwright (AGENTNET_PLAYWRIGHT) and Chromium (AGENTNET_CHROMIUM
 // or /usr/bin/chromium).
@@ -38,8 +40,12 @@ func TestKeyboardViewportRendered(t *testing.T) {
 	const total = 30 // one topic, taller than the screen
 	root := ""
 	for i := range total {
-		r, err := alice.SendMessage(t.Context(), client.Outgoing{To: bob.Address, Kind: envelope.KindMessage, ReplyTo: root,
-			Body: fmt.Sprintf("Pallet count %d: dock %d is labelled and dry", i+1, i%4+1)})
+		// The topic starts with a task that waits for bob's OK: its card has a Reply of its own.
+		kind, body := envelope.KindMessage, fmt.Sprintf("Pallet count %d: dock %d is labelled and dry", i, i%4+1)
+		if i == 0 {
+			kind, body = envelope.KindTask, "Count the pallets on every dock"
+		}
+		r, err := alice.SendMessage(t.Context(), client.Outgoing{To: bob.Address, Kind: kind, ReplyTo: root, Body: body})
 		if err != nil {
 			t.Fatal(err)
 		}
