@@ -123,6 +123,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/agents", s.changeAgent)
 	mux.HandleFunc("POST /api/remind", s.remind)
 	mux.HandleFunc("POST /api/remind/{what}", s.remind)
+	// liveworkspacename.go: the workspace's own name; renaming it for
+	// everyone is admin only.
+	mux.HandleFunc("GET /api/workspace", s.workspaceInfo)
+	mux.HandleFunc("POST /api/workspace/name", s.renameWorkspace)
 	mux.HandleFunc("GET /events", s.events)
 	return s.guard(mux)
 }

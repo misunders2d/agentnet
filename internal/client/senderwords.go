@@ -2,7 +2,11 @@ package client
 
 import (
 	"context"
+	"slices"
 	"strings"
+
+	"github.com/misunders2d/agentnet/internal/identity"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Agents see people, not devices (MEL-525): every agent-facing text names
@@ -227,4 +231,46 @@ func (a *Agent) selfIntro() string {
 		label = "your owner"
 	}
 	return "You are the agent of " + label + ", running on their device " + DeviceWords(a.Address) + " (" + a.Address + ")."
+}
+
+// PeerWords returns a namer of devices for people, as the page's sentences
+// use them (MEL-525: people never see addresses): "your Pixel" for another
+// device of this installation's own person, "Vitalii (Desk)" for a device a
+// verified person record here names, and the device in words otherwise
+// ("Bezos"). When that person's name is also this person's own or another
+// known person's, the device key's first group follows the device, so a
+// look-alike name cannot pass as someone else. What is not an address
+// (e.g. "all devices") is returned as it is. The records are read once.
+func (a *Agent) PeerWords() func(address string) string {
+	self, hasSelf, _ := a.store.selfPerson(a.Address)
+	known, _ := a.KnownPersons()
+	labels := map[string]int{}
+	if hasSelf {
+		labels[strings.ToLower(self.info.Label)]++
+	}
+	for _, p := range known {
+		if p.State == personPinned {
+			labels[strings.ToLower(p.Label)]++
+		}
+	}
+	return func(address string) string {
+		if _, _, err := protocol.SplitAddress(address); err != nil {
+			return address
+		}
+		if address == a.Address {
+			return "this device"
+		}
+		device := DeviceWords(address)
+		if hasSelf && slices.ContainsFunc(self.roster.Devices, func(d identity.Public) bool { return d.Address == address }) {
+			return "your " + device
+		}
+		p, ok, err := a.store.personByAddress(address)
+		if err != nil || !ok || p.info.State != personPinned || p.info.Label == "" {
+			return device
+		}
+		if labels[strings.ToLower(p.info.Label)] > 1 {
+			device += " · " + shortKey(p.info.Fingerprint)
+		}
+		return p.info.Label + " (" + device + ")"
+	}
 }

@@ -34,11 +34,12 @@ var tsRoots = []any{
 	ReplyReceiverBindingView{}, ReplySessionCatalogView{}, NotifyView{}, DeviceLink{}, AssistantSetupView{},
 	WorkspaceBinding{}, client.TeamsView{}, protocol.TeamState{}, protocol.TeamSnapshot{},
 	client.TypingView{}, client.TypingResult{}, client.StorageSummary{}, static.Skin{}, TopicPage{}, ApprovalsView{},
+	WorkspaceInfoView{},
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
 	AgentCatalogChange{}, WorkspaceJoin{}, client.TeamChange{}, protocol.TypingScope{}, AssistantSetupRequest{},
-	ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{},
+	ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{},
 }
 
 func TestTypeScriptViewTypes(t *testing.T) {

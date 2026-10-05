@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -224,4 +225,14 @@ func (a *Agent) SetWorkspaceName(ctx context.Context, name string) (string, erro
 	}
 	a.store.changed()
 	return out.Name, err
+}
+
+// RelayHost is the host name of this device's relay ("agentnet.bezosapp.uk"):
+// what people see for a workspace its admin has not named.
+func (a *Agent) RelayHost() string {
+	u, err := url.Parse(a.hub.base)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
