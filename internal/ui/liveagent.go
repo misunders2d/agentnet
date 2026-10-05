@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -254,6 +255,8 @@ func eventText(body string, p dmPeople) string {
 			}
 		}
 		return who + " invited " + host + " into " + room + "."
+	case protocol.EventShare:
+		return who + " shared more selected messages with the agent already in " + room + "."
 	case protocol.EventAccept:
 		if p.group {
 			if ev.Author.GroupAdmission == "" {
@@ -344,6 +347,29 @@ func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([
 		}
 		out = append(out, agentView(info, p, msgs, l.namedAgentReady(info)))
 	}
+	if p.group {
+		unique := map[string]int{}
+		var merged []AgentView
+		for _, v := range out {
+			k := v.Host.Address + "/" + v.Host.Fingerprint + "/" + v.AgentID
+			if i, ok := unique[k]; ok && (merged[i].State == client.PartActive || merged[i].State == client.PartInvited) && (v.State == client.PartActive || v.State == client.PartInvited) {
+				old := merged[i]
+				if old.State != client.PartActive && v.State == client.PartActive {
+					merged[i] = v
+					v = old
+				}
+				for _, who := range v.Inviters {
+					if !slices.ContainsFunc(merged[i].Inviters, func(x PersonView) bool { return x.Person == who.Person }) {
+						merged[i].Inviters = append(merged[i].Inviters, who)
+					}
+				}
+				continue
+			}
+			unique[k] = len(merged)
+			merged = append(merged, v)
+		}
+		out = merged
+	}
 	return out, nil
 }
 
@@ -357,7 +383,10 @@ func (l *Live) hasResponder() bool {
 func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMessage, responder bool) AgentView {
 	v := AgentView{PID: info.PID, AgentID: info.AgentID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
 		Inviter: personView(info.Inviter), Note: info.Note, Shared: []string{}, TasksFrom: []PersonView{}, Held: info.Held}
-	v.External = info.External
+	v.External, v.Member = info.External, info.Member || p.group && !info.External
+	for _, inviter := range info.Inviters {
+		v.Inviters = append(v.Inviters, personView(inviter))
+	}
 	if info.Invited > 0 && info.Invited < maxClaimedUnix { // the inviter's claim: one no page could show is left out
 		v.Invited = time.Unix(info.Invited, 0)
 	}
@@ -365,7 +394,7 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 		found := false
 		for _, m := range msgs {
 			direct := m.Key == g.Fingerprint && !m.Replica
-			claimed := m.ExcerptPID == info.PID && m.Claimed == g.Fingerprint && m.SyncedFrom == info.Inviter.Address && m.History
+			claimed := m.ExcerptPID == info.PID && m.Claimed == g.Fingerprint && slices.ContainsFunc(info.Inviters, func(p client.PersonInfo) bool { return p.Address == m.SyncedFrom }) && m.History
 			if m.LID == g.LID && m.Sub == "" && (direct || claimed) {
 				v.Shared, found = append(v.Shared, m.ID), true
 				break
@@ -431,8 +460,11 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 		}
 	}
 	if p.group {
+		if info.Member && info.State == client.PartActive {
+			v.StateText = "Member of this group. Can be asked by every member; its owner decides what runs. Stays until explicitly removed."
+		}
 		v.StateText = strings.ReplaceAll(strings.ReplaceAll(v.StateText, "this DM", "this group"), "either of you", "current group members")
-		if p.role == "visitor" && info.State == client.PartActive {
+		if p.role == "visitor" && !info.Member && info.State == client.PartActive {
 			v.StateText = "Invited agent context for this group. Only selected snapshots and requests addressed to this agent are supplied."
 		}
 	}

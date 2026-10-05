@@ -128,6 +128,7 @@ for (const [what, rec, want] of [
   const bobCaps = async (names) => { const session = id(); profiles.set(bob.address, { person: JSON.parse(wire.rosterJSON(bob.roster)), live: true, sessions: [session], caps: [JSON.parse(wire.capsJSON(await wire.newCaps(bob.keys, bob.address, session, names)))] }); };
   await bobCaps([wire.CapEnv2, wire.CapPerson, wire.CapHumanParticipation]);
   const before = posts.length;
+  await alice.store.write([{s:"outbox",k:rec.id,v:rec}]);
   await alice.post(rec);
   let kept = await alice.store.get('outbox', rec.id);
   check(kept.state === 'waiting' && /room participation/.test(kept.detail) && posts.length === before, 'a room copy waits at a device without rm1');
@@ -165,11 +166,11 @@ for (const [what, rec, want] of [
   // (client admitConv, ROOM_V1 P3/P4), live or as history.
   const memberHuman = { audience: [G.entry], proof: [G.scope, G.acc] }, bobPin = await e.store.get('pins', bob.address);
   const request = { ...n, id: id(), lid: id(), from: bob.address, kind: 'question', pid: B.pid, target: { address: bob.address, fingerprint: bob.fp }, human: memberHuman };
-  await assert.rejects(e.admitGroupTurn(request, { id: request.id, from: bob.address }, bobPin, { id: request.id }), /not read yet/); checks++;
+  await assert.rejects(e.admitGroupTurn(request, { id: request.id, from: bob.address }, bobPin, { id: request.id }), /not enabled|not read yet/); checks++;
   const alicePin = await e.store.get('pins', alice.address);
   const hist = { ...n, id: id(), lid: id(), from: alice.address, pid: '', human: undefined, sub: 'history', replica: true, attachments: [],
     body: historyOf({ from: alice.address, from_key: alice.fp, kind: 'question', origin: 'ui', pid: B.pid, target: { address: bob.address, fingerprint: bob.fp }, human: memberHuman }) };
-  await assert.rejects(e.admitGroupTurn(hist, { id: hist.id, from: alice.address }, alicePin, { id: hist.id }), /not read yet/); checks++;
+  await assert.rejects(e.admitGroupTurn(hist, { id: hist.id, from: alice.address }, alicePin, { id: hist.id }), /not enabled|not read yet/); checks++;
   // Selected group history keeps to ordinary member turns (client
   // groupHistorySources: no PID): a guest's turn held here is not offered.
   await e.store.write(ops.filter((o) => o.s === 'inbox'));

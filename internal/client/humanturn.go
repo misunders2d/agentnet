@@ -244,12 +244,18 @@ func (a *Agent) verifyHumanProof(ctx context.Context, root protocol.ConvRoot, h 
 	if err != nil {
 		return err
 	}
+	if err := m.loadHosts(a.store.db, h.Proof); err != nil {
+		return err
+	}
 	invites := map[string]protocol.ParticipationEvent{}
 	for _, e := range h.Proof {
 		if e.Type != protocol.EventScope {
 			continue
 		}
 		p, ok := m.author(e.Author)
+		if !ok && m.roomEvents[e.Hash()] {
+			p, ok = m.roomAuthor(e.Author)
+		}
 		if !ok {
 			return errors.New("human: scope not authored by original member")
 		}
@@ -330,6 +336,27 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 			return err
 		}
 	}
+	if root.Kind == protocol.ConvKindGroup {
+		if reason, err := a.checkConversationAgent(in, sender, false); err != nil {
+			return hold(reason, err.Error())
+		}
+		m, err := a.dmMembers(in.Conv)
+		if err != nil {
+			return hold(reasonProof, err.Error())
+		}
+		if in.Target != nil && !in.Human.AgentAuthor() && !m.requestEpoch(in.From, sender.Fingerprint(), in.Target) {
+			return hold(reasonInvalid, "group request admission changed")
+		}
+		if in.Target == nil {
+			p, err := a.Participation(in.PID)
+			if err != nil {
+				return hold(reasonProof, err.Error())
+			}
+			if reason, err := externalOutputRequest(a.store.db, in, p, m, a.Address, a.Self().Fingerprint()); err != nil {
+				return hold(reason, err.Error())
+			}
+		}
+	}
 	state := ""
 	if in.Target != nil && !in.Replica && in.Target.Address == a.Address && in.Target.Fingerprint == a.Self().Fingerprint() {
 		state = stateAgentWaiting // for this device's agent: the worker decides whether it may run (agentjob.go)
@@ -338,7 +365,27 @@ func (a *Agent) admitHumanTurn(ctx context.Context, env envelope.Envelope, in en
 		if err := insertHumanProof(tx, in.Human); err != nil {
 			return err
 		}
-		return humanTurnAuthorization(tx, in, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint(), false)
+		if err := humanTurnAuthorization(tx, in, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint(), false); err != nil {
+			return err
+		}
+		if root.Kind == protocol.ConvKindGroup {
+			m, err := membersIn(tx, in.Conv)
+			if err != nil {
+				return err
+			}
+			if in.Target != nil && !in.Human.AgentAuthor() && !m.requestEpoch(in.From, sender.Fingerprint(), in.Target) {
+				return errors.New("group request admission changed before storage")
+			}
+			if in.Target == nil {
+				p, err := participationIn(tx, in.Conv, in.PID, m, a.Address)
+				if err != nil {
+					return err
+				}
+				_, err = externalOutputRequest(tx, in, p, m, a.Address, a.Self().Fingerprint())
+				return err
+			}
+		}
+		return nil
 	}
 	result, err := a.store.addConvInbox(in, sender.Fingerprint(), state, fromQuarantine, also)
 	if err != nil {

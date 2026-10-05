@@ -299,7 +299,14 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 		inviter  *Agent
 		taskKeys []string
 	}{{w.alice, nil}, {w.alice, []string{carol.Self().Fingerprint()}}, {carol, nil}} {
-		inv, e := setup.inviter.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, record.ID, nil, setup.taskKeys, "exact epoch scope")
+		separate, e := w.bob.CreateLocalAgent("Epoch lane "+string(rune('A'+i)), Responder{Harness: "agentstub", Dir: stub.dir})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = w.bob.PublishAgentCatalog(tctx(t)); e != nil {
+			t.Fatal(e)
+		}
+		inv, e := setup.inviter.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, separate.ID, nil, setup.taskKeys, "exact epoch scope")
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -349,11 +356,11 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	groupGovernanceAwait(t, next, w.bob)
 	next = groupInteractionRejoin(t, w.alice, carol, next)
 	groupGovernanceAwait(t, next, carol, w.bob)
-	if stateAt(t, w.alice, taskKeyPID.PID).Claimable() {
-		t.Fatal("same-key task grant admission revived")
+	if got := stateAt(t, w.alice, taskKeyPID.PID); !got.Claimable() || len(got.TaskKeys) != 0 {
+		t.Fatal("membership must remain, stale task consent must not revive")
 	}
-	if stateAt(t, w.bob, inviterPID.PID).Claimable() {
-		t.Fatal("same-key inviter admission revived")
+	if !stateAt(t, w.bob, inviterPID.PID).Claimable() {
+		t.Fatal("accepted membership ended when inviter left")
 	}
 	if !stateAt(t, w.bob, stablePID.PID).Claimable() {
 		t.Fatal("unrelated requester change ended stable invite")
@@ -374,6 +381,14 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	waitState(t, w.bob, task.ID, stateNotRun)
 	if stub.runs() != 0 {
 		t.Fatal("same-key requester rejoin revived queued task")
+	}
+	fresh, e := carol.AskAgent(tctx(t), taskKeyPID.PID, envelope.KindTask, "new epoch needs fresh task consent")
+	if e != nil {
+		t.Fatal(e)
+	}
+	waitState(t, w.bob, fresh.ID, stateAwaiting)
+	if stub.runs() != 0 {
+		t.Fatal("old task keys authorized a new admission")
 	}
 	if _, err = carol.store.db.Exec(`UPDATE outbox SET state=? WHERE id=?`, stateQueued, queued.ID); err != nil {
 		t.Fatal(err)
@@ -750,6 +765,9 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	for _, a := range []*Agent{w.alice, w.bob, carol} {
 		fakeNotify(a)
 	}
+	if err := w.bob.Approve(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
 	member, err := w.bob.CreateLocalAgent("Member builder", Responder{Harness: "agentstub", Dir: stub.dir})
 	if err != nil {
 		t.Fatal(err)
@@ -761,6 +779,9 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	fakeNotify(host)
 	runAgent(t, host)
 	publishGroupFixtureCaps(t, host, true)
+	if err := host.Approve(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
 	visitor, err := host.CreateLocalAgent("Outside reviewer", Responder{Harness: "agentstub", Dir: stub.dir})
 	if err != nil {
 		t.Fatal(err)
@@ -819,6 +840,11 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "visitor acceptance", func() bool { return stateAt(t, w.alice, v.PID).Claimable() })
+	future, e := carol.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "GROUP_FUTURE_CONTEXT"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, "accepted outside agent receives new ordinary group context", func() bool { return p6HasLID(t, host, future.LID) })
 	q, err = w.alice.AskAgent(tctx(t), v.PID, envelope.KindQuestion, "visitor question")
 	if err != nil {
 		t.Fatal(err)
@@ -829,7 +855,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 			t.Fatalf("visitor output attribution %+v", answer)
 		}
 	}
-	if !strings.Contains(stub.last(), "GROUP_SELECTED_BYTES") || strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") || strings.Contains(stub.last(), "member question") {
+	if !strings.Contains(stub.last(), "GROUP_SELECTED_BYTES") || !strings.Contains(stub.last(), "GROUP_FUTURE_CONTEXT") || strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") || strings.Contains(stub.last(), "member question") {
 		t.Fatalf("visitor grant isolation %s", stub.last())
 	}
 	if stub.runs() != 2 {

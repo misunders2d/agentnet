@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,6 +251,55 @@ func groupParticipationEngineVectors(t *testing.T, root protocol.ConvRoot, state
 		seal(role+"-dismiss", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: pid, Body: marshal(t, dismiss)}, alice, ap)
 		result[role+"-pid"], result[role+"-agent"] = pid, agent
 	}
+	roomParts := []protocol.ParticipationEvent{}
+	roomAccepts := []protocol.ParticipationEvent{}
+	for i, host := range []identity.Public{ap, dp} {
+		person, signer, role := ar, alice, "member"
+		if i == 1 {
+			person, signer, role = dr, dana, "visitor"
+		}
+		ev := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: protocol.NewID(), Type: protocol.EventInvite, TS: 1700000100, Author: protocol.EventAuthor{Person: ar.Person, Roster: ar.Hash(), Address: ap.Address, Fingerprint: ap.Fingerprint(), GroupAdmission: am.Admission.Hash()}, Host: &protocol.ParticipationHost{Person: person.Person, Address: host.Address, Fingerprint: host.Fingerprint(), AgentID: protocol.NewID()}, Audience: protocol.AudienceRoom, Group: &protocol.ParticipationGroup{Seq: state.Seq, Hash: state.Hash(), HostRole: role}}
+		if i == 0 {
+			ev.Group.HostAdmission = am.Admission.Hash()
+		}
+		ev.Sign(alice.Sign)
+		scope := protocol.ScopeOf(ev, ev.TS)
+		scope.Sign(alice.Sign)
+		accept := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: ev.PID, Type: protocol.EventAccept, Prev: ev.Hash(), TS: ev.TS, Author: protocol.EventAuthor{Person: person.Person, Roster: person.Hash(), Address: host.Address, Fingerprint: host.Fingerprint()}}
+		if i == 0 {
+			accept.Author.GroupAdmission = am.Admission.Hash()
+		}
+		accept.Sign(signer.Sign)
+		prefix := fmt.Sprintf("p6-%d", i)
+		seal(prefix+"-invite", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: ev.PID, Body: marshal(t, ev)}, alice, ap)
+		seal(prefix+"-scope", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: ev.PID, Body: marshal(t, scope)}, alice, ap)
+		seal(prefix+"-accept", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: ev.PID, Body: marshal(t, accept)}, signer, host)
+		roomParts = append(roomParts, scope)
+		roomAccepts = append(roomAccepts, accept)
+	}
+	human := &envelope.HumanTurn{}
+	for i, p := range roomParts {
+		human.Audience = append(human.Audience, envelope.HumanScope{PID: p.PID, Invite: p.Prev, Decision: roomAccepts[i].Hash()})
+		human.Proof = append(human.Proof, p, roomAccepts[i])
+	}
+	source, target := roomParts[0], roomParts[1]
+	seal("p6-ordinary", envelope.Inner{Kind: envelope.KindMessage, Body: "P6 future group message", Origin: envelope.OriginUI, Human: human}, alice, ap)
+	rootID, askID := protocol.NewID(), protocol.NewID()
+	seal("p6-root", envelope.Inner{Kind: envelope.KindQuestion, LID: rootID, PID: source.PID, Body: "Ask the other agent", Origin: envelope.OriginUI, Target: &envelope.Target{Address: ap.Address, Fingerprint: ap.Fingerprint(), AgentID: source.Host.AgentID, GroupAdmission: am.Admission.Hash()}, Human: human}, alice, ap)
+	authored := *human
+	authored.AuthorPID = source.PID
+	ask := envelope.Inner{Kind: envelope.KindQuestion, LID: askID, PID: target.PID, ReplyTo: rootID, Body: "P6 correlated agent ask", Emotion: "neutral", Origin: envelope.OriginAgentPrefix + "fixture", Target: &envelope.Target{Address: dp.Address, Fingerprint: dp.Fingerprint(), AgentID: target.Host.AgentID}, Human: &authored}
+	seal("p6-ask", ask, alice, ap)
+	seal("p6-status", envelope.Inner{V: envelope.Version3, Kind: envelope.KindMessage, Sub: envelope.SubStatus, Body: `{"state":"awaiting","n":1,"at":1700000100,"detail":"P6 owner approval needed"}`, Ref: &envelope.Ref{ID: askID, Fingerprint: ap.Fingerprint()}}, dana, dp)
+	seal("p6-answer", envelope.Inner{Kind: envelope.KindAnswer, PID: target.PID, ReplyTo: askID, Body: "P6 verified agent answer", Emotion: "neutral", Origin: envelope.OriginAgentPrefix + "fixture", AgentID: target.Host.AgentID, Human: human}, dana, dp)
+	seal("p6-wrong-correlation", envelope.Inner{Kind: envelope.KindAnswer, PID: target.PID, ReplyTo: rootID, Body: "P6 wrong request", Emotion: "neutral", Origin: envelope.OriginAgentPrefix + "fixture", AgentID: target.Host.AgentID, Human: human}, dana, dp)
+	forged := ask
+	forged.LID = protocol.NewID()
+	seal("p6-wrong-author", forged, dana, dp)
+	share := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: target.PID, Type: protocol.EventShare, Prev: target.Prev, TS: 1700000100, Author: target.Author, Host: target.Host, Audience: protocol.AudienceRoom, Group: target.Group, Grant: []protocol.GrantRef{{LID: rootID, Fingerprint: ap.Fingerprint()}}}
+	share.Sign(alice.Sign)
+	seal("p6-share", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: target.PID, Body: marshal(t, share)}, alice, ap)
+	result["p6-source"], result["p6-target"] = source.PID, target.PID
 	ordinaryLID := protocol.NewID()
 	seal("ordinary", envelope.Inner{Kind: envelope.KindMessage, LID: ordinaryLID, Body: "Exact ordinary original", Origin: "ui"}, alice, ap)
 	for _, sub := range []string{envelope.SubReaction, envelope.SubRevision, envelope.SubRetraction} {

@@ -80,3 +80,15 @@ assert.equal(info.invite, "", "a scope does not stand in for an invitation held 
 assert.notEqual(info.state, "active");
 assert.ok(info.held > 0);
 console.log("PASS room engine: room audience and end time resolved, exact projection only, agreeing scopes, end time by this clock, group scope counted once its binding verifies, never for an invitation held here");
+
+// P6 consent is recorded while the invitation counts, not inferred after leave.
+const permanent=invite({group:{seq:3,hash:h64("e"),host_role:"member",host_admission:h64("2"),task_admissions:null}});
+const pevents=[await rec(permanent),await rec(await wire.scopeOf(permanent,sec-50)),await rec(await accept(permanent))];
+const pm=members(true);for(const x of pevents)pm.groupInvites.add(x.hash);
+const pinfo=e.resolveAgent(permanent.pid,pevents,pm),saved=e.roomConsentOps(conv,pevents,pinfo);
+assert.equal(saved.length,3);assert.equal(pinfo.member,true);
+pm.roomEvents=new Set(pevents.map(x=>x.hash));pm.roomAuthors=new Map([[alice.person,alice],[bob.person,bob]]);pm.delete(alice.person);pm.epochs.delete(fp("a"));
+assert.equal(e.resolveAgent(permanent.pid,pevents,pm).state,"active","accepted member survives inviter departure");
+const changed=structuredClone(alice);changed.devices[0].fingerprint=fp("f");pm.roomAuthors.set(alice.person,changed);
+assert.notEqual(e.resolveAgent(permanent.pid,pevents,pm).state,"active","cached consent does not bypass changed author keys");
+console.log("PASS P6 permanent membership: accepted consent persists after inviter leaves; changed keys stay held");

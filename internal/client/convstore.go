@@ -263,6 +263,9 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 			return "", err
 		}
 	}
+	if err := recordRoomContext(tx, in, verifiedBy, in.To); err != nil {
+		return "", err
+	}
 	if err := bindReplyReceiverInput(tx, in, verifiedBy); err != nil {
 		return "", err
 	}
@@ -477,6 +480,9 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			return err
 		}
 		if i == 0 {
+			if err := recordRoomContext(tx, in, jobKeyOrSelf(tx, in.From), in.From); err != nil {
+				return err
+			}
 			if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
 				return err
 			}
@@ -525,7 +531,7 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 		if len(copies) > 0 {
 			in = copies[0].in
 		}
-		if _, err := tx.Exec(`UPDATE inbox SET quote=nullif(?,''),topic_done=? WHERE id=?`, in.Quote, in.TopicDone, first); err != nil {
+		if _, err := tx.Exec(`UPDATE inbox SET quote=nullif(?,''),topic_done=?,human=nullif(?,'') WHERE id=?`, in.Quote, in.TopicDone, humanJSON(in.Human), first); err != nil {
 			return err
 		}
 	}

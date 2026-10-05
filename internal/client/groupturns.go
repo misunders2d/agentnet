@@ -541,6 +541,24 @@ func (a *Agent) mayDeliverGroupTurn(env envelope.Envelope) (bool, bool, error) {
 		}
 		return false, false, nil
 	}
+	if required == protocol.CapHumanParticipation && sub == "" {
+		var in envelope.Inner
+		var human string
+		if err = a.store.db.QueryRow(`SELECT coalesce(pid,''),kind,coalesce(human,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.PID, &in.Kind, &human); err != nil {
+			return true, false, err
+		}
+		if human != "" {
+			if err = json.Unmarshal([]byte(human), &in.Human); err != nil {
+				return true, false, err
+			}
+			admission, e := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
+			if e != nil || grant == "" || admission.Hash() != grant {
+				return true, false, a.store.setOutboxState(env.ID, stateNotDelivered, "group sender admission changed", "")
+			}
+			in.Conv = conv
+			return a.mayDeliverHuman(env, in, state, fp)
+		}
+	}
 	if state != stateQueued {
 		return true, false, nil
 	}

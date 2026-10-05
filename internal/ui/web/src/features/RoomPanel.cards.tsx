@@ -17,7 +17,7 @@ export type Act = (g: Guest, what: "accept" | "decline" | "dismiss" | "cancel" |
 
 function GuestAvatar({ g, size, mood, past }: { g: Guest; size: 32 | 40; mood?: Mood; past?: boolean }) {
   return g.kind === "agent"
-    ? <AgentAvatar seed={g.seed} size={size} guest={!past} device={g.device} mood={mood || (g.online === false ? "asleep" : g.working ? "working" : "neutral")} />
+    ? <AgentAvatar seed={g.seed} size={size} guest={!past && !g.member} device={g.device} mood={mood || (g.online === false ? "asleep" : g.working ? "working" : "neutral")} />
     : <PersonAvatar name={g.name} seed={g.seed} size={size} guest={!past} online={past ? undefined : g.online} />;
 }
 
@@ -27,15 +27,15 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
   const asleep = g.kind === "agent" && g.online === false;
   const line = [asleep ? g.line.replace(/ · ([^·]+)$/, " · asleep · $1 offline") : g.line, g.sinceAt && "since " + timeOf(g.sinceAt)].filter(Boolean).join(" · ");
   return (
-    <article aria-label={g.name + ", guest"} className="pop-in rounded-2xl stroke bg-guest-bg p-3 shadow-pop-sm">
+    <article aria-label={g.name + (g.member ? ", member" : ", guest")} className="pop-in rounded-2xl stroke bg-guest-bg p-3 shadow-pop-sm">
       <div className="flex items-center gap-3">
         <GuestAvatar g={g} size={40} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5"><b className="truncate text-[15.5px] font-bold">{g.name}{g.kind === "person" && g.hostHere && " (you)"}</b><Tag tone="guest">Guest</Tag></div>
+          <div className="flex items-center gap-1.5"><b className="truncate text-[15.5px] font-bold">{g.name}{g.kind === "person" && g.hostHere && " (you)"}</b>{!g.member && <Tag tone="guest">Guest</Tag>}</div>
           <div className={"truncate text-[13px] font-semibold " + (g.kind === "agent" ? "text-agent-ink" : "text-text-2")}>{line}</div>
         </div>
       </div>
-      {g.state === "conflict" && <p className="mt-2 text-[13px] font-semibold text-danger">{g.stateText}</p>}
+      {(g.kind === "agent" || g.state === "conflict") && <p className="mt-2 text-[13px] font-semibold text-danger">{g.stateText}</p>}
       <div className="mt-2.5 rounded-xl border border-outline/20 bg-surface px-2.5 py-2">
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-[13px] font-bold">{x.label}{!x.cells.length && x.range && <span className="whitespace-nowrap text-[12px] font-semibold text-muted tnum">{x.range}</span>}</div>
         {x.cells.length > 0 && (
@@ -53,12 +53,12 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
       </div>
       <div className="mt-2.5 flex flex-wrap gap-2">
         <Button size="sm" icon={<IconEye size={18} />} onClick={() => setSeeing(true)}>{g.hostHere && g.kind === "person" ? "What you saw" : "What " + shortName(g) + " saw"}</Button>
-        {(g.can.dismiss || g.can.end) && <Button size="sm" disabled={busy} icon={<IconHandStop size={18} />} onClick={() => onAct(g, "dismiss")}>Dismiss</Button>}
+        {(g.can.dismiss || g.can.end) && <Button size="sm" disabled={busy} icon={<IconHandStop size={18} />} onClick={() => onAct(g, "dismiss")}>{g.member ? "Remove agent" : "Dismiss"}</Button>}
         {g.can.leave && <Button size="sm" disabled={busy} icon={<IconDoorExit size={18} />} onClick={() => onAct(g, "leave")}>Leave</Button>}
       </div>
       {(g.can.dismiss || g.can.end) && (
         <p className="mt-2 text-[13px] leading-snug text-text-2">
-          {g.kind === "agent" ? "Nothing more can be asked of it. What was already shared stays with it." : "Stops new messages. What was already shared stays with them."}
+          {g.kind === "agent" ? "Can be asked while here. Removing it stops new requests; what was already shared stays with it." : "Stops new messages. What was already shared stays with them."}
         </p>
       )}
       {g.can.leave && <p className="mt-2 text-[13px] leading-snug text-text-2">You stop getting new messages. What you saw stays with you.</p>}
@@ -93,7 +93,7 @@ export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; bu
       {mine && (
         <p className="mt-2 text-[14px] leading-snug text-text-2">
           {g.kind === "agent"
-            ? "It sees only " + (g.shared.length ? plural(g.shared.length, "earlier message") : "what someone asks it here") + ". Only you can let it in."
+            ? "It sees only " + (g.shared.length ? plural(g.shared.length, "earlier message") : "what someone asks it here") + (g.member ? ", then new group turns while it is a member" : "") + ". Only you can let it in."
             : g.line + ". You’d see " + (g.shared.length + g.missing ? plural(g.shared.length + g.missing, "earlier message") + ", then new ones" : "new messages") + " while you’re here."}
         </p>
       )}

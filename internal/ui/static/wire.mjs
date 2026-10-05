@@ -1660,7 +1660,7 @@ export const MaxTaskKeys = 16;
 export const MaxInviteNote = 1024;
 export const MaxParticipationEvent = 8192;
 const participationDomain = "agentnet-participation-v1\n";
-const eventTypes = new Set(["invite", "accept", "decline", "dismiss", "scope"]);
+const eventTypes = new Set(["invite", "accept", "decline", "dismiss", "scope", "share"]);
 // Go's unicode.IsPrint, plus a newline (an invite's note).
 const noteText = /^[\p{L}\p{M}\p{N}\p{P}\p{S} \n]*$/u;
 
@@ -1720,6 +1720,10 @@ function uniqueList(items, max, valid, what) {
 // null when absent, which matters: an accept, decline or dismiss may not
 // carry them even empty.
 export function validateEvent(e) {
+  if(e.type === "share") {
+    if(!validHash(e.prev)||!e.group||e.role||e.until||e.task_keys?.length||e.note) throw new Error("participation: a share names an existing group agent and selected context only");
+    return validateEvent({...e,type:"invite",prev:""});
+  }
   if (e.v !== 1 || !validHash(e.conv) || !validID(e.pid) || !(e.ts > 0)) throw new Error("participation: invalid event");
   const a = e.author;
   if (!validID(a.person) || !validHash(a.roster) || !validFingerprint(a.fingerprint)) throw new Error("participation: invalid author");

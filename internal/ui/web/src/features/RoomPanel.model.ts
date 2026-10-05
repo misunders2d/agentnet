@@ -35,8 +35,8 @@ export interface Speaker { name: string; seed: string; agent: boolean; me: boole
 
 /** speaker says who wrote a message in this conversation, in words. */
 export function speaker(m: T.DMMessage, t: T.DMThread, o: T.Overview | null, names: Record<string, string>): Speaker {
-  const a = m.pid ? (t.agents || []).find((x) => x.pid === m.pid) : undefined;
-  if (a && !m.target && holds(a.host, m.from) && (m.kind === "answer" || m.kind === "result" || !!m.agent_id))
+  const a = m.pid ? (t.agents || []).find((x) => x.pid === (m.agent_author_pid || m.pid)) : undefined;
+  if (a && m.verified_agent && holds(a.host, m.from))
     return { name: agentName(a.agent_id, names, a.host, o?.person), seed: a.agent_id || a.host.address, agent: true, me: false };
   if (m.dir === "out" || isMine(o, m.from)) return { name: "You", seed: o?.person?.person || o?.me.address || "me", agent: false, me: true };
   const people = [t.peer, ...(t.members || []), ...(t.guests || []).map((g) => g.host)];
@@ -65,6 +65,7 @@ export interface Guest {
   key: string;
   pid: string;
   kind: "agent" | "person";
+  member?: boolean;
   name: string;
   seed: string;
   who: string;                 // the invite sheet's key for this same person or agent ("Bring back")
@@ -142,7 +143,8 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
     return {
       key: "a:" + a.pid, pid: a.pid, kind: "agent", name, seed: a.agent_id || a.host.address,
       who: "a:" + a.host.address + "#" + (a.agent_id || ""),
-      line: agentWhere(a.host, a.host.address, me), device: deviceKind(a.host.address),
+      member: a.member,
+      line: a.member ? "Invited by " + (a.inviters?.length ? a.inviters : [a.inviter]).map(inviterWord).join(" and ") : agentWhere(a.host, a.host.address, me), device: a.member ? undefined : deviceKind(a.host.address),
       online: online(o, a.host.address), hostName: a.host_here ? "you" : personName(a.host), hostHere: a.host_here,
       invitedBy: inviterWord(a.inviter), note: a.note?.trim() || undefined,
       state: a.state, stateText: a.state_text,

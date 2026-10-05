@@ -102,7 +102,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		return ConvSent{}, err
 	}
 	for id := range m.persons {
-		if _, err := a.refreshPerson(ctx, id, false); err != nil {
+		if _, err := a.refreshPerson(ctx, id, false); err != nil && !(root.Kind == protocol.ConvKindGroup && hubUnreachable(err)) {
 			return ConvSent{}, err
 		}
 	}
@@ -122,12 +122,30 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	}
 	var devices []identity.Public
 	seen := map[string]bool{}
-	for _, member := range root.Members {
+	members := root.Members
+	groupAdmission := ""
+	if root.Kind == protocol.ConvKindGroup {
+		if request || output {
+			return ConvSent{}, errors.New("group addressed turns use their participation route")
+		}
+		members = nil
+		for id := range m.persons {
+			members = append(members, protocol.ConvMember{Person: id})
+		}
+		admission, e := groupMemberAdmission(a.store.db, *m.group, a.Address, a.Self().Fingerprint())
+		if e != nil {
+			return ConvSent{}, e
+		}
+		groupAdmission = admission.Hash()
+	}
+	for _, member := range members {
 		p, ok := m.persons[member.Person]
 		if !ok {
 			return ConvSent{}, errors.New("human: original member proof missing")
 		}
-		in.Fan = append(in.Fan, envelope.Fan{Person: member.Person, Roster: p.info.Roster})
+		if root.Kind != protocol.ConvKindGroup {
+			in.Fan = append(in.Fan, envelope.Fan{Person: member.Person, Roster: p.info.Roster})
+		}
 		for _, d := range p.roster.Devices {
 			if d.Address != a.Address && !seen[d.Address] {
 				devices = append(devices, d)
@@ -217,6 +235,22 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		}
 		copyIn := in
 		copyIn.ID, copyIn.To = protocol.NewID(), device.Address
+		if root.Kind == protocol.ConvKindGroup {
+			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil && !hubUnreachable(err) {
+				return ConvSent{}, err
+			}
+			me, ok, e := a.store.selfPerson(a.Address)
+			if e != nil || !ok {
+				return ConvSent{}, errors.New("group sender person missing")
+			}
+			copyIn.Replica = me.has(device.Address, device.Fingerprint())
+			copyIn.Fan = []envelope.Fan{{Person: me.info.Person, Roster: me.info.Roster}}
+			for _, p := range m.persons {
+				if p.has(device.Address, device.Fingerprint()) && p.info.Person != me.info.Person {
+					copyIn.Fan = append(copyIn.Fan, envelope.Fan{Person: p.info.Person, Roster: p.info.Roster})
+				}
+			}
+		}
 		if request && (device.Address == x.Host.Address && device.Fingerprint() == x.Host.Fingerprint || out.selfJob && len(copies) == 0) {
 			copyIn.ID = in.LID // the host's executable copy (asked on the host: the first copy, whose ID its job takes)
 		}
@@ -233,9 +267,22 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 			a.releaseSpool(envelope.Envelope{Blobs: blobsOf(copyIn.Attachments)})
 			return ConvSent{}, err
 		}
-		copies = append(copies, outCopy{in: copyIn, env: sealed, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint()})
+		copies = append(copies, outCopy{in: copyIn, env: sealed, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint(), groupAdmission: groupAdmission})
 	}
 	guard := func(tx *sql.Tx, replyID string) error {
+		if groupAdmission != "" {
+			current, e := groupTurnPacketIn(tx, root.ID())
+			if e != nil {
+				return e
+			}
+			admission, e := groupMemberAdmission(tx, current, a.Address, a.Self().Fingerprint())
+			if e != nil {
+				return e
+			}
+			if admission.Hash() != groupAdmission {
+				return ErrGroupContextPending
+			}
+		}
 		if out.claim != nil { // an output: the worker's claim decides with this write
 			if err := out.claim(tx, replyID); err != nil {
 				return err

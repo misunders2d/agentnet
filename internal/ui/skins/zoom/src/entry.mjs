@@ -1483,6 +1483,7 @@ function setHubBack() {
 function dmAuthor(m, d) {
   if (humanGroup(d) && m.claimed_key && m.synced_from) return "Claimed " + m.from + " · forwarded history";
   if (m.excerpt_pid) return "Claimed " + (m.agent_id ? namedAuthor(m) : m.from || "author") + " · forwarded context";
+  if(m.verified_agent && m.agent_author_pid) {const a=(d.agents||[]).find(a=>a.pid===m.agent_author_pid&&a.host.address===m.from);if(a)return agentName(a);}
   if (m.agent_id) return namedAuthor(m);
   if (m.dir === "out") return m.via ? "You, on your " + myDeviceName(m.via) : "You";
   if ((m.origin || "").startsWith("agent:")) { // its verified participant label; exact host stays in Details
@@ -2060,8 +2061,8 @@ const namedAgentOn = (id, host, whose = "") => {
 };
 // whoseAgent: a participation's host as the owner of its agent ("Your", "Bob's").
 const whoseAgent = (a) => !a ? "" : a.host_here ? "Your" : a.host && a.host.label ? a.host.label + "'s" : "";
-const agentName = (a) => a.agent_id ? namedAgentLabel(a.agent_id, a.host.address, undefined, whoseAgent(a)) : (a.host_here ? "Your agent" : a.host.label + "'s agent");
-const namedAuthor = (m) => namedAgentOn(m.agent_id, m.from, whoseAgent(m.pid && agentOf(m.pid)));
+const agentName = (a) => a.agent_id ? namedAgentLabel(a.agent_id, a.host.address, undefined, whoseAgent(a)) : (isMe(a.host) ? "Your agent" : a.host.label + "'s agent");
+const namedAuthor = (m) => namedAgentOn(m.agent_id, m.from, whoseAgent(m.pid && agentOf(m.agent_author_pid || m.pid)));
 // catalogLabel names a record in a picker: the same catalog name, plus a short
 // ID only where one host offers two agents of one name (to choose between).
 function catalogLabel(a, records) {
@@ -2396,17 +2397,17 @@ function mentionKey(e) {
 
 function agentCard(a, t) {
   const shown = a.shared.length + a.missing;
-  const facts = ["invited by " + (isMe(a.inviter) ? "you" : a.inviter.label),
+  const facts = ["invited by " + (a.inviters?.length ? a.inviters : [a.inviter]).map(p => isMe(p) ? "you" : p.label).join(" and "),
     shown ? "shown " + plural(shown, "earlier message", "earlier messages") + (a.missing ? " (" + a.missing + " not here)" : "")
       : "shown no earlier messages",
     a.tasks_from.length ? "tasks without asking from " + a.tasks_from.map((p) => (isMe(p) ? "you" : p.label)).join(" and ")
       : "tasks wait for " + (a.host_here ? "you" : a.host.label) + " to accept them"];
   return el("div", { class: "agent-card " + a.state },
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", { ...(a.agent_id ? { title: a.agent_id + " · " + a.host.address } : {}) }, agentName(a)),
-      el("span", { class: "hint" }, "on " + a.host.address)),
+      el("details", {}, el("summary", {}, "Execution host"), el("span", { class: "hint" }, a.host.address))),
     el("p", { class: "agent-state" }, a.state_text),
     el("p", { class: "hint" }, facts.join(" · ")),
-    a.external && el("p", { class: "hint" }, "External host · " + a.host.address + ". It is not a room member; it receives only selected context and requests addressed to this agent."),
+    a.external && !a.member && el("p", { class: "hint" }, "External host · " + a.host.address + ". It is not a room member; it receives only selected context and requests addressed to this agent."),
     a.note && el("p", { class: "agent-note" }, "Note: " + a.note),
     (a.can_decide || a.can_ask || a.can_dismiss) && el("div", { class: "agent-actions" },
       a.can_decide && el("button", { type: "button", class: "btn primary", onclick: () => decideDialog(a, t, true) }, "Accept…"),
@@ -2469,7 +2470,7 @@ function inviteDialog(t) {
   const picked = (cs) => cs.filter((c) => c.input.checked).map((c) => c.input.value);
   dialog({
     title: "Add an assistant to " + (humanGroup(t) ? "this group" : "this DM"),
-    body: [el("p", {}, humanGroup(t) ? "It joins only if its owner accepts, on their computer. Current members see the invitation, what it may be shown and who may give it tasks." : "It joins only if its owner accepts, on their computer. You both see the invitation, what it may be shown and who may give it tasks."),
+    body: [el("p", {}, humanGroup(t) ? "The agent stays as a member after its owner accepts. Every member can ask it; its owner decides what runs. Choosing an agent already here shares more messages with the same membership." : "It joins only if its owner accepts, on their computer. You both see the invitation, what it may be shown and who may give it tasks."),
       el("fieldset", { class: "choices" }, el("legend", {}, "Whose agent"), hosts.map((c) => c.row)),
       el("p", { class: "hint" }, "External hosts are listed by this workspace's server, not verified real-world owners. Choose an exact named agent; its host must prove support and its owner must accept."),
       el("label", { for: "invite-agent", class: "field-label" }, "Assistant on that host"), named, catalogStatus,
@@ -2478,9 +2479,9 @@ function inviteDialog(t) {
         el("p", { class: "hint" }, "None unless you choose. Only selected messages and their available attached files become visible to this agent. Unselected history and files are excluded; unavailable bytes are reported as missing. No private agent session is copied.")),
       fileConsent.row,
       el("fieldset", { class: "choices" }, el("legend", {}, "Tasks without asking its owner each time"), tasks.map((c) => c.row),
-        el("p", { class: "hint" }, humanGroup(t) ? "Current members can ask questions or give tasks. A task from an exact key not chosen here waits for its owner to accept it." : "Either of you can ask it questions or give it tasks. A task from someone not chosen here waits for its owner to accept it.")),
+        el("p", { class: "hint" }, humanGroup(t) ? "Every current member can ask the same agent. Its owner approves questions and tasks. If the agent is already here, this only shares more selected messages; it grants no new task permission." : "Either of you can ask it questions or give it tasks. A task from someone not chosen here waits for its owner to accept it.")),
       el("label", { for: "agent-note", class: "field-label" }, "A note for its owner (optional)"), note],
-    ok: "Invite",
+    ok: humanGroup(t) ? "Add agent or share more" : "Invite",
     run: async () => {
       const host = picked(hosts)[0];
       if (!host) throw new Error("Choose whose agent to invite.");
@@ -2499,7 +2500,7 @@ function inviteDialog(t) {
       if (t.messages.some(m => picked(share).includes(m.id) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected messages include files. Confirm file access, or deselect those messages.");
       await api("/api/dm/agent/invite", { conv: t.id, host, ...(agentID ? { agent_id: agentID } : {}), share: picked(share), tasks_from: picked(tasks), note: note.value }, transport);
       if (!current()) return;
-      announce("Invited. Its owner accepts or declines it on their computer.");
+      announce(humanGroup(t) && t.agents?.some(a=>["active","invited"].includes(a.state)&&a.host.address===host&&(a.agent_id||"")===agentID) ? "Shared more messages with the agent already here." : "Invited. Its owner accepts or declines it on their computer.");
       await loadDM();
     },
   });
@@ -5021,6 +5022,9 @@ const Zoom = {
         el("p", { class: "hint" }, humanGroup(d) ? "Group: " + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · via " + d.peer.address),
         el("h2", {}, d.messages[0] ? firstLine(d.messages[0].body, 80) : "No messages yet"))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
+      humanGroup(d) && el("section", {class:"zoom-agents", "aria-label":"Agents in this group"},
+        d.agents.filter(a=>!["dismissed","declined"].includes(a.state)).map(a=>agentCard(a,d)),
+        inviteRights(d).assistants && el("button",{type:"button",class:"text-btn",onclick:()=>inviteDialog(d)},"Add agent or share more…")),
       el("ol", { class: "mini-chat" }, d.messages.map((m) => {
         if (m.event) return el("li", { class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
         const mine = m.dir === "out";
