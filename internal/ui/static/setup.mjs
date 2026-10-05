@@ -4,6 +4,9 @@
 // an invitation link, or is pasted here. The page shows the server it is for
 // and what the invitation says (the inviter's words, not proof), and joins
 // only when the person presses Join. The device is named automatically.
+// A computer whose membership ended (its device link refused or not
+// approved in time, or removed by its server) says so and starts again
+// only when the person presses Start again.
 const invitePrefix = "agentnet-invite-v1:";
 const linkPrefix = "agentnet-link-v2:";
 
@@ -40,6 +43,14 @@ export function codeFrom(text) {
 }
 
 let panel, state = { state: "none", device: "", device_words: "" };
+let held = ""; // an invitation that arrived while the computer's membership had ended
+
+// endedWords is what an ended membership says: a title and why.
+export const endedWords = {
+  refused: ["Adding this computer was refused", "It was refused on your other device."],
+  expired: ["This computer was not added", "Nobody approved it on your other device in time."],
+  removed: ["This computer was removed", "Its AgentNet server removed it."],
+};
 
 function show(title, ...kids) {
   panel.replaceChildren(el("div", { class: "join-card" }, el("h1", {}, title),
@@ -64,6 +75,33 @@ function welcome(problem) {
     "Open the invitation link you were sent, or paste it here.",
     form);
   box.focus();
+}
+
+// ended says how this computer's membership ended and starts again on the
+// person's click: what it had is kept aside, never deleted.
+function ended() {
+  const [title, why] = endedWords[state.state];
+  const error = el("p", { class: "error", role: "alert", id: "setup-error" });
+  const go = el("button", { type: "button", class: "btn primary join-go" }, "Start again");
+  go.addEventListener("click", async () => {
+    if (go.disabled) return;
+    go.disabled = true; error.textContent = "";
+    try {
+      state = await call("/api/setup/start-again", {});
+    } catch (e) {
+      error.textContent = e.message;
+      go.disabled = false;
+      return;
+    }
+    const code = held;
+    held = "";
+    if (code) inspect(code); else welcome("");
+  });
+  show(title, why,
+    held ? "Start again to use the invitation you opened." : "Start again with a new invitation, or with a new link from your other device.",
+    el("p", { class: "hint" }, "What this computer had is kept in a folder in AgentNet's data, not deleted."),
+    error, go);
+  go.focus();
 }
 
 async function inspect(code) {
@@ -152,9 +190,13 @@ async function main() {
   show("AgentNet", "Opening…");
   try { state = await call("/api/setup"); } catch (e) { show("AgentNet", "AgentNet could not start: " + e.message); return; }
   // The app opened again from another invitation link while this page is open.
-  window.addEventListener("hashchange", () => { const c = take(); if (c) inspect(c); });
+  window.addEventListener("hashchange", () => {
+    const c = take();
+    if (!c) return;
+    if (endedWords[state.state]) { held = c; ended(); } else inspect(c);
+  });
   const code = take();
-  if (code) inspect(code); else welcome("");
+  if (endedWords[state.state]) { held = code; ended(); } else if (code) inspect(code); else welcome("");
 }
 
 if (typeof document !== "undefined") main();

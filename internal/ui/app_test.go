@@ -18,7 +18,10 @@ import (
 	"github.com/misunders2d/agentnet/internal/ui/static"
 )
 
-type fakeSetup struct{ joined []SetupJoin }
+type fakeSetup struct {
+	joined []SetupJoin
+	starts int
+}
 
 func (f *fakeSetup) SetupState() SetupView {
 	return SetupView{State: "none", Device: "linux-laptop", DeviceWords: "Linux laptop"}
@@ -29,6 +32,10 @@ func (f *fakeSetup) SetupInspect(code string) SetupInvite {
 func (f *fakeSetup) SetupJoin(j SetupJoin) (SetupResult, error) {
 	f.joined = append(f.joined, j)
 	return SetupResult{Host: "hub.example.test"}, nil
+}
+func (f *fakeSetup) SetupStartAgain() (SetupView, error) {
+	f.starts++
+	return f.SetupState(), nil
 }
 
 // The app's first-run page has the messenger page's guard: its Host, the
@@ -65,6 +72,12 @@ func TestSetupPage(t *testing.T) {
 	}
 	if r := do(t, ts, "POST", "/api/setup/join", body, post(ts)); r.StatusCode != 200 || len(p.joined) != 1 || p.joined[0].Name != "Bohdan" {
 		t.Fatalf("join: %d %+v", r.StatusCode, p.joined)
+	}
+	if r := do(t, ts, "POST", "/api/setup/start-again", `{}`, authed(ts, map[string]string{"Content-Type": "application/json"})); r.StatusCode != http.StatusForbidden || p.starts != 0 {
+		t.Fatalf("cross-origin start again: %d", r.StatusCode)
+	}
+	if r := do(t, ts, "POST", "/api/setup/start-again", `{}`, post(ts)); r.StatusCode != 200 || p.starts != 1 {
+		t.Fatalf("start again: %d", r.StatusCode)
 	}
 	r = do(t, ts, "GET", "/api/setup", "", authed(ts, nil))
 	var v SetupView

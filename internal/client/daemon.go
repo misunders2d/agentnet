@@ -139,8 +139,8 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		if ctx.Err() != nil {
 			return stopped()
 		}
-		if errors.Is(err, ErrRevoked) {
-			return err
+		if errors.Is(err, ErrRevoked) || errors.Is(err, ErrLinkRefused) || errors.Is(err, ErrLinkExpired) {
+			return err // the Hub ended this agent: reconnecting cannot help
 		}
 		if healthy {
 			reconnect.Reset()

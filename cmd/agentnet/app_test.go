@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -282,6 +283,122 @@ func TestAppSetupJoinsThenServesMessenger(t *testing.T) {
 	again := startApp(t, home, nil)
 	if e := again.next("page"); e.Mode != "daemon" || !strings.HasPrefix(e.URL, page+"/?t=") || e.URL == first.URL {
 		t.Fatalf("restart: %+v (want a new token on %s)", e, page)
+	}
+}
+
+// A computer whose membership ended gets the first-run page saying so,
+// not an error and a restart loop: its device link refused (the home
+// says so), or removed by its server while away (the Hub says so once the
+// messenger runs). Joining waits for Start again, which keeps everything
+// it had, keys and database included, in an old-<time> folder in the home
+// and leaves the app's own files; a new invitation then joins afresh.
+func TestAppStartsAgainWhenItsMembershipEnds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	hubDir := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, hubDir, "127.0.0.1:0", "")
+	admin, err := client.Join(ctx, filepath.Join(t.TempDir(), "admin"), testhub.BootstrapCode(t, hubDir), "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	invite := func() string {
+		t.Helper()
+		code, err := admin.Invite(ctx, "admin", time.Hour, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return code
+	}
+	enrolled := func(name string) string {
+		t.Helper()
+		home := filepath.Join(t.TempDir(), name)
+		a, err := client.Join(ctx, home, invite(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Close()
+		return home
+	}
+	startAgain := func(app *appProc, home string, e appEvent, want string) (*http.Client, string) {
+		t.Helper()
+		if e.Event != "page" || e.Mode != "setup" {
+			t.Fatalf("%s: %+v (want the first-run page)", want, e)
+		}
+		cl, page := pageClient(t, e.URL)
+		if code, body := pageCall(t, cl, page, "/api/setup", nil); code != 200 || !strings.Contains(string(body), `"state":"`+want+`"`) {
+			t.Fatalf("%s: setup state %d %s", want, code, body)
+		}
+		if code, body := pageCall(t, cl, page, "/api/setup/join", map[string]string{"code": invite(), "name": "Bohdan"}); code != http.StatusConflict || !strings.Contains(string(body), "Start again") {
+			t.Fatalf("%s: a join before Start again: %d %s", want, code, body)
+		}
+		if code, body := pageCall(t, cl, page, "/api/setup/start-again", map[string]any{}); code != 200 || !strings.Contains(string(body), `"state":"none"`) {
+			t.Fatalf("%s: start again: %d %s", want, code, body)
+		}
+		aside, _ := filepath.Glob(filepath.Join(home, appAsidePrefix+"*"))
+		if len(aside) != 1 {
+			t.Fatalf("%s: set aside %v", want, aside)
+		}
+		for _, f := range []string{"identity.json", "agent.db"} {
+			if _, err := os.Stat(filepath.Join(aside[0], f)); err != nil {
+				t.Fatalf("%s: %s was not kept: %v", want, f, err)
+			}
+			if _, err := os.Stat(filepath.Join(home, f)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s: %s is still in the home: %v", want, f, err)
+			}
+		}
+		for _, f := range []string{appUIAddrFile, appExeFile} {
+			if _, err := os.Stat(filepath.Join(home, f)); err != nil {
+				t.Fatalf("%s: the app's own %s moved: %v", want, f, err)
+			}
+		}
+		return cl, page
+	}
+
+	// Refused on the other device: the home says so before anything runs.
+	refused := enrolled("tablet")
+	db, err := sql.Open("sqlite", filepath.Join(refused, "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT OR REPLACE INTO config (k, v) VALUES ('link', ?)`, `{"state":"`+client.LinkRefused+`","person":"p"}`)
+	db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := startApp(t, refused, map[string]string{"AGENTNET_APP_EXE": "/opt/AgentNet.AppImage"})
+	startAgain(app, refused, app.next("setup page"), client.EnrollRefused)
+	if err := app.stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Removed by its server while the app was closed: the messenger page
+	// first, then the first-run page once the Hub says so.
+	removed := enrolled("gone")
+	if err := admin.Revoke(ctx, "admin/gone"); err != nil {
+		t.Fatal(err)
+	}
+	app = startApp(t, removed, map[string]string{"AGENTNET_APP_EXE": "/opt/AgentNet.AppImage"})
+	e := app.next("page")
+	if e.Mode == "daemon" {
+		e = app.next("setup page")
+	}
+	cl, page := startAgain(app, removed, e, client.EnrollRemoved)
+	if code, body := pageCall(t, cl, page, "/api/setup/join", map[string]string{"code": invite(), "name": "Bohdan"}); code != 200 {
+		t.Fatalf("join after starting again: %d %s", code, body)
+	}
+	if e := app.next("messenger page"); e.Event != "page" || e.Mode != "daemon" {
+		t.Fatalf("after the new join: %+v", e)
+	}
+	code, body := pageCall(t, cl, page, "/api/overview", nil)
+	var o struct {
+		Me struct {
+			Address string `json:"address"`
+		} `json:"me"`
+	}
+	json.Unmarshal(body, &o)
+	if code != 200 || o.Me.Address == "" || o.Me.Address == "admin/gone" {
+		t.Fatalf("overview after starting again: %d %s", code, body)
 	}
 }
 
@@ -601,6 +718,30 @@ console.log(JSON.stringify(Object.fromEntries(bases.map((b) => [b, nameCandidate
 	for _, b := range bases {
 		if strings.Join(got[b], " ") != strings.Join(want[b], " ") {
 			t.Errorf("%s: browser %v, Go %v", b, got[b], want[b])
+		}
+	}
+}
+
+// The first-run page has words for every way a membership ends, and only
+// for those.
+func TestSetupPageKnowsEndedStates(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	setup, _ := filepath.Abs(filepath.Join("..", "..", "internal", "ui", "static", "setup.mjs"))
+	script := `const { endedWords } = await import(process.argv[1]); console.log(JSON.stringify(Object.keys(endedWords).sort()));`
+	out, err := exec.Command(node, "--input-type=module", "-e", script, "file://"+filepath.ToSlash(setup)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	want := []string{client.EnrollExpired, client.EnrollRefused, client.EnrollRemoved}
+	if got := strings.TrimSpace(string(out)); got != `["`+strings.Join(want, `","`)+`"]` {
+		t.Fatalf("setup.mjs ended states %s, Go %v", got, want)
+	}
+	for _, s := range want {
+		if !client.EnrollEnded(s) {
+			t.Fatalf("%s is not an ended state in Go", s)
 		}
 	}
 }

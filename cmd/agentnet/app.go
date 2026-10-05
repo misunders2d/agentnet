@@ -57,6 +57,7 @@ const (
 	appStableExeDir  = "bin"            // <home>/bin/agentnet: the program hooks run (appexe.go)
 	appJoinTimeout   = 2 * time.Minute  // one join from the first-run page
 	appStartTimeout  = 30 * time.Second // the messenger page after a join
+	appAsidePrefix   = "old-"           // <home>/old-<time>: what an ended membership left, kept on Start again
 )
 
 // getAppURL is where people get the AgentNet app.
@@ -94,6 +95,10 @@ type appRunner struct {
 	token   string
 	handler atomic.Pointer[http.Handler]
 	srv     *http.Server
+
+	// ended is how the last daemon's membership ended (client.EnrollRemoved
+	// …), for the next look at the home; only run uses it.
+	ended string
 }
 
 // runApp runs `agentnet app` until ctx ends or the shell asks it to stop.
@@ -164,7 +169,8 @@ func (r *appRunner) pageURL() string { return "http://" + r.addr + "/?t=" + r.to
 // run decides the mode, in this order: another daemon holds the home
 // (attached: its database is never opened here, since opening it would
 // bring it to this program's schema while an older program may use it);
-// nothing joined yet (setup); joined (daemon).
+// nothing joined yet, or a membership that ended (setup); joined (daemon).
+// A daemon whose membership the Hub ends goes back to setup.
 func (r *appRunner) run(ctx context.Context) error {
 	lock := filepath.Join(r.home, "daemon.lock")
 	for ctx.Err() == nil {
@@ -182,6 +188,12 @@ func (r *appRunner) run(ctx context.Context) error {
 		if err != nil {
 			release()
 			return err
+		}
+		if r.ended != "" { // the Hub said so; the home alone cannot tell a removal
+			if state == client.EnrollEnrolled {
+				state = r.ended
+			}
+			r.ended = ""
 		}
 		var a *client.Agent
 		var started chan error
@@ -202,9 +214,29 @@ func (r *appRunner) run(ctx context.Context) error {
 		if errors.Is(err, errAnotherDaemon) {
 			continue
 		}
+		if ended := endedState(err); ended != "" {
+			// The first-run page says what happened and offers to start again.
+			r.logf("this computer's AgentNet membership ended: %v", err)
+			r.ended = ended
+			continue
+		}
 		return err
 	}
 	return nil
+}
+
+// endedState is the state a daemon's end leaves the home in when the Hub
+// ended its membership, or "".
+func endedState(err error) string {
+	switch {
+	case errors.Is(err, client.ErrRevoked):
+		return client.EnrollRemoved
+	case errors.Is(err, client.ErrLinkRefused):
+		return client.EnrollRefused
+	case errors.Is(err, client.ErrLinkExpired):
+		return client.EnrollExpired
+	}
+	return ""
 }
 
 // attached shows the page of the daemon that holds the home and waits, in
@@ -407,10 +439,12 @@ func (r *appRunner) runOptions(a *client.Agent, answer func(error)) client.RunOp
 type appSetup struct {
 	r      *appRunner
 	ctx    context.Context
-	state  string
 	device string
-	mu     sync.Mutex // one join at a time
+	mu     sync.Mutex // one join or start again at a time
 	joined chan appJoined
+
+	stateMu sync.Mutex
+	state   string // client.EnrollNone …
 }
 
 type appJoined struct {
@@ -436,8 +470,100 @@ func (r *appRunner) setup(ctx context.Context, state string) (*client.Agent, cha
 	}
 }
 
+func (s *appSetup) current() string {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.state
+}
+
 func (s *appSetup) SetupState() ui.SetupView {
-	return ui.SetupView{State: s.state, Device: s.device, DeviceWords: deviceWords(s.device)}
+	return ui.SetupView{State: s.current(), Device: s.device, DeviceWords: deviceWords(s.device)}
+}
+
+// SetupStartAgain, on the person's click, moves what an ended membership
+// left into a folder in the home (appSetAside): nothing is deleted, and
+// the next join makes new keys.
+func (s *appSetup) SetupStartAgain() (ui.SetupView, error) {
+	if !s.mu.TryLock() {
+		return ui.SetupView{}, ui.Refuse("Already joining: wait a moment.")
+	}
+	defer s.mu.Unlock()
+	if !client.EnrollEnded(s.current()) {
+		return s.SetupState(), nil
+	}
+	dir, err := appSetAside(s.r.home, time.Now())
+	if err != nil {
+		s.r.logf("starting again: %v", err)
+		return ui.SetupView{}, ui.Refuse("AgentNet could not start again: " + sentenceOf(err))
+	}
+	s.r.logf("started again; this computer's earlier AgentNet data is kept in %s", dir)
+	s.stateMu.Lock()
+	s.state = client.EnrollNone
+	s.stateMu.Unlock()
+	return s.SetupState(), nil
+}
+
+// appSetAside moves everything in home but the app's own files
+// (appKeepsOnStartAgain) into a new folder there, old-<time>, and answers
+// it. Nothing is deleted; if one move fails, the moved ones go back. It
+// runs only while this process holds the home and nothing has it open.
+func appSetAside(home string, now time.Time) (string, error) {
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		return "", err
+	}
+	base := filepath.Join(home, appAsidePrefix+now.UTC().Format("2006-01-02-150405"))
+	dir := base
+	for i := 2; ; i++ {
+		if err = os.Mkdir(dir, 0o700); !errors.Is(err, os.ErrExist) {
+			break
+		}
+		dir = base + "-" + strconv.Itoa(i)
+	}
+	if err == nil {
+		err = secfile.EnsureDir(dir) // owner-only, on Windows too
+	}
+	if err != nil {
+		return "", err
+	}
+	var moved []string
+	for _, e := range entries {
+		if appKeepsOnStartAgain(e.Name()) {
+			continue
+		}
+		if err := os.Rename(filepath.Join(home, e.Name()), filepath.Join(dir, e.Name())); err != nil {
+			for i := len(moved) - 1; i >= 0; i-- {
+				os.Rename(filepath.Join(dir, moved[i]), filepath.Join(home, moved[i]))
+			}
+			os.Remove(dir)
+			return "", err
+		}
+		moved = append(moved, e.Name())
+	}
+	return dir, nil
+}
+
+// appKeepsOnStartAgain names the home's entries that stay when the person
+// starts again: the app's own (its page's address, the installed app's
+// location, the program copy hooks run, the hooks and the person's
+// skins), an update's handoff, locks, and earlier set-aside folders.
+// Everything else belonged to the membership that ended: keys, database,
+// files.
+func appKeepsOnStartAgain(name string) bool {
+	switch name {
+	case appUIAddrFile, appExeFile, appStableExeDir, "skins", "hooks", "update-request.json":
+		return true
+	}
+	return strings.HasSuffix(name, ".lock") || strings.HasPrefix(name, "update-helper-") || strings.HasPrefix(name, appAsidePrefix)
+}
+
+// sentenceOf is err as the end of a sentence.
+func sentenceOf(err error) string {
+	t := strings.TrimSpace(err.Error())
+	if !strings.HasSuffix(t, ".") {
+		t += "."
+	}
+	return t
 }
 
 // appCode finds an invitation or a device link in what the person pasted
@@ -492,6 +618,9 @@ func (s *appSetup) SetupJoin(j ui.SetupJoin) (ui.SetupResult, error) {
 		return ui.SetupResult{}, ui.Refuse("Already joining: wait a moment.")
 	}
 	defer s.mu.Unlock()
+	if client.EnrollEnded(s.current()) {
+		return ui.SetupResult{}, ui.Refuse("Press Start again first.")
+	}
 	code := appCode(j.Code)
 	_, linkErr := protocol.DecodeLinkOffer(code)
 	link := linkErr == nil

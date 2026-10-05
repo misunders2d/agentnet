@@ -14,8 +14,12 @@ import (
 
 // SetupView is what the first-run page shows on opening.
 type SetupView struct {
-	// State is none (nothing joined here yet) or incomplete (a join that
-	// did not finish: the same invitation again completes it).
+	// State is none (nothing joined here yet), incomplete (a join that
+	// did not finish: the same invitation again completes it), or how this
+	// computer's membership ended: refused (its device link was refused on
+	// the other device), expired (nobody approved it in time) or removed
+	// (its server removed it). An ended computer starts again only after
+	// the person asks to (SetupStartAgain).
 	State string `json:"state"`
 	// Device is the name this computer will have, made automatically, and
 	// DeviceWords the same in words ("Linux laptop").
@@ -58,6 +62,10 @@ type SetupProvider interface {
 	// SetupJoin joins with code and answers only once the messenger page
 	// serves this address. Refusals are Refuse errors in plain words.
 	SetupJoin(j SetupJoin) (SetupResult, error)
+	// SetupStartAgain, on the person's click in an ended state, keeps
+	// what this computer had aside (never deleted) and answers the state
+	// it starts from: none.
+	SetupStartAgain() (SetupView, error)
 }
 
 // NewSetup is the first-run page for p on host, authenticated by token.
@@ -87,6 +95,13 @@ func NewSetup(p SetupProvider, host, token string) http.Handler {
 		var v SetupJoin
 		if readJSON(w, r, &v) {
 			res, err := p.SetupJoin(v)
+			writeResult(w, res, err)
+		}
+	})
+	mux.HandleFunc("POST /api/setup/start-again", func(w http.ResponseWriter, r *http.Request) {
+		var v struct{}
+		if readJSON(w, r, &v) {
+			res, err := p.SetupStartAgain()
 			writeResult(w, res, err)
 		}
 	})

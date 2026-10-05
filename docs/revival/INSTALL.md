@@ -38,6 +38,15 @@ drafts typed in a browser at that address are not carried over (the app
 opens on Comic once). Notification clicks from the old daemon open a
 browser; the app's own open its window.
 
+**When this computer's membership ends** (its device link refused on your
+other device or approved by nobody in time, or the computer removed by its
+server), the app's window says so and offers **Start again**, never an error
+loop. Start again moves everything this computer had in the home, keys and
+database included, into an `old-<date>` folder there (nothing is deleted);
+the app's own files (its address, the installed app's location, skins,
+hooks) stay. A new invitation or device link then joins afresh. A daemon
+started by hand stops in these cases, as it does when revoked.
+
 ## Agents, servers and advanced use: the agentnet program
 
 **Release binaries**: use the

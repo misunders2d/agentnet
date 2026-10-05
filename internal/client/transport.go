@@ -28,9 +28,19 @@ type HubError struct {
 
 func (e *HubError) Error() string { return fmt.Sprintf("hub: %s (%d)", e.Msg, e.Status) }
 
-// Is maps the Hub's revocation answer to ErrRevoked.
+// Is maps the Hub's answers that end this agent for good to their errors:
+// revoked (ErrRevoked), and a device link refused on the other device
+// (ErrLinkRefused) or approved by nobody in time (ErrLinkExpired).
 func (e *HubError) Is(target error) bool {
-	return target == ErrRevoked && e.Code == protocol.CodeRevoked
+	switch target {
+	case ErrRevoked:
+		return e.Code == protocol.CodeRevoked
+	case ErrLinkRefused:
+		return e.Code == protocol.CodeLinkRefused
+	case ErrLinkExpired:
+		return e.Code == protocol.CodeLinkExpired
+	}
+	return false
 }
 
 // errPermanent marks local failures that retrying cannot fix.
