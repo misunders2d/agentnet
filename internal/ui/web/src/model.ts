@@ -25,6 +25,7 @@ export interface ChatItem {
   topics?: Topic[];            // an agent's separate conversations not archived, newest first
   peer?: string;               // an agent's device address
   topicTotal?: number;         // every topic with that agent, archived ones too
+  keyChanged?: boolean;        // the agent's identity changed: sending is paused until it is checked and trusted
 }
 
 // ---- topics (docs/plans/TOPICS.md) ------------------------------------------
@@ -192,6 +193,7 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       topics: ts,
       peer,
       topicTotal: c ? c.total : ts.length,
+      keyChanged: (byPeer.get(peer) || []).some((t) => t.key_changed) || !!c?.latest.key_changed,
     });
   }
   return items.sort((a, b) => (b.lastAt || "").localeCompare(a.lastAt || ""));
@@ -441,3 +443,16 @@ export function reminderTimes(now = new Date()): { label: string; at: Date }[] {
 /** localInput is d as a datetime-local field's value, in this device's time. */
 export const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
 
+// ---- held back (overview.quarantine) ----------------------------------------
+
+/** holdSentence says why a received message is held back (QuarantineItem.code),
+ *  naming its sender; its content is never shown. browser: this device can't trust keys. */
+export function holdSentence(code: string, name: string, browser = false): string {
+  switch (code) {
+    case "key_changed": return name + "’s identity changed. It waits until you check and trust the new one" + (browser ? " in AgentNet on your computer." : ".");
+    case "proof_pending": return "It names a chat or a person this device can’t check yet. It waits here; nothing runs it.";
+    case "identity_conflict": return "It disagrees with what this device knows about " + name + ". It stays held; nothing runs it.";
+    case "conflicting_duplicate": return name + " sent different words under a message already received. It stays held; nothing runs it.";
+    default: return "It couldn’t be verified, so it isn’t shown.";
+  }
+}

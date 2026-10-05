@@ -22,6 +22,7 @@ import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { Reports } from "./Approvals.reports";
 import { Body, Card, Landing, kindTag, useLand, useOpen } from "./Approvals.parts";
 import { ConvRow, SelfConsentRow } from "./Approvals.conv";
+import { HeldBack } from "./Approvals.held";
 import { capital, decidable, inSentence, isSelfConsent, nameOf, peerAgent, whyWords } from "./Approvals.words";
 
 export { ApprovalCard } from "./Approvals.card";
@@ -158,6 +159,7 @@ export function OksView() {
         </section>
       )}
       {notices.length > 0 && <Reports notices={notices} o={o} />}
+      <HeldBack o={o} />
     </div>
   );
 }
