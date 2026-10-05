@@ -188,7 +188,7 @@ func TestCLIFullJourney(t *testing.T) {
 		return strings.Contains(c.run("--home", "alice", "sessions", "bob/desk"), "direct https://")
 	})
 
-	q := strings.Fields(c.run("--home", "alice", "ask", "bob/desk", "status?"))
+	q := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "bob/desk", "status?"))
 	if len(q) != 3 || q[2] != "direct" {
 		t.Fatalf("ask: %v", q)
 	}

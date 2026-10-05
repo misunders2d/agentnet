@@ -72,7 +72,7 @@ func TestClaudeNativeExactReceipt(t *testing.T) {
 			row := claudeReceiptRow(sid, claudeChannelSource, ack)
 			tt.edit(row)
 			writeClaudeRows(t, file, row)
-			ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack)
+			ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack, 0)
 			if e != nil || ok != tt.match {
 				t.Fatalf("receipt match=%v expected=%v: %v", ok, tt.match, e)
 			}
@@ -84,7 +84,7 @@ func TestClaudeNativeExactReceipt(t *testing.T) {
 			m := row["message"].(map[string]any)
 			m["content"] = strings.Replace(m["content"].(string), field+"=\"", field+"=\"wrong-", 1)
 			writeClaudeRows(t, file, row)
-			if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack); e != nil || ok {
+			if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack, 0); e != nil || ok {
 				t.Fatalf("wrong tuple accepted=%v: %v", ok, e)
 			}
 		})
@@ -93,22 +93,22 @@ func TestClaudeNativeExactReceipt(t *testing.T) {
 		row := claudeReceiptRow(sid, claudeChannelSource, ack)
 		row[field] = "different"
 		writeClaudeRows(t, file, row)
-		if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack); e == nil || ok {
+		if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack, 0); e == nil || ok {
 			t.Fatalf("wrong physical %s accepted=%v: %v", field, ok, e)
 		}
 	}
 	row := claudeReceiptRow(sid, claudeChannelSource, ack)
 	writeClaudeRows(t, file, row, row)
-	if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack); e == nil || ok {
+	if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack, 0); e == nil || ok {
 		t.Fatalf("duplicate physical receipt accepted=%v: %v", ok, e)
 	}
 	writeClaudeRows(t, file, row)
 	raw, _ := os.ReadFile(file)
 	os.WriteFile(file, raw[:len(raw)-1], 0600)
-	if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack); e == nil || ok {
+	if ok, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack, 0); e == nil || ok {
 		t.Fatalf("incomplete physical record accepted=%v: %v", ok, e)
 	}
-	if ok, e := claudeNativeScan(filepath.Join(t.TempDir(), "lazy.jsonl"), sid, true, nil); e != nil || ok {
+	if ok, e := claudeNativeScan(filepath.Join(t.TempDir(), "lazy.jsonl"), sid, true, 0, nil); e != nil || ok {
 		t.Fatalf("lazy new file must not become a receipt: %v %v", ok, e)
 	}
 }

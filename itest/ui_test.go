@@ -206,7 +206,7 @@ func TestUIDaemonJourney(t *testing.T) {
 	}
 
 	// A question from the command line reaches bob's page, held for him.
-	q := strings.Fields(c.run("--home", "alice", "ask", bob, "which port does auth use?"))[0]
+	q := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", bob, "which port does auth use?"))[0]
 	seq = nextEvent(t, ev, seq, "question arrived")
 	var o ui.Overview
 	waitFor(t, "question on bob's page", func() bool { o = bp.overview(); _, ok := threadOf(o, q); return ok })

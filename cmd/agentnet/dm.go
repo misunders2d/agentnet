@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -177,8 +178,12 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		replyTo := fs.String("reply-to", "", "reply to exact same-conversation physical/logical reference")
 		var files []client.OutgoingFile
 		fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, client.OutgoingFile{Path: p}); return nil })
+		answerFor := answerWaitFlag(fs, -1) // -1: the kind's default, below
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() < 1 || fs.NArg() > 2 || (fs.NArg() == 1 && len(files) == 0) || (*question && *task) {
-			return errors.New("usage: dm send [--question|--task] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
+			return errors.New("usage: dm send [--question|--task] [--answer-wait D] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
+		}
+		if *answerFor < 0 && *question {
+			*answerFor = client.AskAnswerWait
 		}
 		beyond := ""
 		if !*question && !*task {
@@ -207,7 +212,10 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			line += " (" + sent.Detail + ")"
 		}
 		fmt.Fprintln(stdout, line)
-		return nil
+		if !*question && !*task {
+			return nil // a plain message expects no answer
+		}
+		return awaitAnswer(ctx, a, sent.ID, "agentnet dm show "+fs.Arg(0), answerWait(answerFor), receiver, stdout, os.Stderr)
 	case "invite":
 		fs := flag.NewFlagSet("dm invite", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -315,12 +323,15 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fs.SetOutput(io.Discard)
 		task := fs.Bool("task", false, "a task instead of a question")
 		returnSelection := receiverFlags(fs)
+		answerFor := answerWaitFlag(fs, -1) // -1: the kind's default, below
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
-			return errors.New("usage: dm ask-agent [--task] PID TEXT")
+			return errors.New("usage: dm ask-agent [--task] [--answer-wait D] PID TEXT")
 		}
 		kind := envelope.KindQuestion
 		if *task {
 			kind = envelope.KindTask
+		} else if *answerFor < 0 {
+			*answerFor = client.AskAnswerWait
 		}
 		receiver, err := returnSelection.selected(a, true)
 		if err != nil {
@@ -335,7 +346,11 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			line += " (" + sent.Detail + ")"
 		}
 		fmt.Fprintln(stdout, line)
-		return nil
+		show := "agentnet dm agents (then dm show) for participation " + fs.Arg(0)
+		if p, e := a.Participation(fs.Arg(0)); e == nil {
+			show = "agentnet dm show " + p.Conv
+		}
+		return awaitAnswer(ctx, a, sent.ID, show, answerWait(answerFor), receiver, stdout, os.Stderr)
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
 }

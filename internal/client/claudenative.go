@@ -1,12 +1,10 @@
 package client
 
 import (
-	"bufio"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -239,8 +237,11 @@ func claudeChannelTuple(content string) (map[string]string, bool) {
 
 // Read complete physical native records only. No model echoes, native output
 // writes or SDK receipts can substitute for one exact user/channel-origin tuple.
-func claudeNativeReceipt(file, sid, source string, ack ReplyReceiverAck) (bool, error) {
-	return claudeNativeScan(file, sid, false, func(raw json.RawMessage) bool {
+// The scan starts at offset, the transcript's size when the input was
+// claimed (liveInputClaim.Offset): its token is fresh at the claim, so no
+// record before that can hold it.
+func claudeNativeReceipt(file, sid, source string, ack ReplyReceiverAck, offset int64) (bool, error) {
+	return claudeNativeScan(file, sid, false, offset, func(raw json.RawMessage) bool {
 		var row struct {
 			Type, UUID, SessionID string
 			IsMeta, IsSidechain   bool
@@ -266,50 +267,44 @@ func claudeNativeReceipt(file, sid, source string, ack ReplyReceiverAck) (bool, 
 	})
 }
 
-func claudeNativeScan(file, sid string, missingOK bool, match func(json.RawMessage) bool) (bool, error) {
-	f, e := os.Open(file)
-	if errors.Is(e, os.ErrNotExist) && missingOK {
-		return false, nil // native Claude may create its first JSONL lazily
-	}
-	if e != nil {
-		return false, e
-	}
-	defer f.Close()
-	r := bufio.NewReaderSize(io.LimitReader(f, (32<<20)+1), 4096)
-	found, total, records := false, 0, 0
-	for {
-		line, e := r.ReadString('\n')
-		total += len(line)
-		records++
-		if total > 32<<20 || len(line) > 2<<20 || records > 100000 {
-			return false, errors.New("native Claude transcript exceeds bound")
+// claudeNativeScan validates a Claude transcript from offset on, record by
+// record, and counts the records match accepts (more than one is an error).
+// Its size is never a refusal: a record over nativeRecordMax is read
+// through and skipped (nativescan.go).
+func claudeNativeScan(file, sid string, missingOK bool, offset int64, match func(json.RawMessage) bool) (bool, error) {
+	found := false
+	err := nativeRecords(file, offset, func(rec nativeRecord) error {
+		if !rec.Complete {
+			return errors.New("native Claude record is not completely persisted")
 		}
-		if e == io.EOF {
-			if len(line) != 0 {
-				return false, errors.New("native Claude record is not completely persisted")
-			}
-			return found, nil
-		}
-		if e != nil {
-			return false, e
+		if rec.Oversize {
+			return nil
 		}
 		var row struct{ SessionID, Version, Type string }
-		if json.Unmarshal([]byte(line), &row) != nil {
-			return false, errors.New("native Claude transcript record is invalid")
+		if json.Unmarshal(rec.Line, &row) != nil {
+			return errors.New("native Claude transcript record is invalid")
 		}
 		if row.SessionID != "" && row.SessionID != sid {
-			return false, errors.New("native Claude transcript contains another session")
+			return errors.New("native Claude transcript contains another session")
 		}
 		// A resumed session keeps the records earlier Claude versions wrote:
 		// a version is typed, never required to be one release.
 		if row.Version != "" && !nativeVersion.MatchString(row.Version) {
-			return false, errors.New("native Claude transcript version is malformed")
+			return errors.New("native Claude transcript version is malformed")
 		}
-		if match != nil && match(json.RawMessage(line)) {
+		if match != nil && match(json.RawMessage(rec.Line)) {
 			if found {
-				return false, errors.New("duplicate native Claude input receipt")
+				return errors.New("duplicate native Claude input receipt")
 			}
 			found = true
 		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) && missingOK {
+		return false, nil // native Claude may create its first JSONL lazily
 	}
+	if err != nil {
+		return false, err
+	}
+	return found, nil
 }

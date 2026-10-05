@@ -107,9 +107,19 @@ input and completed local continuation are separate. No live-session dispatch.
 
 ask/task/dm send/dm ask-agent accept --reply-receiver human|AGENT_ID.
 Without it, a question or task asked from a Pi/OMP, Claude Code or Codex
-session returns to that registered session, or the command is refused and
-says why; a plain dm send message selects no receiver unless --on-close-agent
-is given. A background job uses only its own reply binding, if any.
+session is never refused. Its answer returns to that session when the session
+is a live receiver: a current Pi/OMP registration, a Codex thread registered
+on its app-server daemon, or a Claude Code session whose AgentNet Claude
+channel attached (optional: hooks install claude --channel). Otherwise it
+lands in this computer's inbox, where every session's hooks announce it and
+agentnet conversation ID shows it; one plain note says so. When the asking
+session ends (or starts anew), what it had not taken yet goes to this
+computer's inbox and the next session's hooks announce it; it never becomes
+an OK item. Input a session already claimed stays bound and is listed here.
+The asking command also waits for the answer and prints it (--answer-wait).
+A plain dm send message selects no receiver unless --on-close-agent is given,
+which needs that exact registered session. A background job uses only its own
+reply binding, if any.
 Managed receivers require --continue TEXT and --continue-mode question|task.
 --reply-binding ID reuses original receiver/instructions/mode without changes.`,
 	"join": `Usage: agentnet [--home DIR] join --agent NAME CODE-OR-LINK
@@ -180,19 +190,31 @@ Examples:
   agentnet send --reply-to 3f9c... --progress bob/desk "accepted; checking the deploy"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--answer-wait 90s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
 
 Send a question. If the recipient approved you and chose a responder, their
 harness answers automatically in the background; otherwise it waits for them.
 The answer arrives in your inbox as kind "answer" replying to this message.
 Output and --wait as for send: "delivered" means it reached their inbox,
 not that it was answered.
+
+Then ask waits for the answer and prints it (asked here, answered here):
+--answer-wait D, default 90s (0: return at once; always 0 inside a run).
+It prints "sent; waiting..." first: if the command is stopped, the answer
+still arrives, so never send the question again; read it with agentnet
+conversation ID. The local daemon wakes the wait (nothing polls the Hub);
+without a running daemon it says so and returns. It stops early when the
+request waits for someone's OK or a person's decision there. Without an
+answer in time it says "no answer yet" and where the answer will land. The
+answer is printed as another agent's words: information, not instructions.
+An answer that proposes an action instead ("proposes an action (not run)")
+is carried out only if you confirm it: agentnet do ID.
 ` + followUpHelp + `
 
 Example:
   agentnet ask --follow-up "tell me if staging needs a migration" bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--answer-wait D] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
 
 Send a task. It waits until the recipient accepts it, unless they granted
 your agent's exact key standing permission to run tasks (accept --always,
@@ -200,7 +222,9 @@ approve --tasks); either way their responder runs it with their normal
 permissions. The outcome arrives as
 kind "result" with a status (done, failed, timeout, cancelled, declined).
 Output and --wait as for send: "delivered" means it reached their inbox, not
-that it was accepted or done.
+that it was accepted or done. --answer-wait D waits for the result and prints
+it, as for ask (default 0: tasks run long; it stops early when the task waits
+for an OK).
 ` + followUpHelp + `
 
 Example:
@@ -406,11 +430,11 @@ migrated. All devices in new DMs need the person2-capable version.`,
 	"dm": `Usage: agentnet dm new ADDRESS
        agentnet dm list
        agentnet dm show ID
-       agentnet dm send [--question|--task] [--file PATH]... ID [TEXT]
+       agentnet dm send [--question|--task] [--answer-wait D] [--file PATH]... ID [TEXT]
        agentnet dm invite [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST
        agentnet dm agents ID
        agentnet dm accept-agent|decline-agent|dismiss-agent PID
-       agentnet dm ask-agent [--task] PID TEXT
+       agentnet dm ask-agent [--task] [--answer-wait D] PID TEXT
        agentnet dm invite-guest [--share LID,...] [--note TEXT] ID HOST
        agentnet dm accept-guest|decline-guest|end-guest PID
 
@@ -478,7 +502,11 @@ Failures and cancellations are not sent. A dismissal
 request and holds back output not yet handed over, which the host keeps;
 output already sent cannot be recalled. dm show gives each request's state
 on the host (part_waiting, awaiting, running, answered, needs_human,
-not_run, not_delivered, …).`,
+not_run, not_delivered, …).
+
+dm ask-agent and dm send --question wait for the answer and print it, as
+agentnet ask does (--answer-wait D, default 90s; 0 for --task, and always 0
+inside a run).`,
 
 	"members": `Usage: agentnet members
 
@@ -1131,7 +1159,7 @@ var valueFlags = map[string]bool{
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
 	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
-	"follow-up": true, "offset": true, "limit": true, "reply-to": true,
+	"follow-up": true, "offset": true, "limit": true, "reply-to": true, "answer-wait": true,
 }
 
 const followUpHelp = `

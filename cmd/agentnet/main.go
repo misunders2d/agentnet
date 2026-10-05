@@ -894,11 +894,16 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	returnSelection := receiverFlags(fs)
 	remoteAgent := fs.String("agent", "", "exact named remote executor AgentID, independent of reply receiver")
 	replyTo := fs.String("reply-to", "", "continue a conversation: the id of a message you sent to or received from ADDRESS")
+	answerDefault := client.AskAnswerWait // asked here, answered here (MEL-537)
+	if kind == "task" {
+		answerDefault = 0
+	}
+	answerFor := answerWaitFlag(fs, answerDefault)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--answer-wait D] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
 	}
 	beyond := ""
 	if *remoteAgent != "" {
@@ -946,7 +951,7 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 		return err
 	}
 	printResult(r, *wait)
-	return nil
+	return awaitAnswer(ctx, a, r.ID, "agentnet conversation "+r.ID, answerWait(answerFor), receiver, os.Stdout, os.Stderr)
 }
 
 func runResponder(a *client.Agent, args []string) error {

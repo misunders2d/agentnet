@@ -129,7 +129,7 @@ func TestCLIReplyToResumesSession(t *testing.T) {
 		})
 		return id
 	}
-	q1 := strings.Fields(c.run("--home", "alice", "ask", "bob/desk", "first"))[0]
+	q1 := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "bob/desk", "first"))[0]
 	a1 := answerTo(q1)
 	stopBob()
 	c.env = []string{"PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH")}
@@ -141,7 +141,7 @@ func TestCLIReplyToResumesSession(t *testing.T) {
 	if out, err := c.try("--home", "alice", "ask", "--reply-to", a1, "carol/desk", "x"); err == nil || !strings.Contains(out, "not carol/desk") {
 		t.Fatalf("other agent: %v %s", err, out)
 	}
-	q2 := strings.Fields(c.run("--home", "alice", "ask", "--reply-to", a1, "bob/desk", "second"))[0]
+	q2 := strings.Fields(c.run("--home", "alice", "ask", "--answer-wait", "0", "--reply-to", a1, "bob/desk", "second"))[0]
 	answerTo(q2)
 	data, _ := os.ReadFile(filepath.Join(stub, "claude.args"))
 	runs := strings.Split(strings.TrimSpace(string(data)), "\n")

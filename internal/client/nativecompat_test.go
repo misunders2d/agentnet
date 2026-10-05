@@ -113,21 +113,21 @@ func TestClaudeTranscriptAcrossVersions(t *testing.T) {
 	sid := "resumed-session"
 	ack := ReplyReceiverAck{BindingID: "binding", InputID: "input", ClaimID: "claim", InputToken: "token"}
 	file := filepath.Join(t.TempDir(), sid+".jsonl")
-	if found, e := claudeNativeScan(file, sid, true, nil); found || e != nil {
+	if found, e := claudeNativeScan(file, sid, true, 0, nil); found || e != nil {
 		t.Fatalf("lazy transcript: %v %v", found, e)
 	}
 	older := map[string]any{"type": "user", "uuid": "older", "sessionId": sid, "version": "2.1.200", "message": map[string]any{"role": "user", "content": "earlier prompt"}}
 	receipt := claudeReceiptRow(sid, claudeChannelSource, ack)
 	receipt["version"] = "2.2.0-beta.1"
 	writeClaudeRows(t, file, older, receipt)
-	if found, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack); !found || e != nil {
+	if found, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack, 0); !found || e != nil {
 		t.Fatalf("receipt across versions: %v %v", found, e)
 	}
 	for _, v := range []string{"2.1", "latest", "2.1.287; rm"} {
 		bad := claudeReceiptRow(sid, claudeChannelSource, ack)
 		bad["version"] = v
 		writeClaudeRows(t, file, older, bad)
-		if _, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack); e == nil {
+		if _, e := claudeNativeReceipt(file, sid, claudeChannelSource, ack, 0); e == nil {
 			t.Fatalf("malformed version %q accepted", v)
 		}
 	}

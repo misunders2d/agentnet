@@ -42,8 +42,14 @@ func (a *Agent) registerClaudeReplySession(event, sid, file string, route claude
 	if e = route.checkFile(file, sid); e != nil {
 		return "", e
 	}
-	if _, e = claudeNativeScan(file, sid, true, nil); e != nil {
-		return "", e
+	// The whole transcript is validated where ownership is established, once
+	// per registration (and once per channel start, claudeReplyChannelOwner);
+	// every other event keeps the route, path and identity checks without
+	// rereading a long session's file on every tool call (MEL-537).
+	if event == "SessionStart" {
+		if _, e = claudeNativeScan(file, sid, true, 0, nil); e != nil {
+			return "", e
+		}
 	}
 	tx, e := a.store.db.Begin()
 	if e != nil {
@@ -102,6 +108,13 @@ func (a *Agent) registerClaudeReplySession(event, sid, file string, route claude
 		r.Active = true
 		r.CloseReason = ""
 		r.CloseGeneration = 0
+		if count == 1 {
+			// A new generation: what the previous one left undelivered goes to
+			// this computer's inbox, announced by hooks as ordinary arrivals.
+			if e = releaseEndedInputs(tx, r.Handle); e != nil {
+				return "", e
+			}
+		}
 	} else {
 		if count == 0 || !r.Active || r.Claude == nil || *r.Claude != route {
 			return "", errors.New("native Claude hook has no exact current registration")
@@ -114,6 +127,9 @@ func (a *Agent) registerClaudeReplySession(event, sid, file string, route claude
 			// shutdown meaning is NOT qualified; never infer on-close task authority.
 			r.CloseReason = "detached"
 			r.CloseGeneration = r.Generation
+			if e = releaseEndedInputs(tx, r.Handle); e != nil {
+				return "", e
+			}
 		}
 	}
 	if e = saveReplySession(tx, r); e == nil {
@@ -144,36 +160,57 @@ func (a *Agent) claudeReplyChannelOwner(sid string, route claudeNativeRoute) (Cl
 	if e := route.verify(true); e != nil {
 		return ClaudeReplyChannelOwner{}, e
 	}
-	rows, e := a.store.db.Query(`SELECT record FROM reply_sessions WHERE json_extract(record,'$.harness')='claude' AND json_extract(record,'$.session_id')=?`, sid)
+	tx, e := a.store.db.Begin()
 	if e != nil {
 		return ClaudeReplyChannelOwner{}, e
 	}
-	defer rows.Close()
+	defer tx.Rollback()
+	rows, e := tx.Query(`SELECT record FROM reply_sessions WHERE json_extract(record,'$.harness')='claude' AND json_extract(record,'$.session_id')=?`, sid)
+	if e != nil {
+		return ClaudeReplyChannelOwner{}, e
+	}
 	var r replySessionRecord
 	count := 0
 	for rows.Next() {
 		var raw string
 		if e = rows.Scan(&raw); e != nil {
-			return ClaudeReplyChannelOwner{}, e
+			break
 		}
 		if e = json.Unmarshal([]byte(raw), &r); e != nil {
-			return ClaudeReplyChannelOwner{}, e
+			break
 		}
 		count++
 	}
-	if e = rows.Err(); e != nil {
+	rowErr := rows.Err()
+	rows.Close()
+	if e != nil {
 		return ClaudeReplyChannelOwner{}, e
+	}
+	if rowErr != nil {
+		return ClaudeReplyChannelOwner{}, rowErr
 	}
 	if count != 1 || !r.Active || r.Claude == nil || *r.Claude != route || r.OwnerToken == "" {
 		return ClaudeReplyChannelOwner{}, errors.New("native Claude SDK has no exact registered receiver")
 	}
-	if e = a.checkReplySession(a.store.db, r); e != nil {
+	if e = a.checkReplySession(tx, r); e != nil {
 		return ClaudeReplyChannelOwner{}, e
 	}
 	if e = route.checkFile(r.File, sid); e != nil {
 		return ClaudeReplyChannelOwner{}, e
 	}
-	if _, e = claudeNativeScan(r.File, sid, true, nil); e != nil {
+	if r.ChannelGeneration != r.Generation {
+		// Once per channel start in this generation: the whole transcript.
+		if _, e = claudeNativeScan(r.File, sid, true, 0, nil); e != nil {
+			return ClaudeReplyChannelOwner{}, e
+		}
+		// The channel drains this registration from now on: a question asked
+		// from this session may name it as its receiver (NativeOriginReceiver).
+		r.ChannelGeneration = r.Generation
+		if e = saveReplySession(tx, r); e != nil {
+			return ClaudeReplyChannelOwner{}, e
+		}
+	}
+	if e = tx.Commit(); e != nil {
 		return ClaudeReplyChannelOwner{}, e
 	}
 	return ClaudeReplyChannelOwner{ReplySessionCall: ReplySessionCall{
