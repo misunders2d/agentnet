@@ -248,7 +248,10 @@ func TestHumanSharedEndAfterLostAcceptanceReceiptAndReplay(t *testing.T) {
 	if err != nil || !handled || allowed {
 		t.Fatalf("stale acceptance escaped: %v %v %v", handled, allowed, err)
 	}
-	if state, _, _, _ := w.alice.store.outboxState(accept.id); state != stateNotDelivered {
+	// Alice's running daemon may redeliver the queued acceptance before the
+	// end arrives. Preserve that proven receipt; either terminal state must
+	// refuse further sends, as checked above.
+	if state, _, _, _ := w.alice.store.outboxState(accept.id); state != stateNotDelivered && state != "delivered" {
 		t.Fatalf("stale acceptance state %s", state)
 	}
 
