@@ -130,7 +130,7 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 		return o, err
 	}
 	for _, x := range q {
-		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
+		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Code: holdCode(x.Reason), Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
 	}
 	return o, nil
 }

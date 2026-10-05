@@ -823,11 +823,35 @@ func IsReviewNotice(kind, status, replyTo string, files int) bool {
 }
 
 // QuarantineItem is a received envelope held back; its content is not shown.
+// Code says why (Hold*), so a page writes its own sentence with the
+// sender's name from its people list; Reason is the provider's own
+// sentence, a fallback that names the sender's address.
 type QuarantineItem struct {
 	ID     string    `json:"id"`
 	Peer   string    `json:"peer"`
+	Code   string    `json:"code"`
 	Reason string    `json:"reason"` // plain text
 	At     time.Time `json:"at"`
+}
+
+// Why a received message is held back (QuarantineItem.Code). The browser
+// engine gives the same codes (engine.mjs holdCode).
+const (
+	HoldKeyChanged = "key_changed"           // the sender's key changed: held until the person trusts the new one
+	HoldProof      = "proof_pending"         // the conversation or person it names cannot be checked here yet
+	HoldConflict   = "identity_conflict"     // it disagrees with the person record kept here
+	HoldDuplicate  = "conflicting_duplicate" // different content under a message already received
+	HoldUnverified = "unverified"            // it did not verify: its content is never shown
+)
+
+// holdCode is the code for a client quarantine reason; any reason not
+// named here did not verify.
+func holdCode(reason string) string {
+	switch reason {
+	case HoldKeyChanged, HoldProof, HoldConflict, HoldDuplicate:
+		return reason
+	}
+	return HoldUnverified
 }
 
 // Thread is one conversation with one peer.
