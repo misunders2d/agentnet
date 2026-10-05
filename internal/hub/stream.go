@@ -197,7 +197,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	signals := h.signals.subscribe(caller, sub)
 	defer h.signals.unsubscribe(caller, sub)
-	var lastSeq int64
+	var lastSeq, adminNoticeCursor int64
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
 	sentLinks := int64(-1)   // and the devices waiting for this one's approval
@@ -249,6 +249,20 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			sentLinks = gen
+		}
+		notices, err := h.store.deviceAdminNotices(caller, adminNoticeCursor)
+		if err != nil {
+			return
+		}
+		for _, n := range notices {
+			data, _ := json.Marshal(n)
+			if !write("event: device_admin\ndata: %s\n\n", data) {
+				return
+			}
+			adminNoticeCursor = n.Seq
+		}
+		if len(notices) == 100 {
+			continue
 		}
 		if receiptPush {
 			receipts, err := h.store.receiptsFor(caller, receiptCursor)

@@ -502,6 +502,11 @@ func (n *notifier) dispatch(ctx context.Context, address string, now time.Time) 
 	}
 	// One push for all of it: the one conversation, or a summary.
 	payload := protocol.PushPayload{V: 1}
+	for _, a := range send {
+		if a.sender == deviceAdminPushSender {
+			payload.Notice = "device_admin"
+		}
+	}
 	topic := "summary"
 	if channels := distinctChannels(send); len(channels) == 1 && channels[0] != "" {
 		payload.Channel, topic = channels[0], channels[0]
@@ -539,6 +544,19 @@ func (n *notifier) allowed(address string, a alert, now time.Time) (bool, error)
 		return false, nil
 	}
 	st := n.h.store
+	if a.sender == deviceAdminPushSender {
+		device, err := rawAgentIn(st.db, address)
+		if err != nil {
+			return false, err
+		}
+		_, current, err := currentPersonDevice(st.db, device)
+		if err != nil || !current {
+			return false, err
+		}
+		var allowed bool
+		err = st.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM notify_prefs p JOIN device_admin_notices n ON n.recipient=p.address WHERE p.address=? AND p.enabled=1 AND n.id=? AND n.person=? AND n.fingerprint=?)`, address, a.lastMsg, device.Person, device.Public.Fingerprint()).Scan(&allowed)
+		return allowed, err
+	}
 	var enabled bool
 	var fp string
 	err := st.db.QueryRow(`SELECT

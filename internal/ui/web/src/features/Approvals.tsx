@@ -113,8 +113,9 @@ export function OksView() {
   }
   const held = [...(o?.held || [])].sort(newestFirst);
   const joined = (o?.review || []).filter(isSelfConsent).sort(newestFirst);
-  const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r));
-  const keys = [...items.map((i) => i.key), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id)];
+  const security = (o?.review || []).filter((r) => r.reason === "device_admin").sort(newestFirst);
+  const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r) && r.reason !== "device_admin");
+  const keys = [...items.map((i) => i.key), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
   const { root, title, land } = useLanding(keys.join("\n"));
 
   if (!o) return loadError ? <Failed text={loadError} retry={() => store.retryNow()} /> : <Loading />;
@@ -150,10 +151,11 @@ export function OksView() {
           </ul>
         </section>
       )}
-      {joined.length > 0 && (
+      {(joined.length > 0 || security.length > 0) && (
         <section className="px-4 pt-6" aria-labelledby="oks-notices">
           <h2 id="oks-notices" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Just so you know</h2>
           <ul className="flex flex-col gap-3 pt-3">
+            {security.map((r) => <Listed key={"a:" + r.id} k={"a:" + r.id} land={land}><DeviceAdminRow r={r} /></Listed>)}
             {joined.map((r) => <Listed key={"s:" + r.id} k={"s:" + r.id} land={land}><SelfConsentRow r={r} o={o} names={names} /></Listed>)}
           </ul>
         </section>
@@ -162,6 +164,20 @@ export function OksView() {
       <HeldBack o={o} />
     </div>
   );
+}
+
+function DeviceAdminRow({ r }: { r: T.ReviewItem }) {
+  const store = useApp(), land = useLand();
+  const [busy, setBusy] = useState(false);
+  return <article className="rounded-2xl border-[1.5px] border-ink/15 bg-sunken p-3.5">
+    <Body at={r.at} title={r.why}>
+      <Button variant="ghost" size="sm" disabled={busy} onClick={async () => {
+        setBusy(true);
+        await store.run(api => api.act({ do: "resolve", id: r.id }), "Notice hidden on this device. Company settings access is unchanged.");
+        setBusy(false); land();
+      }}>Hide notice</Button>
+    </Body>
+  </article>;
 }
 
 // ---- rows ---------------------------------------------------------------------

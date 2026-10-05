@@ -2682,24 +2682,25 @@ function rerender() {
 
 function renderReview(items) {
   const decisions = items.filter((it) => !it.notice);
-  const reports = items.filter((it) => it.notice);
+  const security = items.filter((it) => it.reason === "device_admin");
+  const reports = items.filter((it) => it.notice && it.reason !== "device_admin");
   const btn = $("review-btn");
   const n = decisions.length;
-  const total = n + reports.length + (state.overview.links || []).filter((l) => l.state === "pending").length;
+  const total = n + reports.length + security.length + (state.overview.links || []).filter((l) => l.state === "pending").length;
   $("review-count").textContent = total;
   $("review-count").hidden = !total;
-  $("review-word").textContent = n ? "Needs you" : reports.length ? "Reports" : "Nothing needs you";
+  $("review-word").textContent = n ? "Needs you" : security.length ? "Notices" : reports.length ? "Reports" : "Nothing needs you";
   $("review-reports").hidden = true;
   $("review-reports").textContent = plural(reports.length, "report", "reports");
   btn.dataset.n = n;
   btn.setAttribute("aria-label", (n === 1 ? "1 item needs your decision" : n + " items need your decision") +
-    (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : ""));
+    (reports.length ? ", " + plural(reports.length, "report", "reports") + " from other machines" : "") + (security.length ? ", " + plural(security.length, "company settings notice", "company settings notices") : ""));
   fill($("review-list"), ...(n ? decisions.map((it) => el("li", {},
     el("button", { type: "button", onclick: () => { toggleReview(false); openThread(it.id, it.id); } },
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
       el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
-  fill($("activity-extra"), remindersSection(), ...linkNotices().map((n) => el("li", {}, n)));
+  fill($("activity-extra"), remindersSection(), ...security.map(it => el("li", {}, el("p", {}, it.why), el("time", {datetime:it.at}, when(it.at)), el("button", {type:"button", onclick:async()=>{ await api("/api/act",{do:"resolve",id:it.id}); await loadOverview(); }}, "Hide notice"))), ...linkNotices().map((n) => el("li", {}, n)));
   const senders = [...new Set(reports.map((it) => it.peer))];
   const contacts = contactsOf(state.overview.threads);
   fill($("report-list"), ...senders.map((peer) => {

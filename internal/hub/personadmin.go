@@ -71,8 +71,37 @@ func deviceAdminHolds(q querier, address string, a agent, seen map[string]bool) 
 
 // Delete descendants when a source grant ends, so a later re-grant cannot
 // silently restore old authority. The caller owns the transaction.
-func revokeDeviceAdminGrants(tx *sql.Tx, address string) error {
-	_, err := tx.Exec(`WITH RECURSIVE descendants(address) AS (
+func revokeDeviceAdminGrants(tx *sql.Tx, address, by string) error {
+	rows, err := tx.Query(`WITH RECURSIVE descendants(address) AS (
+		SELECT address FROM agents WHERE admin_granted_by = ?
+		UNION SELECT a.address FROM agents a JOIN descendants d ON a.admin_granted_by = d.address
+	) SELECT address, coalesce(person_id,'') FROM agents WHERE admin=1 AND address IN (SELECT address FROM descendants)`, address)
+	if err != nil {
+		return err
+	}
+	type withdrawn struct{ address, person string }
+	var targets []withdrawn
+	for rows.Next() {
+		var d withdrawn
+		if err := rows.Scan(&d.address, &d.person); err != nil {
+			rows.Close()
+			return err
+		}
+		targets = append(targets, d)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, d := range targets {
+		if d.person != "" {
+			if err := addDeviceAdminNotice(tx, d.person, d.address, by, false); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = tx.Exec(`WITH RECURSIVE descendants(address) AS (
 		SELECT address FROM agents WHERE admin_granted_by = ?
 		UNION SELECT a.address FROM agents a JOIN descendants d ON a.admin_granted_by = d.address
 	) UPDATE agents SET admin = 0, admin_granted_by = NULL WHERE address IN (SELECT address FROM descendants)`, address)
@@ -113,10 +142,20 @@ func (s *store) setDeviceAdmin(caller, address string, admin bool) error {
 	if admin && target.Admin {
 		return tx.Commit()
 	}
+	stored, err := rawAgentIn(tx, address)
+	if err != nil {
+		return err
+	}
+	if !admin && !stored.Admin && stored.grantedBy == "" {
+		return tx.Commit()
+	}
+	if err := addDeviceAdminNotice(tx, me.Person, address, caller, admin); err != nil {
+		return err
+	}
 	var by any
 	if admin {
 		by = caller
-	} else if err := revokeDeviceAdminGrants(tx, address); err != nil {
+	} else if err := revokeDeviceAdminGrants(tx, address, caller); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE agents SET admin = ?, admin_granted_by = ? WHERE address = ?`, admin, by, address); err != nil {

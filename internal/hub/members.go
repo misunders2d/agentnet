@@ -18,6 +18,7 @@ import (
 func (h *Hub) membersChanged() {
 	h.membersGen.Add(1)
 	h.streams.notifyAll()
+	h.notifier.wake() // role notices may have queued opted-in Web Push alerts
 }
 
 // members builds the current member list.

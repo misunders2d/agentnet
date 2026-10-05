@@ -208,6 +208,7 @@ func (s NotifySeen) Validate() error {
 // PushPayload is the body of a Web Push message, encrypted to the
 // subscription. It names only the channel; "" means several conversations.
 type PushPayload struct {
+	Notice  string `json:"notice,omitempty"` // fixed security notice category, never message text
 	V       int    `json:"v"`
 	Channel string `json:"chan,omitempty"`
 }

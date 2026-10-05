@@ -430,6 +430,7 @@ const outFilePrefix = "answer-"
 // desktop notification and, if configured, a review notice to their agent.
 // Each has its own bookkeeping, so neither suppresses the other.
 func (a *Agent) reviewAttention(ctx context.Context) {
+	a.notifyDeviceAdminNotices()
 	a.notifyReview()
 	a.sendReviewNotice(ctx)
 }

@@ -288,6 +288,9 @@ func (a *Agent) Resolve(id string) error {
 			a.NoteChange()
 			return nil
 		}
+		if dismissed, err := a.dismissDeviceAdminNotice(id); err != nil || dismissed {
+			return err
+		}
 		if dismissed, err := a.dismissSelfConsentNotice(id); err != nil || dismissed {
 			return err
 		}
