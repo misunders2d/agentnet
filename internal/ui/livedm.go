@@ -373,7 +373,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, m := range shownRows(msgs, people) {
 			dm := DMMessage{Topic: assigned[m.LID], TopicEvent: m.TopicEvent, ID: m.ID, LID: m.LID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, SentAt: shownSent(time.Unix(m.Sent, 0), time.Unix(m.At, 0)), Delivery: m.Delivery,
 				Origin: m.Origin, State: m.State, StateText: DMStateText(m.Dir, m.Kind, m.State, words(laggingCopy(m, c.Peer.Address)), m.Detail),
-				Detail: m.Detail, At: time.Unix(m.At, 0), Unread: m.Dir == "in" && isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
+				Detail: m.Detail, JobDetail: m.JobDetail, At: time.Unix(m.At, 0), Unread: m.Dir == "in" && isUnread[m.ID], Replica: m.Replica, PID: m.PID, Attachments: fileViews(m.Attachments), Via: m.Via, Copies: copyViews(m.Copies), SyncedFrom: syncedFrom(m), Controls: m.Controls, Exec: m.Exec}
 
 			for i := range dm.Copies {
 				if dm.Copies[i].Own {

@@ -2449,6 +2449,7 @@ export class Engine {
       else throw Error("Group current admission or visitor invitation is unavailable.");
     }catch(e){frozen=e.message;members=await this.groupPeople(packet).catch(()=>[]);}
     const inbox=await this.store.all("inbox"),outbox=await this.store.all("outbox"),ctls=[...inbox,...outbox].filter(r=>r.control&&r.conv===conv);
+    const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const visitorPIDs=new Set(infos.filter(i=>i.external&&i.host?.address===this.address&&i.host.fingerprint===this.fp).map(i=>i.pid));
     const messages=(await this.convMessages(conv,inbox,outbox)).filter(m=>role!=="visitor"||visitorPIDs.has(m.pid||m.excerpt_pid)||m.human?.audience.some(s=>visitorPIDs.has(s.pid))),shownReply=linkReplies(messages,this.fp);
     const personLabel=pid=>pid===this.me.person?"You":members.find(p=>p.person===pid)?.label||"Someone";
@@ -2479,7 +2480,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",state_text:event?"":here?outText(m.state,"the group",m.detail):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -5241,7 +5242,7 @@ export class Engine {
             const o = { id: it.id, from: String(it.from || ""), key, kind: String(it.kind || ""), state: String(it.state || ""), blocker: String(it.blocker || ""), since: iso((it.since || 0) * 1000),
               attempt: Number.isSafeInteger(it.attempt) && it.attempt >= 0 ? it.attempt : 0, actionable: it.actionable === true && wire.validFingerprint(key) };
             if (it.conv === true) o.conv = true; // a DM or group request: decided, never answered by hand from here
-            if (o.actionable && typeof it.excerpt === "string" && it.excerpt) o.excerpt = firstLine(it.excerpt);
+            if ((o.actionable || o.state === "needs_human") && typeof it.excerpt === "string" && it.excerpt) o.excerpt = o.state === "needs_human" ? it.excerpt : firstLine(it.excerpt);
             // A task carrying out its agent's proposal (client.ProposalView, first lines): for the operator approving it.
             const p = it.proposal;
             if (o.actionable && p && typeof p === "object" && typeof p.proposal_id === "string" && p.proposal_id) {
@@ -5264,6 +5265,30 @@ export class Engine {
       out.push(item);
     }
     return out;
+  }
+
+  // Private reports from a current own device supplement its public blocker.
+  // A removed/pending key or another person's report never becomes our agent's turn.
+  async ownNeedsYouReports(inbox, outbox) {
+    const latest = new Map();
+    if (this.me?.state === "conflict") return [];
+    for (const m of inbox) {
+      if (m.v !== 1 || m.control || m.kind !== "message" || m.status !== "review_notice" || m.reply_to || m.resolved) continue;
+      if (!this.me?.devices.some(d => d.address === m.from && d.fingerprint === m.fp)) continue;
+      const pin = await this.store.get("pins", m.from);
+      if (!pin || pin.pending || pin.fingerprint !== m.fp) continue;
+      const r = this.reportItems([m], outbox)[0]?.report;
+      if (!r || r.host !== m.from) continue;
+      if (!latest.has(r.host) || r.at >= latest.get(r.host).at) latest.set(r.host, {...r, fingerprint:m.fp});
+    }
+    return [...latest.values()];
+  }
+
+  needsYouText(m, reports) {
+    if (!m.pid || !m.target || m.excerpt_pid || m.history) return "";
+    const r = reports.find(r => r.host === m.target.address && r.fingerprint === m.target.fingerprint);
+    const ids = [m.id, m.lid, ...(m.copies || []).map(c => c.id)];
+    return r?.items.find(it => it.conv && it.state === "needs_human" && it.key === (m.fp || this.fp) && ids.includes(it.id))?.excerpt || "";
   }
 
   // noticeLine is a report's one-line text: what a version 2 report says,
@@ -5880,6 +5905,7 @@ export class Engine {
     const pinned = persons.filter((p) => p.state === "pinned"); // names for a record's author (liveagent.go dmPeople.known)
     const words = await this.peerWordsFn(); // sentences name a person and device, never the address
     const dms = [], links = new Map(); // person → the agents their device runs in DMs here
+    const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     const needsYou = [], heldTurns = []; // what waits for this person (client.PageReview), by conversation
     for (const c of await this.store.all("convs")) {
       const peer = persons.find((p) => p.person === c.peer);
@@ -5888,7 +5914,7 @@ export class Engine {
       const originals = member ? [] : [...(await this.dmMembers(c)).values()];
       if (!member) msgs = msgs.filter(m => m.sub !== "event" || participations.some(p => p.pid === m.pid && (p.role !== "human" || p.host?.address === this.address && p.host.fingerprint === this.fp || p.decision && ["active", "dismissed"].includes(p.state))));
       msgs = await this.oneRowPerRecord(msgs, new Map(participations.filter(p => p.role === "human").map(p => [p.pid, p])));
-      this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns, words);
+      this.needsYouOf(c.id, participations, msgs, inbox.filter((r) => r.control && r.conv === c.id), needsYou, heldTurns, words, privateReports);
       if (this.erasedConv(c.id) && !msgs.some((m) => !m.sub)) continue; // deleted here, and no later turn: not listed until one comes
       for (const info of participations.filter(p => p.role !== "human")) {
         if (!info.host) continue;
@@ -5915,7 +5941,7 @@ export class Engine {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox));
       const view=await this.groupThread(conv), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root}).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
-      this.needsYouOf(conv,parts.filter(p=>p.role!=="human"),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words);
+      this.needsYouOf(conv,parts.filter(p=>p.role!=="human"),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       dms.push({id:conv,kind:"group",title:packet.state.title,peer:{label:packet.state.title,address:"",state:""},members:view.members,role:view.role,frozen:view.frozen,created:iso(packet.root.created*1000),mine:packet.root.creator.address===this.address,count:visible.length,last:visible.length?firstLine(visible.at(-1).body):"",last_at:iso(visible.length?visible.at(-1).at:packet.root.created*1000),unread:visible.filter(m=>m.fp&&!m.own&&!m.read).length,held:0,waiting:visible.filter(m=>m.state==="waiting"||m.state==="queued").length,
         guests:parts.filter(p=>p.state==="active").length,decide:0,...(last?{last_event:last}:{})});
@@ -5956,6 +5982,7 @@ export class Engine {
     if (!c) throw new Error("No conversation with that id.");
     const peer = await this.store.get("persons", c.peer);
     const inbox = await this.store.all("inbox"), outbox = await this.store.all("outbox");
+    const privateReports = await this.ownNeedsYouReports(inbox, outbox);
     let msgs = (await this.convMessages(id, inbox, outbox));
     const ctls = [...inbox.filter((r) => r.control && r.conv === id), ...outbox.filter((r) => r.control && r.conv === id).map((r) => ({ ...r, dir: "out" }))];
     const myLabel = this.me && this.me.label ? this.me.label : "You";
@@ -5965,9 +5992,9 @@ export class Engine {
       return { targetFp, mine: mineAuthor };
     };
     const execView = (m, here) => {
-      if (!here || !m.target || (m.kind !== "question" && m.kind !== "task")) return {};
+      if (!m.target || (m.kind !== "question" && m.kind !== "task")) return {};
       const answered = msgs.some((r) => r.fp && shownReply(r.reply_to) === m.id && (r.kind === "answer" || r.kind === "result"));
-      const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === this.fp && x.from === m.target.address), m.target.address, answered);
+      const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === (here ? this.fp : m.fp) && x.from === m.target.address), m.target.address, answered);
       return e ? { exec: e } : {};
     };
     const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
@@ -6006,6 +6033,7 @@ export class Engine {
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
+          job_detail: this.needsYouText(m, privateReports),
           state, detail: m.detail || "", at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? await this.shownCopies(m.copies) : undefined,
           ...(m.excerpt_pid ? { excerpt_pid: m.excerpt_pid, claimed_key: m.claimed_key } : {}),
@@ -7133,7 +7161,7 @@ export class Engine {
   // is read-only: decided on decide_on, never here or by opening it. Person
   // turns held for the person go to held: they are answered here. Its
   // sentences name devices with words (peerWordsFn), never the address.
-  needsYouOf(conv, infos, msgs, ctls, needsYou, held, words = (a) => a) {
+  needsYouOf(conv, infos, msgs, ctls, needsYou, held, words = (a) => a, reports = []) {
     const mine = (h) => !!h && !!this.me && h.person === this.me.person && h.address !== this.address;
     for (const info of infos) {
       if (info.role === "human" || info.state !== "invited" || !mine(info.host)) continue;
@@ -7155,7 +7183,7 @@ export class Engine {
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
       if (!e || !["awaiting", "needs_human", "interrupted", "running"].includes(e.state)) continue; // client.PageReview's states
       needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted", running: "agent_running" }[e.state], conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
-        why: (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
+        why: (e.state === "needs_human" && this.needsYouText(m, reports)) || (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
     }
   }
 

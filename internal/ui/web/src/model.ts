@@ -545,7 +545,7 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   const who = senderOf(c, o);
   switch (c.reason) {
     case Reason.invite: return who + " invited your agent into " + chatName(c.conv, o);
-    case Reason.needsHuman: return "Your agent needs you for " + (who === "You" ? "your " : who + "’s ") + (c.kind === "task" ? "task" : "question");
+    case Reason.needsHuman: return "Your agent couldn’t finish — it needs your answer";
     case Reason.heldTurn: return who + (c.kind === "task" ? " gave you a task" : " asked you something");
     default: return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
   }

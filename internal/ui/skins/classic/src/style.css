@@ -770,3 +770,7 @@ button.reaction { cursor: pointer; }
 .topic-row small { grid-column:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted); }
 .topic-row input { width:20px;height:20px;align-self:center; }
 @media(max-width:700px) { .topics-bar button {max-width:120px;} .topics-bar .topic-chip:not([aria-pressed=true]) {display:none;} .topics-bar button {padding:6px;} .topics-list {width:100%;} }
+
+/* The agent’s needs-you turn stays readable at phone widths. */
+.agent-turn { margin-top: 8px; padding: 12px; border: 1px solid var(--attn-line); border-radius: 10px; }
+.agent-detail { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
