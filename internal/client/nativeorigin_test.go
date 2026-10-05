@@ -11,12 +11,13 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// refusedOrigin: a named session that cannot be the receiver refuses, with
-// the way out, and is never an inbox (nil) receiver.
-func refusedOrigin(t *testing.T, what string, r *ReplyReceiver, e error) {
+// refusedOrigin: a named session that cannot be the receiver is never
+// refused (MEL-537): no receiver, so the answer lands in this computer's
+// inbox, with a plain note saying so.
+func refusedOrigin(t *testing.T, what string, r *ReplyReceiver, note string) {
 	t.Helper()
-	if e == nil || r != nil || !strings.Contains(e.Error(), "--reply-receiver human") {
-		t.Fatalf("%s: %+v %v", what, r, e)
+	if r != nil || !strings.Contains(note, "inbox") {
+		t.Fatalf("%s: %+v %q", what, r, note)
 	}
 }
 
@@ -37,19 +38,19 @@ func TestNativeOriginClaudeExactSession(t *testing.T) {
 	owner, route := claudeReceiverFixture(t, w.alice)
 	sid, projects := owner.SessionID, route.Projects
 	r, e := w.alice.claudeOrigin(sid, projects)
-	if e != nil || r == nil || r.Kind != "live_session" || r.SessionHandle != owner.Handle {
+	if e != "" || r == nil || r.Kind != "live_session" || r.SessionHandle != owner.Handle {
 		t.Fatalf("origin %+v %v", r, e)
 	}
 	if raw, _ := json.Marshal(r); strings.Contains(string(raw), owner.OwnerToken) {
 		t.Fatal("origin receiver carries the native owner token")
 	}
-	sent, e := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "asked from Claude", ReplyReceiver: r})
-	if e != nil {
-		t.Fatal(e)
+	sent, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "asked from Claude", ReplyReceiver: r})
+	if err != nil {
+		t.Fatal(err)
 	}
 	var bound string
-	if e = w.alice.store.db.QueryRow(`SELECT r.receiver FROM reply_receivers r JOIN outbox o ON o.reply_receiver=r.id WHERE o.id=?`, sent.ID).Scan(&bound); e != nil {
-		t.Fatal(e)
+	if err = w.alice.store.db.QueryRow(`SELECT r.receiver FROM reply_receivers r JOIN outbox o ON o.reply_receiver=r.id WHERE o.id=?`, sent.ID).Scan(&bound); err != nil {
+		t.Fatal(err)
 	}
 	if !strings.Contains(bound, owner.Handle) || strings.Contains(bound, owner.OwnerToken) {
 		t.Fatalf("binding %s", bound)
@@ -64,12 +65,12 @@ func TestNativeOriginClaudeExactSession(t *testing.T) {
 		}
 	}
 	set("$.claude.pid", 2147483646)
-	if r, e = w.alice.claudeOrigin(sid, projects); e != nil || r == nil || r.SessionHandle != owner.Handle {
+	if r, e = w.alice.claudeOrigin(sid, projects); e != "" || r == nil || r.SessionHandle != owner.Handle {
 		t.Fatalf("selection needed the native process: %+v %v", r, e)
 	}
 	hidden := route
 	hidden.PID = 2147483646
-	if _, e = w.alice.claudeReplyChannelOwner(sid, hidden); e == nil {
+	if _, err = w.alice.claudeReplyChannelOwner(sid, hidden); err == nil {
 		t.Fatal("lease without the registered native process")
 	}
 	set("$.claude.pid", route.PID)
@@ -96,16 +97,36 @@ func TestNativeOriginClaudeExactSession(t *testing.T) {
 	refusedOrigin(t, "another realm", r, e)
 	set("$.realm", realm)
 
+	// Selection never reads the transcript: its size or content cannot
+	// refuse a question (delivery proves ownership again).
 	writeClaudeRows(t, owner.File, map[string]any{"type": "user", "sessionId": protocol.NewID(), "message": map[string]any{"role": "user", "content": "another"}})
-	r, e = w.alice.claudeOrigin(sid, projects)
-	refusedOrigin(t, "transcript of another session", r, e)
+	if r, e = w.alice.claudeOrigin(sid, projects); e != "" || r == nil {
+		t.Fatalf("selection read the transcript: %+v %v", r, e)
+	}
 	os.Remove(owner.File)
-	if r, e = w.alice.claudeOrigin(sid, projects); e != nil || r == nil {
+	if r, e = w.alice.claudeOrigin(sid, projects); e != "" || r == nil {
 		t.Fatalf("transcript not yet written: %+v %v", r, e)
 	}
 
-	if _, e = w.alice.registerClaudeReplySession("SessionEnd", sid, owner.File, route); e != nil {
-		t.Fatal(e)
+	// A new generation without AgentNet's channel draining it: the hooks
+	// announce the answer instead, from the inbox.
+	if _, err = w.alice.registerClaudeReplySession("SessionStart", sid, owner.File, route); err != nil {
+		t.Fatal(err)
+	}
+	r, e = w.alice.claudeOrigin(sid, projects)
+	refusedOrigin(t, "no channel in this generation", r, e)
+	if !strings.Contains(e, "no AgentNet Claude channel") {
+		t.Fatalf("note %q", e)
+	}
+	if _, err = w.alice.claudeReplyChannelOwner(sid, route); err != nil {
+		t.Fatal(err)
+	}
+	if r, e = w.alice.claudeOrigin(sid, projects); e != "" || r == nil {
+		t.Fatalf("channel attached again: %+v %v", r, e)
+	}
+
+	if _, err = w.alice.registerClaudeReplySession("SessionEnd", sid, owner.File, route); err != nil {
+		t.Fatal(err)
 	}
 	r, e = w.alice.claudeOrigin(sid, projects)
 	refusedOrigin(t, "ended session", r, e)
@@ -166,7 +187,7 @@ func TestNativeOriginCodexExactThread(t *testing.T) {
 		t.Fatalf("registry %+v", views)
 	}
 	r, e := w.alice.codexOrigin(sid, home)
-	if e != nil || r == nil || r.Kind != "live_session" || r.SessionHandle != views[0].Handle {
+	if e != "" || r == nil || r.Kind != "live_session" || r.SessionHandle != views[0].Handle {
 		t.Fatalf("origin %+v %v", r, e)
 	}
 	var token string
@@ -175,7 +196,7 @@ func TestNativeOriginCodexExactThread(t *testing.T) {
 		t.Fatal("origin receiver carries the native owner token")
 	}
 	// Delivery still needs the registered daemon itself.
-	if e = route.verify(tctx(t), false); e == nil {
+	if err := route.verify(tctx(t), false); err == nil {
 		t.Fatal("hidden native daemon verified for delivery")
 	}
 
@@ -225,18 +246,17 @@ func TestNativeOriginCodexExactThread(t *testing.T) {
 	refusedOrigin(t, "another daemon endpoint", r, e)
 	set("$.codex.endpoint", route.Endpoint)
 
+	// Selection never reads the rollout: delivery proves it again.
 	header, _ := json.Marshal(map[string]any{"type": "session_meta", "ordinal": 0, "payload": map[string]any{"id": "another-thread", "cli_version": "0.160.0", "source": "vscode"}})
 	original, _ := os.ReadFile(file)
 	os.WriteFile(file, append(header, '\n'), 0600)
-	r, e = w.alice.codexOrigin(sid, home)
-	refusedOrigin(t, "rollout of another thread", r, e)
-	os.WriteFile(file, original, 0600)
-	if r, e = w.alice.codexOrigin(sid, home); e != nil || r == nil {
-		t.Fatalf("restored: %+v %v", r, e)
+	if r, e = w.alice.codexOrigin(sid, home); e != "" || r == nil {
+		t.Fatalf("selection read the rollout: %+v %v", r, e)
 	}
+	os.WriteFile(file, original, 0600)
 
-	if _, e = w.alice.registerCodexReplySession("SessionEnd", sid, file, route); e != nil {
-		t.Fatal(e)
+	if _, err := w.alice.registerCodexReplySession("SessionEnd", sid, file, route); err != nil {
+		t.Fatal(err)
 	}
 	r, e = w.alice.codexOrigin(sid, home)
 	refusedOrigin(t, "ended thread", r, e)
@@ -244,15 +264,15 @@ func TestNativeOriginCodexExactThread(t *testing.T) {
 
 // The harness environment decides: no name is a plain command (inbox), both
 // names are ambiguous, a named session is selected only through the caller's
-// own native profile, and anything unqualified refuses rather than falling
-// back.
+// own native profile, and anything unqualified goes to this computer's inbox
+// with a note: asking is never refused (MEL-537).
 func TestNativeOriginNamesOnly(t *testing.T) {
 	w := newWorld(t, "")
-	if r, e := w.alice.NativeOriginReceiver("", ""); r != nil || e != nil {
+	if r, e := w.alice.NativeOriginReceiver("", ""); r != nil || e != "" {
 		t.Fatalf("plain command %+v %v", r, e)
 	}
 	r, e := w.alice.NativeOriginReceiver("claude-session", "codex-thread")
-	if r != nil || e == nil || !strings.Contains(e.Error(), "cannot tell which assistant") {
+	if r != nil || !strings.Contains(e, "cannot tell which one asked") || !strings.Contains(e, "inbox") {
 		t.Fatalf("both names %+v %v", r, e)
 	}
 
@@ -263,7 +283,7 @@ func TestNativeOriginNamesOnly(t *testing.T) {
 	r, e = w.alice.NativeOriginReceiver(owner.SessionID, "")
 	refusedOrigin(t, "not started by Claude Code", r, e)
 	t.Setenv("CLAUDECODE", "1")
-	if r, e = w.alice.NativeOriginReceiver(owner.SessionID, ""); e != nil || r == nil || r.SessionHandle != owner.Handle {
+	if r, e = w.alice.NativeOriginReceiver(owner.SessionID, ""); e != "" || r == nil || r.SessionHandle != owner.Handle {
 		t.Fatalf("Claude origin from its profile %+v %v", r, e)
 	}
 	t.Setenv(ClaudeSessionEnv, protocol.NewID())
@@ -276,7 +296,7 @@ func TestNativeOriginNamesOnly(t *testing.T) {
 
 	sid, _, codex := codexOriginFixture(t, w.alice)
 	t.Setenv("CODEX_HOME", codex.Home)
-	if r, e = w.alice.NativeOriginReceiver("", sid); e != nil || r == nil {
+	if r, e = w.alice.NativeOriginReceiver("", sid); e != "" || r == nil {
 		t.Fatalf("Codex origin from its home %+v %v", r, e)
 	}
 	t.Setenv("CODEX_HOME", t.TempDir()) // no running daemon here

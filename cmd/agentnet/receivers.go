@@ -15,6 +15,10 @@ import (
 
 type replyReceiverFlags struct{ receiver, instructions, mode, binding, onClose *string }
 
+// originNotes receives the one plain note saying where an answer goes when
+// the asking session cannot receive it itself (stderr; tests swap it).
+var originNotes io.Writer = os.Stderr
+
 func receiverFlags(fs *flag.FlagSet) replyReceiverFlags {
 	return replyReceiverFlags{fs.String("reply-receiver", "", "local return receiver: human, managed AgentID, or session:HANDLE"), fs.String("continue", "", "original local continuation instructions (managed or explicit on-close)"), fs.String("continue-mode", "", "explicit local question or task mode"), fs.String("reply-binding", "", "reuse exact existing local receiver/instructions/context"), fs.String("on-close-agent", "", "explicit managed AgentID to continue an exact native receiver after normal shutdown")}
 }
@@ -45,25 +49,33 @@ func (f replyReceiverFlags) selected(a *client.Agent, request bool) (*client.Rep
 		// continuation.
 		origin := os.Getenv(client.BackgroundEnv) != "1" && (request || *f.onClose != "")
 		if origin && os.Getenv("AGENTNET_REPLY_SESSION") != "" {
+			// Asked from a Pi or OMP session: the answer returns to it while
+			// its registration is current; otherwise to this computer's inbox
+			// (an explicit --on-close-agent still needs that exact session).
 			generation, e := strconv.ParseInt(os.Getenv("AGENTNET_REPLY_SESSION_GENERATION"), 10, 64)
-			if e != nil {
+			var r *client.ReplyReceiver
+			if e == nil {
+				r, e = a.CurrentReplySession(os.Getenv("AGENTNET_REPLY_SESSION"), os.Getenv("AGENTNET_REPLY_SESSION_HOME"), generation)
+			}
+			if e == nil {
+				return f.closedSelection(r)
+			}
+			if *f.onClose != "" {
 				return nil, e
 			}
-			r, e := a.CurrentReplySession(os.Getenv("AGENTNET_REPLY_SESSION"), os.Getenv("AGENTNET_REPLY_SESSION_HOME"), generation)
-			if e != nil {
-				return nil, e
-			}
-			return f.closedSelection(r)
+			fmt.Fprintln(originNotes, client.InboxNote("this session's registration is not current: "+e.Error()))
+			return nil, nil
 		}
 		if origin {
 			// Asked from a Claude Code or Codex session: the answer returns to
-			// that exact registered session, or nothing is sent.
-			r, e := a.NativeOriginReceiver(os.Getenv(client.ClaudeSessionEnv), os.Getenv(client.CodexThreadEnv))
-			if e != nil {
-				return nil, e
-			}
+			// that session when it is a live receiver, else to this computer's
+			// inbox, announced by every session's hooks. Never refused.
+			r, note := a.NativeOriginReceiver(os.Getenv(client.ClaudeSessionEnv), os.Getenv(client.CodexThreadEnv))
 			if r != nil {
 				return f.closedSelection(r)
+			}
+			if note != "" && *f.onClose == "" {
+				fmt.Fprintln(originNotes, note)
 			}
 		}
 		if *f.onClose != "" {

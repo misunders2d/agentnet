@@ -81,7 +81,7 @@ func TestCLIDM(t *testing.T) {
 		t.Fatal("the reply landed in the other DM")
 	}
 
-	c.run("--home", "alice", "dm", "send", "--question", deploy, "can you check the release notes?")
+	c.run("--home", "alice", "dm", "send", "--question", "--answer-wait", "0", deploy, "can you check the release notes?")
 	var qid string
 	waitFor(t, "the question held for bob", func() bool {
 		m := regexp.MustCompile(`in admin/laptop \[ui\] question \(conv_held\)  ([0-9a-f]{32})`).FindStringSubmatch(dmShow(c, "bob", deploy))

@@ -122,9 +122,12 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 	for _, m := range review.Device {
 		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, words(m.From), m.Detail),
 			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))}
+		if m.Kind == KindTask {
+			item.Proposal, _ = l.a.ProposalOf(m.ID) // the proposal it carries out, if any
+		}
 		if item.Notice {
 			if r, ok := l.a.NoticeReport(m); ok {
-				item.Report, item.Excerpt = &r, fmt.Sprintf("%s reported %d waiting request(s)", r.Host, len(r.Items))
+				item.Report, item.Excerpt = &r, fmt.Sprintf("%s reported %d waiting request(s)", r.Host, r.Waiting())
 			}
 		}
 		o.Review = append(o.Review, item)
@@ -325,6 +328,12 @@ func (l *Live) Thread(id string) (Thread, error) {
 			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}
 		}
 		v.StateText = StateText(m.Dir, m.Kind, m.State, peer)
+		if m.Dir == "in" && m.Kind == KindTask {
+			v.Proposal, _ = l.a.ProposalOf(m.ID)
+		}
+		if m.Dir == "in" && (m.State == "running" || m.State == "cancel_requested") && m.Detail != "" {
+			v.StateText = m.Detail
+		}
 		switch Next(m.Dir, m.Kind, m.State, peer, replied[m.ID]) {
 		case "you":
 			v.Next = "Needs you"

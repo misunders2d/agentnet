@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -24,7 +25,18 @@ const maxSockPath = 100
 // temporary directory, derived from the absolute home path so the daemon
 // and CLI agree on it.
 func sockPath(home string) string {
-	p := filepath.Join(home, "daemon.sock")
+	return homeSockPath(home, "daemon.sock", ".sock")
+}
+
+// changesSockPath is the daemon's change socket (listenChanges), named by
+// sockPath's rules: HOME/changes.sock, or HASH.changes.sock in the private
+// per-user directory for a long home.
+func changesSockPath(home string) string {
+	return homeSockPath(home, "changes.sock", ".changes.sock")
+}
+
+func homeSockPath(home, name, suffix string) string {
+	p := filepath.Join(home, name)
 	if len(p) <= maxSockPath {
 		return p
 	}
@@ -37,7 +49,7 @@ func sockPath(home string) string {
 	if err != nil {
 		return p // unusable: the listener fails and pings still wake the worker
 	}
-	return filepath.Join(dir, hex.EncodeToString(sum[:8])+".sock")
+	return filepath.Join(dir, hex.EncodeToString(sum[:8])+suffix)
 }
 
 // notifyDaemon wakes a running daemon's worker, if there is one.
@@ -71,4 +83,53 @@ func listenKicks(home string, wake func()) (stop func(), err error) {
 		}
 	}()
 	return func() { ln.Close(); <-done; os.Remove(path) }, nil
+}
+
+// listenChanges serves the daemon's change socket: an owner-only local
+// socket on which each connection receives one byte at once and then one
+// byte per local change (changed: the daemon's change feed), coalesced. It
+// reads nothing, so a connection can learn only that something changed
+// here, never what, and can make nothing happen. A command waiting for an
+// answer (AwaitReply) blocks on it instead of polling. A write that does
+// not complete within changesWriteTimeout ends that connection. stop
+// returns once every connection is closed.
+func listenChanges(home string, changed func() (uint64, <-chan struct{})) (stop func(), err error) {
+	path := changesSockPath(home)
+	os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	os.Chmod(path, 0o600) // owner only, inside an owner-only directory as well
+	quit := make(chan struct{})
+	var wg sync.WaitGroup
+	serve := func(c net.Conn) {
+		defer wg.Done()
+		defer c.Close()
+		for {
+			_, next := changed() // before writing, so no change is missed
+			c.SetWriteDeadline(time.Now().Add(changesWriteTimeout))
+			if _, err := c.Write([]byte{1}); err != nil {
+				return
+			}
+			select {
+			case <-next:
+			case <-quit:
+				return
+			}
+		}
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			wg.Add(1)
+			go serve(c)
+		}
+	}()
+	return func() { close(quit); ln.Close(); wg.Wait(); os.Remove(path) }, nil
 }

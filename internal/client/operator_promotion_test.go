@@ -57,7 +57,7 @@ func TestOperatorPromotionCountThenGrantSeparateInstanceAndRestart(t *testing.T)
 	}
 	waitState(t, w.bob, task.ID, stateAwaiting)
 	eventually(t, "same recipient received count only", func() bool { return len(mustNotices(t, w.alice)) == 1 })
-	if _, ok := w.alice.NoticeReport(mustNotices(t, w.alice)[0]); ok {
+	if r, ok := w.alice.NoticeReport(mustNotices(t, w.alice)[0]); !ok || len(r.Items) != 0 || r.Count != 1 {
 		t.Fatal("count before grant was actionable")
 	}
 	before, _ := w.bob.store.config(reviewToGenKey)
@@ -92,7 +92,8 @@ func TestOperatorPromotionCountThenGrantSeparateInstanceAndRestart(t *testing.T)
 	stop()
 	runAgent(t, w.bob)
 	time.Sleep(300 * time.Millisecond)
-	if len(mustNotices(t, w.alice)) != 2 || st.count() != 0 {
+	// The named report replaced the count card: one open, two in all.
+	if len(mustNotices(t, w.alice)) != 1 || len(notices(t, w.alice, w.bob.Address)) != 2 || st.count() != 0 {
 		t.Fatal("grant/restart duplicated report or executed task")
 	}
 	if s, _ := w.bob.store.jobState(task.ID); s != stateAwaiting {

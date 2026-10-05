@@ -118,6 +118,9 @@ func (a *Agent) onMembers(data []byte) {
 	a.members.view = MemberView{Listed: MembersListed, Members: m, At: time.Now(), Current: true}
 	a.members.mu.Unlock()
 	a.keepMemberFacts(m) // before the bump below, so a page reads them
+	if a.reviewAgain.note() {
+		a.wakeWorker() // a device that could not read reports may now (reviewnotice.go)
+	}
 	connected := 0
 	for _, e := range m.Members {
 		if e.Presence == protocol.PresenceConnected {

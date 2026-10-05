@@ -242,7 +242,7 @@ func TestCLISendReportsDelivery(t *testing.T) {
 	if both, _ := c.try("--home", "alice", "send", "bob/desk", "again"); !strings.Contains(both, "not necessarily read or answered") {
 		t.Fatalf("online send explanation:\n%s", both)
 	}
-	if f := strings.Fields(c.run("--home", "alice", "ask", "--wait", "0", "bob/desk", "q?")); f[1] != "custody" {
+	if f := strings.Fields(c.run("--home", "alice", "ask", "--wait", "0", "--answer-wait", "0", "bob/desk", "q?")); f[1] != "custody" {
 		t.Fatalf("--wait 0: %v", f)
 	}
 	stopBob()

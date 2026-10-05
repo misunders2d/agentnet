@@ -181,10 +181,10 @@ func TestCodexActualSelectedReceiver(t *testing.T) {
 		t.Fatal(e)
 	}
 	text := codexInputText(&ReplyReceiverDelivery{BindingID: binding.ID, InputID: sent.ID, ClaimID: claim.ID, InputToken: claim.Token, RequestBody: "Original LOCAL Codex goal1003y", Message: Message{From: w.bob.Address, Kind: envelope.KindAnswer, Body: "Verified remote clarification1003y; continue original local goal"}})
-	if ok, e := codexNativeReceipt(record.File, record.SessionID, text); e != nil || !ok {
+	if ok, e := codexNativeReceipt(record.File, record.SessionID, text, 0); e != nil || !ok {
 		t.Fatalf("receipt %v %v", ok, e)
 	}
-	if ok, e := codexNativeReceipt(otherRecord.File, otherRecord.SessionID, text); e != nil || ok {
+	if ok, e := codexNativeReceipt(otherRecord.File, otherRecord.SessionID, text, 0); e != nil || ok {
 		t.Fatalf("unselected session received %v %v", ok, e)
 	}
 	wait("selected native continuation completed by fixture", func() bool {
@@ -339,7 +339,10 @@ func TestCodexActualSelectedReceiver(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		wait("native receipt before simulated lost ACK", func() bool { ok, _ := codexNativeReceipt(record.File, record.SessionID, codexInputText(d)); return ok })
+		wait("native receipt before simulated lost ACK", func() bool {
+			ok, _ := codexNativeReceipt(record.File, record.SessionID, codexInputText(d), 0)
+			return ok
+		})
 		again.Close()
 		again, e = Open(w.alice.home)
 		if e != nil {
@@ -372,7 +375,7 @@ func TestCodexActualSelectedReceiver(t *testing.T) {
 		if e != nil || next == nil || !next.ReconcileOnly || next.InputToken != d.InputToken {
 			t.Fatalf("uncertain restarted claim %+v %v", next, e)
 		}
-		if ok, _ := codexNativeReceipt(record.File, record.SessionID, codexInputText(d)); ok || mainCalls(record.SessionID) != before {
+		if ok, _ := codexNativeReceipt(record.File, record.SessionID, codexInputText(d), 0); ok || mainCalls(record.SessionID) != before {
 			t.Fatal("uncertain claim resent")
 		}
 		remaining["lost_ack_reconciled"] = true

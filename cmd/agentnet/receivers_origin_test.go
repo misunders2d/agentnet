@@ -36,62 +36,92 @@ func originSelection(t *testing.T, request bool, args ...string) func() (string,
 	}
 }
 
+// notesTo captures the origin notes the CLI prints.
+func notesTo(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var b bytes.Buffer
+	old := originNotes
+	originNotes = &b
+	t.Cleanup(func() { originNotes = old })
+	return &b
+}
+
 // A CLI request names its origin session only through the harness's own
-// session environment; a named session that cannot be the receiver refuses
-// (never the inbox), an explicit receiver or a background job decides alone,
-// and a plain command keeps the inbox.
+// session environment; a named session that cannot be the receiver is never
+// refused (MEL-537): its answer goes to this computer's inbox, with one plain
+// note saying so. An explicit receiver or a background job decides alone,
+// and a plain command keeps the inbox without a note.
 func TestCLIOriginSelection(t *testing.T) {
 	for _, k := range []string{"AGENTNET_REPLY_SESSION", "AGENTNET_REPLY_BINDING", "AGENTNET_BACKGROUND", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"} {
 		t.Setenv(k, "")
 	}
+	notes := notesTo(t)
 	request := originSelection(t, true)
-	if kind, err := request(); kind != "" || err != nil {
-		t.Fatalf("plain command: %q %v", kind, err)
+	if kind, err := request(); kind != "" || err != nil || notes.Len() != 0 {
+		t.Fatalf("plain command: %q %v %q", kind, err, notes)
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "synthetic-claude-session")
-	if kind, err := request(); kind != "" || err == nil || !strings.Contains(err.Error(), "Claude Code session synthetic-claude-session") || !strings.Contains(err.Error(), "--reply-receiver human") {
-		t.Fatalf("unregistered Claude origin: %q %v", kind, err)
+	if kind, err := request(); kind != "" || err != nil || !strings.Contains(notes.String(), "inbox") || !strings.Contains(notes.String(), "agentnet conversation ID") {
+		t.Fatalf("unregistered Claude origin: %q %v %q", kind, err, notes)
 	}
-	if kind, err := originSelection(t, true, "--reply-receiver", "human")(); kind != "human" || err != nil {
+	notes.Reset()
+	if kind, err := originSelection(t, true, "--reply-receiver", "human")(); kind != "human" || err != nil || notes.Len() != 0 {
 		t.Fatalf("explicit human override: %q %v", kind, err)
 	}
 	t.Setenv("AGENTNET_BACKGROUND", "1")
-	if kind, err := request(); kind != "" || err != nil {
+	if kind, err := request(); kind != "" || err != nil || notes.Len() != 0 {
 		t.Fatalf("background job captured an interactive origin: %q %v", kind, err)
 	}
 	t.Setenv("AGENTNET_BACKGROUND", "")
 	t.Setenv("CODEX_THREAD_ID", "synthetic-codex-thread")
-	if _, err := request(); err == nil || !strings.Contains(err.Error(), "cannot tell which assistant") {
-		t.Fatalf("both harness names: %v", err)
+	if kind, err := request(); kind != "" || err != nil || !strings.Contains(notes.String(), "cannot tell which one asked") {
+		t.Fatalf("both harness names: %q %v %q", kind, err, notes)
 	}
+	notes.Reset()
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	t.Setenv("CODEX_HOME", t.TempDir())
-	if _, err := request(); err == nil || !strings.Contains(err.Error(), "Codex thread synthetic-codex-thread") {
-		t.Fatalf("unregistered Codex origin: %v", err)
+	if kind, err := request(); kind != "" || err != nil || !strings.Contains(notes.String(), "inbox") {
+		t.Fatalf("unregistered Codex origin: %q %v %q", kind, err, notes)
 	}
 }
 
-// A refused origin sends nothing: no outbox row, no binding.
-func TestCLIOriginRefusalSendsNothing(t *testing.T) {
+// Asking from a session that cannot take the answer itself sends the
+// question with no receiver bound: it is not refused, and the note says the
+// answer comes to this computer's inbox.
+func TestCLIOriginWithoutChannelUsesInbox(t *testing.T) {
 	for _, k := range []string{"AGENTNET_REPLY_SESSION", "AGENTNET_BACKGROUND", "CODEX_THREAD_ID"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "synthetic-claude-session")
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	notes := notesTo(t)
 	a, home := diagnosticAgent(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := runSendKind(ctx, a, "ask", []string{"peer/desk", "where is the shipment?"}); err == nil || !strings.Contains(err.Error(), "--reply-receiver human") {
-		t.Fatalf("ask from an unregistered Claude session: %v", err)
+	code, err := a.Invite(ctx, "peer", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := client.Join(ctx, t.TempDir(), code, "desk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { peer.Close() })
+	if err := runSendKind(ctx, a, "ask", []string{"--wait", "0", "--answer-wait", "0", peer.Address, "where is the shipment?"}); err != nil {
+		t.Fatalf("ask from a Claude session without a channel: %v", err)
+	}
+	if !strings.Contains(notes.String(), "inbox") {
+		t.Fatalf("note %q", notes)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var n int
-	db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&n)
-	if n != 0 {
-		t.Fatalf("refused request queued %d outbox rows", n)
+	var sent, bound int
+	db.QueryRow(`SELECT count(*), count(reply_receiver) FROM outbox`).Scan(&sent, &bound)
+	if sent != 1 || bound != 0 {
+		t.Fatalf("outbox %d rows, %d bound", sent, bound)
 	}
 }
 
@@ -105,15 +135,17 @@ func TestCLIPlainMessageSkipsOrigin(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("CLAUDECODE", "") // as from a terminal, even when these tests run under Claude Code
 	message, request := originSelection(t, false), originSelection(t, true)
+	notes := notesTo(t)
 	for _, c := range []struct {
-		name    string
-		env     map[string]string
-		refusal string
+		name string
+		env  map[string]string
+		note string
 	}{
-		{"Claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "synthetic-claude-session"}, "Claude Code session synthetic-claude-session"},
-		{"Codex", map[string]string{"CODEX_THREAD_ID": "synthetic-codex-thread"}, "Codex thread synthetic-codex-thread"},
-		{"both", map[string]string{"CLAUDE_CODE_SESSION_ID": "synthetic-claude-session", "CODEX_THREAD_ID": "synthetic-codex-thread"}, "cannot tell which assistant"},
+		{"Claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "synthetic-claude-session"}, "not started by Claude Code"},
+		{"Codex", map[string]string{"CODEX_THREAD_ID": "synthetic-codex-thread"}, "no exact AgentNet registration"},
+		{"both", map[string]string{"CLAUDE_CODE_SESSION_ID": "synthetic-claude-session", "CODEX_THREAD_ID": "synthetic-codex-thread"}, "cannot tell which one asked"},
 		{"Pi", map[string]string{"AGENTNET_REPLY_SESSION": "synthetic-pi-handle", "AGENTNET_REPLY_SESSION_HOME": t.TempDir(), "AGENTNET_REPLY_SESSION_GENERATION": "1"}, "another AgentNet home"},
 	} {
 		for _, k := range origins {
@@ -122,11 +154,12 @@ func TestCLIPlainMessageSkipsOrigin(t *testing.T) {
 		for k, v := range c.env {
 			t.Setenv(k, v)
 		}
-		if kind, err := message(); kind != "" || err != nil {
-			t.Fatalf("%s: plain message blocked or bound: %q %v", c.name, kind, err)
+		notes.Reset()
+		if kind, err := message(); kind != "" || err != nil || notes.Len() != 0 {
+			t.Fatalf("%s: plain message blocked or bound: %q %v %q", c.name, kind, err, notes)
 		}
-		if _, err := request(); err == nil || !strings.Contains(err.Error(), c.refusal) {
-			t.Fatalf("%s: request lost origin return: %v", c.name, err)
+		if kind, err := request(); kind != "" || err != nil || !strings.Contains(notes.String(), c.note) || !strings.Contains(notes.String(), "inbox") {
+			t.Fatalf("%s: request refused or bound without a live session: %q %v %q", c.name, kind, err, notes)
 		}
 	}
 	for _, k := range origins {
@@ -136,7 +169,8 @@ func TestCLIPlainMessageSkipsOrigin(t *testing.T) {
 	if kind, err := originSelection(t, false, "--reply-receiver", "human")(); kind != "human" || err != nil {
 		t.Fatalf("explicit receiver on a plain message: %q %v", kind, err)
 	}
-	if _, err := originSelection(t, false, "--on-close-agent", strings.Repeat("a", 32))(); err == nil || !strings.Contains(err.Error(), "Claude Code session synthetic-claude-session") {
+	// --on-close-agent still needs that exact session: it fails loudly.
+	if _, err := originSelection(t, false, "--on-close-agent", strings.Repeat("a", 32))(); err == nil || !strings.Contains(err.Error(), "on-close-agent requires an exact registered native reply receiver") {
 		t.Fatalf("on-close-agent on a plain message skipped origin: %v", err)
 	}
 
@@ -178,11 +212,12 @@ func TestCLIPlainMessageSkipsOrigin(t *testing.T) {
 }
 
 // The receivers help states the origin rules the code keeps: a request
-// returns only to a registered session or is refused, and a plain message
+// returns to a live registered session or to this computer's inbox, never
+// refused; an ended session's answers go to the inbox; a plain message
 // selects no receiver unless --on-close-agent is given.
 func TestReceiversHelpStatesOriginRules(t *testing.T) {
 	text := topics["receivers"]
-	for _, want := range []string{"Pi/OMP, Claude Code or Codex", "registered session", "refused", "unless --on-close-agent", "background job"} {
+	for _, want := range []string{"Pi/OMP, Claude Code or Codex", "never refused", "inbox", "hooks", "session ends", "unless --on-close-agent", "background job"} {
 		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
 			t.Errorf("receivers help lacks %q:\n%s", want, text)
 		}
@@ -192,7 +227,8 @@ func TestReceiversHelpStatesOriginRules(t *testing.T) {
 // The live audit: dm send run by Claude Code in a session AgentNet cannot
 // return answers to (no Claude config here). The plain message is stored with
 // no receiver bound; a question or task from that session (dm send
-// --question/--task, dm ask-agent) is refused and stores nothing.
+// --question/--task) is sent too, its answer bound for this computer's inbox
+// (MEL-537); nothing binds a receiver.
 func TestCLIDMSendPlainFromHarnessSession(t *testing.T) {
 	for _, k := range []string{"AGENTNET_REPLY_SESSION", "AGENTNET_REPLY_BINDING", "AGENTNET_BACKGROUND", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR"} {
 		t.Setenv(k, "")
@@ -248,16 +284,16 @@ func TestCLIDMSendPlainFromHarnessSession(t *testing.T) {
 	if err = runDM(ctx, a, []string{"send", conv, "plain note"}, &out); err != nil || out.Len() == 0 {
 		t.Fatalf("plain message from an unregistered Claude session: %q %v", out.String(), err)
 	}
-	if err = runDM(ctx, a, []string{"send", "--question", conv, "where is the shipment?"}, io.Discard); err == nil || !strings.Contains(err.Error(), ".claude") || !strings.Contains(err.Error(), "--reply-receiver human") {
-		t.Fatalf("question from an unregistered Claude session: %v", err)
-	}
-	if err = runDM(ctx, a, []string{"send", "--task", conv, "ship it today"}, io.Discard); err == nil || !strings.Contains(err.Error(), ".claude") || !strings.Contains(err.Error(), "--reply-receiver human") {
-		t.Fatalf("task from an unregistered Claude session: %v", err)
-	}
-	// The receiver is chosen before the participation is looked up, so any
-	// participation id reaches the origin check.
-	if err = runDM(ctx, a, []string{"ask-agent", "any-pid", "where is the shipment?"}, io.Discard); err == nil || !strings.Contains(err.Error(), ".claude") || !strings.Contains(err.Error(), "--reply-receiver human") {
-		t.Fatalf("ask-agent from an unregistered Claude session: %v", err)
+	// Not refused for where the answer would go: the note says the inbox,
+	// and only the group's own rule (people's turns there are plain
+	// messages) stops a question or task.
+	notes := notesTo(t)
+	for _, kind := range []string{"--question", "--task"} {
+		notes.Reset()
+		err = runDM(ctx, a, []string{"send", kind, "--answer-wait", "0", conv, "where is the shipment?"}, io.Discard)
+		if err == nil || strings.Contains(err.Error(), "--reply-receiver") || !strings.Contains(err.Error(), "only ordinary human messages") || !strings.Contains(notes.String(), "inbox") {
+			t.Fatalf("%s from an unregistered Claude session: %v %q", kind, err, notes)
+		}
 	}
 	msgs, err := a.ConversationMessages(conv)
 	if err != nil || len(msgs) != 1 || msgs[0].Kind != envelope.KindMessage || msgs[0].Body != "plain note" {
