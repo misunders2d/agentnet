@@ -301,6 +301,27 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   Device operations:
   `/api/device/service`, `/api/device/link`, `/api/device/decide`,
   `/api/device/remove`.
+  `/api/device/link` answers `{url, expires, app_url}`: `app_url`
+  (`agentnet://open#<code>`) opens the same link in the AgentNet app on this
+  computer. A browser skin makes the link when the person presses Open
+  AgentNet, so its ten minutes cover only that step.
+- The AgentNet app (MEL-533, MEL-534, MEL-536): `overview.app` is `true` when
+  the page is the app's window (the app updates as a whole: offer the new
+  version of the app, never a terminal command). Invite people:
+  `POST /api/invite` `{name, admin, days}` (`days` 1, 7 or 30) answers
+  `{link, label, expires, message}` (one link that offers the app and opens
+  in it; `message` is ready to send); GET `/api/invites` answers
+  `{can_invite, invites[{id, name, label, admin, by, created?, expires}]}`:
+  show Invite people only when `can_invite` (this device is an admin on its
+  server), load it when Settings or New chat opens; `POST /api/invite/revoke`
+  `{id}` withdraws an unused one. Where to get the app: GET `/api/get-app`
+  answers `{version, detected?, platforms[{id, label, url}]}`
+  (`static/getapp.json`, the one table). Folders, for Connect an agent: GET
+  `/api/folders?path=` (empty: the person's home) answers `{path, parent?,
+  home, roots?, dirs[{name, path}], truncated?}`, subfolders only, hidden
+  ones left out; read-only, and only on this computer's program (a browser
+  refuses it). A folder the person picks goes to `POST /api/responder` as
+  today; never ask for a typed path.
 - Agents: `/api/dm/agent/invite`, `/decide`, `/dismiss`, `/ask` under that prefix.
 - Notifications: `/api/notify/enable`, `/disable`, `/mute`, `/allow`, `/seen`,
   plus GET `/api/notify/resolve?chan=...`.

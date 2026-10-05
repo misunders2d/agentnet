@@ -52,6 +52,12 @@ A screen may add private helper files named after it (for example
 `features/Message.reactions.tsx`). Do not edit another screen's files or the
 shared foundation; describe what you need from them in your report.
 
+The AgentNet app's routes (docs/UI_SKINS.md, "The AgentNet app"):
+`/api/invite`, `/api/invites` (`can_invite`), `/api/invite/revoke`,
+`/api/get-app`, `/api/folders` (this computer only), `DeviceLink.app_url`
+and `overview.app`. Invite people, Connect an agent and the app's update
+notice use only these; the demo serves them too.
+
 OKs reads the overview (`needs_you`, `held`, `review`, `group_invitations`,
 `links`); `Approvals.chats.ts` (the old per-chat scan) is gone. The one
 other read: an invitation card reads its chat once (`/api/dm`) to name what

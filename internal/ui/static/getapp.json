@@ -1,0 +1,10 @@
+{
+  "releases": "https://github.com/misunders2d/agentnet/releases",
+  "platforms": [
+    { "id": "windows", "label": "Windows", "asset": "AgentNet-windows-x64-setup.exe" },
+    { "id": "macos", "label": "macOS", "asset": "AgentNet-macos-universal.dmg" },
+    { "id": "linux", "label": "Linux", "asset": "AgentNet-linux-x86_64.AppImage" },
+    { "id": "linux-deb", "label": "Linux (.deb, Ubuntu and Debian)", "asset": "AgentNet-linux-amd64.deb" },
+    { "id": "linux-rpm", "label": "Linux (.rpm, Fedora)", "asset": "AgentNet-linux-x86_64.rpm" }
+  ]
+}

@@ -19,8 +19,13 @@ import { createParser } from "./vendor/sse.mjs"; // eventsource-parser: the fram
 import { browserTeams } from "./teams.mjs"; // signed person teams over this engine (native module)
 import { browserDriveProvider } from "./drivespace.mjs"; // the optional Google Drive space of a conversation (native module)
 import { browserStorageSetupProvider } from "./drivespace-setup.mjs"; // Settings > File storage options (native module)
+import * as getapp from "./getapp.mjs"; // where the AgentNet app is downloaded (getapp.json, shared with Go)
 
 const HEARTBEAT = 90_000;
+const autoNameTries = 20; // device names tried when one is taken (cmd/agentnet appNameTries)
+
+// inviteMessage is ui.InviteMessage: what an admin sends with a link.
+export const inviteMessage = (from, link) => (from ? from + " invited you" : "You're invited") + " to AgentNet. Open this link to get the app and join: " + link;
 const MAX_BACKOFF = 60_000;
 // files keeps file ciphertext: received files ("ct/" + blob id) and a copy
 // of each file sent here, encrypted to this device ("kept/" + its SHA-256),
@@ -556,6 +561,25 @@ export class Engine {
     return address;
   }
 
+  // joinAuto and joinAndLinkAuto join under an automatic device name: base,
+  // then base-2, base-3 … (wire.nameCandidates, as the Go app does) while
+  // the server says a name is taken. People never name devices.
+  async joinAuto(code, base) {
+    return this.tryNames(base, (name) => this.join(code, name));
+  }
+
+  async joinAndLinkAuto(code, base) {
+    return this.tryNames(base, (name) => this.joinAndLink(code, name));
+  }
+
+  async tryNames(base, join) {
+    let last;
+    for (const name of wire.nameCandidates(base, autoNameTries)) {
+      try { return await join(name); } catch (e) { if (!e.taken) throw e; last = e; }
+    }
+    throw new Error("This device's usual names are all taken on your server. Ask your server's admin for help.", { cause: last });
+  }
+
   // joinWith joins with invitation inv (link: the link fields a device
   // link adds, made with the new keys; state: this device's link to keep).
   async joinWith(inv, agentName, link, linkState) {
@@ -578,7 +602,7 @@ export class Engine {
     try {
       await this.call("POST", "/v1/join", body, { signed: false });
     } catch (e) {
-      if (e.status === 409) throw new Error("The name " + address + " is already used on this server. Choose another name.");
+      if (e.status === 409) throw Object.assign(new Error("The name " + address + " is already used on this server. Choose another name."), { taken: true });
       if (e.status === 403 && link) throw new Error("That link cannot be used any more (it was used, or it expired): make a new one on your other device.");
       throw new Error("Could not join (" + e.message + "). Check your connection and try again.");
     }
@@ -788,7 +812,7 @@ export class Engine {
     const book = await this.linkBook();
     book.offers[offer] = { ...o, used: false };
     await put(this.store, "kv", "links", book);
-    return { url: this.base + "/#" + code, expires: iso(expires * 1000) };
+    return { url: this.base + "/#" + code, expires: iso(expires * 1000), app_url: "agentnet://open#" + code };
   }
 
   // onLinkEvent takes the server's "link" event: a device joined with one
@@ -6957,6 +6981,61 @@ export class Engine {
     return { note: "Report dismissed on this device only. Nothing changed on " + m.from + "." };
   }
 
+  // ---- invitations (MEL-533): ui/liveinvites.go, the same routes and words
+
+  // invite makes one invitation link for a new person (an admin's device):
+  // the server makes their label from the name and writes the names on the
+  // invitation as its unsigned hints.
+  async invite(r) {
+    const name = String(r.name || "").trim();
+    if (!name) throw new Error("Write the name of the person you invite.");
+    if (!wire.validInviteHint(name, wire.MaxInviteHint)) throw new Error("Use a shorter name (up to 64 characters) without line breaks.");
+    if (![1, 7, 30].includes(r.days)) throw new Error("Choose how long the link works: 1, 7 or 30 days.");
+    const from = this.me && wire.validInviteHint(this.me.label, wire.MaxInviteHint) ? this.me.label : "";
+    // TODO(integrate:P2): the workspace's name as the invitation's workspace hint.
+    const ttl = r.days * 24 * 3600 * 1e9; // nanoseconds, as Go's time.Duration
+    let out;
+    try {
+      out = await this.call("POST", "/v1/admin/invites", { name, from, ttl, admin: !!r.admin, browser: true });
+    } catch (e) {
+      if (e.status === 403) throw new Error("Only an admin of your server can invite people.");
+      if (e.status === 409) throw new Error("Your server cannot make invitation links: it needs to serve its page over HTTPS that browsers trust.");
+      throw e;
+    }
+    const inv = wire.decodeInvite(out.code);
+    const link = inv.hub + "/#" + out.code;
+    return { link, label: out.label || inv.label, expires: iso(this.now() + r.days * 24 * 3600 * 1000), message: inviteMessage(from, link) };
+  }
+
+  // invitesList says whether this device may invite and, for an admin's
+  // device, the invitations still waiting to be used.
+  async invitesList() {
+    const p = await this.call("GET", "/v1/admin/invites");
+    return { can_invite: !!p.can_invite, invites: (p.invites || []).map((i) => ({ id: i.id, name: i.name || "", label: i.label, admin: !!i.admin, by: i.created_by,
+      ...(i.created_at ? { created: iso(i.created_at * 1000) } : {}), expires: iso(i.expires * 1000) })) };
+  }
+
+  async revokeInvite(id) {
+    if (!id) throw new Error("Choose an invitation.");
+    try {
+      await this.call("POST", "/v1/admin/invites/revoke", { id });
+    } catch (e) {
+      if (e.status === 404) throw new Error("That invitation was already used, withdrawn or expired.");
+      if (e.status === 403) throw new Error("Only an admin of your server can invite people.");
+      throw e;
+    }
+  }
+
+  // getApp is where to get the AgentNet app (getapp.json, as Go reads it)
+  // for this server's version, and the device this browser runs on.
+  async getApp() {
+    const table = this.getAppTable || (this.getAppTable = await (await this.fetch(this.base + "/assets/getapp.json", { cache: "no-store" })).json());
+    if (!this.version) { try { await this.features(); } catch (e) { /* the latest release then */ } }
+    const nav = globalThis.navigator || {};
+    return { version: this.version || "", detected: getapp.detectPlatform(nav.userAgent, nav.userAgentData && nav.userAgentData.platform, nav.maxTouchPoints),
+      platforms: getapp.downloads(table, this.version).map((d) => ({ id: d.id, label: d.label, url: d.url })) };
+  }
+
   // api answers the page's requests as the daemon's page API does.
   async api(path, body) {
     try { return await this.apiRequest(path,body); }
@@ -7060,6 +7139,11 @@ export class Engine {
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");
     case "/api/send": return this.sendDirect(body);
     case "/api/simulate": throw new Error("Not available here.");
+    case "/api/invite": return this.invite(body || {});
+    case "/api/invites": return this.invitesList();
+    case "/api/invite/revoke": await this.revokeInvite((body || {}).id); return { revoked: true };
+    case "/api/get-app": return this.getApp();
+    case "/api/folders": throw new Error("Folders are chosen in the AgentNet app on a computer: this browser cannot see that computer's folders.");
     }
     throw new Error("Unknown request.");
   }

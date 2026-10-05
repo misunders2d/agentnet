@@ -341,9 +341,30 @@
     // current workspace instead).
     const notice = (words, action) => { if (bar) bar.notify(words, action ? { label: action, run: () => go(HOME, location.hash) } : null); };
     const clear = () => history.replaceState(null, "", location.pathname + location.search);
+    // An invitation or device link opened in the AgentNet app once this
+    // computer has joined (agentnet://open#…): taken out of the address at
+    // once (it is a secret), never acted on. The same server needs no
+    // second person; another server is joined from the workspace menu.
+    // TODO(integrate:P2): open P2's workspace join sheet with it, the
+    // server's host shown and a click required.
+    const invitation = () => {
+      const hash = location.hash || "";
+      if (browser || !/^#agentnet-(invite-v1|link-v2):/.test(hash)) return false;
+      clear();
+      let host = "";
+      try {
+        const code = decodeURIComponent(hash.slice(1));
+        const raw = code.startsWith("agentnet-link-v2:") ? null : JSON.parse(atob(code.slice(code.indexOf(":") + 1).replace(/-/g, "+").replace(/_/g, "/")));
+        host = raw && typeof raw.hub === "string" ? new URL(raw.hub).host : "";
+      } catch (_) { host = ""; }
+      notice(hash.startsWith("#agentnet-link-v2:") ? "A device link opens on a new device: this computer is already one of yours."
+        : "This computer has joined AgentNet already. To join " + (host ? "the server " + host : "another server") + " with that invitation, use Join a workspace in the workspace menu.");
+      return true;
+    };
     const route = () => {
       const hash = location.hash || "";
       notice("");
+      if (invitation()) return;
       const review = hash === "#review" || hash.startsWith("#review&"), msg = hash.startsWith("#msg="), conv = hash.startsWith("#conv=");
       if (!review && !msg && !conv) return;
       const q = new URLSearchParams(hash.slice(1)), wid = q.get("workspace");
