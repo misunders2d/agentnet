@@ -183,4 +183,15 @@ for (const [what, body, re] of [['done', { peer: bob, id: 'f'.repeat(32) }, /No 
   await refuses(() => engine.api('/api/topic/' + what, body), re, 'refuses ' + what + ' ' + JSON.stringify(body));
 }
 check(changes > writesBefore && network === 0, 'changes are announced; nothing touched the network');
+// MEL-562: outbound review reports are internal report threads, while user JSON stays visible.
+{
+ const s=memoryStore(),e=new Engine({store:s,now:()=>now});e.address='me/desk';
+ const report='d'.repeat(32),ordinary='e'.repeat(32),peer='other/desk';
+ await s.write([{s:'outbox',k:report,v:{v:1,id:report,to:peer,kind:'message',status:'review_notice',body:JSON.stringify({v:2,host:e.address,items:[]}),at:now,state:'custody',attachments:[]}},
+ {s:'outbox',k:ordinary,v:{v:1,id:ordinary,to:peer,kind:'message',body:'{"user":"ordinary JSON remains visible"}',at:now+1,state:'custody',attachments:[]}}]);
+ const threads=await e.threadSummaries();check(threads.find(t=>t.id===report).notice_only,'sent internal report excluded from topics');
+ check(!threads.find(t=>t.id===report).title.includes('{'),'sent internal report has readable summary');
+ check(!threads.find(t=>t.id===ordinary).notice_only,'ordinary user JSON still a topic');
+ const page=await e.topicList(new URLSearchParams());check(!page.topics.some(t=>t.id===report)&&page.topics.some(t=>t.id===ordinary),'All topics preserves user JSON and omits internal reports');
+}
 console.log(JSON.stringify({ checks }));

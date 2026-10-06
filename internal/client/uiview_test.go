@@ -225,3 +225,32 @@ func TestPageViewsLeaveOutConversations(t *testing.T) {
 		t.Fatalf("%d unread DM messages at bob, want 2 (viewing marks nothing read)", n)
 	}
 }
+
+// MEL-562: sent internal review reports must not become person-visible topics.
+func TestSentReviewNoticeIsNotConversationTopic(t *testing.T) {
+	w := newWorld(t, "")
+	notice, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage, Status: envelope.StatusReviewNotice, Body: `{"v":2,"items":[]}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindMessage, Body: `{"user":"ordinary JSON remains visible"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threads := threadsWith(t, w.alice, w.bob.Address)
+	if !threads[notice.ID].NoticeOnly || threads[notice.ID].Notices != 0 {
+		t.Fatalf("outgoing internal report became topic: %+v", threads[notice.ID])
+	}
+	if threads[ordinary.ID].NoticeOnly {
+		t.Fatal("ordinary user JSON hidden as report")
+	}
+	page, err := w.alice.Topics(TopicQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, topic := range page.Topics {
+		if topic.ID == notice.ID {
+			t.Fatal("internal report appeared in All topics")
+		}
+	}
+}

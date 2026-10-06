@@ -197,7 +197,8 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, ''),topic_done
+	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, ''),topic_done,
+		(coalesce(json_extract(envelope,'$.kind'),'')='message' AND coalesce(status,'')='review_notice' AND reply_to IS NULL AND NOT EXISTS(SELECT 1 FROM sent_attachments a WHERE a.message_id=o.id))
 		FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
@@ -205,7 +206,7 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone); err != nil {
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice); err != nil {
 			return nil, err
 		}
 		r.replied = replies[r.id]
