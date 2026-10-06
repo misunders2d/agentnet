@@ -3,11 +3,81 @@ package main
 import (
 	"bytes"
 	"context"
+	"debug/buildinfo"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 )
+
+// Release builds can record their tag in Main.Version without retaining -ldflags.
+// Exercise adoption through the installer with a real, never-executed binary.
+func TestAppCommandAdoptsOfficialModuleVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("NSIS owns Windows PATH")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/misunders2d/agentnet\n\ngo 1.26\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc main() { panic(\"unrecognized commands must never execute\") }\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	run("git", "init", "--quiet")
+	run("git", "add", "go.mod", "main.go")
+	run("git", "-c", "user.name=Release Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture")
+	run("git", "tag", "v1.2.3")
+	binary := filepath.Join(t.TempDir(), "official")
+	run("go", "build", "-trimpath", "-o", binary, ".")
+	info, err := buildinfo.ReadFile(binary)
+	if err != nil || info.Main.Version != "v1.2.3" {
+		t.Fatalf("release fixture metadata: %+v, %v", info, err)
+	}
+	original, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeReleaseServer(t, &releaseStub{asset: original})
+	for _, modified := range []bool{false, true} {
+		home, user := t.TempDir(), t.TempDir()
+		dst := appCommandPath(user)
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			t.Fatal(err)
+		}
+		old := append([]byte(nil), original...)
+		if modified {
+			old = append(old, []byte("custom change")...)
+		}
+		if err := os.WriteFile(dst, old, 0755); err != nil {
+			t.Fatal(err)
+		}
+		src := filepath.Join(t.TempDir(), "new-app-command")
+		if err := os.WriteFile(src, []byte("updated app command"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		status := installAppCommand(context.Background(), src, home, user, false)
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if modified {
+			if status.State != "custom" || !bytes.Equal(got, old) {
+				t.Fatalf("modified release overwritten: %+v", status)
+			}
+		} else if status.State != "installed" || string(got) != "updated app command" {
+			t.Fatalf("official release not adopted: %+v", status)
+		}
+	}
+}
 
 func TestAppCommandInstallsAndRefreshesOnlyOwnedCopy(t *testing.T) {
 	if runtime.GOOS == "windows" {

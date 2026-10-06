@@ -6,6 +6,27 @@ section at release; keep detailed verification and remaining work here.
 
 ## Current published release — October 6 v0.8.2
 
+### Post-release CLI adoption correction — implemented, unreleased
+
+The owner updated the Linux AppImage to v0.8.2 through the app. The bundled
+CLI at `~/.config/agentnet/bin/agentnet` reports v0.8.2/schema 50, while the
+terminal copy at `~/.local/bin/agentnet` remains v0.8.1/schema 48. Its hash
+matches the official v0.8.1 release, but no `app-command.json` ownership record
+exists. `appOwnsCommand` only read a retained `-ldflags` version; the actual
+release stores its tag in Go's `Main.Version` without that flag. This wrongly
+classifies the official CLI as custom. The public installer regression fails
+before the fix (1.780s) and all focused AppCommand race tests pass after it
+(1.182s), including rejection of a modified release with the same tag.
+
+The correction uses module-version metadata as a checksum-manifest selector;
+only a matching published hash authorizes replacement. It does not execute an
+unknown CLI or weaken custom/symlink protection. It is not in the immutable
+v0.8.2 tag. Current users can choose **Settings → Your agent → Replace command…**
+once to adopt the bundled CLI. The owner retains control; this investigation
+has not changed the installed terminal copy.
+
+### Publication and qualification
+
 [v0.8.2](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2) was published
 at 17:58 UTC from `ac9dab82ddcc31bb510b0644a9edf1a561c015cf`. It adds group human guests, explicit permanent-member invites,
 retract/refresh controls, corrected OKs/navigation, current edited previews,

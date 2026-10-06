@@ -53,7 +53,9 @@ func appOwnsCommand(ctx context.Context, src, dst, recordPath string) bool {
 	if err != nil {
 		return false
 	}
-	tag := ""
+	// Tagged release builds may store the version here without retaining
+	// -ldflags. The tag only selects a checksum manifest, never proves ownership.
+	tag := info.Main.Version
 	for _, setting := range info.Settings {
 		if setting.Key == "-ldflags" {
 			for _, word := range strings.Fields(setting.Value) {

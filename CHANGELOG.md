@@ -6,6 +6,12 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Recognize an official standalone CLI's module-version metadata before
+  checksum verification, so a desktop upgrade adopts it instead of incorrectly
+  labeling it a custom build. Custom or modified binaries remain protected.
+
 ## [0.8.2] — 2026-10-06
 
 ### Fixed
@@ -74,6 +80,11 @@ No existing installation was upgraded for qualification. Interactive
 Windows/macOS installation, physical-device read-state convergence and a live
 in-app upgrade remain unverified. The worker-wake fix does not establish that
 every startup delay is eliminated. Private Projects remain a design discussion.
+
+An existing official standalone CLI can be misclassified as a custom build and
+left at its older version. In v0.8.2, use **Settings → Your agent → Replace
+command…** once to adopt the app's copy; later app updates refresh that managed
+copy. The automatic recognition correction is recorded under Unreleased.
 
 ## [0.8.1] — 2026-10-06
 

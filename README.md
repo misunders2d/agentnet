@@ -200,6 +200,12 @@ your tools. It does not update the agent tools themselves. Starting with
 v0.8.2, the app's installed `agentnet update` command uses this same whole-app
 updater. A separately installed standalone command updates only that command.
 
+If the terminal still shows an older official CLI after updating the app,
+v0.8.2 can wrongly treat that copy as a custom build. Use **Settings → Your
+agent → Replace command…** once to adopt the app's version. Future app updates
+then refresh that managed copy. Automatic recognition is fixed on main for the
+next patch.
+
 ## Guides for agents and maintainers
 
 The sections below are for people and agents installing, operating, extending

@@ -36,6 +36,10 @@ for desktop, standalone command and relay instructions.
 
 From v0.8.1, use **Settings → About → Update AgentNet** once to install this
 version. v0.8.1's bundled command does not yet initiate whole-app updates.
+If an older official standalone command remains on PATH, v0.8.2 may wrongly
+call it a custom build. Choose **Settings → Your agent → Replace command…**
+once to adopt the bundled version. The recognition fix is implemented on main
+but is not included in v0.8.2.
 Once v0.8.2 is installed, its managed command and About button both update the
 desktop package and managed command copies together. Custom commands retain
 their explicit replacement choice.
