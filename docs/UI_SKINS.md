@@ -25,6 +25,14 @@ The agentnet-skins collection requires previews before listing a skin as
 available. Visual previews complement the compatibility checks below; they
 do not replace them or belong inside the installable package.
 
+Give people a reason to choose a new skin: a distinct layout, interaction
+style, or coherent playful experience. Changing colors and button corners
+alone is a theme variant. Collection examples should demonstrate what a
+complete skin can do, including purposeful transitions where they fit the
+design. Keep those transitions fast, interruptible and optional through
+reduced-motion preferences; preserve readable content and familiar action
+labels. Passing compatibility tests does not establish a successful design.
+
 - **Comic** (`comic`) is AgentNet's own skin and the default: the messenger,
   built from `internal/ui/web` into the package `internal/ui/static/skins/comic/`
   and embedded in the program.
