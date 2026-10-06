@@ -47,6 +47,7 @@ func TestAppCommandAdoptsOfficialModuleVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeReleaseServer(t, &releaseStub{asset: original})
+	t.Setenv("PATH", t.TempDir())
 	for _, modified := range []bool{false, true} {
 		home, user := t.TempDir(), t.TempDir()
 		dst := appCommandPath(user)
@@ -64,6 +65,13 @@ func TestAppCommandAdoptsOfficialModuleVersion(t *testing.T) {
 		if err := os.WriteFile(src, []byte("updated app command"), 0755); err != nil {
 			t.Fatal(err)
 		}
+		registrationErr := registerAppCommandTarget(context.Background(), home, dst)
+		if modified && registrationErr == nil {
+			t.Fatal("modified official target registered")
+		}
+		if !modified && registrationErr != nil {
+			t.Fatal(registrationErr)
+		}
 		status := installAppCommand(context.Background(), src, home, user, false)
 		got, err := os.ReadFile(dst)
 		if err != nil {
@@ -80,6 +88,7 @@ func TestAppCommandAdoptsOfficialModuleVersion(t *testing.T) {
 }
 
 func TestAppCommandInstallsAndRefreshesOnlyOwnedCopy(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	if runtime.GOOS == "windows" {
 		t.Skip("NSIS owns Windows PATH")
 	}
@@ -137,6 +146,7 @@ func TestAppCommandInstallsAndRefreshesOnlyOwnedCopy(t *testing.T) {
 }
 
 func TestAppCommandNeverOverwritesSymlinkTarget(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix symlink")
 	}

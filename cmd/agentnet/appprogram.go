@@ -23,9 +23,14 @@ type appCommandStatus struct {
 	Problem string `json:"cli_problem,omitempty"`
 }
 
-type appCommandRecord struct {
+type appCommandTarget struct {
 	Path string `json:"path"`
 	Sum  string `json:"sum"`
+}
+type appCommandRecord struct {
+	Path    string             `json:"path"`
+	Sum     string             `json:"sum"`
+	Targets []appCommandTarget `json:"targets,omitempty"`
 }
 
 func appCommandPath(userHome string) string {
@@ -46,9 +51,17 @@ func appOwnsCommand(ctx context.Context, src, dst, recordPath string) bool {
 		return true
 	}
 	var record appCommandRecord
-	if b, err := secfile.Read(recordPath); err == nil && json.Unmarshal(b, &record) == nil && record.Path == dst && record.Sum == hex.EncodeToString(have) {
-		return true
+	if b, err := secfile.Read(recordPath); err == nil && json.Unmarshal(b, &record) == nil {
+		if record.Path == dst && record.Sum == hex.EncodeToString(have) {
+			return true
+		}
+		for _, target := range record.Targets {
+			if target.Path == dst && target.Sum == hex.EncodeToString(have) {
+				return true
+			}
+		}
 	}
+
 	info, err := buildinfo.ReadFile(dst)
 	if err != nil {
 		return false
@@ -76,11 +89,7 @@ func appOwnsCommand(ctx context.Context, src, dst, recordPath string) bool {
 	return sums[assetName()] == hex.EncodeToString(have)
 }
 
-func installAppCommand(ctx context.Context, src, home, userHome string, replace bool) appCommandStatus {
-	dst := appCommandPath(userHome)
-	if dst == "" {
-		return appCommandStatus{Path: src, State: "installed"}
-	}
+func installAppCommandAt(ctx context.Context, src, home, userHome, dst string, replace, primary bool) appCommandStatus {
 	state := appCommandStatus{Path: dst, State: "installed"}
 	fail := func(err error) appCommandStatus {
 		state.State = "error"
@@ -96,13 +105,20 @@ func installAppCommand(ctx context.Context, src, home, userHome string, replace 
 	}
 	defer release()
 	recordPath := filepath.Join(home, "app-command.json")
+	var previous os.FileInfo
+	var prior []byte
 	if st, err := os.Lstat(dst); err == nil {
+		previous = st
+		prior, err = fileSum(dst)
+		if err != nil {
+			return fail(err)
+		}
 		if (!st.Mode().IsRegular() && !(replace && st.Mode()&os.ModeSymlink != 0)) || (!replace && !appOwnsCommand(ctx, src, dst, recordPath)) {
 			state.State = "custom"
 			state.Problem = "Your own agentnet command is here. Keep it, or choose Replace command."
 			return state
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !errors.Is(err, os.ErrNotExist) || !primary {
 		return fail(err)
 	}
 	want, err := fileSum(src)
@@ -111,7 +127,7 @@ func installAppCommand(ctx context.Context, src, home, userHome string, replace 
 	}
 	if st, statErr := os.Lstat(dst); statErr == nil && st.Mode().IsRegular() {
 		if have, err := fileSum(dst); err == nil && bytes.Equal(have, want) {
-			return finishAppCommand(home, userHome, dst, want, state)
+			return finishAppCommandAt(home, userHome, dst, want, state, primary)
 		}
 	}
 	copied, err := stableCopy(src, filepath.Join(home, "app-command-stage"))
@@ -142,7 +158,20 @@ func installAppCommand(ctx context.Context, src, home, userHome string, replace 
 	if err != nil {
 		return fail(err)
 	}
-	if _, err = os.Stat(dst); err == nil {
+	staged, err := fileSum(tmp.Name())
+	if err != nil || !bytes.Equal(staged, want) {
+		return fail(errors.New("bundled command changed while staging"))
+	}
+	now, statErr := os.Lstat(dst)
+	if previous != nil {
+		have, e := fileSum(dst)
+		if statErr != nil || !os.SameFile(previous, now) || previous.Mode() != now.Mode() || e != nil || !bytes.Equal(have, prior) {
+			return fail(errors.New("command changed during update; preserved for review"))
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fail(errors.New("command appeared during update; preserved for review"))
+	}
+	if previous != nil {
 		if err = replaceExecutable(dst, tmp.Name()); err != nil {
 			return fail(err)
 		}
@@ -153,18 +182,41 @@ func installAppCommand(ctx context.Context, src, home, userHome string, replace 
 	if err != nil {
 		return fail(err)
 	}
-	return finishAppCommand(home, userHome, dst, sum, state)
+	if !bytes.Equal(sum, want) {
+		return fail(errors.New("installed command changed before ownership was recorded"))
+	}
+	return finishAppCommandAt(home, userHome, dst, sum, state, primary)
 }
 
-func finishAppCommand(home, userHome, dst string, sum []byte, state appCommandStatus) appCommandStatus {
-	b, _ := json.Marshal(appCommandRecord{Path: dst, Sum: hex.EncodeToString(sum)})
+func finishAppCommandAt(home, userHome, dst string, sum []byte, state appCommandStatus, primary bool) appCommandStatus {
+	record, err := readAppCommandRecord(home)
+	if err != nil {
+		state.State = "error"
+		state.Problem = err.Error()
+		return state
+	}
+	target := appCommandTarget{Path: dst, Sum: hex.EncodeToString(sum)}
+	if primary {
+		record.Path, record.Sum = target.Path, target.Sum
+		for i := range record.Targets {
+			if record.Targets[i].Path == dst {
+				record.Targets[i] = target
+			}
+		}
+	} else {
+		record.setTarget(target)
+	}
+	b, _ := json.Marshal(record)
 	if err := secfile.Write(filepath.Join(home, "app-command.json"), b); err != nil {
 		state.State = "error"
 		state.Problem = "The command location could not be saved: " + err.Error()
 		return state
 	}
-	if err := ensureAppCommandPATH(userHome); err != nil {
-		state.Problem = "Command installed; could not update your shell path: " + err.Error()
+	if primary && runtime.GOOS != "windows" {
+		if err := ensureAppCommandPATH(userHome); err != nil {
+			state.State = "error"
+			state.Problem = "Command installed; could not update your shell path: " + err.Error()
+		}
 	}
 	return state
 }
