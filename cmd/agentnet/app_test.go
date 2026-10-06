@@ -72,8 +72,8 @@ func startApp(t *testing.T, home string, env map[string]string) *appProc {
 	for k, v := range env {
 		t.Setenv(k, v)
 	}
-	oldAddr, oldGrace, oldLog := appFirstAddr, takeoverGrace, appLogf
-	t.Cleanup(func() { appFirstAddr, takeoverGrace, appLogf = oldAddr, oldGrace, oldLog })
+	oldAddr, oldGrace, oldLog, oldStable := appFirstAddr, takeoverGrace, appLogf, appStable
+	t.Cleanup(func() { appFirstAddr, takeoverGrace, appLogf, appStable = oldAddr, oldGrace, oldLog, oldStable })
 	if appFirstAddr == oldAddr && strings.HasSuffix(appFirstAddr, ":17443") {
 		appFirstAddr = freeAddr(t) // never the real app's port
 	}
@@ -462,25 +462,35 @@ func TestAppAttachedNeverOpensTheHome(t *testing.T) {
 }
 
 func TestAppStopsWhenTheShellIsGone(t *testing.T) {
-	home := t.TempDir()
-	release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	app := startApp(t, home, nil)
-	if e := app.next("event"); e.Event != "error" || !strings.Contains(e.Text, "without its page") {
-		t.Fatalf("a daemon without a page: %+v", e)
-	}
-	app.stdin.Close() // EOF: the shell died
-	select {
-	case err := <-app.done:
-		app.done <- err
+	before := appStable
+	t.Run("stable app", func(t *testing.T) {
+		if runtime.GOOS != "windows" {
+			// Exercise macOS's stable-copy state on Linux too.
+			t.Setenv("APPIMAGE", filepath.Join(t.TempDir(), "AgentNet.AppImage"))
+		}
+		home := t.TempDir()
+		release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock"))
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Minute):
-		t.Fatal("the app kept running without its shell")
+		defer release()
+		app := startApp(t, home, nil)
+		if e := app.next("event"); e.Event != "error" || !strings.Contains(e.Text, "without its page") {
+			t.Fatalf("a daemon without a page: %+v", e)
+		}
+		app.stdin.Close() // EOF: the shell died
+		select {
+		case err := <-app.done:
+			app.done <- err
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Minute):
+			t.Fatal("the app kept running without its shell")
+		}
+	})
+	if appStable != before {
+		t.Fatalf("app fixture leaked stable executable state: %+v (was %+v)", appStable, before)
 	}
 }
 
