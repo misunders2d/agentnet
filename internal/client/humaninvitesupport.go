@@ -27,8 +27,8 @@ func (a *Agent) HumanInviteSupport(ctx context.Context, conv, host string) ([]Hu
 	if err != nil {
 		return nil, err
 	}
-	if _, member := m.persons[me.info.Person]; !ok || !member || !externalDM(m.root) {
-		return nil, errors.New("only an original DM member checks a human invitation")
+	if _, member := m.persons[me.info.Person]; !ok || !member || !humanRoom(m) || !m.device(a.Address, me.info.Fingerprint) {
+		return nil, errors.New("only a current conversation member checks a human invitation")
 	}
 	key, err := a.sendKey(ctx, host)
 	if err != nil {
@@ -66,6 +66,9 @@ func (a *Agent) HumanInviteSupport(ctx context.Context, conv, host string) ([]Hu
 				return nil, err
 			}
 			state := humanSupportState(profile, d.Address, d.SignKey)
+			if m.group != nil && state != "not set up" && (!profile.Supports(d.Address, d.SignKey, protocol.CapGroup) || !profile.Supports(d.Address, d.SignKey, protocol.CapRoom) || !profile.Supports(d.Address, d.SignKey, protocol.CapGroupHumanParticipation)) {
+				state = "update"
+			}
 			if state == "not set up" || state == "update" && v.State != "not set up" {
 				v.State = state
 			}

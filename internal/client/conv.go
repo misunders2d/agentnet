@@ -145,7 +145,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapRoom, protocol.CapTyping} // apx1 is already implied by rm1; preserve the 16-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapRoom, protocol.CapTyping} // apx1 is already implied by rm1; preserve the 16-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -544,6 +544,16 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			if e != nil {
 				return ConvSent{}, e
 			}
+			if info.Role == protocol.RoleHuman && m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) {
+				if !info.HostHere || !info.HumanActive() {
+					return ConvSent{}, errors.New("only the exact active guest device writes as that guest")
+				}
+				h, e := a.roomAudience(conv, info.PID)
+				if e != nil {
+					return ConvSent{}, e
+				}
+				return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+			}
 			return a.sendExternalParticipation(ctx, root, raw, info, m)
 		}
 		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) {
@@ -940,6 +950,19 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 				}
 				if ok && w.required == protocol.CapAgentReaction && w.human { // to a captured audience: as a human-audience turn
 					ok = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation) == nil
+				}
+				if ok && room && (w.human || w.pid != "") {
+					if members, e := a.dmMembers(w.conv); e == nil && members.group != nil {
+						guest := w.human
+						if !guest {
+							if p, e := a.Participation(w.pid); e == nil {
+								guest = p.Role == protocol.RoleHuman
+							}
+						}
+						if guest {
+							ok = a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation) == nil
+						}
+					}
 				}
 				if ok && room && w.required != protocol.CapRoom {
 					ok = a.requireParticipationCaps(ctx, key, protocol.CapRoom) == nil

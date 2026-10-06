@@ -554,8 +554,8 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 		host = &protocol.ParticipationHost{Person: p.info.Person, Address: hostAddress, Fingerprint: key.Fingerprint(), AgentID: agentID}
 	}
 	if role == protocol.RoleHuman {
-		if !externalDM(m.root) {
-			return ParticipationInfo{}, errors.New("human guests require an unchanged two-person DM")
+		if !humanRoom(m) {
+			return ParticipationInfo{}, errors.New("human guests require a verified DM or group")
 		}
 		if _, original := m.persons[host.Person]; original {
 			return ParticipationInfo{}, errors.New("that person already belongs to this DM")
@@ -567,11 +567,21 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 		if key.Fingerprint() != host.Fingerprint {
 			return ParticipationInfo{}, errors.New("human host key changed")
 		}
+		if m.group != nil {
+			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation); err != nil {
+				return ParticipationInfo{}, err
+			}
+		}
 		if err := a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation); err != nil && !errors.Is(err, errAgentIdentityUnsupported) {
 			return ParticipationInfo{}, err
 		}
 		for _, person := range m.persons {
 			for _, device := range person.roster.Devices {
+				if m.group != nil {
+					if err := a.requireParticipationCaps(ctx, device, protocol.CapGroupHumanParticipation); err != nil {
+						return ParticipationInfo{}, err
+					}
+				}
 				if err := a.requireParticipationCaps(ctx, device, protocol.CapHumanParticipation); err != nil && !errors.Is(err, errAgentIdentityUnsupported) {
 					return ParticipationInfo{}, err
 				}
@@ -641,7 +651,7 @@ func (a *Agent) inviteParticipation(ctx context.Context, conv, hostAddress, agen
 		Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: me.info.Fingerprint},
 		Host:   host, Grant: refs, Audience: protocol.AudienceConversation, TaskKeys: taskKeys, Note: note, Role: role}
 	if m.group != nil {
-		if role == "" {
+		if role == "" || role == protocol.RoleHuman {
 			ev.Audience = protocol.AudienceRoom
 		}
 		if err := m.bindGroupInvite(&ev); err != nil {

@@ -119,7 +119,7 @@ func humanEndReader(q dbq, conv, address, fp string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !externalDM(m.root) {
+	if !humanRoom(m) {
 		return false, nil
 	}
 	rows, err := q.Query(`SELECT DISTINCT pid FROM participation_events WHERE conv=? ORDER BY pid`, conv)
@@ -557,7 +557,7 @@ func (a *Agent) disclosedHumanEvent(ctx context.Context, in envelope.Inner, send
 	if err != nil {
 		return ev, false, reasonProof, err
 	}
-	if !externalDM(m.root) || !m.device(sender.Address, sender.Fingerprint()) {
+	if !humanRoom(m) || !m.device(sender.Address, sender.Fingerprint()) {
 		return ev, false, "", nil
 	}
 	host, role := ev.Host, ev.Role
@@ -649,7 +649,7 @@ func (a *Agent) discloseHumanConv(ctx context.Context, conv string) error {
 	if err != nil {
 		return err
 	}
-	if !externalDM(m.root) || !m.device(a.Address, a.Self().Fingerprint()) {
+	if !humanRoom(m) || !m.device(a.Address, a.Self().Fingerprint()) {
 		return nil
 	}
 	_, raw, _, err := a.store.conversation(conv)
@@ -790,9 +790,9 @@ func (a *Agent) shareHumanEvent(ctx context.Context, m dmMembers, root []byte, p
 	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: g.Host.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: string(body),
 		Conv: ev.Conv, LID: protocol.NewID(), Root: root, PID: pid, Sub: envelope.SubEvent, Origin: envelope.OriginUI}
-	for _, mem := range m.root.Members {
-		if p, ok := m.persons[mem.Person]; ok {
-			in.Fan = append(in.Fan, envelope.Fan{Person: mem.Person, Roster: p.info.Roster})
+	for person, p := range m.persons {
+		if m.group == nil || p.has(a.Address, a.Self().Fingerprint()) {
+			in.Fan = append(in.Fan, envelope.Fan{Person: person, Roster: p.info.Roster})
 		}
 	}
 	sealed, err := envelope.Seal(in, a.id.Sign, recipient)

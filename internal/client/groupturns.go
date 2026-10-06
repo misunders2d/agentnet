@@ -554,13 +554,18 @@ func (a *Agent) mayDeliverGroupTurn(env envelope.Envelope) (bool, bool, error) {
 			if err = json.Unmarshal([]byte(human), &in.Human); err != nil {
 				return true, false, err
 			}
-			admission, e := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
-			if e != nil || grant == "" || admission.Hash() != grant {
-				return true, false, a.store.setOutboxState(env.ID, stateNotDelivered, "group sender admission changed", "")
+			if in.Human.AuthorPID == "" {
+				admission, e := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
+				if e != nil || grant == "" || admission.Hash() != grant {
+					return true, false, a.store.setOutboxState(env.ID, stateNotDelivered, "group sender admission changed", "")
+				}
 			}
 			in.Conv = conv
 			return a.mayDeliverHuman(env, in, state, fp)
 		}
+	}
+	if required != protocol.CapGroup {
+		return false, false, nil
 	}
 	if state != stateQueued {
 		return true, false, nil

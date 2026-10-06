@@ -446,6 +446,13 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 			out.human = h
 		}
 	}
+	if m.group != nil && out.human != nil && out.Target != nil {
+		for _, e := range out.human.Proof {
+			if e.Role == protocol.RoleHuman {
+				return ConvSent{}, errors.New("group human guest execution audience is not enabled")
+			}
+		}
+	}
 	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: out.Kind, Body: out.Body,
 		ReplyTo: out.ReplyTo, Quote: out.Quote, Topic: out.Topic, TopicEvent: out.TopicEvent, TopicDone: out.TopicDone, Conv: info.Conv, LID: lid, Root: raw, PID: info.PID, Sub: out.sub, Status: out.status, Origin: out.Origin, Emotion: out.Emotion, Target: out.Target, AgentID: out.AgentID, Human: out.human}
 	if in.Human != nil {
@@ -754,7 +761,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 					if adm.Hash() != copy.groupAdmission {
 						return ErrGroupContextPending
 					}
-				} else if in.Human == nil && (copy.env.To != current.Host.Address || copy.recipientFP != current.Host.Fingerprint) {
+				} else if in.Human == nil && !humanEndEvent(in, current) && (copy.env.To != current.Host.Address || copy.recipientFP != current.Host.Fingerprint) {
 					return errors.New("group: outside PID audience differs")
 				}
 			}
@@ -956,7 +963,7 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 	var ev *protocol.ParticipationEvent
 	disclosed := false // another human participation's lifecycle, shared by an original
 	if in.Sub == envelope.SubEvent {
-		if !group && !recipientMember {
+		if !recipientMember {
 			parsed, ok, reason, err := a.disclosedHumanEvent(ctx, in, sender)
 			if err != nil {
 				if reason != "" {
@@ -1177,7 +1184,7 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 			}
 		}
 		if members.group != nil {
-			if !members.device(a.Address, a.Self().Fingerprint()) && !(current.External && current.Host.Address == a.Address && current.Host.Fingerprint == a.Self().Fingerprint()) {
+			if !members.device(a.Address, a.Self().Fingerprint()) && !(current.External && current.Host.Address == a.Address && current.Host.Fingerprint == a.Self().Fingerprint()) && !disclosed && !humanEndEvent(in, current) {
 				return errors.New("group: PID recipient no longer authorized")
 			}
 			if members.device(a.Address, a.Self().Fingerprint()) {

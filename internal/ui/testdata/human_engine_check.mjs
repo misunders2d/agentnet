@@ -9,12 +9,13 @@ const check = (v, why) => { assert.ok(v, why); checks++; };
 const refuses = async (fn, re) => { await assert.rejects(fn, re); checks++; };
 const json = (v, status = 200) => new Response(v == null ? null : JSON.stringify(v), { status });
 async function world() {
-  const users = [], pubs = new Map(), profiles = new Map(), rosters = new Map(), catalogs = new Map(), blobs = new Map(), posts = [];
+  const users = [], pubs = new Map(), profiles = new Map(), rosters = new Map(), catalogs = new Map(), blobs = new Map(), posts = [], groups = new Map();
   let offline = false;
   const fetch = async (url, o = {}) => {
     if (offline) throw new TypeError('Failed to fetch');
     const p = new URL(url).pathname;
-    if (p === '/v1/version') return json({ features: ['env2', 'person2', 'caps', 'notify1'], realm_id: 'test-realm' });
+    if (p === '/v1/version') return json({ features: ['env2', 'person2', 'caps', 'notify1'], realm_id: 'f'.repeat(32) });
+    if (p.startsWith('/v1/groups/') && p.endsWith('/chain')) { const records=groups.get(p)||[]; if(o.method==='POST'){const record=JSON.parse(o.body);records[record.seq]=record;groups.set(p,records);return json({seq:record.seq,hash:record.hash});} const after=Number(new URL(url).searchParams.get('after')||-1);return json({records:records.filter(r=>r.seq>after),more:false}); }
     if (p.endsWith('/profile')) return json(profiles.get(p.slice(11, -8)));
     if (p.endsWith('/agent-catalog')) return json(catalogs.get(p.slice(11, -14)) || []);
     if (p.startsWith('/v1/persons/') && p.endsWith('/chain')) {
@@ -406,5 +407,56 @@ for (const ending of ['original', 'self']) {
   const n=await wire.open(task.envelope,c.keys,c.address,phone.pub);
   check(!n.replica&&n.human.author_pid===guest.pid&&n.pid===assistant.pid,'sealed own guest '+kind+' retains separate human author and assistant target');
  }
+}
+
+// Public group guest APIs, real signed envelopes, chosen old context only.
+{
+ const w=await world(), {alice:a,bob:b,carol:g,mallory:other}=w;
+ for(const e of w.users){e.realm='f'.repeat(32);await w.caps(e,[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapExternalParticipation,wire.CapHumanParticipation,wire.CapGroupHumanParticipation,wire.CapGroup,wire.CapRoom]);}
+ const conv=await a.createGroup('Guest scope');
+ const invitation=await a.inviteGroup({conv,person:b.me.person});
+ await w.drain(b);await b.decideGroup({id:invitation.id,accept:true});await w.drain(a);
+ if(a.recoveringGroups)await a.recoveringGroups;
+ await a.recoverGroupIntents();await w.drain(b);await b.retryHeld();
+
+ check(!(await b.groupThread(conv)).members.find(m=>m.person===b.me.person).admin,'ordinary member fixture');
+ // Old rm1 target/member sessions must fail before any guest invite is saved.
+ const names=[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapHumanParticipation,wire.CapGroup,wire.CapRoom];
+ for(const legacy of [g,a]){await w.caps(legacy,names);check(!(await b.checkHuman({conv,host:g.address})).ready,'mixed v081/v082 requires update');await refuses(()=>b.changeHuman('invite',{conv,host:g.address}),/update/i);await w.caps(legacy,[...names,wire.CapGroupHumanParticipation]);}
+ const old=await b.sendDM({conv,body:'chosen old group context'});
+ await b.sendDM({conv,body:'unshared old group context'});await w.drain(a);
+ check((await b.checkHuman({conv,host:g.address})).ready,'ordinary member checks group guest');
+ const p=await b.changeHuman('invite',{conv,host:g.address,share:[old.id]});
+ await w.drain(g);await w.drain(a);
+
+ check((await g.groupThread(conv)).guests.some(x=>x.pid===p.pid&&x.can_decide),'browser guest offered exact consent');
+ await g.changeHuman('decide',{pid:p.pid,accept:true});await w.drain(a);await w.drain(b);
+ await b.recoverHumanExcerpts();await w.drain(g);
+ const view=await g.groupThread(conv);
+ check(view.role==='human_guest'&&!view.members.some(m=>m.person===g.me.person),'guest has no membership');
+
+ check(view.messages.some(m=>m.body==='chosen old group context')&&!view.messages.some(m=>m.body==='unshared old group context'),'only selected history disclosed');
+ await b.sendDM({conv,body:'new group member turn'});await w.drain(g);
+
+ check((await g.groupThread(conv)).messages.some(m=>m.body==='new group member turn'),'guest reads captured new turn');
+ await g.sendDM({conv,pid:p.pid,body:'new group guest turn'});await w.drain(a);await w.drain(b);
+ check((await b.groupThread(conv)).messages.some(m=>m.body==='new group guest turn'),'guest writes with exact scope');
+ await refuses(()=>g.sendDM({conv,body:'no scope'}),/member|admission|guest/i);
+ const second=await b.changeHuman('invite',{conv,host:other.address});await w.drain(other);await w.drain(a);await other.changeHuman('decide',{pid:second.pid,accept:true});await w.drain(b);await w.drain(a);
+ await b.discloseHumanPass();await a.discloseHumanPass();await w.drain(g);await w.drain(other);await g.retryHeld();await other.retryHeld();
+
+ check((await other.groupThread(conv)).guests.some(x=>x.pid===p.pid&&x.state==='active'),'another guest receives public counted lifecycle only');
+ // Offline copies retain exact scope; key changes block retry.
+ const pin=await b.store.get('pins',g.address);await b.store.write([{s:'pins',k:g.address,v:{...pin,pending:'changed'}}]);
+ await refuses(()=>b.sendDM({conv,body:'changed guest key denied'}),/key|pinned|exact host/i);await b.store.write([{s:'pins',k:g.address,v:pin}]);
+ await b.sendDM({conv,body:'captured before offline end'});
+ const queued=(await b.store.all('outbox')).find(r=>r.to===g.address&&r.body==='captured before offline end');
+ await b.changeHuman('end',{pid:p.pid});await w.drain(g);await w.drain(a);await w.drain(other);
+ check((await other.groupThread(conv)).guests.find(x=>x.pid===p.pid)?.state==='dismissed','other guest learns ended scope');
+ check(!!(await b.gate(await b.groupRecord(conv),queued)).why,'offline captured pre-end copy is fenced after dismiss');
+ await refuses(()=>g.sendDM({conv,pid:p.pid,body:'after end'}),/active|guest/i);
+ const leave=await b.changeHuman('invite',{conv,host:g.address});await w.drain(g);await w.drain(a);await g.changeHuman('decide',{pid:leave.pid,accept:true});await w.drain(b);await w.drain(a);
+ await g.changeHuman('leave',{pid:leave.pid});await w.drain(b);await w.drain(a);
+ check((await b.groupThread(conv)).guests.find(x=>x.pid===leave.pid).state==='dismissed','guest may leave without member rights');
 }
 console.log('human engine isolated lifecycle checks passed: ' + checks);

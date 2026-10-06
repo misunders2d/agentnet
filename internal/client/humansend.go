@@ -138,11 +138,13 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		for id := range m.persons {
 			members = append(members, protocol.ConvMember{Person: id})
 		}
-		admission, e := groupMemberAdmission(a.store.db, *m.group, a.Address, a.Self().Fingerprint())
-		if e != nil {
-			return ConvSent{}, e
+		if h.AuthorPID == "" {
+			admission, e := groupMemberAdmission(a.store.db, *m.group, a.Address, a.Self().Fingerprint())
+			if e != nil {
+				return ConvSent{}, e
+			}
+			groupAdmission = admission.Hash()
 		}
-		groupAdmission = admission.Hash()
 	}
 	for _, member := range members {
 		p, ok := m.persons[member.Person]
@@ -242,6 +244,9 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		copyIn := in
 		copyIn.ID, copyIn.To = protocol.NewID(), device.Address
 		if root.Kind == protocol.ConvKindGroup {
+			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation); err != nil && !hubUnreachable(err) {
+				return ConvSent{}, err
+			}
 			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil && !hubUnreachable(err) {
 				return ConvSent{}, err
 			}

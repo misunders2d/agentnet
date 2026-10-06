@@ -53,7 +53,7 @@ func (m dmMembers) verifyInviteEpoch(q dbq, ev protocol.ParticipationEvent) (boo
 	if c.Hash != scope.Hash || scope.Seq > m.group.State.Seq {
 		return false, nil
 	}
-	if scope.HostRole == "visitor" && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) {
+	if scope.HostRole == "visitor" && ev.Role != protocol.RoleHuman && (ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope) {
 		if now, ok := m.group.State.Member(ev.Author.Person); !ok || !now.Admin || !slices.Contains(c.Admins, ev.Author.Person) {
 			return false, nil
 		}
@@ -89,7 +89,7 @@ func (m dmMembers) bindGroupInvite(ev *protocol.ParticipationEvent) error {
 		if scope.HostAdmission == "" {
 			return ErrGroupContextPending
 		}
-	} else if ev.Type == protocol.EventInvite && !member.Admin {
+	} else if ev.Type == protocol.EventInvite && ev.Role != protocol.RoleHuman && !member.Admin {
 		return errors.New("only a group administrator can add an agent whose owner is outside this group")
 	}
 	for _, fp := range ev.TaskKeys {
@@ -142,6 +142,11 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 	if !found || root.Kind != protocol.ConvKindGroup {
 		return false, false, nil
 	}
+	// Ordinary captured guest turns use the human consent delivery guard,
+	// not the addressed-agent PID guard below.
+	if required == protocol.CapHumanParticipation {
+		return false, false, nil
+	}
 	if state != stateQueued || required != protocol.CapGroup || fp == "" {
 		return true, false, nil
 	}
@@ -171,6 +176,12 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		return true, false, err
 	}
 	allowed := m.device(env.To, fp) && epoch != "" && epoch == m.keyEpoch(fp) || info.External && env.To == info.Host.Address && fp == info.Host.Fingerprint && epoch == ""
+	if !allowed && humanEndEvent(in, info) {
+		allowed, err = humanEndReader(a.store.db, in.Conv, env.To, fp)
+		if err != nil {
+			return true, false, err
+		}
+	}
 	if in.Human != nil {
 		err = humanTurnAuthorization(a.store.db, in, a.Address, a.Self().Fingerprint(), env.To, fp, false)
 		allowed = err == nil && (!m.device(env.To, fp) || epoch != "" && epoch == m.keyEpoch(fp))

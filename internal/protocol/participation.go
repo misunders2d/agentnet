@@ -52,6 +52,10 @@ const CapExternalParticipation = "apx1"
 
 // Human guests are scoped participants, never members or executors.
 const CapHumanParticipation = "hgp1"
+
+// CapGroupHumanParticipation explicitly advertises complete group guest lifecycle
+// and scoped sending. Older rm1 readers do not implement this capability.
+const CapGroupHumanParticipation = "hgg1"
 const RoleHuman = "human"
 
 // CapRoom means the device reads room participation (ROOM_V1 §2): the room
