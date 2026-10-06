@@ -163,7 +163,7 @@ export const markup = `
     <button type="button" role="tab" id="settings-tab-device" aria-controls="settings-device" data-settings="device" aria-pressed="false">Assistants</button>
     <button type="button" role="tab" id="settings-tab-storage" aria-controls="settings-storage" data-settings="storage" aria-pressed="false">Storage</button>
   </nav>
-  <section id="settings-profile" role="tabpanel" aria-labelledby="settings-tab-profile" class="settings-panel"><div id="profile-card"></div><p id="release" class="release" hidden></p><div id="profile-devices"></div></section>
+  <section id="settings-profile" role="tabpanel" aria-labelledby="settings-tab-profile" class="settings-panel"><div id="profile-card"></div><p id="release" class="release" hidden></p><div id="profile-devices"></div><div id="app-update"></div></section>
   <section id="settings-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" class="settings-panel" hidden>
     <h3>Interface</h3><p class="hint">Different ways to use the same conversations. Installed interfaces appear here too.</p>
       <div id="interfaces" class="interfaces-switch" role="group" aria-label="Interface">
@@ -184,6 +184,7 @@ export const markup = `
     <div id="file-storage"></div>
   </section>
   <section id="settings-device" role="tabpanel" aria-labelledby="settings-tab-device" class="settings-panel" hidden>
+    <div id="app-command"></div>
     <div id="assistant-setup"></div>
     <h3>Your agent on this computer</h3>
     <p class="hint">Who answers approved questions and runs accepted tasks here. Installed means found on this computer, not logged in or working.</p>

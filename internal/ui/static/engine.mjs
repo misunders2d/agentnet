@@ -1195,12 +1195,91 @@ export class Engine {
       this.changed();
       await this.replayErased({ address, fingerprint }).catch(() => {}); // what was deleted here stays deleted there
     }
+    this.syncRoots().catch(() => {});
     this.runHistory().catch(() => {});
   }
 
   runHistory() {
     if (!this.historyRun) this.historyRun = this.historyPasses().finally(() => { this.historyRun = null; });
     return this.historyRun;
+  }
+
+  // Quiet signed DM roots need no HistoryItem. Current own-human devices only;
+  // the existing outbox is a durable per-root/per-key marker, not a new counter.
+  async rootSyncAuthority(root, from, fromFP, to, toFP, checks=[]) {
+    const own=await this.groupRead(checks,"kv","person");
+    if(!own || own.state!=="self" || from===to || !wire.rootMember(root,own.person) || ![ [from,fromFP],[to,toFP] ].every(([address,fp])=>own.devices.some(d=>d.address===address&&d.fingerprint===fp)&&(own.human_keys||[]).includes(fp)))throw Error("Root sync is only between current own-human devices.");
+    for(const [address,fp] of [[from,fromFP],[to,toFP]]) {
+      if(address===this.address&&fp===this.fp)continue;
+      const pin=await this.groupRead(checks,"pins",address);
+      if(!pin || pin.pending || pin.fingerprint!==fp)throw Error("Root sync device key changed.");
+    }
+    const people=new Map([[own.person,own]]);
+    for(const m of root.members) {
+      const p=m.person===own.person?own:await this.groupRead(checks,"persons",m.person);
+      if(!p || p.state==="conflict" || !p.hashes.includes(m.roster))throw Error("Root sync member proof is unavailable or frozen.");people.set(m.person,p);
+    }
+    const creator=people.get(root.creator.person),step=creator?.steps.find(s=>s.hash===root.creator.roster);
+    const dev=creator?.known.find(d=>d.address===root.creator.address&&d.fingerprint===root.creator.fingerprint);
+    if(!dev || !step?.devices.includes(dev.address+"|"+dev.fingerprint))throw Error("Root sync creator is not in its bound roster.");
+    await wire.verifyRoot(root,(await wire.parsePublic(JSON.parse(dev.json))).sign_key);
+    return own;
+  }
+
+  syncRoots() {
+    this.rootSyncAgain=true;
+    if(!this.rootSyncRun)this.rootSyncRun=(async()=>{do{this.rootSyncAgain=false;await this.syncRootPages();}while(this.rootSyncAgain);})().finally(()=>{this.rootSyncRun=null;});
+    return this.rootSyncRun;
+  }
+
+  async syncRootPages() {
+    for(;;) {
+      const own=await this.store.get("kv","person");
+      if(!own || own.state!=="self" || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !(own.human_keys||[]).includes(this.fp))return;
+      const ops=[],checks=[];
+      for(const c of await this.store.all("convs")) {
+        if(c.kind==="group" || this.erasedConv(c.id))continue;
+        const root=wire.parseRoot(c.root);if(!wire.rootMember(root,own.person))continue;
+        for(const dev of own.devices) {
+          if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
+          try { await this.rootSyncAuthority(root,this.address,this.fp,dev.address,dev.fingerprint,checks); } catch(e) { continue; }
+          const saved=await this.authorityRows({conv:c.id,sub:wire.SubRootSync},checks);
+          if(saved.some(r=>r.to===dev.address&&r.recipient_fp===dev.fingerprint&&r.required_cap===wire.CapRootSync&&["queued","waiting","custody","delivered"].includes(r.state)))continue;
+          const id=wire.newID(),lid=wire.newID(),body='{"v":1}',at=this.now();
+          const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",conv:c.id,lid,root:c.root,sub:wire.SubRootSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
+          ops.push({s:"outbox",k:id,v:{id,lid,conv:c.id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapRootSync,sub:wire.SubRootSync,body,envelope,at,state:"queued",aside:true}});
+          if(ops.length===historyPage)break;
+        }
+        if(ops.length===historyPage)break;
+      }
+      if(!ops.length)return;
+      await this.store.write(ops,checks);this.changed();
+      if(this.connected)this.queueOutbox();
+      if(ops.length<historyPage)return;
+    }
+  }
+
+  async rootSyncGate(rec) {
+    const c=await this.store.get("convs",rec.conv);if(!c)throw Error("Root sync conversation is unavailable.");
+    await this.refreshPerson(this.me);
+    await this.rootSyncAuthority(wire.parseRoot(c.root),this.address,this.fp,rec.to,rec.recipient_fp);
+    const pin=await this.store.get("pins",rec.to);
+    const features=await this.features(),prof=await this.profile(rec.to);
+    const ok=features.includes("env2")&&features.includes("caps")&&await wire.profileSupports(prof,rec.to,(await this.pubOf(pin)).sign_key,wire.CapRootSync);
+    if(!ok)throw Object.assign(Error("This device needs to update AgentNet to receive empty chats."),{code:"root_sync_unsupported"});
+    return {why:"",pin};
+  }
+
+  async admitRootSync(n,env,pin) {
+    const root=wire.parseRoot(n.root),own=this.me;
+    if(!own || !own.devices.some(d=>d.address===env.from&&d.fingerprint===pin.fingerprint) || !(own.human_keys||[]).includes(pin.fingerprint))throw new Hold("invalid","Root sync comes only from current own-human devices.");
+    for(const m of root.members)if(m.person!==own.person)await this.pinChain(m.person);
+    const checks=[];
+    try {await this.rootSyncAuthority(root,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
+    const c=await this.groupRead(checks,"convs",n.conv),other=root.members.find(m=>m.person!==own.person),ops=[];
+    if(!c)ops.push({s:"convs",k:n.conv,v:{id:n.conv,root:wire.rootJSON(root),peer:other.person,created:root.created,creator:root.creator.address}});
+    ops.push({s:"inbox",k:env.id,v:{id:env.id,from:env.from,fp:pin.fingerprint,conv:n.conv,lid:n.lid,kind:"message",sub:wire.SubRootSync,body:n.body,replica:true,aside:true,read:true,at:this.now()}});
+    ops.checks=checks;ops.rootSync=true;return ops;
   }
 
   async historyPasses() {
@@ -1232,7 +1311,7 @@ export class Engine {
     }
     const rows = [];
     for (const m of await this.store.all("inbox")) { // never a deleted turn or a deletion record (client historyPage)
-      if (m.conv && convs.has(m.conv) && m.fp !== dev.fingerprint && m.sub !== wire.SubClear && !this.erasedRow(m)) rows.push({ conv: m.conv, ms: m.at, id: m.id, m, here: false });
+      if (m.conv && convs.has(m.conv) && m.fp !== dev.fingerprint && m.sub !== wire.SubRootSync && m.sub !== wire.SubClear && !this.erasedRow(m)) rows.push({ conv: m.conv, ms: m.at, id: m.id, m, here: false });
     }
     const first = new Map();
     for (const r of await this.store.all("outbox")) {
@@ -1597,6 +1676,7 @@ export class Engine {
       await put(this.store, "kv", "person", this.me);
       await this.pinDevices(this.me);
       this.changed();
+      this.syncRoots().catch(()=>{});
       return this.me;
     }
     await put(this.store, "persons", next.person, next);
@@ -1693,6 +1773,7 @@ export class Engine {
       { person: them.person, roster: them.hash });
     const id = await wire.rootID(c);
     await put(this.store, "convs", id, { id, root: wire.rootJSON(c), peer: them.person, created: c.created, creator: this.address });
+    await this.syncRoots();
     this.changed();
     // Starting a DM is deciding on that person: with notifications on, they may alert.
     if ((await this.notifyState()).enabled) this.syncNotify().catch(() => {});
@@ -1815,6 +1896,7 @@ export class Engine {
     if (rec.state === "receiver_waiting") return;
     try {
       await this.receiverDeliveryGate(rec);
+      if(rec.sub===wire.SubRootSync)await this.rootSyncGate(rec);
       // An assistant's reaction, as history too, needs agr1 at the reader
       // besides the copy's own requirement (client.deliver): never to an
       // older reader as its host's mark.
@@ -1884,7 +1966,7 @@ export class Engine {
       if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
-      if (e.code === "receiver_unsupported" || rec.conv && ["agent_identity_unsupported", "human_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
+      if (e.code === "receiver_unsupported" || rec.conv && ["root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
         rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
       } else if (retryable(e)) {
         rec.detail = e.message;
@@ -1923,6 +2005,7 @@ export class Engine {
   }
 
   async gate(c, rec) {
+    if(rec?.sub===wire.SubRootSync)return this.rootSyncGate(rec);
     if (rec?.sub === wire.SubClear) return this.clearGate(rec);
     if (rec?.group_lifecycle) return this.groupLifecycleGate(rec);
     if (c?.kind === "group" || rec?.required_cap === wire.CapGroup) return this.groupSendGate(c, rec);
@@ -3331,7 +3414,9 @@ export class Engine {
     if(h.attachments.length>8 || (JSON.parse(n.body).attachments||[]).some(a=>!a.name || !Number.isSafeInteger(a.size) || a.size<0 || a.size>(100<<20) || !wire.validHash(a.sha256) || a.blob?.id || a.blob?.size || a.blob?.sha256))throw new Hold("invalid","Group history file is not an exact manifest.");
     const ref={lid:h.lid,author:h.from_key,hash:await wire.groupHistoryContentHash(n.conv,h)}, self=wire.groupMember(packet.state,this.me.person);
     const selected=wire.groupAllowsHistory(self.admission,ref);
-    if(!selected && (sender.person!==this.me.person || h.group_admission!==await wire.groupAdmissionHash(self.admission) || !members.some(m=>m.devices?.some(d=>d.address===h.from&&d.fingerprint===h.from_key))))throw new Hold("invalid","Historical item lacks its exact selected grant/current own live admission.");
+    // Own linked history vouches for past attribution. An author's departure
+    // cannot erase our old messages; the live sender/receiver gates stay above.
+    if(!selected && (sender.person!==this.me.person || h.group_admission!==await wire.groupAdmissionHash(self.admission)))throw new Hold("invalid","Historical item lacks its exact selected grant/current own live admission.");
     const key=h.from_key+"/"+h.lid,seen=await this.groupRead(checks,"lids",key);
     if(seen && (seen.conv!==n.conv || seen.hash!==ref.hash))throw new Hold("conflicting_duplicate","Group history conflicts with an existing logical turn.");
     const ops=[{s:"kv",k:"group-carrier/"+env.id,v:true}];
@@ -3715,6 +3800,7 @@ export class Engine {
       if (ops.some(o => o.s === "inbox" && o.v?.sub === "event")) { this.recoverHumanExcerpts().catch(() => {}); this.discloseHumanAudience(); this.retryHeld().catch(() => {}); }
       if (ops.groupCarrier) this.retryHeld().catch(() => {});
       if (ops.groupCarrier) this.recoverGroupIntents().catch(() => {});
+      if(ops.rootSync)this.syncRoots().catch(()=>{});
       if (this.connected && ops.some((o) => o.s === "outbox")) this.flushOutbox().catch(() => {}); // history forwarded to your other devices
       if (ops.some((o) => o.s === "kv" && o.v && o.v.serve)) this.runServes().catch(() => {});
       const atts = ops.flatMap((o) => (o.s === "inbox" && o.v && o.v.conv ? (o.v.attachments || []).filter((a) => a.blob) : []));
@@ -3765,6 +3851,7 @@ export class Engine {
     }
     if (n.receiver_route && n.receiver_route.op !== "request") return this.admitReceiverSetup(n, env, pin);
     if (n.v === wire.Version3) return this.admitControl(n, env, pin);
+    if(n.sub===wire.SubRootSync)return this.admitRootSync(n,env,pin);
     if (n.v === wire.Version2 && (n.sub === wire.SubGroupProof || n.sub === wire.SubGroupContext)) return this.admitGroupCarrier(n, env, pin);
     if (n.v === wire.Version2 && [wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(n.sub)) return this.admitGroupLifecycle(n, env, pin);
     const base = { id: env.id, from: env.from, kind: n.kind, body: n.body, reply_to: n.reply_to, quote:n.quote||"",topic_done:!!n.topic_done,topic:n.topic||"",topic_event:n.topic_event||null, ts:n.ts, at: this.now(), fp: pin.fingerprint, read: false,
@@ -4600,13 +4687,14 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapExternalParticipation, wire.CapGroup, wire.CapProgress, wire.CapReplyReceiver, wire.CapHumanParticipation, wire.CapAgentReaction, wire.CapConvClear, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rm1: every room reader rule is enforced here (ROOM_V1 §2.1)
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapExternalParticipation, wire.CapGroup, wire.CapProgress, wire.CapRootSync, wire.CapHumanParticipation, wire.CapAgentReaction, wire.CapConvClear, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit crs1 fits the 16-cap advertisement bound
       await this.publishPerson().catch(() => {});
       await this.flushReceipts();
       await this.retryHeld();
       await this.recoverGroupIntents();
       await this.flushOutbox();
       await this.retryApproved();
+      await this.syncRoots();
       await this.discloseHumanAudience(); // after a restart or reconnect: accepted guests learn each other
       this.runHistory().catch(() => {});
       this.runServes().catch(() => {});
@@ -4830,7 +4918,7 @@ export class Engine {
       const least = copyOrder(g);
       const copies=g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to)})); return { ...g[0], state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies };
     });
-    const received = inbox.filter((m) => m.conv === convId && !m.control && m.sub !== wire.SubDriveSpace && !this.erasedRow(m)).map((m) => {
+    const received = inbox.filter((m) => m.conv === convId && !m.control && m.sub !== wire.SubRootSync && m.sub !== wire.SubDriveSpace && !this.erasedRow(m)).map((m) => {
       if (m.sub !== "excerpt") return m;
       const h = wire.parseHistory(m.body);
       return { ...m, ...h, id: m.id, at: h.ts * 1000, sub: "", fp: "", excerpt_pid: m.pid, claimed_key: h.from_key,
@@ -5087,8 +5175,15 @@ export class Engine {
       const envelope=await wire.seal({v:3,id,from:this.address,to:d.address,ts:Math.floor(at/1000),kind:"message",sub,body,ref,conv:c.id,lid,replica:own,fan},this.keys,await this.pubOf(pin));
       recs.push({v:3,control:true,id,lid,conv:c.id,to:d.address,fp:this.fp,own,person:this.me.person,kind:"message",sub,body,ref,at,aside:true,envelope,state:"queued",required_cap:wire.CapGroup,recipient_fp:d.fingerprint,group_admission:fence});
     }
-    if(!recs.length)throw Error("No current group device can read controls.");
-    await this.store.write(recs.map(v=>({s:"outbox",k:v.id,v})),checks);for(const r of recs)await this.post(r);return {id:recs[0].id,state:copyOrder(recs).state,skipped};
+    if(!recs.length) {
+      if(members.size!==1||!members.has(this.me.person))throw Error("No current group device can read controls.");
+      // A sole remaining person can still edit/delete their own messages.
+      // Keep a signed local control in the same durable history store.
+      const id=wire.newID(),fan=[{person:this.me.person,roster:this.me.hash}],fence=await this.groupControlFence(members,this.fp,this.fp);
+      const envelope=await wire.seal({v:3,id,from:this.address,to:this.address,ts:Math.floor(at/1000),kind:"message",sub,body,ref,conv:c.id,lid,replica:true,fan},this.keys,await wire.publicEntry(this.keys,this.address));
+      recs.push({v:3,control:true,id,lid,conv:c.id,to:this.address,fp:this.fp,own:true,person:this.me.person,kind:"message",sub,body,ref,at,aside:true,envelope,state:"delivered",required_cap:wire.CapGroup,recipient_fp:this.fp,group_admission:fence});
+    }
+    await this.store.write(recs.map(v=>({s:"outbox",k:v.id,v})),checks);for(const r of recs)if(r.state!=="delivered")await this.post(r);return {id:recs[0].id,state:copyOrder(recs).state,skipped};
   }
 
   // An assistant's own reaction (client.admitAssistantReaction): it binds

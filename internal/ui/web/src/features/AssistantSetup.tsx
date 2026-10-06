@@ -26,7 +26,7 @@ import { Card, Details, Fact, Hint, input } from "./Settings.parts";
 const tone = (state: string) =>
   state === "connected" ? "ok" as const : state === "detected" || state === "needs_activation" ? "agent" as const : state === "needs_setup" ? "act" as const : state === "error" ? "danger" as const : "muted" as const;
 
-const CARD_TITLE = "Connect your coding sessions";
+const CARD_TITLE = "Use AgentNet inside your tools";
 const them = (n: number) => (n === 1 ? "it" : "them");
 
 const TITLE: Record<Stage, string> = {
@@ -148,6 +148,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
         {stage === "home" && <>
           <p className="text-[15px] text-text-2">When a Claude Code, Codex or Pi session on this computer asks someone through AgentNet, the answer comes back to that same session. Run this again after you install or remove one.</p>
+          {o?.me.responder && <p className="text-[15px] text-text-2">Choose {({ claude: "Claude Code", codex: "Codex", pi: "Pi" } as Record<string, string>)[o.me.responder] || o.me.responder} below to connect the program that answers for you.</p>}
           <Button variant="act" disabled={!!busy} onClick={read}>{busy === "read" ? "Looking…" : "Find them"}</Button>
         </>}
 

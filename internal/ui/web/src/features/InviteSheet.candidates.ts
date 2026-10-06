@@ -63,10 +63,10 @@ export function useCatalogs(api: Api, addresses: string[], enabled: boolean): Ca
  *  devices that run an agent (a phone or a browser publishes none). */
 export function catalogHosts(t: T.DMThread, o: T.Overview): string[] {
   const out = new Set<string>();
-  const people = [...(t.members || []), t.peer, ...(o.people || []).filter((p) => p.state === "pinned")];
+  const people = [o.person, ...(t.members || []), t.peer, ...(o.people || []).filter((p) => p.state === "pinned")];
   for (const p of people) {
-    if (!p || isMine(o, p.address)) continue;
-    for (const d of p.devices?.length ? p.devices : [{ address: p.address }]) if (!isMine(o, d.address) && runsAgent(d.address, o)) out.add(d.address);
+    if (!p) continue;
+    for (const d of p.devices?.length ? p.devices : [{ address: p.address }]) if (d.address !== o.me.address && runsAgent(d.address, o)) out.add(d.address);
   }
   return [...out].sort();
 }
@@ -125,7 +125,7 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
     });
     // Members' agents: each published agent, or a device's own default agent
     // when it runs one and publishes none (model.bringInDevices).
-    const members = (group ? t.members || [] : [t.peer]).filter((p) => p && !isMine(o, p.address));
+    const members = [me, ...(group ? t.members || [] : [t.peer])].filter((p): p is T.PersonView => !!p);
     const known = new Map<string, T.PersonView>();
     for (const p of [...members, ...(o.people || [])]) for (const d of p.devices?.length ? p.devices : [{ address: p.address }]) if (!known.has(d.address)) known.set(d.address, p);
     for (const [address, records] of Object.entries(cat.remote)) {
@@ -133,13 +133,13 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
       if (!p) continue;
       for (const r of records) add({
         key: "a:" + address + "#" + r.id, kind: "agent", name: r.label || agentName(r.id, names, p, me), seed: r.id,
-        subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, agentId: r.id, ownerName: personName(p),
+        subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, agentId: r.id, ownerName: personName(p), mine: isMine(o, address),
       });
     }
     for (const p of members) {
-      for (const address of bringInDevices(p, o, cat.remote)) add({
+      for (const address of bringInDevices(p, o, cat.remote).filter((a) => a !== o.me.address)) add({
         key: "a:" + address + "#", kind: "agent", name: agentName(undefined, names, p, me), seed: address,
-        subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, ownerName: personName(p),
+        subtitle: agentLine(p, me, address, online(o, address)), online: online(o, address), device: deviceKind(address), host: address, ownerName: personName(p), mine: isMine(o, address),
       });
     }
   }

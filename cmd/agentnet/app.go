@@ -76,10 +76,13 @@ var (
 var errAnotherDaemon = errors.New("another agentnet daemon took this home")
 
 type appEvent struct {
-	Event string `json:"event"`
-	Mode  string `json:"mode,omitempty"`
-	URL   string `json:"url,omitempty"`
-	Text  string `json:"text,omitempty"`
+	Event  string `json:"event"`
+	Mode   string `json:"mode,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Helper string `json:"helper,omitempty"`
+	Plan   string `json:"plan,omitempty"`
+	Home   string `json:"home,omitempty"`
 }
 
 type appRunner struct {
@@ -87,8 +90,12 @@ type appRunner struct {
 	exe  string // the installed app (AGENTNET_APP_EXE), "" when unknown
 	logf func(string, ...any)
 
-	outMu sync.Mutex
-	out   io.Writer
+	commandMu     sync.Mutex
+	command       appCommandStatus
+	updating      atomic.Bool
+	updateReplies chan bool
+	outMu         sync.Mutex
+	out           io.Writer
 
 	ln      net.Listener
 	addr    string
@@ -113,22 +120,37 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 	os.Unsetenv("AGENTNET_APP_EXE")
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go func() { // a stop request, or the shell gone
+	if err := secfile.EnsureDir(home); err != nil {
+		return err
+	}
+	r := &appRunner{home: home, exe: exe, logf: appLogf, out: stdout, token: protocol.NewID() + protocol.NewID(), updateReplies: make(chan bool, 1)}
+	go func() { // EOF or quit ends the app; only shell input acknowledges a handoff.
 		sc := bufio.NewScanner(stdin)
 		for sc.Scan() {
-			if strings.TrimSpace(sc.Text()) == appStopLine {
+			line := strings.TrimSpace(sc.Text())
+			if line == appStopLine {
 				break
+			}
+			if line == "app-update-ready" || line == "app-update-failed" {
+				select {
+				case r.updateReplies <- line == "app-update-ready":
+				default:
+				}
 			}
 		}
 		cancel()
 	}()
-	if err := secfile.EnsureDir(home); err != nil {
-		return err
+	if bundledWith == "app" && exe != "" {
+		r.command = r.installCommand(false)
 	}
-	r := &appRunner{home: home, exe: exe, logf: appLogf, out: stdout, token: protocol.NewID() + protocol.NewID()}
 	addLoginShellPath(r.logf)
 	if os.Getenv("APPIMAGE") != "" || runtime.GOOS == "darwin" {
 		appStable.on, appStable.home = true, home
+		if bundledWith == "app" && exe != "" {
+			if _, err := selfExe(); err != nil {
+				r.logf("the app's command for connected tools could not be refreshed: %v", err)
+			}
+		}
 	}
 	if exe != "" {
 		if err := secfile.Write(filepath.Join(home, appExeFile), []byte(exe+"\n")); err != nil {
@@ -328,7 +350,9 @@ func (r *appRunner) listen() error {
 	}))
 	r.handler.Store(&starting)
 	r.srv = &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		(*r.handler.Load()).ServeHTTP(w, req)
+		if !r.appAPI(w, req) {
+			(*r.handler.Load()).ServeHTTP(w, req)
+		}
 	})}
 	go func() {
 		if err := r.srv.Serve(r.ln); !errors.Is(err, http.ErrServerClosed) {
@@ -554,10 +578,10 @@ func appSetAside(home string, now time.Time) (string, error) {
 // files.
 func appKeepsOnStartAgain(name string) bool {
 	switch name {
-	case appUIAddrFile, appExeFile, appStableExeDir, "skins", "hooks", "update-request.json":
+	case appUIAddrFile, appExeFile, appStableExeDir, "skins", "hooks", "update-request.json", "app-command.json", appUpdateResultFile:
 		return true
 	}
-	return strings.HasSuffix(name, ".lock") || strings.HasPrefix(name, "update-helper-") || strings.HasPrefix(name, appAsidePrefix)
+	return strings.HasSuffix(name, ".lock") || strings.HasPrefix(name, "update-helper-") || strings.HasPrefix(name, "app-update-") || strings.HasPrefix(name, appAsidePrefix)
 }
 
 // sentenceOf is err as the end of a sentence.

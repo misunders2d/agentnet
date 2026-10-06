@@ -64,14 +64,14 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  const close = () => { stage = 'home'; review = null; error.textContent = ''; draw(true); };
  function draw(focus = false) {
   if (!current()) return;
-  const card = node('section', '', 'assistant-setup-card'); card.setAttribute('aria-label', 'Set up harnesses');
-  const heading = node('h3', stage === 'choose' ? 'Choose your tools' : stage === 'review' ? 'Review setup changes' : stage === 'saved' ? 'Setup result' : 'Connect your tools'); heading.tabIndex = -1; card.append(heading);
+  const card = node('section', '', 'assistant-setup-card'); card.setAttribute('aria-label', 'Use AgentNet inside your tools');
+  const heading = node('h3', stage === 'choose' ? 'Choose your tools' : stage === 'review' ? 'Review setup changes' : stage === 'saved' ? 'Setup result' : 'Use AgentNet inside your tools'); heading.tabIndex = -1; card.append(heading);
   if (isBrowser || view?.local === false) {
    card.append(node('p', 'This browser cannot inspect or install software. Open Settings → Agent → Set up harnesses on your native AgentNet computer.', 'setup-description')); root.replaceChildren(card); return;
   }
   if (stage === 'home') {
    card.append(node('p', 'Set up AgentNet integration for Codex, Claude, Pi or OMP. Run this again when tools are installed or removed. Your default responder stays separate.', 'setup-description'));
-   const start = button(busy ? 'Checking tools…' : 'Set up harnesses', choose, true); start.disabled = busy; card.append(start);
+   const start = button(busy ? 'Checking tools…' : 'Use AgentNet inside your tools', choose, true); start.disabled = busy; card.append(start);
   } else if (stage === 'choose') {
    card.append(node('p', 'Choose installed tools to configure. Existing skills, plugins, permissions and model sign-in stay untouched.', 'setup-description'));
    const { eligible, all } = checkAll();
@@ -86,7 +86,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
     const body = node('div', '', 'setup-tool-body'); const title = node('div', '', 'setup-row-title'); title.append(node('strong', h.label));
     const statuses = { connected: 'Registered context', detected: 'Detected', needs_setup: 'Needs setup', needs_activation: 'Needs activation', not_detected: 'Not detected', unsupported: 'Unsupported', error: 'Needs attention' };
     title.append(node('span', statuses[h.state] || 'Unknown', 'setup-status ' + (h.state === 'connected' ? 'connected' : h.state === 'detected' ? '' : 'attention')));
-    body.append(title, node('p', h.note)); row.append(input, body); list.append(row);
+    body.append(title, node('p', h.state === 'needs_setup' ? 'Its connection is out of date or still points to your previous AgentNet. Choose this program and reconnect it here.' : h.note)); row.append(input, body); list.append(row);
     if (chosen.has(h.id)) {
      const config = node('div', '', 'setup-assistant-config');
      if (!managed(h.id)) config.append(node('p', h.id === 'omp' ? 'OMP supports native hooks and CLI replies only here. Managed conversation assistants are unavailable; setup will not create one.' : 'No managed responder is available for this tool. Existing assistant settings are unchanged.', 'setup-note'));

@@ -39,13 +39,32 @@ export interface DriveProvider {
   beginGoogleConsent?<T = unknown>(request: { conv: string; full?: boolean; confirm_account: boolean }): Promise<T>;
 }
 
+export interface AppCommandStatus {
+  cli_path: string;
+  cli_state: "installed" | "custom" | "error";
+  cli_problem?: string;
+}
+
+export interface AppStatus extends AppCommandStatus {
+  version: string;
+  app_update_supported: boolean;
+  problem?: string;
+  update_result?: string;
+}
+
 export interface Host {
+  /** Native shell fallback, read only in response to paste; absent in browsers. */
+  clipboardImage?(): Promise<File | null>;
   version: number;
   platform: "daemon" | "browser";
   api<T = unknown>(path: string, body?: unknown): Promise<T>;
   listen(fn: (e: HostEvent) => void): () => void;
   file(id: string, index: number, dir?: string): Promise<{ bytes: Uint8Array }>;
   stage(file: File): Promise<unknown>;
+  /** Desktop shell only; actions on this computer, never membership APIs. */
+  appStatus?(): Promise<AppStatus>;
+  appUpdate?(): Promise<{ state: string; message: string }>;
+  appReplaceCommand?(): Promise<AppCommandStatus>;
   drive?: DriveProvider;
   /** Registers notification routing; kinds lists the destinations handled
    *  beyond channel and conversation (the host offers the rest itself). */

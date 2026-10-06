@@ -795,11 +795,11 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 		       coalesce(origin, ''), coalesce(emotion, ''), coalesce(target, ''), coalesce(pid, ''), lid, coalesce(ref_id, ''), coalesce(ref_fp, ''), coalesce(agent_id, ''),coalesce(quote,''),coalesce(topic,''),coalesce(topic_event,''),topic_done FROM (
 		  SELECT conv, received_ms AS ms, id, 'in' AS dir, sender, verified_by, claimed_fp, ts, kind, body, reply_to, status, sub, origin, emotion, target, pid, lid, ref_id, ref_fp,
 		         CASE WHEN kind IN ('question', 'task') THEN '' ELSE agent_id END AS agent_id,quote,topic,topic_event,topic_done
-		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('history', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
+		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('root-sync', 'history', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
 		     AND NOT `+erasedInFor("inbox")+`
 		  UNION ALL
 		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub='status') AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done
-		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
+		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('root-sync', 'history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
 		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND NOT `+erasedOut+`)
 		WHERE (conv, ms, id) > (?, ?, ?) AND conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context)
 		ORDER BY conv, ms, id LIMIT ?`, a.Address, self, self, pos.Conv, pos.Ms, pos.ID, historyPage)

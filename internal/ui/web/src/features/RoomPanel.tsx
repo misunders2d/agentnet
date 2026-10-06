@@ -30,9 +30,9 @@ export function RoomPanel() {
   const [snack, setSnack] = useState<Snack | null>(null);
   const current = wide && open?.kind === "dm" && t?.id === open.id ? t : null;
   const r = current ? room(current, o, {}) : null; // who is here, for opening; names come with the body
-  const busy = r ? [...r.guests, ...r.invited].map((g) => g.key + g.state).join(",") + "|" + r.waiting.map((w) => w.id).join(",") : "";
+  const busy = r ? [...r.guests, ...r.invited].map((g) => g.key + g.state).join(",") + "|" + r.waiting.map((w) => w.id).join(",") + "|" + r.groupInvites.map(i => i.id + i.state).join(",") : "";
   const sig = current ? current.id + "|" + busy : "";
-  const attention = !!r && r.guests.length + r.invited.length + r.waiting.length > 0;
+  const attention = !!r && r.guests.length + r.invited.length + r.waiting.length + r.groupInvites.length > 0;
   const shown = !!current && !!r && (panel || (roomy && attention && closed !== sig));
   const close = () => { store.setPanel(false); setClosed(sig); };
   useEffect(() => setSnack(null), [current?.id]); // a snackbar belongs to its conversation
@@ -156,6 +156,16 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
       {invitable && (
         <Button size="sm" variant="outline" className="mt-2.5 self-start" icon={<IconUserPlus size={18} />} onClick={() => bringIn(store, t, wide)}>Bring someone in</Button>
       )}
+
+      {r.groupInvites.length > 0 && <>
+        <Label n={r.groupInvites.length}>Invited people</Label>
+        <ul aria-label="Invited people" className="space-y-2">{r.groupInvites.map(i => <li key={i.id} className="flex min-w-0 items-center gap-3 rounded-2xl stroke bg-sunken p-3">
+          <PersonAvatar name={i.name} seed={i.target} size={36} />
+          <div className="min-w-0 flex-1"><p className="break-words font-bold">{i.name}</p>
+            <p className="text-[13px] text-text-2">{i.state === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept"}</p>
+          </div>
+        </li>)}</ul>
+      </>}
 
       {r.invited.length > 0 && <>
         <Label n={r.invited.length}>Invited</Label>

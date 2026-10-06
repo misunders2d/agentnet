@@ -22,6 +22,7 @@ export interface ChatItem {
   working: boolean;            // an agent is working on something here
   frozen?: string;
   members?: string[];          // group member names, for stacked avatars
+  conversations?: T.DMSummary[]; // distinct signed conversations in one person's chat
   topics?: Topic[];            // an agent's separate conversations not archived, newest first
   peer?: string;               // an agent's device address
   topicTotal?: number;         // every topic with that agent, archived ones too
@@ -147,10 +148,21 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
   // What waits for this device's decision in each chat (one decided on another device is not counted).
   const decide = new Map<string, number>();
   for (const c of o.needs_you || []) if (!c.decide_on) decide.set(c.conv, (decide.get(c.conv) || 0) + 1);
+  const chats = new Map<string, T.DMSummary[]>();
   for (const d of o.dms || []) {
+    // Group/guest rooms keep their own audience. Only verified person IDs
+    // group human DMs: matching display names never merge identities.
+    const person = d.kind !== "group" && (!d.role || d.role === "member") && d.peer.person;
+    const key = person ? "person:" + person : "dm:" + d.id;
+    chats.set(key, [...(chats.get(key) || []), d]);
+  }
+  for (const [key, conversations] of chats) {
+    conversations.sort((a, b) => (b.last_at || "").localeCompare(a.last_at || "") || a.id.localeCompare(b.id));
+    // Opening an empty conversation must not hide a person's existing chat.
+    const d = conversations.find((c) => c.count > 0) || conversations[0];
     const group = d.kind === "group";
     items.push({
-      key: "dm:" + d.id,
+      key,
       open: { kind: "dm", id: d.id },
       kind: group ? "group" : "person",
       title: group ? d.title || "Group" : personName(d.peer),
@@ -158,13 +170,14 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       avatarSeed: group ? d.id : d.peer.person || d.peer.address,
       last: firstLine(d.last),
       lastAt: d.last_at,
-      unread: d.unread,
-      needsYou: decide.get(d.id) || 0,
-      held: d.held,
+      unread: conversations.reduce((n, c) => n + c.unread, 0),
+      needsYou: conversations.reduce((n, c) => n + (decide.get(c.id) || 0), 0),
+      held: conversations.reduce((n, c) => n + c.held, 0),
       guests: 0,
       working: false,
       frozen: d.frozen,
       members: group ? (d.members || []).map((m) => m.label) : undefined,
+      conversations: key.startsWith("person:") ? conversations : undefined,
     });
   }
   // One row per agent: its separate conversations are topics inside it.

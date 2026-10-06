@@ -134,7 +134,7 @@ func copyRequirement(c outCopy) string {
 }
 
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
-	if required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
+	if required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)

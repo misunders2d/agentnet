@@ -1,6 +1,28 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Current work — October 5 release candidate
+## Current work — October 6 v0.8.1 candidate
+
+v0.8.0 (`d99dcc85`) is the released base. The active v0.8.1 candidate fixes
+MEL-550–557 plus MEL-558 linked-device history, one person chat with separate
+conversations, solo-group message controls and visible pending invitations.
+Read [the current release notes](NEXT_RELEASE.md) for scope and current limits.
+The owner requires every original item before rollout; none is deferred.
+
+Conversation replication carries an unchanged signed DM root in a quiet v2
+`root-sync` replica (`crs1`, explicitly advertised). Existing outbox records
+provide durable reconciliation across reconnects and roster changes. It adds
+no schema step, polling, history reset, visible message or execution request.
+Both endpoints must remain current human devices of the same verified person;
+root signatures and bound roster chains are checked. Old readers wait for an
+update. Person-chat grouping never merges signed roots or their audiences.
+
+Browser regressions cover all three skins at desktop/phone sizes. Focused
+authority and recovery tests pass; complete release checks remain in progress.
+The Linux AppImage, deb and rpm build locally. Native UI behavior is still
+unverified: an isolated test window stayed blank and was closed. Do not
+report browser checks or cross-compilation as native platform qualification.
+
+## Previous release — October 5 implementation record
 
 The October 5 candidate includes the app, Google sign-in, topics, person
 approvals, group agents, sending, catch-up, unread and readable needs-you

@@ -172,20 +172,27 @@ export function browserTeams(engine, realmID) {
     if (!records.length) fail('team: empty chain');
     await pin(records, id);
   }
-  async function accept(d) {
+  async function accept(d, fresh = false) {
     directory(d, realmID); await load();
     for (const ref of d.teams) {
       const row = data.chains[ref.id]?.[ref.seq];
       if (!row || row.state.hash !== ref.hash) await fetchTeam(ref.id);
       if (data.conflicts[ref.id] || data.chains[ref.id]?.[ref.seq]?.state.hash !== ref.hash) fail('team: directory proof mismatch');
     }
-    const next = structuredClone(data); next.directory = d; next.at = new Date().toISOString(); await save(next);
+    const next = structuredClone(data);
+    // Only a complete authenticated snapshot proves a list was removed.
+    if (fresh && !d.truncated) {
+      const listed = new Set(d.teams.map(r => r.id));
+      next.deleted ||= {};
+      for (const id of Object.keys(next.chains)) if (!listed.has(id)) next.deleted[id] = true;
+    }
+    next.directory = d; next.at = new Date().toISOString(); await save(next);
   }
   async function view() {
     await load();
     const listed = new Set(data.directory.teams.map(r => r.id)), self = engine.me?.person;
     return { realm_id: realmID, status, current, reason, at: data.at, truncated: data.directory.truncated,
-      teams: Object.keys(data.chains).sort().map(id => {
+      teams: Object.keys(data.chains).filter(id => !data.deleted?.[id]).sort().map(id => {
         const st = data.chains[id].at(-1).state;
         return { ...structuredClone(st), member: st.members.includes(self), manager: st.managers.includes(self), conflict: !!data.conflicts[id], listed: listed.has(id) };
       }) };
@@ -193,7 +200,7 @@ export function browserTeams(engine, realmID) {
   async function refresh() {
     const gen = generation; current = false;
     try {
-      await accept(await call('GET', '/v1/teams'));
+      await accept(await call('GET', '/v1/teams'), true);
       if (gen === generation && !pending) { current = true; status = 'available'; reason = ''; }
     } catch (e) {
       current = false; status = (Object.values(data?.conflicts || {}).some(Boolean) || /person conflict|pinned person fork|verified fork/.test(e.message)) ? 'conflict' : e.status === 404 ? 'unsupported' : 'unavailable'; reason = e.message;
@@ -201,6 +208,14 @@ export function browserTeams(engine, realmID) {
     return view();
   }
   async function change(c) {
+    if (c.op === 'delete') {
+      if (!wire.validID(c.team) || c.name || c.target) fail('Invalid people list deletion.');
+      const v = await refresh(), st = v.teams.find(t => t.id === c.team && t.listed && !t.conflict);
+      if (!v.current || !st) fail('Refresh this people list before deleting it.');
+      await call('DELETE', '/v1/teams/' + c.team);
+      const next = structuredClone(data); next.deleted ||= {}; next.deleted[c.team] = true;
+      await save(next); current = false; await refresh(); return st;
+    }
     const id = c.op === 'create' ? wire.newID() : c.team;
     for (let attempt = 0; attempt < 2; attempt++) {
       const v = await refresh();

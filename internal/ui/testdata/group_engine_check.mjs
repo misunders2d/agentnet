@@ -383,7 +383,37 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check((await w.st.get('held',wire.parseEnvelope(wrongHistory).id))?.reason==='invalid','late linked history refuses different own admission');
   const alien=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000101,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:pv['history-member-answer']},aliceKeys,pub);
   await w.receive({envelope:alien});check((await w.st.get('held',wire.parseEnvelope(alien).id))?.reason==='invalid','other member cannot forward own linked PID history');
-  await w.reload();check((await w.e.groupThread(conv)).messages.filter(m=>m.kind==='answer').length===3,'late linked participation and captured history survive durable reload');await w.close();
+  await w.reload();check((await w.e.groupThread(conv)).messages.filter(m=>m.kind==='answer').length===3,'late linked participation and captured history survive durable reload');
+  // A departed original author must not prevent our own linked device from
+  // restoring messages received under our still-current admission.
+  await w.receive(c.withdrawn);
+  const past={...JSON.parse(v.live_history_json),id:wire.newID(),lid:wire.newID(),from:bobPub.address,from_key:await wire.fingerprint(bobPub),body:'before departure',attachments:[],group_admission:await wire.groupAdmissionHash(wire.groupMember(states[0],roster.person).admission)};
+  const pastEnvelope=await historyEnvelope(JSON.stringify(past));await w.receive({envelope:pastEnvelope});
+  const restored=await w.st.get('inbox',past.id);
+  check(restored?.history&&restored.body===past.body&&restored.state===''&&restored.read&&!restored.fp,'departed author ordinary history restored quietly under linked-device provenance');
+  const badPast={...past,id:wire.newID(),lid:wire.newID(),group_admission:'e'.repeat(64)},badPastEnvelope=await historyEnvelope(JSON.stringify(badPast));await w.receive({envelope:badPastEnvelope});
+  check(!await w.st.get('inbox',badPast.id)&&(await w.st.get('held',wire.parseEnvelope(badPastEnvelope).id))?.reason==='invalid','departed author history still requires exact own admission');
+  const foreignPast={...past,id:wire.newID(),lid:wire.newID()},foreignPastEnvelope=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000101,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:JSON.stringify(foreignPast)},aliceKeys,pub);await w.receive({envelope:foreignPastEnvelope});
+  check(!await w.st.get('inbox',foreignPast.id)&&(await w.st.get('held',wire.parseEnvelope(foreignPastEnvelope).id))?.reason==='invalid','another person cannot assert our past group history');
+  await w.reload();check((await w.st.get('inbox',past.id))?.history,'departed author history survives reload');await w.close();
+  // Last-person deletion keeps a durable local control even without another
+  // device, never reviving withdrawn recipients or posting to the relay.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  {
+   const self=wire.groupMember(states[0],roster.person),stamp=await wire.groupAdmissionHash(self.admission),id=wire.newID(),lid=wire.newID();
+   const original={v:2,id,lid,from:address,to:alicePub.address,ts:1700000000,kind:'message',conv,root:wire.rootJSON(root),body:'my old message',fan:[{person:roster.person,roster:await wire.rosterHash(roster)}]};
+   const sealed=await wire.seal(original,keys,alicePub);
+   await w.st.write([{s:'outbox',k:id,v:{...original,fp:w.e.fp,at:1700000000000,state:'delivered',envelope:sealed,group_admission:stamp,recipient_fp:await wire.fingerprint(alicePub),required_cap:wire.CapGroup}}]);
+   await w.receive(c['solo-proof']);await w.receive(c['solo-context']);
+   check((await w.e.dmMembers(await w.e.groupRecord(conv))).size===1,'signed admin transition leaves only our person');
+   w.e.post=async()=>{throw Error('local control must not contact relay');};
+   await w.e.messageControl('edit',{conv,id,dir:'out',text:'edited alone'});
+   check((await w.e.groupThread(conv)).messages.find(m=>m.id===id)?.text==='edited alone','last browser person can edit');
+   await w.e.messageControl('delete',{conv,id,dir:'out'});
+   check((await w.st.get('outbox',id)).body===''&&(await w.e.groupThread(conv)).messages.find(m=>m.id===id)?.deleted,'last browser person can delete and erase text');
+   await w.reload();check((await w.e.groupThread(conv)).messages.find(m=>m.id===id)?.deleted,'last-person browser deletion survives reload');
+  }
+  await w.close();
   w=await world();const outside=v.outside_browser, outsideConv=outside.state.conv;
   for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
   await w.receive(outside['group-context']);check((await w.st.get('held',outside['group-context'].inner.id))?.reason==='proof_pending','outside browser context before exact signed invite stays held');

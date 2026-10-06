@@ -28,7 +28,8 @@ export function chatItems(o: T.Overview | null, names: Record<string, string>): 
   const items: ListItem[] = chatList(o, names).map((i) => {
     if (i.open.kind === "thread") return i; // named in model.chatList: one row per agent, its threads as topics
     const line = eventLine(dms.get(i.open.id)?.last || "", i.open.id, o, names);
-    return line ? { ...i, last: line, event: true } : i;
+    const note = (i.conversations?.length || 0) > 1 ? i.conversations!.length + " conversations" : undefined;
+    return line ? { ...i, note, last: line, event: true } : { ...i, note };
   });
 
   // Rows with the same name: DMs say when they started, device threads what they began with.

@@ -297,9 +297,10 @@ func (a *Agent) groupHistoryOutboundCheck(q dbq, packet GroupContext, to, fp str
 		if !ok || !me.has(to, fp) || item.GroupAdmission == "" || item.GroupAdmission != admission.Hash() {
 			return errors.New("group: history recipient lacks signed selection/current own live stamp")
 		}
-		if err = groupTurnCheck(q, packet, item.From, item.FromKey); err != nil {
-			return err
-		}
+		// The stored live-admission stamp establishes this person's access
+		// when the message arrived. The original author may since have left.
+		// Exact source resolution below binds the claimed author and content;
+		// only the forwarding and receiving devices need current membership.
 	}
 	source, err := a.groupHistorySourceIn(q, packet.State.Conv, ref)
 	if err != nil {

@@ -84,6 +84,23 @@ func (s *store) teamHead(realm, team string) (protocol.TeamState, bool, bool, er
 	return state, true, conflict, err
 }
 
+func (s *store) teamIDs(realm string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT team FROM teams WHERE realm_id=?`, realm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // TeamView reads retained, verified directory state; offline does not erase
 // membership, and an unverified/older pushed directory never makes it current.
 func (a *Agent) TeamView() (TeamsView, error) {
@@ -124,7 +141,9 @@ func (a *Agent) TeamView() (TeamsView, error) {
 	if err != nil {
 		return v, err
 	}
-	rows, err := a.store.db.Query(`SELECT state,conflict FROM teams WHERE realm_id=? ORDER BY team`, realm)
+	rows, err := a.store.db.Query(`SELECT state,conflict FROM teams WHERE realm_id=?
+ AND NOT EXISTS(SELECT 1 FROM config WHERE k='team-deleted/' || teams.realm_id || '/' || teams.team)
+ ORDER BY team`, realm)
 	if err != nil {
 		return v, err
 	}
@@ -150,10 +169,14 @@ func (a *Agent) Teams(ctx context.Context) (TeamsView, error) {
 	a.teams.mu.Unlock()
 	realm, err := a.teamRealm(ctx)
 	if err == nil {
-		var d protocol.TeamDirectory
-		err = a.hub.do(ctx, http.MethodGet, "/v1/teams", nil, &d)
+		var known []string
+		known, err = a.store.teamIDs(realm)
 		if err == nil {
-			err = a.acceptTeamDirectory(ctx, realm, d)
+			var d protocol.TeamDirectory
+			err = a.hub.do(ctx, http.MethodGet, "/v1/teams", nil, &d)
+			if err == nil {
+				err = a.pinTeamDirectory(ctx, realm, d, true, known)
+			}
 		}
 	}
 	if err != nil {
@@ -201,6 +224,14 @@ func (a *Agent) Teams(ctx context.Context) (TeamsView, error) {
 }
 
 func (a *Agent) acceptTeamDirectory(ctx context.Context, realm string, d protocol.TeamDirectory) error {
+	known, err := a.store.teamIDs(realm)
+	if err != nil {
+		return err
+	}
+	return a.pinTeamDirectory(ctx, realm, d, true, known)
+}
+
+func (a *Agent) pinTeamDirectory(ctx context.Context, realm string, d protocol.TeamDirectory, fresh bool, known []string) error {
 	if err := d.Validate(); err != nil {
 		return err
 	}
@@ -223,6 +254,28 @@ func (a *Agent) acceptTeamDirectory(ctx context.Context, realm string, d protoco
 		var hash string
 		if err := a.store.db.QueryRow(`SELECT hash FROM team_chain WHERE realm_id=? AND team=? AND seq=?`, realm, ref.ID, ref.Seq).Scan(&hash); err != nil || hash != ref.Hash {
 			return ErrTeamStale
+		}
+	}
+	// Only a complete, authenticated directory can prove omission. Keep local
+	// verified chains for audit, but persist deletion independently of signed state
+	// so reconnects, restarts and stale pushes cannot resurrect a removed list.
+	if fresh && !d.Truncated {
+		listed := map[string]bool{}
+		for _, ref := range d.Teams {
+			listed[ref.ID] = true
+		}
+		// A delayed response cannot delete a list learned or created after its
+		// request began: absence says nothing about those later IDs.
+		var removed []string
+		for _, id := range known {
+			if !listed[id] {
+				removed = append(removed, id)
+			}
+		}
+		for _, id := range removed {
+			if _, err := a.store.db.Exec(`INSERT OR IGNORE INTO config(k,v) VALUES(?, '1')`, "team-deleted/"+realm+"/"+id); err != nil {
+				return err
+			}
 		}
 	}
 	a.teams.mu.Lock()
@@ -388,6 +441,40 @@ func (a *Agent) pinTeamSteps(realm, team string, steps []protocol.TeamStep, raws
 
 func (a *Agent) ChangeTeam(ctx context.Context, c TeamChange) (protocol.TeamState, error) {
 	var none protocol.TeamState
+	if c.Op == "delete" {
+		if !protocol.ValidID(c.Team) || c.Name != "" || c.Target != "" {
+			return none, errors.New("invalid people list deletion")
+		}
+		v, err := a.Teams(ctx)
+		if err != nil {
+			return none, err
+		}
+		if !v.Current {
+			return none, ErrTeamStale
+		}
+		var state protocol.TeamState
+		found := false
+		for _, t := range v.Teams {
+			if t.ID == c.Team && t.Listed && !t.Conflict {
+				state = t.TeamState
+				found = true
+			}
+		}
+		if !found {
+			return none, errors.New("team not found")
+		}
+		if err := a.hub.do(ctx, http.MethodDelete, "/v1/teams/"+c.Team, nil, nil); err != nil {
+			return none, err
+		}
+		// The explicit accepted deletion is also proof when the following refresh
+		// is unavailable or truncated. It never deletes chat state.
+		if _, err := a.store.db.Exec(`INSERT OR IGNORE INTO config(k,v) VALUES(?, '1')`, "team-deleted/"+v.RealmID+"/"+c.Team); err != nil {
+			return none, err
+		}
+		a.changes.bump()
+		_, _ = a.Teams(ctx)
+		return state, nil
+	}
 	if c.Op == protocol.TeamCreate {
 		if c.Team != "" {
 			return none, errors.New("create chooses a new team identity")
@@ -590,7 +677,7 @@ func (a *Agent) syncTeams(ctx context.Context) {
 	}
 	realm, err := a.teamRealm(ctx)
 	if err == nil {
-		err = a.acceptTeamDirectory(ctx, realm, *pending)
+		err = a.pinTeamDirectory(ctx, realm, *pending, false, nil)
 	}
 	a.teams.mu.Lock()
 	if a.teams.generation == gen {

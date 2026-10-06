@@ -254,3 +254,69 @@ func (h *Hub) handleTeamChain(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, out)
 }
+
+// Lists are workspace directory metadata, not conversation authority. Deletion
+// uses the Hub's existing signed-request/admin checks; no caller-supplied role
+// becomes part of the signed manager chain. Retain that chain as a tombstone.
+func (h *Hub) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
+	caller, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	if !protocol.ValidID(id) {
+		writeError(w, 400, "", "invalid people list id")
+		return
+	}
+	tx, err := h.store.db.Begin()
+	if err != nil {
+		writeError(w, 500, "", "people list unavailable")
+		return
+	}
+	defer tx.Rollback()
+	member, err := agentIn(tx, caller)
+	if err != nil {
+		writeError(w, 500, "", "people list unavailable")
+		return
+	}
+	if member.Revoked || member.Pending {
+		writeError(w, 403, protocol.CodeTeamRefused, "people list deletion refused")
+		return
+	}
+	state, found, err := teamHeadIn(tx, h.RealmID(), id)
+	if err != nil {
+		writeError(w, 500, "", "people list unavailable")
+		return
+	}
+	if !found {
+		writeError(w, 404, "", "people list not found")
+		return
+	}
+	// A removed roster device cannot keep a person's former manager/admin rights.
+	if member.Person != "" {
+		head, exists, err := personHeadIn(tx, member.Person)
+		if err != nil {
+			writeError(w, 500, "", "person unavailable")
+			return
+		}
+		roster, err := protocol.ParsePersonRoster(head.record)
+		if !exists || err != nil || !roster.Has(caller, member.Public.Fingerprint()) {
+			writeError(w, 403, protocol.CodeTeamRefused, "people list deletion refused")
+			return
+		}
+	}
+	if !member.Admin && (member.Person == "" || !state.Manager(member.Person)) {
+		writeError(w, 403, protocol.CodeTeamRefused, "Only a list manager or workspace admin can delete this list.")
+		return
+	}
+	if _, err := tx.Exec(`DELETE FROM teams WHERE realm_id=? AND team=?`, h.RealmID(), id); err != nil {
+		writeError(w, 500, "", "people list deletion failed")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, 500, "", "people list deletion failed")
+		return
+	}
+	h.membersChanged()
+	w.WriteHeader(http.StatusNoContent)
+}

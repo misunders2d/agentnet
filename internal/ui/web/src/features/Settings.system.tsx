@@ -16,6 +16,7 @@ import { JoinSheet, LeaveSheet, RenameSheet, useDisconnected, useReconnect, useW
 import { errorText } from "../api";
 import { Card, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
 import { GoogleMembers } from "./GoogleMembers";
+import { AppControls } from "./AppControls";
 import { DriveSettings } from "./Drive";
 
 // ---- Storage -----------------------------------------------------------------
@@ -296,11 +297,12 @@ export function AboutSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
         {o?.release ? (
           <Card tone="agent" className="p-4">
             <p className="font-display text-[20px] font-bold leading-tight">Version {o.release} is out</p>
-            <p className="mt-1 text-[15px] text-text-2">Your server recommends it. Updates aren’t installed from this page: in a terminal on this computer, run <code className="rounded-md bg-surface px-1.5 py-0.5 font-mono text-[13px] stroke">agentnet update</code>.</p>
+            <p className="mt-1 text-[15px] text-text-2">Your server recommends it. Use Update AgentNet below in the desktop app.</p>
             <a href="https://github.com/misunders2d/agentnet/releases" target="_blank" rel="noopener noreferrer"
               className="mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-full stroke bg-surface px-4 font-semibold hover:bg-sunken">What’s new<IconArrowUpRight size={18} aria-hidden="true" /></a>
           </Card>
         ) : null}
+        <AppControls />
         {o && (
           <Card className="px-4 py-1.5">
             <Details label="Technical details" onOpen={loadPaths} className="pb-2">

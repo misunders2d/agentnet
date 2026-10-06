@@ -1,7 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "No page gets any app command: the window shows AgentNet's own loopback page, which talks only to the agentnet program.",
-  "windows": [],
-  "permissions": []
+  "description": "One clipboard image read command for the main loopback page; Rust additionally checks the app's exact current origin. No general plugin or shell commands.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"] },
+  "local": false,
+  "permissions": ["allow-agentnet-clipboard-image"]
 }

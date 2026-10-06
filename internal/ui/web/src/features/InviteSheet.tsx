@@ -87,7 +87,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [filesOk, setFilesOk] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [teamPeople, setTeamPeople] = useState<T.PersonRef[]>([]);
+  const [teamPeople, setTeamPeople] = useState<Pick<T.PersonRef, "id">[]>([]);
   const [teamHistory, setTeamHistory] = useState(false);
 
   const route: Route | null = c && t ? routeFor(c, t) : null;

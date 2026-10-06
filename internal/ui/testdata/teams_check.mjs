@@ -71,6 +71,7 @@ const engine = { store, keys, address: 'alice/desk', fp: await wire.fingerprint(
       if (duringGet) { const f = duringGet; duringGet = null; f(); }
       return { realm_id: realm, teams, truncated: false };
     }
+    if (method === 'DELETE') { chains.delete(path.split('/')[3]); return null; }
     if (method === 'GET') {
       const id = path.split('/')[3]; return { realm_id: realm, team: id, records: chains.get(id), more: false };
     }
@@ -142,4 +143,20 @@ await teams.teams(); assert.equal((await teams.view()).teams.find(t => t.id === 
 chains.set(id, [validAlternative]);
 await teams.teams(); assert.equal((await teams.view()).teams.find(t => t.id === id).conflict, true);
 assert.deepEqual(await store.get('kv', 'unrelated-grant'), before.v);
+// A partial snapshot does not prove omission; accepted deletion does and
+// remains hidden after reload/offline and replay of a previously valid push.
+const beforeDeletion = await engine.call('GET', '/v1/teams');
+teams.onTeams({ realm_id: realm, teams: [], truncated: true });
+await teams.sync();
+assert.ok((await teams.view()).teams.some(t => t.id === id2));
+// Avoid the intentionally conflicting first list for this independent proof.
+chains.delete(id);
+await teams.teams();
+await teams.team({ op: 'delete', team: id2 });
+assert.ok(!(await teams.view()).teams.some(t => t.id === id2));
+offline = true;
+const restarted = browserTeams(engine, realm);
+assert.ok(!(await restarted.teams()).teams.some(t => t.id === id2));
+restarted.onTeams(beforeDeletion); await restarted.sync();
+assert.ok(!(await restarted.view()).teams.some(t => t.id === id2));
 console.log('PASS teams: Go canonical/hash/signature, real-key authority, transfer/archive, CAS, snapshot isolation, offline/generation and authenticated fork');

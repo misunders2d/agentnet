@@ -62,6 +62,12 @@
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
     return r.json();
   };
+  const appJSON = async (path, body) => {
+    if (browser) throw new Error("Open the AgentNet app for this computer's settings.");
+    const response = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error((await response.text()).trim() || response.statusText);
+    return response.json();
+  };
   // single is the one-workspace transport of a program without the
   // workspace module.
   const single = {
@@ -107,6 +113,12 @@
   const go = (id, hash) => { const u = new URL(location.href); u.searchParams.set("skin", id); if (hash !== undefined) u.hash = hash; location.assign(u); };
   const common = {
     version: 1,
+    ...(typeof window.__agentnetNativeClipboardImage === "function" ? { clipboardImage: () => window.__agentnetNativeClipboardImage() } : {}),
+    // Computer-wide app actions stay on this loopback origin; switching a
+    // workspace never sends an updater request to a remote membership.
+    appStatus: () => appJSON("/api/app/status"),
+    appUpdate: () => appJSON("/api/app/update", {}),
+    appReplaceCommand: () => appJSON("/api/app/cli", { replace: true }),
     onOpen(fn, kinds) {
       openHandler = typeof fn === "function" ? fn : null;
       openKinds = new Set(["channel", "conversation", ...(Array.isArray(kinds) ? kinds.filter((k) => k === "message" || k === "review") : [])]);

@@ -445,6 +445,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	own := map[string]bool{}
 	var fan []envelope.Fan
 	var group *GroupContext
+	peerRequired := true
 	if root.Kind == protocol.ConvKindGroup {
 		if !(groupControlSub(sub) && cap == protocol.CapControl || sub == envelope.SubStatus && cap == protocol.CapHeadless) {
 			return ControlSent{}, errors.New("group: this control requires its own addressed authority")
@@ -475,6 +476,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			return ControlSent{}, e
 		}
 		fan = []envelope.Fan{{Person: me.roster.Person, Roster: me.roster.Hash()}}
+		peerRequired = len(members.persons) > 1
 		for _, person := range members.persons {
 			for _, d := range person.roster.Devices {
 				if d.Address != a.Address {
@@ -586,11 +588,31 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			peerCan = true
 		}
 	}
-	if !peerCan {
+	if !peerCan && peerRequired {
 		return sent, fmt.Errorf("%w: %s", ErrNoControls, strings.Join(sent.Skipped, "; "))
 	}
 	local := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
 		Kind: envelope.KindMessage, Sub: sub, Body: body, Ref: eref, Conv: ref.Conv, LID: lid, Fan: fan}
+	if len(copies) == 0 {
+		// The last person still owns their messages, even on one device.
+		// Keep a signed local copy in the usual control/history store. It is
+		// already stored here and must never be posted to the relay.
+		recipient, e := a.Self().Recipient()
+		if e != nil {
+			return ControlSent{}, e
+		}
+		local.Replica = true
+		env, e := envelope.Seal(local, a.id.Sign, recipient)
+		if e != nil {
+			return ControlSent{}, e
+		}
+		fence, e := groupControlEpochFence(a.store.db, *group, a.Address, a.Self().Fingerprint(), a.Address, a.Self().Fingerprint())
+		if e != nil {
+			return ControlSent{}, e
+		}
+		copies = append(copies, outCopy{env: env, in: local, state: protocol.StateDelivered,
+			required: protocol.CapGroup, recipientFP: a.Self().Fingerprint(), groupAdmission: fence})
+	}
 	var guard func(*sql.Tx, string) error
 	if group != nil {
 		guard = func(tx *sql.Tx, _ string) error {
@@ -634,6 +656,9 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	defer notifyDaemon(a.home)
 	sent.ID = copies[0].env.ID
 	for _, c := range copies {
+		if c.state == protocol.StateDelivered { // the local-only copy above
+			continue
+		}
 		state := c.state
 		res, err := a.deliver(ctx, c.env, nil)
 		switch {

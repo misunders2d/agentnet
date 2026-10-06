@@ -13,6 +13,7 @@ import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Card, Command, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
 import { Permissions, useGrants } from "./AgentsView.grants";
+import { AppControls } from "./AppControls";
 import { AssistantSetup } from "./AssistantSetup";
 import { FolderField } from "./AssistantSetup.folders";
 import { browserDevice as isBrowser } from "./AssistantSetup.model";
@@ -36,7 +37,7 @@ export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadin
   const r = useLoad(() => store.api.responder(), [o?.me.responder, o?.me.responder_dir, browser]);
   const head = <PageHead title="Your agent" titleRef={titleRef} lead="The program on this computer that answers questions and does tasks for you, with your own setup." />;
   // Connecting coding sessions is its own card below, whatever the agent's state.
-  const setup = <div className="mt-6"><AssistantSetup /></div>;
+  const setup = <div className="mt-6 space-y-4"><AssistantSetup /><AppControls command /></div>;
   // The server says "not available here" when this installation runs nothing.
   if (browser || (r.error && !r.data && /not available here/i.test(r.error))) return <>{head}<Card className="p-4"><p>This {browser ? "browser" : "installation"} runs nothing, so questions and tasks wait for you. Set up your agent on a computer that runs AgentNet.</p></Card>{setup}</>;
   if (r.error && !r.data) return <>{head}<Failed text={r.error} retry={r.reload} />{setup}</>;
@@ -69,7 +70,7 @@ function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => vo
       <Status view={view} me={me} />
 
       <section aria-labelledby="assistant-choose">
-        <GroupLabel id="assistant-choose">Who answers</GroupLabel>
+        <GroupLabel id="assistant-choose">Answers for you</GroupLabel>
         <RadioGroup value={choice} onValueChange={(v) => setChoice(String(v))} aria-labelledby="assistant-choose" className="grid gap-2.5 @md:grid-cols-2">
           <Choice value={MANUAL} selected={choice === MANUAL} avatar={<PersonAvatar name={me?.label || "Me"} seed={me?.person || "me"} size={40} />} title="No agent" sub="I’ll answer myself" />
           {harnesses.map((h) => (
@@ -83,7 +84,7 @@ function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => vo
 
       {choice && choice !== MANUAL && (
         <section className="fade-in">
-          <FolderField label="Works in" value={dir} onChange={setDir} hint="The folder it starts in for every question and task." />
+          <FolderField label="Works in" value={dir} onChange={setDir} hint="Requests from other people start in this folder. Your own sessions stay as they are. Tasks usually change files here, within your normal permissions." />
         </section>
       )}
 

@@ -104,11 +104,17 @@ export function candidates(t: T.DMThread, o: T.Overview | null, agentNames: Reco
     : [t.peer];
   const people = new Map<string, Candidate>();
   for (const p of originals) {
-    if (!p || !p.person || p.state === "self" || p.person === me) continue;
-    const name = mentionName(p.label);
-    if (!name || people.has("p:" + p.person)) continue;
+    if (!p) continue;
+    // A summary may arrive before its full peer view. Resolve only an exact
+    // device from an already verified person; listed claims grant no identity.
+    const known = !p.person && p.address ? o?.people?.find((x) => x.state === "pinned" && x.person &&
+      (x.address === p.address || x.devices?.some((d) => d.address === p.address))) : undefined;
+    const person = p.person || known?.person;
+    if (!person || person === me) continue;
+    const name = mentionName(p.label || known?.label);
+    if (!name || people.has("p:" + person)) continue;
     const admin = "admin" in p && p.admin;
-    people.set("p:" + p.person, { key: "p:" + p.person, kind: "person", id: p.person, name, sub: group ? (admin ? "Group admin" : "In this group") : "In this chat", seed: p.person });
+    people.set("p:" + person, { key: "p:" + person, kind: "person", id: person, name, sub: group ? (admin ? "Group admin" : "In this group") : "In this chat", seed: person });
   }
   for (const g of t.guests || []) {
     if (g.state !== "active" || g.host_here) continue;

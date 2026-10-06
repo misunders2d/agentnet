@@ -37,11 +37,9 @@ func (a *Agent) groupHistoryReceiveCheck(q dbq, root protocol.ConvRoot, sender i
 		if !ok || !me.has(sender.Address, sender.Fingerprint()) || item.GroupAdmission == "" || item.GroupAdmission != recipient.Hash() {
 			return errors.New("group: historical item lacks exact selected grant/current own live admission")
 		}
-		// The old live own-copy path still requires an exact verified original
-		// author's current key. Selected attribution does not assert that authority.
-		if err = groupTurnCheck(q, packet, item.From, item.FromKey); err != nil {
-			return err
-		}
+		// Our exact linked device vouches for historical attribution, as in
+		// DMs. A departed author's old messages stay history, with no current
+		// author authority. Sender, recipient and own admission stay current.
 	}
 	if retractedRef(q, root.ID(), item.LID, item.FromKey) {
 		return ErrGroupHistoryUnavailable

@@ -237,6 +237,7 @@ const (
 	SubEvent           = "event"            // a conversation event; history only, never a request
 	SubExcerpt         = "excerpt"          // shared history; never a request
 	SubHistory         = "history"          // a message or event of the conversation, forwarded by a device of the recipient's own person; never a request
+	SubRootSync        = "root-sync"        // signed DM root only, current own-human devices; no turn or execution
 	SubFile            = "file"             // a request for, or the offer of, a history message's file between devices of one person; never a request to run
 	SubGroupProof      = "group-proof"      // original signed ciphertext records in one JSON attachment; never a turn
 	SubGroupContext    = "group-context"    // current-only signed membership in one JSON attachment; never a turn
@@ -696,6 +697,11 @@ func checkVersion2(in Inner) error {
 	}
 	switch in.Sub {
 	case "", SubEvent, SubHistory, SubFile:
+	case SubRootSync:
+		root, err := protocol.ParseConvRoot(in.Root)
+		if err != nil || root.Kind != protocol.ConvKindDM || root.ID() != in.Conv || in.Kind != KindMessage || !in.Replica || in.Body != `{"v":1}` || in.Target != nil || in.PID != "" || len(in.Attachments) != 0 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil {
+			return errors.New("root sync: a quiet replica carries only one signed DM root")
+		}
 	case SubGroupProof, SubGroupContext, SubGroupInvite, SubGroupConsent, SubGroupWithdrawal:
 		root, err := protocol.ParseConvRoot(in.Root)
 		if err != nil || root.V != protocol.GroupRootVersion || root.Kind != protocol.ConvKindGroup || root.ID() != in.Conv || in.Kind != KindMessage || len(in.Attachments) != 1 || in.Target != nil || (in.PID != "" && (in.Sub != SubGroupProof && in.Sub != SubGroupContext || !protocol.ValidID(in.PID))) || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Replica {
@@ -826,6 +832,9 @@ func SealAttention(in Inner, sender ed25519.PrivateKey, recipient age.Recipient,
 }
 
 func sealEnvelope(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
+	if in.Sub == SubRootSync && channel != "" {
+		return Envelope{}, errors.New("root sync carries no attention")
+	}
 	if !validKind(in.Kind) {
 		return Envelope{}, fmt.Errorf("unknown message kind %q", in.Kind)
 	}
@@ -937,6 +946,9 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	}
 	if err := checkVersion2(in); err != nil {
 		return in, err
+	}
+	if in.Sub == SubRootSync && e.Attn {
+		return in, errors.New("root sync carries no attention")
 	}
 	if len(in.Attachments) != len(e.Blobs) {
 		return in, errors.New("encrypted manifest does not match signed attachments")

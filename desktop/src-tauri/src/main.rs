@@ -2,13 +2,15 @@
 //! (`agentnet app`), which does all of AgentNet's work and serves the page
 //! the window shows on this computer's loopback address. The shell starts
 //! with the computer (hidden in the tray), keeps one instance, hands
-//! agentnet:// links to the window and stops the program on Quit. No page
-//! gets any app command (capabilities/default.json is empty).
+//! agentnet:// links to the window and stops the program on Quit. The main
+//! loopback page has one guarded native clipboard-image read command.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod deeplink;
+mod clipboard;
 #[cfg(target_os = "linux")]
 mod linux;
+mod navigation;
 mod sidecar;
 #[cfg(any(windows, test))]
 mod win_autostart;
@@ -60,10 +62,13 @@ fn main() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![AUTOSTART_ARG])))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image])
         .manage(Shell::default())
         .setup(move |app| {
             let handle = app.handle().clone();
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .initialization_script(include_str!("clipboard.js"))
                 .title("AgentNet")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(380.0, 600.0)
@@ -79,7 +84,11 @@ fn main() {
                 .on_new_window({
                     let h = handle.clone();
                     move |url, _| {
-                        open_outside(&h, &url);
+                        if allow_navigation(&h, &url) {
+                            if let Some(w) = window(&h) {
+                                let _ = w.navigate(url);
+                            }
+                        }
                         NewWindowResponse::Deny
                     }
                 })
@@ -159,6 +168,14 @@ fn same_origin(a: &Url, b: &Url) -> bool {
 /// page and the program's loopback page. Other web pages open in the
 /// system browser; nothing else loads.
 fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
+    // The first callback can precede build() returning and splash being set.
+    // In particular, Windows serves the starting page at http://tauri.localhost.
+    if navigation::app_origin(url) {
+        if url.query_pairs().any(|(k, _)| k == "retry") {
+            signal(app, Signal::Retry);
+        }
+        return true;
+    }
     let shell = app.state::<Shell>();
     if let Some(splash) = shell.splash.lock().unwrap().as_ref() {
         if same_origin(url, splash) {
@@ -181,6 +198,9 @@ fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
 }
 
 fn open_outside(app: &AppHandle, url: &Url) {
+    if navigation::app_origin(url) {
+        return;
+    }
     if url.scheme() == "http" || url.scheme() == "https" || url.scheme() == "mailto" {
         let _ = app.opener().open_url(url.as_str(), None::<&str>);
     }
@@ -257,6 +277,10 @@ fn on_line(app: &AppHandle, line: String) {
         Some(sidecar::Event::Error { text }) => {
             *app.state::<Shell>().last_error.lock().unwrap() = Some(text.clone());
             show_error(app, &text);
+        }
+        Some(sidecar::Event::Update { helper, plan, home }) => {
+            let h = app.clone();
+            std::thread::spawn(move || apply_update(&h, &helper, &plan, &home));
         }
         None => {}
     }
@@ -451,5 +475,34 @@ fn first_autostart(app: &AppHandle) {
     }
     if set_autostart(app, true).is_ok() {
         chose_autostart(app);
+    }
+}
+
+// Only the local program's stdout can request an update; web pages have no
+// app update command. The helper waits for EOF until the old daemon stops.
+fn apply_update(app: &AppHandle, helper: &str, plan: &str, home: &str) {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(helper);
+    cmd.args(["--home", home, "app-update-helper", plan]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)] { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
+    match cmd.spawn() {
+        Ok(mut child) => {
+            let held = child.stdin.take();
+            let acknowledged = app.state::<Shell>().running.lock().unwrap().as_mut()
+                .is_some_and(|running| running.send_line("app-update-ready").is_ok());
+            if !acknowledged { let _ = child.kill(); let _ = child.wait(); return; }
+            // Let the HTTP response reach the page before stopping its program.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            stop_program(app);
+            // Keep the pipe alive until process exit: otherwise the new app
+            // could start while single-instance still sees this old shell.
+            std::mem::forget(held);
+            app.exit(0);
+        }
+        Err(_) => {
+            if let Some(running) = app.state::<Shell>().running.lock().unwrap().as_mut() {
+                let _ = running.send_line("app-update-failed");
+            }
+        },
     }
 }

@@ -108,9 +108,17 @@ func (a *Agent) convSync(ctx context.Context) {
 	if work&convRelease != 0 {
 		a.releaseConv(ctx, feats)
 	}
-	if work&convHistory != 0 && a.historyStep(ctx) {
-		a.convWork.due(convHistory) // one page per sync; the next follows at once
-		a.kickNow()
+	if work&convHistory != 0 {
+		roots, err := a.syncRoots()
+		if err != nil {
+			a.Logf("copying conversation roots: %v", err)
+			a.convWork.due(convHistory)
+		}
+		more := a.historyStep(ctx)
+		if roots || more {
+			a.convWork.due(convHistory) // one page per sync; the next follows at once
+			a.kickNow()
+		}
 	}
 	if work&convServe != 0 && a.serveFiles(ctx) {
 		a.convWork.due(convServe) // one file per sync
@@ -137,7 +145,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapRoom, protocol.CapTyping}
+var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapRoom, protocol.CapTyping} // apx1 is already implied by rm1; preserve the 16-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -297,6 +305,9 @@ func (a *Agent) CreateDM(ctx context.Context, address string) (string, error) {
 	if err := a.store.addConversation(root, raw, them.info.Person); err != nil {
 		return "", err
 	}
+	a.convWork.due(convHistory)
+	a.kickNow()
+	notifyDaemon(a.home)
 	return root.ID(), nil
 }
 
@@ -1036,6 +1047,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	sp, err := a.personOfKey(ctx, env.From, sender)
 	if err != nil {
 		return personErr(err)
+	}
+	if in.Sub == envelope.SubRootSync {
+		return a.admitRootSync(ctx, env, in, root, sender, sp, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubGroupWithdrawal {
 		return a.admitGroupWithdrawalCarrier(ctx, env, in, root, sender, fromQuarantine, hold)

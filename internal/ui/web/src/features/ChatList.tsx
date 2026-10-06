@@ -64,7 +64,7 @@ export function ChatList() {
   const active: Filter = filter !== "all" && kinds.has(filter) ? filter : "all";
   const q = query.trim();
   const shown = items.filter((i) => (active === "all" || i.kind === active)
-    && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title, ...(i.topics || []).map((t) => t.title)));
+    && matches(q, i.title, i.subtitle, i.note, i.last, ...(i.members || []), summaries.get(i.open.id)?.title, threads.get(i.open.id)?.title, ...(i.topics || []).map((t) => t.title), ...(i.conversations || []).flatMap((d) => [d.title, d.last])));
   const unread = items.reduce((n, i) => n + i.unread, 0);
   const showSearch = wide || searching || !!q;
 
@@ -143,7 +143,8 @@ export function ChatList() {
               {shown.map((i) => (
                 <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => clearTimeout(hover.current)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
                   <ChatRow item={i} summary={summaries.get(i.open.id)} overview={overview} wide={wide}
-                    selected={!!lit && lit.id === i.open.id} onOpen={() => void store.open(i.open)} />
+                    selected={!!lit && (lit.id === i.open.id || !!i.conversations?.some((c) => c.id === lit.id))}
+                    onOpen={() => void store.open(open?.kind === "dm" && i.conversations?.some((c) => c.id === open.id) ? open : i.open)} />
                 </li>
               ))}
             </ul>

@@ -23,6 +23,7 @@ export const CapHeadless = "hdl1";        // protocol cap: reads status controls
 export const CapExternalParticipation = "apx1"; // selected DM excerpts and exact outside-host participation
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
+export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
 export const SubGroupProof = "group-proof", SubGroupContext = "group-context"; // bounded quiet carriers; no capability advertisement
 export const SubGroupInvite = "group-invite", SubGroupConsent = "group-consent", SubGroupWithdrawal = "group-withdrawal";
@@ -456,7 +457,7 @@ function marshalInner(n) {
   return s + "}";
 }
 
-const subs = new Set(["", "event", "excerpt", "history", "file", SubDriveSpace, SubGroupProof, SubGroupContext, SubGroupInvite, SubGroupConsent, SubGroupWithdrawal]);
+const subs = new Set(["", "event", "excerpt", "history", "file", SubRootSync, SubDriveSpace, SubGroupProof, SubGroupContext, SubGroupInvite, SubGroupConsent, SubGroupWithdrawal]);
 const driveFolderPattern = /^[A-Za-z0-9_-]{1,256}$/;
 // parseDriveSpace is gdrive.Space.Validate on a Drive space record's body:
 // the conversation, the folder, its name, the owner (a person id, as the
@@ -670,6 +671,10 @@ async function checkV2(n) {
   if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
   if (!n.root || utf8.encode(n.root).length > convRootSizeLimit(n.root)) throw new Error("missing or oversized conversation root");
   if (!subs.has(n.sub)) throw new Error("unknown sub " + n.sub);
+  if (n.sub === SubRootSync) {
+    const root=parseRoot(n.root);
+    if(await rootID(root)!==n.conv || n.kind!=="message" || !n.replica || n.body!== '{"v":1}' || n.target || n.pid || n.attachments.length || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route)throw Error("root sync: a quiet replica carries only one signed DM root");
+  }
   if ([SubGroupProof, SubGroupContext, SubGroupInvite, SubGroupConsent, SubGroupWithdrawal].includes(n.sub)) {
     const root = parseGroupRoot(n.root);
     if (root.v !== GroupRootVersion || root.kind !== "group" || await rootID(root) !== n.conv || n.kind !== "message" || n.attachments.length !== 1 || n.target || (n.pid && (![SubGroupProof, SubGroupContext].includes(n.sub) || !validID(n.pid))) || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.replica) throw new Error("group: carrier must be a plain group message with one attachment");
@@ -749,6 +754,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
+  if (inner.sub === SubRootSync && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -835,6 +841,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
+  if (n.sub === SubRootSync && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];

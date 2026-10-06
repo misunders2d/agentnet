@@ -474,6 +474,10 @@ const CapEnv2 = "env2"
 // asked to update, never sent a partial conversation).
 const CapPerson = "person2"
 
+// CapRootSync reads quiet signed DM-root replicas between current own-human
+// devices. Explicitly advertised: older rm1/person2 readers do not implement it.
+const CapRootSync = "crs1"
+
 // Relay membership roles (Profile.SelfRole).
 const (
 	RoleAdmin  = "admin"

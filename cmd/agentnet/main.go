@@ -73,6 +73,8 @@ func run(args []string) error {
 		return nil
 	case "update":
 		return runUpdate(ctx, *home, rest)
+	case appUpdateHelperCmd:
+		return runAppUpdateHelper(*home, rest, os.Stdin)
 	case updateHelperCmd: // hidden: see restart_windows.go
 		return runUpdateHelper(*home, rest)
 	case "skill":

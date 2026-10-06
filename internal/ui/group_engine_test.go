@@ -243,6 +243,23 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 		}
 		carriers["withdrawn"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Withdrawals: []protocol.GroupWithdrawal{withdrawal}}, 0, s0.Hash())
 		carriers["promoted-leave"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: states[3], Withdrawals: []protocol.GroupWithdrawal{withdrawal}}, 3, states[3].Hash())
+		// The last human keeps their admission and becomes the remaining
+		// admin through the prior admin's signed transition.
+		solo := s0
+		solo.Seq, solo.Prev = 1, s0.Hash()
+		solo.Members = slices.DeleteFunc(slices.Clone(s0.Members), func(m protocol.GroupMember) bool { return m.Person != br.Person })
+		solo.Members[0].Admin = true
+		solo.Sign(alice.Sign)
+		if err := solo.Verify(root, &s0, resolve, nil); err != nil {
+			t.Fatal("native last-person state", err)
+		}
+		soloCommit := protocol.GroupCommit{Bootstrap: root.Creator.Fingerprint, V: 1, Conv: solo.Conv, Realm: solo.Realm, Seq: solo.Seq, Prev: solo.Prev, Hash: solo.Hash(), Admins: solo.Admins(), Writer: ap.Address, Actor: solo.Actor, ActorRoster: solo.ActorRoster, Ciphertext: encrypt([]byte(marshal(t, client.GroupContext{Root: root, State: solo})))}
+		soloCommit.Sign(alice.Sign)
+		if err := soloCommit.VerifyChain(root, &commits[0], resolve); err != nil {
+			t.Fatal("native last-person proof", err)
+		}
+		carriers["solo-proof"] = carrier(envelope.SubGroupProof, protocol.GroupJournalPage{Records: []protocol.GroupCommit{soloCommit}}, solo.Seq, solo.Hash())
+		carriers["solo-context"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: solo}, solo.Seq, solo.Hash())
 		participations := groupParticipationEngineVectors(t, root, s0, alice, dana, ar, dr, browser)
 		vectors["participations"] = participations
 		var membershipRecords []protocol.ParticipationEvent

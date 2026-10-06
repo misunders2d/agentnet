@@ -6,11 +6,81 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
+
+// A departure revokes future group access, not the remaining person's
+// already-received messages. One old author must not block every chat's sync.
+func TestGroupHistoryLinkAfterAuthorLeaves(t *testing.T) {
+	w, _, packet, stops := groupTurnsFixture(t)
+	dm := newDM(t, w.bob, w.alice)
+	for _, conv := range []string{packet.State.Conv, dm} {
+		if _, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "before departure"}); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "laptop has old message", func() bool {
+			return len(convBodies(t, w.alice, conv)) == 1
+		})
+	}
+	withdrawal, err := w.bob.SignGroupWithdrawal(tctx(t), packet.State.Conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.alice.AcceptGroupWithdrawal(tctx(t), withdrawal); err != nil {
+		t.Fatal(err)
+	}
+	var linked []*Agent
+	stop := stops[w.alice]
+	for _, name := range []string{"after-departure-phone", "after-departure-laptop"} {
+		if len(linked) > 0 {
+			stop = runAgent(t, w.alice)
+		}
+		device, await, _ := linkPhone(t, w.alice, name)
+		request := pendingLink(t, w.alice)
+		stop()
+		if err := w.alice.DecideLink(tctx(t), request.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		if result := <-await; result.err != nil {
+			t.Fatal(result.err)
+		}
+		linked = append(linked, device)
+	}
+	for _, device := range linked {
+		if _, err := w.alice.historyPageFor(device.Self(), historyPos{}); err != nil {
+			t.Fatalf("departed author's old message blocked linked history: %v", err)
+		}
+		runAgent(t, device)
+	}
+	runAgent(t, w.alice)
+	for _, device := range linked {
+		for _, conv := range []string{packet.State.Conv, dm} {
+			eventually(t, "both old group chat and DM reach each linked device", func() bool {
+				return strings.Join(convBodies(t, device, conv), "|") == "in:before departure"
+			})
+			messages, err := device.ConversationMessages(conv)
+			if err != nil || len(messages) != 1 || !messages[0].History || messages[0].Job != "" {
+				t.Fatalf("history must remain display only: count=%d error=%v", len(messages), err)
+			}
+		}
+	}
+	if _, err := linked[0].SendConv(tctx(t), dm, ConvOutgoing{Body: "from linked phone"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, device := range append([]*Agent{w.alice}, linked...) {
+		eventually(t, "phone reply reaches same conversation on all three devices", func() bool {
+			messages, err := device.ConversationMessages(dm)
+			return err == nil && len(messages) == 2 && messages[1].Body == "from linked phone"
+		})
+	}
+	if err := groupTurnCheck(w.alice.store.db, packet, w.bob.Address, w.bob.Self().Fingerprint()); err == nil {
+		t.Fatal("history sync restored departed author's live group access")
+	}
+}
 
 func groupHistoryLinkedFixture(t *testing.T) (*world, *Agent, *Agent, GroupContext) {
 	t.Helper()

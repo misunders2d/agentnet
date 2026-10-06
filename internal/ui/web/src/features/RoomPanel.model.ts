@@ -92,9 +92,26 @@ export interface Guest {
 
 export interface Waiting { id: string; text: string; asker: string; agent: string; decider: string; mine: boolean }
 
+export interface GroupInvite { id: string; target: string; name: string; state: string }
+
+/** Outbound proposals are invitations, never members before publication. */
+export function pendingGroupInvites(t: T.DMThread, o: T.Overview | null): GroupInvite[] {
+  if (t.kind !== "group") return [];
+  const members = new Set((t.members || []).map(m => m.person));
+  const seen = new Set<string>();
+  return (o?.group_invitations || []).filter(i => i.conv === t.id && i.direction === "out" &&
+    (i.status === "pending" || i.status === "accepted") && !members.has(i.target)).flatMap(i => {
+      if (seen.has(i.target)) return [];
+      seen.add(i.target);
+      return [{ id: i.id, target: i.target, state: i.status,
+        name: o?.people?.find(p => p.person === i.target)?.label || "Person " + i.target.slice(0, 8) }];
+    });
+}
+
 export interface Room {
   members: Member[];
   guests: Guest[];             // in the room now
+  groupInvites: GroupInvite[]; // outbound member proposals, separate from guests
   invited: Guest[];            // not in yet
   waiting: Waiting[];          // requests here that wait for an owner's OK
   past: Guest[];               // dismissed, left or declined
@@ -187,6 +204,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
   return {
     members,
     guests: all.filter((g) => LIVE.has(g.state)),
+    groupInvites: pendingGroupInvites(t, o),
     invited: all.filter((g) => PENDING.has(g.state)),
     waiting,
     // One row per person or agent: their latest visit.

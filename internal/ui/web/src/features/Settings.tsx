@@ -36,7 +36,7 @@ const VIEWS: Record<Id, (p: { titleRef?: React.Ref<HTMLHeadingElement> }) => Rea
 // Each row's sticker: pastel tiles with ink icons, in both themes (like avatars).
 const ROWS: Record<RowId, { label: string; icon: ReactNode; color: string }> = {
   devices: { label: "Your devices", icon: <IconDevices size={20} />, color: "#A8D8FF" },
-  teams: { label: "Teams", icon: <IconStack2 size={20} />, color: "#B5E3C4" },
+  teams: { label: "People lists", icon: <IconStack2 size={20} />, color: "#B5E3C4" },
   assistant: { label: "Your agent", icon: <IconRobot size={20} />, color: "#D9C2FF" },
   permissions: { label: "Permissions", icon: <IconShieldCheck size={20} />, color: "#B5E3C4" },
   notifications: { label: "Notifications", icon: <IconBell size={20} />, color: "#FFC6E0" },

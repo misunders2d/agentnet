@@ -953,7 +953,7 @@ type FileInfo struct {
 // recordSubs are the received records between devices that are never a
 // message: group proofs, contexts, invitations, consents and withdrawals,
 // and Drive space records (a conversation's view leaves them out too).
-const recordSubs = `('drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+const recordSubs = `('root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
 
 // inbox lists received messages; a local request to this device's own
 // agent (agentjob.go) is not one, nor is a record between devices.

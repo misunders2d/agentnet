@@ -214,7 +214,7 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
           </span>
         </button>
       )}
-      {!q && <Button variant="outline" onClick={() => { onDone(); store.showTab("settings", "teams"); }}>Teams</Button>}
+      {!q && <Button variant="outline" onClick={() => { onDone(); store.showTab("settings", "teams"); }}>People lists</Button>}
 
       {shownPeople.length > 0 && <>
         <h3 className={heading}>People</h3>
@@ -238,12 +238,13 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
   );
 }
 
-export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack: () => void; onCreated: () => void; initialPeople?: T.PersonRef[] }) {
+export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack: () => void; onCreated: () => void; initialPeople?: Pick<T.PersonRef, "id">[] }) {
   const store = useApp();
+  const overview = useStore(store, (s) => s.overview);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [people, setPeople] = useState(initialPeople);
+  const [people, setPeople] = useState<Pick<T.PersonRef, "id">[]>(initialPeople);
   const [created, setCreated] = useState("");
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -278,11 +279,25 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack
           placeholder="For example, Savannah rush order"
           className="mt-1.5 block h-12 w-full rounded-xl bg-surface px-3 text-[16px] stroke placeholder:text-muted" />
       </label>
-      <p className="text-[13px] text-muted">You’ll be its admin. Only you can bring people in at first; you can make others admins later.</p>
-      <TeamPeople selected={people} onChange={setPeople} disabled={busy} />
+      <p className="text-[13px] text-muted">Choose people below. Each decides whether to join; you start as group admin.</p>
+      <div className="flex flex-wrap gap-2" aria-label="Selected people">{people.map((p) => <button key={p.id} type="button" disabled={busy}
+        onClick={() => setPeople(people.filter((x) => x.id !== p.id))} aria-label={"Remove " + (overview?.people?.find((x) => x.person === p.id)?.label || "person")}
+        className="inline-flex min-h-11 max-w-full items-center gap-2 rounded-full bg-agent px-3 stroke">
+        <span className="break-words">{overview?.people?.find((x) => x.person === p.id)?.label || "Person " + p.id.slice(0, 8)}</span><IconX size={16} aria-hidden="true" />
+      </button>)}</div>
+      <fieldset disabled={busy} className="space-y-2">
+        <legend className="font-semibold">People</legend>
+        <div className="max-h-48 overflow-y-auto">{(overview?.people || []).filter(p => p.state === "pinned" && p.person && p.person !== overview?.person?.person).map(p =>
+          <label key={p.person} className="flex min-h-11 cursor-pointer items-center gap-3 px-1">
+            <input type="checkbox" checked={people.some(x => x.id === p.person)} className="size-5 shrink-0 accent-[var(--an-agent-ink)]" onChange={e => setPeople(e.target.checked ?
+              [...people, { id: p.person! }] : people.filter(x => x.id !== p.person))} />
+            <span className="break-words">{personName(p)}</span>
+          </label>)}</div>
+      </fieldset>
+      <TeamPeople selected={people} onChange={setPeople} disabled={busy} showSelected={false} />
       {created && <p role="status">The group is already created. Only the remaining people below will be invited when you retry.</p>}
       {error && <p role="alert" className="rounded-xl bg-danger-bg px-3 py-2.5 font-semibold text-danger">{error}</p>}
-      <Button variant="act" size="lg" type="submit" disabled={busy} className="mt-1">{busy ? "Sending…" : created ? "Retry remaining invitations" : "Create group"}</Button>
+      <Button variant="act" size="lg" type="submit" disabled={busy || (!created && !title.trim())} className="mt-1">{busy ? "Sending…" : created ? "Retry remaining invitations" : "Create group"}</Button>
     </form>
   );
 }

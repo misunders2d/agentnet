@@ -1,4 +1,4 @@
-// Classic's and Zoom's "Set up harnesses" (skins/*/src/assistant-setup.mjs)
+// Classic's and Zoom's "Use AgentNet inside your tools" (skins/*/src/assistant-setup.mjs)
 // on a tiny stand-in DOM: the working folder is chosen by browsing
 // /api/folders, never typed; a folder that can't be read still leads
 // somewhere (Up, Home); review comes before apply; the reviewed change is
@@ -57,7 +57,7 @@ function tool(id, over = {}) {
 function server({ folderDelay, agents: start = [], local = true } = {}) {
   const calls = [];
   let agents = start;
-  const view = () => ({ local: true, harnesses: [tool('claude'), tool('codex'), tool('omp', { detected: false, state: 'not_detected' })] });
+  const view = () => ({ local: true, harnesses: [tool('claude', {state:'needs_setup'}), tool('codex'), tool('omp', { detected: false, state: 'not_detected' })] });
   const home = { path: '/home/me', parent: '/home', home: '/home/me', dirs: ['work', 'notes', 'locked'], truncated: true };
   const folders = {
     '/api/folders': home,
@@ -104,8 +104,10 @@ for (const skin of ['classic', 'zoom']) {
 
   const doc = makeDocument(), root = doc.createElement('div'), s = server();
   doc.documentElement.append(root);
-  await mountAssistantSetup({ root, api: s.api });
-  await click(root, 'Set up harnesses');
+  await mountAssistantSetup({ root, api: s.api, suggestedHarness: 'claude' });
+  assert.match(root.textContent, /Your answers use Claude/, skin);
+  await click(root, 'Use AgentNet inside your tools');
+  assert.match(root.textContent, /connection is out of date or still points to your previous AgentNet/, skin);
   // No typed folder anywhere: the only text field is a new agent's name.
   const claude = root.querySelector('#setup-tool-claude');
   claude.checked = true; claude.onchange(); await flush();
@@ -152,7 +154,7 @@ for (const skin of ['classic', 'zoom']) {
     const doc2 = makeDocument(), root2 = doc2.createElement('div'), s2 = server({ folderDelay: gate });
     doc2.documentElement.append(root2);
     await mountAssistantSetup({ root: root2, api: s2.api });
-    await click(root2, 'Set up harnesses');
+    await click(root2, 'Use AgentNet inside your tools');
     const c2 = root2.querySelector('#setup-tool-claude');
     c2.checked = true; c2.onchange(); await flush();
     const opening = buttonNamed(root2, 'Choose working folder for Claude').onclick();
@@ -171,7 +173,7 @@ for (const skin of ['classic', 'zoom']) {
     const doc3 = makeDocument(), root3 = doc3.createElement('div'), s3 = server({ agents: [gone] });
     doc3.documentElement.append(root3);
     await mountAssistantSetup({ root: root3, api: s3.api });
-    await click(root3, 'Set up harnesses');
+    await click(root3, 'Use AgentNet inside your tools');
     const c3 = root3.querySelector('#setup-tool-claude');
     c3.checked = true; c3.onchange(); await flush();
     await click(root3, 'Change working folder for Claude');
@@ -199,7 +201,7 @@ for (const skin of ['classic', 'zoom']) {
     const doc4 = makeDocument(), root4 = doc4.createElement('div'), s4 = server({ local: false });
     doc4.documentElement.append(root4);
     await mountAssistantSetup({ root: root4, api: s4.api });
-    await click(root4, 'Set up harnesses');
+    await click(root4, 'Use AgentNet inside your tools');
     assert.match(root4.textContent, /Open Settings on your AgentNet computer/, skin);
     assert.doesNotMatch(root4.textContent, /Agent catalog unavailable/, skin);
     assert.deepEqual(s4.calls, [['GET', '/api/assistant-setup']], skin);

@@ -1,3 +1,4 @@
+import { pendingGroupInvites } from "./RoomPanel.model";
 // The conversation's header (who this is, whether their computer is on,
 // Bring in, and the overflow menu) and, on phones, the guest bar: who is
 // helping here right now, with Dismiss said in words.
@@ -126,6 +127,8 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
     title = t.title || "Group";
     const n = (t.members || []).length;
     sub = n + (n === 1 ? " member" : " members") + " · " + (others.length ? "you, " + others.join(", ") : "just you");
+    const pending = pendingGroupInvites(t, overview).length;
+    if (pending) sub += " · " + pending + " invited";
     avatar = <GroupAvatar names={others.length ? others : [title]} seed={t.id} size={wide ? 48 : 40} />;
   } else if (t && (t.role === "human_guest" || t.role === "visitor")) {
     title = roomTitle(t);

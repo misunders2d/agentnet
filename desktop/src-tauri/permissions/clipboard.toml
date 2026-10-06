@@ -1,0 +1,6 @@
+# Only this custom command may reach native image data. It checks the
+# invoking main webview's exact current loopback origin before reading.
+[[permission]]
+identifier = "allow-agentnet-clipboard-image"
+description = "Read one clipboard image from the current AgentNet app page."
+commands.allow = ["agentnet_clipboard_image"]

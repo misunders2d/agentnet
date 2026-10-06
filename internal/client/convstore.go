@@ -704,7 +704,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
 		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done
-		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
+		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('root-sync', 'history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+`
 		ORDER BY ms, 1`, conv, self, selfFP, conv, selfFP)
 	if err != nil {

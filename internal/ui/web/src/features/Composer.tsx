@@ -1,4 +1,5 @@
 import { sendID } from "../optimistic.mjs";
+import { pastePictures } from "../pictures.mjs";
 // The message composer: one row of "+", the text and send. Typing @ offers
 // the people and agents here; picking an agent asks it ("Zen should Answer |
 // Do it") instead of writing to everyone. In a device conversation, replying
@@ -239,10 +240,20 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   }
 
   const paste = (e: ClipboardEvent) => {
-    const list = [...(e.clipboardData?.files || [])];
-    if (!list.length || e.clipboardData.getData("text/plain")) return;
-    e.preventDefault();
-    addFiles(list, true);
+    if (!filesAllowed || sending) return;
+    const ta = field.current;
+    const host = store.host;
+    const here = () => visible.current === conv && field.current === ta;
+    void pastePictures(e, (list) => { if (here()) addFiles(list, true); }, {
+      clipboardImage: host.clipboardImage ? () => host.clipboardImage!() : undefined,
+      insertText: (s) => {
+        if (!here() || !ta) return;
+        const value = decode(latest().text).text;
+        const from = ta.selectionStart, to = ta.selectionEnd;
+        edit(value.slice(0, from) + s + value.slice(to), from + s.length);
+      },
+      error: (text) => { if (here()) setNotice({ conv, text }); },
+    });
   };
 
   // ---- sending

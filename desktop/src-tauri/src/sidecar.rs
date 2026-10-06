@@ -32,6 +32,7 @@ pub const STOP_LINE: &str = "quit";
 pub enum Event {
     Page { mode: String, url: String },
     Error { text: String },
+    Update { helper: String, plan: String, home: String },
 }
 
 /// parse reads one stdout line; anything else is ignored.
@@ -122,6 +123,12 @@ pub struct Running {
 }
 
 impl Running {
+    pub fn send_line(&mut self, line: &str) -> std::io::Result<()> {
+        let stdin = self.stdin.as_mut().ok_or_else(|| std::io::Error::other("program input closed"))?;
+        writeln!(stdin, "{line}")?;
+        stdin.flush()
+    }
+
     /// stop asks the program to quit, waits up to STOP_WAIT, then kills it.
     pub fn stop(&mut self) {
         if let Some(mut s) = self.stdin.take() {

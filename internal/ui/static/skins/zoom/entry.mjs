@@ -1,5 +1,5 @@
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
-import { avatarPicture, openPictureEditor } from "./pictures.mjs";
+import { avatarPicture, openPictureEditor, pastePictures } from "./pictures.mjs";
 import { topicControls } from './topics.mjs';
 import { pendingSends, sendID } from "./optimistic.mjs";
 import { markup } from './template.mjs';
@@ -197,7 +197,7 @@ async function loadOverview() {
   $("new-btn").hidden = !!(o.link && o.link.state === "pending"); // a device waiting for approval sends nothing
   renderOffline(o);
   $("release").hidden = !o.release;
-  fill($("release"), o.release && ["Update available · " + o.release + ". ", el("a", {href: "https://github.com/misunders2d/agentnet/releases", target: "_blank", rel: "noopener noreferrer"}, "Release notes"), el("span", {}, " · In a terminal: agentnet help update. Updates are not installed here.")]);
+  fill($("release"), o.release && ["Update available · " + o.release + ". ", el("a", {href: "https://github.com/misunders2d/agentnet/releases", target: "_blank", rel: "noopener noreferrer"}, "Release notes")]);
   $("profile-btn").classList.toggle("update-available", !!o.release);
   $("profile-btn").title = o.release ? "Your profile and settings · Update available" : "Your profile and settings";
   renderNotify(o.notify);
@@ -294,12 +294,15 @@ function addFiles(list, pasted) {
   syncComposer();
 }
 
-// pastedFiles takes the files a paste carries (a picture alone is not
-// pasted as text too).
-function pastedFiles(e) {
-  const files = [...((e.clipboardData && e.clipboardData.files) || [])];
-  if (files.length && !e.clipboardData.getData("text/plain")) e.preventDefault();
-  return files;
+// Capture the open draft before the native clipboard read can yield.
+function pastedFiles(e, add) {
+  const field=e.target, key=state.draftKey, host=currentHost, gen=state.gen;
+  const here=()=>alive && field.isConnected && key===state.draftKey && host===currentHost && gen===state.gen;
+  void pastePictures(e,files=>{if(here())add(files);},{
+    clipboardImage:host.clipboardImage?()=>host.clipboardImage():undefined,
+    insertText:text=>{if(here()){field.setRangeText(text,field.selectionStart,field.selectionEnd,"end");field.dispatchEvent(new Event("input",{bubbles:true}));}},
+    error:text=>{if(here())$("compose-error").textContent=text;}
+  });
 }
 
 function removeFile(key) {
@@ -1133,7 +1136,7 @@ function groupPeopleSelection(t, host, gen, ws, initial, onReview = () => {}) {
   const current = () => gen === state.gen && wsNow() === ws && currentHost === host && state.overview?.person?.person === owner;
   const chips = el("div", { class: "person-chips", "aria-label": "Selected people" });
   const note = el("p", { class: "hint" });
-  const team = el("select", { id: "group-team", "aria-label": "Team" }, el("option", { value: "" }, "Choose a team"));
+  const team = el("select", { id: "group-team", "aria-label": "Team" }, el("option", { value: "" }, "Choose a people list"));
   let reviewed = !!initial, loading = false, seq = 0;
   const draw = () => fill(chips, ...[...chosen.keys()].map(id => el("span", { class: "chip person-chip" }, personLabelOf(id),
     el("button", { type: "button", class: "chip-x", "aria-label": "Remove " + personLabelOf(id), onclick: () => { if (!state.dialogBusy) { chosen.delete(id); draw(); } } }, "×"))),
@@ -1152,15 +1155,15 @@ function groupPeopleSelection(t, host, gen, ws, initial, onReview = () => {}) {
       if (current() && request === seq) add(snap);
     } catch (e) { if (current()) note.textContent = e.message; }
     finally { loading = false; if (current()) addTeam.disabled = false; }
-  } }, "Add team people");
+  } }, "Add list’s people");
   api("/api/teams", undefined, host).then(v => {
     if (!current()) return;
-    fill(team, el("option", { value: "" }, "Choose a team"),
+    fill(team, el("option", { value: "" }, "Choose a people list"),
       (v.current ? v.teams || [] : []).filter(t => t.listed && !t.archived && !t.conflict).map(t => el("option", { value: t.id }, t.name)));
-    if (!v.current) note.textContent = "Current teams are unavailable. No people were added.";
+    if (!v.current) note.textContent = "Current people lists are unavailable. No people were added.";
   }).catch(e => { if (current()) note.textContent = e.message; });
-  return { nodes: [el("label", { for: "group-team", class: "field-label" }, "Team (optional)"), team, addTeam, chips, note],
-    current, reviewed: () => reviewed, persons: () => { if (loading) throw Error("Wait for the current team snapshot before inviting."); return [...chosen.keys()]; },
+  return { nodes: [el("label", { for: "group-team", class: "field-label" }, "People list (optional)"), team, addTeam, chips, note],
+    current, reviewed: () => reviewed, persons: () => { if (loading) throw Error("Wait for the current people list snapshot before inviting."); return [...chosen.keys()]; },
     forget: id => { chosen.delete(id); draw(); } };
 }
 
@@ -1188,6 +1191,8 @@ function newGroupDialog(initial) {
       if (people.length) announce("Invitations sent separately; each person still must accept. A changed group may require a fresh invitation and consent.");
       await loadOverview(); await openDM(created.id);
     } });
+  $("dialog-ok").disabled = !name.value.trim();
+  name.addEventListener("input", () => { if (!state.dialogBusy) $("dialog-ok").disabled = !created && !name.value.trim(); });
 }
 
 function groupInvitationDialog(i) {
@@ -1216,7 +1221,7 @@ function inviteGroupDialog(t, initialPerson) {
   const last = el("input", { id: "group-history-last", type: "number", min: 1, max: 64, value: "10" });
   const since = el("input", { id: "group-history-since", type: "datetime-local" });
   dialog({ title: "Invite to " + t.title, ok: "Send invitation", focus: person,
-    body: [el("label", { for: "group-invite-person", class: "field-label" }, "Single person (team selection uses the people below)"), person, ...selection.nodes,
+    body: [el("label", { for: "group-invite-person", class: "field-label" }, "Single person (people list selection below)"), person, ...selection.nodes,
       !people.length && el("p", { class: "hint" }, "No other pinned person available. Open a person's conversation to check their device first."),
       el("label", { for: "group-history-mode", class: "field-label" }, "Earlier context"), mode,
       el("label", { for: "group-history-last" }, "Last messages (up to 64)"), last,
@@ -1241,7 +1246,17 @@ function inviteGroupDialog(t, initialPerson) {
     } });
 }
 
-function groupMemberCount(t) { return plural(t.members.length, t.frozen ? "last verified member" : "current member", t.frozen ? "last verified members" : "current members"); }
+function pendingGroupPeople(t) {
+  const seen = new Set();
+  return (state.overview?.group_invitations || []).filter(i => i.conv === t.id && i.direction === "out" &&
+    ["pending", "accepted"].includes(i.status) && !(t.members || []).some(m => m.person === i.target)).filter(i => {
+      if (seen.has(i.target)) return false; seen.add(i.target); return true;
+    });
+}
+function groupMemberCount(t) {
+  const invited = pendingGroupPeople(t).length;
+  return plural(t.members.length, t.frozen ? "last verified member" : "current member", t.frozen ? "last verified members" : "current members") + (invited ? " · " + invited + " invited" : "");
+}
 
 function renderGroupMembers(t, box = $("agents")) {
   const me = state.overview?.person?.person;
@@ -1296,13 +1311,13 @@ function groupChangeDialog(t,action,person) {
 // nothing: no conversation, history, job or permission follows from it.
 // What is shown is the verified state kept here; whether it is current is
 // said, never assumed.
-const teamStatusText = { unknown: "Teams not read yet", unsupported: "This server does not have teams", unavailable: "Teams could not be read now; this is the last verified state", conflict: "A team record conflicts with the one kept here; it is frozen" };
+const teamStatusText = { unknown: "People lists not read yet", unsupported: "This server does not have people lists", unavailable: "People lists could not be read now; this is the last verified state", conflict: "A people list record conflicts with the one kept here; it is frozen" };
 async function loadTeams() {
   const host = currentHost, gen = state.gen;
   try {
-    const v = await api("/api/teams", undefined, host);
+    const [v, permissions] = await Promise.all([api("/api/teams", undefined, host), api("/api/workspace", undefined, host).catch(() => null)]);
     if (gen !== state.gen) return;
-    state.teams = v;
+    state.teams = v; state.teamAdmin = !!permissions?.can_rename;
   } catch (e) {
     if (gen !== state.gen) return;
     state.teams = { status: /404/.test(e.message) ? "unsupported" : "unavailable", current: false, reason: e.message, teams: (state.teams && state.teams.teams) || [] };
@@ -1319,16 +1334,16 @@ const personLabelOf = (id) => {
 function teamsSection() {
   const v = state.teams;
   const o = state.overview;
-  const head = el("li", { class: "result-head teams-head" }, "Teams",
-    v && v.status !== "unsupported" && o.person && el("button", { type: "button", class: "text-btn", onclick: () => teamDialog(null) }, "New team…"));
-  if (!v) return [head, el("li", { class: "hint empty-list" }, "Reading teams…")]; // loaded when People is chosen and on each change; rendering never fetches
+  const head = el("li", { class: "result-head teams-head" }, "People lists",
+    v && v.status !== "unsupported" && o.person && el("button", { type: "button", class: "text-btn", onclick: () => teamDialog(null) }, "New people list…"));
+  if (!v) return [head, el("li", { class: "hint empty-list" }, "Reading people lists…")]; // loaded when People is chosen and on each change; rendering never fetches
   const q = state.query.trim().toLowerCase();
   const teams = (v.teams || []).filter((t) => !q || (t.name || "").toLowerCase().includes(q)).sort((a, b) => (a.archived !== b.archived ? (a.archived ? 1 : -1) : (a.name || "").localeCompare(b.name || "")));
   const status = v.status === "available" && v.current ? null
     : el("li", { class: "hint team-status " + (v.status === "conflict" ? "danger" : "") }, (teamStatusText[v.status] || v.status) + (v.reason && v.status !== "unsupported" ? " (" + v.reason + ")" : "") + (v.at && !v.current && v.teams && v.teams.length ? " · as of " + when(v.at) : ""));
   return [head, status,
     ...teams.map(teamRow),
-    !teams.length && v.status !== "unsupported" && el("li", { class: "hint empty-list" }, q ? "No team matches." : "No teams yet.")].filter(Boolean);
+    !teams.length && v.status !== "unsupported" && el("li", { class: "hint empty-list" }, q ? "No people list matches." : "No people lists yet.")].filter(Boolean);
 }
 function teamRow(t) {
   const current = !!(state.hub && state.hub.kind === "team" && state.hub.key === t.id);
@@ -1351,7 +1366,7 @@ async function teamAct(change, done) {
   try {
     const st = await api("/api/team", change, host);
     if (gen !== state.gen) return;
-    announce(change.op === "create" ? "Team created." : change.op === "join" ? "You joined " + st.name + "." : change.op === "leave" ? "You left " + st.name + "." : "Done: " + change.op.replace("-", " ") + ".");
+    announce(change.op === "create" ? "People list created." : change.op === "join" ? "You joined " + st.name + "." : change.op === "leave" ? "You left " + st.name + "." : "Done: " + change.op.replace("-", " ") + ".");
     await loadTeams();
     if (done) done(null, st);
   } catch (e) {
@@ -1361,14 +1376,14 @@ async function teamAct(change, done) {
 }
 function teamDialog(t) {
   const name = el("input", { id: "team-name", type: "text", maxlength: "64", value: t ? t.name : "", placeholder: "e.g. Data platform", autocomplete: "off" });
-  dialog({ title: t ? "Rename " + t.name : "New team", ok: t ? "Rename" : "Create", focus: name,
+  dialog({ title: t ? "Rename " + t.name : "New people list", ok: t ? "Rename" : "Create", focus: name,
     body: [el("label", { for: "team-name", class: "field-label" }, "Name"), name,
-      el("p", { class: "hint" }, t ? "Managers rename a team; members see the new name once the server has it." : "You become its first member and manager. Others on your server can join it themselves; a team grants no access to anything.")],
-    run: async () => { const n = name.value.trim(); if (!n) throw new Error("Give the team a name."); await new Promise((res, rej) => teamAct(t ? { team: t.id, op: "rename", name: n } : { op: "create", name: n }, (e) => (e ? rej(e) : res()))); } });
+      el("p", { class: "hint" }, t ? "Managers rename a people list; members see the new name once the server has it." : "You become its first member and manager. Others on your server can join it themselves; a people list is not a chat and grants no chat access.")],
+    run: async () => { const n = name.value.trim(); if (!n) throw new Error("Give the people list a name."); await new Promise((res, rej) => teamAct(t ? { team: t.id, op: "rename", name: n } : { op: "create", name: n }, (e) => (e ? rej(e) : res()))); } });
 }
 function teamPersonDialog(t, op, who) {
   const words = { remove: ["Remove " + who.label + " from " + t.name + "?", "Remove", "They can join again themselves; nothing else changes for them."],
-    "manager-add": ["Make " + who.label + " a manager of " + t.name + "?", "Make manager", "Managers rename, archive and manage members."],
+    "manager-add": ["Make " + who.label + " a manager of " + t.name + "?", "Make manager", "Managers rename, delete and manage members."],
     "manager-remove": ["Take the manager role from " + who.label + "?", "Take role", "The last manager cannot be removed: the server refuses that, so hand the role over first."] };
   const [title, ok, hint] = words[op];
   dialog({ title, ok, body: [el("p", { class: "hint" }, hint)], run: async () => { await new Promise((res, rej) => teamAct({ team: t.id, op, target: who.id }, (e) => (e ? rej(e) : res()))); } });
@@ -1395,8 +1410,10 @@ function teamHub(t) {
         ? el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "leave" }) }, "Leave")
         : el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "join" }) }, "Join")),
       canManage && el("button", { type: "button", class: "chip", onclick: () => teamDialog(t) }, "Rename…"),
-      canManage && el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "archive" }) }, "Archive"),
-      t.manager && t.archived && !t.conflict && el("button", { type: "button", class: "chip", onclick: () => teamAct({ team: t.id, op: "restore" }) }, "Restore"),
+      (t.manager || state.teamAdmin) && !t.conflict && el("button", { type: "button", class: "chip", onclick: () => dialog({
+        title: "Delete this people list?", ok: "Delete list", body: [el("p", {}, "Only the list is deleted. Chats, messages and group membership stay as they are.")],
+        run: async () => new Promise((resolve, reject) => teamAct({ team: t.id, op: "delete" }, e => e ? reject(e) : resolve()))
+      }) }, "Delete list"),
       !t.archived && !t.conflict && members.length > 0 && el("button", { type: "button", class: "chip", onclick: () => teamSelection([t]) }, "Select for a conversation…")),
     t.member && t.manager && (t.managers || []).length === 1 && el("p", { class: "hint" }, "You are the only manager: the server refuses your leaving or losing the role until another manager exists."),
   ];
@@ -2205,6 +2222,8 @@ function renderAgents(t) {
   fill(box, el("div", { class: "participant-list" },
     humanGroup(t) && t.frozen && el("span", {class: "hint"}, groupMemberCount(t)),
     people.map(p => el("span", { class: "participant" }, avatar(p.label || p.address, "sm"), p.state === "self" ? "You" : p.label)),
+    humanGroup(t) && pendingGroupPeople(t).map(i => el("span", { class: "participant invited-person", "aria-label": "Invited person" },
+      avatar(personLabelOf(i.target), "sm"), personLabelOf(i.target), el("span", { class: "tag" }, i.status === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept"))),
     (t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => el("button", { type: "button", class: "participant human-participant", title: g.host.address + " · participation " + g.pid, onclick: () => dialog({ title: g.host.label + " · human participation", body: [guestCard(g, t)], ok: "Close", run: async () => {} }) }, avatar(g.host.label || "Someone", "sm"), g.host_here ? "You" : g.host.label, el("span", { class: "tag" }, g.state === "active" ? "Guest" : g.state === "dismissed" ? "Ended here" : g.state))),
     t.agents.filter(a => !["dismissed", "declined"].includes(a.state)).map(a => el("button", {
       type: "button", class: "participant assistant-participant", title: (a.agent_id || a.pid) + " · " + a.host.address + " · participation " + a.pid,
@@ -2395,7 +2414,7 @@ function mentionPeople(t) {
   const originals = humanGroup(t) ? t.members : dmHumanGuest(t) ? guestOriginals(t) : [state.overview?.person, t.peer];
   const account = (address) => (address || "").split("/")[0];
   for (const p of (originals || []).filter(Boolean)) {
-    if (p.state === "self" || (me && p.person === me) || !p.person || !mentionName(p.label)) continue;
+    if ((me && p.person === me) || !p.person || !mentionName(p.label)) continue;
     seen.set("person:" + p.person, { kind: "person", name: mentionName(p.label), ref: { kind: "person", id: p.person }, role: humanGroup(t) ? (p.admin ? "Group admin" : "Group member") : "In this conversation", more: "account " + account(p.address), title: niceGoogleDevice(p.address) || "" });
   }
   for (const g of t.guests || []) if (g.state === "active" && !g.host_here && mentionName(g.host?.label)) seen.set("guest:" + g.pid, { kind: "person", name: mentionName(g.host.label), ref: { kind: "guest", id: g.pid }, role: "Guest", more: (g.inviter?.label ? "invited by " + g.inviter.label + " · " : "") + "account " + account(g.host.address), title: g.host.address + " · participation " + g.pid });
@@ -2534,11 +2553,15 @@ function inviteDialog(t) {
   };
   // A browser device runs no agent. External hosts come from this workspace's
   // current directory; listing does not verify a real-world owner or grant trust.
-  const browser = !!(state.overview.me && state.overview.me.browser);
+  const browser = transport?.platform === "browser" || !!state.overview.device;
   const members = humanGroup(t) ? t.members : [me, t.peer];
   const devices = humanGroup(t) ? members.flatMap(p => (p.devices?.length ? p.devices : [{address:p.address,fingerprint:p.fingerprint}]).map(d => ({...d,label:p.label,person:p.person}))) : [];
   const hosts = humanGroup(t) ? [...new Map(devices.filter(d=>d.address && !(browser && d.address===me.address)).map(d=>[d.address,choice("radio","agent-host",d.address,(d.person===me.person?"Yours":d.label+"'s")+", on "+d.address)])).values()] : [!browser && choice("radio", "agent-host", me.address, "Yours, on " + me.address),
     choice("radio", "agent-host", t.peer.address, t.peer.label + "'s, on their " + deviceWords(t.peer.address))].filter(Boolean);
+  if (!humanGroup(t)) for (const d of me.devices || []) {
+    if (d.address !== me.address && runsAgent(d.address) && !hosts.some(c => c.input.value === d.address))
+      hosts.push(choice("radio", "agent-host", d.address, "Yours, on " + deviceWords(d.address)));
+  }
   const memberAddresses = new Set(humanGroup(t) ? devices.map(d=>d.address) : [me.address, t.peer.address, ...(me.devices || []).map(d => d.address), ...(t.peer.devices || []).map(d => d.address)]);
   const external = new Set(directory().current ? directory().members.filter(m => !memberAddresses.has(m.address)).map(m => m.address) : []);
   for (const address of external) hosts.push(choice("radio", "agent-host", address, "External host · " + address));
@@ -4436,12 +4459,14 @@ async function renderResponder() {
     } catch (e) { if (currentView()) err.textContent = e.message; }
   };
   fill(box,
+    el("h3", {}, "Answers for you"),
     el("p", {}, !r.chosen ? "Nothing chosen yet" + (r.problem ? ": " + r.problem : ".") : r.manual ? "No automatic responder: everything waits for you."
       : r.harness + " answers approved questions and runs accepted tasks in " + r.dir + (r.ready ? "." : ". Not ready: " + (r.problem || "check the folder and the program."))),
     el("div", { class: "responder-choice", role: "radiogroup", "aria-label": "Your agent" }, options.map((o) =>
       el("label", { class: o.disabled ? "off" : "" }, el("input", { type: "radio", name: "responder", value: o.value, checked: o.value === current, disabled: o.disabled,
         onchange: () => { if (o.value === "manual") save("manual"); } }), " ", o.label))),
     el("label", { class: "field-label", for: "responder-dir" }, "Works in"), dir,
+    el("p", { class: "hint" }, "Requests from other people start in this folder. Your own sessions stay as they are. Tasks usually change files here, within your normal permissions."),
     el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn primary", onclick: () => {
       const chosen = box.querySelector('input[name="responder"]:checked');
       if (!chosen) { err.textContent = "Choose an agent, or no automatic answers."; return; }
@@ -4601,14 +4626,58 @@ async function renderAssistantSetup() {
   try {
     const m = await moduleOf("assistant-setup");
     if (!current()) return;
-    await m.mountAssistantSetup({root, api: (path, body) => api(path, body, host), isCurrent: current, isBrowser: host?.platform === "browser" || !!state.overview?.me?.browser, onChanged: async () => {
+    await m.mountAssistantSetup({root, suggestedHarness: state.overview?.me?.responder || "", api: (path, body) => api(path, body, host), isCurrent: current, isBrowser: host?.platform === "browser" || !!state.overview?.me?.browser, onChanged: async () => {
       if (!current()) return;
       try { await loadOverview(); if (!current()) return; state.dmNames = {}; if (state.dm) await loadDM(); }
       catch (e) { if (current()) announce("Setup saved; the participant list could not be refreshed: " + e.message); }
     }});
   } catch (e) { if (current()) fill(root, el("p", {class: "hint"}, "Assistant setup unavailable: " + e.message)); }
 }
+async function renderAppControls() {
+  const host = currentHost, gen = state.gen;
+  const command = $("app-command"), update = $("app-update");
+  if (!command || !update || !host.appStatus) return;
+  const current = () => alive && host === currentHost && gen === state.gen;
+  let status;
+  try { status = await host.appStatus(); }
+  catch (e) {
+    if (current() && !/404|not found/i.test(e.message)) fill(update, el("p", {class:"error", role:"alert"}, e.message));
+    return;
+  }
+  if (!current()) return;
+  let busy = false, message = "", problem = "";
+  const act = async (replace) => {
+    if (busy || !current()) return;
+    busy = true; problem = ""; paint();
+    try {
+      if (replace) { const v = await host.appReplaceCommand(); if (current()) status = { ...status, ...v }; }
+      else { const v = await host.appUpdate(); if (current()) message = v.message; }
+    } catch (e) { if (current()) problem = e.message; }
+    finally { if (current()) { busy = false; paint(); } }
+  };
+  const paint = () => {
+    if (!current()) return;
+    fill(command, el("h3", {}, "AgentNet command for your tools"),
+      el("p", {class:"hint", style:"overflow-wrap:anywhere"}, "Location: " + status.cli_path),
+      status.cli_state === "installed" ? el("p", {class:"hint"}, "Your tools can use this copy of AgentNet.") :
+      status.cli_state === "custom" ? [el("p", {}, "This command is your own build. Replace it with the app’s copy only if you choose."),
+        el("button", {type:"button", class:"btn", disabled:busy || !host.appReplaceCommand, onclick:() => dialog({
+          title:"Replace your AgentNet command?", ok:"Replace command",
+          body:[el("p", {}, "Your tools will use the app’s version at " + status.cli_path + ". Your existing custom build at this location is replaced.")],
+          run:() => act(true)
+        })}, "Replace command…")] : el("p", {class:"error", role:"alert"}, status.cli_problem || "The AgentNet command could not be installed."));
+    fill(update, el("h3", {}, "Update this computer"),
+      el("p", {}, "The app, its AgentNet command and connected tools update together. The app restarts when ready."),
+      el("button", {type:"button", class:"btn", disabled:busy || !status.app_update_supported || !host.appUpdate, onclick:() => act(false)}, busy ? "Updating…" : "Update AgentNet"),
+      !status.app_update_supported && el("p", {class:"hint"}, status.problem || "This installation is updated by its package manager."),
+      (message || status.update_result) && el("p", {role:"status"}, message || status.update_result),
+      problem && el("p", {class:"error", role:"alert"}, problem));
+  };
+  paint();
+}
+
 function settingsTab(name) {
+  if (name === "profile" || name === "device") renderAppControls();
   if (name === "notifications") ensureTyping().then(ui => { if (ui) ui.showSettings(); });
   if (name === "device") { renderResponder(); renderAssistantSetup(); }
   if (name === "storage") { renderStorage(); renderFileStorage(); }
@@ -4712,8 +4781,7 @@ function start() {
   $("file-input").addEventListener("change", () => { addFiles([...$("file-input").files]); $("file-input").value = ""; });
   $("body").addEventListener("paste", (e) => {
     if (!filesAllowed()) return;
-    const files = pastedFiles(e);
-    if (files.length) addFiles(files, true);
+    pastedFiles(e, files => addFiles(files, true));
   });
   $("composer").addEventListener("dragover", (e) => { if (filesAllowed() && e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault(); });
   $("composer").addEventListener("drop", (e) => {
@@ -4812,7 +4880,7 @@ function dialogFiles(body) {
   const show = () => { pendingChips(list, show); note.textContent = state.files.length ? overLimit(state.files) : ""; renderPending(); };
   const add = (files, pasted) => { pushFiles(files, pasted); show(); };
   input.addEventListener("change", () => { add([...input.files]); input.value = ""; });
-  body.addEventListener("paste", (e) => { const files = pastedFiles(e); if (files.length) add(files, true); });
+  body.addEventListener("paste", (e) => pastedFiles(e, files => add(files, true)));
   show();
   return [el("button", { type: "button", class: "btn write-attach", onclick: () => input.click() }, "Add files or pictures…"), input, list, note];
 }
@@ -5157,6 +5225,10 @@ const Zoom = {
         el("p", { class: "hint" }, humanGroup(d) ? "Group: " + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · " + devicesText(d.peer)),
         el("h2", {}, title))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
+      humanGroup(d) && pendingGroupPeople(d).length > 0 && el("section", {"aria-label":"Invited people", class:"participant-list"},
+        pendingGroupPeople(d).map(i => el("span", {class:"participant invited-person"},
+          avatar(personLabelOf(i.target), "sm"), personLabelOf(i.target),
+          el("span", {class:"tag"}, i.status === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept")))),
       humanGroup(d) && el("details", {class:"zoom-agents", "aria-label":"Agents in this group"},
         el("summary", {}, d.agents.filter(a=>!["dismissed","declined"].includes(a.state)).length + " agents in this group"),
         d.agents.filter(a=>!["dismissed","declined"].includes(a.state)).map(a=>agentCard(a,d)),

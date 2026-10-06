@@ -42,7 +42,7 @@ export const STATE_SENTENCE: Record<string, string> = {
   connected: "Set up, and one of its sessions has checked in. That doesn’t test its sign-in.",
   needs_activation: "Set up. Sessions you start from now on can use it.",
   detected: "Installed on this computer, not connected yet.",
-  needs_setup: "Installed on this computer. Its connection needs setting up again.",
+  needs_setup: "Its connection is out of date or still points to your previous AgentNet. Choose this program and reconnect it here.",
   not_detected: "Not found on this computer.",
   unsupported: "Can’t be connected on this computer yet. Nothing was changed.",
   error: "Its settings can’t be changed safely, so nothing was changed.",

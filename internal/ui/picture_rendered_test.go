@@ -47,6 +47,7 @@ func (f *pictureFixture) Overview() (Overview, error) {
 	defer f.lock.Unlock()
 	o.Persons = true
 	o.Role = RolePerson
+	o.Files = &FileLimits{MaxFile: 20 << 20, MaxCount: 10}
 	o.Me.Address = "alice/laptop"
 	o.Person = &PersonView{Person: "alice", Label: "Alice", Address: o.Me.Address, State: "self", Published: true, Picture: f.picture, PictureURL: pictureURL(f.picture), Devices: []DeviceView{{Address: o.Me.Address, Name: "laptop", This: true}}}
 	hash := protocol.PictureHash(f.sample)

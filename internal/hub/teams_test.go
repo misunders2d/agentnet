@@ -85,6 +85,9 @@ func TestTeamsHubRemovedRosterKeyCannotUseOldAuthority(t *testing.T) {
 	if status, e := put(t, h, phone, removed); status != 204 {
 		t.Fatalf("remove old key: %d %+v", status, e)
 	}
+	if w := deleteTeamHTTP(t, h, a.member, create.Team); w.Code != 403 {
+		t.Fatalf("removed key deleted list: %d %s", w.Code, w.Body)
+	}
 	if w := putTeamHTTP(t, h, a.member, oldClaim); w.Code != 403 {
 		t.Fatalf("removed key used historical manager authority: %d %s", w.Code, w.Body)
 	}

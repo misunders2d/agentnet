@@ -15,6 +15,7 @@ import { InviteSheet } from "./InviteSheet";
 import { RoomSheet } from "./RoomPanel";
 import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
 import { TopicBar, TopicEnd } from "./Conversation.topics";
+import { PersonConversations } from "./Conversation.person";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
 import { chatList, deviceKind } from "../model";
@@ -84,6 +85,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
     <section aria-label={title} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
       {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
+      <PersonConversations dm={t} />
       <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">

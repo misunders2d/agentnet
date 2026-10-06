@@ -222,6 +222,10 @@ still runs with the page's full trust.
 | `host.api(path, body?)` | Existing JSON `/api/*` read/action surface. Omit body for GET; provide an object for POST. Resolves parsed JSON or rejects with a user-readable error. A skin never fetches `/api` or `/events` itself. |
 | `host.listen(fn)` | Push events `{type:"change",seq}`, `{type:"disconnect"}` or `{type:"restart"}`. Returns an unsubscribe function. Reload data on change. Reconnect/reload after interruption; do not poll. |
 | `host.onOpen(fn, kinds?)` | Required. Registers notification routing: `fn(target, kind, context)`. Every skin gets `"channel"` (a browser notification's channel: resolve it with GET `/api/notify/resolve?chan=…`, which answers `{conv}` when this device has that conversation; an empty channel means news in more than one) and `"conversation"` (a DM id). Listing `"message"` in `kinds` adds `fn(messageID, "message", {conv?, dir?})` (the conversation and direction the notification names) and `"review"` adds `fn("", "review")`. A destination a skin does not take waits in the switcher with the way to open it in Comic. A missing destination opens the skin's list, never another arbitrary chat. |
+| `host.clipboardImage()` | Optional, native shell only. Resolves `File` for a clipboard image or `null` when there is none. Call only for a user paste that contains no browser image file; ordinary text paste stays available. Capture this host callback for the paste operation; standalone skins never read native clipboard globals themselves. |
+| `host.appStatus()` | Optional desktop-app capability. Resolves `{cli_path, cli_state:"installed"\|"custom"\|"error", cli_problem?, version, app_update_supported, problem?, update_result?}`. The location/state describe this computer's AgentNet command; `problem` explains unavailable app updates. Browser/non-app hosts may lack the method or reject it; omit unavailable controls. |
+| `host.appUpdate()` | Optional desktop-app action, called from the person's Update choice. Resolves `{state:"restarting", message}` after update preparation succeeds, or rejects with a user-readable error. The app restarts when ready; the resolved result does not prove that restart or installation completed. |
+| `host.appReplaceCommand()` | Optional desktop-app action, called only after explicit confirmation to replace a custom AgentNet command. Resolves the updated command fields `{cli_path, cli_state:"installed"\|"custom"\|"error", cli_problem?}`. Merge these fields into the previous app status, or read `appStatus()` for the complete status. Opening or canceling confirmation never calls this method. |
 | `host.stage(file)` | Prepares a File for sending; resolves an opaque attachment value for `files` in a send. Keep that value only until that send consumes it. Browser encrypts through its engine; daemon stages locally. |
 | `host.file(messageID,index,dir)` | Opens an attachment this device holds: a received one, or a copy kept of one it sent. Pass the message's own `dir` (`in` or `out`): a received id is the sender's choice and can equal a sent one here. Resolves `{bytes:Uint8Array}` (browser may add name/size/image). Show Open only where the view says `openable: true`; a sent file without a kept copy says so in `note`. Validate magic bytes before inline display; never execute HTML or SVG. |
 | `host.drive` | Optional project-space provider bound to this host's membership: `drive({conv, action, ...})` resolves the existing Drive view/result; `driveUpload(conv, file, confirm)` uploads plaintext to Google only after explicit confirmation. It reuses the core's Drive actions, consent and permissions. Browser providers also expose `prepareGoogle()` and `beginGoogleConsent({conv, full?, confirm_account})`: prepare first, then call begin directly from the confirming click, with no intervening await, to retain the browser user gesture. Never stage this upload through `host.stage`; Google files are outside AgentNet encryption. Switching workspace never retargets a captured provider; retired/disconnected bindings reject new calls. No tokens or raw transport are exposed. Absence/configuration errors must be shown as unavailable. |
@@ -240,6 +244,17 @@ label (`name`, unless it is a placeholder such as `""`, "Current workspace",
 relay's host name (`overview.workspace.server`, or the endpoint's host);
 "AgentNet" only when none of these says anything. Comic and the host's bar
 say the same.
+
+The app methods use the app's authenticated loopback origin directly, through
+`GET /api/app/status`, `POST /api/app/update` with `{}`, and
+`POST /api/app/cli` with `{replace:true}`. The app checks its exact Host and UI
+session cookie; POST also requires its exact Origin, JSON content type and
+same-origin fetch metadata when supplied. These are computer-wide operations,
+not membership APIs. A standalone skin uses the host captured when the
+operation starts, never `host.api`, direct fetches, native globals or a later
+workspace's host for these actions. Switching memberships does not send an
+app action to a remote workspace. Check optional methods and handle rejection;
+`host.platform === "daemon"` alone does not prove the native app is present.
 
 ### Workspaces
 
