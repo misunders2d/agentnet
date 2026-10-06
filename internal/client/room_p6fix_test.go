@@ -415,13 +415,14 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 	log := filepath.Join(t.TempDir(), "room-env")
 	t.Setenv("P6_CLI", bin)
 	t.Setenv("P6_ENV_LOG", log)
+	t.Setenv("P6_RELEASE", log+".release")
 	t.Setenv(RoomRequestEnv, "inherited-must-be-stripped")
 	for name, script := range map[string]string{"p6root": rootScript, "p6child": childScript} {
 		Harnesses[name] = harness{bin: script, stdin: true}
 		t.Cleanup(func() { delete(Harnesses, name) })
 	}
 	os.WriteFile(rootScript, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'root:%s:%s\\n' \"$AGENTNET_ROOM_REQUEST\" \"$AGENTNET_REQUEST_ID\" >>\"$P6_ENV_LOG\"\n\"$P6_CLI\" --home \"$AGENTNET_HOME\" room ask --pid \"$P6_CHILD_PID\" CHILD_REQUEST\n"), 0700)
-	os.WriteFile(childScript, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'child:%s:%s\\n' \"$AGENTNET_ROOM_REQUEST\" \"$AGENTNET_REQUEST_ID\" >>\"$P6_ENV_LOG\"\n\"$P6_CLI\" --home \"$AGENTNET_HOME\" room ask --pid \"$P6_REMOTE_PID\" REMOTE_REQUEST\n"), 0700)
+	os.WriteFile(childScript, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'child:%s:%s\\n' \"$AGENTNET_ROOM_REQUEST\" \"$AGENTNET_REQUEST_ID\" >>\"$P6_ENV_LOG\"\nwhile [ ! -f \"$P6_RELEASE\" ]; do sleep 0.02; done\n\"$P6_CLI\" --home \"$AGENTNET_HOME\" room ask --pid \"$P6_REMOTE_PID\" REMOTE_REQUEST\n"), 0700)
 	named, err := w.alice.CreateLocalAgent("nested", Responder{Harness: "p6child", Dir: stub.dir})
 	if err != nil {
 		t.Fatal(err)
@@ -460,6 +461,18 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 	defer cancel()
 	done := make(chan bool, 1)
 	go func() { done <- w.alice.runNext(ctx, make(chan struct{})) }()
+	eventually(t, "parent and nested local jobs both running", func() bool {
+		var n int
+		err := w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE pid IN (?,?) AND state=? AND local=1`, from.PID, child.PID, stateRunning).Scan(&n)
+		return err == nil && n == 2
+	})
+	if resume, err := w.alice.PauseForAppUpdate(); err == nil {
+		resume()
+		t.Fatal("whole-app update allowed while parent and child jobs were running")
+	}
+	if err := os.WriteFile(log+".release", nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	replyAt(t, w.alice, conv, ask.LID)
 	select {
 	case ran := <-done:
@@ -469,6 +482,14 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	eventually(t, "nested runs release whole-app idle fence", func() bool {
+		resume, err := w.alice.PauseForAppUpdate()
+		if err != nil {
+			return false
+		}
+		resume()
+		return true
+	})
 	data, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)

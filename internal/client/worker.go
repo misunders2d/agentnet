@@ -98,10 +98,12 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 
 // runNext claims and runs one job; it reports whether it did.
 func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
-	if !a.appUpdateMu.TryLock() {
+	// Nested local execution may run alongside its waiting parent. Both hold
+	// readers; a whole-app replacement requires exclusive idle ownership.
+	if !a.appUpdateMu.TryRLock() {
 		return false
 	}
-	defer a.appUpdateMu.Unlock()
+	defer a.appUpdateMu.RUnlock()
 	if ctx.Err() != nil {
 		return false
 	}
