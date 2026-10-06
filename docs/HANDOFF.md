@@ -39,7 +39,11 @@ separate operations. v0.8.1 users use About once to reach this command behavior.
 Focused native/browser regressions and rendered Comic/Classic/Zoom checks
 pass for the implemented paths. Full candidate CI and release asset checks
 are still pending. No live installations have been changed for v0.8.2;
-physical Windows/macOS updates and real-model topic behavior remain unverified.
+physical Windows/macOS updates remain unverified. The opt-in
+`TestLiveOwnAgentTopicClosure` passed against installed Codex in 81.541s:
+two ordinary answers kept one topic active, then an explicit close marked it
+done. It used synthetic participants, temporary AgentNet homes and a local
+TLS relay; no open user sessions or existing installations were touched.
 
 ## Current published release — October 6 v0.8.1
 
@@ -51,7 +55,8 @@ Comic also restores direct agent-chat entry points, retains named agents on
 follow-up and refreshes tool-connection status when the user returns. A local
 self-addressed question is accepted only with an exact matching signed local
 outbox envelope and current self key; retries never reopen an existing job.
-Read [the current release notes](NEXT_RELEASE.md) for scope and current limits.
+Read [the published release notes](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1)
+for scope and limits; [NEXT_RELEASE.md](NEXT_RELEASE.md) tracks v0.8.2.
 The owner requires every original item before rollout; none is deferred.
 
 Conversation replication carries an unchanged signed DM root in a quiet v2

@@ -1,63 +1,64 @@
-# AgentNet v0.8.1 — published October 6, 2026
+# AgentNet v0.8.2 — release candidate
 
-[Release and downloads](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1)
-from `daddab38d229f695936a6d975702668b381f3135`.
-See the [installation/update guide](revival/INSTALL.md#updating-and-downgrading)
-for the one-time desktop-package upgrade from v0.8.0 and subsequent in-app
-updates. `agentnet update` alone does not update a desktop app.
+This version is being verified; v0.8.1 remains the published release.
+See the [changelog](../CHANGELOG.md) for release history and the
+[installation/update guide](revival/INSTALL.md#updating-and-downgrading)
+for desktop, standalone command and relay instructions.
 
 ## Changes
 
-- One chat per person in Comic. Separate conversations stay inside that chat,
-  with their own messages, topics and participants. Existing conversations are
-  retained; opening a person selects a populated conversation when available.
-- Linked devices recover earlier messages even when an original group author
-  has since left. Empty conversations also synchronize between current human
-  devices of the same person. Update all devices for empty-conversation sync.
-- You can edit or delete your own message after everyone else leaves a group.
-  Pending group invitations remain visible until accepted and added, declined
-  or revoked. An invited person is not counted as a joined member.
-- Profile photos are cropped with drag and zoom controls. Cropped PNGs have
-  unsupported metadata removed before upload; the server keeps strict checks.
-- Pasted images take priority over accompanying text. The desktop app can read
-  an image from its system clipboard when the webview supplies no image file.
-- Settings separates who answers requests from connecting AgentNet to your
-  tools, explains reconnect requirements and describes the working folder.
-- Comic can start a direct chat with this computer's agent or your other
-  devices' agents without an existing conversation. Named-agent follow-ups
-  keep their selected executor. Questions sent locally to your own agent
-  run once without creating a sender permission grant.
-- Returning to the connection screen refreshes configured/active status
-  without reconnecting tools or losing the current selection.
-- People lists are clearly distinct from group chats. New groups require a
-  name. List managers and workspace admins can delete a list without deleting
-  its chats; deleted lists do not return from an old cached snapshot.
-- The mention picker resolves an incomplete peer view from already verified
-  identity data. Bringing in an agent includes your other devices' agents.
-- The app installs and refreshes its command for coding tools. Custom builds
-  require an explicit replacement choice. Settings shows the command location.
-- Update AgentNet downloads and verifies the published package before replacing
-  the app, then restarts its daemon and refreshes managed command/hook copies.
-  Failed preparation keeps the current app; installer failures use a prepared
-  recovery copy. Windows shell asset links remain inside the app.
+- **Bring someone into a group as a guest.** Share selected earlier messages;
+  the guest can participate in that conversation until dismissed. Adding a
+  permanent member is a separate admin choice. Guests gain no member,
+  invitation or agent-execution permissions.
+- **Retract or refresh a pending member invitation.** Each refreshed proposal
+  needs fresh consent. A stale Join cannot accept a different proposal.
+- **OKs shows requests that need a decision.** Running requests have a separate
+  Stop action. Opening a request selects its actual topic and preserves your
+  unsent text, attachments and reply.
+- **Read once across your devices.** Reading a message clears that exact
+  message's unread state on your other verified human devices. Newer unseen
+  messages stay unread; offline devices catch up when they reconnect.
+- Edited and deleted messages update the chat preview. Notification settings
+  show each verified person once, with explicit conversation mute overrides.
+- Opening a person prefers a populated conversation. Separate conversations
+  remain available, with clearer conversation and topic counts.
+- Local queued agent work wakes promptly. Ordinary answers keep the topic
+  open; explicitly asking to close the topic and manual Done/Reopen remain
+  available. Internal review records stay out of messages and topic titles.
+- **Update the app and its command together.** An app-managed `agentnet update`
+  uses the same whole-app updater as Settings → About. Active agent work blocks
+  update preparation, and new work waits during the installation handoff.
 
-## Compatibility and verification
+## Updating
 
-Empty-conversation replication uses the explicit `crs1` capability. Older
-readers wait for an update. A carrier preserves the original signed root and
-creates no message, unread count, notification or agent task. Only current
-human devices of the same verified person can send or receive it.
+From v0.8.1, use **Settings → About → Update AgentNet** once to install this
+version. v0.8.1's bundled command does not yet initiate whole-app updates.
+Once v0.8.2 is installed, its managed command and About button both update the
+desktop package and managed command copies together. Custom commands retain
+their explicit replacement choice.
 
-Local browser checks cover Comic, Classic and Zoom at desktop and phone
-widths, including photo saving and pending invitations. Native photo saving
-and clipboard paste remain unverified: the isolated Linux test window did
-not render and was closed. Windows/macOS cross-compilation and mocked
-installer recovery do not establish real installation or native UI behavior.
+A standalone `agentnet` command updates only that command. Relay deployments
+remain separate. Preserve existing identities, data, permissions and service
+settings; an ordinary upgrade does not require re-enrollment. A separately
+managed daemon sharing the app's home must be stopped when idle first.
 
-The release's native Linux/Windows/macOS CI, race shards, container checks and
-desktop builds passed. Published assets were checksum-verified. The relay and
-an existing Linux AppImage installation were upgraded with their identities
-preserved; the app's About page and update controls were confirmed by the
-owner. A future in-app update and interactive Windows/macOS installer runs
-remain unverified. See the [current handoff](HANDOFF.md) for evidence and
-open follow-up issues; this release does not claim to fix every reported bug.
+Update participating devices for group guests, invitation refresh/retraction
+and linked-device read state. Mixed-version recipients hold new encrypted
+records until their sessions support them; existing history and permissions
+remain intact. Read-state records contain encrypted exact message references,
+shared only among your current verified human devices.
+
+## Verification and remaining limits
+
+Focused native/browser regressions and rendered Comic, Classic and Zoom
+checks have passed. Full candidate race tests, native CI, desktop builds and
+release-asset verification are still pending. An isolated three-turn real
+Codex check passed: two ordinary replies kept the same topic active, and an
+explicit request closed it. No existing device or relay has been upgraded to
+this candidate. Interactive Windows/macOS installation and physical-device read
+state convergence remain separate live checks.
+
+Private Projects are a [design discussion](DECISIONS.md#10-private-projects-and-selected-guest-context-discussion-oct-6),
+not part of this release. The proposed model separates lasting member invites
+from temporary guests who receive only selected/approved context.

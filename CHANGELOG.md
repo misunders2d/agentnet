@@ -107,7 +107,8 @@ Known follow-ups include agent startup delays, misleading OKs/navigation,
 stale edited-message previews, cross-device unread state, duplicate people in
 notification settings and internal status data in some agent topics. See the
 [handoff](docs/HANDOFF.md) for current tracking and
-[v0.8.1 release notes](docs/NEXT_RELEASE.md) for additional detail.
+[v0.8.1 release notes](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1)
+for additional detail.
 
 <details>
 <summary>Maintainers and coding agents: keep this record current</summary>
