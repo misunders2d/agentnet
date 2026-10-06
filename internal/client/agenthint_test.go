@@ -134,13 +134,6 @@ func TestWorkspaceNameFromHub(t *testing.T) {
 	if _, err := w.alice.SetWorkspaceName(tctx(t), "two\nlines"); err != ErrWorkspaceName {
 		t.Fatalf("invalid name: %v", err)
 	}
-	w.bob.onMembers([]byte(`{"members":[{"address":"vitalii/desk","presence":"connected","joined":5}],"truncated":false,"workspace":"bad\nname"}`))
-	if w.bob.WorkspaceName() != "Mellanni" {
-		t.Fatalf("an invalid pushed name replaced the kept one: %q", w.bob.WorkspaceName())
-	}
-	if v := w.bob.MemberView(); !v.Current || len(v.Members.Members) != 1 {
-		t.Fatalf("an invalid name dropped the list: %+v", v)
-	}
 	reopened, err := Open(w.bobHome)
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +141,15 @@ func TestWorkspaceNameFromHub(t *testing.T) {
 	defer reopened.Close()
 	if reopened.WorkspaceName() != "Mellanni" {
 		t.Fatal("the name is not kept offline")
+	}
+	// This handle has no stream. Bob's live daemon can legitimately replace
+	// an injected list with a Hub push before the assertion reads it.
+	reopened.onMembers([]byte(`{"members":[{"address":"vitalii/desk","presence":"connected","joined":5}],"truncated":false,"workspace":"bad\nname"}`))
+	if reopened.WorkspaceName() != "Mellanni" {
+		t.Fatalf("an invalid pushed name replaced the kept one: %q", reopened.WorkspaceName())
+	}
+	if v := reopened.MemberView(); !v.Current || len(v.Members.Members) != 1 {
+		t.Fatalf("an invalid name dropped the list: %+v", v)
 	}
 	if _, err := w.alice.SetWorkspaceName(tctx(t), ""); err != nil {
 		t.Fatal(err)
