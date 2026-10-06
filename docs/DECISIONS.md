@@ -512,3 +512,88 @@ or Googlemail). Third-party addresses with only historical email_verified are
 refused: this avoids letting a past mailbox owner claim the invited identity.
 Later devices require approval by any existing active device of the person.
 Approval must be decided before expiry; publication gets PendingGrace.
+
+## 10. Private projects and selected guest context (discussion, Oct 6)
+
+**Status: future design pending; no implementation or release commitment.**
+The v0.8.2 bug-fix release stays the priority. No Project entity, migration,
+new permission contract or automatic membership propagation is authorized by
+this discussion.
+
+Owner requirement (Sergey, 2026-10-06): projects are private and invite-only,
+with core people, transient guests/agents and inner topics. Guest context is
+“only selected/approved messages.” Guests receive no whole-project history,
+other topics or future project stream by default. Any automatic future
+messages must belong to an explicitly approved scope; its boundaries and
+end conditions remain to be designed. Joining a project cannot silently grant
+access to every room, file, Drive folder or harness tool.
+
+### Current behavior is not the proposed access model
+
+AgentNet topics organize a conversation; they are not access-control
+boundaries. `roomAudience(conv)` gathers every following participation,
+without filtering by topic. Current group human guests receive selected
+older context and follow the conversation's future stream while active.
+Renaming a group to Project or hiding topics in a skin would not satisfy
+selected/approved-only disclosure.
+
+Earlier context grants name exact messages and freeze excerpts on invitation
+retry. Their attachment manifests and available file bytes are disclosed to
+the exact invited device. Ending participation blocks further sending and
+queued delivery; it cannot recall already received copies. Drive permissions
+remain separate: conversation joins/leaves change no Google permissions,
+and AgentNet broker grants do not constrain independent harness tools.
+Existing group agent participation may be persistent membership; transient
+Project help must not silently imply that membership or its rights.
+
+### Alternatives still under discussion
+
+| Option | Reuse and tradeoff |
+|---|---|
+| **A. Existing group presented as Project** | Least structural change; preserves current signed membership. Current guest follow is conversation-wide, so a rename/disclosure alone fails the owner's selected/approved requirement. Requires a real selective disclosure path before offering Project guests. |
+| **B. Project metadata over separate private conversation rooms** | Reuses existing per-room authority and encryption to isolate unrelated work. Each child retains its own signed roster/participation; parent access grants no child access, and parent removal alone revokes no child grant. Explicit repeated grants are possible, but automatic roster fanout would add an authority contract. Room isolation alone still does not provide message selection within that room. |
+| **C. Explicitly scoped guest audiences within a Project** | Could support one core membership with selected guest context and separately approved future scopes. Requires signed scope/consent, recipient selection, queued-delivery revalidation, history/file enforcement and cross-topic reference rules. A topic filter or UI visibility rule cannot enforce this. |
+
+No option selected yet. B is feasible as a private catalog of independent
+rooms, not as a claim that existing child rosters disappear or inherit
+Project authority. C is needed if the chosen product promises selective
+future audiences within one conversation; an approved future topic must
+never expand into all future Project messages.
+
+Smallest future design slice: specify one exact guest context grant over
+selected message identities and their disclosed attachment manifests, with
+no automatic follow by default. Reuse existing signed identities,
+participation lifecycle and per-recipient encryption where they enforce
+that invariant. Then evaluate whether separate rooms are sufficient or
+whether scoped audiences need a new compatible protocol capability. Resolve
+what a guest can read/send, who may approve additions, scope expiry/end,
+file delivery and metadata disclosure before implementation.
+
+Suggested product wording: “This guest receives only context you select and
+approve. Future messages are shared only within a separately approved scope.
+Ending access stops further delivery; received copies may remain.” Ordinary
+inner topics remain organizational unless an implemented protocol explicitly
+binds audience authority to them.
+
+### Evidence and comparison boundary
+
+AgentNet sources inspected for this discussion:
+[ROOM_V1](plans/ROOM_V1.md), [TOPICS](plans/TOPICS.md),
+[conversation audience](../internal/client/room.go),
+[participation events](../internal/protocol/participation.go),
+[history excerpts](../internal/client/participation_external.go),
+[recipient/file sending](../internal/client/humansend.go),
+[guest end/queued-copy regression](../internal/client/groupguest_test.go),
+[group agent membership/removal](../internal/client/groupparticipation.go)
+and [Drive permissions](../internal/client/drivespace.go).
+
+Buzz source inspected locally on 2026-10-06 provides a comparison, not an
+AgentNet contract: `VISION_PROJECTS.md` describes Project kind `30621` as
+repository grouping without granting repository authority; desktop
+`src/features/projects/projectCreation.ts` emits that metadata. Private
+channel authority is enforced separately in
+`crates/buzz-relay/src/handlers/channel_authz.rs`; `side_effects.rs` refuses
+private-channel self-join. Listed/unlisted Project metadata is not a private
+channel ACL. This supports separating catalog metadata from authority; it
+does not establish selected-message guest access or AgentNet's encrypted
+participation/file semantics. No Buzz live deployment behavior was tested.
