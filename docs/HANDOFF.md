@@ -5,6 +5,10 @@
 v0.8.0 (`d99dcc85`) is the released base. The active v0.8.1 candidate fixes
 MEL-550–557 plus MEL-558 linked-device history, one person chat with separate
 conversations, solo-group message controls and visible pending invitations.
+Comic also restores direct agent-chat entry points, retains named agents on
+follow-up and refreshes tool-connection status when the user returns. A local
+self-addressed question is accepted only with an exact matching signed local
+outbox envelope and current self key; retries never reopen an existing job.
 Read [the current release notes](NEXT_RELEASE.md) for scope and current limits.
 The owner requires every original item before rollout; none is deferred.
 

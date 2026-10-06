@@ -811,13 +811,38 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 
 // addInbox stores in, which the key with fingerprint verifiedBy verified.
 func (s *store) addInbox(in envelope.Inner, verifiedBy string) error {
+	return s.addReceivedInbox(in, verifiedBy, nil)
+}
+
+// addReceivedInbox may accept an exact question initiated on this installation.
+// local is supplied only after verifying a self-addressed envelope with our own
+// key. Its complete signed envelope must also exist in our local outbox. This
+// accepts that request only; it creates no sender or person permission grant.
+func (s *store) addReceivedInbox(in envelope.Inner, verifiedBy string, local *envelope.Envelope) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	accept := false
+	if local != nil && in.Kind == envelope.KindQuestion && in.ReceiverRoute == nil {
+		encoded, err := json.Marshal(local)
+		if err != nil {
+			return err
+		}
+		// Replays never change an existing request's state or run it again.
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM outbox WHERE id=? AND recipient=? AND recipient_fp=? AND envelope=?)
+			AND NOT EXISTS(SELECT 1 FROM inbox WHERE id=?)`, in.ID, in.To, verifiedBy, string(encoded), in.ID).Scan(&accept); err != nil {
+			return err
+		}
+	}
 	if err := insertInner(tx, in, verifiedBy); err != nil {
 		return err
+	}
+	if accept {
+		if _, err := tx.Exec(`UPDATE inbox SET state=? WHERE id=? AND state IN (?,?)`, stateAccepted, in.ID, stateHeld, statePending); err != nil {
+			return err
+		}
 	}
 	return s.done(tx.Commit())
 }

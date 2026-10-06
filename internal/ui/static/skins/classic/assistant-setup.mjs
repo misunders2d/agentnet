@@ -33,12 +33,14 @@ export function folderWayOut(failed, last) {
  for (const r of last?.roots || []) if (r !== failed && r !== up) out.push({ kind: 'root', label: r, path: r });
  return out;
 }
+const focusStops = new WeakMap();
 export async function mountAssistantSetup({ root, api, isCurrent = () => true, isBrowser = false, suggestedHarness = '', onChanged = () => {} }) {
  if (!root || !isCurrent()) return;
  const doc = root.ownerDocument;
+ focusStops.get(doc)?.();
  const node = (tag, text, cls) => { const el = doc.createElement(tag); if (text) el.textContent = text; if (cls) el.className = cls; return el; };
  const button = (text, action, primary = false) => { const b = node('button', text, 'setup-button' + (primary ? ' primary' : '')); b.type = 'button'; b.onclick = action; return b; };
- let view, catalog, chosen = new Set(), review, busy = false, stage = 'home', outcomes = [], folders = null, folderGen = 0;
+ let view, catalog, chosen = new Set(), review, busy = false, stage = 'home', outcomes = [], folders = null, folderGen = 0, statusGeneration = 0;
  const configs = new Map();
  const records = harness => (catalog?.agents || []).filter(a => a.enabled && a.responder?.harness === harness);
  const managed = harness => (catalog?.harnesses || []).some(h => h.name === harness && h.found);
@@ -53,7 +55,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  const call = async body => { if (!current()) throw Error('Workspace changed. Reopen setup in that workspace.'); const result = await api('/api/assistant-setup', body); if (!current()) throw Error('Workspace changed. Setup still belongs to the original workspace.'); return result; };
  const selected = () => (view?.harnesses || []).filter(h => chosen.has(h.id));
  const choose = async () => {
-  if (busy) return; busy = true; error.textContent = ''; draw();
+  if (busy) return; statusGeneration++; busy = true; error.textContent = ''; draw();
   // The tool list first; the agent list only where setup can run (a server that can't says so in its note).
   try { view = await call(); if (view.local === false) { busy = false; draw(); return; } catalog = await agentAPI(); configs.clear(); folders = null; folderGen++; chosen = new Set((view.harnesses || []).filter(h => h.detected && h.supported && h.configured).map(h => h.id)); busy = false; stage = 'choose'; draw(true); } catch (e) { fail(e); }
  };
@@ -62,11 +64,11 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
   return { eligible, all: eligible.length > 0 && eligible.every(h => chosen.has(h.id)) };
  };
  const reviewSelection = async () => {
-  if (busy || !selected().length) return; busy = true; error.textContent = ''; draw();
+  if (busy || !selected().length) return; statusGeneration++; busy = true; error.textContent = ''; draw();
   try { for (const h of selected().filter(h => managed(h.id))) { const c = configFor(h); if (c.requireChoice || !c.label.trim() || !c.dir.trim()) throw Error('Choose an assistant name and working folder for ' + h.label + ' before reviewing.'); } review = await call({ action: 'review', harnesses: selected().map(h => h.id) }); stage = 'review'; busy = false; draw(true); } catch (e) { fail(e); }
  };
  const apply = async () => {
-  if (busy || !review?.review_id) return; busy = true; error.textContent = ''; draw();
+  if (busy || !review?.review_id) return; statusGeneration++; busy = true; error.textContent = ''; draw();
   try {
    const requested = selected().map(h => ({ harness: h.id, config: { ...configFor(h) }, managed: managed(h.id) }));
    view = await call({ action: 'apply', harnesses: selected().map(h => h.id), review_id: review.review_id }); outcomes = [];
@@ -199,5 +201,18 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
   root.replaceChildren(card); if (focus) heading.focus({ preventScroll: true });
  }
  draw();
- return { refresh: choose };
+ let statusRead = false;
+ const stop = () => { doc.defaultView?.removeEventListener('focus', returned); doc.removeEventListener?.('visibilitychange', returned); if (focusStops.get(doc) === stop) focusStops.delete(doc); };
+ const ready = () => current() && !busy && (stage === 'choose' || stage === 'saved');
+ const returned = async () => {
+  if (!current()) { stop(); return; }
+  if (doc.visibilityState === 'hidden' || !ready() || statusRead) return;
+  statusRead = true;
+  const generation = statusGeneration;
+  try { const next = await call(); if (ready() && generation === statusGeneration) { view = next; draw(); } }
+  catch (e) { if (ready() && generation === statusGeneration) { error.textContent = 'Setup status could not be refreshed: ' + e.message + ' Check again.'; draw(); } }
+  finally { statusRead = false; }
+ };
+ if (!isBrowser) { doc.defaultView?.addEventListener('focus', returned); doc.addEventListener?.('visibilitychange', returned); focusStops.set(doc, stop); }
+ return { refresh: choose, dispose: stop };
 }

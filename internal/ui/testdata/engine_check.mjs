@@ -169,8 +169,18 @@ async function handle(req) {
     engine.start();
     return {};
   case "testHumanCaps": { // signed old/new reader ads, only on this test device
-    const profile = await engine.profile(engine.address);
-    const old = (profile.caps || []).map(wire.parseCaps).find(c => c.session === engine.session);
+    // The stream's connected/member flags precede onConnect's capability
+    // publication. Wait for that session's ad before modifying it; never
+    // fabricate an old reader from an absent record.
+    let old;
+    const deadline = Date.now() + 20000;
+    while (!old) {
+      const profile = await engine.profile(engine.address);
+      old = (profile.caps || []).map(wire.parseCaps).find(c => c.session === engine.session);
+      if (old) break;
+      if (Date.now() >= deadline) throw Error("own session capabilities were not published");
+      await sleep(100);
+    }
     const caps = old.caps.filter(c => ![wire.CapHumanParticipation, wire.CapRoom].includes(c));
     if (req.supported) caps.push(wire.CapHumanParticipation);
     const clock = Date.now;

@@ -471,7 +471,11 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		}
 		// The key that verified it is the evidence, not whatever is pinned
 		// by the time it is stored.
-		if err := a.store.addInbox(in, sender.Fingerprint()); err != nil {
+		var local *envelope.Envelope
+		if env.From == a.Address && sender.Fingerprint() == a.Self().Fingerprint() {
+			local = &env // exact local outbox provenance is checked in the same insert transaction
+		}
+		if err := a.store.addReceivedInbox(in, sender.Fingerprint(), local); err != nil {
 			return err
 		}
 		if err := a.processReceiverCatalog(in, sender.Fingerprint()); err != nil {

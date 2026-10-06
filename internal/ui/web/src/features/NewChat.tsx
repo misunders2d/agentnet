@@ -14,6 +14,7 @@ import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { presence } from "./ChatList.row";
 import { chatItems, type ListItem } from "./ChatList.words";
+import { OwnAgentChats } from "./AgentChat";
 import { TeamPeople } from "./Teams";
 
 /** Someone a chat can be started with. */
@@ -215,6 +216,9 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
         </button>
       )}
       {!q && <Button variant="outline" onClick={() => { onDone(); store.showTab("settings", "teams"); }}>People lists</Button>}
+
+      <h3 className={heading}>Your agents</h3>
+      <OwnAgentChats overview={overview} query={q} onStarted={onDone} />
 
       {shownPeople.length > 0 && <>
         <h3 className={heading}>People</h3>

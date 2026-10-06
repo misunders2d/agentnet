@@ -12,7 +12,7 @@ import { Popover } from "@base-ui/react/popover";
 import { IconAlertCircle, IconAt, IconCloudOff, IconLock } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
-import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, threadAuthor, whoName } from "../model";
+import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, threadAgentID, threadAuthor, whoName } from "../model";
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
@@ -96,7 +96,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (thread) {
       if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
       const to = deviceTarget(thread.peer, overview); // a device that runs no agent cannot be asked
-      return to.kind === "agent" ? { kind: "device", name: deviceAgent(thread.peer, overview, names), seed: thread.peer, ask: true }
+      if (threadAgentID(thread) && to.kind !== "agent") return { kind: "none", note: "The selected agent is unavailable on that computer." };
+      return to.kind === "agent" ? { kind: "device", name: deviceAgent(thread.peer, overview, names, threadAgentID(thread)), seed: thread.peer, ask: true }
         : to.kind === "person" ? { kind: "device", name: to.name, seed: thread.peer, ask: false }
         : { kind: "none", note: to.note };
     }
@@ -303,7 +304,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
-          r = await store.api.send({ id, to: device.peer, kind: to.kind === "device" && !to.ask ? "message" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
+          r = await store.api.send({ id, to: device.peer, agent_id: to.kind === "device" && to.ask ? threadAgentID(device) : undefined, kind: to.kind === "device" && !to.ask ? "message" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
           // Keep the preview in the visible conversation throughout saving;
           // once the new topic exists its loaded view takes over the same id.
           if (d.newTopic) store.sends.move(id, id);

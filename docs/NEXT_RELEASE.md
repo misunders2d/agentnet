@@ -17,6 +17,12 @@
   an image from its system clipboard when the webview supplies no image file.
 - Settings separates who answers requests from connecting AgentNet to your
   tools, explains reconnect requirements and describes the working folder.
+- Comic can start a direct chat with this computer's agent or your other
+  devices' agents without an existing conversation. Named-agent follow-ups
+  keep their selected executor. Questions sent locally to your own agent
+  run once without creating a sender permission grant.
+- Returning to the connection screen refreshes configured/active status
+  without reconnecting tools or losing the current selection.
 - People lists are clearly distinct from group chats. New groups require a
   name. List managers and workspace admins can delete a list without deleting
   its chats; deleted lists do not return from an old cached snapshot.

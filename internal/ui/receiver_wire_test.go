@@ -52,14 +52,10 @@ func TestBrowserReceiverWireMatchesGo(t *testing.T) {
 	if json.Unmarshal([]byte(setup["caps_json"].(string)), &caps) != nil || caps.Verify(browser.SignKey) != nil {
 		t.Fatal("normal Engine capability record invalid")
 	}
-	count := 0
-	for _, c := range caps.Caps {
-		if c == protocol.CapReplyReceiver {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("normal Engine must advertise rcv1 exactly once: %v", caps.Caps)
+	// rm1 bundles rcv1 (RoomImplies); the signed record's verification above
+	// already requires unique names. Check support rather than spelling.
+	if !caps.Reads(protocol.CapReplyReceiver) {
+		t.Fatalf("normal Engine must support reply receivers: %v", caps.Caps)
 	}
 	alice, _ := identity.Generate()
 	bob, _ := identity.Generate()

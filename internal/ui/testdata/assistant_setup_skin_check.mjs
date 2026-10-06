@@ -34,7 +34,8 @@ class Node_ {
 }
 class Text_ extends Node_ { constructor(doc, t) { super(doc, '#text'); this.text = t; } }
 function makeDocument() {
-  const doc = { activeElement: null };
+  const doc = new EventTarget();
+  Object.assign(doc, { activeElement: null, visibilityState: 'visible', defaultView: new EventTarget() });
   doc.createElement = (tag) => new Node_(doc, tag);
   doc.createTextNode = (t) => new Text_(doc, t);
   doc.documentElement = doc.createElement('html');
@@ -57,7 +58,8 @@ function tool(id, over = {}) {
 function server({ folderDelay, agents: start = [], local = true } = {}) {
   const calls = [];
   let agents = start;
-  const view = () => ({ local: true, harnesses: [tool('claude', {state:'needs_setup'}), tool('codex'), tool('omp', { detected: false, state: 'not_detected' })] });
+  let status = 'needs_setup';
+  const view = () => ({ local: true, harnesses: [tool('claude', {state:status, configured:status !== 'needs_setup', registered:status === 'connected'}), tool('codex'), tool('omp', { detected: false, state: 'not_detected' })] });
   const home = { path: '/home/me', parent: '/home', home: '/home/me', dirs: ['work', 'notes', 'locked'], truncated: true };
   const folders = {
     '/api/folders': home,
@@ -85,13 +87,41 @@ function server({ folderDelay, agents: start = [], local = true } = {}) {
     if (path === '/api/agents' && body.action === 'publish') return { saved: true, published: true };
     throw new Error('unexpected ' + path);
   };
-  return { calls, api };
+  return { calls, api, status: value => { status = value; } };
 }
 
 for (const skin of ['classic', 'zoom']) {
   const { mountAssistantSetup, folderEntries } = await import('../skins/' + skin + '/src/assistant-setup.mjs');
   assert.deepEqual(folderEntries({ path: 'C:\\Users', dirs: ['me'] }), [{ name: 'me', path: 'C:\\Users\\me' }], skin);
   assert.deepEqual(folderEntries({ path: '/', dirs: ['home', { name: 'x', path: '/x' }] }), [{ name: 'home', path: '/home' }, { name: 'x', path: '/x' }], skin);
+
+  // Returning from native setup/session activation reads status only and
+  // preserves the person's current choices; hidden/review views stay put.
+  {
+    const doc = makeDocument(), root = doc.createElement('div'), s = server();
+    doc.documentElement.append(root);
+    const controller = await mountAssistantSetup({ root, api: s.api });
+    await click(root, 'Use AgentNet inside your tools');
+    root.querySelector('#setup-tool-codex').checked = true;
+    root.querySelector('#setup-tool-codex').onchange();
+    s.status('needs_activation');
+    const before = s.calls.length;
+    doc.defaultView.dispatchEvent(new Event('focus')); await flush(); await flush();
+    assert.deepEqual(s.calls.slice(before), [['GET', '/api/assistant-setup']], skin);
+    assert.doesNotMatch(root.textContent, /Needs setup/, skin);
+    assert.match(root.textContent, /Needs activation/, skin);
+    assert.equal(root.querySelector('#setup-tool-codex').checked, true, skin);
+    doc.visibilityState = 'hidden'; s.status('connected');
+    const hidden = s.calls.length;
+    doc.dispatchEvent(new Event('visibilitychange')); await flush();
+    assert.equal(s.calls.length, hidden, skin);
+    doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange')); await flush(); await flush();
+    assert.match(root.textContent, /Registered context/, skin);
+    assert.ok(s.calls.every(c => c[0] === 'GET'), skin);
+    controller.dispose(); const ended = s.calls.length;
+    doc.defaultView.dispatchEvent(new Event('focus')); await flush();
+    assert.equal(s.calls.length, ended, skin);
+  }
 
   // A browser asks the server nothing and says where setup happens.
   {

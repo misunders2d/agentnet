@@ -49,14 +49,14 @@ func (c *gatedConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-// h2Frame reads one HTTP/2 frame and returns its type.
-func h2Frame(c net.Conn) (byte, error) {
+// h2Frame reads one HTTP/2 frame and returns its type and flags.
+func h2Frame(c net.Conn) (byte, byte, error) {
 	var hdr [9]byte
 	if _, err := io.ReadFull(c, hdr[:]); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	_, err := io.CopyN(io.Discard, c, int64(hdr[0])<<16|int64(hdr[1])<<8|int64(hdr[2]))
-	return hdr[3], err
+	return hdr[3], hdr[4], err
 }
 
 // A connection whose TLS handshake is still running when the Hub starts to
@@ -100,8 +100,23 @@ func TestStopClosesConnectionThatJoinsLate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer served1.Close()
-	if typ, err := h2Frame(served1); err != nil || typ != 0x4 { // the Hub's SETTINGS: it serves this connection
+	if err := served1.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if typ, _, err := h2Frame(served1); err != nil || typ != 0x4 {
 		t.Fatalf("first frame %d: %v", typ, err)
+	}
+	// Server SETTINGS can arrive before net/http reads the client preface
+	// and calls StateActive. Wait for its SETTINGS ACK: the first connection
+	// is now serving and must receive GOAWAY rather than a late-join close.
+	for {
+		typ, flags, err := h2Frame(served1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if typ == 0x4 && flags&0x1 != 0 {
+			break
+		}
 	}
 	raw, err = net.Dial("tcp", inner.Addr().String())
 	if err != nil {
@@ -110,10 +125,9 @@ func TestStopClosesConnectionThatJoinsLate(t *testing.T) {
 	defer raw.Close()
 	late := make(chan net.Conn, 1)
 	go func() {
-		c, err := connect(raw)
-		if err != nil {
-			t.Error(err)
-		}
+		// Shutdown intentionally closes this late connection; its TLS or
+		// preface write may fail. Only the Hub's bounded stop is required.
+		c, _ := connect(raw)
 		late <- c
 	}()
 	<-ln.second // accepted, its handshake held
@@ -121,7 +135,7 @@ func TestStopClosesConnectionThatJoinsLate(t *testing.T) {
 	stop()
 	<-ln.closed
 	for { // the Hub has told the connections it serves to finish
-		typ, err := h2Frame(served1)
+		typ, _, err := h2Frame(served1)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -39,11 +39,34 @@ func signCapsNow(t *testing.T, a *Agent, caps []string) {
 }
 
 // without is caps less drop, as an older program lists them: one that
-// does not read drop does not read rm1 either when rm1 implies drop.
+// does not read drop does not read rm1 either when rm1 implies drop. Keep
+// rm1's other effective capabilities even if a current program omits their
+// redundant explicit names; each old-reader probe drops only what it tests.
 func without(caps []string, drop string) []string {
-	return slices.DeleteFunc(slices.Clone(caps), func(c string) bool {
+	out := slices.Clone(caps)
+	if slices.Contains(caps, protocol.CapRoom) && (drop == protocol.CapRoom || slices.Contains(protocol.RoomImplies, drop)) {
+		out = append(out, protocol.RoomImplies...)
+		slices.Sort(out)
+		out = slices.Compact(out)
+	}
+	return slices.DeleteFunc(out, func(c string) bool {
 		return c == drop || c == protocol.CapRoom && slices.Contains(protocol.RoomImplies, drop)
 	})
+}
+
+func TestCapabilityFixtureDropsOnlyRequestedReader(t *testing.T) {
+	before := protocol.CapsRecord{Caps: []string{protocol.CapEnv2, protocol.CapRoom, protocol.CapRootSync}}
+	for _, drop := range []string{protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapRoom, protocol.CapRootSync} {
+		after := protocol.CapsRecord{Caps: without(before.Caps, drop)}
+		if after.Reads(drop) {
+			t.Fatalf("fixture still reads dropped %s", drop)
+		}
+		for _, keep := range append(slices.Clone(protocol.RoomImplies), protocol.CapEnv2, protocol.CapRootSync) {
+			if keep != drop && before.Reads(keep) && !after.Reads(keep) {
+				t.Fatalf("dropping %s also removed effective %s", drop, keep)
+			}
+		}
+	}
 }
 
 // withCap is caps plus add, sorted and once, as a signed record requires.

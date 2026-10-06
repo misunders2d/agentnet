@@ -3,12 +3,28 @@
 // Run by TestComicAssistantSetupModel.
 import assert from 'node:assert/strict';
 import {
-  agentsFor, applySetup, browserDevice, canHaveAgent, firstPick, folderEntries, folderName, folderWayOut, notReady, parentFolder, pickFor, readSetup, savedLine, startChosen, STATE_SENTENCE, STATE_WORDS,
+  agentsFor, applySetup, browserDevice, canHaveAgent, firstPick, folderEntries, folderName, folderWayOut, notReady, parentFolder, pickFor, readSetup, savedLine, startChosen, STATE_SENTENCE, STATE_WORDS, watchSetupFocus,
 } from '../web/src/features/AssistantSetup.model.ts';
 
 const tool = (id, over = {}) => ({ id, label: { claude: 'Claude', codex: 'Codex', pi: 'Pi', omp: 'OMP' }[id], detected: true, configured: false, registered: false, supported: true, state: 'detected', note: 'server note', ...over });
 const agent = (id, label, harness, dir, enabled = true, ready = true) => ({ record: { v: 1, id, host: 'h', host_key: 'k', label, ts: 1 }, enabled, responder: { chosen: true, manual: false, harness, dir, ready, ...(ready ? {} : { problem: 'The responder directory ' + dir + ' does not exist.' }), harnesses: null } });
 const catalogOf = (agents, found = ['claude', 'codex', 'pi']) => ({ host: 'h', local: true, agents, harnesses: ['claude', 'codex', 'pi'].map((name) => ({ name, found: found.includes(name) })) });
+
+// Focus/visible return refreshes the current status; hidden and disposed
+// views make no reads, and no timer or configuration write is involved.
+{
+  const doc = Object.assign(new EventTarget(), { defaultView: new EventTarget(), visibilityState: 'visible' });
+  let reads = 0;
+  const stop = watchSetupFocus(doc, () => { reads++; });
+  doc.defaultView.dispatchEvent(new Event('focus'));
+  assert.equal(reads, 1);
+  doc.visibilityState = 'hidden'; doc.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(reads, 1);
+  doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange'));
+  assert.equal(reads, 2);
+  stop(); doc.defaultView.dispatchEvent(new Event('focus'));
+  assert.equal(reads, 2);
+}
 
 // The tools ticked when the list opens: set up already, found and safe.
 {

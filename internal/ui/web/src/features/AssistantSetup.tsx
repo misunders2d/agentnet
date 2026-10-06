@@ -17,7 +17,7 @@ import { useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import {
-  agentsFor, applySetup, browserDevice, canHaveAgent, NAME_MAX, pickFor, pickOf, readSetup, savedLine, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady,
+  agentsFor, applySetup, browserDevice, canHaveAgent, NAME_MAX, pickFor, pickOf, readSetup, savedLine, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady, watchSetupFocus,
   type AgentPick, type SavedAgent, type SetupCalls, type Stage,
 } from "./AssistantSetup.model";
 import { FolderField } from "./AssistantSetup.folders";
@@ -56,7 +56,23 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
   const alive = useRef(true);
   const heading = useRef<HTMLHeadingElement>(null);
   const moved = useRef(false);
+  const statusRead = useRef(false);
+  const statusGeneration = useRef(0);
+  const screen = useRef({ stage, busy });
+  screen.current = { stage, busy };
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => {
+    if (browser) return;
+    return watchSetupFocus(document, () => {
+      const ready = () => alive.current && store.isActive() && !screen.current.busy && ["choose", "saved"].includes(screen.current.stage);
+      if (!ready() || statusRead.current) return;
+      statusRead.current = true;
+      const generation = statusGeneration.current;
+      void calls.setup().then((v) => { if (ready() && generation === statusGeneration.current) setView(v); }).catch((e) => {
+        if (ready() && generation === statusGeneration.current) setError("Setup status could not be refreshed: " + errorText(e) + " Check again.");
+      }).finally(() => { statusRead.current = false; });
+    });
+  }, [browser, calls, store]);
   // A new step moves focus to its title, as the old setup did (not on first show).
   useEffect(() => { if (moved.current) heading.current?.focus({ preventScroll: true }); moved.current = true; }, [stage]);
 
@@ -64,6 +80,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
   const read = async () => {
     if (busy) return;
+    statusGeneration.current++;
     setBusy("read"); setError("");
     try {
       const { view: v, catalog: c } = await readSetup(calls);
@@ -83,6 +100,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
   const toReview = async () => {
     if (busy) return;
     if (missing) { setError(missing); return; }
+    statusGeneration.current++;
     setBusy("review"); setError("");
     try {
       const r = await calls.setup({ action: "review", harnesses: picked.map((h) => h.id) });
@@ -93,6 +111,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 
   const apply = async () => {
     if (busy || !review?.review_id) return;
+    statusGeneration.current++;
     setBusy("apply"); setError("");
     try {
       const r = await applySetup(calls, picked, review.review_id, catalog, picks);

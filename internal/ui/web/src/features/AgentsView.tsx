@@ -16,6 +16,7 @@ import { ScreenTitle } from "./Approvals.title";
 import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { capital, deviceWords, isMine } from "./Approvals.words";
 import { AgentSheet, type AgentSetup } from "./AgentsView.forms";
+import { AgentChatButton, OwnAgentChats } from "./AgentChat";
 import { AssistantSetup } from "./AssistantSetup";
 import { latestThreads, Permissions, useGrants, warmGrants } from "./AgentsView.grants";
 import { eventKind } from "./Message.model";
@@ -73,7 +74,7 @@ export function AgentsView() {
 
       <Section title="Your agents">
         {data.browser ? <BrowserNote /> : <MyAgent o={o} r={data.responder} />}
-        <OtherDevices o={o} />
+        <OwnAgentChats overview={o} includeLocal={false} />
         {!data.browser && <NamedAgents o={o} catalog={data.catalog} />}
       </Section>
 
@@ -137,6 +138,7 @@ function MyAgent({ o, r }: { o: T.Overview; r: Load<T.ResponderView> }) {
         </Details>
       )}
       <div className="mt-3 flex flex-wrap gap-2">
+        <AgentChatButton target={{host:o.me.address,label:"Your agent",local:true,unavailable:state === "ready" ? undefined : "Choose a ready program in Settings first"}} />
         <Button variant={state === "unset" || state === "problem" ? "act" : "outline"} size="sm" icon={<IconSettings size={18} />} onClick={() => store.showTab("settings", "assistant")}>
           {state === "unset" ? "Set it up in Settings" : "Change in Settings"}
         </Button>
@@ -225,6 +227,7 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
       </div>
       {a.enabled && r && !r.ready && r.problem && <p className="pt-2 text-[14px] text-danger">{r.problem}</p>}
       {chats.length > 0 && <Chats o={o} dms={chats} />}
+      <div className="mt-3"><AgentChatButton target={{host:a.record.host,agentId:a.record.id,label:a.record.label,local:true,unavailable:!a.enabled || !r?.ready ? "This agent is not ready" : undefined}} /></div>
       {r && (
         <Details>
           <Row k="Works in"><span className="font-mono text-[14px] [overflow-wrap:anywhere]">{r.dir}</span></Row>
@@ -239,22 +242,6 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
 
 // Your agents on your other devices that this one talks with. A device that
 // only sends reports here is not one: it is in ReportsNote.
-function OtherDevices({ o }: { o: T.Overview }) {
-  const store = useApp();
-  const mine = latestThreads(o).filter((t) => isMine(t.peer, o) && t.peer !== o.me.address && !t.notice_only && runsAgent(t.peer, o)); // a phone is you, not an agent
-  if (!mine.length) return null;
-  return (
-    <ul className="flex flex-col gap-2">
-      {mine.map((t) => (
-        <li key={t.peer}>
-          <LinkRow onOpen={() => void store.open({ kind: "thread", id: t.id, peer: t.peer })} seed={t.peer} device={deviceKind(t.peer)}
-            title="Your agent" sub={"On " + niceDevice(t.peer)} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 // ReportsNote: devices that tell this one when something waits for a person
 // there. Their reports are in OKs; deciding happens on that device.
 function ReportsNote({ o }: { o: T.Overview }) {

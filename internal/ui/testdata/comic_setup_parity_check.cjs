@@ -26,7 +26,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         const bob = { person: id('b'), label: 'Bob', address: 'bob/desk', state: 'pinned' }, carol = { person: id('c'), label: 'Carol', address: 'carol/desk', state: 'pinned' };
         const overview = { ...original, role: 'unset', person: null, persons: true, groups: true, agents: false, people: [bob, carol], threads: [], topics: [], dms: [], reminders: [], links: [], link: null, quarantine: [] };
         let team = { realm_id: 'realm', id: id('d'), name: 'Dock crew', seq: 1, hash: id('e'), members: [own.person, bob.person, carol.person], managers: [own.person], archived: false, member: true, manager: true, conflict: false, listed: true };
-        let newGroups = 0, refuseCarol = true, refuseRename = false, failTeams = false;
+        let newGroups = 0, refuseCarol = true, refuseRename = false, failTeams = false, nativeSetupState = 'needs_setup';
         const invites = [], calls = [], listeners = new Set();
         const at = new Date().toISOString();
         const dm = { id: id('1'), peer: bob, created: at, mine: true, agents: [], guests: [], messages: [{ id: id('2'), lid: id('3'), dir: 'in', from: bob.address, kind: 'message', body: 'Order notes', state: 'delivered', state_text: 'Delivered', at, verified_agent: false, attachments: [{ index: 0, name: 'notes.txt', size: 4, openable: true }] }] };
@@ -41,6 +41,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
           if (route === '/api/overview') return structuredClone(overview);
           if (route === '/api/device/service') { overview.role = 'service'; return { note: 'Service role recorded' }; }
           if (route === '/api/agents') return { local: true, host: 'alice/laptop', agents: [] };
+          if (route === '/api/assistant-setup' && body === undefined) return { local: true, harnesses: [{ id: 'codex', label: 'Codex', detected: true, supported: true, configured: nativeSetupState !== 'needs_setup', registered: nativeSetupState === 'connected', state: nativeSetupState, note: 'Synthetic native setup status.' }] };
           if (route === '/api/teams') { if (failTeams) throw Error('Server unavailable'); return { status: 'available', current: true, at, truncated: false, teams: [structuredClone(team)] }; }
           if (route === '/api/team') {
             if (body.op === 'leave' && team.managers.length === 1) throw Error('The last manager cannot leave.');
@@ -103,6 +104,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
           refuseRename() { refuseRename = true; },
           clearInvitations() { invites.length = 0; emit(); },
           failTeams(value) { failTeams = value; emit(); },
+          nativeSetup(state) { nativeSetupState = state; },
           async unmount() { await skin.unmount(root); },
         };
       }, { platform });
@@ -135,12 +137,27 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       // Return from phone Profile through its section header. Main nav
       // also has a You button, which keeps the current section open.
       if (width < 1024) await p.locator('.an-tab-in > .sticky').getByRole('button', { name: 'You', exact: true }).click();
-      await p.getByRole('button', { name: /^Teams/ }).click();
-      await p.getByRole('heading', { name: 'Teams', exact: true }).waitFor(T);
+      if (platform === 'daemon') {
+        await p.getByRole('button', { name: /^Your agent/ }).click();
+        await p.getByRole('button', { name: 'Find them', exact: true }).click();
+        await p.getByText('Needs setup', { exact: true }).waitFor(T);
+        const reads = await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').length);
+        await p.evaluate(() => { __p24.nativeSetup('needs_activation'); window.dispatchEvent(new Event('focus')); });
+        await p.getByText('Start a new session', { exact: true }).waitFor(T);
+        assert.equal(await p.getByRole('checkbox', { name: 'Connect Codex', exact: true }).isChecked(), false, 'refresh preserves chosen tools');
+        await p.evaluate(() => { __p24.nativeSetup('connected'); window.dispatchEvent(new Event('focus')); });
+        await p.getByText('Connected', { exact: true }).waitFor(T);
+        assert.equal(await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').length), reads + 2, 'one status read per focus');
+        assert.ok(await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').every(c => c.body === undefined)), 'focus never configures tools');
+        await snap('native-setup-refreshed');
+        if (width < 1024) await p.locator('.an-tab-in > .sticky').getByRole('button', { name: 'You', exact: true }).click();
+      }
+      await p.getByRole('button', { name: /^People lists/ }).click();
+      await p.getByRole('heading', { name: 'People lists', exact: true }).waitFor(T);
       await snap('teams');
       await p.getByRole('button', { name: /Dock crew.*3 members/ }).click();
       let team = p.getByRole('dialog', { name: 'Dock crew', exact: true });
-      await team.getByRole('button', { name: 'Leave team' }).click();
+      await team.getByRole('button', { name: 'Leave list' }).click();
       await p.getByText('The last manager cannot leave.', { exact: true }).waitFor(T);
       await team.getByRole('button', { name: 'Make manager', exact: true }).first().click();
       await p.getByRole('alertdialog').getByRole('button', { name: 'Confirm change' }).click();
@@ -148,32 +165,28 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       await snap('team-members'); await noSideways(team);
       await p.evaluate(() => __p24.refuseRename());
       await team.getByRole('textbox', { name: 'New name', exact: true }).fill('Refused name');
-      await team.getByRole('button', { name: 'Rename team' }).click();
+      await team.getByRole('button', { name: 'Rename list' }).click();
       await p.getByText('Server refused rename.', { exact: true }).waitFor(T);
       assert.equal(await team.getByRole('heading', { name: 'Dock crew', exact: true }).count(), 1, 'refused rename leaves verified name');
-      await team.getByRole('button', { name: 'Archive team' }).click();
-      await team.getByRole('button', { name: 'Restore team' }).waitFor(T);
-      await team.getByRole('button', { name: 'Restore team' }).click();
-      await team.getByRole('button', { name: 'Archive team' }).waitFor(T);
       await team.getByRole('button', { name: 'Take manager role' }).click();
       await p.getByRole('alertdialog').getByRole('button', { name: 'Confirm change' }).click();
       await p.waitForFunction(() => __p24.calls.some(c => c.path === '/api/team' && c.body.op === 'manager-remove'));
       await team.getByRole('button', { name: 'Select for a conversation…' }).click();
       let draft = p.getByRole('dialog', { name: 'New group', exact: true });
-      await draft.getByRole('list', { name: 'Selected team people' }).getByText('Carol', { exact: true }).waitFor(T);
+      await draft.locator('[aria-label="Selected people"]').getByText('Carol', { exact: true }).waitFor(T);
       assert.equal(await p.evaluate(() => __p24.invites.length), 0, 'snapshot sends no invitation');
       await draft.getByRole('button', { name: 'Remove Carol', exact: true }).click();
       // The wrapping label's raw text includes option names. Match the
       // select's accessible name, which excludes its own option contents.
-      await draft.getByRole('combobox', { name: 'Team', exact: true }).selectOption('d'.repeat(64));
+      await draft.getByRole('combobox', { name: 'People list', exact: true }).selectOption('d'.repeat(64));
       await p.evaluate(() => __p24.failTeams(true));
-      await draft.getByText(/These are the last verified teams/).waitFor(T);
-      assert.equal(await draft.getByRole('button', { name: 'Add team’s people', exact: true }).isDisabled(), true, 'stale directory cannot expand a snapshot');
+      await draft.getByText(/These are the last verified people lists/).waitFor(T);
+      assert.equal(await draft.getByRole('button', { name: 'Add list’s people', exact: true }).isDisabled(), true, 'stale directory cannot expand a snapshot');
       await p.evaluate(() => __p24.failTeams(false));
-      await draft.getByText(/These are the last verified teams/).waitFor({ state: 'hidden', ...T });
-      await draft.getByRole('button', { name: 'Add team’s people', exact: true }).click();
-      await draft.getByRole('list', { name: 'Selected team people' }).getByText('Carol', { exact: true }).waitFor(T);
-      assert.equal(await draft.getByRole('list', { name: 'Selected team people' }).getByRole('listitem').count(), 2, 'snapshot merge excludes own person and duplicates');
+      await draft.getByText(/These are the last verified people lists/).waitFor({ state: 'hidden', ...T });
+      await draft.getByRole('button', { name: 'Add list’s people', exact: true }).click();
+      await draft.locator('[aria-label="Selected people"]').getByText('Carol', { exact: true }).waitFor(T);
+      assert.equal(await draft.locator('[aria-label="Selected people"]').getByRole('button').count(), 2, 'snapshot merge excludes own person and duplicates');
       await draft.getByRole('textbox', { name: 'Group name' }).fill('Order crew');
       await snap('team-snapshot'); await noSideways(draft);
       await draft.getByRole('button', { name: 'Create group', exact: true }).click();
@@ -189,15 +202,15 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       }
       // New group opens Bring in. The team selection is also present there.
       const bring = p.getByRole('dialog', { name: 'Bring someone in', exact: true });
-      await bring.getByText('Choose people from teams', { exact: true }).waitFor(T);
+      await bring.getByText('Add people from a list', { exact: true }).waitFor(T);
       await bring.getByRole('button', { name: 'Close', exact: true }).click();
       // Existing group: reviewed people can receive reviewed history too.
       await p.evaluate(() => { __p24.clearInvitations(); __p24.openGroup(); });
       await p.getByRole('button', { name: width < 1024 ? 'Bring someone in' : 'Bring in', exact: true }).click();
       const existing = p.getByRole('dialog', { name: 'Bring someone in', exact: true });
       const bulk = existing.getByRole('region', { name: 'Invite team people' });
-      await bulk.getByRole('combobox', { name: 'Team', exact: true }).selectOption('d'.repeat(64));
-      await bulk.getByRole('button', { name: 'Add team’s people', exact: true }).click();
+      await bulk.getByRole('combobox', { name: 'People list', exact: true }).selectOption('d'.repeat(64));
+      await bulk.getByRole('button', { name: 'Add list’s people', exact: true }).click();
       await bulk.getByRole('button', { name: 'Remove Carol', exact: true }).click();
       await bulk.getByLabel('Share reviewed history with these people', { exact: true }).check();
       await snap('existing-group-history');

@@ -337,7 +337,7 @@ export interface ThreadAuthor { key: string; name: string; sub?: string; agent: 
 export function threadAuthor(m: T.Message, o: T.Overview | null | undefined, names: Record<string, string>, peer: string, all: T.Message[] = []): ThreadAuthor {
   const me = o?.person;
   if (m.dir === "out") {
-    if (o?.me.agent && !runsAgent(peer, o) && (m.kind === "answer" || m.kind === "result")) {
+    if (o?.me.agent && (peer === o.me.address || !runsAgent(peer, o)) && (m.kind === "answer" || m.kind === "result")) {
       const req = all.find((x) => x.id === m.reply_to);
       if (!req || req.state !== "manual") return { key: "local:" + o.me.address, name: (m.agent_id && names[m.agent_id]) || "Your agent", sub: "On this computer", agent: true, mine: false, seed: m.agent_id || o.me.address };
     }
@@ -351,6 +351,20 @@ export function threadAuthor(m: T.Message, o: T.Overview | null | undefined, nam
   if (w.relation === "own" || w.relation === "this") return { key: "me:" + m.from, name: "You", sub: "from " + w.device, agent: false, mine: true, seed: me?.person || "me" };
   if (w.relation === "person") return { key: "p:" + (w.person?.person || m.from), name: whoName(w), sub: "from " + w.device, agent: false, mine: false, seed: w.person?.person || m.from };
   return { key: "p:" + m.from, name: w.device || "Someone", agent: false, mine: false, seed: m.from };
+}
+
+/** Keep follow-ups addressed to the named agent recorded in this thread's
+ * verified messages. The send API resolves it against the current catalog. */
+export function threadAgentID(thread: T.Thread): string | undefined {
+  for (const m of [...(thread.messages || [])].reverse()) {
+    if ((m as T.Message & { _local?: boolean })._local) continue; // pending preview carries no signed target
+    if (m.dir === "out" && (m.kind === "question" || m.kind === "task"))
+      return m.target?.address === thread.peer ? m.target.agent_id : undefined;
+    // A paged view may contain the answer without its original question.
+    if (m.from === thread.peer && (m.kind === "answer" || m.kind === "result") && m.agent_id)
+      return m.agent_id;
+  }
+  return undefined;
 }
 
 /** What a device thread's composer may send to peer. */

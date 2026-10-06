@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import { threadAgentID, threadAuthor } from '../web/src/model.ts';
+
+const host = 'owner/laptop', agent = 'chosen-agent';
+const request = {id:'request',dir:'out',from:host,to:host,kind:'question',target:{address:host,agent_id:agent}};
+const answer = {id:'answer',dir:'out',from:host,to:host,kind:'answer',agent_id:agent,reply_to:request.id};
+const o = {me:{address:host,agent:true},person:{person:'owner',address:host}};
+assert.equal(threadAgentID({peer:host,messages:[request,answer]}), agent);
+assert.equal(threadAgentID({peer:host,messages:[answer]}), agent, 'paged answer retains named executor');
+assert.equal(threadAgentID({peer:'other/device',messages:[request,answer]}), undefined, 'another host cannot supply a target');
+assert.equal(threadAgentID({peer:host,messages:[{...request,target:undefined}]}), undefined);
+assert.equal(threadAgentID({peer:host,messages:[request,answer,{...request,id:'default',target:undefined}]}), undefined, 'latest default request does not switch back to an older named executor');
+assert.equal(threadAgentID({peer:host,messages:[request,answer,{...request,id:'pending',target:undefined,_local:true}]}), agent, 'pending preview cannot change the verified executor');
+const who = threadAuthor(answer,o,{[agent]:'Selected agent'},host,[request,answer]);
+assert.equal(who.name,'Selected agent');
+assert.equal(who.agent,true);
+assert.equal(who.mine,false,'own agent answer appears opposite the human request');
+assert.equal(threadAuthor(request,o,{},host,[request,answer]).mine,true);
+assert.equal(threadAuthor(answer,o,{},host,[{...request,state:'manual'},answer]).mine,true,'manual answer remains human');
+console.log('Direct agent follow-up identity and self answer authorship PASS');

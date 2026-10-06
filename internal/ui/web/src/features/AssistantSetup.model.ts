@@ -50,6 +50,18 @@ export const STATE_SENTENCE: Record<string, string> = {
 
 export const tools = (v: T.AssistantSetupView | null | undefined) => v?.harnesses || [];
 
+/** Native sessions may check in while this window is away. Read once on
+ * returning; never poll or install anything from a focus event. */
+export function watchSetupFocus(doc: Document, refresh: () => void): () => void {
+  const visible = () => { if (doc.visibilityState !== "hidden") refresh(); };
+  doc.defaultView?.addEventListener("focus", visible);
+  doc.addEventListener("visibilitychange", visible);
+  return () => {
+    doc.defaultView?.removeEventListener("focus", visible);
+    doc.removeEventListener("visibilitychange", visible);
+  };
+}
+
 /** A tool can be chosen when the server found it and can set it up safely. */
 export const selectable = (h: T.AssistantSetupHarness) => h.detected && h.supported;
 
