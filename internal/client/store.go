@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -979,7 +979,7 @@ type FileInfo struct {
 // recordSubs are the received records between devices that are never a
 // message: group proofs, contexts, invitations, consents and withdrawals,
 // and Drive space records (a conversation's view leaves them out too).
-const recordSubs = `('root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+const recordSubs = `('read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
 
 // inbox lists received messages; a local request to this device's own
 // agent (agentjob.go) is not one, nor is a record between devices.

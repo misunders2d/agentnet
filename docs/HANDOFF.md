@@ -4,7 +4,44 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Current release — October 6 v0.8.1
+## In progress — v0.8.2
+
+The local candidate adds group human guests, explicit permanent-member invites,
+retract/refresh controls, corrected OKs/navigation, current edited previews,
+person notification controls, worker wake, quieter internal records and
+whole-app CLI updates. The owner approved encrypted exact read-state sharing
+among current verified own human devices. Private Project organization is a
+separate [design discussion](DECISIONS.md#10-private-projects-and-selected-guest-context-discussion-oct-6),
+not part of this bug-fix release.
+
+Three explicit reader capabilities preserve mixed-version behavior: `hgg1`
+for complete group human guests, `gic1` for nonce-bound invitation refresh and
+cancellation, and `rd1` for read-state synchronization. `rm1` implies none of
+these. All live sessions on a recipient must support the new record before
+handoff; otherwise the unchanged encrypted copy waits. Existing rm1-implied
+tokens were omitted from advertisements to preserve the 16-token limit.
+
+Read-state records contain bounded batches of exact `(conversation, original
+author fingerprint, logical message ID)` references. They carry no text,
+notifications, visible chat entry or job. Current self-person human keys and
+roster chains are checked at admission and delivery. Durable local marks and
+the existing outbox reconcile reconnects, restarts and newly linked devices;
+marks arriving before their messages are retained. No timestamp watermark or
+new polling loop is introduced. Removed devices, pending keys and conflicted
+persons cannot share read state.
+
+App-managed `agentnet update` uses the authenticated local About updater.
+It refuses active work before staging, prevents new claims during handoff,
+and preserves custom commands. A separately managed daemon sharing the home
+must be stopped when idle first. Standalone CLI and relay updates remain
+separate operations. v0.8.1 users use About once to reach this command behavior.
+
+Focused native/browser regressions and rendered Comic/Classic/Zoom checks
+pass for the implemented paths. Full candidate CI and release asset checks
+are still pending. No live installations have been changed for v0.8.2;
+physical Windows/macOS updates and real-model topic behavior remain unverified.
+
+## Current published release — October 6 v0.8.1
 
 [v0.8.1](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) is published
 from `daddab38d229f695936a6d975702668b381f3135`, based on v0.8.0 (`d99dcc85`). It fixes

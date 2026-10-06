@@ -148,8 +148,36 @@ func TestGroupGuestPublicJourney(t *testing.T) {
 	if err = json.Unmarshal([]byte(capturedRaw), &captured); err != nil {
 		t.Fatal(err)
 	}
+	// A late legacy session holds the exact signed end until its reader updates.
+	signCapsAfter(t, guest, oldCaps)
 	if _, err = w.bob.DismissParticipation(tctx(t), p.PID); err != nil {
 		t.Fatal(err)
+	}
+	var lateID, lateRaw string
+	if err = w.bob.store.db.QueryRow(`SELECT id,envelope FROM outbox WHERE recipient=? AND pid=? AND sub='event' AND json_extract(body,'$.type')='dismiss'`, guest.Address, p.PID).Scan(&lateID, &lateRaw); err != nil {
+		t.Fatal(err)
+	}
+	if state, _, _, e := w.bob.store.outboxState(lateID); e != nil || state != stateConvWaiting {
+		t.Fatalf("late legacy guest end must wait: %q %v", state, e)
+	}
+	if x, e := guest.Participation(p.PID); e != nil || x.State != PartActive {
+		t.Fatalf("unsupported guest received end: %+v %v", x, e)
+	}
+	roomReader(t, guest)
+	features, e := w.bob.relayFeatures(tctx(t))
+	if e != nil {
+		t.Fatal(e)
+	}
+	w.bob.releaseConv(tctx(t), features)
+	if err = w.bob.FlushOutbox(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	var restoredRaw string
+	if err = w.bob.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, lateID).Scan(&restoredRaw); err != nil {
+		t.Fatal(err)
+	}
+	if restoredRaw != lateRaw {
+		t.Fatal("reader update replaced immutable end copy")
 	}
 	eventually(t, "guest ended", func() bool { x, e := guest.Participation(p.PID); return e == nil && x.State == PartDismissed })
 	eventually(t, "all members apply guest dismissal", func() bool { x, e := carol.Participation(p.PID); return e == nil && x.State == PartDismissed })

@@ -862,6 +862,12 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	if env.V != envelope.Version2 {
 		return true, nil
 	}
+	if handled, allowed, err := a.mayDeliverReadSync(env); handled {
+		return allowed, err
+	}
+	if handled, allowed, err := a.groupGuestDeliveryGate(env); handled {
+		return allowed, err
+	}
 	if handled, allowed, err := a.mayDeliverGroupWithdrawal(env); handled {
 		return allowed, err
 	}

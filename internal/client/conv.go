@@ -114,8 +114,13 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying conversation roots: %v", err)
 			a.convWork.due(convHistory)
 		}
+		reads, readErr := a.syncReadMarks()
+		if readErr != nil {
+			a.Logf("copying read state: %v", readErr)
+			a.convWork.due(convHistory)
+		}
 		more := a.historyStep(ctx)
-		if roots || more {
+		if roots || reads || more {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -145,7 +150,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapGroup, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapRoom, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 16-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapConvClear, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapGroup, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapReadSync, protocol.CapRoom, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 16-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -925,6 +930,8 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			key, _, found, err := a.store.peer(to)
 			switch {
 			case err != nil || !found:
+			case w.required == protocol.CapReadSync:
+				ok = a.requireParticipationCaps(ctx, key, w.required) == nil
 			case w.required == protocol.CapAgentReaction && w.conv == "":
 				// A device thread's assistant reaction: no person gate either.
 				ok = a.requireParticipationCaps(ctx, key, w.required) == nil && a.assistantReactionCaps(ctx, key, "", "", w.agentID) == nil
@@ -1051,6 +1058,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return hold(reasonProof, err.Error())
 		}
 		return err
+	}
+	if in.Sub == envelope.SubReadSync {
+		return a.admitReadSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	root, err := protocol.ParseConvRoot(in.Root)
 	if err != nil || root.ID() != in.Conv {

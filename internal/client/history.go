@@ -203,7 +203,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 	for _, c := range copies {
 		data, _ := json.Marshal(c.env)
 		body := ""
-		if c.required == protocol.CapGroup {
+		if c.required == protocol.CapGroup || c.required == protocol.CapReadSync {
 			body = c.in.Body
 		} else if c.in.Sub == envelope.SubHistory {
 			var item HistoryItem

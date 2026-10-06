@@ -412,7 +412,7 @@ for (const ending of ['original', 'self']) {
 // Public group guest APIs, real signed envelopes, chosen old context only.
 {
  const w=await world(), {alice:a,bob:b,carol:g,mallory:other}=w;
- for(const e of w.users){e.realm='f'.repeat(32);await w.caps(e,[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapExternalParticipation,wire.CapHumanParticipation,wire.CapGroupHumanParticipation,wire.CapGroup,wire.CapRoom]);}
+ for(const e of w.users){e.realm='f'.repeat(32);await w.caps(e,[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapExternalParticipation,wire.CapHumanParticipation,wire.CapGroupHumanParticipation,wire.CapGroupInvitationControl,wire.CapGroup,wire.CapRoom]);}
  const conv=await a.createGroup('Guest scope');
  const invitation=await a.inviteGroup({conv,person:b.me.person});
  await w.drain(b);await b.decideGroup({id:invitation.id,accept:true});await w.drain(a);
@@ -421,7 +421,7 @@ for (const ending of ['original', 'self']) {
 
  check(!(await b.groupThread(conv)).members.find(m=>m.person===b.me.person).admin,'ordinary member fixture');
  // Old rm1 target/member sessions must fail before any guest invite is saved.
- const names=[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapHumanParticipation,wire.CapGroup,wire.CapRoom];
+ const names=[wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapHumanParticipation,wire.CapGroupInvitationControl,wire.CapGroup,wire.CapRoom];
  for(const legacy of [g,a]){await w.caps(legacy,names);check(!(await b.checkHuman({conv,host:g.address})).ready,'mixed v081/v082 requires update');await refuses(()=>b.changeHuman('invite',{conv,host:g.address}),/update/i);await w.caps(legacy,[...names,wire.CapGroupHumanParticipation]);}
  const old=await b.sendDM({conv,body:'chosen old group context'});
  await b.sendDM({conv,body:'unshared old group context'});await w.drain(a);
@@ -441,6 +441,20 @@ for (const ending of ['original', 'self']) {
  check((await g.groupThread(conv)).messages.some(m=>m.body==='new group member turn'),'guest reads captured new turn');
  await g.sendDM({conv,pid:p.pid,body:'new group guest turn'});await w.drain(a);await w.drain(b);
  check((await b.groupThread(conv)).messages.some(m=>m.body==='new group guest turn'),'guest writes with exact scope');
+ // A reader may start an older signed session during a file upload. The
+ // actual postStored final gate must stop the message, retaining sealed bytes.
+ const fileTurn=await b.sendDM({conv,body:'Capability handoff check',files:[{name:'handoff.txt',size:4,bytes:new TextEncoder().encode('TEST')}]});
+ const fileCopy=(await b.store.all('outbox')).find(r=>r.lid===fileTurn.lid&&r.to===g.address);
+ const sealedFileCopy=fileCopy.envelope,capturedFileScope=wire.humanJSON(fileCopy.human);
+ const upload=b.uploadBlob.bind(b);let readerDowngraded=false;
+ b.uploadBlob=async(...args)=>{await upload(...args);if(!readerDowngraded){readerDowngraded=true;await w.caps(g,names);}};
+ await b.post(fileCopy);b.uploadBlob=upload;
+ const blockedFileCopy=await b.store.get('outbox',fileCopy.id);
+ check(readerDowngraded&&!w.posts.some(raw=>wire.parseEnvelope(raw).id===fileCopy.id),'old signed hgg1 reader appearing during upload blocks actual final message handoff');
+ check(blockedFileCopy.envelope===sealedFileCopy&&wire.humanJSON(blockedFileCopy.human)===capturedFileScope,'final hgg1 refusal preserves sealed message and captured scope');
+ await w.caps(g,[...names,wire.CapGroupHumanParticipation]);
+ await b.post(blockedFileCopy);
+ check(w.posts.some(raw=>wire.parseEnvelope(raw).id===fileCopy.id),'same sealed copy can retry after current hgg1 support is restored');
  await refuses(()=>g.sendDM({conv,body:'no scope'}),/member|admission|guest/i);
  const second=await b.changeHuman('invite',{conv,host:other.address});await w.drain(other);await w.drain(a);await other.changeHuman('decide',{pid:second.pid,accept:true});await w.drain(b);await w.drain(a);
  await b.discloseHumanPass();await a.discloseHumanPass();await w.drain(g);await w.drain(other);await g.retryHeld();await other.retryHeld();

@@ -21,12 +21,15 @@ export const SubReaction = "reaction", SubRevision = "revision", SubRetraction =
 export const SubStatus = "status", SubDecision = "decision"; // headless: a host's per-request state; an operator's decision to a host (hdl1)
 export const CapHeadless = "hdl1";        // protocol cap: reads status controls and version 2 reports, sends decisions
 export const CapExternalParticipation = "apx1"; // selected DM excerpts and exact outside-host participation
+export const CapGroupHumanParticipation = "hgg1"; // complete group human guest lifecycle; NOT implied by rm1
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
+export const CapReadSync = "rd1", SubReadSync = "read-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
 export const SubGroupProof = "group-proof", SubGroupContext = "group-context"; // bounded quiet carriers; no capability advertisement
 export const SubGroupInvite = "group-invite", SubGroupConsent = "group-consent", SubGroupWithdrawal = "group-withdrawal";
+export const CapGroupInvitationControl = "gic1"; // nonce proposals + signed cancellation; not rm1-implied
 export const CapGroup = "grp1"; // protocol constant only; absent from advertised defaults until Engine parity
 export const SubDriveSpace = "drive-space"; // envelope.SubDriveSpace: a conversation's shared Drive space record (version 2, quiet)
 export const CapDrive = "drv1";           // protocol.CapDriveSpace: this device reads Drive space records
@@ -668,6 +671,10 @@ async function checkV2(n) {
     if (n.target && (!n.target.agent_id || !["question", "task"].includes(n.kind) || n.target.address !== n.to || !validFingerprint(n.target.fingerprint))) throw new Error("a device message target must name an agent on its exact recipient");
     return;
   }
+  if(n.sub===SubReadSync) {
+    if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || n.attachments.length || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
+    parseReadSync(n.body);return;
+  }
   if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
   if (!n.root || utf8.encode(n.root).length > convRootSizeLimit(n.root)) throw new Error("missing or oversized conversation root");
   if (!subs.has(n.sub)) throw new Error("unknown sub " + n.sub);
@@ -754,7 +761,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if (inner.sub === SubRootSync && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubRootSync || inner.sub === SubReadSync) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -841,7 +848,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if (n.sub === SubRootSync && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubRootSync || n.sub === SubReadSync) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -983,6 +990,15 @@ export function validLabel(s) {
 // bytes, or an already parsed value) with only the named fields. A parsed
 // value is measured as Go would write it (fitsRecord), which is how devices
 // write records.
+export function parseReadSync(json) {
+ const r=strictRecord(json,32768,"read sync",{v:"number",person:"string",roster:"string",refs:"array"});
+ if(r.v!==1 || !validID(r.person) || !validHash(r.roster) || !r.refs?.length || r.refs.length>64)throw Error("read sync: invalid owner or references");
+ const seen=new Set();r.refs=r.refs.map(ref=>{
+  const x=strict(ref,"read reference",{conv:"string",fingerprint:"string",lid:"string"});
+  if(typeof x.conv!=="string" || x.conv && !validHash(x.conv) || !validFingerprint(x.fingerprint) || !validID(x.lid))throw Error("read sync: invalid reference");
+  const key=x.conv+"|"+x.fingerprint+"|"+x.lid;if(seen.has(key))throw Error("read sync: duplicate reference");seen.add(key);return x;
+ });return r;
+}
 function strictRecord(json, max, what, fields) {
   if (typeof json === "string" && utf8.encode(json).length > max) throw new Error(what + ": record too large");
   return strict(typeof json === "string" ? JSON.parse(json) : json, what, fields);
@@ -1591,7 +1607,7 @@ export async function verifyGroupProofPage(root, page, resolve, realm, { previou
 
 export const groupContextJSON = (p) => '{"root":' + rootJSON(p.root) + ',"proof":' + groupArray(p.proof, groupStateJSON) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals, groupWithdrawalJSON) + (p.memberships?.length ? ',"memberships":' + groupArray(p.memberships, eventJSON) : '') + "}";
 // Exact json.Marshal field order from protocol.GroupInvitation/GroupConsent.
-export const groupInvitationJSON = p => '{"v":' + goInt(p.v,"version") + ',"root":' + rootJSON(p.root) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals,groupWithdrawalJSON) + ',"target":' + goString(p.target) + ',"roster":' + goString(p.roster) + ',"seq":' + goInt(p.seq,"seq") + ',"prev":' + goString(p.prev) + ',"history":' + groupArray(p.history,r => '{"lid":'+goString(r.lid)+',"author":'+goString(r.author)+',"hash":'+goString(r.hash)+'}') + '}';
+export const groupInvitationJSON = p => '{"v":' + goInt(p.v,"version") + ',"root":' + rootJSON(p.root) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals,groupWithdrawalJSON) + ',"target":' + goString(p.target) + ',"roster":' + goString(p.roster) + ',"seq":' + goInt(p.seq,"seq") + ',"prev":' + goString(p.prev) + ',"history":' + groupArray(p.history,r => '{"lid":'+goString(r.lid)+',"author":'+goString(r.author)+',"hash":'+goString(r.hash)+'}') + (p.nonce ? ',"nonce":'+goString(p.nonce) : '') + '}';
 export const groupInvitationID = p => hashOf(utf8.encode("agentnet-group-invitation-v1\n" + groupInvitationJSON(p)));
 // client.contentHash: attachment descriptors omit per-recipient ciphertext.
 // Exact Go struct field order/null bytes are required by signed history refs.
@@ -1609,8 +1625,9 @@ export function groupHistoryContentHash(conv,n) {
   return hashOf(utf8.encode(json+'}'));
 }
 export function parseGroupInvitation(json) {
-  const f = strictRecord(json,MaxGroupState,"group invitation",{v:"int",root:"object",state:"object",withdrawals:"array",target:"string",roster:"string",seq:"int",prev:"string",history:"array"});
+  const f = strictRecord(json,MaxGroupState,"group invitation",{v:"int",root:"object",state:"object",withdrawals:"array",target:"string",roster:"string",seq:"int",prev:"string",history:"array",nonce:"string"});
   const p = {v:f.v || 0,root:parseGroupRoot(f.root || {}),state:parseGroupState(f.state || {}),withdrawals:f.withdrawals ? f.withdrawals.map(parseGroupWithdrawal) : null,target:f.target || "",roster:f.roster || "",seq:f.seq || 0,prev:f.prev || "",history:f.history ? f.history.map(r => {const x=strict(r,"group history ref",{lid:"string",author:"string",hash:"string"});return {lid:x.lid || "",author:x.author || "",hash:x.hash || ""};}) : null};
+  if(f.nonce){if(!validID(f.nonce))throw Error("group: invalid invitation nonce");p.nonce=f.nonce;}
   if (p.v!==1 || !validID(p.target) || !validHash(p.roster) || p.state.realm!==p.root.realm || p.seq!==p.state.seq+1) throw Error("group: invalid invitation binding");
   validateGroupAdmission({conv:p.state.conv,realm:p.root.realm,person:p.target,roster:p.roster,seq:p.seq,prev:p.prev,history:p.history,by:p.root.creator.fingerprint});
   fitsRecord(groupInvitationJSON(p),MaxGroupState,"group invitation"); return p;
@@ -1623,7 +1640,7 @@ export const groupConsentJSON = c => '{"v":'+goInt(c.v,"version")+',"invitation"
 export function parseGroupConsent(json) {
   const f = strictRecord(json,MaxGroupState,"group consent",{v:"int",invitation:"string",decision:"string",admission:"object"});
   const c={v:f.v || 0,invitation:f.invitation || "",decision:f.decision || "",...(f.admission ? {admission:parseGroupAdmission(f.admission)} : {})};
-  if(c.v!==1 || !validHash(c.invitation) || !(c.decision==="declined"&&!c.admission || c.decision==="accepted"&&c.admission)) throw Error("group: explicit accept or decline required");
+  if(c.v!==1 || !validHash(c.invitation) || !((c.decision==="declined"||c.decision==="cancelled")&&!c.admission || c.decision==="accepted"&&c.admission)) throw Error("group: explicit accept or decline required");
   if(c.admission) validateGroupAdmission(c.admission); return c;
 }
 export function parseGroupContext(json) {

@@ -16,6 +16,9 @@ This record starts with v0.8.1; earlier releases remain on the
 - Comic keeps running requests out of approval counts, offers Stop separately,
   and opens the request's actual topic without losing an unsent draft.
 - Edited or deleted messages update conversation previews.
+- Reading a message clears its unread state on your other current, verified
+  human devices. Exact message references are encrypted; newer unseen messages
+  stay unread, and offline devices catch up after reconnecting.
 - Notification settings show one row per verified person, with separate
   conversation mutes that preserve existing choices.
 - New Chat prefers a person's populated conversation; conversation and topic
@@ -29,6 +32,13 @@ This record starts with v0.8.1; earlier releases remain on the
 - The app-managed `agentnet update` command uses the About page's whole-app
   updater, updating the desktop app and its bundled command together. Active
   jobs block preparation; standalone CLI and relay deployments remain separate.
+
+### Compatibility
+
+- Update participating devices for group human guests, refreshed/retracted
+  invitations and linked-device read-state synchronization. Older readers hold
+  the new records for an update; permissions and existing message histories are
+  preserved. Read state is shared only among your own verified human devices.
 
 ### Documentation
 
