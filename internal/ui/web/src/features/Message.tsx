@@ -100,6 +100,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
     : who.mine ? "rounded-[20px] bg-mine text-mine-ink" + (last ? " rounded-br-md" : "")
       : "rounded-[20px] bg-theirs text-ink" + (last ? " rounded-bl-md" : "");
 
+  const needsHumanDetail = isThreadMsg(m) ? "" : m.job_detail || (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
+
   const body = (
     <div tabIndex={wide && live && !selecting ? 0 : undefined} role={wide && live ? "group" : undefined} aria-label={wide && live ? who.name + ", " + timeOf(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
@@ -158,7 +160,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
         {confirm !== null && <DeleteMessage open={confirm} onOpenChange={setConfirm} m={m} ctx={ctx} />}
         {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
       </div>
-      {!readOnly && !isThreadMsg(m) && m.job_detail && m.exec?.state === "needs_human" && !(m.actions || []).length && <section data-agent-needs-you tabIndex={-1} aria-label="Your agent says" className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4"><p className="font-bold">Your agent couldn’t finish — it needs your answer</p><p className="pt-1 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{m.job_detail}</p><p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p></section>}
+      {!readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <section data-agent-needs-you tabIndex={-1} aria-label="Your agent says" className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4"><p className="font-bold">Your agent couldn’t finish — it needs your answer</p><p className="pt-1 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{needsHumanDetail}</p><p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p></section>}
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
       {!readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
         <div className="mx-auto mt-2.5 w-full max-w-[600px] px-3 empty:hidden sm:px-4">

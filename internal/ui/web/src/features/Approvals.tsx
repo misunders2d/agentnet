@@ -11,7 +11,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { IconDeviceMobile, IconUsersGroup } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, firstLine, when } from "../model";
+import { agentName, firstLine, isWorkingItem, when } from "../model";
 import { focusedIn } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
@@ -100,22 +100,25 @@ export function OksView() {
 
   const items: Item[] = [];
   const elsewhere: T.ConvItem[] = [];
+  const working: T.ConvItem[] = [];
   if (o) {
     for (const r of reviewAsks(o)) items.push({ key: "r:" + r.id, at: r.at, node: <ReviewRow r={r} o={o} names={names} /> });
     for (const c of o.needs_you || []) {
-      if (c.decide_on) elsewhere.push(c); // decided on another device: listed apart, not counted
+      if (isWorkingItem(c)) working.push(c);
+      else if (c.decide_on) elsewhere.push(c); // decided on another device: listed apart, not counted
       else items.push({ key: "n:" + c.conv + ":" + (c.id || c.pid), at: c.at, node: <ConvRow c={c} o={o} /> });
     }
     for (const g of groupInvites(o)) items.push({ key: "g:" + g.id, at: "", node: <GroupRow g={g} o={o} /> });
     for (const l of deviceAsks(o)) items.push({ key: "d:" + l.id, at: l.requested_at, node: <DeviceRow l={l} /> });
     items.sort(newestFirst);
     elsewhere.sort(newestFirst);
+    working.sort(newestFirst);
   }
   const held = [...(o?.held || [])].sort(newestFirst);
   const joined = (o?.review || []).filter(isSelfConsent).sort(newestFirst);
   const security = (o?.review || []).filter((r) => r.reason === "device_admin").sort(newestFirst);
   const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r) && r.reason !== "device_admin");
-  const keys = [...items.map((i) => i.key), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
+  const keys = [...items.map((i) => i.key), ...working.map((c) => "w:" + c.conv + ":" + c.id), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
   const { root, title, land } = useLanding(keys.join("\n"));
 
   if (!o) return loadError ? <Failed text={loadError} retry={() => store.retryNow()} /> : <Loading />;
@@ -132,7 +135,16 @@ export function OksView() {
             {items.map((i) => <Listed key={i.key} k={i.key} land={land}>{i.node}</Listed>)}
           </ul>
         </div>
-      ) : !held.length && !elsewhere.length && <AllClear />}
+      ) : !held.length && !elsewhere.length && !working.length && <AllClear />}
+      {working.length > 0 && (
+        <section className="px-4 pt-6" aria-labelledby="oks-working">
+          <h2 id="oks-working" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Working</h2>
+          <p className="pt-1 text-[14px] text-text-2">These requests are already running. Stop them here if needed.</p>
+          <ul className="flex flex-col gap-3 pt-3" aria-label="Working">
+            {working.map((c) => { const k = "w:" + c.conv + ":" + c.id; return <Listed key={k} k={k} land={land}><ConvRow c={c} o={o} /></Listed>; })}
+          </ul>
+        </section>
+      )}
       {held.length > 0 && (
         <section className="px-4 pt-6" aria-labelledby="oks-held">
           <h2 id="oks-held" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Asked of you</h2>

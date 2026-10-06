@@ -20,8 +20,8 @@ type Item =
 const RUN = 5 * 60e3;
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function Timeline({ ctx, messages, focus, selected, onSelect, empty, footer, end }: {
-  ctx: Ctx; messages: AnyMsg[]; focus?: string; selected: string[] | null; onSelect: (id: string) => void; empty: ReactNode;
+export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, empty, footer, end }: {
+  ctx: Ctx; messages: AnyMsg[]; focus?: string; focusSeq?: number; selected: string[] | null; onSelect: (id: string) => void; empty: ReactNode;
   footer?: ReactNode;      // a snackbar over the timeline's end (Bring back): the last lines stay clear of it
   end?: ReactNode;         // after the last message (a topic that is done or archived says so)
 }) {
@@ -56,7 +56,8 @@ export function Timeline({ ctx, messages, focus, selected, onSelect, empty, foot
     else setFresh((n) => n + added.filter((m) => !ev(m)).length);
   }, [messages]);
 
-  useEffect(() => { if (focus && seen.current && box.current) flash(box.current, focus, true); }, [focus]);
+  const focused = focus && messages.some(m => m.id === focus) ? focus : undefined;
+  useEffect(() => { if (focused && seen.current && box.current) flash(box.current, focused, true); }, [focused, focusSeq]);
 
   // Pictures, reactions and the typing line change the height, and a
   // phone's keyboard (or a growing message box) shrinks the view: the

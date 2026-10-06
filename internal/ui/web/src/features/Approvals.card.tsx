@@ -84,7 +84,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const named = mine.named;
   const notice = isThreadMsg(m) && m.kind === "message" && m.status === "review_notice";
   const conv = dm?.id || thread?.id || "";
-	const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
+	const said = (isThreadMsg(m) ? m.detail : m.job_detail) || (phase === "needs_human" ? (o?.needs_you || []).find(c => c.conv === conv && c.id === m.id)?.why : "") || "";
 	const proposal = m.proposal;
 
   const permissionPerson = thread?.permission_person;
@@ -220,8 +220,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
       </ConfirmSheet>
       <ConfirmSheet open={sheet === "approve"} onOpenChange={(v) => setSheet(v ? "approve" : null)}
         title={"Approve " + permissionName + "?"}
-        body={capital(agent) + " answers questions from " + permissionName + (permissionPerson ? " on all current and future verified devices." : " on this device.") + " Removing a device or a person conflict ends person permission; key changes block until trusted. Your question settings apply; tools you already allow keep their effects. Tasks still wait for you."}
-        confirm={"Approve " + permissionName} onConfirm={() => act({ do: "approve", id: permissionTarget }, permissionName + "’s questions are answered automatically from now on.")}
+        body={capital(agent) + " answers questions from " + permissionName + (permissionPerson ? " on all current and future verified devices." : " on this device.") + " Removing a device or a person conflict ends person permission; key changes block until trusted. Your question settings apply; tools you already allow keep their effects. Tasks still wait for you. This held question still waits: choose Allow once to answer it."}
+        confirm={"Approve " + permissionName} onConfirm={() => act({ do: "approve", id: permissionTarget }, permissionName + "’s future questions are answered automatically. This question still needs Allow once.")}
         other="Just this one" onOther={allow}>
         <TurnOff cmd={"agentnet unapprove " + permissionTarget} what="Turns it off. Their questions wait for you again." />
       </ConfirmSheet>

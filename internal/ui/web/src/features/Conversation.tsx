@@ -89,7 +89,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
       <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
-      <Timeline ctx={ctx} messages={messages} focus={open.focus} selected={selected} onSelect={toggle} end={<TopicEnd ctx={ctx} />}
+      <Timeline ctx={ctx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} selected={selected} onSelect={toggle} end={<TopicEnd ctx={ctx} />}
         footer={left && (
           // The room panel's words; the timeline keeps its last lines clear of it.
           <div role="status" className="pop-in flex items-center gap-3 rounded-2xl stroke bg-ink py-2 pl-4 pr-2 text-canvas shadow-pop">

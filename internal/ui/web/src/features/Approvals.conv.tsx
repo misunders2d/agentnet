@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { IconDeviceDesktop, IconDeviceLaptop, IconDeviceMobile } from "@tabler/icons-react";
 import type { Api, T } from "../api";
 import { useApp } from "../context";
-import { agentName, deviceKind, firstLine } from "../model";
+import { agentName, deviceKind, firstLine, isWorkingItem } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
@@ -60,15 +60,17 @@ function useAct() {
 function RequestRow({ c, o }: Props) {
   const { isOpen, go } = useOpen();
   const { busy, run } = useAct();
-  const [sheet, setSheet] = useState<"" | "decline" | "close">("");
+  const [sheet, setSheet] = useState<"" | "decline" | "close" | "stop">("");
   const acts = c.decide_on ? [] : c.actions || [];
   const can = (a: string) => acts.includes(a);
   const human = c.reason === Reason.needsHuman;
+  const working = isWorkingItem(c);
   const title = convTitle(c, o);
   const who = senderOf(c, o);
   const kind = c.kind === "task" ? "task" : "question";
   const said = human && c.why ? whyWords(c.why, c.peer, o) : "";
-  const actions = c.decide_on ? <DecideOn address={c.decide_on} o={o} /> : acts.length ? <>
+  const actions = c.decide_on ? (working ? <p className="mt-1 text-[14px] text-text-2">Working on {deviceWords(c.decide_on, o)}.</p> : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
+    {can("cancel") && <Button variant="danger" size="sm" disabled={!!busy} onClick={() => setSheet("stop")}>Stop</Button>}
     {can("accept") && <Button variant={human ? "outline" : "act"} size="sm" disabled={!!busy}
       onClick={() => run("accept", (api) => api.act({ do: "accept", id: c.id }), human ? "Running it again." : "Allowed once.")}>
       {busy === "accept" ? (human ? "Starting…" : "Allowing…") : human ? "Ask again" : "Allow once"}
@@ -81,11 +83,14 @@ function RequestRow({ c, o }: Props) {
       <OpenCard onOpen={() => go("dm", c.conv, c.id)} current={isOpen(c.conv, c.id)} label={title + ". Open it in the chat."}
         face={human ? <AgentAvatar seed={c.pid || c.peer} size={40} /> : <SenderFace c={c} o={o} />} actions={actions}
         detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
-        <Body tag={human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
-          meta={capital(inChat(c.conv, o)) + (human || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
+        <Body tag={working ? <Tag tone="agent">Working</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
+          meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : human || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
           {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}
         </Body>
       </OpenCard>
+      <ConfirmSheet open={sheet === "stop"} onOpenChange={(v) => setSheet(v ? "stop" : "")}
+        title="Stop this request?" body="It stops working on this now. Whatever it already did stays done." confirm="Stop" tone="danger"
+        onConfirm={() => run("cancel", (api) => api.act({ do: "cancel", id: c.id }), "Stopping.")} />
       <DeclineSheet open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : "")} who={who === "You" ? "Your other device" : who} kind={kind}
         onDecline={(reason) => run("decline", (api) => api.act({ do: "decline", id: c.id, reason }), "Declined. " + (who === "You" ? "Your other device" : who) + " is told.")} />
       <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : "")}

@@ -147,7 +147,7 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
   const items: ChatItem[] = [];
   // What waits for this device's decision in each chat (one decided on another device is not counted).
   const decide = new Map<string, number>();
-  for (const c of o.needs_you || []) if (!c.decide_on) decide.set(c.conv, (decide.get(c.conv) || 0) + 1);
+  for (const c of decidable(o)) decide.set(c.conv, (decide.get(c.conv) || 0) + 1);
   const chats = new Map<string, T.DMSummary[]>();
   for (const d of o.dms || []) {
     // Group/guest rooms keep their own audience. Only verified person IDs
@@ -552,9 +552,10 @@ export function agentWhere(host: T.PersonView | null | undefined, address: strin
 /** Why a conversation item waits (client.Review*). */
 export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_human", invite: "agent_invite", heldTurn: "person_turn" } as const;
 
-/** decidable: the items this device decides. One with decide_on is decided
- *  on that device (a browser runs no agent), so it is shown but never counted. */
-export const decidable = (o: T.Overview | null) => (o?.needs_you || []).filter((c) => !c.decide_on);
+/** Working is stoppable, but never an outstanding approval. */
+export const isWorkingItem = (c: T.ConvItem) => (c.actions || []).includes("cancel");
+/** Items this device decides; other-device and running items stay visible apart. */
+export const decidable = (o: T.Overview | null) => (o?.needs_you || []).filter((c) => !c.decide_on && !isWorkingItem(c));
 
 export const chatOf = (conv: string, o: T.Overview | null) => (o?.dms || []).find((d) => d.id === conv) || null;
 

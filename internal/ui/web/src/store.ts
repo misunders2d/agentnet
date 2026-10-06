@@ -14,7 +14,7 @@ export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
 // A thread names its agent's device (peer) whenever that is known: an
 // agent's topics are one conversation on screen, and what is on screen must
 // not change identity when the messages arrive (store.open fills it in).
-export type Open = null | { kind: "dm"; id: string; focus?: string } | { kind: "thread"; id: string; focus?: string; peer?: string };
+export type Open = null | { kind: "dm"; id: string; focus?: string; focusSeq?: number } | { kind: "thread"; id: string; focus?: string; focusSeq?: number; peer?: string };
 
 export interface Draft {
   text: string;
@@ -81,6 +81,8 @@ export class Store {
   private recovering = false;
   private refreshed = new Set<string>(); // conversations already asked about this open
   private toastSeq = 0;
+  private focusSeq = 0;
+  private topicFocusSeq = 0;
   private alive = true;
 
   constructor(readonly host: Host) {
@@ -189,6 +191,7 @@ export class Store {
   // one agent never shows it: the open topic stays until the next is ready.
   async open(o: Open) {
     if (!o) { this.close(); return; }
+    if (o.focus) o = { ...o, focusSeq: ++this.focusSeq };
     if (o.kind === "thread" && !o.peer) {
       const id = o.id;
       const peer = (this.state.views[id] as T.Thread | undefined)?.peer || (this.state.overview?.threads || []).find((t) => t.id === id)?.peer;
@@ -218,9 +221,15 @@ export class Store {
   private viewPatch(o: NonNullable<Open>, v: View | null, same: boolean): Partial<State> {
     if (same && !v) return {};
     if (v) v = { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(o.id, v.messages || []) } as View;
+    // A request arrow chooses its actual topic, including Main flow. Keep
+    // unsent text, staged files and reply intact; only the displayed topic changes.
+    const target = o.kind === "dm" && o.focus && o.focusSeq !== this.topicFocusSeq && v ? (v as T.DMThread).messages?.find(m => m.id === o.focus) : undefined;
+    if (target) this.topicFocusSeq = o.focusSeq || 0;
+    const draft = this.draft(o.id);
+    const drafts = target ? { drafts: { ...this.state.drafts, [o.id]: { ...draft, topic: target.topic || "", newTopic: false } } } : {};
     const typing = same ? {} : { typing: null };
     const views = v ? { views: { ...this.state.views, [o.id]: v } } : {};
-    return o.kind === "dm" ? { dm: (v as T.DMThread | null), thread: null, ...views, ...typing } : { thread: (v as T.Thread | null), dm: null, ...views, ...typing };
+    return o.kind === "dm" ? { dm: (v as T.DMThread | null), thread: null, ...views, ...typing, ...drafts } : { thread: (v as T.Thread | null), dm: null, ...views, ...typing };
   }
 
   // prefetch loads a conversation the person is about to open (a press or a
