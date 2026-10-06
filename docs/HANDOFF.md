@@ -1,8 +1,9 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-## Current work — October 6 v0.8.1 candidate
+## Current release — October 6 v0.8.1
 
-v0.8.0 (`d99dcc85`) is the released base. The active v0.8.1 candidate fixes
+[v0.8.1](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) is published
+from `daddab38d229f695936a6d975702668b381f3135`, based on v0.8.0 (`d99dcc85`). It fixes
 MEL-550–557 plus MEL-558 linked-device history, one person chat with separate
 conversations, solo-group message controls and visible pending invitations.
 Comic also restores direct agent-chat entry points, retains named agents on
@@ -20,11 +21,69 @@ Both endpoints must remain current human devices of the same verified person;
 root signatures and bound roster chains are checked. Old readers wait for an
 update. Person-chat grouping never merges signed roots or their audiences.
 
-Browser regressions cover all three skins at desktop/phone sizes. Focused
-authority and recovery tests pass; complete release checks remain in progress.
-The Linux AppImage, deb and rpm build locally. Native UI behavior is still
-unverified: an isolated test window stayed blank and was closed. Do not
-report browser checks or cross-compilation as native platform qualification.
+Browser regressions cover all three skins at desktop/phone sizes. Final
+[release-candidate CI](https://github.com/misunders2d/agentnet/actions/runs/37461588724)
+passed native Linux/Windows/macOS tests, Linux race shards, the container journey
+and all three desktop builds. The
+[release workflow](https://github.com/misunders2d/agentnet/actions/runs/37466526667)
+passed; all 12 assets were checked against GitHub digests and the 11 packaged
+files against `SHA256SUMS`. A Windows transfer-test timeout passed on the same
+commit's rerun; no test deadline was raised.
+
+The existing relay and one existing Linux AppImage installation were upgraded
+to this exact release with identity preserved and private backups retained.
+The owner confirmed the v0.8.1 About page and update button in the running app.
+This is not qualification of every UI feature: native photo/clipboard behavior,
+interactive Windows/macOS installation, physical-phone history convergence,
+and a future in-app update still need live verification. An earlier isolated
+Linux test window stayed blank and was closed; that failed test was not proof
+of a working native UI.
+
+### Operating and updating an existing installation
+
+- Read [README setup](../README.md#get-started) and the
+  [installation guide](revival/INSTALL.md#updating-and-downgrading). v0.8.0
+  desktop users install v0.8.1's matching desktop package once; later updates
+  use **Settings → About → Update AgentNet**. The standalone CLI updater
+  cannot replace the app.
+- Inspect the actual process, executable path, AgentNet home and service
+  ownership first. The app can attach to an older manually managed daemon;
+  replacing the AppImage alone does not replace that separate daemon. Follow
+  the guide's existing-installation steps rather than starting another daemon.
+- Keep keys, data, permissions, service choices and user configuration.
+  Preserve a rollback copy; never wipe or re-enroll to make an upgrade work.
+  Do not interrupt active jobs or update additional devices without authority.
+  Verify the running UI and command versions separately after reopening.
+- Whole-app updates refresh the bundled command and managed AgentNet hook
+  copies. They do not update the user's agent runtimes or unrelated settings.
+  Unrecognized/custom CLI copies require the owner's explicit replacement
+  choice. New terminal/agent sessions may be needed to see PATH changes.
+- Relay upgrades are separate from desktop upgrades. Back up while stopped,
+  retain the existing volume and secrets, replace the release binary/image,
+  restart, then verify `/v1/version` and unchanged realm identity. An admin's
+  `release set` only recommends a client version; it installs nothing.
+
+### Open follow-ups after v0.8.1
+
+- MEL-539: running work can be shown in OKs without an approval action; the
+  arrow can retain the wrong topic. Standing question approval affects future
+  eligible questions; an already held question still needs its own acceptance.
+  Do not automatically re-run held, failed or interrupted work.
+- MEL-559: edited message text can remain stale in the sidebar preview.
+- MEL-561: chats read on one linked device can remain unread on another.
+- MEL-562: internal review-status JSON can appear in agent messages/topic titles.
+- MEL-564: notification settings repeat people once per conversation and mix
+  person-level allow grants with conversation mutes. Proposed correction is a
+  person-level control with explicit overrides, preserving existing grants.
+- Agent startup latency remains separate work: observed queue waits of 41–47
+  seconds need worker-wake and process-start measurement. Do not label the
+  whole delay a model cold start without timings.
+- MEL-563: a Codex launcher resolving back to itself caused a stuck greeting;
+  the affected host's launcher was repaired separately with owner approval.
+  For a stuck job, inspect the actual launcher/process and job state before
+  blaming the relay or cancelling/resending anything.
+- The owner reported **What's new** doing nothing on v0.8.0. Use the direct
+  release URL as a workaround; v0.8.1 behavior is not yet verified.
 
 ## Previous release — October 5 implementation record
 
@@ -233,7 +292,7 @@ the current behavior above.
 > full navigation is claimed.
 
 > **Previous release — v0.6.0 (historical):** read [NEXT_RELEASE.md](NEXT_RELEASE.md)
-> and [opt-in CLI examples](../README.md#opt-in-cli-selection-in-this-candidate).
+> and the current [CLI guidance](../README.md#guides-for-agents-and-maintainers).
 > Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
 > `49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset
 > digests verified.
@@ -564,7 +623,7 @@ source supports groups and explicit selected receivers as described above.
    - Begin small-scale operator deployment using released `v0.2.1` binaries.
    - Monitor real-world desktop notifications and review notices across Linux desktop environments.
 2. **Community Verification (Call for macOS & Windows Testers)**:
-   - Verify native desktop balloon/banner display on physical macOS and Windows machines (see checklist in [`README.md`](../README.md#useful-areas-to-contribute)).
+   - Verify native desktop balloon/banner display on physical macOS and Windows machines (see current verification limits in [`README.md`](../README.md#guides-for-agents-and-maintainers)).
 3. **Linear Tracking**:
    - Track progress across tickets `MEL-409` through `MEL-435` in project [Agent Net Revived](https://linear.app/mellanni/project/agent-net-revived-c2f1212b3580).
 

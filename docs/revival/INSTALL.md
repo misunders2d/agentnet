@@ -8,11 +8,12 @@ People do not need Go, Rust, Docker or a database server on their computer.
 
 ## People: install and open the app
 
-These package names belong to the October 5 release candidate. Publication
-and finished installer checks are not confirmed by this guide. Once that
-release is published, use its downloads on the
-[AgentNet releases page](https://github.com/misunders2d/agentnet/releases).
-An older release may offer only the command-line program.
+The current published release is
+[v0.8.1](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1), dated
+October 6, 2026. Download the matching package below and `SHA256SUMS` from
+that release. An existing Linux AppImage installation was upgraded and opened
+successfully. Interactive Windows/macOS installation remains unverified
+despite passing native CI and installer builds.
 
 | Device | Package to choose | How to open it |
 | --- | --- | --- |
@@ -26,9 +27,7 @@ An older release may offer only the command-line program.
 **Unsigned installers:** the desktop builds are not signed. Windows and Mac
 may warn or block opening them. Check that the download comes from this
 project's release before allowing it. Opening permission depends on your
-system; the reviewed reports do not qualify those installer prompts on a
-real Windows PC or Mac. A completed, working downloadable installer is not
-qualified by this guide's local test record.
+system; those installer prompts remain unverified on a real Windows PC or Mac.
 
 ### Join your workspace
 
@@ -64,8 +63,13 @@ existing entries. Open a new terminal or coding-agent session after installing
 so it can find `agentnet`; if an already running launcher still has the old
 environment, reopen it or sign out and back in. The installer reports a failed
 PATH update rather than claiming it succeeded. Uninstall removes its own PATH
-entry. Other platforms still need their installed command location checked;
-this is not a promise that every installer changes PATH.
+entry. On Linux/macOS, v0.8.1 installs a managed command at
+`~/.local/bin/agentnet` and adds that directory to supported shell profile
+files. Open a fresh terminal and check which command it resolves: a different
+earlier PATH entry may still win. Custom/unrecognized binaries and symlinks
+are preserved unless the owner chooses **Replace command…** in the app's
+command settings. Agent runtimes and unrelated user configuration are not
+upgraded by updating AgentNet.
 
 For advanced commands, use that installed program or the standalone setup
 below. `agentnet ui` opens the installed app. App builds update as a whole;
@@ -348,7 +352,9 @@ With Docker:
 
 ```sh
 docker compose stop hub
-umask 077; docker compose run --rm --no-deps hub hub backup --out - > hub-backup.tgz
+umask 077
+docker compose run --rm -T --no-deps hub hub backup --data /data --out - < /dev/null > hub-backup.tgz
+gzip -t hub-backup.tgz
 docker compose start hub
 # restore into a new, empty volume:
 docker run --rm -i -v NEWVOLUME:/data agentnet-hub:local hub restore --from - --data /data < hub-backup.tgz
@@ -363,12 +369,75 @@ be copied the same way: stop the daemon, then copy the home directory.
 
 ### Installed app
 
-Update the whole app using the matching desktop package for the release.
-Quit AgentNet before replacing it, then open its icon again. Keep its local
-AgentNet data; it contains your identity and history. The app's bundled
-command refuses `agentnet update`, so the standalone updater below is not
-the app update path. Real installer upgrade/downgrade behavior remains to
-be qualified for this candidate.
+**v0.8.0 to v0.8.1:** install the matching desktop package once. v0.8.0 has
+no in-app installer; its About notice incorrectly directs desktop users to
+`agentnet update`. If **What's new** does nothing, open the
+[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1)
+directly.
+
+- **AppImage:** download `AgentNet-linux-x86_64.AppImage`, verify its entry
+  in `SHA256SUMS`, choose **Quit AgentNet** from the tray, retain a copy of
+  the old AppImage, and replace it at the existing launcher path. Make the
+  new file executable, then open it. A different filename/location requires
+  opening the new file so its launcher registration follows it.
+- **Windows:** download `AgentNet-windows-x64-setup.exe`, quit AgentNet from
+  the tray, then run the installer under the same Windows account using the
+  existing installation location. Keep app data and open AgentNet from Start.
+  A separate `agentnet-windows-amd64.exe` download is only the standalone CLI.
+- **deb/rpm/macOS:** install the matching release package using the existing
+  package/application location. Quit the app before replacing it.
+
+Keep the local AgentNet data directory: it contains identity, history and
+permissions. Do not reset or re-enroll for an ordinary update. Let active jobs
+finish first. Check **Settings → About → v0.8.1**, then inspect
+`agentnet version` in a fresh terminal separately. If an older manually
+managed daemon owns the home, follow [existing installs and recovery](#existing-installs-and-recovery)
+before assuming the new AppImage changed that daemon.
+
+**v0.8.1 and later:** use **Settings → About → Update AgentNet**. It checks
+GitHub's latest published release independently of the server recommendation,
+downloads the matching package and verifies its checksum before handing off
+to the installer/restart. The app's command and managed AgentNet hook copies
+refresh with it. This does not update Claude, Codex, Pi or unrelated settings.
+Custom/unrecognized CLI copies require the owner's **Replace command…**
+choice. Package-manager authorization may be required for deb/rpm.
+
+The app-bundled command refuses `agentnet update`; that command is for the
+standalone installation below. The v0.8.1 Linux AppImage replacement and
+visible About controls have live evidence; a future in-app update and
+interactive Windows/macOS installation remain unverified.
+
+### Relay / Hub
+
+A desktop or CLI update on a laptop does not update the relay. For an
+authorized relay upgrade:
+
+1. Identify the deployed image/binary, service, data directory or volume,
+   configuration and current `/v1/version` response (including `realm_id`).
+2. Obtain and checksum-verify the chosen release binary/image. Retain the
+   previous executable/image and deployment configuration for rollback.
+3. Stop the Hub and make a private [consistent backup](#backup-and-restore).
+   Verify the backup before replacing the deployed binary or image.
+4. Start the new release with the **same data volume and configuration**.
+   Do not run bootstrap/reset steps, recreate an empty volume, or replace
+   identity, TLS or sign-in secrets.
+5. Check service/container health, the running binary's `version`, and HTTPS
+   `/v1/version`. Confirm the requested version and unchanged `realm_id`.
+
+Use the existing service manager or Compose deployment; do not treat a
+standalone CLI update outside the container as a container upgrade. Schema
+compatibility determines whether rollback also needs the pre-update data
+backup. Restoring a backup loses changes made after that backup.
+
+Recommending a client release is a separate admin action, run from an enrolled
+admin device:
+
+```bash
+agentnet admin release show
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.1 v0.8.1
+```
+
+That publishes advice only. It installs nothing on the relay or clients.
 
 ### Standalone command-line program
 
@@ -417,9 +486,8 @@ On Windows and on filesystems without hard links the replacement is two
 renames; if the machine stops between them, or undoing a failed second rename
 fails, rename `<file>.old` back. Built from source: stop the daemon (Windows
 cannot replace a running `.exe`), `git pull`, rebuild into the same place,
-start it again and run `agentnet doctor`. For the Hub:
-back it up, then `git pull && docker compose up -d --build` (or rebuild and
-restart `hub serve`). Before changing a database's schema, `agentnet` saves
+start it again and run `agentnet doctor`. For the Hub, follow the separate
+[relay upgrade](#relay--hub) procedure above. Before changing a database's schema, `agentnet` saves
 the old one next to it as `*.vN.bak`. Clients and Hubs check the protocol
 generation; a mismatch names the side to update. Downgrading is manual:
 stop the daemon, restore the previous binary, and restore the database from
@@ -456,9 +524,10 @@ help update`, and to ask the person unless already authorized), and
 `agentnet version` (on stderr) and `agentnet doctor` show it. Versions are
 compared only for being equal, never ordered. Re-setting the same version
 and URL announces nothing new. It is advice only: receiving a
-recommendation downloads and installs nothing (only an explicit `agentnet
-update`, run by a person or at their request, does), and the note is shown to
-people, not to models.
+recommendation downloads and installs nothing. The person, or an agent with
+their authorization, uses the update path matching the installation: desktop
+app controls/package, standalone CLI updater, or separate relay deployment.
+The note is shown to people, not to models.
 
 ## Agent skill
 

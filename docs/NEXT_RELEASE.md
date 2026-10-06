@@ -1,4 +1,10 @@
-# AgentNet v0.8.1 — release candidate
+# AgentNet v0.8.1 — published October 6, 2026
+
+[Release and downloads](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1)
+from `daddab38d229f695936a6d975702668b381f3135`.
+See the [installation/update guide](revival/INSTALL.md#updating-and-downgrading)
+for the one-time desktop-package upgrade from v0.8.0 and subsequent in-app
+updates. `agentnet update` alone does not update a desktop app.
 
 ## Changes
 
@@ -48,5 +54,10 @@ and clipboard paste remain unverified: the isolated Linux test window did
 not render and was closed. Windows/macOS cross-compilation and mocked
 installer recovery do not establish real installation or native UI behavior.
 
-This document describes the candidate, not a published release or completed
-rollout. Final race checks, CI and deployment evidence belong in the handoff.
+The release's native Linux/Windows/macOS CI, race shards, container checks and
+desktop builds passed. Published assets were checksum-verified. The relay and
+an existing Linux AppImage installation were upgraded with their identities
+preserved; the app's About page and update controls were confirmed by the
+owner. A future in-app update and interactive Windows/macOS installer runs
+remain unverified. See the [current handoff](HANDOFF.md) for evidence and
+open follow-up issues; this release does not claim to fix every reported bug.

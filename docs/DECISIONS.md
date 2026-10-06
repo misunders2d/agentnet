@@ -1,10 +1,10 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
-> **Current contract:** [NEXT_RELEASE.md](NEXT_RELEASE.md) records the Sep 30
-> owner scope and reconciled group, agent, workspace, storage and interface
-> decisions. It supersedes conflicting older deferrals/proposals below.
-> Implementation and acceptance remain incomplete; historical issue statuses
-> in this document are not a current Linear export.
+> **Current release:** [NEXT_RELEASE.md](NEXT_RELEASE.md) describes published
+> v0.8.1; [HANDOFF.md](HANDOFF.md) records verification and remaining work.
+> The decisions below include historical proposals and implementation snapshots.
+> Use the current release and code to resolve older deferrals; historical issue
+> statuses here are not a current Linear export.
 
 > **Target Audience:** Any incoming coding agent or human contributor evaluating architecture choices, historical debates, or future roadmap items.
 >

@@ -10,6 +10,12 @@ it does not change membership, encryption, delivery or permissions.
 Anyone can build a skin. The built-in ones are packages too, loaded through
 exactly the same path; only trust differs (see [Trust](#trust)).
 
+For a reusable creator starting point, examples and independent build/test
+commands, use [agentnet-skins](https://github.com/misunders2d/agentnet-skins).
+This document remains the authoritative Host API v1 contract. A collection
+skin must produce a self-contained package and pass the contract and runtime
+checks; adding a skin requires no AgentNet source change or relay-wide rollout.
+
 - **Comic** (`comic`) is AgentNet's own skin and the default: the messenger,
   built from `internal/ui/web` into the package `internal/ui/static/skins/comic/`
   and embedded in the program.
