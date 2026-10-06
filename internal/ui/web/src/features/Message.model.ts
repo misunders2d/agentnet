@@ -4,9 +4,9 @@
 // shape; everything here reads both. Nothing decides: states are the
 // server's, actions come from its can[] and actions[] lists.
 import type { T } from "../api";
-import { agentName, agentWhere, deliveryWord, deviceKind, jobWord, niceDevice, personName, type DeviceKind } from "../model";
+import { agentName, agentWhere, deliveryWord, deviceKind, deviceWho, jobWord, niceDevice, owner, personName, threadAuthor, threadRow, whoName, type DeviceKind } from "../model";
 
-export type AnyMsg = T.DMMessage | T.Message;
+export type AnyMsg = (T.DMMessage | T.Message) & { _local?: boolean; _failed?: boolean; _retry?: () => void };
 
 /** Everything a message needs to know about the conversation it is in. */
 export interface Ctx {
@@ -53,12 +53,12 @@ export function roomTitle(t: T.DMThread) {
 export const agentOf = (ctx: Pick<Ctx, "dm">, pid?: string) => (pid ? (ctx.dm?.agents || []).find((a) => a.pid === pid) : undefined);
 export const guestOf = (ctx: Pick<Ctx, "dm">, pid?: string) => (pid ? (ctx.dm?.guests || []).find((g) => g.pid === pid) : undefined);
 
-/** The device thread's agent, as the chat list names it: whose agent it is
- *  ("Bohdan’s agent"; its device is said apart, "on Desk"), or the device when its owner isn't known here. */
+/** The device thread's other end, as the chat list names it (model.threadRow):
+ *  its agent where one runs ("Bohdan’s agent"; its device is said apart,
+ *  "on Desk"), this computer's agent for your own device that runs none, or
+ *  the person whose device it is ("Vitalii"). */
 export function threadAgentName(ctx: Pick<Ctx, "thread" | "names" | "overview">) {
-  const peer = ctx.thread?.peer || "";
-  const host = hostOf(peer, ctx.overview);
-  return host ? agentName(undefined, ctx.names, host, ctx.overview?.person) : niceDevice(peer);
+  return threadRow(ctx.thread?.peer || "", ctx.overview, ctx.names).title;
 }
 
 // ---- authors ------------------------------------------------------------------
@@ -77,24 +77,21 @@ export interface Who {
 export function whoWrote(m: AnyMsg, ctx: Ctx): Who {
   const o = ctx.overview, me = o?.person;
   if (isThreadMsg(m)) {
-    if (m.dir === "out") return { key: "me", name: "You", agent: false, mine: true, guest: false, seed: me?.person || "me" };
-    const named = m.agent_id && ctx.names[m.agent_id];
-    return {
-      key: "in:" + m.from + "#" + (m.agent_id || ""), name: named || threadAgentName(ctx), sub: "on " + niceDevice(m.from),
-      agent: true, mine: false, guest: false, seed: m.agent_id || m.from, device: deviceKind(m.from),
-    };
+    // An agent only where one runs: what is typed on your phone is yours (model.threadAuthor).
+    const a = threadAuthor(m, o, ctx.names, ctx.thread?.peer || m.from, ctx.thread?.messages || []);
+    return { ...a, guest: false, device: a.agent ? deviceKind(m.dir === "out" ? o?.me.address : m.from) : undefined };
   }
   const t = ctx.dm;
   // An agent's turn only when the server proved it came from that agent's
   // exact host (verified_agent); a claimed origin or agent id proves nothing.
   const agentMsg = m.verified_agent;
   if (agentMsg) {
-    const a = agentOf(ctx, m.pid);
+    const a = agentOf(ctx, m.agent_author_pid || m.pid);
     if (a) {
       // A named agent says whose it is; "Your agent" already does, so it says where.
       const named = !!(a.agent_id && ctx.names[a.agent_id]);
-      const sub = named ? agentWhere(a.host, a.host.address, me) : "on " + niceDevice(a.host.address);
-      return { key: "a:" + a.pid, name: agentLabel(a, ctx), sub, agent: true, mine: false, guest: true, seed: a.agent_id || a.host.address, device: deviceKind(a.host.address) };
+      const sub = a.member ? (named ? owner(a.host, me) + " agent" : undefined) : named ? agentWhere(a.host, a.host.address, me) : "on " + niceDevice(a.host.address);
+      return { key: "a:" + a.pid, name: agentLabel(a, ctx), sub, agent: true, mine: false, guest: !a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address) };
     }
     const host = hostOf(m.from, o);
     return {
@@ -113,11 +110,12 @@ export function whoWrote(m: AnyMsg, ctx: Ctx): Who {
   return { key: "p:" + m.from, name: niceDevice(m.from) || "Someone", agent: false, mine: false, guest: false, seed: m.from };
 }
 
-/** deviceWords names a device for a sentence: "your Phone", "Vitalii’s Desk". */
+/** deviceWords names a device for a sentence: "your Phone", "Vitalii’s Desk"
+ *  (a look-alike name with its key: "Sergey · 19c77bce’s Desk"). */
 export function deviceWords(address: string, o: T.Overview | null) {
-  const host = hostOf(address, o);
-  if (!host) return niceDevice(address);
-  return (isMe(host, o) ? "your" : personName(host) + "’s") + " " + niceDevice(address);
+  const w = deviceWho(address, o);
+  if (w.relation === "own" || w.relation === "this") return "your " + w.device;
+  return w.relation === "person" ? whoName(w) + "’s " + w.device : w.device;
 }
 
 // ---- requests to agents --------------------------------------------------------
@@ -151,7 +149,11 @@ function answerTo(m: AnyMsg, all: AnyMsg[]) {
 /** requestState: how far a question or task got, only as its executor or the
  *  conversation proves it: an answer here, the executor's word, the local job. */
 export function requestState(m: AnyMsg, all: AnyMsg[]): { text: string; tone: "ok" | "work" | "wait" | "bad" | "muted" } {
-  if (answerTo(m, all)) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
+  const answer = answerTo(m, all);
+  // A proposal (MEL-521) answers with a task the agent may not run itself:
+  // nothing was done. Confirmation comes from the host's actions[] list.
+  if (answer && "status" in answer && answer.status === "proposal") return { text: "Suggested a task · not run", tone: "wait" };
+  if (answer) return { text: m.kind === "task" ? "Done" : "Answered", tone: "ok" };
   const e = m.exec;
   if (e && e.state) {
     const w = word(e.state);
@@ -162,7 +164,7 @@ export function requestState(m: AnyMsg, all: AnyMsg[]): { text: string; tone: "o
     if (w) return { text: w, tone: tone(m.state || "") };
   }
   if ((m.actions || []).includes("cancel")) return { text: "Working…", tone: "work" };
-  const d = deliveryWord(m.state || "");
+  const d = deliveryWord(("delivery" in m ? m.delivery : undefined) ?? m.state ?? "");
   return { text: d, tone: ["failed", "expired", "quarantined"].includes(m.state || "") ? "bad" : "muted" };
 }
 

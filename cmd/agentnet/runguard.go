@@ -55,7 +55,7 @@ func runGuard(cmd string, args []string) error {
 
 // subcommands are the commands whose first argument names what they do.
 var subcommands = map[string]bool{"admin": true, "a2a": true, "dm": true, "group": true, "hooks": true, "hub": true,
-	"operator": true, "person": true, "remind": true, "responder": true, "team": true}
+	"operator": true, "person": true, "remind": true, "responder": true, "room": true, "team": true}
 
 // runAllowed is the allow-list: commands that only read (or print), the
 // harness's own hook, which does nothing inside a run (hook.go), and the
@@ -79,6 +79,8 @@ func runAllowed(cmd string, args []string) bool {
 		return sub == "list" || sub == "snapshot"
 	case "dm":
 		return sub == "list" || sub == "show" || sub == "agents" || sub == "send" && receiverRun() // receiverGuard
+	case "room":
+		return sub == "ask" || sub == "wait"
 	case "group":
 		return sub == "invitations"
 	case "person":

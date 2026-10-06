@@ -27,9 +27,11 @@ cat > "$AGENT_LOG.last"
 mode=$(cat "$AGENT_LOG.mode" 2>/dev/null || echo emotion)
 case "$mode" in
 emotion) printf 'the deploy failed at step 3\n\nemotion: concerned\n' ;;
+closed) printf 'Finished the work\ntopic: done\nemotion: calm\n' ;;
 bare) printf 'the deploy failed at step 3\n' ;;
 bad) printf 'the deploy failed at step 3\nemotion: Very Sad\n' ;;
 sleep) touch "$AGENT_LOG.started"; sleep 30 & wait; printf 'late reply\nemotion: calm\n' ;;
+propose) printf 'AGENTNET: PROPOSE-TASK\nRestart the deploy from step 3.\nemotion: calm\n' ;;
 esac
 `
 
@@ -165,7 +167,7 @@ func TestAgentAnswersInTheConversation(t *testing.T) {
 		t.Fatalf("answer at alice: %+v", ans)
 	}
 	prompt := st.last()
-	for _, want := range []string{"deploy failed at step 3", "logs are in the ticket", "please look", "emotion: WORD", "## Question from the other person", "reply with your question for them"} {
+	for _, want := range []string{"deploy failed at step 3", "logs are in the ticket", "please look", "emotion: WORD", "## Question from another person, who calls themselves \"Person of " + w.alice.Address + "\", writing from their device Alice (" + w.alice.Address + ", key ", "reply with your question for them"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
 		}
@@ -208,7 +210,7 @@ func TestAgentAnswersInTheConversation(t *testing.T) {
 	}
 	prompt = st.last()
 	if !strings.Contains(prompt, "what failed?") || strings.Count(prompt, "and the fix?") != 1 ||
-		!strings.Contains(prompt, "You (the agent), answer: the deploy failed") || !strings.Contains(prompt, "your own person") {
+		!strings.Contains(prompt, "You (the agent), answer: the deploy failed") || !strings.Contains(prompt, "Your owner, \"Person of "+w.bob.Address+"\", on this device asks you the question below") {
 		t.Fatalf("follow-up prompt:\n%s", prompt)
 	}
 
@@ -243,7 +245,7 @@ func TestAgentContextBound(t *testing.T) {
 	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
 	pid := participate(t, w, conv, lids[:2], nil)
 	old := agentContextBytes
-	agentContextBytes = 60
+	agentContextBytes = 90 // one line naming its speaker as a person on a device
 	t.Cleanup(func() { agentContextBytes = old })
 	q, err := w.alice.AskAgent(tctx(t), pid, envelope.KindQuestion, "what failed?")
 	if err != nil {
@@ -251,13 +253,13 @@ func TestAgentContextBound(t *testing.T) {
 	}
 	replyAt(t, w.alice, conv, q.ID)
 	prompt := st.last()
-	if !strings.Contains(prompt, "(1 earlier message(s) left out to stay within 60 bytes.)") ||
+	if !strings.Contains(prompt, "(1 earlier message(s) left out to stay within 90 bytes.)") ||
 		strings.Contains(prompt, "deploy failed at step 3\n") || !strings.Contains(prompt, "logs are in the ticket") {
 		t.Fatalf("bounded prompt:\n%s", prompt)
 	}
 	info := stateAt(t, w.bob, pid)
-	c, err := w.bob.agentContext(info, "", 60)
-	if err != nil || c.Bytes > 60 || c.Omitted == 0 || len(c.lines) != len(c.Messages) {
+	c, err := w.bob.agentContext(info, "", 90)
+	if err != nil || c.Bytes > 90 || c.Omitted == 0 || len(c.lines) != len(c.Messages) {
 		t.Fatalf("context: %+v %v", c, err)
 	}
 }
@@ -747,6 +749,7 @@ func (h postHook) RoundTrip(r *http.Request) (*http.Response, error) {
 // next queued output is held back (and stays so), and a plain message to a
 // frozen person stays queued.
 func TestAgentOutputRecheckedAtEachHandOver(t *testing.T) {
+	t.Parallel()
 	for _, stop := range []string{"dismissal", "freeze"} {
 		t.Run(stop, func(t *testing.T) {
 			w, conv, _, stopBob := agentWorld(t)
@@ -815,5 +818,43 @@ func TestAgentOutputRecheckedAtEachHandOver(t *testing.T) {
 				t.Fatalf("a later flush sent it (%d, %v)", len(outputs), err)
 			}
 		})
+	}
+}
+
+// A group's or DM's participant answers in the request's selected topic.
+// An ordinary answer leaves it active; only the explicit trailer closes it.
+func TestChatTopicAgentReply(t *testing.T) {
+	st := installAgentStub(t)
+	w, conv, lids, _ := agentWorld(t)
+	setResponder(t, w.bob, "agentstub", st.dir, time.Minute)
+	pid := participate(t, w, conv, lids[:2], nil)
+	q, err := w.alice.AskAgentInTopic(tctx(t), pid, envelope.KindQuestion, "What failed?", "new", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := replyAt(t, w.alice, conv, q.ID)
+	if answer.Topic == "" || answer.TopicDone {
+		t.Fatalf("ordinary answer: %+v", answer)
+	}
+	topics, err := w.alice.ChatTopics(conv)
+	if err != nil || len(topics) != 1 || topics[0].State != TopicActive || topics[0].Pending {
+		t.Fatalf("ordinary answer topics: %+v %v", topics, err)
+	}
+	st.mode("closed")
+	next, err := w.alice.AskAgentInTopic(tctx(t), pid, envelope.KindQuestion, "Please finish.", answer.Topic, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, n := convMsg(t, w.alice, conv, func(m ConvMessage) bool { return m.LID == next.LID })
+	if n != 1 || request.ReplyTo != answer.LID {
+		t.Fatalf("follow-up lost its logical topic parent: %+v (previous answer %s)", request, answer.LID)
+	}
+	done := replyAt(t, w.alice, conv, next.ID)
+	if done.Topic != answer.Topic || !done.TopicDone || done.Body != "Finished the work" {
+		t.Fatalf("explicit close: %+v", done)
+	}
+	topics, err = w.alice.ChatTopics(conv)
+	if err != nil || len(topics) != 1 || topics[0].State != TopicDone || topics[0].DoneBy != DoneByAgent {
+		t.Fatalf("closed topics: %+v %v", topics, err)
 	}
 }

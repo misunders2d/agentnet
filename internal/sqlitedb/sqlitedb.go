@@ -50,6 +50,10 @@ func Open(path string, steps []string) (*sql.DB, error) {
 	return db, nil
 }
 
+// ErrNewerSchema means a newer program wrote the database: this one refuses
+// to open it rather than guess.
+var ErrNewerSchema = errors.New("is newer than this program supports")
+
 func upgrade(db *sql.DB, path string, steps []string) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -61,7 +65,7 @@ func upgrade(db *sql.DB, path string, steps []string) error {
 		return err
 	}
 	if current > len(steps) {
-		return fmt.Errorf("%s: schema version %d is newer than this program supports (%d)", path, current, len(steps))
+		return fmt.Errorf("%s: schema version %d %w (%d)", path, current, ErrNewerSchema, len(steps))
 	}
 	if current == len(steps) {
 		return nil

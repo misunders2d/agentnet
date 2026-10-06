@@ -23,10 +23,10 @@ import (
 // grantHoldsFor is the grant condition for an address and a verifying
 // fingerprint, given as SQL expressions.
 const grantHoldsFor = `EXISTS (SELECT 1 FROM task_grants g JOIN peers p ON p.address = g.address
-	WHERE g.address = %s AND g.fingerprint = %s AND p.public = g.public AND p.pending IS NULL)`
+	WHERE g.address = %s AND g.fingerprint = %s AND p.public = g.public AND p.pending IS NULL AND NOT EXISTS (SELECT 1 FROM person_devices fd JOIN persons fs ON fs.person=fd.person WHERE fd.address=g.address AND fs.state='conflict'))`
 
 // taskGrantHolds is grantHoldsFor for an inbox row.
-var taskGrantHolds = fmt.Sprintf(grantHoldsFor, "inbox.sender", "inbox.verified_by")
+var taskGrantHolds = `(` + fmt.Sprintf(grantHoldsFor, "inbox.sender", "inbox.verified_by") + ` OR ` + personGrantHolds("tasks", "inbox.sender", "inbox.verified_by") + `)`
 
 // Errors for task grants.
 var (
@@ -42,7 +42,7 @@ func taskGranted(q querier, address, verifiedBy string) (bool, error) {
 		return false, nil
 	}
 	var ok bool
-	err := q.QueryRow(`SELECT `+fmt.Sprintf(grantHoldsFor, "?", "?"), address, verifiedBy).Scan(&ok)
+	err := q.QueryRow(`SELECT `+fmt.Sprintf(grantHoldsFor, "?", "?")+` OR `+personGrantHolds("tasks", "?", "?"), address, verifiedBy, address, verifiedBy).Scan(&ok)
 	return ok, err
 }
 
@@ -50,7 +50,7 @@ func taskGranted(q querier, address, verifiedBy string) (bool, error) {
 // keep (if set), back to awaiting the person, saying why.
 func demoteGranted(tx *sql.Tx, address, keep, why string) error {
 	_, err := tx.Exec(`UPDATE inbox SET state = ?, detail = ?, notified = 0, review_sent = 0
-		WHERE sender = ? AND kind = ? AND state = ? AND (? = '' OR verified_by IS NOT ?)`,
+		WHERE sender = ? AND kind = ? AND state = ? AND (? = '' OR verified_by IS NOT ?) AND NOT (`+taskGrantHolds+` OR `+ownProposalHolds+`)`,
 		stateAwaiting, "not run without asking: "+why+"; accept ID runs it once", address, envelope.KindTask, statePending, keep, keep)
 	if err == nil { // back in review: reported afresh to each recipient
 		_, err = tx.Exec(`DELETE FROM reported WHERE item IN (SELECT id FROM inbox WHERE sender = ? AND kind = ? AND state = ? AND review_sent = 0)`, address, envelope.KindTask, stateAwaiting)
@@ -86,16 +86,27 @@ func grant(tx *sql.Tx, address string) (string, error) {
 	return fp, demoteGranted(tx, address, fp, "the task grant is now for a different key")
 }
 
-// GrantTasks lets future tasks from address run without asking, for its
-// currently pinned key only. It returns that key's fingerprint. Tasks
-// already waiting are not affected.
+// GrantTasks gives a verified person standing permission for its current
+// and future roster devices, returning the person ID. An explicit device
+// address grants only its currently pinned key and returns its fingerprint.
+// Tasks already waiting are not affected.
 func (a *Agent) GrantTasks(address string) (string, error) {
+	target, err := a.PermissionTarget(address)
+	if err != nil {
+		return "", err
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
-	fp, err := grant(tx, address)
+	fp := ""
+	if isPersonTarget(target) {
+		err = setPersonGrant(tx, target, "tasks", true)
+		fp = target
+	} else {
+		fp, err = grant(tx, target)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -107,8 +118,8 @@ func (a *Agent) GrantTasks(address string) (string, error) {
 }
 
 // AcceptAlways accepts task id once and, in the same transaction, grants
-// future tasks from its sender, but only for the key that verified this
-// task and only while that key is still the pinned one.
+// future tasks from its verified person (or exact device if no person exists).
+// The task key must still be pinned, with no pending key change.
 func (a *Agent) AcceptAlways(id string) (sender, fp string, err error) {
 	// Asked before the transaction (the store has one connection), told
 	// after the checks below.
@@ -135,13 +146,41 @@ func (a *Agent) AcceptAlways(id string) (sender, fp string, err error) {
 		return "", "", ErrConversationItem
 	}
 	if kind != envelope.KindTask {
-		return "", "", errors.New("--always is for tasks; to answer an agent's questions automatically use agentnet approve ADDRESS")
+		return "", "", errors.New("--always is for tasks; to answer an agent's questions automatically use agentnet approve PERSON-or-ADDRESS")
 	}
-	if fp, err = grant(tx, sender); err != nil {
-		return "", "", err
+	key, found, e := pinnedKey(tx, sender)
+	if e != nil {
+		return "", "", e
 	}
+	if !found {
+		return "", "", ErrNoPinnedKey
+	}
+	var pending sql.NullString
+	if e = tx.QueryRow(`SELECT pending FROM peers WHERE address=?`, sender).Scan(&pending); e != nil {
+		return "", "", e
+	}
+	if pending.Valid {
+		return "", "", ErrKeyPending
+	}
+	fp = key.Fingerprint()
 	if !verifiedBy.Valid || verifiedBy.String != fp {
 		return "", "", ErrTaskKeyDiffer
+	}
+	var person, personState string
+	e = tx.QueryRow(`SELECT d.person,p.state FROM person_devices d JOIN persons p ON p.person=d.person WHERE d.address=? AND d.fingerprint=?`, sender, fp).Scan(&person, &personState)
+	if e == nil && personState != personSelf && personState != personPinned {
+		return "", "", errPersonConflict
+	}
+	if e == nil {
+		err = setPersonGrant(tx, person, "tasks", true)
+		sender = person
+	} else if errors.Is(e, sql.ErrNoRows) {
+		_, err = grant(tx, sender)
+	} else {
+		err = e
+	}
+	if err != nil {
+		return "", "", err
 	}
 	if blocked != "" {
 		return "", "", fmt.Errorf("%w: %s", ErrNothingRuns, blocked)
@@ -166,19 +205,41 @@ func (a *Agent) AcceptAlways(id string) (sender, fp string, err error) {
 // the person again; the ids of ones running now are returned (they may
 // finish unless cancelled). Accepted-once tasks are unaffected.
 func (a *Agent) RevokeTasks(address string) (running []string, err error) {
+	target, e := a.PermissionTarget(address)
+	if e != nil && !isPersonTarget(address) {
+		return nil, e
+	}
+	if isPersonTarget(address) {
+		target = address
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM task_grants WHERE address = ?`, address); err != nil {
-		return nil, err
+	if isPersonTarget(target) {
+		if err = setPersonGrant(tx, target, "tasks", false); err != nil {
+			return nil, err
+		}
+		if err = demotePersonJobs(tx); err != nil {
+			return nil, err
+		}
+	} else {
+		res, err := tx.Exec(`DELETE FROM task_grants WHERE address=?`, target)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			if err = coveredByPerson(tx, target, "tasks"); err != nil {
+				return nil, err
+			}
+		}
+		if err = demoteGranted(tx, target, "", "the task grant was revoked"); err != nil {
+			return nil, err
+		}
 	}
-	if err := demoteGranted(tx, address, "", "the task grant was revoked"); err != nil {
-		return nil, err
-	}
-	rows, err := tx.Query(`SELECT id FROM inbox WHERE sender = ? AND kind = ? AND state IN (?, ?) ORDER BY received_at, id`,
-		address, envelope.KindTask, stateRunning, stateCancelReq)
+	rows, err := tx.Query(`SELECT id FROM inbox WHERE (sender=? OR sender IN (SELECT address FROM person_devices WHERE person=?)) AND kind=? AND state IN (?,?) ORDER BY received_at,id`,
+		target, target, envelope.KindTask, stateRunning, stateCancelReq)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +272,7 @@ type Grant struct {
 // TaskGrants lists task grants with the granted key and whether it still
 // holds (the same key pinned, no change pending).
 func (a *Agent) TaskGrants() ([]Grant, error) {
-	rows, err := a.store.db.Query(`SELECT g.address, g.fingerprint, g.public = p.public, p.public IS NOT NULL, p.pending IS NOT NULL
+	rows, err := a.store.db.Query(`SELECT g.address, g.fingerprint, g.public = p.public, p.public IS NOT NULL, p.pending IS NOT NULL, EXISTS(SELECT 1 FROM person_devices fd JOIN persons fs ON fs.person=fd.person WHERE fd.address=g.address AND fs.state='conflict')
 		FROM task_grants g LEFT JOIN peers p ON p.address = g.address ORDER BY g.address`)
 	if err != nil {
 		return nil, err
@@ -221,10 +282,13 @@ func (a *Agent) TaskGrants() ([]Grant, error) {
 	for rows.Next() {
 		var g Grant
 		var same, pinned, pending sql.NullBool
-		if err := rows.Scan(&g.Address, &g.Fingerprint, &same, &pinned, &pending); err != nil {
+		var frozen bool
+		if err := rows.Scan(&g.Address, &g.Fingerprint, &same, &pinned, &pending, &frozen); err != nil {
 			return nil, err
 		}
 		switch {
+		case frozen:
+			g.Status = "inactive: person frozen"
 		case !pinned.Bool:
 			g.Status = "inactive: no key pinned"
 		case pending.Bool:

@@ -6,11 +6,12 @@ import { IconChevronRight, IconRobot, IconSearch, IconX } from "@tabler/icons-re
 import { useAgentNames, useApp, useWide } from "../context";
 import { useStore, type Open } from "../store";
 import type { T } from "../api";
-import { Reason, agentName, convTitle, decidable, firstLine, personOf, senderOf, type ChatItem } from "../model";
+import { Reason, askerWords, convTitle, decidable, firstLine, personOf, senderOf, type ChatItem } from "../model";
 import { useNeedsYou } from "./Approvals";
 import { ChatRow } from "./ChatList.row";
 import { chatItems, personAt } from "./ChatList.words";
 import { GroupInvitations } from "./ChatList.invites";
+import { Reminders } from "./Reminders";
 import { warmPictures } from "./Message.files";
 import { TopicResults } from "./ChatList.topics";
 import { CandidateRow, NewChatButton, candidates, matches, startChat } from "./NewChat";
@@ -122,6 +123,7 @@ export function ChatList() {
       {!overview ? (loadError ? <LoadFailed text={loadError} /> : <Skeleton />) : (
         <>
           {!q && <NeedsYouBanner overview={overview} agentNames={agentNames} />}
+          {!q && <Reminders />}
           {!q && <GroupInvitations />}
           {overview.persons && !overview.person && <NoName />}
           {shownFilters.length > 0 && (
@@ -171,10 +173,12 @@ function NeedsYouBanner({ overview: o, agentNames }: { overview: T.Overview; age
   const conv = decidable(o).sort((a, b) => b.at.localeCompare(a.at))[0];
   const device = (o.links || []).find((l) => l.state === "pending");
   if (review && (!conv || review.at >= conv.at)) { // what is asked, then who asks
-    // Whose agent asks; the row below says on which device (a phone's banner has room for one).
-    const who = agentName(undefined, agentNames, personAt(review.peer, o), me);
+    // Who asks: an agent where one runs, else the person ("Question from you · Pixel", "… from Vitalii · Phone").
+    const a = askerWords(review.peer, o, agentNames);
+    const who = a.agent ? a.name : a.name + " · " + a.device;
+    const p = personAt(review.peer, o);
     named = {
-      face: <AgentAvatar seed={review.peer} size={40} mood="waiting" />,
+      face: a.agent ? <AgentAvatar seed={review.peer} size={40} mood="waiting" /> : <PersonAvatar name={a.you ? me?.label || "Me" : a.name} seed={p?.person || p?.address || review.peer} size={40} />,
       headline: firstLine(review.excerpt, 120) || (review.kind === "task" ? "A task for your agent" : "A question for your agent"),
       line: (review.kind === "task" ? "Task from " : review.kind === "question" ? "Question from " : "From ") + who,
       go: () => void store.open({ kind: "thread", id: review.id, focus: review.id }),

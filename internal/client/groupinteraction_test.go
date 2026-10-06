@@ -16,6 +16,7 @@ import (
 )
 
 func TestGroupInteractionControlsThreePeople(t *testing.T) {
+	t.Parallel()
 	w, carol, packet, _ := groupTurnsFixture(t)
 	sent, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "original group text"})
 	if err != nil {
@@ -89,7 +90,7 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 	if err = host.PublishAgentCatalog(tctx(t)); err != nil {
 		t.Fatal(err)
 	}
-	p, err := carol.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, record.ID, nil, nil, "current membership disclosure only")
+	p, err := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, record.ID, nil, nil, "current membership disclosure only")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,7 @@ func TestGroupInteractionVisitorDepartureRestart(t *testing.T) {
 	})
 	// Accepting it is refused, saying why (BUG-23): nothing would run it.
 	if err = host.Accept(task.ID); !errors.Is(err, ErrNothingRuns) {
-		t.Fatalf("accept of a task after its inviter's departure: %v", err)
+		t.Fatalf("accept of a task after its requester's departure: %v", err)
 	}
 	if s, _ := host.store.jobState(task.ID); s == stateAccepted || s == stateRunning {
 		t.Fatalf("a refused accept left the task %s", s)
@@ -299,7 +300,14 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 		inviter  *Agent
 		taskKeys []string
 	}{{w.alice, nil}, {w.alice, []string{carol.Self().Fingerprint()}}, {carol, nil}} {
-		inv, e := setup.inviter.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, record.ID, nil, setup.taskKeys, "exact epoch scope")
+		separate, e := w.bob.CreateLocalAgent("Epoch lane "+string(rune('A'+i)), Responder{Harness: "agentstub", Dir: stub.dir})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = w.bob.PublishAgentCatalog(tctx(t)); e != nil {
+			t.Fatal(e)
+		}
+		inv, e := setup.inviter.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, separate.ID, nil, setup.taskKeys, "exact epoch scope")
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -349,11 +357,11 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	groupGovernanceAwait(t, next, w.bob)
 	next = groupInteractionRejoin(t, w.alice, carol, next)
 	groupGovernanceAwait(t, next, carol, w.bob)
-	if stateAt(t, w.alice, taskKeyPID.PID).Claimable() {
-		t.Fatal("same-key task grant admission revived")
+	if got := stateAt(t, w.alice, taskKeyPID.PID); !got.Claimable() || len(got.TaskKeys) != 0 {
+		t.Fatal("membership must remain, stale task consent must not revive")
 	}
-	if stateAt(t, w.bob, inviterPID.PID).Claimable() {
-		t.Fatal("same-key inviter admission revived")
+	if !stateAt(t, w.bob, inviterPID.PID).Claimable() {
+		t.Fatal("accepted membership ended when inviter left")
 	}
 	if !stateAt(t, w.bob, stablePID.PID).Claimable() {
 		t.Fatal("unrelated requester change ended stable invite")
@@ -375,6 +383,14 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 	if stub.runs() != 0 {
 		t.Fatal("same-key requester rejoin revived queued task")
 	}
+	fresh, e := carol.AskAgent(tctx(t), taskKeyPID.PID, envelope.KindTask, "new epoch needs fresh task consent")
+	if e != nil {
+		t.Fatal(e)
+	}
+	waitState(t, w.bob, fresh.ID, stateAwaiting)
+	if stub.runs() != 0 {
+		t.Fatal("old task keys authorized a new admission")
+	}
 	if _, err = carol.store.db.Exec(`UPDATE outbox SET state=? WHERE id=?`, stateQueued, queued.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -384,6 +400,7 @@ func TestGroupInteractionEpochRetryFences(t *testing.T) {
 }
 
 func TestGroupInteractionControlReorderedOriginal(t *testing.T) {
+	t.Parallel()
 	w, _, packet, stops := groupTurnsFixture(t)
 	stops[w.bob]()
 	msg, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "immutable original"})
@@ -453,7 +470,11 @@ func TestGroupInteractionVisitorReorderedCarriers(t *testing.T) {
 	read := func(sub string) envelope.Envelope {
 		var raw []byte
 		var env envelope.Envelope
-		if e := w.alice.store.db.QueryRow(`SELECT envelope FROM outbox WHERE recipient=? AND pid=? AND sub=? ORDER BY rowid DESC LIMIT 1`, host.Address, p.PID, sub).Scan(&raw); e != nil {
+		query := `SELECT envelope FROM outbox WHERE recipient=? AND pid=? AND sub=?`
+		if sub == envelope.SubEvent { // P6 also stores a later public scope; replay the original invite
+			query += ` AND json_extract(body,'$.type')='invite'`
+		}
+		if e := w.alice.store.db.QueryRow(query+` ORDER BY rowid DESC LIMIT 1`, host.Address, p.PID, sub).Scan(&raw); e != nil {
 			t.Fatal(e)
 		}
 		if e := json.Unmarshal(raw, &env); e != nil {
@@ -540,7 +561,11 @@ func TestGroupInteractionVisitorReorderedCarriers(t *testing.T) {
 
 func TestGroupInteractionVisitorLargeCurrentContext(t *testing.T) {
 	stub := installAgentStub(t)
-	w, _, packet, _ := groupTurnsFixture(t)
+	w, carol, packet, stops := groupTurnsFixture(t)
+	// Only the sender's signed history is needed to build the large context.
+	// Leave unrelated recipient copies in normal offline custody.
+	stops[w.bob]()
+	stops[carol]()
 	for range 50 {
 		if _, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "PRIVATE_ROOM_CONTENT_NOT_DISCLOSED"}); err != nil {
 			t.Fatal(err)
@@ -658,6 +683,7 @@ func TestGroupInteractionTypingActualAudience(t *testing.T) {
 }
 
 func TestGroupInteractionLinkedControlHistory(t *testing.T) {
+	t.Parallel()
 	w, _, packet, stops := groupTurnsFixture(t)
 	sent, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "linked original"})
 	if err != nil {
@@ -750,6 +776,9 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	for _, a := range []*Agent{w.alice, w.bob, carol} {
 		fakeNotify(a)
 	}
+	if err := w.bob.Approve(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
 	member, err := w.bob.CreateLocalAgent("Member builder", Responder{Harness: "agentstub", Dir: stub.dir})
 	if err != nil {
 		t.Fatal(err)
@@ -761,6 +790,9 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	fakeNotify(host)
 	runAgent(t, host)
 	publishGroupFixtureCaps(t, host, true)
+	if err := host.Approve(w.alice.Address); err != nil {
+		t.Fatal(err)
+	}
 	visitor, err := host.CreateLocalAgent("Outside reviewer", Responder{Harness: "agentstub", Dir: stub.dir})
 	if err != nil {
 		t.Fatal(err)
@@ -819,6 +851,11 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "visitor acceptance", func() bool { return stateAt(t, w.alice, v.PID).Claimable() })
+	future, e := carol.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "GROUP_FUTURE_CONTEXT"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, "accepted outside agent receives new ordinary group context", func() bool { return p6HasLID(t, host, future.LID) })
 	q, err = w.alice.AskAgent(tctx(t), v.PID, envelope.KindQuestion, "visitor question")
 	if err != nil {
 		t.Fatal(err)
@@ -829,7 +866,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 			t.Fatalf("visitor output attribution %+v", answer)
 		}
 	}
-	if !strings.Contains(stub.last(), "GROUP_SELECTED_BYTES") || strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") || strings.Contains(stub.last(), "member question") {
+	if !strings.Contains(stub.last(), "GROUP_SELECTED_BYTES") || !strings.Contains(stub.last(), "GROUP_FUTURE_CONTEXT") || strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") || strings.Contains(stub.last(), "member question") {
 		t.Fatalf("visitor grant isolation %s", stub.last())
 	}
 	if stub.runs() != 2 {
@@ -982,7 +1019,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if _, err = host.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Kind: envelope.KindAnswer, PID: p.PID, AgentID: visitor.ID, ReplyTo: q.ID, Body: "cross PID forged output"}); err == nil {
 		t.Fatal("cross PID output admitted")
 	}
-	if _, err = w.bob.DismissParticipation(tctx(t), v.PID); err != nil {
+	if _, err = w.alice.DismissParticipation(tctx(t), v.PID); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "visitor dismissed", func() bool { return stateAt(t, host, v.PID).State == PartDismissed })

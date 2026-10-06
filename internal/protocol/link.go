@@ -160,6 +160,9 @@ type LinkEvent struct {
 	Device identity.Public `json:"device"`
 	Join   []byte          `json:"join"`
 	MAC    []byte          `json:"mac"`
+	// Google asks for an explicit local decision without a device-link
+	// code. It never grants permission or approves itself.
+	Google *GoogleLink `json:"google,omitempty"`
 }
 
 // PersonChain is a page of a person's roster chain, oldest first.

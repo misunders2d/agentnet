@@ -489,7 +489,25 @@ func TestSelfConsentGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "bob's invite at alice", func() bool { return stateAt(t, w.alice, q.PID).State == PartInvited })
+	if q.PID != p.PID || !q.Claimable() || q.Decision != p.Decision {
+		t.Fatalf("existing own agent must be reused: %+v", q)
+	}
+	if n := decisionsBy(t, w.alice, conv, p.PID, w.alice.Self().Fingerprint()); n != 1 {
+		t.Fatalf("re-invitation added consent: %d", n)
+	}
+	// A fresh agent invited by another member still needs its owner's click.
+	other, err := w.alice.CreateLocalAgent("Other own builder", Responder{Harness: "claude", Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = w.alice.PublishAgentCatalog(tctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	q, err = w.bob.InviteNamedAgent(tctx(t), conv, w.alice.Address, other.ID, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "bob's fresh invite at alice", func() bool { return stateAt(t, w.alice, q.PID).State == PartInvited })
 	if ok, err := w.alice.selfConsent(tctx(t), q.PID); ok || err != nil {
 		t.Fatalf("another member's invite accepted without a click (%v)", err)
 	}

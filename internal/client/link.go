@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,6 +73,9 @@ func (a *Agent) NewDeviceLink(ctx context.Context) (DeviceLinkOffer, error) {
 	if !ok {
 		return DeviceLinkOffer{}, errors.New("set up your person first (agentnet person create NAME)")
 	}
+	if !me.roster.Human(a.Self().Fingerprint()) {
+		return DeviceLinkOffer{}, errors.New("only your own human devices may link another device; agent hosts cannot")
+	}
 	if !a.PersonPublished() {
 		if err := a.publishPerson(ctx); err != nil {
 			return DeviceLinkOffer{}, fmt.Errorf("%w: %v", ErrNotPublished, err)
@@ -128,6 +132,9 @@ func (a *Agent) onLinkEvent(data []byte) {
 }
 
 func (a *Agent) takeLinkRequest(ev protocol.LinkEvent) error {
+	if ev.Google != nil {
+		return a.takeGoogleLinkRequest(ev)
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
@@ -234,7 +241,7 @@ func (a *Agent) PendingLinks() ([]LinkRequest, error) {
 // publishes it; if the Hub cannot be reached, it stays approved and is
 // published when it can (never as a second, competing step).
 func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
-	return a.decideLink(ctx, id, accept, false)
+	return a.decideLink(ctx, id, accept, false, false)
 }
 
 // ApproveNativeLink approves the pending link request id as DecideLink
@@ -247,10 +254,16 @@ func (a *Agent) DecideLink(ctx context.Context, id string, accept bool) error {
 // approve ID), and not this call for a request that is no longer pending
 // (approved already, perhaps on the page).
 func (a *Agent) ApproveNativeLink(ctx context.Context, id string) error {
-	return a.decideLink(ctx, id, true, true)
+	return a.decideLink(ctx, id, true, true, false)
 }
 
-func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) error {
+// ApproveAgentLink enrolls an agent host without enrollment authority. The
+// choice is the existing human device's local decision, never a received hint.
+func (a *Agent) ApproveAgentLink(ctx context.Context, id string) error {
+	return a.decideLink(ctx, id, true, false, true)
+}
+
+func (a *Agent) decideLink(ctx context.Context, id string, accept, native, agentHost bool) error {
 	var address, pub, state string
 	var join []byte
 	var expires int64
@@ -290,6 +303,9 @@ func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) 
 		a.setLink(id, LinkFailed, "this device no longer speaks for that person")
 		return ErrLinkCrossPerson
 	}
+	if !me.roster.Human(a.Self().Fingerprint()) {
+		return errors.New("only your own human devices may approve another device; agent hosts cannot")
+	}
 	if me.info.Seq != o.Seq || me.info.Roster != o.Roster {
 		a.setLink(id, LinkStale, "")
 		return ErrLinkStale
@@ -298,8 +314,11 @@ func (a *Agent) decideLink(ctx context.Context, id string, accept, native bool) 
 	if err := json.Unmarshal([]byte(pub), &dev); err != nil {
 		return err
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Seq: me.info.Seq + 1, Prev: me.info.Roster,
-		Devices: append(append([]identity.Public(nil), me.roster.Devices...), dev), By: a.Self().Fingerprint(), Join: join}
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Picture: me.roster.Picture, Seq: me.info.Seq + 1, Prev: me.info.Roster,
+		Devices: append(append([]identity.Public(nil), me.roster.Devices...), dev), HumanKeys: me.roster.Humans(), By: a.Self().Fingerprint(), Join: join}
+	if !agentHost {
+		r.HumanKeys = append(r.HumanKeys, dev.Fingerprint())
+	}
 	r.Sign(a.id.Sign)
 	if _, err := r.VerifyNext(me.roster); err != nil {
 		a.setLink(id, LinkFailed, err.Error())
@@ -437,7 +456,9 @@ func (a *Agent) RemoveDevice(ctx context.Context, address string) error {
 	case len(keep) == 0:
 		return errors.New("the last device of a person cannot be removed")
 	}
-	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, By: a.Self().Fingerprint()}
+	r := protocol.PersonRoster{Person: me.info.Person, Label: me.info.Label, Email: me.roster.Email, Picture: me.roster.Picture, Seq: me.info.Seq + 1, Prev: me.info.Roster, Devices: keep, HumanKeys: slices.DeleteFunc(me.roster.Humans(), func(fp string) bool {
+		return !slices.ContainsFunc(keep, func(d identity.Public) bool { return d.Fingerprint() == fp })
+	}), By: a.Self().Fingerprint()}
 	r.Sign(a.id.Sign)
 	raw, _ := json.Marshal(r)
 	err = a.hub.doBytes(ctx, "PUT", "/v1/person", raw, nil)
@@ -457,6 +478,7 @@ func (a *Agent) RemoveDevice(ctx context.Context, address string) error {
 
 // LinkStatus is the new device's side of a link.
 type LinkStatus struct {
+	Google      bool   `json:"google,omitempty"`
 	State       string `json:"state"` // "" (no link), pending, linked, refused, expired, stale, failed
 	Detail      string `json:"detail,omitempty"`
 	Person      string `json:"person,omitempty"`
@@ -573,9 +595,7 @@ func (a *Agent) pendingStream(ctx context.Context, query, session string) (linke
 		// A member's stream: activated before this stream connected. The
 		// Hub counts this session as live for a while: say what it reads,
 		// as a daemon's session does, so nobody waits on it.
-		rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: ownCaps, TS: time.Now().Unix()}
-		rec.Sign(a.id.Sign)
-		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
+		if err := a.putCaps(ctx, session); err != nil {
 			a.Logf("capabilities of the waiting session: %v", err)
 		}
 		return true, nil
@@ -625,7 +645,7 @@ func (a *Agent) finishLink(ctx context.Context) (LinkStatus, error) {
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &step)
 	}
-	if !ok || me.info.Person != s.Person || err != nil || step.By != s.ApproverKey || !step.Has(a.Address, a.Self().Fingerprint()) {
+	if !ok || me.info.Person != s.Person || err != nil || (!s.Google && step.By != s.ApproverKey) || !step.Has(a.Address, a.Self().Fingerprint()) {
 		s.State, s.Detail = LinkFailed, "the person's roster does not name this device in the step its approver signed"
 		a.setLinkState(s)
 		return s, ErrLinkCrossPerson

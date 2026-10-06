@@ -11,7 +11,10 @@ import (
 
 // startWorkspaceUI runs inside the existing default Agent.Run Owned callback.
 // It never reacquires that daemon's home lock or substitutes its Agent.
-func startWorkspaceUI(a *client.Agent, home, host, token string, skins string) (*ui.Server, http.Handler, func(), error) {
+//
+// openPage, in the AgentNet app (app.go), opens the app's window on a
+// notification's destination; nil keeps the browser page command.
+func startWorkspaceUI(a *client.Agent, home, host, token string, skins string, openPage ...func(workspace string) func(fragment string) []string) (*ui.Server, http.Handler, func(), error) {
 	registry, err := client.OpenWorkspaces(home)
 	if err != nil {
 		return nil, nil, nil, err
@@ -21,8 +24,10 @@ func startWorkspaceUI(a *client.Agent, home, host, token string, skins string) (
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	inApp := len(openPage) > 0 && openPage[0] != nil
 	live := ui.NewLive(a)
 	live.SetAssistantSetup(newAssistantSetup(home, a))
+	live.SetApp(inApp)
 	page := ui.New(live, host, token, skins)
 	for _, w := range items {
 		if w.ID == client.DefaultWorkspace && w.State == "enrolled" {
@@ -37,8 +42,12 @@ func startWorkspaceUI(a *client.Agent, home, host, token string, skins string) (
 		if workspaceHome, e := registry.Home(workspace.ID); e == nil {
 			l.SetAssistantSetup(newAssistantSetup(workspaceHome, agent))
 		}
+		l.SetApp(inApp)
 	}
 	runtime.Options = func(w client.Workspace) client.RunOptions {
+		if len(openPage) > 0 && openPage[0] != nil {
+			return client.RunOptions{OpenPage: openPage[0](w.ID)}
+		}
 		return client.RunOptions{
 			OpenConv: func(conv string) []string {
 				return workspacePageCommand(home, conv, w.ID)

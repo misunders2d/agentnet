@@ -7,7 +7,7 @@ import { Switch } from "@base-ui/react/switch";
 import { IconChevronRight, IconDevices, IconPlus, IconSettings } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, agentWhere, deviceKind, niceDevice, personName } from "../model";
+import { agentName, agentWhere, deviceKind, niceDevice, personName, runsAgent } from "../model";
 import { useStore, type Store } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -16,6 +16,7 @@ import { ScreenTitle } from "./Approvals.title";
 import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { capital, deviceWords, isMine } from "./Approvals.words";
 import { AgentSheet, type AgentSetup } from "./AgentsView.forms";
+import { AssistantSetup } from "./AssistantSetup";
 import { latestThreads, Permissions, useGrants, warmGrants } from "./AgentsView.grants";
 import { eventKind } from "./Message.model";
 
@@ -160,9 +161,11 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
   const [sheet, setSheet] = useState<null | { agent?: T.CatalogAgent }>(null);
   const [off, setOff] = useState<T.CatalogAgent | null>(null);
   const [unshared, setUnshared] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const c = catalog.v;
   if (catalog.error) return <p className="px-1 text-[14px] text-muted">Named agents aren’t available here: {catalog.error}</p>;
   if (!c?.local) return null;
+  if (connecting) return <AssistantSetup start onDone={() => setConnecting(false)} />;
   const agents = c.agents || [];
   const change = async (body: T.AgentCatalogChange, ok: string) => {
     const r = await store.run((api) => api.changeAgents(body));
@@ -183,6 +186,7 @@ function NamedAgents({ o, catalog }: { o: T.Overview; catalog: Load<T.AgentCatal
           <button type="button" className="min-h-11 font-bold underline underline-offset-2" onClick={() => change({ action: "publish" }, "Shared.")}>Share again</button>
         </p>
       )}
+      <Button variant="act" size="sm" icon={<IconPlus size={18} />} onClick={() => setConnecting(true)}>Connect an agent</Button>
       <button type="button" onClick={() => setSheet({})}
         className="flex min-h-14 items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-ink/40 px-4 text-left font-bold hover:bg-sunken">
         <span className="grid size-9 place-items-center rounded-xl bg-agent text-agent-ink" aria-hidden="true"><IconPlus size={20} /></span>
@@ -237,7 +241,7 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
 // only sends reports here is not one: it is in ReportsNote.
 function OtherDevices({ o }: { o: T.Overview }) {
   const store = useApp();
-  const mine = latestThreads(o).filter((t) => isMine(t.peer, o) && t.peer !== o.me.address && !t.notice_only);
+  const mine = latestThreads(o).filter((t) => isMine(t.peer, o) && t.peer !== o.me.address && !t.notice_only && runsAgent(t.peer, o)); // a phone is you, not an agent
   if (!mine.length) return null;
   return (
     <ul className="flex flex-col gap-2">
@@ -295,7 +299,7 @@ function Others({ o }: { o: T.Overview }) {
       });
     }
   }
-  for (const t of latestThreads(o).filter((t) => !t.notice_only && !isMine(t.peer, o) && !rows.some((r) => r.address === t.peer && !r.agentId))) {
+  for (const t of latestThreads(o).filter((t) => !t.notice_only && !isMine(t.peer, o) && runsAgent(t.peer, o) && !rows.some((r) => r.address === t.peer && !r.agentId))) {
     const p = (o.people || []).find((x) => x.address === t.peer || (x.devices || []).some((d) => d.address === t.peer)) || null;
     rows.push({ key: t.peer, seed: t.peer, address: t.peer, owner: p, open: () => void store.open({ kind: "thread", id: t.id, peer: t.peer }), where: "Talks with your agent directly", state: "active", conv: "", pid: "" });
   }

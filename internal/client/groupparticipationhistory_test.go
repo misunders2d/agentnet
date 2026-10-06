@@ -34,7 +34,7 @@ func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := producer.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, record.ID, []string{original.LID}, nil, "selected history scope")
+	p, err := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, record.ID, []string{original.LID}, nil, "selected history scope")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +43,9 @@ func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "visitor accepted before link", func() bool { v, e := producer.Participation(p.PID); return e == nil && v.Claimable() })
+	if err = host.Approve(producer.Address); err != nil {
+		t.Fatal(err)
+	}
 	question, err := producer.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "before late link")
 	if err != nil {
 		t.Fatal(err)
@@ -154,9 +157,9 @@ func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
 			if err = phone.accept(tctx(t), h.env); err != nil {
 				t.Fatal(err)
 			}
-			phone.retryProof(tctx(t))
 		}
 	}
+	// Replay the complete history batch before retrying held proof dependencies.
 	phone.retryProof(tctx(t))
 	view, err := phone.Participation(p.PID)
 	if err != nil || !view.Claimable() || view.Host.Fingerprint != host.Self().Fingerprint() || view.AgentID != record.ID {

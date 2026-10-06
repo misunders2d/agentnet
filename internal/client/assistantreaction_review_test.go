@@ -273,6 +273,9 @@ func TestAssistantReactionMemberHostedGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "active", func() bool { v, e := producer.Participation(p.PID); return e == nil && v.Claimable() })
+	if err = host.Approve(producer.Address); err != nil {
+		t.Fatal(err)
+	}
 	q, err := producer.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "member group react")
 	if err != nil {
 		t.Fatal(err)
@@ -316,6 +319,9 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "active", func() bool { v, e := producer.Participation(p.PID); return e == nil && v.Claimable() })
+	if err = host.Approve(producer.Address); err != nil {
+		t.Fatal(err)
+	}
 	q, err := producer.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "linked group react")
 	if err != nil {
 		t.Fatal(err)
@@ -397,6 +403,14 @@ func TestAssistantReactionGroupLinkedHistory(t *testing.T) {
 	producer = reopen(t, producer, stops[producer])
 	stillWaiting(t, producer, phone.Address, protocol.CapGroup)
 	addCapSuccessor(t, phone, protocol.CapAgentReaction)
+	// rm1 implies agr1, so the older reader also lacked rm1. Its upgrade
+	// restores both, allowing the captured request proof to arrive first.
+	addCapSuccessor(t, phone, protocol.CapRoom)
+	eventually(t, "linked captured request recovered before its reaction", func() bool {
+		var n int
+		phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE lid=? AND coalesce(human,'')!='' AND coalesce(group_admission,'')!=''`, q.LID).Scan(&n)
+		return n == 1
+	})
 	eventually(t, "the assistant's reaction recovered on the linked device", func() bool {
 		rs := reactorsOn(groupTurns(t, phone, conv), q.LID, "👀")
 		return len(rs) == 1 && rs[0].ID == "assistant:"+p.PID && rs[0].Assistant

@@ -25,6 +25,7 @@ export interface ChatItem {
   topics?: Topic[];            // an agent's separate conversations not archived, newest first
   peer?: string;               // an agent's device address
   topicTotal?: number;         // every topic with that agent, archived ones too
+  keyChanged?: boolean;        // the agent's identity changed: sending is paused until it is checked and trusted
 }
 
 // ---- topics (docs/plans/TOPICS.md) ------------------------------------------
@@ -34,6 +35,7 @@ export interface ChatItem {
  *  here; there is no setting. How topics are derived (when one is archived,
  *  page limits) is the server's: client/topics.go and engine.mjs. */
 export const TOPICS = {
+  undoDelay:6000,     // confirmation can be undone before applying the action
   barMax: 6,          // chips in a conversation's topic bar, "All topics (N)" included
   chipMinWidth: 104,  // px a topic chip keeps before the bar shows one fewer (the rest are under All topics)
   chipMaxWidth: "16rem", // the widest a topic chip grows on a wide screen
@@ -48,11 +50,27 @@ export const TOPICS = {
   pageMax: 200,       // topics one request may list (client.TopicPageMax)
 } as const;
 
+// Arrival notes use seconds; message ordering still uses arrival.
+export const MESSAGES = Object.freeze({ ARRIVED_NOTE_AFTER: 60 });
+
+/** Reminder tunables (MEL-528, "Remind me…"): the quick times offered and
+ *  how the list at the top of Chats behaves. Change them here; there is no
+ *  setting. How far ahead a reminder may be set is the server's
+ *  (client/remind.go maxReminderAhead). */
+export const REMIND = {
+  soon: [30, 120] as readonly number[], // minutes ahead of the quick choices: "In 30 minutes", "In 2 hours"
+  morning: 9,         // hour of "Tomorrow at 9:00" (this device's time)
+  customAhead: 60,    // minutes ahead the "At a time I choose" field starts at
+  listMax: 4,         // reminders shown at the top of Chats before "Show all"
+  titleMax: 90,       // characters of a reminded message's first line in the list
+} as const;
+
 export type TopicState = "active" | "done" | "archived";
 
 /** Topic is one of an agent's separate conversations (a device thread): each
  *  is its own reply chain, so its own session on the agent's side. */
 export interface Topic {
+  conv?: string;
   id: string;
   peer: string;
   title: string;
@@ -65,7 +83,7 @@ export interface Topic {
   waiting: boolean;            // a request in it waits for the agent, or the agent is working
   pending: boolean;            // anything in it is still open: never archived
   state: TopicState;
-  doneBy?: "agent" | "you";
+  doneBy?: "agent" | "you" | "person";
   conclusion?: string;         // the final reply that made it done, first line: the agent's, or yours when you answered by hand here
   concludedBy?: string;        // the device that sent it
   count: number;               // its messages, as this view shows them (a Mark done covers no later one)
@@ -73,10 +91,10 @@ export interface Topic {
 }
 
 export const topicOf = (t: T.ThreadSummary): Topic => ({
-  id: t.id, peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
+  id: t.id, conv:t.conv,peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
   needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending,
   state: t.state === "done" || t.state === "archived" ? t.state : "active",
-  doneBy: t.done_by === "agent" || t.done_by === "you" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
+  doneBy: t.done_by === "agent" || t.done_by === "you" || t.done_by === "person" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
   count: t.count, quietSince: t.quiet_since || t.last_at,
 });
 
@@ -108,13 +126,16 @@ export const deviceName = (address: string) => {
   return i < 0 ? address : address.slice(i + 1);
 };
 
-/** Capitalised device name for display ("zenbook" → "Zenbook"). */
-export const niceDevice = (address: string) => {
-  const d = deviceName(address);
-  return d ? d.charAt(0).toUpperCase() + d.slice(1) : d;
-};
+/** niceDevice is a device in words, as every screen shows it (client.DeviceWords;
+ *  vectors in internal/ui/testdata/device_words.json): dashes as spaces, the
+ *  first letter capital, iPhone, iPad, iMac, Mac and MacBook as written
+ *  ("zenbook" → "Zenbook", "windows-laptop" → "Windows laptop", "iphone" → "iPhone"). */
+const deviceSpecial: Record<string, string> = { iphone: "iPhone", ipad: "iPad", imac: "iMac", mac: "Mac", macbook: "MacBook" };
+export const niceDevice = (address: string) =>
+  deviceName(address || "").split("-").filter(Boolean)
+    .map((w, i) => deviceSpecial[w.toLowerCase()] || (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
 
-export const personName = (p: T.PersonView | undefined | null) => (p && (p.label || niceDevice(p.address))) || "Someone";
+export const personName = (p: T.PersonView | undefined | null) => (p && (p.label || "Someone")) || "Someone";
 
 /** possessive: "Vitalii" → "Vitalii's"; "you" for this installation's person. */
 export const owner = (p: T.PersonView | undefined | null, me?: T.PersonView | null) =>
@@ -159,14 +180,14 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
     const ts = (byPeer.get(peer) || []).map(topicOf).sort(newestFirst), c = counts.get(peer);
     const latest = c && (!ts[0] || newestFirst(topicOf(c.latest), ts[0]) < 0) ? topicOf(c.latest) : ts[0];
     if (!latest) continue;
-    const person = deviceOwner(peer, o);
+    const row = threadRow(peer, o, agentNames); // an agent only where one runs (MEL-529)
     items.push({
       key: "agent:" + peer,
       open: { kind: "thread", id: latest.id, peer },
-      kind: "agent",
-      title: person ? agentName(undefined, agentNames, person, o.person) : niceDevice(peer),
-      subtitle: person ? "on " + niceDevice(peer) : "Agent · no person linked",
-      avatarSeed: peer,
+      kind: row.kind,
+      title: row.title,
+      subtitle: row.subtitle,
+      avatarSeed: row.seed,
       last: firstLine(latest.last),
       lastAt: latest.lastAt,
       unread: ts.reduce((n, t) => n + t.unread, 0) + (c?.archived_unread || 0),
@@ -177,6 +198,7 @@ export function chatList(o: T.Overview | null, agentNames: Record<string, string
       topics: ts,
       peer,
       topicTotal: c ? c.total : ts.length,
+      keyChanged: (byPeer.get(peer) || []).some((t) => t.key_changed) || !!c?.latest.key_changed,
     });
   }
   return items.sort((a, b) => (b.lastAt || "").localeCompare(a.lastAt || ""));
@@ -212,6 +234,142 @@ export function agentSubtitle(address: string, o: T.Overview | null): string {
     if ((p.devices || []).some((d) => d.address === address) || p.address === address) return personName(p) + "’s agent · " + niceDevice(address);
   }
   return niceDevice(address);
+}
+
+// ---- people and devices (MEL-529, MEL-525) ----------------------------------
+// A device runs an agent only when it says so: overview.agent_devices for
+// the others (kept offline), me.agent for this one. A phone or a browser
+// never does, so its messages are its person's. Every screen asks these
+// helpers; none guesses that a device thread's peer is an agent. The hint
+// is for display and offers only: it decides nothing that runs.
+
+/** runsAgent: the device at address runs an agent people may ask. */
+export function runsAgent(address: string, o: T.Overview | null | undefined): boolean {
+  if (!o || !address) return false;
+  if (address === o.me.address) return !!o.me.agent;
+  return (o.agent_devices || []).includes(address);
+}
+
+/** agentPeers: the other devices that run an agent (for the Agents lists). */
+export const agentPeers = (o: T.Overview | null | undefined) => new Set<string>(o?.agent_devices || []);
+
+/** shortKey: a key's first group ("19c77bce"), to tell look-alike names apart. */
+export const shortKey = (fp?: string) => String(fp || "").replace(/^SHA256:/i, "").trim().split(/[-\s]/)[0] || "";
+
+/** Who a device is, as people see it. */
+export interface DeviceWho {
+  relation: "this" | "own" | "person" | "unknown";
+  agent: boolean;              // it runs an agent (runsAgent)
+  person: T.PersonView | null; // its person, as their record names it
+  device: string;              // the device in words: "Pixel"
+  verified: boolean;           // that record is checked here, not only listed by the server
+  short: string;               // the key's first group, when the name alone could pass for someone else
+  name: string;                // "You", "Vitalii", or the device when no person is known
+}
+
+/** deviceWho says whose a device is: this one, another of yours, another
+ *  person's, or unknown. A person's name gets the key's first group when it
+ *  is also another person's (or yours), or when the server only lists them. */
+export function deviceWho(address: string, o: T.Overview | null | undefined): DeviceWho {
+  const device = niceDevice(address), agent = runsAgent(address, o);
+  if (o && address === o.me.address) return { relation: "this", agent, person: o.person || null, device, verified: true, short: "", name: "You" };
+  const p = deviceOwner(address, o || null);
+  if (!p) return { relation: "unknown", agent, person: null, device, verified: false, short: "", name: device || "Someone" };
+  if (o?.person && (p === o.person || (!!p.person && p.person === o.person.person))) return { relation: "own", agent, person: p, device, verified: true, short: "", name: "You" };
+  const verified = p.state !== "listed";
+  const label = (p.label || "").trim().toLowerCase();
+  const same = (x: T.PersonView) => (!!x.person && x.person === p.person) || x.address === p.address;
+  const clash = !!label && [o?.person, ...(o?.people || [])].some((x) => !!x && !same(x) && (x.label || "").trim().toLowerCase() === label);
+  const fp = (p.devices || []).find((d) => d.address === address)?.fingerprint || (p.address === address ? p.fingerprint : "") || "";
+  return { relation: "person", agent, person: p, device, verified, short: clash || !verified ? shortKey(fp) : "", name: personName(p) };
+}
+
+/** whoName: "Vitalii", or "Sergey · 19c77bce" when the name needs its key. */
+export const whoName = (w: DeviceWho) => (w.short ? w.name + " · " + w.short : w.name);
+
+/** One device thread's row: an agent where one runs, else the person. */
+export interface ThreadRow { kind: "agent" | "person"; title: string; subtitle: string; seed: string; local: boolean }
+
+/** threadRow names a device thread for the chat list and its header:
+ *  - a device that runs an agent: that agent ("Your agent" · "on Zenbook"),
+ *    or the device when its person is not known ("Bezos" · "Agent · not linked to a person");
+ *  - another device of yours that runs none, while this one runs an agent:
+ *    this computer's agent, asked from there ("Your agent" · "On this computer · asked from your Pixel");
+ *  - another device of yours otherwise: "Your Pixel";
+ *  - another person's device that runs none: that person ("Vitalii" · "from Phone"). */
+export function threadRow(peer: string, o: T.Overview | null | undefined, names: Record<string, string>): ThreadRow {
+  const w = deviceWho(peer, o), me = o?.person;
+  if (w.agent) {
+    if (!w.person) return { kind: "agent", title: w.device || "Agent", subtitle: "Agent · not linked to a person", seed: peer, local: false };
+    return { kind: "agent", title: agentName(undefined, names, w.person, me) + (w.short ? " · " + w.short : ""), subtitle: "on " + w.device, seed: peer, local: false };
+  }
+  if (w.relation === "own" || w.relation === "this") {
+    if (o?.me.agent) return { kind: "agent", title: "Your agent", subtitle: "On this computer · asked from your " + w.device, seed: o.me.address, local: true };
+    return { kind: "person", title: "Your " + w.device, subtitle: "Your device", seed: peer, local: false };
+  }
+  if (w.relation === "person") return { kind: "person", title: whoName(w), subtitle: "from " + w.device, seed: w.person?.person || peer, local: false };
+  return { kind: "person", title: w.device || "Someone", subtitle: "Not linked to a person", seed: peer, local: false };
+}
+
+/** Who wrote one message of a device thread. */
+export interface ThreadAuthor { key: string; name: string; sub?: string; agent: boolean; mine: boolean; seed: string }
+
+/** threadAuthor: who wrote m in the device thread with peer (all: the thread's messages).
+ *  - from another device of yours that runs no agent: you ("You" · "from Pixel", on your side);
+ *  - from another person's device that runs none: that person;
+ *  - from a device that runs an agent: that agent;
+ *  - sent here, as an answer or result to a device that runs none: this computer's
+ *    agent, unless its request was answered by hand;
+ *  - anything else sent here: you. */
+export function threadAuthor(m: T.Message, o: T.Overview | null | undefined, names: Record<string, string>, peer: string, all: T.Message[] = []): ThreadAuthor {
+  const me = o?.person;
+  if (m.dir === "out") {
+    if (o?.me.agent && !runsAgent(peer, o) && (m.kind === "answer" || m.kind === "result")) {
+      const req = all.find((x) => x.id === m.reply_to);
+      if (!req || req.state !== "manual") return { key: "local:" + o.me.address, name: (m.agent_id && names[m.agent_id]) || "Your agent", sub: "On this computer", agent: true, mine: false, seed: m.agent_id || o.me.address };
+    }
+    return { key: "me", name: "You", agent: false, mine: true, seed: me?.person || "me" };
+  }
+  const w = deviceWho(m.from, o);
+  if (w.agent) {
+    const row = threadRow(m.from, o, names);
+    return { key: "in:" + m.from + "#" + (m.agent_id || ""), name: (m.agent_id && names[m.agent_id]) || row.title, sub: "on " + w.device, agent: true, mine: false, seed: m.agent_id || m.from };
+  }
+  if (w.relation === "own" || w.relation === "this") return { key: "me:" + m.from, name: "You", sub: "from " + w.device, agent: false, mine: true, seed: me?.person || "me" };
+  if (w.relation === "person") return { key: "p:" + (w.person?.person || m.from), name: whoName(w), sub: "from " + w.device, agent: false, mine: false, seed: w.person?.person || m.from };
+  return { key: "p:" + m.from, name: w.device || "Someone", agent: false, mine: false, seed: m.from };
+}
+
+/** What a device thread's composer may send to peer. */
+export type DeviceTarget =
+  | { kind: "agent" }                  // ask it, or give it a task
+  | { kind: "own"; note: string }      // your own device that runs no agent: answer its requests by hand only
+  | { kind: "person"; name: string };  // a person's device that runs no agent: a plain message only
+
+/** deviceTarget: a device that runs no agent cannot be asked anything. */
+export function deviceTarget(peer: string, o: T.Overview | null | undefined): DeviceTarget {
+  const w = deviceWho(peer, o);
+  if (w.agent) return { kind: "agent" };
+  if (w.relation === "own" || w.relation === "this")
+    return { kind: "own", note: "This is your own " + w.device + ". " + (o?.me.agent ? "Questions you ask there come to this computer’s agent." : "It runs no agent, so there is nothing to ask it.") };
+  return { kind: "person", name: w.relation === "person" ? whoName(w) : w.device || "this device" };
+}
+
+/** askerWords: who asked, for a sentence ("Question from you · Pixel",
+ *  "… from Vitalii · Phone", "… from Vitalii’s agent"). */
+export function askerWords(address: string, o: T.Overview | null | undefined, names: Record<string, string>): { name: string; device: string; agent: boolean; you: boolean } {
+  const w = deviceWho(address, o);
+  if (w.agent) return { name: threadRow(address, o, names).title, device: w.device, agent: true, you: false };
+  const you = w.relation === "own" || w.relation === "this";
+  return { name: you ? "you" : whoName(w), device: w.device, agent: false, you };
+}
+
+/** bringInDevices: the devices of p whose default agent may be brought in:
+ *  only devices that run an agent and publish no named agents (those are
+ *  offered one by one). A phone or a browser is never offered. */
+export function bringInDevices(p: T.PersonView, o: T.Overview | null | undefined, remote: Record<string, unknown[] | undefined>): string[] {
+  const devices = (p.devices || []).length ? (p.devices || []).map((d) => d.address) : [p.address];
+  return devices.filter((a) => runsAgent(a, o) && !(remote[a] || []).length);
 }
 
 // ---- who is in a conversation ---------------------------------------------
@@ -387,8 +545,64 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   const who = senderOf(c, o);
   switch (c.reason) {
     case Reason.invite: return who + " invited your agent into " + chatName(c.conv, o);
-    case Reason.needsHuman: return "Your agent needs you for " + (who === "You" ? "your " : who + "’s ") + (c.kind === "task" ? "task" : "question");
+    case Reason.needsHuman: return "Your agent couldn’t finish — it needs your answer";
     case Reason.heldTurn: return who + (c.kind === "task" ? " gave you a task" : " asked you something");
     default: return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
+  }
+}
+
+// ---- reminders ("Remind me later", on received messages; daemon only) ------
+
+/** reminderOf: the pending reminder on message id, when this device keeps reminders. */
+export const reminderOf = (o: T.Overview | null, id: string) =>
+  (o?.remind && (o.reminders || []).find((r) => r.message === id)) || undefined;
+
+/** clock says a time of day as this device writes it: "9:00 AM", "15:00". */
+export const clock = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+/** dueText says when, on this device's clock: "today 15:00", "tomorrow 9:00", "Tue 7 Oct 9:00". */
+export function dueText(when: string | Date, now = new Date()): string {
+  const d = new Date(when);
+  const time = clock(d);
+  if (d.toDateString() === now.toDateString()) return "today " + time;
+  const next = new Date(now);
+  next.setDate(now.getDate() + 1);
+  if (d.toDateString() === next.toDateString()) return "tomorrow " + time;
+  const year = d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" as const };
+  return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", ...year }) + " " + time;
+}
+
+/** timeZone names this device's time zone ("Europe/Kyiv"), or "" when the browser does not say. */
+export function timeZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
+}
+
+/** reminderTimes: the quick choices of "Remind me…", from now. */
+export function reminderTimes(now = new Date()): { label: string; at: Date }[] {
+  const soon = REMIND.soon.map((m) => ({ label: m < 60 ? "In " + m + " minutes" : "In " + m / 60 + (m === 60 ? " hour" : " hours"), at: new Date(now.getTime() + m * 60e3) }));
+  const morning = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, REMIND.morning, 0);
+  return [...soon, { label: "Tomorrow at " + clock(morning), at: morning }];
+}
+
+/** localInput is d as a datetime-local field's value, in this device's time. */
+export const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
+
+// ---- held back (overview.quarantine) ----------------------------------------
+
+/** holdVerified: whether a held message's sender is known (QuarantineItem.code).
+ *  One that didn't verify ("unverified", or a code this page doesn't know)
+ *  only claims who sent it, so it is never shown as that person. */
+export const holdVerified = (code: string) =>
+  ["key_changed", "proof_pending", "identity_conflict", "conflicting_duplicate"].includes(code);
+
+/** holdSentence says why a received message is held back (QuarantineItem.code),
+ *  naming its sender; its content is never shown. browser: this device can't trust keys. */
+export function holdSentence(code: string, name: string, browser = false): string {
+  switch (code) {
+    case "key_changed": return name + "’s identity changed. It waits until you check and trust the new one" + (browser ? " in AgentNet on your computer." : ".");
+    case "proof_pending": return "It names a chat or a person this device can’t check yet. It waits here; nothing runs it.";
+    case "identity_conflict": return "It disagrees with what this device knows about " + name + ". It stays held; nothing runs it.";
+    case "conflicting_duplicate": return name + " sent different words under a message already received. It stays held; nothing runs it.";
+    default: return "It says it’s from " + name + ", but that couldn’t be checked, so it isn’t shown.";
   }
 }

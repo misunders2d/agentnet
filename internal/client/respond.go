@@ -135,6 +135,19 @@ func (a *Agent) declineConv(id, reason string) (SendResult, error) {
 	return SendResult{ID: id, State: stateDeclined}, nil
 }
 
+// acceptableCond is what Accept takes (with acceptableArgs): a device
+// request waiting for acceptance or approval, or one to rerun; or, in a
+// conversation, a request to this device's agent (its participation's,
+// not a replica) waiting for its person, or one to rerun. An operator's
+// accept from a report takes the same (headless.go admitDecision).
+const acceptableCond = `conv IS NULL AND
+		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
+		OR pid IS NOT NULL AND replica = 0 AND ((kind IN (?, ?) AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))`
+
+var acceptableArgs = []any{envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
+	envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman,
+	envelope.KindTask, envelope.KindQuestion, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman}
+
 // Accept lets the worker run a task awaiting acceptance, answer a held
 // question, or explicitly rerun one that was interrupted, failed, cancelled
 // or marked needs_human. A rerun starts afresh; it does not resume the
@@ -158,12 +171,8 @@ func (a *Agent) Accept(id string) error {
 		notifyDaemon(a.home)
 		return nil
 	}
-	acceptable := []any{id, envelope.KindTask, stateAwaiting, envelope.KindQuestion, stateHeld,
-		envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman,
-		envelope.KindTask, envelope.KindQuestion, stateAwaiting, envelope.KindTask, envelope.KindQuestion, stateInterrupt, stateJobFailed, stateCancelled, stateNeedHuman}
-	const acceptableWhere = ` WHERE id = ? AND (conv IS NULL AND
-		((kind = ? AND state = ?) OR (kind = ? AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?)))
-		OR pid IS NOT NULL AND replica = 0 AND ((kind IN (?, ?) AND state = ?) OR (kind IN (?, ?) AND state IN (?, ?, ?, ?))))`
+	acceptable := append([]any{id}, acceptableArgs...)
+	const acceptableWhere = ` WHERE id = ? AND (` + acceptableCond + `)`
 	var n int
 	if err := a.store.db.QueryRow(`SELECT count(*) FROM inbox`+acceptableWhere, acceptable...).Scan(&n); err != nil {
 		return err
@@ -288,6 +297,9 @@ func (a *Agent) Resolve(id string) error {
 			a.NoteChange()
 			return nil
 		}
+		if dismissed, err := a.dismissDeviceAdminNotice(id); err != nil || dismissed {
+			return err
+		}
 		if dismissed, err := a.dismissSelfConsentNotice(id); err != nil || dismissed {
 			return err
 		}
@@ -333,9 +345,25 @@ func (a *Agent) daemonRuns() bool {
 	return false
 }
 
-// Approve lets questions from address be answered automatically.
+// Approve allows future questions from a verified person or explicit device.
 func (a *Agent) Approve(address string) error {
-	_, err := a.store.db.Exec(`INSERT OR IGNORE INTO approvals(address, added_at) VALUES(?, ?)`, address, time.Now().Unix())
+	target, err := a.PermissionTarget(address)
+	if err != nil {
+		return err
+	}
+	if isPersonTarget(target) {
+		tx, e := a.store.db.Begin()
+		if e != nil {
+			return e
+		}
+		defer tx.Rollback()
+		if e = setPersonGrant(tx, target, "questions", true); e != nil {
+			return e
+		}
+		err = tx.Commit()
+	} else {
+		_, err = a.store.db.Exec(`INSERT OR IGNORE INTO approvals(address, added_at) VALUES(?, ?)`, target, time.Now().Unix())
+	}
 	if err == nil {
 		notifyDaemon(a.home)
 	}
@@ -345,28 +373,46 @@ func (a *Agent) Approve(address string) error {
 // Approvals counts the agents whose questions are answered automatically.
 func (a *Agent) Approvals() (int, error) {
 	var n int
-	err := a.store.db.QueryRow(`SELECT count(*) FROM approvals`).Scan(&n)
+	err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM approvals)+(SELECT count(*) FROM person_grants WHERE questions=1)`).Scan(&n)
 	return n, err
 }
 
 // NoApprovals is what a responder does with no agent approved.
-const NoApprovals = "no agent approved yet, so every question waits for you (agentnet inbox --review); approve one with agentnet approve ADDRESS only if the person asks"
+const NoApprovals = "no agent approved yet, so every question waits for you (agentnet inbox --review); approve one with agentnet approve PERSON-or-ADDRESS only if the person asks"
 
 // Unapprove stops automatic answers for address. Its questions still
 // waiting for the worker go back to held (the worker also re-checks approval
 // when it claims); ones you accepted explicitly stay accepted, and one
 // already running may finish unless cancelled.
 func (a *Agent) Unapprove(address string) error {
+	target, e := a.PermissionTarget(address)
+	if e != nil && !isPersonTarget(address) {
+		return e
+	}
+	if isPersonTarget(address) {
+		target = address
+	}
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM approvals WHERE address = ?`, address); err != nil {
-		return err
+	if isPersonTarget(target) {
+		if err = setPersonGrant(tx, target, "questions", false); err != nil {
+			return err
+		}
+	} else {
+		res, err := tx.Exec(`DELETE FROM approvals WHERE address=?`, target)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			if err = coveredByPerson(tx, target, "questions"); err != nil {
+				return err
+			}
+		}
 	}
-	if _, err := tx.Exec(`UPDATE inbox SET state = ? WHERE sender = ? AND kind = ? AND state = ?`,
-		stateHeld, address, envelope.KindQuestion, statePending); err != nil {
+	if err = demotePersonJobs(tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

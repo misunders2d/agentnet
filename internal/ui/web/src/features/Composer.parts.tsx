@@ -1,10 +1,10 @@
-// The composer's pieces: the "+" menu, the reply chip, the Answer | Do it
+// The composer's pieces: the "+" menu, the reply chip, the addressed-agent
 // row, the send button, and the text field that shows mentions as chips.
 // Colors and type sizes sit on inner elements, not on buttons themselves:
 // the page's base sheet resets a button's font and color.
-import { forwardRef, type CSSProperties, type ReactNode, type Ref, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type TextareaHTMLAttributes } from "react";
+import { forwardRef, type CSSProperties, type ReactNode, type Ref, type MouseEvent as ReactMouseEvent, type TextareaHTMLAttributes } from "react";
 import { Menu } from "@base-ui/react/menu";
-import { IconArrowUp, IconBolt, IconCornerUpLeft, IconMessageCircle, IconMoodSmile, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
+import { IconArrowUp, IconCornerUpLeft, IconMoodSmile, IconPaperclip, IconPlus, IconUserPlus, IconX } from "@tabler/icons-react";
 import { AgentAvatar } from "../ui/Avatar";
 import type { Span } from "./Composer.mentions";
 import { usePortal } from "../owned";
@@ -69,62 +69,23 @@ export function ReplyChip({ title, text, note, cancel, onCancel }: { title: stri
   );
 }
 
-/** IntentRow: "Zen should [Answer | Do it]", shown once an agent is addressed. */
-export function IntentRow({ name, seed, doIt, disabled, onChoose, onStop, note }: {
-  name: string; seed: string; doIt: boolean; disabled?: boolean; onChoose: (doIt: boolean) => void; onStop?: () => void; note?: string;
+/** The addressed agent, with a way to return to ordinary chat. */
+export function IntentRow({ name, seed, onStop, note }: {
+ name: string; seed: string; onStop?: () => void; note?: string;
 }) {
-  const keys = (e: ReactKeyboardEvent) => {
-    if (!disabled && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-      e.preventDefault();
-      onChoose(!doIt);
-      (e.currentTarget.querySelector(doIt ? "[data-answer]" : "[data-doit]") as HTMLElement | null)?.focus();
-    }
-  };
-  const seg = "flex h-9 items-center gap-1.5 px-3 text-sm font-bold transition-colors duration-200 ease-out-soft stroke";
-  return (
-    <div className="mb-1 fade-in">
-      <div className="flex flex-wrap items-center gap-x-2">
-        <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-bold text-text-2">
-          <AgentAvatar seed={seed} size={24} />
-          <span className="truncate">{name} should</span>
-        </span>
-        <span className="flex items-center">
-          <span role="radiogroup" aria-label={"What " + name + " should do"} aria-disabled={disabled || undefined} onKeyDown={keys}
-            className={"flex " + (disabled ? "pointer-events-none opacity-45" : "")}>
-            <button type="button" role="radio" aria-checked={!doIt} tabIndex={doIt ? -1 : 0} disabled={disabled} data-answer="" onMouseDown={keep} onClick={() => onChoose(false)} className="flex h-11 items-center">
-              <span className={seg + " rounded-l-xl " + (!doIt ? "bg-agent-fill text-ink" : "bg-canvas text-text-2 hover:bg-sunken")}>
-                <IconMessageCircle size={16} stroke={2.4} aria-hidden="true" />Answer
-              </span>
-            </button>
-            <button type="button" role="radio" aria-checked={doIt} tabIndex={doIt ? 0 : -1} disabled={disabled} data-doit="" onMouseDown={keep} onClick={() => onChoose(true)} className="flex h-11 items-center">
-              <span className={seg + " -ml-px rounded-r-xl " + (doIt ? "bg-act text-act-ink" : "bg-canvas text-text-2 hover:bg-sunken")}>
-                <IconBolt size={16} stroke={2.4} aria-hidden="true" />Do it
-              </span>
-            </button>
-          </span>
-          {onStop && (
-            <button type="button" onMouseDown={keep} onClick={onStop} aria-label={"Don’t ask " + name} title={"Don’t ask " + name} className="grid size-11 place-items-center rounded-full hover:bg-sunken">
-              <IconX size={18} stroke={2.4} className="text-muted" />
-            </button>
-          )}
-        </span>
-        <span className="hidden text-[13px] text-muted lg:inline">Alt+D switches</span>
-      </div>
-      {note && <p className="pb-1.5 text-[13px] leading-snug text-text-2">{note}</p>}
-    </div>
-  );
+ return <div className="mb-1 fade-in">
+  <div className="flex items-center gap-1.5 text-[13px] font-bold text-text-2">
+   <AgentAvatar seed={seed} size={24}/><span className="truncate">Asking {name}</span>
+   {onStop && <button type="button" onMouseDown={keep} onClick={onStop} aria-label={"Don’t ask " + name} className="grid size-11 place-items-center rounded-full hover:bg-sunken"><IconX size={18}/></button>}
+  </div>
+  {note && <p className="pb-1.5 text-[13px] leading-snug text-text-2">{note}</p>}
+ </div>;
 }
 
-export function SendButton({ doIt, ready, busy, label }: { doIt: boolean; ready: boolean; busy: boolean; label: string }) {
+export function SendButton({ ready, busy, label }: { ready: boolean; busy: boolean; label: string }) {
   const look = ready ? "bg-act stroke shadow-pop-sm press hover:brightness-[1.03]" : "bg-sunken border-[1.5px] border-hairline lg:border";
   const ink = ready ? "text-act-ink" : "text-muted";
   const dots = <span aria-hidden="true" className={"flex gap-0.5 text-lg leading-none " + ink}><span className="working-dot">•</span><span className="working-dot">•</span><span className="working-dot">•</span></span>;
-  if (doIt) return (
-    <button type="submit" onMouseDown={keep} aria-disabled={!ready || busy} aria-label={label} title={label}
-      className={"flex h-[46px] shrink-0 items-center self-end rounded-full px-4 transition-colors duration-200 lg:h-12 " + look}>
-      {busy ? dots : <span className={"flex items-center gap-1.5 text-base font-bold " + ink}><IconBolt size={20} stroke={2.4} aria-hidden="true" />Do it</span>}
-    </button>
-  );
   return (
     <button type="submit" onMouseDown={keep} aria-disabled={!ready || busy} aria-label={label} title={label}
       className={"grid size-[46px] shrink-0 place-items-center self-end rounded-full transition-colors duration-200 lg:size-12 " + look}>

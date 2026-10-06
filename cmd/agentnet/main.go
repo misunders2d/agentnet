@@ -85,6 +85,8 @@ func run(args []string) error {
 		return runHooks(*home, rest)
 	case "ui":
 		return runUI(ctx, *home, rest, os.Stdout)
+	case "app": // the AgentNet app's own program (app.go); it opens the home itself
+		return runApp(ctx, *home, rest, os.Stdin, os.Stdout)
 	}
 	if _, known := topics[cmd]; !known {
 		return fmt.Errorf("unknown command %q (see agentnet --help)", cmd)
@@ -104,6 +106,8 @@ func run(args []string) error {
 		return runSend(ctx, a, rest, false)
 	case "ask", "task":
 		return runSendKind(ctx, a, cmd, rest)
+	case "do":
+		return runDo(ctx, a, rest)
 	case "accept", "approve", "unapprove":
 		if len(rest) == 2 && ((cmd == "accept" && rest[0] == "--always") || (cmd != "accept" && rest[0] == "--tasks")) {
 			return runTaskGrant(a, cmd, rest[1])
@@ -175,9 +179,11 @@ func run(args []string) error {
 	case "responder":
 		return runResponder(a, rest)
 	case "operator":
-		return runOperator(a, rest)
+		return runOperator(ctx, a, rest, os.Stdout)
 	case "team":
 		return runTeam(ctx, a, rest, os.Stdout, os.Stderr)
+	case "room":
+		return runRoom(ctx, a, rest, os.Stdout)
 	case "group":
 		return runGroup(ctx, a, rest, os.Stdout, os.Stderr)
 	case "a2a":
@@ -822,43 +828,81 @@ func runAdminRelease(ctx context.Context, a *client.Agent, args []string) error 
 	return nil
 }
 
+// runAdminWorkspace shows, sets or clears the workspace name every member
+// sees ("Mellanni"); setting and clearing are admin only.
+func runAdminWorkspace(ctx context.Context, a *client.Agent, args []string) error {
+	usage := errors.New("usage: admin workspace [show] | admin workspace set NAME | admin workspace clear")
+	var name string
+	var err error
+	switch {
+	case len(args) == 0 || len(args) == 1 && args[0] == "show":
+		name, err = a.HubWorkspace(ctx)
+	case len(args) == 1 && args[0] == "clear":
+		name, err = a.SetWorkspaceName(ctx, "")
+	case len(args) == 2 && args[0] == "set":
+		if strings.TrimSpace(args[1]) == "" {
+			return usage
+		}
+		name, err = a.SetWorkspaceName(ctx, args[1])
+	default:
+		return usage
+	}
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		fmt.Println("no workspace name set (members see the relay's host name)")
+		return nil
+	}
+	fmt.Printf("workspace name %s\n", name)
+	return nil
+}
+
 func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: admin invite|revoke|release ...")
+		return errors.New("usage: admin invite|revoke|release|workspace ...")
 	}
 	switch args[0] {
+	case "google":
+		return runGoogleAdmin(ctx, a, args[1:])
 	case "invite":
 		fs := flag.NewFlagSet("admin invite", flag.ContinueOnError)
 		ttl := fs.Duration("ttl", 7*24*time.Hour, "invite lifetime (max 720h)")
 		admin := fs.Bool("admin", false, "grant admin rights")
 		raw := fs.Bool("raw", false, "print only the invite code (for scripts)")
-		link := fs.Bool("link", false, "print a private browser invitation URL (Hub needs --web and browser-trusted HTTPS)")
+		link := fs.Bool("link", false, "print the invitation link a person opens to get the AgentNet app and join (Hub needs --web and browser-trusted HTTPS)")
+		name := fs.String("name", "", "with --link: the invited person's name, written on the invitation (LABEL is then made from it unless given)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if *raw && *link {
 			return errors.New("choose either --raw or --link")
 		}
-		if fs.NArg() != 1 {
-			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw | --link] LABEL\n" +
+		if *name != "" && !*link {
+			return errors.New("--name is for --link invitations")
+		}
+		if fs.NArg() > 1 || (fs.NArg() == 0 && (*name == "" || !*link)) {
+			return errors.New("usage: admin invite [--ttl D] [--admin] [--raw] LABEL   or   admin invite [--ttl D] [--admin] --link (--name NAME [LABEL] | LABEL)\n" +
 				"LABEL is the invited person's AgentNet name (e.g. bob). Use the name your person gave for this invitation; if they have not, ask them who is being invited and what name to use. " +
 				"Do not infer it or reuse your own label, \"admin\", a user, host or model name unless your person chose it. It grants no rights; --admin does")
 		}
-		invite := a.Invite
 		if *link {
-			invite = a.BrowserInvite // refused before any invite is created unless a browser can use it
-		}
-		code, err := invite(ctx, fs.Arg(0), *ttl, *admin)
-		if err != nil {
-			return err
-		}
-		if *link {
-			address, err := inviteLink(code)
+			// The one invitation kind people get: refused before anything is
+			// created unless a browser and the app can use the link.
+			inv, err := a.CreateInvite(ctx, client.InviteOptions{Label: fs.Arg(0), Name: *name, TTL: *ttl, Admin: *admin, Workspace: a.WorkspaceName()})
+			if err != nil {
+				return err
+			}
+			address, err := inviteLink(inv.Code)
 			if err != nil {
 				return fmt.Errorf("invite created, but no browser link printed: %w", err)
 			}
 			fmt.Println(address)
 			return nil
+		}
+		code, err := a.Invite(ctx, fs.Arg(0), *ttl, *admin)
+		if err != nil {
+			return err
 		}
 		if *raw {
 			fmt.Println(code)
@@ -881,6 +925,8 @@ func runAdmin(ctx context.Context, a *client.Agent, args []string) error {
 		return nil
 	case "release":
 		return runAdminRelease(ctx, a, args[1:])
+	case "workspace":
+		return runAdminWorkspace(ctx, a, args[1:])
 	}
 	return fmt.Errorf("unknown admin command %q", args[0])
 }
@@ -894,11 +940,16 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 	returnSelection := receiverFlags(fs)
 	remoteAgent := fs.String("agent", "", "exact named remote executor AgentID, independent of reply receiver")
 	replyTo := fs.String("reply-to", "", "continue a conversation: the id of a message you sent to or received from ADDRESS")
+	answerDefault := client.AskAnswerWait // asked here, answered here (MEL-537)
+	if kind == "task" {
+		answerDefault = 0
+	}
+	answerFor := answerWaitFlag(fs, answerDefault)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
+		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s] [--answer-wait D] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT", kind)
 	}
 	beyond := ""
 	if *remoteAgent != "" {
@@ -946,7 +997,7 @@ func runSendKind(ctx context.Context, a *client.Agent, kind string, args []strin
 		return err
 	}
 	printResult(r, *wait)
-	return nil
+	return awaitAnswer(ctx, a, r.ID, "agentnet conversation "+r.ID, answerWait(answerFor), receiver, os.Stdout, os.Stderr)
 }
 
 func runResponder(a *client.Agent, args []string) error {
@@ -978,7 +1029,11 @@ func runResponder(a *client.Agent, args []string) error {
 			}
 			return nil
 		}
-		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, r.Timeout)
+		limit := "none"
+		if r.Timeout > 0 {
+			limit = r.Timeout.String()
+		}
+		fmt.Printf("harness %s\ndir %s\ntimeout %s\n", r.Harness, r.Dir, limit)
 		for _, c := range r.Context {
 			fmt.Printf("context %s\n", c)
 		}
@@ -998,7 +1053,7 @@ func runResponder(a *client.Agent, args []string) error {
 		var r client.Responder
 		fs.StringVar(&r.Harness, "harness", "", "responder: "+strings.Join(client.HarnessNames(), ", "))
 		fs.StringVar(&r.Dir, "dir", "", "working directory (its agent instructions apply)")
-		fs.DurationVar(&r.Timeout, "timeout", 5*time.Minute, "limit per question or task")
+		fs.DurationVar(&r.Timeout, "timeout", 0, "your own limit per question or task (0: none; AgentNet sets none)")
 		fs.Func("context", "file given with every question (repeatable)", func(p string) error { r.Context = append(r.Context, p); return nil })
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -1032,13 +1087,21 @@ func runTaskGrant(a *client.Agent, cmd, arg string) error {
 			return err
 		}
 		fmt.Printf("accept %s\n", arg)
-		fmt.Printf("tasks from %s (key %s) now run without asking; %s. Stop: agentnet unapprove --tasks %s\n", sender, fp, perms, sender)
+		if protocol.ValidID(sender) {
+			fmt.Printf("tasks from %q's current and future verified devices now run without asking; %s. Stop: agentnet unapprove --tasks %s\n", a.PermissionLabel(sender), perms, sender)
+		} else {
+			fmt.Printf("tasks from %s (key %s) now run without asking; %s. Stop: agentnet unapprove --tasks %s\n", sender, fp, perms, sender)
+		}
 	case "approve":
 		fp, err := a.GrantTasks(arg)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("tasks from %s (key %s) now run without asking; %s. Tasks already waiting still need accept ID. Stop: agentnet unapprove --tasks %s\n", arg, fp, perms, arg)
+		if protocol.ValidID(fp) {
+			fmt.Printf("tasks from %q's current and future verified devices now run without asking; %s. Tasks already waiting still need accept ID. Stop: agentnet unapprove --tasks %s\n", a.PermissionLabel(fp), perms, fp)
+		} else {
+			fmt.Printf("tasks from %s (key %s) now run without asking; %s. Tasks already waiting still need accept ID. Stop: agentnet unapprove --tasks %s\n", arg, fp, perms, arg)
+		}
 	case "unapprove":
 		running, err := a.RevokeTasks(arg)
 		if err != nil {
@@ -1083,6 +1146,18 @@ func runApprovals(a *client.Agent) error {
 	for _, t := range ts {
 		fmt.Printf("tasks      %s  key %s  %s\n", t.Address, t.Fingerprint, t.Status)
 	}
+	pgs, err := a.PersonGrants()
+	if err != nil {
+		return err
+	}
+	for _, g := range pgs {
+		if g.Questions {
+			fmt.Printf("questions  person %s %q (%s)\n", g.Person, g.Label, g.State)
+		}
+		if g.Tasks {
+			fmt.Printf("tasks      person %s %q (%s; current verified devices)\n", g.Person, g.Label, g.State)
+		}
+	}
 	// An agent of this device accepted into a conversation runs, without
 	// asking, the tasks of the member keys its invitation named: accepting
 	// it was that grant, which stands until it is dismissed.
@@ -1105,7 +1180,7 @@ func runApprovals(a *client.Agent) error {
 				strings.Join(taskGrantees(a, p), ", "), c.ID, p.PID, grantEnd(p))
 		}
 	}
-	if len(qs) == 0 && len(ts) == 0 && granted == 0 {
+	if len(qs) == 0 && len(ts) == 0 && len(pgs) == 0 && granted == 0 {
 		fmt.Println("none: every question and task waits for you")
 	}
 	return nil

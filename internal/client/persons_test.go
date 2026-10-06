@@ -48,7 +48,9 @@ func linkPhone(t *testing.T, at *Agent, name string) (phone *Agent, awaited chan
 	if err != nil {
 		t.Fatal(err)
 	}
-	phone, err = JoinAndLink(tctx(t), t.TempDir(), o.Code, name)
+	home := t.TempDir()
+	seedFixtureStore(t, home)
+	phone, err = JoinAndLink(tctx(t), home, o.Code, name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,17 +349,31 @@ func TestDaemonHearsRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tablet, err := JoinAndLink(tctx(t), t.TempDir(), o.Code, "tablet")
+	home := t.TempDir()
+	tablet, err := JoinAndLink(tctx(t), home, o.Code, "tablet")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { tablet.Close() })
-	runAgent(t, tablet)
+	stop := runAgent(t, tablet)
 	req := pendingLink(t, w.alice)
 	if err := w.alice.DecideLink(tctx(t), req.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the tablet refused", func() bool { return tablet.LinkState().State == LinkRefused })
+	stop()
+	// The home says so, and its daemon's next run ends at once with the
+	// refusal instead of reconnecting forever (the app then offers to
+	// start again).
+	if s, err := EnrollmentState(home); err != nil || s != EnrollRefused {
+		t.Fatalf("a refused device's home: %s %v", s, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tablet.Logf = t.Logf
+	if err := tablet.Run(ctx, RunOptions{}); !errors.Is(err, ErrLinkRefused) || ctx.Err() != nil {
+		t.Fatalf("a refused device's daemon: %v (ctx %v)", err, ctx.Err())
+	}
 }
 
 // HubRole is the relay's word on this installation's role, from its own
@@ -384,6 +400,45 @@ func TestHubRole(t *testing.T) {
 	w.hub.Stop()
 	if role, err := w.bob.HubRole(tctx(t)); err == nil || role != HubRoleUnknown {
 		t.Fatalf("with the relay down: %q %v", role, err)
+	}
+}
+
+// A phone linked to the admin's person is a member until the person
+// grants it the role from the admin device; the grant is only for another
+// device of their own person, and a member's grant is refused.
+func TestSetDeviceAdmin(t *testing.T) {
+	w := newWorld(t, "")
+	runAgent(t, w.alice)
+	runAgent(t, w.bob)
+	persons(t, w.alice, w.bob)
+	phone := linked(t, w.alice)
+	ctx := tctx(t)
+	if role, err := phone.HubRole(ctx); err != nil || role != protocol.RoleMember {
+		t.Fatalf("the linked phone before any grant: %q %v", role, err)
+	}
+	for _, bad := range []string{w.alice.Address, w.bob.Address} {
+		if err := w.alice.SetDeviceAdmin(ctx, bad, true); err == nil {
+			t.Fatalf("granted %s, not another device of alice's person", bad)
+		}
+	}
+	if err := phone.SetDeviceAdmin(ctx, w.alice.Address, false); err == nil || !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("the phone without the role changed alice's: %v", err)
+	}
+	if err := w.alice.SetDeviceAdmin(ctx, phone.Address, true); err != nil {
+		t.Fatal(err)
+	}
+	if role, err := phone.HubRole(ctx); err != nil || role != protocol.RoleAdmin {
+		t.Fatalf("the granted phone: %q %v", role, err)
+	}
+	if err := w.alice.SetDeviceAdmin(ctx, phone.Address, false); err != nil {
+		t.Fatal(err)
+	}
+	if role, _ := phone.HubRole(ctx); role != protocol.RoleMember {
+		t.Fatalf("taken back: %q", role)
+	}
+	bobPhone := linked(t, w.bob)
+	if err := w.bob.SetDeviceAdmin(ctx, bobPhone.Address, true); err == nil || !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("a member granted the role: %v", err)
 	}
 }
 

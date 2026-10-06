@@ -29,17 +29,18 @@ export function Card({ children, onOpen, label, current }: { children: ReactNode
 /** OpenCard: a row whose face and words open the conversation it names,
  *  with its decisions below, outside that button (a button never holds
  *  another). */
-export function OpenCard({ face, children, onOpen, label, current, actions }: {
-  face: ReactNode; children: ReactNode; onOpen: () => void; label: string; current?: boolean; actions?: ReactNode;
+export function OpenCard({ face, children, onOpen, label, current, actions, detail }: {
+  face: ReactNode; children: ReactNode; onOpen: () => void; label: string; current?: boolean; actions?: ReactNode; detail?: ReactNode;
 }) {
   return (
-    <article className={"rounded-2xl bg-surface stroke shadow-pop-sm" + (current ? ring : "")}>
+    <article className={"min-w-0 w-full rounded-2xl bg-surface stroke shadow-pop-sm [overflow-wrap:anywhere]" + (current ? ring : "")}>
       <button type="button" data-open onClick={onOpen} aria-label={label} aria-current={current || undefined}
         className={"group press flex w-full gap-3 rounded-2xl p-3.5 text-left" + (actions ? " pb-2" : "")}>
         {face}
         {children}
         <span className="grid size-9 shrink-0 self-center place-items-center rounded-full bg-ink text-canvas transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transition-none motion-reduce:group-hover:translate-x-0" aria-hidden="true"><IconChevronRight size={20} stroke={2.5} /></span>
       </button>
+      {detail && <div className="px-3.5 pb-3.5 sm:pl-[66px]">{detail}</div>}
       {actions && <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 sm:pl-[66px]">{actions}</div>}
     </article>
   );

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
@@ -82,21 +83,32 @@ func (a *Agent) ReviewTo() (string, error) {
 
 func reviewNoticeDetail(from string) string {
 	return "review notice: requests wait for a person's decision on " + from +
-		"; decide there (agentnet inbox --review on that machine). Nothing here runs or can be accepted; agentnet resolve ID once seen"
+		"; its report names them for a steward's devices, or says who decides them. Nothing here runs or can be accepted; agentnet resolve ID once seen"
 }
 
 // sendReviewNotice tells the review_to agent and every granted operator
-// (operators.go), once per item, that items here wait for a decision.
-// Received notices never count, so two agents naming each other cannot
-// loop. The first notice is queued in the outbox in the same transaction
-// that marks its items, so a crash or retry never sends a second one for
-// them, and a failure before queueing leaves them to be reported later:
-// tried once per item per daemon run and per setting, never on every ping.
-// A recipient that reads reports (protocol.CapHeadless) gets the requests
-// named (headless.go Report), with their first lines only if it is a
-// granted operator; anyone else gets the count. Desktop notifications are
-// tracked separately.
+// (operators.go: granted devices and each steward person's current
+// devices), once per item, that items here wait for a decision. Received
+// notices never count, so two agents naming each other cannot loop. The
+// first notice is queued in the outbox in the same transaction that marks
+// its items, so a crash or retry never sends a second one for them, and a
+// failure before queueing leaves them to be reported later: tried once per
+// item per daemon run and per setting, never on every ping. A recipient
+// that reads reports (protocol.CapHeadless) gets a version 2 report
+// (headless.go Report): an operator the requests named, with their first
+// lines; anyone else how many wait and who can decide them (Deciders),
+// never more. Each report is a snapshot of everything waiting now, so the
+// newest replaces the older ones on arrival; once the items a recipient was
+// told about have all left review, it gets one more snapshot, empty if
+// nothing waits, which clears its card (no timer). Desktop notifications
+// are tracked separately.
 func (a *Agent) sendReviewNotice(ctx context.Context) {
+	// The worker's pass and one during a run (worker.go) never overlap: a
+	// pass skipped here is covered by the worker's next one, after the run.
+	if !a.reviewMu.TryLock() {
+		return
+	}
+	defer a.reviewMu.Unlock()
 	gen, err := a.store.config(reviewToGenKey)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		a.Logf("review notice: %v", err)
@@ -114,13 +126,45 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	}
 	var recipients []string
 	isOperator := map[string]bool{}
+	isOwner := map[string]bool{}
 	for _, addr := range operators {
 		if addr != a.Address {
 			recipients, isOperator[addr] = append(recipients, addr), true
 		}
 	}
-	if to != "" && to != a.Address && !isOperator[to] {
+	// Reuse encrypted reports for the person's current devices. This is
+	// visibility of the agent's needs-you text, never an operator grant.
+	if me, ok, err := a.store.selfPerson(a.Address); err != nil {
+		a.Logf("review notice: %v", err)
+		return
+	} else if ok {
+		for _, d := range me.info.Devices {
+			if d.Address != a.Address {
+				isOwner[d.Address] = true
+				if !slices.Contains(recipients, d.Address) {
+					recipients = append(recipients, d.Address)
+				}
+			}
+		}
+	}
+	if to != "" && to != a.Address && !slices.Contains(recipients, to) {
 		recipients = append(recipients, to)
+	}
+	// A recipient told about items earlier gets its settled snapshot even
+	// after its grant or the setting changed (its card must not stay
+	// behind), but nothing new.
+	current := map[string]bool{}
+	for _, r := range recipients {
+		current[r] = true
+	}
+	if rows, err := a.store.db.Query(`SELECT DISTINCT recipient FROM reported ORDER BY recipient`); err == nil {
+		for rows.Next() {
+			var r string
+			if rows.Scan(&r) == nil && r != a.Address && !slices.Contains(recipients, r) {
+				recipients = append(recipients, r)
+			}
+		}
+		rows.Close()
 	}
 	if len(recipients) == 0 {
 		return
@@ -133,33 +177,66 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	if a.reviewTried == nil {
 		a.reviewTried = map[string]bool{}
 	}
+	since := a.reviewAgain.begin()
+	for _, to := range a.reviewAgain.take() { // skipped devices a member list event since may concern
+		for k := range a.reviewTried {
+			if strings.HasPrefix(k, to+"\x00") {
+				delete(a.reviewTried, k)
+			}
+		}
+	}
 	// Every item waiting here counts, including follow-ups your responder
 	// marked needs_human, except review notices received from others and
 	// a person's DM turns (alertReviewStates: they follow the DM's alerts).
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, received_at, attempts, body FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
+	rows, err := a.store.db.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, state, CASE WHEN state='running' THEN last_attempt_at ELSE received_at END, attempts, body, conv IS NOT NULL, coalesce(detail,'') FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) ORDER BY received_at, id`, args...)
 	if err != nil {
 		a.Logf("review notice: %v", err)
 		return
 	}
 	var items []ReportItem
+	agentText := map[string]string{}
 	for rows.Next() {
 		var it ReportItem
-		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt); err != nil {
+		var detail string
+		if err := rows.Scan(&it.ID, &it.From, &it.Key, &it.Kind, &it.State, &it.Since, &it.Attempt, &it.Excerpt, &it.Conv, &detail); err != nil {
 			rows.Close()
 			a.Logf("review notice: %v", err)
 			return
 		}
 		it.Blocker, it.Excerpt = blockerOf(it.Kind, it.State), firstLine(it.Excerpt)
+		if it.State == stateNeedHuman {
+			agentText[it.ID] = detail
+		}
+		if it.State == stateRunning {
+			it.Excerpt = detail
+			if strings.HasPrefix(detail, "Seems stuck:") {
+				it.Blocker = BlockerStalled
+			}
+		}
 		items = append(items, it)
 	}
 	rows.Close()
-	if len(items) == 0 {
-		return
+	for i := range items { // what a task carries out, for the operator approving it (MEL-521)
+		if items[i].Kind == envelope.KindTask && !items[i].Conv {
+			items[i].Proposal, _ = a.ProposalOf(items[i].ID)
+			if p := items[i].Proposal; p != nil {
+				p.Question, p.Proposal = firstLine(p.Question), firstLine(p.Proposal)
+			}
+		}
 	}
-	feats, ferr := a.relayFeatures(ctx)
+	type plan struct {
+		to         string
+		list       []ReportItem
+		ids, stale []string
+		left       string // reviewTried key of the settled snapshot
+	}
+	var plans []plan
 	for _, to := range recipients {
 		list := items
+		if isOwner[to] && !isOperator[to] {
+			list = slices.DeleteFunc(slices.Clone(items), func(it ReportItem) bool { return it.State != stateNeedHuman })
+		}
 		if isOperator[to] {
 			// An operator device of an older version (v0.6.2) drops a whole
 			// report naming an interrupted request, and with it the alert
@@ -170,32 +247,102 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		// Each recipient is told once per item (reported): a recipient
 		// added later gets what waits now, and one that could not be told
 		// keeps its items pending, whatever happened with the others.
-		var ids []string
+		p := plan{to: to, list: list}
+		listed := map[string]bool{}
 		for _, it := range list {
+			listed[it.ID] = true
 			var n int
 			a.store.db.QueryRow(`SELECT count(*) FROM reported WHERE item = ? AND recipient = ?`, it.ID, to).Scan(&n)
-			if n == 0 && !a.reviewTried[to+"\x00"+it.ID] {
-				ids = append(ids, it.ID)
+			if n == 0 && current[to] && !a.reviewTried[to+"\x00"+it.ID] {
+				p.ids = append(p.ids, it.ID)
 			}
 		}
-		if len(ids) == 0 {
-			continue
+		// Items this recipient was told about that left its list since: a
+		// fresh snapshot settles its card (settled snapshot).
+		if told, err := a.store.db.Query(`SELECT item FROM reported WHERE recipient = ? ORDER BY item`, to); err == nil {
+			for told.Next() {
+				var id string
+				if told.Scan(&id) == nil && !listed[id] {
+					p.stale = append(p.stale, id)
+				}
+			}
+			told.Close()
+		}
+		if len(p.stale) > 0 {
+			p.left = to + "\x00left\x00" + strings.Join(p.stale, ",")
+			if a.reviewTried[p.left] {
+				p.stale, p.left = nil, ""
+			}
+		}
+		if len(p.ids) > 0 || len(p.stale) > 0 {
+			plans = append(plans, p)
+		}
+	}
+	if len(plans) == 0 {
+		return
+	}
+	feats, ferr := a.relayFeatures(ctx)
+	var deciders []Decider
+	for _, p := range plans {
+		to, list, ids := p.to, p.list, p.ids
+		// The requests themselves go only to a granted operator that reads
+		// reports; current own devices also get read-only needs-you text. Other
+		// recipients learn how many wait and who decides them
+		// (no identity or request state by accident).
+		body := countText(len(list), a.Address)
+		reportKey := ""
+		fullText := false
+		capable := false
+		if ferr == nil {
+			if key, err := a.sendKey(ctx, to); err == nil {
+				if ok, _ := a.capSupport(ctx, to, key, feats, protocol.CapHeadless); ok {
+					capable = true
+					if isOperator[to] || isOwner[to] {
+						reportKey = key.Fingerprint()
+						owner, err := ownerReportHolds(a.store.db, to, reportKey)
+						if err != nil {
+							a.Logf("review notice: %v", err)
+							return
+						}
+						steward, err := stewardHolds(a.store.db, to, reportKey)
+						if err != nil {
+							a.Logf("review notice: %v", err)
+							return
+						}
+						fullText = owner || steward
+						body = a.reportBodyFor(list, agentText, fullText, isOperator[to])
+					} else {
+						if deciders == nil {
+							if deciders, err = a.store.deciders(); err != nil {
+								a.Logf("review notice: %v", err)
+								return
+							}
+							if deciders == nil {
+								deciders = []Decider{}
+							}
+						}
+						body = a.countBody(len(list), deciders)
+					}
+				}
+			}
 		}
 		for _, id := range ids {
 			a.reviewTried[to+"\x00"+id] = true
 		}
-		// The requests themselves go only to a granted operator that reads
-		// reports; the review destination alone learns the count and no
-		// more, as before (no identity or request state by accident).
-		body := fmt.Sprintf("%d request(s) wait for a person's decision on %s. Review there: agentnet inbox --review", len(list), a.Address)
-		reportKey := ""
-		if isOperator[to] && ferr == nil {
-			if key, err := a.sendKey(ctx, to); err == nil {
-				if ok, _ := a.capSupport(ctx, to, key, feats, protocol.CapHeadless); ok {
-					body = a.reportBody(list)
-					reportKey = key.Fingerprint()
-				}
+		if p.left != "" {
+			a.reviewTried[p.left] = true
+		}
+		if (isOperator[to] || isOwner[to]) && !capable {
+			// An operator gets the requests by name or nothing yet (a device
+			// just added may not have said what it reads): a count now would
+			// mark them told. Tried once, like any item: it is looked at
+			// again only after a Hub member list event (reviewAgain), when a
+			// new item waits or when the daemon starts again. A ping is no
+			// change: nothing polls the Hub.
+			if a.reviewAgain.skip(to, since) {
+				a.wakeWorker()
 			}
+			continue
 		}
 		claim := func(tx *sql.Tx, _ string) error {
 			// A grant may have changed while this snapshot was prepared. A
@@ -208,12 +355,27 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 				return errNoNewReview
 			}
 			if reportKey != "" {
+				// Its key here must be the granted one (a steward's device:
+				// the key its roster lists), or nothing is sent.
 				active, err := operatorHolds(tx, to, reportKey)
 				if err != nil {
 					return err
 				}
-				if !active {
+				owner, err := ownerReportHolds(tx, to, reportKey)
+				if err != nil {
+					return err
+				}
+				if !active && !owner || isOperator[to] && !active {
 					return errNoNewReview
+				}
+				if fullText && !owner {
+					steward, err := stewardHolds(tx, to, reportKey)
+					if err != nil {
+						return err
+					}
+					if !steward {
+						return errNoNewReview
+					}
 				}
 			}
 			now := time.Now().Unix()
@@ -227,8 +389,20 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 					fresh++
 				}
 			}
+			for _, id := range p.stale {
+				res, err := tx.Exec(`DELETE FROM reported WHERE item = ? AND recipient = ?`, id, to)
+				if err != nil {
+					return err
+				}
+				if n, _ := res.RowsAffected(); n == 1 {
+					fresh++
+				}
+			}
 			if fresh == 0 {
 				return errNoNewReview
+			}
+			if len(ids) == 0 {
+				return nil
 			}
 			// The older flag, for the review destination's own record.
 			marks := append([]any{}, alertReviewStates...)
@@ -249,7 +423,106 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 		for _, id := range ids {
 			delete(a.reviewTried, to+"\x00"+id) // reported; a later return to review is new
 		}
+		if p.left != "" {
+			delete(a.reviewTried, p.left)
+		}
 	}
+}
+
+// reviewAgain holds the operator devices a review pass skipped because they
+// could not read reports yet (an older program, or one that has not
+// connected or published what it reads since it was linked or updated).
+// Only a Hub member list event (pushed when a device connects, publishes its
+// capabilities or gets another roster step: onMembers) has the next pass
+// look at them again, or one that came while the skipping pass ran; a new
+// item or the daemon's next run does too. A ping changes nothing, so
+// nothing polls the Hub.
+type reviewAgain struct {
+	sync.Mutex
+	events  uint64          // member list events this run
+	skipped map[string]bool // waiting for a member list event
+	changed map[string]bool // to look at again on the next pass
+}
+
+// begin is called as a pass starts; skip takes what it returns.
+func (r *reviewAgain) begin() uint64 {
+	r.Lock()
+	defer r.Unlock()
+	return r.events
+}
+
+// skip records address as skipped by the pass that began at since. It
+// reports whether a member list event came since then: the address is then
+// looked at again on the next pass (the caller wakes the worker), since
+// that event may have been its news.
+func (r *reviewAgain) skip(address string, since uint64) bool {
+	r.Lock()
+	defer r.Unlock()
+	if r.events != since {
+		if r.changed == nil {
+			r.changed = map[string]bool{}
+		}
+		r.changed[address] = true
+		return true
+	}
+	if r.skipped == nil {
+		r.skipped = map[string]bool{}
+	}
+	r.skipped[address] = true
+	return false
+}
+
+// note records a member list event; it reports whether a skipped device
+// is now to be looked at again (the worker is then woken).
+func (r *reviewAgain) note() bool {
+	r.Lock()
+	defer r.Unlock()
+	r.events++
+	if len(r.skipped) == 0 {
+		return false
+	}
+	if r.changed == nil {
+		r.changed = map[string]bool{}
+	}
+	for address := range r.skipped {
+		r.changed[address] = true
+	}
+	r.skipped = nil
+	return true
+}
+
+// take returns the skipped devices to look at again, once.
+func (r *reviewAgain) take() []string {
+	r.Lock()
+	defer r.Unlock()
+	out := make([]string, 0, len(r.changed))
+	for address := range r.changed {
+		out = append(out, address)
+	}
+	r.changed = nil
+	return out
+}
+
+func (r *reviewAgain) reset() {
+	r.Lock()
+	r.skipped, r.changed = nil, nil
+	r.Unlock()
+}
+
+// countText is a review notice for a device that reads no reports: how
+// many requests wait on host (none: the earlier notice is settled).
+func countText(n int, host string) string {
+	if n == 0 {
+		return "Nothing waits for a person's decision on " + host + " any more."
+	}
+	return fmt.Sprintf("%d request(s) wait for a person's decision on %s.", n, host)
+}
+
+// countBody is a version 2 report for a device that may not decide here:
+// how many requests wait and who can decide them from their own devices.
+func (a *Agent) countBody(n int, deciders []Decider) string {
+	data, _ := json.Marshal(Report{V: 2, At: time.Now().Unix(), Host: a.Address, Items: []ReportItem{}, Count: n, Deciders: deciders})
+	return string(data)
 }
 
 // noteReviewFailure records why the last notice to the review_to agent
@@ -307,13 +580,88 @@ func (a *Agent) ReviewToHealth() (string, error) {
 // reportBody is a version 2 report of items for a granted operator: the
 // requests named, with their first lines, each actionable from there.
 func (a *Agent) reportBody(items []ReportItem) string {
+	return a.reportBodyFor(items, nil, false, true)
+}
+
+// Full agent output travels only in ciphertext to current own devices or
+// a current steward. Excerpt is an existing private report field; public
+// execution statuses continue to carry only their bounded blocker text.
+func (a *Agent) reportBodyFor(items []ReportItem, agentText map[string]string, full, actionable bool) string {
 	r := Report{V: 2, At: time.Now().Unix(), Host: a.Address, Items: make([]ReportItem, 0, len(items))}
 	for _, it := range items {
-		it.Actionable = true
+		it.Actionable = actionable
+		if full && it.State == stateNeedHuman && agentText[it.ID] != "" {
+			it.Excerpt = agentText[it.ID]
+		}
 		r.Items = append(r.Items, it)
 	}
 	data, _ := json.Marshal(r)
 	return string(data)
+}
+
+func ownerReportHolds(q querier, address, fp string) (bool, error) {
+	person, err := permissionPersonIn(q, address, fp)
+	if err != nil || person == "" {
+		return false, err
+	}
+	var self bool
+	err = q.QueryRow(`SELECT state = ? FROM persons WHERE person = ?`, personSelf, person).Scan(&self)
+	return self, err
+}
+
+// Another native device reads the same encrypted owner report as the
+// browser. Project its result beside the original request, without any
+// job or actions here. Local job details remain authoritative.
+func (a *Agent) privateNeedsYou(msgs []ConvMessage) error {
+	hosts := map[string]string{}
+	for _, m := range msgs {
+		if m.Job == "" && m.Target != nil && m.Exec != nil && m.Exec.State == stateNeedHuman && !m.History && m.ExcerptPID == "" {
+			ok, err := ownerReportHolds(a.store.db, m.Target.Address, m.Target.Fingerprint)
+			if err != nil {
+				return err
+			}
+			if ok {
+				hosts[m.Target.Address] = m.Target.Fingerprint
+			}
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	rows, err := a.store.db.Query(`SELECT sender, coalesce(verified_by,''), body FROM inbox WHERE conv IS NULL AND local=0 AND replica=0 AND (`+receivedNotice+`) ORDER BY rowid`, envelope.KindMessage, envelope.StatusReviewNotice)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	latest := map[string]Report{}
+	for rows.Next() {
+		var host, fp, body string
+		if err := rows.Scan(&host, &fp, &body); err != nil {
+			return err
+		}
+		if hosts[host] != fp || fp == "" {
+			continue
+		}
+		if r, ok := notificationReport(body, host, fp); ok && r.At >= latest[host].At {
+			latest[host] = r
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Job != "" || m.Target == nil || m.Exec == nil || m.Exec.State != stateNeedHuman || m.History || m.ExcerptPID != "" || hosts[m.Target.Address] != m.Target.Fingerprint {
+			continue
+		}
+		for _, it := range latest[m.Target.Address].Items {
+			if it.Conv && it.State == stateNeedHuman && it.Key == m.Key && it.Attempt == m.Exec.Attempt && (it.ID == m.ID || it.ID == m.LID || slices.ContainsFunc(m.Copies, func(c ConvCopy) bool { return c.ID == it.ID })) {
+				m.JobDetail = it.Excerpt
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // receivedNotice matches exactly the rows isReviewNotice files (kind, status,

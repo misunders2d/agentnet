@@ -34,6 +34,10 @@ func guardedCommands(dir string) [][]string {
 		{"reply", id, "done"},
 		{"ask", "peer/desk", "where is it?"},
 		{"task", "peer/desk", "ship it"},
+		{"do", id},
+		{"do", "--answer-wait", "1m", id},
+		{"operator", "grant", "--person", "peer/desk"},
+		{"person", "service", "--steward", "peer/desk"},
 		{"accept", id},
 		{"accept", "--always", "peer/desk"},
 		{"approve", "peer/desk"},
@@ -75,6 +79,8 @@ func guardedCommands(dir string) [][]string {
 		{"person", "approve", id},
 		{"person", "refuse", id},
 		{"person", "remove", "peer/desk"},
+		{"person", "admin", "peer/desk"}, // a company setting: the person's own tap
+		{"person", "unadmin", "peer/desk"},
 		{"responder", "set", "--harness", "claude", "--dir", dir},
 		{"responder", "set", "--harness", "claude", "--dir", dir, "--context", filepath.Join(dir, "secret.txt")},
 		{"responder", "off"},
@@ -90,6 +96,8 @@ func guardedCommands(dir string) [][]string {
 		{"admin", "invite", "carol"},
 		{"admin", "revoke", "peer/desk"},
 		{"admin", "release"},
+		{"admin", "workspace", "set", "Mellanni"}, // a company setting: the person's own tap
+		{"admin", "workspace", "clear"},
 		{"ui"},
 		{"update", "--status"},
 		{"hooks", "install", "claude", "--file", filepath.Join(dir, "settings.json")},
@@ -189,7 +197,7 @@ func TestRunGuardIsAnAllowList(t *testing.T) {
 		{"team", "list"}, {"team", "snapshot", id}, {"dm", "list"}, {"dm", "show", id}, {"dm", "agents", id},
 		{"group", "invitations"}, {"person"}, {"person", "links"}, {"operator", "list"}, {"review-to"},
 		{"responder", "list"}, {"responder", "show"}, {"remind", "list"}, {"remind", "list", "--all"},
-		{"send", "peer/desk", "hello"}, {"hook", "claude"},
+		{"send", "peer/desk", "hello"}, {"hook", "claude"}, {"room", "ask", "--pid", id, "question"}, {"room", "wait", id},
 	} {
 		if err := runGuard(args[0], args[1:]); err != nil {
 			t.Errorf("%v: %v", args, err)
@@ -202,7 +210,7 @@ func TestRunGuardIsAnAllowList(t *testing.T) {
 		{"inbox", "--peek=false"}, {"inbox", "--peek", "--bogus"}, {"inbox", "--json"},
 		{"team"}, {"team", "frobnicate"}, {"dm"}, {"dm", "frobnicate"}, {"group"}, {"group", "frobnicate"},
 		{"person", "frobnicate"}, {"operator"}, {"responder"}, {"responder", "frobnicate"}, {"remind"}, {"remind", "frobnicate", "tomorrow"},
-		{"frobnicate"}, {"frobnicate", "list"},
+		{"frobnicate"}, {"frobnicate", "list"}, {"room"}, {"room", "accept", id},
 	} {
 		if err := runGuard(args[0], args[1:]); err == nil || !strings.Contains(err.Error(), refusedText) {
 			t.Errorf("%v: %v", args, err)

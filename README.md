@@ -226,7 +226,7 @@ Today's AI assistants—whether running in terminal windows, desktop apps, or cl
 - 🔒 **End-to-End Encrypted**: Messages and files are encrypted directly to the recipient using [age](https://github.com/FiloSottile/age) (X25519) and signed with Ed25519 keys. The Hub stores ciphertext and routing metadata. Optional browser push adds subscription, attention-channel and presentation metadata; notification payloads contain no message text.
 - ⚡ **Durable Relay & Opt-In Direct Delivery**: A lightweight, self-hosted Hub holds encrypted messages until offline colleagues reconnect. For colleagues on the same LAN or reachable network, optional direct HTTPS delivery transfers files and messages straight between machines.
 - 🤖 **Shared Local Inbox & Automatic Answers**: One shared local inbox per installation. When enabled, your local harness automatically answers routine questions from approved colleagues in the background. It works whether zero, one, or several coding agents are running—no foreground agent session or terminal window is required.
-- 🛡️ **Human Gate for Tasks & Skills-Enabled Questions**: Questions from approved colleagues run with the recipient's own setup (skills, plugins, MCP servers, and permissions) without editing tools or new approvals (`dontAsk` for Claude Code; read-only shell sandbox and `approval_policy="never"` for Codex; shell and file-editing tools excluded for Pi, with recipient extension tools retained). The recipient's existing permission grants remain the authority: tools and Bash commands their configuration already allows keep their effects (not a blanket read-only guarantee). **Tasks run only with your permission.** They wait in your inbox as `awaiting` until you run one with `agentnet accept <id>` or reject it with `agentnet decline <id>`, unless you granted that sender's exact key standing permission (`agentnet approve --tasks <address>` or `agentnet accept --always <id>`; `agentnet unapprove --tasks <address>` revokes, `agentnet approvals` lists). A grant never follows a changed key and never reruns failed work.
+- 🛡️ **Human Gate for Tasks & Skills-Enabled Questions**: Questions from approved colleagues run with the recipient's own setup (skills, plugins, MCP servers, and permissions) without editing tools or new approvals (`dontAsk` for Claude Code; read-only shell sandbox and `approval_policy="never"` for Codex; shell and file-editing tools excluded for Pi, with recipient extension tools retained). The recipient's existing permission grants remain the authority: tools and Bash commands their configuration already allows keep their effects (not a blanket read-only guarantee). **Tasks run only with your permission.** They wait in your inbox as `awaiting` until you run one with `agentnet accept <id>` or reject it with `agentnet decline <id>`, unless you granted that verified person standing permission (`agentnet approve --tasks <person>` or `agentnet accept --always <id>`; `agentnet unapprove --tasks <person>` revokes, `agentnet approvals` lists). Person grants cover current and later-linked devices in the current verified roster. Removing a device ends its person access; pending key changes and frozen people block. Exact device addresses remain advanced, key-bound grants. No grant reruns failed work.
 - 📝 **Local Follow-Up Summaries (`--follow-up`)**: When sending a question or task, attach `--follow-up "instructions"`. When the colleague's first reply arrives, your background responder generates a local plain-text summary stored in your inbox (`summarized`). Nothing is sent back (no bot ping-pong) and no arbitrary tasks are executed—it is a local summary for you, not an autonomous agent loop.
 - 📎 **Resumable Encrypted File Attachments**: Attach logs, patches, or test bundles to messages. Files are encrypted into a local spool with 64 KiB authenticated chunks, transferred in 512 KiB blocks with SHA-256 integrity checks, and resumable across network dropouts.
 - 🌐 **Standard A2A Interoperability**: Includes a built-in loopback gateway implementing the official [`a2aproject/a2a-go`](https://github.com/a2aproject/a2a-go) SDK. Standard A2A clients on localhost can query Agent Cards and exchange tasks with AgentNet peers through an authenticated local bearer token.
@@ -255,7 +255,7 @@ AgentNet enforces distinct handling for questions and tasks:
 | Intent | Command | Initial State | Execution Gate | Safety Boundaries |
 |---|---|---|---|---|
 | **Question** | `agentnet ask <addr> <text>` | `pending` (if approved) or `held` | **Automatic** (if sender is approved & responder active) | Runs with recipient's own setup (skills, plugins, MCP servers, permissions) without editing tools or new approvals. Allowed tools/Bash keep effects; not a blanket sandbox. 5-min timeout, context cap. Non-interrupting background execution. |
-| **Task** | `agentnet task <addr> <text>` | `awaiting` (`pending` under a task grant) | **Explicit Human Gate** | Started via `agentnet accept <id>` (once) or rejected via `agentnet decline <id>`; runs without asking only if you granted the sender's exact verified key (`approve --tasks`, `accept --always`), rechecked when it starts. |
+| **Task** | `agentnet task <addr> <text>` | `awaiting` (`pending` under a task grant) | **Explicit Human Gate** | Started via `agentnet accept <id>` (once) or rejected via `agentnet decline <id>`; runs without asking under a local verified-person or exact device-key grant (`approve --tasks`, `accept --always`), rechecked when it starts. |
 | **Follow-Up** | `agentnet ask/task --follow-up <text> ...` | `pending` (after correlated reply) | **Local Summary** | First reply from recipient is processed once into local detail (outcome: `summarized` or `needs_human`). Sends nothing back; never auto-executes tasks from reply. |
 | **Message** | `agentnet send <addr> <text>` | — | **Inbox Stored** | Stored in local database; never triggers automated execution. |
 
@@ -314,16 +314,20 @@ Authorize specific colleagues and configure or adjust which local harness answer
 agentnet responder list
 
 # Set Claude Code or Codex as background responder
-agentnet responder set --harness claude --dir ~/work/my-project --timeout 5m
+agentnet responder set --harness claude --dir ~/work/my-project
 # Or use Codex (read-only shell sandbox, approval never; auto-approved MCP tools keep effects)
-agentnet responder set --harness codex --dir ~/work/my-project --timeout 5m
+agentnet responder set --harness codex --dir ~/work/my-project
 
-# Approve Alice so her questions are answered automatically
+# Approve verified Alice across her current and later-linked devices
+agentnet approve Alice
+# Advanced: approve only this exact device
 agentnet approve alice/laptop
 
 # Ask Bob a question and request a local background summary when his reply arrives
 agentnet ask --follow-up "check if any migration is required" bob/desk "what changed in auth?"
 ```
+
+Only your own human roster keys can link more devices. Approve an agent-only host with `agentnet person approve --agent-host <link-id>`; it shares person membership without enrollment authority.
 
 ### 6. Human Review, Tasks, and Desktop Notifications
 Items requiring your decision enter the review set (`held` questions, `awaiting` tasks, and `needs_human` items):

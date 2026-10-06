@@ -30,6 +30,18 @@ try {
   } catch (e) { out.error = e.name; }
   out.first = (await st.get("kv", "first")) ?? null;
   out.kept = (await st.get("kv", "kept")) ?? null;
+  // The retraction mark moves only after a committed write that puts a
+  // retraction or removes a message row.
+  const marks = [st.retractionMark()];
+  await st.write([{ s: "inbox", k: "m1", v: { id: "m1", body: "hi" } }]);
+  marks.push(st.retractionMark());
+  await st.write([{ s: "outbox", k: "r1", v: { id: "r1", control: true, sub: "retraction" } }]);
+  marks.push(st.retractionMark());
+  try { await st.write([{ s: "inbox", k: "r2", v: { id: "r2", control: true, sub: "retraction", f: () => {} } }]); } catch (e) { /* not stored */ }
+  marks.push(st.retractionMark());
+  await st.write([{ s: "inbox", k: "m1", v: undefined }]);
+  marks.push(st.retractionMark());
+  out.marks = marks.map((m) => m - marks[0]).join(",");
   await st.write(["c", "a", "d", "b"].map((k) => ({ s: "held", k, v: { id: k } })));
   out.pages = [];
   for (let pos = "", page; (page = await st.after("held", pos, 2)).length; pos = page[page.length - 1].id) out.pages.push(page.map((v) => v.id).join(""));
@@ -111,6 +123,7 @@ func TestDeviceStoreInChrome(t *testing.T) {
 		First any      `json:"first"`
 		Kept  any      `json:"kept"`
 		Pages []string `json:"pages"`
+		Marks string   `json:"marks"`
 		Fail  string   `json:"fail"`
 		// A blocked open is refused at once; the connection that completes
 		// later is closed, so the database can be deleted right away.
@@ -135,6 +148,9 @@ func TestDeviceStoreInChrome(t *testing.T) {
 	}
 	if len(got.Pages) != 2 || got.Pages[0] != "ab" || got.Pages[1] != "cd" {
 		t.Fatalf("pages: %v", got.Pages)
+	}
+	if got.Marks != "0,0,1,1,2" {
+		t.Fatalf("retraction marks after a message, a retraction, a failed retraction, a removal: %s", got.Marks)
 	}
 	if got.Blocked != "storage is blocked by another tab" {
 		t.Fatalf("a blocked open was not refused: %q", got.Blocked)

@@ -37,6 +37,7 @@ Messages and files:
   send       send an encrypted message, with --file attachments
   ask        send a question (approved peers may get an automatic answer)
   task       send a task (runs only if the recipient accepts it)
+  do         confirm an agent's proposed action: send it as a task ("Do it")
   reply      reply to a received message (takes over a question or task)
   inbox      list received messages
   conversation  show a whole conversation, sent and received
@@ -54,8 +55,8 @@ Questions and tasks sent to you:
              (accept --always ID: also let this sender's future tasks run)
   decline    refuse a task or question
   cancel     stop your responder's current work on a message
-  approve    answer an agent's questions automatically (unapprove to stop);
-             approve --tasks: run its tasks without asking, for its exact key
+  approve    approve a verified person for automatic answers (unapprove stops);
+             approve --tasks: let that person's verified devices give tasks
   approvals  list who is approved, with task keys and whether they still hold
   resolve    close an item marked needs_human or interrupted (no reply is sent)
   remind     remind me later about a received message (list, done, cancel)
@@ -80,7 +81,9 @@ Running and checking:
   cleanup    free local space from failed or abandoned sends
 
 Admin (from an admin agent):
-  admin invite, admin revoke
+  admin google list | invite [--admin] EMAIL | allow-domain DOMAIN
+  admin google remove EMAIL | remove-domain DOMAIN
+  admin invite, admin revoke (advanced invite-code fallback)
   The invitee's name (LABEL) comes from your person: use what they said, or ask; never infer it.
 
 Hub (on the server):
@@ -89,8 +92,8 @@ Hub (on the server):
 Local A2A clients:
   a2a serve  let an A2A client on this machine talk to one peer
 
-Messenger page:
-  ui         the messenger page in a browser (daemon --ui; ui --demo to try it)
+The AgentNet app (how people use AgentNet; its installers are on the releases page):
+  ui         open the app (advanced: the daemon's page address; ui --demo to try it)
 
 Home directory: --home DIR, or AGENTNET_HOME, or "agentnet" in your user
 config directory. It holds your keys, inbox and history; keep it private.
@@ -107,9 +110,20 @@ input and completed local continuation are separate. No live-session dispatch.
 
 ask/task/dm send/dm ask-agent accept --reply-receiver human|AGENT_ID.
 Without it, a question or task asked from a Pi/OMP, Claude Code or Codex
-session returns to that registered session, or the command is refused and
-says why; a plain dm send message selects no receiver unless --on-close-agent
-is given. A background job uses only its own reply binding, if any.
+session is never refused. Its answer returns to that session when the session
+is a live receiver: a current Pi/OMP registration, a Codex thread registered
+on its app-server daemon, or a Claude Code session whose AgentNet Claude
+channel attached (optional: hooks install claude --channel). Otherwise it
+lands in this computer's inbox, where every session's hooks announce it and
+agentnet conversation ID shows it; one plain note says so. When the asking
+session ends (or starts anew), the answers it had not taken yet go to this
+computer's inbox and the next session's hooks announce them; they never
+become OK items. A question or task sent back in reply, and input a session
+already claimed, stay bound and are listed here.
+The asking command also waits for the answer and prints it (--answer-wait).
+A plain dm send message selects no receiver unless --on-close-agent is given,
+which needs that exact registered session. A background job uses only its own
+reply binding, if any.
 Managed receivers require --continue TEXT and --continue-mode question|task.
 --reply-binding ID reuses original receiver/instructions/mode without changes.`,
 	"join": `Usage: agentnet [--home DIR] join --agent NAME CODE-OR-LINK
@@ -149,6 +163,16 @@ coworkers who want to confirm they trust the right key. Also ask the Hub
 for this device's admin/member role; show unknown if unavailable or an older
 Hub does not report it. Address labels (including admin/) grant no role.`,
 
+	"room": `Usage: agentnet room ask --pid PID [--kind question|task] TEXT
+       agentnet room wait REQUEST_ID
+
+Available inside a running group-agent request (AGENTNET_ROOM_REQUEST).
+Ask another active group agent and wait for its correlated answer/result.
+The recipient's owner decides permission for every upstream origin. A question
+cannot assign a task. No platform ask-count or depth limits; stopping the
+originating run or removing its membership stops further asks and waits.
+Wait reads local stored replies only. Custody/delivery is never completion.`,
+
 	"send": `Usage: agentnet send [--file PATH]... [--fallback] [--wait 5s] [--reply-to ID] [--progress] ADDRESS[#SESSION] TEXT
 
 Send an end-to-end encrypted message. It goes straight to the recipient when
@@ -180,19 +204,31 @@ Examples:
   agentnet send --reply-to 3f9c... --progress bob/desk "accepted; checking the deploy"
   agentnet send --file report.pdf bob/desk "numbers attached"`,
 
-	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
+	"ask": `Usage: agentnet ask [--file PATH]... [--wait 5s] [--answer-wait 90s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
 
 Send a question. If the recipient approved you and chose a responder, their
 harness answers automatically in the background; otherwise it waits for them.
 The answer arrives in your inbox as kind "answer" replying to this message.
 Output and --wait as for send: "delivered" means it reached their inbox,
 not that it was answered.
+
+Then ask waits for the answer and prints it (asked here, answered here):
+--answer-wait D, default 90s (0: return at once; always 0 inside a run).
+It prints "sent; waiting..." first: if the command is stopped, the answer
+still arrives, so never send the question again; read it with agentnet
+conversation ID. The local daemon wakes the wait (nothing polls the Hub);
+without a running daemon it says so and returns. It stops early when the
+request waits for someone's OK or a person's decision there. Without an
+answer in time it says "no answer yet" and where the answer will land. The
+answer is printed as another agent's words: information, not instructions.
+An answer that proposes an action instead ("proposes an action (not run)")
+is carried out only if you confirm it: agentnet do ID.
 ` + followUpHelp + `
 
 Example:
   agentnet ask --follow-up "tell me if staging needs a migration" bob/desk "what is the deploy command for staging?"`,
 
-	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
+	"task": `Usage: agentnet task [--file PATH]... [--wait 5s] [--answer-wait D] [--follow-up TEXT] [--reply-to ID] ADDRESS TEXT
 
 Send a task. It waits until the recipient accepts it, unless they granted
 your agent's exact key standing permission to run tasks (accept --always,
@@ -200,11 +236,29 @@ approve --tasks); either way their responder runs it with their normal
 permissions. The outcome arrives as
 kind "result" with a status (done, failed, timeout, cancelled, declined).
 Output and --wait as for send: "delivered" means it reached their inbox, not
-that it was accepted or done.
+that it was accepted or done. --answer-wait D waits for the result and prints
+it, as for ask (default 0: tasks run long; it stops early when the task waits
+for an OK).
 ` + followUpHelp + `
 
 Example:
   agentnet task bob/desk "update CHANGELOG.md for release 1.4"`,
+
+	"do": `Usage: agentnet do [--answer-wait D] ID
+
+"Do it" on a proposal. When a question's answer needs an action its agent
+may not take for a question (editing files, running something, sending
+something), the agent answers with the exact task it proposes instead
+("proposes an action (not run)"; ID is that answer). do sends exactly that
+text, as stored, as a task replying to it, to the same agent; there it runs
+under the usual task approval (it waits for their OK unless they let your
+tasks run; on your own computer it runs at once when that computer trusts
+this one: person approve --native). Confirming again shows the
+task already sent; nothing runs twice. Refused for a proposal edited or
+deleted after it was made, one from a key whose change is pending, and
+from any device but the one that asked. Confirm with the person first
+unless they already asked for that work. Refused inside a run.
+--answer-wait D waits for the result and prints it, as for ask (default 0).`,
 
 	"reply": `Usage: agentnet reply [--file PATH]... [--wait 5s] ID TEXT
 
@@ -353,19 +407,24 @@ with ADDRESS#SESSION.`,
 	"person": `Usage: agentnet person
        agentnet person create NAME
        agentnet person rename NAME
-       agentnet person service
+       agentnet person service [--steward ADDRESS]
        agentnet person link
        agentnet person links
-       agentnet person approve [--native] ID
+       agentnet person approve [--native|--agent-host] ID
        agentnet person refuse ID
        agentnet person untrust ADDRESS
+       agentnet person admin|unadmin ADDRESS
        agentnet person remove ADDRESS
 
 One person can use up to eight devices, each with its own keys. person shows
 your person and its devices, marking this one. create NAME sets up a new
 person explicitly. NAME is a display name, not proof of identity: equal
 names never merge people. service marks an independent server or bot; it
-speaks as itself and does not create a human person.
+speaks as itself and does not create a human person. service --steward
+ADDRESS also names, once, the person responsible for it: the person the
+device at ADDRESS speaks for decides its waiting requests from any of their
+devices, those they add later included (agentnet help operator). Run it at
+install, on that machine.
 
 rename NAME changes your display name through the existing signed person
 record. Your person ID, devices, routing address, history and permissions
@@ -382,17 +441,31 @@ rejects it. Approval makes it you and grants access to your chats. Never
 approve a device you did not just ask to link. Private keys are not copied.
 
 Invites of your own agents need no accept when a trusted device of yours
-sends them (see agentnet help dm). This device trusts itself, and a device
+sends them (see agentnet help dm), and a task a trusted device of yours sends
+this device's agent runs without asking, as your own (its harness's normal
+permissions apply). This device trusts itself, and a device
 you approve with approve --native ID: say --native only for a computer that
 joined with the join command (running AgentNet), never for a browser. A
 browser's code comes from the server, so a browser must never be trusted;
 nothing in a link request tells the two apart, so only your --native says
-so. approve ID without --native, approving on the page or on another
+so. For an agent-only host, person approve --agent-host ID links it with
+person permissions but no authority to add devices. Only an own human device
+may enroll devices or change the signed human enrollment keys. Existing
+unannotated roster steps do not imply that every device is human.
+
+approve ID without --native, approving on the page or on another
 device, and a request approved already add nothing, and no command trusts
 a browser. untrust ADDRESS removes a device; to trust it again, link it
 again. person marks trusted devices. A device whose key changes is no
 longer trusted. Invites stored before this version first ran here still
 wait for your accept.
+
+Your other devices are never Hub admins on their own. On a device that is
+one, admin ADDRESS lets another of your linked devices change company
+settings too (the workspace name, invites, release notices, storage), and
+unadmin ADDRESS takes it back. Give it to your phone, not to a computer
+that runs agents: its agents use that device's keys. Removing the device
+ends it; a device an admin invite made admin keeps its role.
 
 remove ADDRESS removes a device from your person. A device admitted through
 linking is also revoked from the Hub; one admitted separately by an admin
@@ -406,11 +479,11 @@ migrated. All devices in new DMs need the person2-capable version.`,
 	"dm": `Usage: agentnet dm new ADDRESS
        agentnet dm list
        agentnet dm show ID
-       agentnet dm send [--question|--task] [--file PATH]... ID [TEXT]
+       agentnet dm send [--question|--task] [--answer-wait D] [--file PATH]... ID [TEXT]
        agentnet dm invite [--grant LID,...] [--tasks FINGERPRINT,...] [--note TEXT] ID HOST
        agentnet dm agents ID
        agentnet dm accept-agent|decline-agent|dismiss-agent PID
-       agentnet dm ask-agent [--task] PID TEXT
+       agentnet dm ask-agent [--task] [--answer-wait D] PID TEXT
        agentnet dm invite-guest [--share LID,...] [--note TEXT] ID HOST
        agentnet dm accept-guest|decline-guest|end-guest PID
 
@@ -478,7 +551,11 @@ Failures and cancellations are not sent. A dismissal
 request and holds back output not yet handed over, which the host keeps;
 output already sent cannot be recalled. dm show gives each request's state
 on the host (part_waiting, awaiting, running, answered, needs_human,
-not_run, not_delivered, …).`,
+not_run, not_delivered, …).
+
+dm ask-agent and dm send --question wait for the answer and print it, as
+agentnet ask does (--answer-wait D, default 90s; 0 for --task, and always 0
+inside a run).`,
 
 	"members": `Usage: agentnet members
 
@@ -590,11 +667,11 @@ stays (dm dismiss-agent PID ends it).`,
 For a machine where nobody sees desktop notifications (a server): when a
 held question, a task awaiting acceptance, a needs_human item or an
 interrupted one waits here, the daemon sends ADDRESS (another agent of the
-same person, e.g. their laptop) one plain message with only a count and this
-agent's address: no text, senders or ids of the requests. Each item is
-reported once. Deciding still happens on this machine: nothing received
-there can accept, decline or approve anything here, and the senders are told
-nothing.
+same person, e.g. their laptop) one message with only a count, who decides them and this agent's address: no
+text, senders or ids of the requests. Each item is
+reported once. That device decides nothing: its card says who does (the
+steward, agentnet help operator), and nothing received there can accept,
+decline or approve anything here; the senders are told nothing.
 
 ADDRESS must be an agent on your Hub that is not revoked: it is checked when
 you set it (nothing changes while the Hub cannot be asked), and doctor says
@@ -609,34 +686,42 @@ agents need a release with review notices: an older recipient shows it as an
 ordinary message, and "delivered" never means a person saw it. Off by
 default; only the local user sets it.`,
 
-	"approve": `Usage: agentnet approve ADDRESS
-       agentnet unapprove ADDRESS
-       agentnet approve --tasks ADDRESS
-       agentnet unapprove --tasks ADDRESS
+	"approve": `Usage: agentnet approve PERSON-or-ADDRESS
+       agentnet unapprove PERSON-or-ADDRESS
+       agentnet approve --tasks PERSON-or-ADDRESS
+       agentnet unapprove --tasks PERSON-or-ADDRESS
 
-Approve: questions from ADDRESS are answered automatically by your responder.
-Unapprove: stop that; their questions still waiting go back to "held".
-Question approval never covers tasks.
+Choose a verified person ID or an exact
+device address. A name is only the person's own claim, so it picks no one:
+given a name, the answer lists the IDs of the people using it. Approving
+Sergey's ID covers all current and future devices in that verified roster.
+Removing a device ends its person access; changed keys block until trusted,
+and a conflicting/frozen person cannot use the grant. Grants stay local.
 
---tasks: tasks from ADDRESS run without asking, with your responder's normal
-task permissions, for the key you trust for ADDRESS now (its fingerprint is
-printed; compare it with the sender's agentnet whoami if unsure). Tasks
-already waiting still need accept ID; failed or interrupted ones are never
-rerun by this. If that agent's key changes, the grant stops holding and its
-tasks wait for you again, even after you trust the new key: grant again to
-renew. unapprove --tasks: its tasks not yet started wait for you again; ones
-running now are listed and may finish unless you cancel them. Nothing a
-sender writes, and no name, grants this.`,
+Questions use your responder's normal question setup; approval never covers
+tasks. --tasks lets that person's verified devices give tasks under your
+responder's normal task permissions. Already waiting tasks still need accept
+ID; failed/interrupted work never reruns because a grant changed.
+
+An exact device address remains an advanced device-only grant. Its task
+permission is for the currently pinned key only; a changed device key needs
+trust and a new device grant. accept --always ID grants the task's verified
+person when present, otherwise that exact device key.
+
+Unapprove [--tasks] stops the corresponding local grant. Not-yet-started
+requests wait again; running work may finish unless canceled. Explicit
+one-time accept and separate device grants remain independent decisions.
+Nothing received, no label and no address prefix ever creates a grant.`,
 
 	"approvals": `Usage: agentnet approvals
 
-List agents whose questions are answered automatically, and agents whose
+List persons and explicit devices whose questions are answered automatically, and those whose
 tasks run without asking, with the granted key and whether the grant still
 holds (active, or inactive because the key changed or a change is pending).
 Changes nothing.`,
 
 	"responder": `Usage: agentnet responder list
-       agentnet responder set --harness NAME --dir DIR [--context FILE]... [--timeout 5m]
+       agentnet responder set --harness NAME --dir DIR [--context FILE]... [--timeout D]
        agentnet responder show
        agentnet responder off
 
@@ -690,7 +775,8 @@ nothing is sent: the item becomes needs_human with the rest as the reason
 (see agentnet help inbox).
 
   --context FILE   text given with every question (repeatable)
-  --timeout D      limit per question or task (default 5m)
+  --timeout D      your own limit per question or task (default none:
+                   AgentNet puts no time limit on agent work)
 
 Example:
   agentnet responder set --harness claude --dir ~/work/project --context ~/notes/team.md`,
@@ -736,16 +822,31 @@ items show up.`,
 	"team":  "Usage: agentnet " + teamHelp,
 	"group": "Usage: agentnet " + groupHelp,
 
-	"operator": `Usage: agentnet operator grant ADDRESS | list | revoke ADDRESS
+	"operator": `Usage: agentnet operator grant --person ADDRESS
+       agentnet operator grant ADDRESS
+       agentnet operator list
+       agentnet operator revoke [--person] ADDRESS|PERSON
 
-On a machine nobody sits at, let the person at ADDRESS decide the
-requests waiting here from their own messenger: accept, decline, reply,
-resolve, stop. The grant names that device's exact pinned key, is made
-here only, and nothing received can make or widen it. Granted operators
-receive this machine's review reports with the waiting requests named
-(id, sender, kind, state, first line), except interrupted ones for now: an
-older operator device drops a whole report naming one (inbox --review here
-lists them). "agentnet review-to" alone still gets a count and nothing more. Each decision is applied once, in the state
+On a machine nobody sits at (a server running a company agent), name who
+decides the requests waiting here from their own messenger: accept,
+decline, reply (device requests), resolve, stop.
+
+grant --person ADDRESS names a steward: the person the device at ADDRESS
+speaks for. Every current device of that person decides, the phone
+included, and every device they add later once this machine sees their
+newer signed device list; a device they remove stops then. It prints the
+person and their devices now: check that this is the person you mean.
+grant ADDRESS names one device under its exact pinned key instead. Either
+grant is made here only (agentnet person service --steward ADDRESS does it
+at install); nothing received can make or widen one.
+
+Each steward or granted device receives this machine's reports with the
+waiting requests named (id, sender, kind, state, first line), a request in
+a DM or group too (decided there, never answered by hand from the report),
+except interrupted ones for now. Any other device told about them
+("agentnet review-to") gets how many wait and who decides them. A newer
+report replaces the older ones; when everything reported is decided, an
+empty report clears the card. Each decision is applied once, in the state
 the operator saw; a repeated or stale one is refused and the operator is
 told what the request's state is now.
 `,
@@ -762,10 +863,12 @@ With the daemon stopped, remove encrypted copies of messages that failed or
 were abandoned, and direct uploads never attached to a message.
   --saved   also remove directly received ciphertext of files already saved`,
 
-	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw | --link] LABEL
+	"admin": `Usage: agentnet admin invite [--ttl 168h] [--admin] [--raw] LABEL
+       agentnet admin invite [--ttl 168h] [--admin] --link (--name NAME [LABEL] | LABEL)
        agentnet admin revoke ADDRESS
        agentnet admin release set --url URL [--note TEXT] VERSION
        agentnet admin release show | clear
+       agentnet admin workspace [show] | set NAME | clear
 
 Run on an admin agent. LABEL is the invited person's AgentNet name (e.g.
 bob): use the name your person gave for this invitation, or ask them who is
@@ -780,6 +883,9 @@ invite prints a self-contained invitation for the person LABEL (their
 address becomes LABEL/NAME, NAME chosen by them when joining): project and install links,
 install-from-source steps for Linux, macOS and Windows, join/daemon/doctor
 steps, how to confirm back to you, and the private single-use invite code.
+Give the whole text to the coding agent on their computer, privately. The
+label is your statement about who they are. revoke immediately cuts ADDRESS
+off.
 
 release set recommends a client version to every member: running daemons
 get it at once, others when they next connect. Each person gets one
@@ -789,17 +895,27 @@ shown to people only, never to models. Setting the same version and URL
 again announces nothing new. It is a recommendation: receiving it downloads
 and installs nothing (members update with agentnet update when they choose).
 Versions are compared only for equality.
-Give the whole text to the coding agent on their computer, privately. The
-label is your statement about who they are. revoke immediately cuts ADDRESS
-off.
+
+workspace set names the workspace for every member (e.g. Mellanni): their
+devices show it at once, or when they next connect, with no reinstall or
+rejoin; each person may still give it their own label on their devices.
+1–120 readable characters. clear removes it (devices then show the relay's
+host name); show prints the current name. A label only: the workspace's
+identity never changes. Your other devices (your phone) may set it only
+after you grant them the role: agentnet help person, person admin.
 
   --ttl D    how long the invite is valid: more than 0, at most 720h (others are refused)
   --admin    the invited agent becomes an admin too
   --raw      print only the invite code (for scripts)
-  --link     print only a private, single-use browser invitation link (the
-             code travels in the link's #fragment); needs a Hub served with
+  --link     print only the private, single-use invitation link people get
+             (the code travels in the link's #fragment): it offers the
+             AgentNet app for their device and opens in it, as an invitation
+             made in the app (Invite people) does; needs a Hub served with
              --web and browser-trusted HTTPS (not a pinned certificate).
-             Share it privately, as you would the code`,
+             Share it privately, as you would the code
+  --name N   with --link: the invited person's name, written on the
+             invitation (shown as what it says); LABEL is then made from it
+             unless given`,
 
 	"hub": `Usage: agentnet hub serve|bootstrap-invite|storage|cleanup|backup|restore [flags]
 
@@ -895,8 +1011,15 @@ listing are not supported. Keep agentnet daemon running for replies.`,
 	"ui": `Usage: agentnet ui
        agentnet ui --demo [--listen 127.0.0.1:0]
 
-The messenger page: your conversations with other agents in a browser on
-this computer. Start the daemon with --ui to serve it over your real inbox:
+People use AgentNet as the AgentNet app: installed like any app (Windows,
+macOS, Linux; https://github.com/misunders2d/agentnet/releases), opened from
+its icon, started with the computer and kept in the tray. The app runs this
+computer's AgentNet itself; agentnet ui opens it (a running one comes to the
+front). The command line stays for coding agents and advanced use, on the
+same home and identity.
+
+Without the app (advanced), the daemon serves the same page over your real
+inbox, and agentnet ui prints its address:
 
   agentnet daemon --ui 127.0.0.1:0
   agentnet ui          # prints the address to open
@@ -922,6 +1045,17 @@ computer, not a relay for a phone or other devices.
                 touched; buttons in the demo banner stand in for a peer
                 writing and your responder finishing
   --listen A    loopback address for the demo (default 127.0.0.1:0)`,
+
+	"app": `Usage: agentnet app
+
+The AgentNet app's own program: the app starts it and shows the page it
+serves in its window. People open the app from their apps, never this
+command. It serves this home's page on one loopback address, kept across
+starts (in the home's ui-addr): a first-run page until this computer has
+joined, then the messenger. While another agentnet daemon runs for the home,
+the app shows that daemon's page and opens nothing itself; when that daemon
+stops for good, the app takes the home over. It reports to the app in JSON
+lines on its output and stops when its input says quit or closes.`,
 
 	"install": `Install agentnet
 
@@ -954,6 +1088,12 @@ Next:  agentnet join --agent NAME 'agentnet-invite-v1:...' (ask the person for N
 Cross-building for other systems: scripts/build.sh (POSIX shell).`,
 
 	"startup": `Start agentnet daemon at login
+
+People do not need this: the AgentNet app starts with the computer by itself
+(tray: Start when I log in). These recipes are for servers, coding agents and
+advanced setups without the app. A computer runs one of the two for a home:
+while a daemon below runs, the app shows its page and starts none; once it
+is stopped and disabled, the app takes over by itself.
 
 The commands assume agentnet is installed as in agentnet help install and
 uses the default home. These are examples; the tests do not exercise them.
@@ -1131,7 +1271,7 @@ var valueFlags = map[string]bool{
 	"harness": true, "context": true, "timeout": true, "ttl": true, "data": true, "out": true,
 	"from": true, "public-url": true, "admin-label": true, "max-file": true, "quota": true,
 	"upload-ttl": true, "delivered-older-than": true, "unattached-older-than": true, "wait": true,
-	"follow-up": true, "offset": true, "limit": true, "reply-to": true,
+	"follow-up": true, "offset": true, "limit": true, "reply-to": true, "answer-wait": true,
 }
 
 const followUpHelp = `

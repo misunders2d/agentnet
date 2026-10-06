@@ -1,0 +1,17 @@
+[
+  {"in": "admin/pixel", "out": "Pixel"},
+  {"in": "admin/zenbook", "out": "Zenbook"},
+  {"in": "hub/bezos", "out": "Bezos"},
+  {"in": "bohdan/windows-laptop", "out": "Windows laptop"},
+  {"in": "bohdan/laptop-browser", "out": "Laptop browser"},
+  {"in": "admin/work-phone", "out": "Work phone"},
+  {"in": "admin/iphone", "out": "iPhone"},
+  {"in": "admin/ipad-2", "out": "iPad 2"},
+  {"in": "vitalii/mac", "out": "Mac"},
+  {"in": "vitalii/imac", "out": "iMac"},
+  {"in": "vitalii/macbook-air", "out": "MacBook air"},
+  {"in": "vitalii/my-iphone", "out": "My iPhone"},
+  {"in": "carol/phone--2", "out": "Phone 2"},
+  {"in": "zenbook", "out": "Zenbook"},
+  {"in": "", "out": ""}
+]

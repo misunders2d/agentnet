@@ -5,9 +5,9 @@ const workspace=/^\/workspace-push\/([a-f0-9]{32})\/$/.exec(new URL(self.registr
 const channel=v=>typeof v==="string"&&/^[A-Za-z0-9_-]{22}$/.test(v)?v:"";
 self.addEventListener("push",event=>{
  if(!workspace)return;
- let chan="";
- try{const p=event.data?.json();if(p?.v===1)chan=channel(p.chan);}catch(_){}
- event.waitUntil(self.registration.showNotification("AgentNet",{body:"New activity",tag:workspace+":"+(chan||"summary"),renotify:true,icon:"/assets/icon-192.png",data:{chan}}));
+ let chan="",security=false;
+ try{const p=event.data?.json();if(p?.v===1){chan=channel(p.chan);security=p.notice==="device_admin";}}catch(_){}
+ event.waitUntil(self.registration.showNotification("AgentNet",{body:security?"Company settings access changed. Open AgentNet to read the notice.":"New activity",tag:workspace+":"+(security?"device-admin":chan||"summary"),renotify:true,icon:"/assets/icon-192.png",data:{chan}}));
 });
 self.addEventListener("notificationclick",event=>{
  event.notification.close();if(!workspace)return;

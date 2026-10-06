@@ -51,7 +51,7 @@ async function slowly(browser, w, h, scheme, name) {
   const frames = async (ms) => { await p.waitForTimeout(ms + 50); return p.evaluate(() => ({ frames: window.__frames, moves: window.__moves })); };
 
   await watch(1500);
-  await p.getByRole('button', { name: /no person linked/ }).first().click();
+  await p.getByRole('button', { name: /not linked to a person/i }).first().click();
   const { frames: opened, moves } = await frames(1500);
   const shownAt = opened.findIndex((f) => f.msgs > 0);
   assert.ok(shownAt >= 0, name + ': the conversation opened: ' + JSON.stringify(opened.slice(-3)));
@@ -138,7 +138,7 @@ async function slowly(browser, w, h, scheme, name) {
       // the pane showed) stays until its messages are there; only a slow load
       // (400 ms) may show the opening placeholder.
       await watch();
-      await p.getByRole('button', { name: /no person linked/ }).first().click();
+      await p.getByRole('button', { name: /not linked to a person/i }).first().click();
       const opened = await frames();
       const shownAt = opened.findIndex((f) => f.msgs > 0);
       assert.ok(shownAt >= 0, name + ': the conversation opened: ' + JSON.stringify(opened.slice(-3)));
@@ -183,7 +183,7 @@ async function slowly(browser, w, h, scheme, name) {
       const done = all.getByRole('listitem').filter({ hasText: title });
       assert.equal(await all.getByRole('listitem').count(), 5 - aisle, name + ': the finished tasks not reopened yet are done');
       // The results were written by hand here (Reply): the person's words, never the agent's.
-      assert.match(await done.first().innerText(), /You: 41. bath sets/);
+      assert.match(await done.first().innerText(), /41. bath sets/);
       // Switching topic swaps only the messages: the header and the topic bar
       // stay the same elements, and every frame shows messages (the last
       // topic's until the next one's are there), never a placeholder.
@@ -195,7 +195,7 @@ async function slowly(browser, w, h, scheme, name) {
       }
       await p.waitForSelector('section[aria-label="Topic state"]');
       const end = await p.locator('section[aria-label="Topic state"]').innerText();
-      assert.match(end, /done/i); assert.match(end, new RegExp('Your answer: ' + (410 + aisle) + ' bath sets')); assert.doesNotMatch(end, /conclusion/);
+      assert.match(end, /done/i); assert.doesNotMatch(end, /Your answer|conclusion/i);
       await fits('done topic');
       await snap('done');
 

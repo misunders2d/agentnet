@@ -1,0 +1,32 @@
+[
+  {
+    "name": "peer signed capability gap",
+    "peer": "Bob",
+    "detail": "peer_update: bob/desk needs env2",
+    "want": "Waiting for Bob to update AgentNet"
+  },
+  {
+    "name": "own device capability gap",
+    "peer": "You",
+    "detail": "peer_update: self/phone needs env2",
+    "want": "Your other device needs to update AgentNet"
+  },
+  {
+    "name": "offline server",
+    "peer": "Bob",
+    "detail": "server_unavailable: cannot reach the Hub",
+    "want": "Cannot reach your server; retries automatically"
+  },
+  {
+    "name": "server too old",
+    "peer": "Bob",
+    "detail": "server_update: your Hub cannot carry conversations",
+    "want": "Your server needs an update before this can be sent"
+  },
+  {
+    "name": "unclassified wait",
+    "peer": "Bob",
+    "detail": "",
+    "want": "Kept here, not sent yet"
+  }
+]

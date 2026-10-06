@@ -195,6 +195,9 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 			if len(signer) > 0 {
 				who = signer[0]
 				from = who.Public("dana/desk")
+				if who == bob {
+					from = bp
+				}
 			}
 			raw := []byte(marshal(t, payload))
 			ct := encrypt(raw)
@@ -240,7 +243,144 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 		}
 		carriers["withdrawn"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Withdrawals: []protocol.GroupWithdrawal{withdrawal}}, 0, s0.Hash())
 		carriers["promoted-leave"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: states[3], Withdrawals: []protocol.GroupWithdrawal{withdrawal}}, 3, states[3].Hash())
-		vectors["participations"] = groupParticipationEngineVectors(t, root, s0, alice, dana, ar, dr, browser)
+		participations := groupParticipationEngineVectors(t, root, s0, alice, dana, ar, dr, browser)
+		vectors["participations"] = participations
+		var membershipRecords []protocol.ParticipationEvent
+		for _, prefix := range []string{"p6-0", "p6-1"} {
+			for _, typ := range []string{"invite", "scope", "accept"} {
+				in := participations[prefix+"-"+typ].(map[string]any)["inner"].(envelope.Inner)
+				ev, err := protocol.ParseParticipationEvent([]byte(in.Body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				membershipRecords = append(membershipRecords, ev)
+			}
+		}
+		carriers["p6-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash())
+
+		// A pre-join copy reaches the host only after Dana's admission. Its
+		// signed fan proves Alice and the browser, never the new member.
+		p26Admission := protocol.GroupAdmission{Conv: s0.Conv, Realm: root.Realm, Person: dr.Person, Roster: dr.Hash(), Seq: 1, Prev: s0.Hash(), By: dr.Devices[0].Fingerprint()}
+		p26Admission.Sign(dana.Sign)
+		p26State := s0
+		p26State.Seq, p26State.Prev = 1, s0.Hash()
+		p26State.Members = append(slices.Clone(s0.Members), protocol.GroupMember{ConvMember: protocol.ConvMember{Person: dr.Person, Roster: dr.Hash()}, Admission: p26Admission})
+		slices.SortFunc(p26State.Members, func(a, b protocol.GroupMember) int { return strings.Compare(a.Person, b.Person) })
+		p26State.Sign(alice.Sign)
+		p26Resolve := func(person, hash string) (protocol.PersonRoster, bool) {
+			if person == dr.Person && hash == dr.Hash() {
+				return dr, true
+			}
+			return resolve(person, hash)
+		}
+		if err := p26State.Verify(root, &s0, p26Resolve, nil); err != nil {
+			t.Fatal("late reader state", err)
+		}
+		p26Commit := protocol.GroupCommit{Bootstrap: root.Creator.Fingerprint, V: 1, Conv: s0.Conv, Realm: s0.Realm, Seq: 1, Prev: s0.Hash(), Hash: p26State.Hash(), Admins: p26State.Admins(), Writer: ap.Address, Actor: s0.Actor, ActorRoster: s0.ActorRoster, Ciphertext: encrypt([]byte(marshal(t, client.GroupContext{Root: root, State: p26State})))}
+		p26Commit.Sign(alice.Sign)
+		if err := p26Commit.VerifyChain(root, &commits[0], p26Resolve); err != nil {
+			t.Fatal("late reader commit", err)
+		}
+		carriers["p26-proof"] = carrier(envelope.SubGroupProof, protocol.GroupJournalPage{Records: []protocol.GroupCommit{p26Commit}}, 1, p26State.Hash())
+		carriers["p26-context"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: p26State}, 1, p26State.Hash())
+		p26Seal := func(name string, in envelope.Inner, signer *identity.Identity, from identity.Public) {
+			in.V, in.ID, in.From, in.To, in.TS = 2, protocol.NewID(), from.Address, browser.Address, 1700000100
+			in.Conv, in.Root, in.LID = root.ID(), json.RawMessage(marshal(t, root)), protocol.NewID()
+			recipient, _ := browser.Recipient()
+			env, err := envelope.Seal(in, signer.Sign, recipient)
+			if err != nil {
+				t.Fatal(name, err)
+			}
+			participations[name] = map[string]any{"envelope": marshal(t, env), "inner": in}
+		}
+		p26Seal("p26-before-join", envelope.Inner{Kind: envelope.KindMessage, Body: "P26 pre-join private turn", Fan: []envelope.Fan{{Person: ar.Person, Roster: ar.Hash()}, {Person: br.Person, Roster: br.Hash()}}}, alice, ap)
+		p26Seal("p26-no-fan", envelope.Inner{Kind: envelope.KindMessage, Body: "P26 legacy copy without reader proof"}, alice, ap)
+		p26Turn := participations["p26-before-join"].(map[string]any)["inner"].(envelope.Inner)
+		p26Author, _ := s0.Member(ar.Person)
+		for _, mode := range []string{"late-reader", "author"} {
+			person, public, signer, admission := dr, dr.Devices[0], dana, p26Admission
+			if mode == "author" {
+				person, public, signer, admission = ar, ap, alice, p26Author.Admission
+			}
+			share := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: membershipRecords[0].PID, Type: protocol.EventShare, Prev: membershipRecords[0].Hash(), TS: 1700000110, Author: protocol.EventAuthor{Person: person.Person, Roster: person.Hash(), Address: public.Address, Fingerprint: public.Fingerprint(), GroupAdmission: admission.Hash()}, Host: membershipRecords[0].Host, Audience: protocol.AudienceRoom, Group: &protocol.ParticipationGroup{Seq: 1, Hash: p26State.Hash(), HostRole: "member", HostAdmission: p26Author.Admission.Hash()}, Grant: []protocol.GrantRef{{LID: p26Turn.LID, Fingerprint: ap.Fingerprint()}}}
+			share.Sign(signer.Sign)
+			p26Seal("p26-share-"+mode, envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: share.PID, Body: marshal(t, share)}, signer, public)
+		}
+
+		carriers["p6-nonadmin-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), bob)
+		carriers["p6-outsider-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: membershipRecords}, s0.Seq, s0.Hash(), dana)
+		// Original author rights still apply when an administrator vouches for
+		// a carried end, and when a member forwards the host's signed bytes.
+		for _, mode := range []string{"host", "inviter", "admin", "non-admin", "wrong-parent", "bad-signature"} {
+			who, public, person, state := dana, dr.Devices[0], dr, s0
+			if mode == "inviter" || mode == "wrong-parent" {
+				who, public, person = alice, ap, ar
+			}
+			if mode == "admin" || mode == "non-admin" {
+				who, public, person = bob, bp, rr
+				if mode == "admin" {
+					state = states[3]
+				}
+			}
+			end := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: membershipRecords[3].PID, Type: protocol.EventDismiss, Prev: membershipRecords[5].Hash(), TS: 1700000110, Author: protocol.EventAuthor{Person: person.Person, Roster: person.Hash(), Address: public.Address, Fingerprint: public.Fingerprint()}}
+			if member, ok := state.Member(person.Person); ok {
+				end.Author.GroupAdmission = member.Admission.Hash()
+			}
+			if mode == "wrong-parent" {
+				end.Prev = strings.Repeat("f", 64)
+			}
+			end.Sign(who.Sign)
+			if mode == "bad-signature" {
+				end.Sig = slices.Clone(end.Sig)
+				end.Sig[0] ^= 1
+			}
+			carriers["p20-"+mode] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: state, Memberships: append(slices.Clone(membershipRecords), end)}, state.Seq, state.Hash())
+			if mode == "host" || mode == "non-admin" || mode == "bad-signature" {
+				in := envelope.Inner{V: 2, ID: protocol.NewID(), From: ap.Address, To: browser.Address, TS: end.TS, Kind: envelope.KindMessage, Conv: root.ID(), Root: json.RawMessage(marshal(t, root)), LID: protocol.NewID(), PID: end.PID, Sub: envelope.SubEvent, Body: marshal(t, end)}
+				recipient, _ := browser.Recipient()
+				env, err := envelope.Seal(in, alice.Sign, recipient)
+				if err != nil {
+					t.Fatal(err)
+				}
+				participations["p20-forward-"+mode] = map[string]any{"envelope": marshal(t, env), "inner": in}
+			}
+		}
+		decline := membershipRecords[5]
+		decline.Type = protocol.EventDecline
+		decline.Sign(dana.Sign)
+		declinedEnd := protocol.ParticipationEvent{V: 1, Conv: root.ID(), PID: decline.PID, Type: protocol.EventDismiss, Prev: decline.Hash(), TS: 1700000110, Author: membershipRecords[3].Author}
+		declinedEnd.Sign(alice.Sign)
+		for _, ev := range []protocol.ParticipationEvent{decline, declinedEnd} {
+			who, from := dana, dr.Devices[0]
+			if ev.Type == protocol.EventDismiss {
+				who, from = alice, ap
+			}
+			in := envelope.Inner{V: 2, ID: protocol.NewID(), From: from.Address, To: browser.Address, TS: ev.TS, Kind: envelope.KindMessage, Conv: root.ID(), Root: json.RawMessage(marshal(t, root)), LID: protocol.NewID(), PID: ev.PID, Sub: envelope.SubEvent, Body: marshal(t, ev)}
+			recipient, _ := browser.Recipient()
+			env, err := envelope.Seal(in, who.Sign, recipient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			participations["p20-declined-"+ev.Type] = map[string]any{"envelope": marshal(t, env), "inner": in}
+		}
+		// Bob held admin at slot 3, then lost it at slot 4 without a new admission.
+		backdated := membershipRecords[3]
+		currentBob, _ := states[4].Member(rr.Person)
+		backdated.PID = protocol.NewID()
+		backdated.Author = protocol.EventAuthor{Person: rr.Person, Roster: rr.Hash(), Address: bp.Address, Fingerprint: bp.Fingerprint(), GroupAdmission: currentBob.Admission.Hash()}
+		backdated.Group = &protocol.ParticipationGroup{Seq: 3, Hash: states[3].Hash(), HostRole: "visitor"}
+		backdated.Sign(bob.Sign)
+		backdatedScope := protocol.ScopeOf(backdated, backdated.TS)
+		backdatedScope.Sign(bob.Sign)
+		backdatedAccept := membershipRecords[5]
+		backdatedAccept.PID, backdatedAccept.Prev = backdated.PID, backdated.Hash()
+		backdatedAccept.Sign(dana.Sign)
+		vectors["p6_backdated"] = []protocol.ParticipationEvent{backdated, backdatedScope, backdatedAccept}
+		carriers["p6-backdated-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: states[4], Memberships: []protocol.ParticipationEvent{backdated, backdatedScope, backdatedAccept}}, 4, states[4].Hash())
+		bad := slices.Clone(membershipRecords)
+		bad[0].Sig = slices.Clone(bad[0].Sig)
+		bad[0].Sig[0] ^= 1
+		carriers["p6-bad-memberships"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: s0, Memberships: bad}, s0.Seq, s0.Hash())
 		vectors["outside_browser"] = groupOutsideBrowserVectors(t, root, alice, bob, ar, rr, browser, br)
 		return vectors
 	}

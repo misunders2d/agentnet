@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Existing Drive widgets inherit Comic's theme and fit narrow sheets. */
+.drive-space .drive-error { color: var(--an-danger); }
+.drive-space pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Pop Huddle: the Comic skin's design tokens (docs/plans/MESSENGER_DESIGN.md).
    The skin runs in a shadow tree the host gives it, so tokens, theme and
    the base reset belong to the skin's own root (.an-root, set by main.tsx),
@@ -82,8 +86,12 @@
 }
 
 @layer base {
-  .an-root { min-height: 100%; background: var(--an-canvas); color: var(--an-ink); font-family: "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.45;
+  /* The skin is exactly as tall as its root, which the host sizes to the
+     part of the screen the keyboard leaves visible (docs/UI_SKINS.md): no
+     vh/dvh for the frame, and the app between root and frame fills it. */
+  .an-root { height: 100%; background: var(--an-canvas); color: var(--an-ink); font-family: "Onest", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 16px; line-height: 1.45;
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; -webkit-text-size-adjust: 100%; }
+  .an-app { height: 100%; }
   @media (min-width: 1024px) { .an-root { font-size: 15px; } }
   :focus-visible { outline: 3px solid var(--an-agent-ink); outline-offset: 2px; border-radius: 6px; }
   ::selection { background: var(--an-act); color: var(--an-act-ink); }

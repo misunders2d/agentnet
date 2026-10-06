@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ import (
 // runPerson shows or sets up this installation's person and its devices
 // (agentnet help person).
 func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Writer) error {
-	usage := errors.New("usage: person | person create NAME | person rename NAME | person service | person link | person links | person approve [--native] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
+	usage := errors.New("usage: person | person create NAME | person rename NAME | person service [--steward ADDRESS] | person link | person links | person approve [--native|--agent-host] ID | person refuse ID | person untrust ADDRESS | person remove ADDRESS (see agentnet help person)")
 	if len(args) == 0 {
 		p, ok, err := a.Person()
 		if err != nil {
@@ -74,6 +75,29 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 			return err
 		}
 		fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+		fmt.Fprintln(stdout, "name who decides its waiting requests from their own devices: agentnet operator grant --person ADDRESS")
+		return nil
+	case args[0] == "service" && len(args) == 3 && args[1] == "--steward":
+		// At install: a service and its steward, named once on this machine
+		// (MEL-532). The steward is checked before anything changes.
+		if role, _ := a.Role(); role != "service" {
+			if _, ok, err := a.Person(); err != nil {
+				return err
+			} else if ok {
+				return errors.New("this installation already speaks for a person")
+			}
+		}
+		g, err := a.GrantOperatorPerson(ctx, args[2])
+		if err != nil {
+			return err
+		}
+		if err := a.SetService(); err != nil {
+			a.RevokeOperatorPerson(g.Person)
+			return err
+		}
+		fmt.Fprintln(stdout, "this installation is a service: it speaks as itself, not for a person")
+		printSteward(stdout, g, "is its steward: each of their devices decides its waiting requests from its messenger, devices they add later included")
+		fmt.Fprintf(stdout, "check that this is the person you mean; revoke: agentnet operator revoke --person %s\n", g.Person)
 		return nil
 	case args[0] == "link" && len(args) == 1:
 		o, err := a.NewDeviceLink(ctx)
@@ -93,6 +117,12 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 			fmt.Fprintf(stdout, "%s  %s  %s  key %s  asked %s\n", l.ID, l.State, l.Address, l.Fingerprint, time.Unix(l.RequestedAt, 0).Format("2006-01-02 15:04"))
 		}
 		return nil
+	case args[0] == "approve" && len(args) == 3 && args[1] == "--agent-host":
+		if err := a.ApproveAgentLink(ctx, args[2]); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, "agent host linked to your person; it shares your permissions but cannot add devices")
+		return nil
 	case args[0] == "approve" && len(args) == 3 && args[1] == "--native":
 		if err := a.ApproveNativeLink(ctx, args[2]); err != nil {
 			return err
@@ -105,11 +135,22 @@ func runPerson(ctx context.Context, a *client.Agent, args []string, stdout io.Wr
 		}
 		fmt.Fprintf(stdout, "%sd\n", args[0])
 		return nil
+	case (args[0] == "admin" || args[0] == "unadmin") && len(args) == 2 && !strings.HasPrefix(args[1], "-"):
+		grant := args[0] == "admin"
+		if err := a.SetDeviceAdmin(ctx, args[1], grant); err != nil {
+			return err
+		}
+		if grant {
+			fmt.Fprintf(stdout, "%s may now change company settings (workspace name, invites, release notices, storage); agentnet person unadmin %s takes it back\n", args[1], args[1])
+		} else {
+			fmt.Fprintf(stdout, "%s may no longer change company settings\n", args[1])
+		}
+		return nil
 	case args[0] == "untrust" && len(args) == 2:
 		if err := a.UntrustOwnDevice(args[1]); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "untrusted %s: its invites of your own agents here wait for your accept again\n", args[1])
+		fmt.Fprintf(stdout, "untrusted %s: its invites of your own agents here, and its tasks to your agent here, wait for your OK again\n", args[1])
 		return nil
 	case args[0] == "remove" && len(args) == 2:
 		if err := a.RemoveDevice(ctx, args[1]); err != nil {
@@ -177,8 +218,12 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		replyTo := fs.String("reply-to", "", "reply to exact same-conversation physical/logical reference")
 		var files []client.OutgoingFile
 		fs.Func("file", "attach a file (repeatable)", func(p string) error { files = append(files, client.OutgoingFile{Path: p}); return nil })
+		answerFor := answerWaitFlag(fs, -1) // -1: the kind's default, below
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() < 1 || fs.NArg() > 2 || (fs.NArg() == 1 && len(files) == 0) || (*question && *task) {
-			return errors.New("usage: dm send [--question|--task] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
+			return errors.New("usage: dm send [--question|--task] [--answer-wait D] [--file PATH]... ID [TEXT]   (TEXT may be left out when files are attached)")
+		}
+		if *answerFor < 0 && *question {
+			*answerFor = client.AskAnswerWait
 		}
 		beyond := ""
 		if !*question && !*task {
@@ -191,7 +236,7 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		if err != nil {
 			return err
 		}
-		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1), Files: files, ReplyReceiver: receiver, ReplyTo: *replyTo}
+		m := client.ConvOutgoing{Kind: envelope.KindMessage, Body: fs.Arg(1), Files: files, ReplyReceiver: receiver, ReplyTo: *replyTo, Quote: *replyTo}
 		if *question {
 			m.Kind = envelope.KindQuestion
 		}
@@ -207,7 +252,10 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			line += " (" + sent.Detail + ")"
 		}
 		fmt.Fprintln(stdout, line)
-		return nil
+		if !*question && !*task {
+			return nil // a plain message expects no answer
+		}
+		return awaitAnswer(ctx, a, sent.ID, "agentnet dm show "+fs.Arg(0), answerWait(answerFor), receiver, stdout, os.Stderr)
 	case "invite":
 		fs := flag.NewFlagSet("dm invite", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -315,12 +363,15 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 		fs.SetOutput(io.Discard)
 		task := fs.Bool("task", false, "a task instead of a question")
 		returnSelection := receiverFlags(fs)
+		answerFor := answerWaitFlag(fs, -1) // -1: the kind's default, below
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 2 {
-			return errors.New("usage: dm ask-agent [--task] PID TEXT")
+			return errors.New("usage: dm ask-agent [--task] [--answer-wait D] PID TEXT")
 		}
 		kind := envelope.KindQuestion
 		if *task {
 			kind = envelope.KindTask
+		} else if *answerFor < 0 {
+			*answerFor = client.AskAnswerWait
 		}
 		receiver, err := returnSelection.selected(a, true)
 		if err != nil {
@@ -335,7 +386,11 @@ func runDM(ctx context.Context, a *client.Agent, args []string, stdout io.Writer
 			line += " (" + sent.Detail + ")"
 		}
 		fmt.Fprintln(stdout, line)
-		return nil
+		show := "agentnet dm agents (then dm show) for participation " + fs.Arg(0)
+		if p, e := a.Participation(fs.Arg(0)); e == nil {
+			show = "agentnet dm show " + p.Conv
+		}
+		return awaitAnswer(ctx, a, sent.ID, show, answerWait(answerFor), receiver, stdout, os.Stderr)
 	}
 	return fmt.Errorf("unknown dm command %q (see agentnet help dm)", args[0])
 }
@@ -372,7 +427,15 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 		} else if m.Origin != "" {
 			who += " [" + m.Origin + "]"
 		}
-		state := m.State
+		state := m.Delivery
+		if state == "" {
+			state = m.State
+		}
+		if len(m.Copies) > 0 {
+			for _, c := range m.Copies {
+				state += "; " + c.To + ": " + c.State
+			}
+		}
 		if m.Detail != "" {
 			state += ": " + m.Detail
 		}
@@ -389,7 +452,12 @@ func printConvMessages(stdout io.Writer, msgs []client.ConvMessage) {
 		if m.PID != "" {
 			kind += " pid " + m.PID
 		}
-		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(m.At, 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
+		header := fmt.Sprintf("%s  %s %s %s (%s)  %s lid %s", time.Unix(func() int64 {
+			if m.Sent > 0 && m.Sent < 253370764800 && m.Sent <= m.At {
+				return m.Sent
+			}
+			return m.At
+		}(), 0).Format("2006-01-02 15:04"), m.Dir, who, kind, state, m.ID, m.LID)
 		text := shownText(m.Body, m.Controls)
 		if m.Sub == envelope.SubEvent {
 			text = eventLine(m.Body) // the record in words, not its signed JSON

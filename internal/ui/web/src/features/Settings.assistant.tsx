@@ -11,8 +11,11 @@ import { useApp } from "../context";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
-import { Card, Command, Details, Fact, Failed, GroupLabel, Hint, input, PageHead, Skeleton, useLoad } from "./Settings.parts";
+import { Card, Command, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
 import { Permissions, useGrants } from "./AgentsView.grants";
+import { AssistantSetup } from "./AssistantSetup";
+import { FolderField } from "./AssistantSetup.folders";
+import { browserDevice as isBrowser } from "./AssistantSetup.model";
 
 const MANUAL = "manual";
 
@@ -26,19 +29,19 @@ const questionLimits: Record<string, string> = {
   pi: "For questions it uses your Pi setup, with its shell and file editing turned off.",
 };
 
-const isBrowser = (platform: string, o: T.Overview | null) => platform === "browser" || !!(o as { device?: unknown } | null)?.device;
-
 export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const browser = isBrowser(store.host.platform, o);
   const r = useLoad(() => store.api.responder(), [o?.me.responder, o?.me.responder_dir, browser]);
   const head = <PageHead title="Your agent" titleRef={titleRef} lead="The program on this computer that answers questions and does tasks for you, with your own setup." />;
+  // Connecting coding sessions is its own card below, whatever the agent's state.
+  const setup = <div className="mt-6"><AssistantSetup /></div>;
   // The server says "not available here" when this installation runs nothing.
-  if (browser || (r.error && !r.data && /not available here/i.test(r.error))) return <>{head}<Card className="p-4"><p>This {browser ? "browser" : "installation"} runs nothing, so questions and tasks wait for you. Set up your agent on a computer that runs AgentNet.</p></Card></>;
-  if (r.error && !r.data) return <>{head}<Failed text={r.error} retry={r.reload} /></>;
-  if (!r.data) return <>{head}<Skeleton lines={4} /></>;
-  return <>{head}<AssistantForm view={r.data} saved={r.reload} /></>;
+  if (browser || (r.error && !r.data && /not available here/i.test(r.error))) return <>{head}<Card className="p-4"><p>This {browser ? "browser" : "installation"} runs nothing, so questions and tasks wait for you. Set up your agent on a computer that runs AgentNet.</p></Card>{setup}</>;
+  if (r.error && !r.data) return <>{head}<Failed text={r.error} retry={r.reload} />{setup}</>;
+  if (!r.data) return <>{head}<Skeleton lines={4} />{setup}</>;
+  return <>{head}<AssistantForm view={r.data} saved={r.reload} />{setup}</>;
 }
 
 function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => void }) {
@@ -80,9 +83,7 @@ function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => vo
 
       {choice && choice !== MANUAL && (
         <section className="fade-in">
-          <label htmlFor="assistant-dir" className="mb-2 block px-1 text-[12px] font-bold uppercase tracking-[0.08em] text-muted">Works in</label>
-          <input id="assistant-dir" className={input + " font-mono text-[14px]"} value={dir} placeholder="/home/you/projects/…" spellCheck={false} autoCapitalize="none" onChange={(e) => setDir(e.target.value)} />
-          <Hint className="mt-1.5 px-1">The folder it starts in for every question and task, as a full path.</Hint>
+          <FolderField label="Works in" value={dir} onChange={setDir} hint="The folder it starts in for every question and task." />
         </section>
       )}
 
@@ -189,7 +190,7 @@ export function PermissionsSection({ titleRef }: { titleRef?: React.Ref<HTMLHead
       <div className="space-y-6">
         <Card className="divide-y divide-hairline">
           <Rule icon={<IconMessageQuestion size={20} />} title="Questions">Your agent answers by itself only for people you’ve approved. Everyone else’s questions wait for you in OKs.</Rule>
-          <Rule icon={<IconBolt size={20} />} title="Tasks">A task runs only after you OK it. If you chose Always allow for someone, their tasks run without asking, until their key changes.</Rule>
+          <Rule icon={<IconBolt size={20} />} title="Tasks">A task runs only after you OK it. If you chose Always allow for someone, their current and future verified devices can give tasks without asking. Removing a device ends its person access; key changes and frozen people block it.</Rule>
           <Rule icon={<IconLock size={20} />} title="Chat messages">Nothing anyone types in a chat can approve anything. Only you can, in OKs.</Rule>
         </Card>
         {isBrowser(store.host.platform, o) ? (
@@ -198,12 +199,12 @@ export function PermissionsSection({ titleRef }: { titleRef?: React.Ref<HTMLHead
           <section aria-labelledby="permissions-now">
             <GroupLabel id="permissions-now">Approved right now</GroupLabel>
             <Permissions grants={grants} />
-            <Hint className="mt-2 px-1">Only devices your agent has talked with directly show here. Anyone approved from a terminal shows there.</Hint>
+            <Hint className="mt-2 px-1">Saved person and advanced device permissions appear here, including those granted in a terminal.</Hint>
             <Details label="In a terminal" className="px-1">
               <div className="space-y-2 pt-1">
                 <Command cmd="agentnet approvals" what="Who’s approved, and whether it still holds" onCopied={copied} />
-                <Command cmd="agentnet unapprove ADDRESS" what="Stop answering their questions by itself" onCopied={copied} />
-                <Command cmd="agentnet unapprove --tasks ADDRESS" what="Turn off Always allow for their tasks" onCopied={copied} />
+                <Command cmd="agentnet unapprove PERSON-or-ADDRESS" what="Stop answering their questions by itself" onCopied={copied} />
+                <Command cmd="agentnet unapprove --tasks PERSON-or-ADDRESS" what="Turn off Always allow for their tasks" onCopied={copied} />
               </div>
             </Details>
           </section>

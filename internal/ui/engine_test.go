@@ -487,7 +487,7 @@ func TestBrowserEngineJourney(t *testing.T) {
 		return len(evMsgs) == 6
 	})
 	record, request := evMsgs[4].(map[string]any), evMsgs[5].(map[string]any)
-	if record["event"] != "Eve invited Eve's agent (on "+eve.addr+") into this DM." || record["body"] != "" {
+	if record["event"] != "Eve invited Eve's agent into this DM." || record["body"] != "" {
 		t.Fatalf("the record as the browser shows it: %v", record)
 	}
 	if request["state"] != "" || request["to"] != eve.addr || request["pid"] != evePID || strings.Contains(fmt.Sprint(request["state_text"]), "Held") {
@@ -752,7 +752,7 @@ func TestBrowserEngineRechecksAfterProfile(t *testing.T) {
 	// profile read) stops the message before the relay is given it: it
 	// stays queued, saying why.
 	w.ok(map[string]any{"op": "holdUploads"})
-	w.ok(map[string]any{"op": "sendFilesLater", "conv": toErin, "files": []any{map[string]any{"name": "late.txt", "b64": base64.StdEncoding.EncodeToString([]byte("late"))}}})
+	w.ok(map[string]any{"op": "sendFilesLater", "connected": true, "conv": toErin, "files": []any{map[string]any{"name": "late.txt", "b64": base64.StdEncoding.EncodeToString([]byte("late"))}}})
 	_, erinP := aliceRaw.peer(erinRaw.addr)
 	w.forge(erinRaw, erinP, "Erin again")
 	w.refuses("a send that reads Erin's new person", w.call(map[string]any{"op": "api", "path": "/api/dm/send", "body": map[string]any{"conv": toErin, "body": "y"}}), "conflicts")

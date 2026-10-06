@@ -2,6 +2,7 @@
 // Regenerate: go test ./internal/ui -run TestTypeScriptViewTypes -update
 
 export interface Action {
+  send_id?: string;
   do: string;
   id?: string;
   body?: string;
@@ -11,6 +12,8 @@ export interface Action {
 }
 
 export interface AgentAsk {
+  topic?: string;
+  id?: string;
   reply_receiver?: ReplyReceiverSelection;
   pid: string;
   kind: string;
@@ -72,6 +75,9 @@ export interface AgentRecord {
 }
 
 export interface AgentView {
+  pids?: string[];
+  member?: boolean;
+  inviters?: PersonView[];
   external?: boolean;
   agent_id?: string;
   pid: string;
@@ -92,6 +98,7 @@ export interface AgentView {
 }
 
 export interface ApprovalRevoke {
+  person?: string;
   kind: string;
   address?: string;
   pid?: string;
@@ -173,21 +180,30 @@ export interface ConvItem {
 }
 
 export interface CopyView {
+  own?: boolean;
+  person?: string;
   to: string;
   state: string;
   detail?: string;
 }
 
 export interface DMDraft {
+  topic?: string;
+  id?: string;
   pid?: string;
   reply_receiver?: ReplyReceiverSelection;
   conv: string;
   body: string;
   reply_to?: string;
   files?: string[];
+  quote?: string;
 }
 
 export interface DMMessage {
+  status?: string;
+  topic?: string;
+  topic_event?: TopicEvent;
+  agent_author_pid?: string;
   group_ref?: GroupHistoryRef;
   excerpt_pid?: string;
   claimed_key?: string;
@@ -224,8 +240,12 @@ export interface DMMessage {
   exec?: ExecView;
   actions?: string[];
   job_detail?: string;
+  proposal?: ProposalView;
   event_type?: string;
   event_by?: string;
+  quote?: string;
+  sent_at?: string;
+  delivery?: string;
 }
 
 export interface DMSummary {
@@ -250,6 +270,7 @@ export interface DMSummary {
 }
 
 export interface DMThread {
+  topics?: ThreadSummary[];
   kind?: string;
   title?: string;
   members?: GroupMemberView[];
@@ -263,6 +284,12 @@ export interface DMThread {
   agents: AgentView[] | null;
   guests?: GuestView[];
   audience_pending?: boolean;
+}
+
+export interface Decider {
+  person?: string;
+  label?: string;
+  address?: string;
 }
 
 export interface DecisionAction {
@@ -292,6 +319,7 @@ export interface DeleteConversationAction {
 export interface DeviceLink {
   url: string;
   expires: string;
+  app_url?: string;
 }
 
 export interface DeviceView {
@@ -299,6 +327,7 @@ export interface DeviceView {
   name: string;
   fingerprint: string;
   this?: boolean;
+  human?: boolean;
 }
 
 export interface DirMember {
@@ -316,6 +345,7 @@ export interface Directory {
 }
 
 export interface Draft {
+  id?: string;
   reply_receiver?: ReplyReceiverSelection;
   agent_id?: string;
   to: string;
@@ -323,6 +353,7 @@ export interface Draft {
   body: string;
   reply_to?: string;
   files?: string[];
+  quote?: string;
 }
 
 export interface ExecView {
@@ -357,6 +388,54 @@ export interface FileView {
   availability?: string;
   note?: string;
   openable: boolean;
+}
+
+export interface FolderView {
+  name: string;
+  path: string;
+}
+
+export interface FoldersView {
+  path: string;
+  parent?: string;
+  home: string;
+  roots?: string[];
+  dirs: FolderView[] | null;
+  truncated?: boolean;
+}
+
+export interface GetAppPlatform {
+  id: string;
+  label: string;
+  url: string;
+}
+
+export interface GetAppView {
+  version: string;
+  detected?: string;
+  platforms: GetAppPlatform[] | null;
+}
+
+export interface GoogleAccess {
+  workspace_url: string;
+  enabled: boolean;
+  can_admin: boolean;
+  emails: GoogleEmail[] | null;
+  domains: string[] | null;
+}
+
+export interface GoogleAccessChange {
+  email?: string;
+  domain?: string;
+  remove: boolean;
+  admin?: boolean;
+}
+
+export interface GoogleEmail {
+  domain_member: boolean;
+  email: string;
+  admin: boolean;
+  denied: boolean;
 }
 
 export interface GroupChange {
@@ -396,6 +475,9 @@ export interface GroupInviteDraft {
 export interface GroupMemberView {
   person?: string;
   label: string;
+  email?: string;
+  picture?: string;
+  picture_url?: string;
   address: string;
   fingerprint?: string;
   state: string;
@@ -414,7 +496,26 @@ export interface GuestAction {
   accept?: boolean;
 }
 
+export interface GuestCheck {
+  ready: boolean;
+  needs_update: GuestCheckPerson[] | null;
+  offline: string[] | null;
+  text: string;
+}
+
+export interface GuestCheckPerson {
+  label: string;
+  me: boolean;
+  role: string;
+}
+
+export interface GuestCheckRequest {
+  conv: string;
+  host: string;
+}
+
 export interface GuestView {
+  needs_update?: string[];
   pid: string;
   state: string;
   state_text: string;
@@ -469,6 +570,24 @@ export interface HubStoragePolicy {
   manual_unattached_age_default_seconds: number;
 }
 
+export interface InviteRequest {
+  name: string;
+  admin: boolean;
+  days: number;
+}
+
+export interface InviteView {
+  link: string;
+  label: string;
+  expires: string;
+  message: string;
+}
+
+export interface InvitesView {
+  can_invite: boolean;
+  invites: PendingInviteView[] | null;
+}
+
 export interface LastEvent {
   kind: string;
   pid: string;
@@ -510,6 +629,7 @@ export interface Me {
   fingerprint: string;
   responder: string;
   responder_dir: string;
+  agent: boolean;
 }
 
 export interface Message {
@@ -542,6 +662,9 @@ export interface Message {
   deleted?: boolean;
   can?: string[];
   exec?: ExecView;
+  quote?: string;
+  sent_at?: string;
+  proposal?: ProposalView;
 }
 
 export interface NotifyView {
@@ -560,6 +683,7 @@ export interface Overview {
   reply_receivers: boolean;
   reply_sessions: boolean;
   demo: boolean;
+  app?: boolean;
   me: Me;
   threads: ThreadSummary[] | null;
   topics?: PeerTopics[];
@@ -585,6 +709,8 @@ export interface Overview {
   link?: LinkState;
   links?: LinkRequest[];
   history?: HistoryCopy[];
+  workspace?: WorkspaceView;
+  agent_devices: string[] | null;
 }
 
 export interface ParticipationGrant {
@@ -609,6 +735,16 @@ export interface PeerTopics {
   latest: ThreadSummary;
 }
 
+export interface PendingInviteView {
+  id: string;
+  name: string;
+  label: string;
+  admin: boolean;
+  by: string;
+  created?: string;
+  expires: string;
+}
+
 export interface PersonRef {
   id: string;
   seq: number;
@@ -618,6 +754,9 @@ export interface PersonRef {
 export interface PersonView {
   person?: string;
   label: string;
+  email?: string;
+  picture?: string;
+  picture_url?: string;
   address: string;
   fingerprint?: string;
   state: string;
@@ -631,15 +770,28 @@ export interface Presence {
   at?: string;
 }
 
+export interface ProposalView {
+  question_id: string;
+  question: string;
+  asker: string;
+  proposal_id: string;
+  proposal: string;
+  confirmed_by: string;
+}
+
 export interface QuarantineItem {
   id: string;
   peer: string;
+  code: string;
   reason: string;
   at: string;
 }
 
 export interface QuestionApproval {
-  address: string;
+  address?: string;
+  person?: string;
+  label?: string;
+  status?: string;
 }
 
 export interface ReactionView {
@@ -726,6 +878,8 @@ export interface Report {
   at: number;
   host: string;
   items: ReportItem[] | null;
+  count?: number;
+  deciders?: Decider[];
 }
 
 export interface ReportItem {
@@ -739,6 +893,8 @@ export interface ReportItem {
   attempt: number;
   excerpt?: string;
   actionable?: boolean;
+  conv?: boolean;
+  proposal?: ProposalView;
   result?: DecisionResult;
 }
 
@@ -769,12 +925,14 @@ export interface ReviewItem {
   at: string;
   notice?: boolean;
   report?: Report;
+  proposal?: ProposalView;
   reason?: string;
   conv?: string;
   agent_id?: string;
 }
 
 export interface Sent {
+  lid?: string;
   id: string;
   state: string;
   path?: string;
@@ -826,6 +984,8 @@ export interface Target {
 }
 
 export interface TaskGrantView {
+  person?: string;
+  label?: string;
   address: string;
   fingerprint: string;
   status: string;
@@ -892,12 +1052,16 @@ export interface Thread {
   peer: string;
   key: PeerKey;
   approved: boolean;
+  permission_person?: PersonView;
+  question_target?: string;
+  task_target?: string;
   task_grant: string;
   messages: Message[] | null;
   topic?: ThreadSummary;
 }
 
 export interface ThreadSummary {
+  conv?: string;
   id: string;
   peer: string;
   title: string;
@@ -923,10 +1087,18 @@ export interface ThreadSummary {
 }
 
 export interface TopicChange {
+  conv?: string;
+  ids?: string[];
+  counts?: Record<string, number>;
   peer: string;
   id: string;
   title?: string;
   count?: number;
+}
+
+export interface TopicEvent {
+  action: string;
+  seen?: string[];
 }
 
 export interface TopicPage {
@@ -975,6 +1147,13 @@ export interface WorkspaceBinding {
   realm?: string;
   state: string;
   handle: string;
+  hub_name?: string;
+}
+
+export interface WorkspaceInfoView {
+  name: string;
+  server: string;
+  can_rename: boolean;
 }
 
 export interface WorkspaceJoin {
@@ -982,4 +1161,13 @@ export interface WorkspaceJoin {
   name: string;
   invite: string;
   agent: string;
+}
+
+export interface WorkspaceNameChange {
+  name: string;
+}
+
+export interface WorkspaceView {
+  name: string;
+  server: string;
 }

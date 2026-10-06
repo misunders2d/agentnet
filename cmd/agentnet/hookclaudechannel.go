@@ -89,7 +89,7 @@ func applyClaudeChannelAssets(home, action string) (json.RawMessage, error) {
 		if e != nil {
 			return nil, e
 		}
-		binary, e := os.Executable()
+		binary, e := selfExe() // a stable copy when the app runs from a passing place (appexe.go)
 		if e != nil {
 			return nil, e
 		}

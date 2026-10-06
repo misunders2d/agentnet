@@ -80,9 +80,8 @@ func TestRoomGroupTurns(t *testing.T) {
 	}
 }
 
-// ROOM_V1 §2.4 at a P1 reader: a group request or output (a PID turn that is
-// not a person guest's own) carrying a captured audience is not read yet,
-// so it is held, whatever its proof; the same request without one is read.
+// A group execution request with a human guest audience stays refused;
+// assistant membership audiences use the captured-turn path (P6).
 func TestRoomGroupRequestCarryingHumanHeld(t *testing.T) {
 	w, _, packet, _ := groupTurnsFixture(t)
 	conv := packet.State.Conv
@@ -153,7 +152,7 @@ func TestRoomGroupRequestCarryingHumanHeld(t *testing.T) {
 	if inboxHas(t, w.alice, item.ID) {
 		t.Fatal("history of a group request carrying a captured audience was read")
 	}
-	if err != nil || why != reasonInvalid+": group: history of a participation turn carrying a captured audience is not read yet" {
+	if err != nil || why != reasonInvalid+": group human guest execution audience is not enabled" {
 		t.Fatalf("history carrying an audience: %q %v", why, err)
 	}
 }

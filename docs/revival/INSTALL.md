@@ -1,7 +1,113 @@
 # Installing and running AgentNet
 
-One program, `agentnet`, is both the laptop client and the Hub. Laptops need
-no Docker, root, VPN, OAuth provider, database server or model service.
+For everyday use, install **the AgentNet app** and open it from its icon.
+It installs the `agentnet` command as part of the app; there is no second
+command-line download to make before chatting. Terminal commands in the
+later sections are for coding agents, server operators and advanced users.
+People do not need Go, Rust, Docker or a database server on their computer.
+
+## People: install and open the app
+
+These package names belong to the October 5 release candidate. Publication
+and finished installer checks are not confirmed by this guide. Once that
+release is published, use its downloads on the
+[AgentNet releases page](https://github.com/misunders2d/agentnet/releases).
+An older release may offer only the command-line program.
+
+| Device | Package to choose | How to open it |
+| --- | --- | --- |
+| Linux, AppImage | `AgentNet-linux-x86_64.AppImage` | Keep the file, allow it to run in its file properties, then open it. It adds an AgentNet icon to the app launcher. AppImage needs FUSE 2. |
+| Linux, Ubuntu or Debian | `AgentNet-linux-amd64.deb` | Open it with your system's package installer, then open the AgentNet icon. |
+| Linux, Fedora | `AgentNet-linux-x86_64.rpm` | Open it with your system's package installer, then open the AgentNet icon. |
+| Windows | `AgentNet-windows-x64-setup.exe` | Run the installer for your own account, then open AgentNet from the Start menu. It adds the bundled `agentnet` command to your user PATH for new terminal/agent sessions. Administrator rights are not required. |
+| Mac, Intel or Apple silicon | `AgentNet-macos-universal.dmg` | Open the disk image, copy AgentNet to Applications, then open it there. Requires macOS 13.3 or later. **Installation and use are untested on a real Mac.** |
+| Android or iPhone | No desktop installer | Open your workspace link in the browser and add AgentNet to the home screen. On iPhone, paste the invitation into that home-screen app if it did not carry over. |
+
+**Unsigned installers:** the desktop builds are not signed. Windows and Mac
+may warn or block opening them. Check that the download comes from this
+project's release before allowing it. Opening permission depends on your
+system; the reviewed reports do not qualify those installer prompts on a
+real Windows PC or Mac. A completed, working downloadable installer is not
+qualified by this guide's local test record.
+
+### Join your workspace
+
+1. Open the invitation or workspace link you were given. It names the
+   workspace. On a computer, choose the app download and Open in AgentNet;
+   if the invitation did not carry over, paste it into the app.
+2. In a Google-enabled workspace, choose Sign in with Google and use the
+   Gmail or Google-managed work account your workspace allows. Ordinary
+   code invitations are not the app's sign-in route there. In other
+   workspaces, review the invitation
+   and choose Join. The app names your device automatically.
+3. When adding another device to an existing Google person, approve the
+   request on one of your already joined human devices. The new device waits
+   for that OK; knowing the account name is not approval.
+4. Open AgentNet from its icon next time. Closing its window leaves it
+   running in the tray. Use Open AgentNet to return, Start when I log in
+   to choose login startup, and Quit AgentNet to stop it. Windows startup
+   handles spaces in your account or installation folder name. An enabled
+   older startup entry is repaired; your choice to disable startup is kept.
+
+Google sign-in has local test coverage, not a real-account sign-in check.
+An identity created before Google enrollment is not converted automatically;
+a Google-enabled workspace requires joining afresh. Do not treat that as a
+promise that an old person's history moves to the new identity.
+
+Phones have no native desktop installer. Their browser/home-screen app uses
+its own device identity; adding it to an existing person still needs an
+existing device's approval.
+
+The app includes the same `agentnet` program that coding agents use. On
+Windows, the installer adds its folder to your user PATH and preserves
+existing entries. Open a new terminal or coding-agent session after installing
+so it can find `agentnet`; if an already running launcher still has the old
+environment, reopen it or sign out and back in. The installer reports a failed
+PATH update rather than claiming it succeeded. Uninstall removes its own PATH
+entry. Other platforms still need their installed command location checked;
+this is not a promise that every installer changes PATH.
+
+For advanced commands, use that installed program or the standalone setup
+below. `agentnet ui` opens the installed app. App builds update as a whole;
+`agentnet update` does not replace the command inside the app.
+
+### Your profile and interface
+
+In your profile, choose a picture, crop it, check the preview and save it;
+you can replace or remove it later, or choose Use as my picture from a chat
+image. These controls work in Comic, Classic and Zoom, including on phones.
+Your picture is public on the workspace's server and does not prove your
+identity. Removing it from the profile does not delete uploaded images.
+Custom agent pictures are not included.
+
+Comic also offers service/bot settings on computers, teams and Google Drive
+storage/project-space controls. Choosing a reply receiver or an existing
+agent session remains in Classic and Zoom; see the
+[remaining Comic gap](../COMIC_PARITY_GAPS.md).
+
+### Existing installs and recovery
+
+**Moving from an older manual install (advanced)** (a systemd service, a
+LaunchAgent, a logon task): nothing to do at first. While that daemon runs,
+the app shows its page and opens nothing itself (it never touches the home's
+database then). To let the app take over, stop and disable the daemon, for
+example `systemctl --user disable --now agentnet` (and remove a drop-in that
+added `--ui`); the app notices within seconds and serves the same home on the
+same address. The app's window keeps its own storage: a skin chosen and
+drafts typed in a browser at that address are not carried over (the app
+opens on Comic once). Notification clicks from the old daemon open a
+browser; the app's own open its window.
+
+**When this computer's membership ends** (its device link refused on your
+other device or approved by nobody in time, or the computer removed by its
+server), the app's window says so and offers **Start again**, never an error
+loop. Start again moves everything this computer had in the home, keys and
+database included, into an `old-<date>` folder there (nothing is deleted);
+the app's own files (its address, the installed app's location, skins,
+hooks) stay. A new invitation or device link then joins afresh. A daemon
+started by hand stops in these cases, as it does when revoked.
+
+## Agents, servers and advanced use: the agentnet program
 
 **Release binaries**: use the
 [latest release](https://github.com/misunders2d/agentnet/releases/latest);
@@ -54,7 +160,7 @@ go build -trimpath -o "$bin\agentnet.exe" ./cmd/agentnet
 
 `scripts/build.sh` cross-builds all platforms into `dist/` (POSIX shell).
 
-## A laptop, in four steps
+## Advanced command-line setup: a laptop in four steps
 
 1. Install it as above (on your `PATH`).
 2. `agentnet join --agent NAME 'agentnet-invite-v1:…'` with the invite your
@@ -194,6 +300,19 @@ Run it as an ordinary member: a separate OS user with its own home,
 `agentnet join` with an invite, `agentnet daemon`. It never uses the Hub's
 `/data` or its keys.
 
+A company agent nobody sits at needs someone who decides its waiting
+requests (OKs) from their own devices. Name that person, its steward, once,
+on the server, at install:
+
+    agentnet person service --steward sergey/laptop
+
+`sergey/laptop` is any one device of that person: every device of theirs,
+the phone included and devices they add later, then gets the requests by
+name in OKs and decides them there. The command prints the person and the
+devices it found: check them. An agent installed before this release needs
+it once, run by its owner: `agentnet operator grant --person ADDRESS`
+(`agentnet doctor` says when nobody can decide; see `agentnet help operator`).
+
 ## Storage
 
 Maintenance commands need the Hub stopped (they share its lock and refuse
@@ -241,6 +360,17 @@ certificate, so laptops continue without any trust reset. Laptop homes can
 be copied the same way: stop the daemon, then copy the home directory.
 
 ## Updating and downgrading
+
+### Installed app
+
+Update the whole app using the matching desktop package for the release.
+Quit AgentNet before replacing it, then open its icon again. Keep its local
+AgentNet data; it contains your identity and history. The app's bundled
+command refuses `agentnet update`, so the standalone updater below is not
+the app update path. Real installer upgrade/downgrade behavior remains to
+be qualified for this candidate.
+
+### Standalone command-line program
 
 To choose a specific release instead of the latest stable one, name it:
 `agentnet update vX.Y.Z` (described below). If your installed version has no `update` command (v0.2.1 and older), use
@@ -303,6 +433,19 @@ Build with the version stamp (`scripts/build.sh`, or `go build -ldflags
 made after and the revision (`--tags`: release tags are lightweight); a plain
 `go build` reports `dev`.
 
+**Naming the workspace.** A Hub admin runs `agentnet admin workspace set
+NAME` (for example `Mellanni`; or `show`, `clear`), or uses Settings →
+Workspaces → Name for everyone in the app. Every member's devices show the
+name with the member list, at once on an open connection or when they next
+connect, with no reinstall or rejoin; it is kept for offline use. With no
+name set they show the relay's host name. Each person can still give it
+their own label on their devices. It is a label, never identity, and a
+company setting: the person's own tap, refused inside agent runs. A
+person's other devices are not admins on their own: to let the owner's
+phone rename it too, run `agentnet person admin ADDRESS` (the phone's
+address, from `agentnet person`) on the admin device, and `person unadmin
+ADDRESS` to take it back. Do not grant it to a computer that runs agents.
+
 **Recommending a client version.** A Hub admin runs `agentnet admin release
 set --url https://… [--note TEXT] VERSION` (or `show`, `clear`). Running
 daemons get it on their open connection at once, others when they next
@@ -353,6 +496,16 @@ purge. Ask an admin to `agentnet admin revoke` the agent. (`agentnet help
 uninstall` lists the exact commands and paths.)
 
 ## What has been tested where
+
+For the October 5 candidate, reviewed reports establish local app-shell and
+messenger checks, cross-platform compilation, and tests using a stand-in
+Google service. They do not establish real Windows/Mac app installation,
+physical-phone behavior, real Google sign-in or installed-app startup.
+Person-picture rendered checks cover all three interfaces at desktop and
+phone widths; those browser checks are not physical-device acceptance.
+See the [current handoff](../HANDOFF.md) and [release notes](../NEXT_RELEASE.md).
+The matrix below describes the project's earlier test coverage; it is not
+qualification of the current desktop installers.
 
 | | Linux (developer machine) | macOS / Windows | Container |
 |---|---|---|---|

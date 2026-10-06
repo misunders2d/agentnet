@@ -22,13 +22,22 @@ func (h *Hub) routes() http.Handler {
 		writeJSON(w, http.StatusOK, protocol.VersionInfo{Version: protocol.Version, Protocol: protocol.ProtocolVersion, Features: features, RealmID: h.RealmID()})
 	})
 	mux.HandleFunc("POST /v1/join", h.handleJoin)
+	mux.HandleFunc("GET /v1/google/config", h.handleGoogleConfig)
+	mux.HandleFunc("POST /v1/google/prepare", h.handleGooglePrepare)
+	mux.HandleFunc("POST /v1/google/join", h.handleGoogleJoin)
+	mux.HandleFunc("POST /v1/google/exchange", h.handleGoogleExchange)
+	mux.HandleFunc("GET /v1/google/access", h.handleGoogleAccess)
+	mux.HandleFunc("PUT /v1/google/access", h.handleGoogleAccessChange)
 	mux.HandleFunc("GET /v1/agents", h.handleMembers)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}", h.handleDirectory)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/sessions", h.handleSessions)
 	mux.HandleFunc("GET /v1/agents/{label}/{agent}/profile", h.handleProfile)
 	mux.HandleFunc("PUT /v1/person", h.handlePutPerson)
+	mux.HandleFunc("PUT /v1/pictures/{hash}", h.handlePicturePut)
+	mux.HandleFunc("GET /v1/pictures/{hash}", h.handlePictureGet)
 	mux.HandleFunc("POST /v1/person/device-invite", h.handleDeviceInvite)
 	mux.HandleFunc("POST /v1/person/device-refuse", h.handleDeviceRefuse)
+	mux.HandleFunc("POST /v1/person/device-admin", h.handleDeviceAdmin) // personadmin.go: the person's grant
 	mux.HandleFunc("GET /v1/persons/{id}/chain", h.handleChain)
 	mux.HandleFunc("PUT /v1/caps", h.handlePutCaps)
 	mux.HandleFunc("POST /v1/messages", h.handlePostMessage)
@@ -54,9 +63,12 @@ func (h *Hub) routes() http.Handler {
 	mux.HandleFunc("POST /v1/groups/{id}/chain", h.handleGroupCommit) // hub/groups.go: encrypted signed group journal (admins)
 	mux.HandleFunc("GET /v1/groups/{id}/chain", h.handleGroupChain)
 	mux.HandleFunc("POST /v1/admin/invites", h.handleInvite)
+	mux.HandleFunc("GET /v1/admin/invites", h.handleInvites) // hub/invites.go: any member; the list for admins only
+	mux.HandleFunc("POST /v1/admin/invites/revoke", h.handleInviteRevoke)
 	mux.HandleFunc("POST /v1/admin/revoke", h.handleRevoke)
 	mux.HandleFunc("POST /v1/admin/release", h.handleRelease)
 	mux.HandleFunc("GET /v1/release", h.handleReleaseGet)
+	mux.HandleFunc("PUT /v1/admin/workspace", h.handleWorkspacePut) // hub/workspace.go; the name rides the member list
 	mux.HandleFunc("GET /v1/notify", h.handleNotifyInfo)
 	mux.HandleFunc("GET /v1/notify/prefs", h.handleNotifyPrefsGet)
 	mux.HandleFunc("PUT /v1/notify/prefs", h.handleNotifyPrefsPut)
@@ -67,6 +79,9 @@ func (h *Hub) routes() http.Handler {
 		relay := http.Handler(static.Relay(filepath.Join(h.cfg.DataDir, "skins")))
 		if wrapped, err := static.WithConnectOrigins(relay, h.cfg.BrowserOrigins); err == nil { // validated in Open
 			relay = wrapped
+		}
+		if h.cfg.GoogleWebClientID != "" {
+			relay = static.WithGoogleSignIn(relay)
 		}
 		mux.Handle("/", relay)
 	}
@@ -303,7 +318,7 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "ack state must be delivered or quarantined")
 		return
 	}
-	state, err := h.store.setDisposition(r.PathValue("id"), caller, req.State)
+	state, sender, changed, err := h.store.setDisposition(r.PathValue("id"), caller, req.State)
 	if errors.Is(err, errNotFound) {
 		writeError(w, http.StatusNotFound, "", "unknown message")
 		return
@@ -311,6 +326,9 @@ func (h *Hub) handleAck(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
+	}
+	if changed {
+		h.streams.notify(sender)
 	}
 	h.waiters.notify(r.PathValue("id"))
 	writeJSON(w, http.StatusOK, protocol.Receipt{ID: r.PathValue("id"), State: state})
@@ -322,8 +340,13 @@ func (h *Hub) handleInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req protocol.InviteRequest
-	if err := decodeStrict(body, &req); err != nil || !protocol.ValidName(req.Label) {
-		writeError(w, http.StatusBadRequest, "", "invite needs a valid person label")
+	if err := decodeStrict(body, &req); err != nil || (req.Label == "" && req.Name == "") || (req.Label != "" && !protocol.ValidName(req.Label)) {
+		writeError(w, http.StatusBadRequest, "", "invite needs a valid person label or the person's name")
+		return
+	}
+	if !protocol.ValidInviteHint(req.Name, protocol.MaxInviteHint) || !protocol.ValidInviteHint(req.From, protocol.MaxInviteHint) ||
+		!protocol.ValidInviteHint(req.Workspace, protocol.MaxWorkspaceHint) {
+		writeError(w, http.StatusBadRequest, "", "names on an invitation must be short readable text")
 		return
 	}
 	if req.Browser && (h.certPEM != "" || !h.cfg.Web) {
@@ -333,13 +356,23 @@ func (h *Hub) handleInvite(w http.ResponseWriter, r *http.Request) {
 	if req.TTL <= 0 || req.TTL > protocol.MaxInviteTTL {
 		req.TTL = 7 * 24 * time.Hour
 	}
+	now := time.Now()
+	label := req.Label
+	if label == "" { // made from the name, never shared with another person (hub/invites.go)
+		var err error
+		if label, err = h.store.freeInviteLabel(labelFromName(req.Name), now); err != nil {
+			writeError(w, http.StatusInternalServerError, "", "storage error")
+			return
+		}
+	}
 	secret := protocol.NewID() + protocol.NewID()
-	if err := h.store.createInvite(secret, req.Label, req.Admin, req.TTL, caller); err != nil {
+	if err := h.store.createNamedInvite(secret, label, req.Name, req.Admin, req.TTL, caller, now); err != nil {
 		writeError(w, http.StatusInternalServerError, "", "storage error")
 		return
 	}
-	code := protocol.Invite{Hub: h.cfg.PublicURL, Label: req.Label, Secret: secret, CertPEM: h.certPEM}.Encode()
-	writeJSON(w, http.StatusCreated, map[string]string{"code": code})
+	code := protocol.Invite{Hub: h.cfg.PublicURL, Label: label, Secret: secret, CertPEM: h.certPEM,
+		Name: req.Name, From: req.From, Workspace: req.Workspace}.Encode()
+	writeJSON(w, http.StatusCreated, protocol.InviteCreated{Code: code, Label: label})
 }
 
 func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +389,13 @@ func (h *Hub) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "an admin cannot revoke itself")
 		return
 	}
-	if err := h.store.revoke(req.Address); err != nil {
+	me, err := h.store.agent(caller)
+	target, targetErr := h.store.agent(req.Address)
+	if err != nil || targetErr == nil && me.linked && target.Admin && !target.linked {
+		writeError(w, http.StatusForbidden, "", "a granted admin cannot revoke an invite admin")
+		return
+	}
+	if err := h.store.revoke(req.Address, caller); err != nil {
 		writeError(w, http.StatusNotFound, "", "unknown or already revoked agent")
 		return
 	}

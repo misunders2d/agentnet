@@ -93,20 +93,21 @@ export function TopicMark({ t, compact, onInk }: { t: Topic; compact?: boolean; 
 export const topicLabel = (t: Topic) =>
   [t.title || "Untitled topic", topicMark(t)?.word, t.unread ? t.unread + " unread" : ""].filter(Boolean).join(", ");
 
-export function TopicBar({ thread }: { thread: T.Thread }) {
+export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
   const store = useApp();
   const wide = useWide();
   const overview = useStore(store, (s) => s.overview);
   const names = useAgentNames();
-  const draft = useStore(store, (s) => s.drafts[thread.id]);
+  const draft = useStore(store, (s) => s.drafts[dm?.id||thread!.id]);
   const [all, setAll] = useState(false);
-  const item = chatList(overview, names).find((i) => i.kind === "agent" && i.peer === thread.peer);
-  const open = thread.topic ? topicOf(thread.topic) : null;
-  const topics = item?.topics || [];
-  const total = item?.topicTotal ?? topics.length;
+  const item = chatList(overview, names).find((i) => i.open.kind === "thread" && i.peer === thread?.peer);
+  const current=dm?.topics?.find(t=>t.id===draft?.topic);
+  const open = dm ? current?topicOf(current):null : thread?.topic ? topicOf(thread.topic) : null;
+  const topics = dm ? (dm.topics||[]).filter(t=>t.state!=="archived").map(topicOf) : item?.topics || [];
+  const total = dm ? dm.topics?.length||0 : item?.topicTotal ?? topics.length;
   const listed = !!overview?.topic_list;
   const fresh = !!draft?.newTopic;
-  const agent = item?.title || "this agent";
+  const agent = dm ? dm.title||dm.peer.label : item?.title || "this agent";
 
   // As many chips as fit: the rest are under All topics, never in a scroll.
   const nav = useRef<HTMLElement>(null), allRef = useRef<HTMLButtonElement>(null), newRef = useRef<HTMLButtonElement>(null);
@@ -118,8 +119,8 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
       const cs = getComputedStyle(el), gap = parseFloat(cs.columnGap) || 8;
       // Every chip brings one gap: the next item is the spacer, which has one gap to
       // All topics (when listed) and one to New topic.
-      const free = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - (allRef.current?.offsetWidth || 0) - (newRef.current?.offsetWidth || 0) - (listed ? 2 : 1) * gap;
-      setRoom(Math.max(1, Math.min(TOPICS.barMax - (listed ? 1 : 0), Math.floor(free / (TOPICS.chipMinWidth + gap)))));
+      const free = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - (allRef.current?.offsetWidth || 0) - (newRef.current?.offsetWidth || 0) - (listed ? 2 : 1) * gap - (dm ? 85 : 0);
+      setRoom(Math.max(dm?0:1, Math.min(TOPICS.barMax - (listed ? 1 : 0), Math.floor(free / (TOPICS.chipMinWidth + gap)))));
     };
     fit();
     const ro = new ResizeObserver(fit);
@@ -151,13 +152,14 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
   const pick = steadyBar(shown.current.ids, topics, open, shown.current.left, room);
   shown.current.ids = pick.map((t) => t.id);
   const hidden = topics.filter((t) => !pick.some((p) => p.id === t.id));
-  const hiddenUnread = hidden.reduce((n, t) => n + t.unread, 0) + ((overview?.topics || []).find((c) => c.peer === thread.peer)?.archived_unread || 0);
+  const hiddenUnread = hidden.reduce((n, t) => n + t.unread, 0) + ((overview?.topics || []).find((c) => c.peer === thread?.peer)?.archived_unread || 0);
   const hiddenNeeds = hidden.filter((t) => t.needsYou > 0).length; // never archived: what needs you is pending
-  const leaveNew = () => { if (fresh) store.setDraft(thread.id, { ...store.draft(thread.id), newTopic: false }); };
+  const leaveNew = () => { if (fresh) store.setDraft(dm?.id||thread!.id, { ...store.draft(dm?.id||thread!.id), newTopic: false }); };
   const chip = "inline-flex h-11 min-w-0 items-center gap-1.5 rounded-full px-3.5 text-[14px] font-semibold ";
 
   return (
     <nav ref={nav} aria-label={"Topics with " + agent} className="flex shrink-0 items-center gap-2 overflow-hidden border-b border-hairline bg-canvas px-3 py-1.5 lg:px-5">
+      {dm && <button type="button" aria-pressed={!draft?.topic&&!fresh} className={chip+"shrink-0 "+(!draft?.topic&&!fresh?"bg-ink text-canvas":"bg-surface stroke")} onClick={()=>store.setDraft(dm.id,{...store.draft(dm.id),topic:undefined,newTopic:false,replyTo:undefined})}>{wide?"Main flow":"Main"}</button>}
       {pick.map((t) => {
         const current = !!open && t.id === open.id && !fresh;
         const lit = going ? t.id === going : current;
@@ -180,7 +182,7 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
         }
         return (
           <button key={t.id} data-topic={t.id} type="button" aria-current={current ? "true" : undefined} aria-label={topicLabel(t)} title={t.title + " · " + dayLabel(t.lastAt) + " " + timeOf(t.lastAt)}
-            onClick={() => { leaveNew(); refocus.current = t.id; if (!open || t.id !== open.id) void store.open({ kind: "thread", id: t.id, peer: thread.peer }); }}
+            onClick={() => { leaveNew(); refocus.current = t.id; if (!open || t.id !== open.id) dm?store.setDraft(dm.id,{...store.draft(dm.id),topic:t.id,newTopic:false,replyTo:undefined}):void store.open({ kind: "thread", id: t.id, peer: thread!.peer }); }}
             style={width} className={chip + "flex-1 basis-0 " + (lit ? "bg-ink text-canvas" : "bg-surface stroke text-ink hover:bg-sunken")}>
             {body}
           </button>
@@ -205,11 +207,11 @@ export function TopicBar({ thread }: { thread: T.Thread }) {
         </button>
       )}
       <button ref={newRef} type="button" aria-pressed={fresh} aria-label={wide ? undefined : "New topic"} title="New topic: your next message starts a separate conversation"
-        onClick={() => store.setDraft(thread.id, { ...store.draft(thread.id), newTopic: !fresh, replyTo: undefined })}
+        onClick={() => store.setDraft(dm?.id||thread!.id, { ...store.draft(dm?.id||thread!.id), newTopic: !fresh, replyTo: undefined })}
         className={chip + "shrink-0 " + (wide ? "" : "w-11 justify-center px-0 ") + (fresh ? "bg-act text-act-ink stroke" : "text-agent-ink hover:bg-sunken")}>
         <IconPlus size={18} stroke={2.2} aria-hidden="true" />{wide && "New topic"}
       </button>
-      {listed && <AllTopics open={all} onOpenChange={setAll} peer={thread.peer} agent={agent} current={open?.id} />}
+      {listed && <AllTopics open={all} onOpenChange={setAll} peer={thread?.peer||""} conv={dm?.id} agent={agent} current={open?.id} />}
     </nav>
   );
 }
@@ -245,7 +247,7 @@ function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: ReactNode
 /** changeTopic sends one of your changes to a topic and says what it did. */
 export function changeTopic(store: ReturnType<typeof useApp>, what: "rename" | "done" | "reopen", t: Topic, title?: string) {
   // count: the messages this view showed, so a mark never covers one you have not seen.
-  return store.run((a) => a.changeTopic(what, { peer: t.peer, id: t.id, ...(what === "rename" ? { title: title || "" } : { count: t.count }) })).then((r) => {
+  return store.run((a) => a.changeTopic(what, { peer: t.peer, conv:t.conv,id: t.id, ...(what === "rename" ? { title: title || "" } : { count: t.count }) })).then((r) => {
     if (r?.note) store.toast(r.note, "ok");
     return !!r;
   });
@@ -288,7 +290,9 @@ function RenameTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChang
  *  archived; Reopen makes it active again. */
 export function TopicEnd({ ctx }: { ctx: Ctx }) {
   const store = useApp();
-  const t = ctx.thread?.topic ? topicOf(ctx.thread.topic) : null;
+  const draft=useStore(store,s=>s.drafts[ctx.conv]);
+  const current=ctx.dm?.topics?.find(t=>t.id===draft?.topic);
+  const t = current?topicOf(current):ctx.thread?.topic ? topicOf(ctx.thread.topic) : null;
   if (!t || t.state === "active" || !ctx.overview?.topic_list) return null;
   const agent = t.concludedBy && t.concludedBy === ctx.overview?.me.address ? "Your agent" : threadAgentName(ctx);
   const archived = t.state === "archived";
@@ -297,11 +301,11 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
       <div className="flex flex-wrap items-center gap-2">
         {archived ? <Tag tone="muted"><IconArchive size={12} stroke={2.6} aria-hidden="true" />Archived</Tag> : <Tag tone="ok"><IconCircleCheck size={12} stroke={2.6} aria-hidden="true" />Done</Tag>}
         {t.doneBy === "you" && !t.conclusion && <span className="text-[13px] text-text-2">You marked it done on this device.</span>}
-        {t.doneBy === "you" && t.conclusion && !archived && <span className="text-[13px] text-text-2">You answered it.</span>}
-        {t.doneBy === "agent" && !archived && <span className="text-[13px] text-text-2">{agent} finished it.</span>}
+        {t.doneBy === "person" && <span className="text-[13px] text-text-2">{t.concludedBy===ctx.overview?.me.address?"You":ctx.overview?.people?.find(p=>p.address===t.concludedBy||p.devices?.some(d=>d.address===t.concludedBy))?.label||"A participant"} marked this done for everyone.</span>}
+        {t.doneBy === "agent" && !archived && <span className="text-[13px] text-text-2">{agent} closed this topic.</span>}
       </div>
       {t.conclusion && (
-        <p className="mt-2 text-[15px]"><span className="font-bold">{t.doneBy === "you" ? "Your answer:" : agent + "’s conclusion:"}</span> <span className="text-text-2">{t.conclusion}</span></p>
+        <p className="mt-2 text-[15px]"><span className="font-bold">{agent + "’s conclusion:"}</span> <span className="text-text-2">{t.conclusion}</span></p>
       )}
       {archived && (
         <p className="mt-2 text-[14px] text-text-2">

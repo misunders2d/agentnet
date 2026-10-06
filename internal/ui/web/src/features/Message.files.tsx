@@ -6,12 +6,15 @@
 import { useEffect, useRef, useState } from "react";
 import { IconDownload, IconFile, IconFileText, IconFileZip, IconPhoto, IconCloudDownload } from "@tabler/icons-react";
 import { errorText, type Api } from "../api";
+import { useStore } from "../store";
 import { useApp } from "../context";
 import { usePortal } from "../owned";
 import { niceDevice, size as bytes } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
+import { openPictureEditor } from "../pictures.mjs";
 import { isThreadMsg, type AnyMsg } from "./Message.model";
+import { SaveToDrive } from "./Drive";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string }
 
@@ -46,9 +49,10 @@ export function MessageFiles({ m }: { m: AnyMsg }) {
   if (!files.length) return null;
   return (
     <div className="mt-1.5 flex flex-col gap-1.5">
-      {files.map((f) => standing(m, f) === "open" && pictureName.test(f.name)
-        ? <Picture key={f.index} m={m} f={f} />
-        : <FileChip key={f.index} m={m} f={f} />)}
+      {files.map((f) => <div key={f.index} className="min-w-0 space-y-1">
+        {standing(m, f) === "open" && pictureName.test(f.name) ? <Picture m={m} f={f} /> : <FileChip m={m} f={f} />}
+        {standing(m, f) === "open" && !isThreadMsg(m) && <SaveToDrive m={m} index={f.index} />}
+      </div>)}
     </div>
   );
 }
@@ -139,6 +143,7 @@ export function warmPictures(api: Api, messages: AnyMsg[] | null | undefined, n 
 
 function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
   const store = useApp();
+  const hasPerson = useStore(store, s => s.overview?.person?.state === "self");
   const portal = usePortal();
   const box = useRef<HTMLButtonElement>(null);
   const key = pictureKey(m, f);
@@ -178,7 +183,7 @@ function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
         {!shown && <span className="absolute inset-0 grid place-items-center text-muted"><IconPhoto size={28} stroke={1.6} className="animate-pulse motion-reduce:animate-none" /></span>}
       </button>
       <Sheet open={big} onOpenChange={setBig} title={f.name} description={bytes(f.size)} wide
-        footer={<Button variant="act" size="lg" icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>}>
+        footer={<><Button variant="act" size="lg" icon={<IconDownload size={20} />} onClick={() => save(url, f.name, portal)}>Download</Button>{hasPerson && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}</>}>
         <img src={url} alt={f.name} className="mx-auto max-h-[60dvh] rounded-2xl object-contain" />
       </Sheet>
     </>
@@ -187,16 +192,18 @@ function Picture({ m, f }: { m: AnyMsg; f: FileItem }) {
 
 function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
   const store = useApp();
+  const hasPerson = useStore(store, s => s.overview?.person?.state === "self");
   const portal = usePortal();
   const load = useFileBytes();
   const [busy, setBusy] = useState(false);
+  const [pictureURL, setPictureURL] = useState("");
   const st = standing(m, f);
   const from = !isThreadMsg(m) && m.synced_from ? "your " + niceDevice(m.synced_from) : "the device it came from";
   const Icon = /\.(zip|tar|gz|tgz|7z|rar)$/i.test(f.name) ? IconFileZip : /\.(txt|md|csv|json|log|pdf|docx?)$/i.test(f.name) ? IconFileText : IconFile;
 
   const open = async () => {
     setBusy(true);
-    try { save((await load(m, f)).url, f.name, portal); }
+    try { const opened = await load(m, f); if (opened.picture) setPictureURL(opened.url); save(opened.url, f.name, portal); }
     catch (e) { store.toast("Couldn’t open " + f.name + ": " + errorText(e), "error"); }
     setBusy(false);
   };
@@ -223,6 +230,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
         <button type="button" onClick={open} disabled={busy} aria-label={"Download " + f.name}
           className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken disabled:opacity-50"><IconDownload size={20} /></button>
       )}
+      {hasPerson && pictureURL && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: pictureURL, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}
       {st === "request" && (
         <button type="button" onClick={ask} disabled={busy} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold hover:bg-sunken disabled:opacity-50">
           <IconCloudDownload size={18} />Get it

@@ -5,7 +5,7 @@
 // changes as the daemon does. Real Engine over a memory store, no network.
 // stdin: {vectors, constants} from topics_browser_test.go.
 import assert from 'node:assert/strict';
-import { Engine, memoryStore, deriveTopic, TOPICS } from '../static/engine.mjs';
+import { Engine, memoryStore, deriveTopic, TOPICS, chatTopicAssignments, summarizeChatTopics } from '../static/engine.mjs';
 
 let checks = 0;
 const check = (v, why) => { assert.ok(v, why); checks++; };
@@ -20,9 +20,34 @@ check(vectors.archive_after === TOPICS.archiveAfter, 'the vectors assume the sam
 // 2. The shared derivation vectors.
 for (const c of vectors.cases) {
   const facts = c.messages.map((m) => ({ id: m.id, reply_to: m.reply_to || '', at: m.at, in: m.dir === 'in', kind: m.kind, state: m.state || '',
-    status: m.status || '', notice: !!m.notice, selected: !!m.selected }));
+    status: m.status || '', topic_done:!!m.topic_done, notice: !!m.notice, selected: !!m.selected }));
   const got = deriveTopic(facts, c.local || null, vectors.now);
   same(got, Object.fromEntries(Object.entries(c.want).filter(([, v]) => v !== '' && v !== undefined)), c.name);
+}
+
+// Optional DM/group topics use the same fixture data as Go.
+for(const c of vectors.chat_cases){
+ const msgs=c.messages.map(m=>({...m,ts:m.sent,to:m.dir==='out'?'bob/desk':undefined,at:m.sent*1000}));
+ same(Object.fromEntries(chatTopicAssignments(msgs)),c.assigned,c.name+' assignment');
+ const locals=new Map(Object.entries(c.local).map(([id,l])=>['chat/'+id,l]));
+ const got=summarizeChatTopics('chat',msgs,locals,vectors.now).map(t=>({ID:t.id,State:t.state,Count:t.count,DoneBy:t.done_by||'',Pending:t.pending}));
+ same(got,c.want,c.name+' shared derivation');
+}
+
+// A new addressed request continues the logical topic head in both native
+// room and browser send paths. Its agent output still replies to the request.
+for (const room of [false,true]) {
+  const e=new Engine({store:memoryStore(),base:'https://synthetic.invalid'});
+  e.address='ann/phone';e.me={person:'ann'};
+  const c={id:'chat'}, info={state:'active',held:0,host:{address:'bob/desk',fingerprint:'b'.repeat(64)}};
+  e.agentConv=async()=>({c,info});e.outgoingTopic=async()=> 'flow';
+  e.chatTopicHead=async(conv,topic)=>{same([conv,topic],['chat','flow'],'head belongs to the requested topic');return 'previous-answer';};
+  e.dmMembers=async()=>new Map([['ann',{}]]);e.humanPlan=async()=>room?{}:null;
+  let sent;
+  e.sendConv=async(_,m)=>{sent=m;};e.sendHumanTurn=async(_,m)=>{sent=m;};
+  await e.askAgent({pid:'participant',kind:'question',body:'Please finish',topic:'flow'});
+  same(sent.reply_to,'previous-answer','agent request retains logical topic parent, room='+room);
+  same(sent.target.address,'bob/desk','topic parent never changes the execution target');
 }
 
 // 3. Routes, on a browser device holding many topics with one agent.
@@ -42,7 +67,7 @@ const plain = [];
 for (let i = 0; i < 150; i++) plain.push(out({ body: (i % 3 ? 'Alpha note ' : 'Beta note ') + i + '\nsecond line', at: now - (i < 40 ? 9 * day : day) + i * 60_000 }));
 // A task the agent finished: done by the agent, with its conclusion.
 const task = out({ kind: 'task', body: 'Count the boxes\nin aisle 4', at: now - 3600_000 });
-const result = inn({ kind: 'result', status: 'done', body: '412 boxes\nall dry', reply_to: task.id, at: now - 3500_000 });
+const result = inn({ kind: 'result', status: 'done',topic_done:true, body: '412 boxes\nall dry', reply_to: task.id, at: now - 3500_000 });
 // A task that failed: not done. A question held for the person: pending.
 const failed = out({ kind: 'task', body: 'Ship it', at: now - 3400_000 });
 inn({ kind: 'result', status: 'failed', body: 'could not ship', reply_to: failed.id, at: now - 3300_000 });
@@ -75,7 +100,7 @@ let t = await topicOf(result.id);
 check(t.id === task.id && t.state === 'done' && t.done_by === 'agent' && t.conclusion === '412 boxes' && t.concluded_by === bob && !t.pending && t.title === 'Count the boxes', 'agent-done topic: ' + JSON.stringify(t));
 check(t.quiet_since === new Date(Math.floor(result.at / 1000) * 1000).toISOString(), 'quiet since its last message, in whole seconds: ' + t.quiet_since);
 t = await topicOf(mine.id);
-check(t.id === given.id && t.state === 'done' && t.done_by === 'you' && t.conclusion === 'Labelled A to F' && t.concluded_by === me, 'answered by hand here: done by you, your words: ' + JSON.stringify(t));
+check(t.id === given.id && t.state === 'active' && !t.done_by && !t.conclusion, 'answered by hand here: done by you, your words: ' + JSON.stringify(t));
 t = await topicOf(failed.id);
 check(t.state === 'active' && !t.done_by && !t.pending, 'a failed result is not done');
 t = await topicOf(held.id);
@@ -109,7 +134,7 @@ check(page.matched === 51 && page.topics.some((x) => x.peer === other), 'search 
 page = await list({ q: 'second line' });
 check(page.matched === 0, 'only the first line is searched');
 page = await list({ peer: bob, state: 'done' });
-check(page.matched === 2 && page.topics.some((x) => x.id === task.id) && page.topics.some((x) => x.id === given.id), 'done filter');
+check(page.matched === 1 && page.topics.some((x) => x.id === task.id), 'done filter');
 for (const q of [{ state: 'deleted' }, { limit: String(TOPICS.pageMax + 1) }, { limit: '-1' }, { limit: 'many' }, { before: 'yesterday' }]) {
   await refuses(() => list(q), /not valid/, 'refuses ' + JSON.stringify(q));
 }
@@ -154,7 +179,7 @@ clock = now + 8 * day;
 check((await topicOf(a.id)).state === 'archived' && (await topicOf(held.id)).state === 'active', 'eight days later');
 clock = now;
 for (const [what, body, re] of [['done', { peer: bob, id: 'f'.repeat(32) }, /No such topic/], ['done', { peer: bob, id: result.id }, /No such topic/],
-  ['done', { peer: bob, id: a.id, extra: 1 }, /Bad request/], ['archive', { peer: bob, id: a.id }, /Unknown request|No such topic change/]]) {
+  ['done', { peer: bob, id: a.id, extra: 1 }, /Bad request/], ['bogus', { peer: bob, id: a.id }, /Unknown request|No such topic change/]]) {
   await refuses(() => engine.api('/api/topic/' + what, body), re, 'refuses ' + what + ' ' + JSON.stringify(body));
 }
 check(changes > writesBefore && network === 0, 'changes are announced; nothing touched the network');

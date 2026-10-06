@@ -25,6 +25,7 @@ type ConversationMessage struct {
 	Status      string           `json:"status,omitempty"` // outcome carried by an answer or result
 	Body        string           `json:"body"`
 	ReplyTo     string           `json:"reply_to,omitempty"`
+	Quote       string           `json:"quote,omitempty"`
 	At          time.Time        `json:"at"`                // when this installation stored it
 	SentAt      time.Time        `json:"sent_at,omitempty"` // the sender's timestamp, for received messages
 	State       string           `json:"state,omitempty"`   // delivery state (out) or response state (in)
@@ -249,7 +250,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		}
 		rows, err := s.db.Query(`SELECT id, kind, coalesce(status, ''), body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
 			state, coalesce(responder, ''), coalesce(detail, ''),
-			CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(target, '') FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
+			CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(target, ''),coalesce(quote,'') FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +259,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			var ts, recv int64
 			var read bool
 			var detail, target string
-			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail, &m.AgentID, &target); err != nil {
+			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail, &m.AgentID, &target, &m.Quote); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -280,7 +281,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, '')
+		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,'')
 			FROM outbox WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -289,7 +290,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			m := ConversationMessage{Dir: "out", To: peer}
 			var data, target string
 			var created int64
-			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target); err != nil {
+			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target, &m.Quote); err != nil {
 				rows.Close()
 				return nil, err
 			}

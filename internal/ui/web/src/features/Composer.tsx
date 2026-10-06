@@ -1,3 +1,4 @@
+import { sendID } from "../optimistic.mjs";
 // The message composer: one row of "+", the text and send. Typing @ offers
 // the people and agents here; picking an agent asks it ("Zen should Answer |
 // Do it") instead of writing to everyone. In a device conversation, replying
@@ -10,7 +11,7 @@ import { Popover } from "@base-ui/react/popover";
 import { IconAlertCircle, IconAt, IconCloudOff, IconLock } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
-import { agentName, firstLine, niceDevice, participants, personName } from "../model";
+import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, threadAuthor, whoName } from "../model";
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
@@ -18,16 +19,22 @@ import { candidates, decode, encode, guestAuthor, matches, shift, trigger, type 
 import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, type MenuAction } from "./Composer.parts";
 import { MentionList, optionId } from "./Composer.picker";
 import { useTypingSignal } from "./Composer.typing";
+import { coarse, useFieldFocus } from "./Composer.focus";
 import { usePortal } from "../owned";
+import { TrustNotice } from "./Trust";
 
 const EMPTY: Draft = { text: "" };
 
 /** Who a send goes to: the conversation, an agent asked in it, the device of
- *  a device conversation, or (answered by hand) a request received from it. */
+ *  a device conversation (its agent asked; or, for a person's device that
+ *  runs no agent, a plain message: ask false), nothing (your own device that
+ *  runs no agent: only its requests are answered, by hand), or (answered by
+ *  hand) a request received from it. model.deviceTarget decides which. */
 type Target =
   | { kind: "conversation" }
   | { kind: "agent"; pid: string; name: string; seed: string; canAsk: boolean; why?: string }
-  | { kind: "device"; name: string; seed: string }
+  | { kind: "device"; name: string; seed: string; ask: boolean }
+  | { kind: "none"; note: string }
   | { kind: "answer"; id: string; task: boolean };
 
 export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread }) {
@@ -67,9 +74,9 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   const { text, spans } = useMemo(() => decode(draft.text), [draft.text]);
   const write = (d: Draft, at?: number) => { if (at != null) caretNext.current = at; store.setDraft(conv, d); };
-  // Focus returns to the text after a choice made around it (synchronously,
-  // so a phone keeps its keyboard).
-  const focusField = () => field.current?.focus({ preventScroll: true });
+  // After a choice made around the text, the cursor goes back to it on a
+  // desktop, and on a phone only when the person was typing (Composer.focus.ts).
+  const { watch, focusField } = useFieldFocus(field);
 
   // ---- who is here and who this goes to
   const people = useMemo(() => (dm ? candidates(dm, overview, names) : []), [dm, overview, names]);
@@ -85,8 +92,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const handled = !!thread && !!draft.replyTo && !answerable && answering.current.has(draft.replyTo);
 
   const target: Target = useMemo(() => {
-    if (thread) return answerable ? { kind: "answer", id: answerable.id, task: answerable.kind === "task" }
-      : { kind: "device", name: deviceAgent(thread.peer, overview, names), seed: thread.peer };
+    if (thread) {
+      if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
+      const to = deviceTarget(thread.peer, overview); // a device that runs no agent cannot be asked
+      return to.kind === "agent" ? { kind: "device", name: deviceAgent(thread.peer, overview, names), seed: thread.peer, ask: true }
+        : to.kind === "person" ? { kind: "device", name: to.name, seed: thread.peer, ask: false }
+        : { kind: "none", note: to.note };
+    }
     if (dm && draft.agent) {
       const a = (dm.agents || []).find((x) => x.pid === draft.agent);
       const p = participants(dm, overview, names).find((x) => x.pid === draft.agent);
@@ -95,8 +107,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     }
     return { kind: "conversation" };
   }, [dm, thread, draft.agent, answerable?.id, answerable?.kind, overview, names]);
-  const asking = target.kind === "agent" || target.kind === "device";
-  const doIt = asking && !!draft.doIt;
   const latest = (): Draft => store.get().drafts[conv] ?? EMPTY;
 
   // Why nothing can be written here now, in words.
@@ -107,13 +117,14 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       : { title: "You can read this chat but not write in it", detail: dm?.frozen })
     : dm?.frozen ? { title: "Nothing more can be sent here", detail: dm.frozen }
     : thread?.key.pending ? { title: "Sending is paused", detail: "This agent’s identity changed. Check it before writing again." }
+    : target.kind === "none" ? { title: "Nothing to ask here", detail: target.note + " To answer one of its requests yourself, choose Reply on it." }
     : null;
 
   const files = draft.files || [];
   const filesAllowed = !!lim && !closed && target.kind !== "answer" && (!visitor || (target.kind === "agent" && target.canAsk));
   const limit = !files.length ? "" : filesAllowed ? overLimit(files, lim)
     : target.kind === "answer" ? "Files can’t go with an answer. Remove them to send." : "Files can’t be sent here. Remove them to send.";
-  const sending = conv in busy;
+  const sending = false; // each captured send progresses independently; a new draft stays usable
   const gone = target.kind === "agent" && !target.canAsk;
   const needsAgent = visitor && target.kind !== "agent";
   const ready = !closed && !sending && !gone && !needsAgent && !handled && !limit && (!!text.trim() || (files.length > 0 && target.kind !== "answer"));
@@ -144,19 +155,20 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
 
   useLayoutEffect(() => { setZone(form.current?.parentElement ?? null); }, [conv, !!closed]);
 
-  // On a wide screen, opening a conversation puts the cursor here.
-  useEffect(() => { if (wide && conv) field.current?.focus({ preventScroll: true }); }, [conv]);
+  // On a wide screen, opening a conversation puts the cursor here (not on a
+  // touch screen: that would open its keyboard).
+  useEffect(() => { if (wide && conv && !coarse()) field.current?.focus({ preventScroll: true }); }, [conv]);
 
   // A reply chosen here (from a message, an approval card) puts the cursor
-  // here. Chosen while an agent is addressed, it goes to the conversation:
-  // the agent is let go.
+  // here, on a phone too. Chosen while an agent is addressed, it goes to the
+  // conversation: the agent is let go.
   const lastReply = useRef({ conv, replyTo: draft.replyTo });
   useEffect(() => {
     const prev = lastReply.current;
     lastReply.current = { conv, replyTo: draft.replyTo };
     if (prev.conv !== conv || !draft.replyTo || draft.replyTo === prev.replyTo) return;
     if (draft.agent && dm) stopAsking();
-    focusField();
+    focusField(true);
   }, [conv, draft.replyTo]);
 
   // ---- editing
@@ -169,7 +181,6 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const next: Draft = { ...d, text: encode(cur, kept) };
     if (dropped.some((s) => s.kind === "agent" && s.id === d.agent)) {
       next.agent = undefined;
-      next.doIt = undefined;
       announce((target.kind === "agent" ? target.name : "The agent") + " is no longer asked; this goes to everyone here.");
     }
     const plain = dropped.filter((s) => s.kind !== "agent");
@@ -187,18 +198,17 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const span: Span = { start: trig.start, name: c.name, kind: c.kind, id: c.id };
     write({
       ...d, text: encode(cur, [...kept, span]),
-      ...(c.kind === "agent" ? { agent: c.id, doIt: c.id === d.agent ? d.doIt : false, replyTo: undefined } : {}),
+      ...(c.kind === "agent" ? { agent: c.id, replyTo: undefined } : {}),
     }, trig.start + token.length);
-    if (c.kind === "agent") announce("Asking " + c.name + ". Alt+D switches between Answer and Do it.");
+    if (c.kind === "agent") announce("Asking " + c.name + ".");
   }
 
   function stopAsking() {
     const d = latest();
     const was = decode(d.text);
-    write({ ...d, text: encode(was.text, was.spans.filter((s) => s.kind !== "agent")), agent: undefined, doIt: undefined });
+    write({ ...d, text: encode(was.text, was.spans.filter((s) => s.kind !== "agent")), agent: undefined });
   }
 
-  const choose = (v: boolean) => write({ ...latest(), doIt: v || undefined });
 
   function insert(s: string) {
     const ta = field.current;
@@ -236,18 +246,30 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   };
 
   // ---- sending
-  async function send() {
-    if (!ready || (!dm && !thread)) return;
-    const c = conv, d = latest(), to = target, here = dm, device = thread;
+  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread }) {
+    if (!retry && (!ready || (!dm && !thread))) return;
+    const { c, d: captured, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
+    // Allocate the optional topic before yielding so a second send keeps it.
+    const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
+    const id = retry?.id || sendID();
     const was = decode(d.text);
     const body = encode(was.text, was.spans, true).trim();
     const sent = d.files || [];
     const progress = (s: string) => setBusy((b) => ({ ...b, [c]: s }));
     const title = here ? (here.kind === "group" ? here.title || "the group" : personName(here.peer)) : to.kind === "device" ? to.name : "that chat";
-    progress("");
+    if (to.kind === "none") return;
+    if (store.isActive()) {
+      clearSent(c, d, sent);
+      if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) });
+    }
+    store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
+      _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question", body, at: new Date().toISOString(),
+      reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
+      () => { store.sends.remove(id); void send({ id, c, d, to, here, device }); });
     setNotice(null);
     typing.stop();
     try {
+      await store.sends.ready(id); // previous turn reaches durable storage before this one is prepared
       // Each file is handed to this computer's AgentNet once; a retry after a
       // failure hands over only the rest. (In a browser device the engine
       // takes the file itself in place of an id.)
@@ -256,6 +278,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         if (f.staged) { ids.push(f.staged); continue; }
         progress(sent.length > 1 ? "Preparing file " + (i + 1) + " of " + sent.length + "…" : "Preparing the file…");
         const id = await store.api.stage(f.file);
+        f.staged = id;
         ids.push(id);
         if (typeof id === "string") keepStaged(c, f.key, id);
       }
@@ -264,26 +287,39 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       const reply = d.replyTo && messageOf(d.replyTo, words, here, device) ? d.replyTo : undefined;
       let r: T.Sent | undefined;
       try {
-        if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, body })).note || "Answer sent.");
-        else if (to.kind === "agent") r = await store.api.askAgent({ pid: to.pid, kind: d.doIt ? "task" : "question", body, files: fileIds });
+        if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, send_id: id, body })).note || "Answer sent.");
+        else if (to.kind === "agent") r = await store.api.askAgent({ id, pid: to.pid, kind: "question", body, topic:d.topic, files: fileIds });
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.
-          r = await store.api.send({ to: device.peer, kind: d.doIt ? "task" : "question", body, reply_to: d.newTopic ? undefined : reply || last?.id, files: fileIds });
-          if (d.newTopic && r) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
-        } else r = await store.api.sendDM({ conv: c, body, reply_to: reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
+          r = await store.api.send({ id, to: device.peer, kind: to.kind === "device" && !to.ask ? "message" : "question", body, reply_to: d.newTopic ? undefined : last?.id, quote:reply, files: fileIds });
+          // Keep the preview in the visible conversation throughout saving;
+          // once the new topic exists its loaded view takes over the same id.
+          if (d.newTopic) store.sends.move(id, id);
+          else if ((last as (T.Message & { _topic?: boolean }) | undefined)?._topic) store.sends.move(id, last!.id);
+          if (d.newTopic && r && store.isActive()) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
+        } else r = await store.api.sendDM({ id, conv: c, topic:d.topic,body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
       } finally {
+        for (const f of sent) f.staged = undefined;
         forgetStaged(c, sent); // a send takes the files it names, sent or refused
       }
-      clearSent(c, d, sent);
+      store.sends.finish(id, r);
+      releaseFiles(sent);
+
       if (!r) { /* answered: the request's own card shows what happened */ }
-      else if (r.state === "queued") store.toast("Will send when you’re back online.");
+      else if (r.state === "queued") store.toast("Sending…");
       else if (r.state === "waiting") store.toast("Kept here, not sent yet: " + (r.detail || "they can’t receive messages right now."));
       else if (r.state === "receiver_waiting" && r.detail) store.toast(r.detail);
       void store.refetch();
     } catch (e) {
+      if (!store.sends.has(id)) return; // a pushed durable turn already proves this save
+      if (!store.isActive()) { store.sends.fail(id, errorText(e)); return; }
+      const current = store.get().drafts[c] ?? EMPTY;
+      const restored = !current.text && !(current.files || []).length;
+      if (restored) { store.setDraft(c, { ...d, files: sent }); store.sends.remove(id); }
+      else store.sends.fail(id, errorText(e));
       const why = errorText(e).replace(/\.?$/, ".");
-      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (sent.length ? " Your text and files are still here." : " Your text is still here.") });
+      if (visible.current === c) setNotice({ conv: c, text: "Not sent: " + why + (restored ? " Your text and files are restored." : " Your newer draft is kept. Retry the failed message above.") });
       else store.toast("Not sent to " + title + ": " + why + " It’s kept in that chat.", "error");
     } finally {
       setBusy(({ [c]: _, ...rest }) => rest);
@@ -295,6 +331,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (f.key === key ? { ...f, staged: id } : f)) });
   }
   function forgetStaged(c: string, list: StagedFile[]) {
+    if (!store.isActive()) return;
     const d = store.get().drafts[c], keys = new Set(list.map((f) => f.key));
     if (d?.files) store.setDraft(c, { ...d, files: d.files.map((f) => (keys.has(f.key) ? { ...f, staged: undefined } : f)) });
   }
@@ -306,11 +343,10 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     if (cur.text === d.text) {
       next.text = "";
       if (cur.agent === d.agent) next.agent = undefined;
-      if (cur.doIt === d.doIt) next.doIt = undefined;
     }
     if (cur.replyTo === d.replyTo) next.replyTo = undefined;
     store.setDraft(c, next);
-    releaseFiles(list);
+
   }
 
   // ---- keys
@@ -337,16 +373,14 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (e.ctrlKey || e.metaKey || (wide && !e.shiftKey && !e.altKey)) { e.preventDefault(); void send(); }
     }
   }
-  function formKeys(e: KeyboardEvent) {
-    if (e.altKey && e.code === "KeyD" && asking && !gone) { e.preventDefault(); choose(!doIt); }
-  }
 
   if (!dm && !thread) return null;
 
   // ---- what the composer says
   const replyMsg = draft.replyTo && target.kind !== "agent" ? messageOf(draft.replyTo, words, dm, thread) : undefined;
   const placeholder = target.kind === "answer" ? (target.task ? "Write your reply" : "Write your answer")
-    : target.kind !== "conversation" ? (doIt ? "Tell " + target.name + " what to do" : "Ask " + target.name)
+    : target.kind === "device" && !target.ask ? "Message " + target.name
+    : target.kind === "agent" || target.kind === "device" ? "Ask " + target.name
     : visitor ? "Type @ to ask an agent"
     : humanGuest ? "Message everyone here"
     : dm?.kind === "group" ? "Message " + (dm.title || "the group")
@@ -358,14 +392,17 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     : needsAgent ? { text: "You’re here because of your agent. Type @ to ask it something.", kind: "info" }
     : conn === "lost" || conn === "gone" ? { text: "You’re offline. What you send waits here and goes when you’re back online.", kind: "offline" }
     : null;
-  const sendLabel = target.kind === "conversation" ? "Send" : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
-    : doIt ? "Do it: send " + target.name + " a task" : "Ask " + target.name;
+  const sendLabel = target.kind === "conversation" || target.kind === "none" || (target.kind === "device" && !target.ask) ? "Send"
+    : target.kind === "answer" ? (target.task ? "Send your reply" : "Send your answer")
+    : "Ask " + target.name;
   const actions: MenuAction[] = [
     ...(dm && !humanGuest && !visitor ? [{ label: "Bring someone in", sub: "They see only what you share", icon: menuIcons.invite, tone: "bg-guest-bg text-guest-ink", run: () => store.openInvite(dm.id) }] : []),
     { label: "Photo or file", sub: filesAllowed && lim ? "Up to " + lim.max_count + " at once, " + bytes(lim.max_file) + " each" : target.kind === "answer" ? "Files can’t go with an answer" : "Files can’t be sent here", icon: menuIcons.file, tone: "bg-agent text-agent-ink", disabled: !filesAllowed, run: () => picker.current?.click() },
     { label: "Emoji", icon: menuIcons.emoji, tone: "bg-act text-act-ink", run: () => { emojiAfterMenu.current = true; setEmojiOpen(true); } }, // opens as the menu leaves: no gap between them
   ];
 
+  // A changed identity: checked and trusted from here (on a computer).
+  if (closed && thread?.key.pending && !dm) return <TrustNotice thread={thread} />;
   if (closed) return (
     <div className="flex items-start gap-3 border-t-[1.5px] border-outline bg-surface px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:py-4">
       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-sunken text-muted"><IconLock size={20} aria-hidden="true" /></span>
@@ -377,7 +414,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   );
 
   return (
-    <form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} onKeyDown={formKeys} aria-label="Write a message"
+    <form ref={form} onSubmit={(e: FormEvent) => { e.preventDefault(); void send(); }} {...watch} aria-label="Write a message" data-conv={conv}
       className="relative border-t-[1.5px] border-outline bg-surface px-3 pt-2 pb-[max(10px,env(safe-area-inset-bottom))] lg:border-t lg:px-6 lg:pt-3 lg:pb-4">
       {open && <MentionList id={listId} items={offered} active={active} query={trig?.query || ""} onPick={pick} onHover={setActive} />}
       <p className="sr-only" aria-live="polite">{said}</p>
@@ -388,16 +425,16 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
             onCancel={() => { write({ ...latest(), replyTo: undefined }); focusField(); }} />
         : <ReplyChip title={"Replying to " + replyMsg.who} text={replyMsg.text} cancel="Cancel reply"
             onCancel={() => { write({ ...latest(), replyTo: undefined }); focusField(); }} />)}
-      {thread && draft.newTopic && !replyMsg && (
+      {(thread || dm) && draft.newTopic && !replyMsg && (
         <ReplyChip title={"New topic" + ("name" in target ? " with " + target.name : "")} text="Your next message starts a separate conversation." cancel="Keep this conversation"
           onCancel={() => { write({ ...latest(), newTopic: false }); focusField(); }} />
       )}
       <FilesTray files={files} lim={lim} busy={sending} onRemove={removeFile} />
-      {(target.kind === "agent" || target.kind === "device") && !handled && (
-        <IntentRow name={target.name} seed={target.seed} doIt={doIt} disabled={gone} onChoose={(v) => { choose(v); focusField(); }}
+      {(target.kind === "agent" || (target.kind === "device" && target.ask)) && !handled && (
+        <IntentRow name={target.name} seed={target.seed}
           onStop={target.kind === "agent" ? () => { stopAsking(); focusField(); } : undefined}
           note={gone && target.kind === "agent" ? target.name + " can’t be asked now" + (target.why ? " (" + target.why.replace(/\.$/, "") + ")" : "") + ". Remove the mention to write to everyone instead."
-            : doIt ? "Anything an owner must OK will wait for them." : undefined} />
+            : undefined} />
       )}
       {status && <StatusLine status={status} />}
 
@@ -413,7 +450,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           onBlur={() => { setCaret(null); typing.stop(); }}
           onScroll={(e) => { if (mirror.current) mirror.current.scrollTop = e.currentTarget.scrollTop; }}
           onKeyDown={keys} onPaste={paste} />
-        <SendButton doIt={doIt} ready={ready} busy={sending} label={sendLabel} />
+        <SendButton ready={ready} busy={sending} label={sendLabel} />
       </div>
 
       <input ref={picker} type="file" multiple hidden tabIndex={-1} onChange={(e) => { addFiles([...(e.target.files || [])]); e.target.value = ""; }} />
@@ -491,8 +528,9 @@ function messageOf(id: string, w: Words, dm?: T.DMThread, thread?: T.Thread): { 
     return { who, text: m.deleted ? "Deleted message" : firstLine(m.text || m.body, 90) || ((m.attachments || []).length ? "Files" : "") };
   }
   const m = (thread?.messages || []).find((x) => x.id === id);
-  if (!m) return undefined;
-  // Whether a person or their agent wrote it is not recorded: it is the device conversation's agent.
-  const who = m.dir === "out" ? "yourself" : inSentence(deviceAgent(m.from, w.overview, w.names, m.agent_id));
+  if (!m || !thread) return undefined;
+  // Who wrote it as model.threadAuthor says: your own phone is you, a person's device that person, an agent device its agent.
+  const a = threadAuthor(m, w.overview, w.names, thread.peer, thread.messages || []);
+  const who = a.mine ? "yourself" : a.agent ? inSentence(a.name) : a.name;
   return { who, text: m.deleted ? "Deleted message" : firstLine(m.text || m.body, 90) || ((m.files || []).length ? "Files" : "") };
 }

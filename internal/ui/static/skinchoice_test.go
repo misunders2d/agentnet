@@ -104,6 +104,9 @@ assert.equal(id(choose(skins, { query: "default", saved: "notebook" })), "comic"
 assert.equal(id(choose(skins, { query: "classic" })), "comic", "?skin=classic opens Comic in this release");
 assert.equal(id(choose(skins, { query: "sketch", saved: "comic" })), "sketch", "?skin= wins over the saved choice");
 assert.equal(id(choose(skins, { saved: "gone" })), "comic", "an unknown id opens Comic");
+const withClassic = [...skins, mark({api:1,id:"classic",name:"Classic"})];
+assert.equal(id(choose(withClassic, {saved:"classic", packageChoice:true})), "classic", "new package Classic selection survives reload");
+assert.equal(id(choose(withClassic, {saved:"classic"})), "comic", "legacy Classic selection still migrates");
 assert.equal(choose([], {}).selected, null, "no Comic in the catalog: nothing to open");
 // Trust: built in by the host's list; anything else by its exact digest.
 const by = (x) => skins.find((s) => s.id === x);
@@ -150,7 +153,7 @@ func TestInstalledSkinCannotTakeBuiltInName(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if list := catalogOf(t, home); len(list) != 1 || list[0]["id"] != "comic" {
+	if list := catalogOf(t, home); len(list) != len(BuiltinSkins) || list[0]["id"] != "comic" {
 		t.Fatalf("a package named like a built-in skin was listed: %v", list)
 	}
 }

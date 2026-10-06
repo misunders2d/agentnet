@@ -13,8 +13,9 @@ exactly the same path; only trust differs (see [Trust](#trust)).
 - **Comic** (`comic`) is AgentNet's own skin and the default: the messenger,
   built from `internal/ui/web` into the package `internal/ui/static/skins/comic/`
   and embedded in the program.
-- **Classic** and **Zoom** (`classic`, `zoom`) come in a later update as
-  standalone packages on this same contract.
+- **Classic** and **Zoom** (`classic`, `zoom`) are standalone reference packages,
+  built from their own folders in `internal/ui/skins/` into embedded packages
+  under `internal/ui/static/skins/`. Each can be copied and built independently.
 - Installed skins: packages placed next to the program (below), and
   browser-local skins imported into one browser.
 
@@ -31,7 +32,8 @@ The UI host (`internal/ui/static/loader.js`) does the same for every skin:
    then installed ones) and the packages stored in this browser;
 2. picks the skin: `?skin=<id>`, else the one chosen before in this browser,
    else Comic. A saved `default` or `classic` (the names before skins were
-   packages) opens Comic and is rewritten once; `?skin=default` names Comic;
+   packages) opens Comic and is rewritten once; choices made through the package loader
+   are marked separately so selecting new Classic survives reload. `?skin=default` names Comic;
 3. asks for trust unless the skin is built in;
 4. adopts the package's [document rules](#document-rules-fonts) at document level;
 5. gives the skin a root in a shadow tree of the page's `#skin` element, links
@@ -179,6 +181,18 @@ The entry exports `async function mount(root, host)` and optionally
   inherit from the page; a package can replace them.
 - The skin's box fills the page under the switcher (or the whole page for
   Comic) and scrolls inside itself; the page never scrolls.
+- The page is the part of the screen a phone's keyboard leaves visible.
+  Android shrinks the page itself (the page's viewport has
+  `interactive-widget=resizes-content`). iOS shrinks only the visual
+  viewport, so there the host sets two custom properties on `<html>`, which
+  inherit into the shadow tree: `--an-viewport-h`, the page's height while
+  the keyboard is open, and `--an-keyboard`, how much of the screen's bottom
+  it covers. Both are absent while nothing covers the page. Size the skin
+  from `root` (`height: 100%` down to the frame), never from `vh`, `dvh` or
+  `svh`, so the message box stays above the keyboard; a fixed bottom popup
+  (a bottom sheet) sits at `bottom: var(--an-keyboard, 0px)` and is no
+  taller than `var(--an-viewport-h, 100dvh)`. Both names are the host's
+  own: a skin reads them and never sets them.
 - Put theme, tokens and resets on `root` (`:root` and `html`/`body` rules do
   not match in a shadow tree). Render popups (menus, dialogs, sheets) into a
   container inside `root`. Read focus from `root.getRootNode().activeElement`,
@@ -210,13 +224,22 @@ still runs with the page's full trust.
 | `host.onOpen(fn, kinds?)` | Required. Registers notification routing: `fn(target, kind, context)`. Every skin gets `"channel"` (a browser notification's channel: resolve it with GET `/api/notify/resolve?chan=…`, which answers `{conv}` when this device has that conversation; an empty channel means news in more than one) and `"conversation"` (a DM id). Listing `"message"` in `kinds` adds `fn(messageID, "message", {conv?, dir?})` (the conversation and direction the notification names) and `"review"` adds `fn("", "review")`. A destination a skin does not take waits in the switcher with the way to open it in Comic. A missing destination opens the skin's list, never another arbitrary chat. |
 | `host.stage(file)` | Prepares a File for sending; resolves an opaque attachment value for `files` in a send. Keep that value only until that send consumes it. Browser encrypts through its engine; daemon stages locally. |
 | `host.file(messageID,index,dir)` | Opens an attachment this device holds: a received one, or a copy kept of one it sent. Pass the message's own `dir` (`in` or `out`): a received id is the sender's choice and can equal a sent one here. Resolves `{bytes:Uint8Array}` (browser may add name/size/image). Show Open only where the view says `openable: true`; a sent file without a kept copy says so in `note`. Validate magic bytes before inline display; never execute HTML or SVG. |
+| `host.drive` | Optional project-space provider bound to this host's membership: `drive({conv, action, ...})` resolves the existing Drive view/result; `driveUpload(conv, file, confirm)` uploads plaintext to Google only after explicit confirmation. It reuses the core's Drive actions, consent and permissions. Browser providers also expose `prepareGoogle()` and `beginGoogleConsent({conv, full?, confirm_account})`: prepare first, then call begin directly from the confirming click, with no intervening await, to retain the browser user gesture. Never stage this upload through `host.stage`; Google files are outside AgentNet encryption. Switching workspace never retargets a captured provider; retired/disconnected bindings reject new calls. No tokens or raw transport are exposed. Absence/configuration errors must be shown as unavailable. |
 | `host.skins` | The catalog: `{api, id, name, digest?, local?, builtin?}` for Comic, the other built-in, installed and browser-local skins. `builtin` is the host's word (its fixed list), never a manifest's. The array is updated in place. |
 | `host.onSkinsChange(fn)` | Calls `fn()` when `host.skins` changes (a browser-local skin imported or removed). Returns an unsubscribe function. |
 | `host.selectSkin(id)` | Reloads into a skin from `host.skins`. The current skin must preserve or explicitly resolve unsent drafts first. |
 | `host.manageLocalSkins(root)` | Optional (present where the browser can store skins). Draws the host's browser-local skin manager (import files or a folder, the stored skins, Remove) into an element the skin owns; returns its teardown, which empties that element. Consent stays the host's: a stored skin asks for trust when chosen. |
 | `host.reconnect()` | Optional, present only on this computer's program with workspaces. After the program restarted and retired this membership's handle, binds the same membership again (only when the program still names it with the endpoint, realm, address and key it proved in its own overview) and mounts the skin again over the new binding. Resolves without remounting when the binding still holds. Nothing under way is retargeted or replayed: staged files and sends stay with the old binding, so a skin keeps text drafts and asks for files again. |
-| `host.workspace` | The membership this host is bound to: `{id, name, endpoint, address, realm, state}`. A host never changes membership: what a skin holds when an operation starts (a send, a staged file, a file open) stays bound to it. |
-| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}`. `has(id)` is by local registration only, never by anything a message or notification says. Optional, present only on this computer's program (never in a browser enrollment), so check before use: `disconnected()` resolves the memberships disconnected here, each `{id, name, endpoint, address, realm, state}` (`list()` leaves them out); `reconnect(id)` routes one of them again, as the same membership with the same keys and history under a new handle, and refuses one whose identity changed. It does not select it. |
+| `host.workspace` | The membership this host is bound to: `{id, name, endpoint, address, realm, state, hub_name?}`. `name` is this device's own label for it (`""` for none); `hub_name` is the workspace's own name its admin set, as last listed. A host never changes membership: what a skin holds when an operation starts (a send, a staged file, a file open) stays bound to it. |
+| `host.workspaces` | `null` on a program without workspaces. Otherwise `{list(), active(), has(id), select(id), state(id), onChange(fn), join({name, invite, agent}), disconnect(id)}`. `has(id)` is by local registration only, never by anything a message or notification says. Optional, present only on this computer's program (never in a browser enrollment), so check before use: `disconnected()` resolves the memberships disconnected here, each `{id, name, endpoint, address, realm, state}` (`list()` leaves them out); `reconnect(id)` routes one of them again, as the same membership with the same keys and history under a new handle, and refuses one whose identity changed. It does not select it. Optional, present where the host can keep it (this computer's program, or a browser with its enrollments): `rename(id, name)` sets this device's own label of a connected membership and resolves its updated entry; `name` `""` clears it, and 1–120 readable characters (no control character) are refused otherwise. It renames nothing on the server and fires no `onChange`. |
+
+**Naming a workspace.** Show a workspace by, in this order: this device's own
+label (`name`, unless it is a placeholder such as `""`, "Current workspace",
+"This computer" or "This server"); the workspace's own name its admin set
+(`overview.workspace.name` for the current one, `hub_name` for others); the
+relay's host name (`overview.workspace.server`, or the endpoint's host);
+"AgentNet" only when none of these says anything. Comic and the host's bar
+say the same.
 
 ### Workspaces
 
@@ -286,6 +309,42 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   Device operations:
   `/api/device/service`, `/api/device/link`, `/api/device/decide`,
   `/api/device/remove`.
+  `/api/device/link` answers `{url, expires, app_url}`: `app_url`
+  (`agentnet://open#<code>`) opens the same link in the AgentNet app on this
+  computer. A browser skin makes the link when the person presses Open
+  AgentNet, so its ten minutes cover only that step.
+- The AgentNet app (MEL-533, MEL-534, MEL-536): `overview.app` is `true` when
+  the page is the app's window (the app updates as a whole: offer the new
+  version of the app, never a terminal command). Google membership (P8):
+  GET `/api/google/access` answers `{workspace_url, enabled, can_admin,
+  emails[{email, admin, denied, domain_member}], domains[]}`. Only `can_admin` may edit:
+  POST the same route with one `{email}` or `{domain}`, plus `remove` and
+  `admin` (optional promotion only; an invite never demotes an admin). Removal of an email blocks domain admission too and
+  revokes its active and pending devices. Offer Invite by email and Allow
+  everyone at @domain in Workspaces; the Get AgentNet link uses
+  `workspace_url`. A person's optional `email` is checked only by the workspace relay and
+  trusted on first sight, like the M1 first-contact key limit. Roster
+  signatures preserve the claim; they do not independently prove Google
+  ownership. Show email only in profile/people details as verified by this
+  workspace. Keep key-change warnings; a second pinned person claiming
+  that email is a conflict and its email is hidden. Later-device
+  Google sign-in uses the existing one-tap device approval. With Google
+  enabled, `/api/invites` hides code invites; codes remain an admin CLI
+  fallback. Without Google configured, the existing invitation UI works:
+  `POST /api/invite` `{name, admin, days}` (`days` 1, 7 or 30) answers
+  `{link, label, expires, message}` (one link that offers the app and opens
+  in it; `message` is ready to send); GET `/api/invites` answers
+  `{can_invite, invites[{id, name, label, admin, by, created?, expires}]}`:
+  show Invite people only when `can_invite` (this device is an admin on its
+  server), load it when Settings or New chat opens; `POST /api/invite/revoke`
+  `{id}` withdraws an unused one. Where to get the app: GET `/api/get-app`
+  answers `{version, detected?, platforms[{id, label, url}]}`
+  (`static/getapp.json`, the one table). Folders, for Connect an agent: GET
+  `/api/folders?path=` (empty: the person's home) answers `{path, parent?,
+  home, roots?, dirs[{name, path}], truncated?}`, subfolders only, hidden
+  ones left out; read-only, and only on this computer's program (a browser
+  refuses it). A folder the person picks goes to `POST /api/responder` as
+  today; never ask for a typed path.
 - Agents: `/api/dm/agent/invite`, `/decide`, `/dismiss`, `/ask` under that prefix.
 - Notifications: `/api/notify/enable`, `/disable`, `/mute`, `/allow`, `/seen`,
   plus GET `/api/notify/resolve?chan=...`.
@@ -298,21 +357,84 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   stays what was sent), `deleted`, and `can[]` (`react`, `edit`, `delete`): show
   only the actions listed. An edit never reruns anything; a deletion hides text
   and files and recalls nothing already read, saved or given to an agent.
-- Reminders: `/api/remind` and existing `/api/remind/{action}`.
-- Topics (an agent's device threads, docs/plans/TOPICS.md): `overview.threads`
+- Reminders: `overview.remind` says this device keeps reminders (a computer;
+  never a browser) and `overview.reminders[]` lists the pending ones
+  (`{message, conv?, from, title, due, overdue}`, soonest first). POST
+  `/api/remind` `{id, due}` (unix seconds, in the future) sets or moves the
+  reminder on a received message; `/api/remind/done` and
+  `/api/remind/cancel` `{id}` end it. Only the person is reminded, on this
+  computer (a notification while AgentNet runs, window open or not): nothing
+  is sent and the message is unchanged; a reply to it ends it.
+- Groups: POST `/api/groups/manage` `{conv, action, person?, title?}` →
+  `{queued}`: `rename` (title only), `promote`, `demote`, `remove` (the
+  member's `person`), `leave` (nothing else; `queued` until the others
+  confirm). Show admin actions only to an admin of a group that is not
+  frozen; anyone in it may leave. A removal recalls nothing already saved.
+  `/api/groups/invite` `history` takes `{last}`, `{since}` or exact `{refs}`.
+- Trust and standing answers for a device: `/api/act` `{do: "trust", id:
+  address, key}` trusts exactly the compared key (`thread.key.pending`) and
+  lets held messages from it in; `{do: "approve"|"unapprove"|"revoke_tasks",
+  id: address}` turns automatic answers on or off, or stops tasks without
+  asking (nothing running is stopped). A browser does neither: say to do it
+  in AgentNet on a computer, never as a command. `thread.key_changed` on a
+  thread summary flags a paused one.
+- Held back: `overview.quarantine[]` `{id, peer, code, reason, at}`; `code` is
+  `key_changed`, `proof_pending`, `identity_conflict`,
+  `conflicting_duplicate` or `unverified`: write your own sentence from it
+  with the sender's name (`reason` names their address). An `unverified`
+  one (or a code you don't know) only claims its sender: say who it says it
+  is from, never draw it as that person. Content is never shown, and these
+  are not decisions to count.
+- Agent invitation: `/api/dm/agent/invite` `tasks_from` lists the member key
+  fingerprints (at most 16) that may give the agent tasks without asking:
+  offer it per person (their devices now), never per address.
+- Typing: GET `/api/typing` carries this device's `preferences` `{send,
+  show}`; POST `/api/typing/preferences` `{send, show}` saves them here.
+- Connecting coding sessions (MEL-528): GET `/api/assistant-setup` lists the
+  tools found on this computer `{local, harnesses[{id, label, detected,
+  configured, registered, supported, state, note, change?, next?, target?}],
+  note?}` (`state`: connected, needs_activation, detected, needs_setup,
+  not_detected, unsupported or error: write your own words for each and keep
+  `note` and `target` behind details). POST `{action: "review", harnesses}`
+  adds `review_id`; POST `{action: "apply", harnesses, review_id}` applies
+  exactly that reviewed change and refuses one that changed since. Then each
+  chosen tool that `/api/agents` lists as `found` gets its named agent through
+  POST `/api/agents` `{action: "create", label, harness, dir}` or `{action:
+  "update", id, harness, dir}` (reuse an agent with the same tool, name and
+  folder instead of making a second), and one `{action: "publish"}`.
+  Read the tool list first: `local: false` (nothing can be installed here)
+  means show `note` and skip `/api/agents`. Say an agent is ready only when
+  its `responder.ready` says so. The folder is chosen by browsing GET
+  `/api/folders?path=` (read-only), never typed; say so when `truncated` is
+  set, and when a folder can't be read (deleted, or closed to the person)
+  still offer Up and Home, not only a retry. Setup approves nobody, shares
+  no history and keeps the default agent.
+- Topics (every chat, docs/plans/TOPICS.md): `overview.threads`
   lists every thread, archived topics too; a skin that pages topics itself
   asks `/api/overview?topics=1` and gets them without archived topics.
   `overview.topics[]` counts each peer's topics (`total`, `archived`,
   `archived_unread`, `latest`) and `overview.topic_list` says the routes
   below exist. A thread summary carries `state` (active, done, archived),
   `done_by` (agent, you), `conclusion` (the final reply's first line: the
-  agent's words when `done_by` is agent, label it as theirs; the person's
-  own when `done_by` is you), `concluded_by`, `pending`, `renamed`,
+  agent's words from an explicit close, labelled as theirs; a local
+  Mark done carries no conclusion), `concluded_by`, `pending`, `renamed`,
   `auto_title`, `quiet_since`; `/api/thread` adds `topic`. GET
   `/api/topics?peer=&state=&q=&before=&limit=` pages `{topics, next,
   matched}`; POST `/api/topic/rename` `{peer,id,title}`, `/api/topic/done`
   and `/api/topic/reopen` `{peer,id,count}` (`count`: the messages shown).
-  A name and the Done/Reopen marks are this device's only; say so.
+  Names and device-chat Done/Reopen are local; say so. People DMs/groups
+  keep a main flow and opt-in topics: `/api/dm` adds `topics[]`, messages
+  have derived `topic` and optional shared `topic_event`, and
+  `/api/topics?conv=...` pages the chat's topics. People-topic Done/Reopen
+  are shared and attributed (`done_by: person`, `concluded_by`); any member
+  may reopen. Send/ask accepts `topic` (`new` starts a topic), and
+  `/api/topic/create` `{conv,id}` promotes a held logical message and replies.
+  Topic changes use `{conv,id,count?,title?}`; bulk Done/Archive/Delete uses
+  `{conv|peer,id:"",ids:[...],counts?:{id:shownCount}}`. Offer one confirmation and a six-second
+  pending Undo before calling the host. Delete for me in people chats
+  affects only this person's devices; others keep their copies. Archive
+  stays local; new messages/shared actions clear it. Comic, Classic and
+  Zoom implement these controls through Host API v1 only.
 - Headless: a request message may carry `exec` `{state, at, host, stale, attempt?, detail}`,
   the executing host's own signed word (never delivery, presence or a timer);
   show it apart from delivery and say when it is stale. A review notice may carry
@@ -323,12 +445,86 @@ Common JSON routes (see `internal/ui/ui.go` for concrete view types and
   The host applies a decision only on a report it sent that operator and still
   holds: once the host has deleted its chat with the operator, decisions on the
   reports in it are refused.
+  A report naming requests (items) went to a device that decides them (a
+  steward's or an operator's): its card says this device decides them. A
+  report to a device that may not decide has no items, only `count` and
+  `deciders[{person,label}|{address}]`: say who decides them from their own
+  devices ("Sergey decides these from his devices"; "You decide these" when
+  this device's person is among them; a count with no deciders: nobody yet,
+  whoever installed that machine can name a steward there), never "decide
+  on that machine", and no command on the card. A notice without a version 2
+  report (count text) says nothing about who decides: claim nothing. An
+  item with `conv` is a DM or group request: offer no Answer for it. A task
+  carrying out an agent's proposal has `proposal` `{question_id, question,
+  asker, proposal_id, proposal, confirmed_by}` (first lines; the engine
+  parses it for actionable items as Go does). Local device messages carry
+  the same `proposal` shape with the full original question and suggestion.
+  All skins show the three steps: the asker asked, your agent suggested,
+  the asker chose Do it. This uses only the asker's usual task approval;
+  model output adds no authority. Running items remain visible with their
+  start time and the existing Stop action. `blocker: seems_stuck` is a
+  once-per-run silence notice, never an automatic kill. The newest report from a
+  host replaces the older ones (the host keeps one open card); a report
+  with no items and no count says nothing waits any more and arrives
+  already resolved, and so does a late, older report once a newer one was
+  stored, open or dismissed. A decision's `result` shows on whichever
+  report of that host lists the same request and attempt.
+- Proposals (MEL-521): an answer with `status` `proposal` is an agent's offer,
+  never run: its body is exactly the task it proposes. Only a device-thread
+  question's run proposes (a conversation's run hands the action to its
+  person, needs_human, until conversation proposals can be confirmed). Show
+  it as a suggestion, never as done ("Suggested a task · not run", "Proposed
+  task (not run)"); confirming it (today only the CLI's `agentnet do ID`;
+  the page's Do it is pending P4's page slice) sends exactly that stored
+  text as a task, under the usual task approval. Until then the person may
+  send that text as a task with the skin's own task choice. A review item
+  for such a task carries `proposal` as above.
   A notification's `#msg=<id>` (optionally `&conv=…&dir=in|out`) lands on that
   message and does nothing else.
+- Workspace name: `overview.workspace` `{name, server}` is the workspace's own
+  name its admin set (`""` for none) and the relay's host name. GET
+  `/api/workspace` adds `can_rename` (this device holds the Hub's admin role:
+  an admin invite made it one, or its person granted it with `agentnet
+  person admin`; a person's devices never inherit it; unknown is false). POST `/api/workspace/name`
+  `{name}` renames it for every member (an empty name clears it); a member is
+  refused "Only an admin of this workspace can rename it for everyone." It is
+  a company setting: offer it only on the person's own tap, never from an
+  agent. Members get the new name with the member list, without reloading.
+- Who runs an agent: `me.agent` (this device) and `overview.agent_devices`
+  (the other devices that, as last listed, say they run one; kept offline)
+  are the only "runs an agent" signal. Show a device as an agent, and offer
+  Ask, Do it or Bring in toward it, only when it says so: a phone or a
+  browser never does, and its messages are its person's. Both are hints for
+  display and offers; nothing a skin does with them grants anything.
+- People, not addresses: name a device by its person and device
+  ("Vitalii · Phone", "You · Pixel"; the device in words, dashes as spaces);
+  keep addresses for verified-detail panels. When a person's name is also
+  another person's (or yours), or the server only lists them, add the device
+  key's first group so a look-alike cannot pass as someone else. The page's
+  own sentences (`state_text`, `why`, `reason`) already name people this way.
 - Storage: GET `/api/storage` (read-only; `local.areas[]` with known usage or an
   `unknown` reason, `local.complete`, `remote.status` available | unsupported |
   unavailable with the Hub's own-usage report). Show unknown as unknown, never
   zero; the Hub's quota is the whole server's, never an allowance.
+- Messaging: DM/group messages carry `delivery`, `sent_at`, and `quote`;
+  device-thread messages carry `sent_at` and `quote`. Use `delivery` for
+  delivery ticks: each other person's best device copy, then the least
+  advanced person. Own devices count only when there are no other people.
+  `state` remains the raw stored state, never a completion claim. Copies
+  carry `own` and `person` (a display label); Details should name the person
+  and device, without routing addresses. Show `sent_at`; keep timeline order
+  and day dividers by `at` (arrival). Show an arrival note in Details when
+  the gap is at least 60 seconds.
+  `POST /api/send` and `/api/dm/send` accept `quote`, independent of
+  `reply_to` (threading/session continuity). Only an explicit `quote` gets
+  a quote card. Agent answers/results/progress have no quote card; a distant
+  request gets a compact jump link, an adjacent request no reference.
+- Human guests: `POST /api/dm/guest/check` `{conv,host}` returns
+  `{ready,needs_update:[{label,me}],offline:[],text}`. Check when the person
+  is selected; an older app may still be invited and its stored invitation
+  waits for an update. Guest views expose `needs_update` labels for waiting
+  copies. “Ask NAME to update” opens a DM and prefills a draft; sending is
+  always the person's choice. Changed keys remain refused.
 - Presence refresh: `/api/refresh`, triggered by user navigation; no polling.
 - What a conversation view says without its sentences: a DM message's
   `reply_to` names the message as this device shows it (an agent's answer

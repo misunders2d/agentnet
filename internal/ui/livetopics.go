@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -44,11 +45,13 @@ type PeerTopics struct {
 	Latest         ThreadSummary `json:"latest"`
 }
 
-// TopicQuery is GET /api/topics: peer ("" every peer), state ("" every
+// TopicQuery is GET /api/topics: conv scopes a people chat; otherwise peer
+// scopes agent chats ("" every peer). State ("" every
 // state, active, done or archived), q (words in a title or the last
 // line), before (the Next of the page before) and limit (0: the default
 // page; at most client.TopicPageMax).
 type TopicQuery struct {
+	Conv   string `json:"conv,omitempty"`
 	Peer   string `json:"peer,omitempty"`
 	State  string `json:"state,omitempty"`
 	Q      string `json:"q,omitempty"`
@@ -64,16 +67,21 @@ type TopicPage struct {
 	Matched int             `json:"matched"`
 }
 
-// TopicChange names a topic (its peer and ThreadSummary.ID) for POST
-// /api/topic/rename (Title; "" gives back the automatic name), /done and
-// /reopen. Count is how many of its messages the page showed (its
+// TopicChange names a topic by Conv or Peer and ThreadSummary.ID for POST
+// /api/topic/{create,rename,done,reopen,archive,delete}. Rename uses Title
+// ("" gives back the automatic name). IDs batches done/archive/delete;
+// Counts holds each selected topic's displayed count. Count is how many
+// messages a single topic's page showed (its
 // ThreadSummary.Count; 0: all it has): a mark never covers a message the
 // person has not seen.
 type TopicChange struct {
-	Peer  string `json:"peer"`
-	ID    string `json:"id"`
-	Title string `json:"title,omitempty"`
-	Count int    `json:"count,omitempty"`
+	Conv   string         `json:"conv,omitempty"`
+	IDs    []string       `json:"ids,omitempty"`
+	Counts map[string]int `json:"counts,omitempty"`
+	Peer   string         `json:"peer"`
+	ID     string         `json:"id"`
+	Title  string         `json:"title,omitempty"`
+	Count  int            `json:"count,omitempty"`
 }
 
 // topicNewer is the note when a message came after what the page showed
@@ -95,7 +103,7 @@ func (s *Server) topics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := r.URL.Query()
-	q := TopicQuery{Peer: v.Get("peer"), State: v.Get("state"), Q: v.Get("q"), Before: v.Get("before")}
+	q := TopicQuery{Conv: v.Get("conv"), Peer: v.Get("peer"), State: v.Get("state"), Q: v.Get("q"), Before: v.Get("before")}
 	if l := v.Get("limit"); l != "" {
 		n, err := strconv.Atoi(l)
 		if err != nil {
@@ -125,7 +133,7 @@ func (s *Server) changeTopic(w http.ResponseWriter, r *http.Request) {
 
 // threadSummary is a client thread summary as the page lists it.
 func threadSummary(t client.ThreadSummary, keyChanged bool) ThreadSummary {
-	return ThreadSummary{ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
+	return ThreadSummary{Conv: t.Conv, ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
 		Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: keyChanged,
 		Notices: t.Notices, NoticeOnly: t.NoticeOnly, State: t.State, DoneBy: t.DoneBy, Conclusion: t.Conclusion,
 		ConcludedBy: t.ConcludedBy, Pending: t.Pending, Renamed: t.Renamed, AutoTitle: t.AutoTitle, QuietSince: t.QuietSince, AgentID: t.AgentID}
@@ -133,7 +141,7 @@ func threadSummary(t client.ThreadSummary, keyChanged bool) ThreadSummary {
 
 // TopicList implements Topics.
 func (l *Live) TopicList(q TopicQuery) (TopicPage, error) {
-	page, err := l.a.Topics(client.TopicQuery{Peer: q.Peer, State: q.State, Query: q.Q, Before: q.Before, Limit: q.Limit})
+	page, err := l.a.Topics(client.TopicQuery{Conv: q.Conv, Peer: q.Peer, State: q.State, Query: q.Q, Before: q.Before, Limit: q.Limit})
 	if errors.Is(err, client.ErrTopicQuery) {
 		return TopicPage{}, Refuse("That topic list request is not valid.")
 	}
@@ -144,7 +152,7 @@ func (l *Live) TopicList(q TopicQuery) (TopicPage, error) {
 	changed := map[string]bool{}
 	for _, t := range page.Topics {
 		kc, seen := changed[t.Peer]
-		if !seen {
+		if !seen && t.Conv == "" {
 			k, err := l.a.PeerKeyOf(t.Peer)
 			if err != nil {
 				return out, err
@@ -159,9 +167,64 @@ func (l *Live) TopicList(q TopicQuery) (TopicPage, error) {
 
 // ChangeTopic implements Topics.
 func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
+	if len(c.IDs) > 0 {
+		if len(c.IDs) > client.TopicPageMax || what != "done" && what != "archive" && what != "delete" {
+			return "", Refuse("Invalid bulk action.")
+		}
+		changed, stale := 0, 0
+		seen := map[string]bool{}
+		for _, id := range c.IDs {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			one := c
+			one.IDs = nil
+			one.ID = id
+			if c.Counts != nil {
+				one.Count = c.Counts[id]
+				if one.Count < 1 {
+					return "", Refuse("Invalid topic count.")
+				}
+			}
+			note, err := l.ChangeTopic(what, one)
+			if err != nil {
+				return "", Refuse(strconv.Itoa(changed) + " topics changed; remaining topics unchanged: " + sentence(err))
+			}
+			if note == topicNewer {
+				stale++
+			} else {
+				changed++
+			}
+		}
+		note := strconv.Itoa(changed) + " topics changed."
+		if stale > 0 {
+			note += " " + strconv.Itoa(stale) + " topics kept active because newer messages arrived."
+		}
+		return note, nil
+	}
+	if c.Conv != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
+		defer cancel()
+		covered, err := l.a.ChangeChatTopic(ctx, c.Conv, c.ID, what, c.Title, c.Count)
+		if err != nil {
+			return "", err
+		}
+		if !covered {
+			return topicNewer, nil
+		}
+		note := map[string]string{"create": "Topic created. Its replies stay here.", "done": "Marked done for everyone. A new message reopens it.", "reopen": "Reopened for everyone.", "rename": "Topic renamed on this device.", "archive": "Archived on this device. Nothing deleted.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what]
+		return note, nil
+	}
 	var err error
 	note, covered := "", true
 	switch what {
+	case "archive":
+		err = l.a.ArchiveTopic(c.Peer, c.ID)
+		note = "Archived on this device. Nothing deleted."
+	case "delete":
+		_, err = l.a.DeleteThread(c.Peer, c.ID)
+		note = "Deleted on this device. Others keep their copies."
 	case TopicRename:
 		err = l.a.RenameTopic(c.Peer, c.ID, c.Title)
 		note = "Topic renamed on this device."

@@ -94,6 +94,10 @@ func TestRelayServesThePage(t *testing.T) {
 			if ct != "image/png" || cache != "no-cache" {
 				t.Errorf("%s: %q %q", p, ct, cache)
 			}
+		case strings.HasSuffix(p, ".json"): // getapp.json, the app's downloads
+			if ct != "application/json" || cache != "no-cache" {
+				t.Errorf("%s: %q %q", p, ct, cache)
+			}
 		default:
 			if ct != "text/javascript; charset=utf-8" || cache != "no-cache" {
 				t.Errorf("%s: %q %q", p, ct, cache)
@@ -230,8 +234,12 @@ func TestRelayManifest(t *testing.T) {
 	if !sizes["192x192"] || !sizes["512x512"] {
 		t.Fatalf("icon sizes: %v", sizes)
 	}
-	if page := string(devicePage()); strings.Count(page, `rel="manifest"`) != 1 || !strings.Contains(page, `<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">`) {
-		t.Fatal("the device page does not share one credentialed manifest link")
+	// Only a phone is offered this page as an app (landing.mjs addManifest,
+	// with credentials); a computer gets the AgentNet app (TestIndexHasNoManifestLink).
+	landing, _ := fs.ReadFile(Files, "landing.mjs")
+	if !strings.Contains(string(landing), `l.href = "/manifest.webmanifest";`) || !strings.Contains(string(landing), `l.crossOrigin = "use-credentials";`) ||
+		!strings.Contains(string(landing), `if (!isPhone(platform())`) {
+		t.Fatal("landing.mjs does not link the manifest on phones only")
 	}
 	if page := string(devicePage()); strings.Count(page, `rel="icon"`) != 1 || !strings.Contains(page, `<link rel="icon" type="image/png" href="/assets/icon-192.png">`) {
 		t.Fatal("the device page does not name its icon once")

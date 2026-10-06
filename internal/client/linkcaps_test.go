@@ -45,8 +45,8 @@ func TestAwaitLinkMemberSessionAdvertisesOwnCaps(t *testing.T) {
 	if err != nil || !linked {
 		t.Fatalf("member stream: linked=%v %v", linked, err)
 	}
-	if put.Session != session || strings.Join(put.Caps, " ") != strings.Join(ownCaps, " ") {
-		t.Fatalf("waiting session advertised %v, daemon advertises %v", put.Caps, ownCaps)
+	if caps, _ := a.advertisedCaps(); put.Session != session || strings.Join(put.Caps, " ") != strings.Join(caps, " ") {
+		t.Fatalf("waiting session advertised %v, daemon advertises %v", put.Caps, caps)
 	}
 	if err := put.Verify(a.id.Public(a.Address).SignKey); err != nil {
 		t.Fatal("capability record not signed by this device")

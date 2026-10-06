@@ -146,28 +146,7 @@ func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Publi
 		return err
 	}
 	if !profile.Supports(key.Address, key.SignKey, required) || required == protocol.CapExternalParticipation && !profile.Supports(key.Address, key.SignKey, protocol.CapAgentIdentity) {
-		if required == protocol.CapHumanParticipation {
-			return fmt.Errorf("%w: %s cannot read human participation yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
-		}
-		if required == protocol.CapReplyReceiver {
-			return fmt.Errorf("%w: %s cannot read selected receiver delegation yet", errAgentIdentityUnsupported, key.Address)
-		}
-		if required == protocol.CapGroup {
-			return fmt.Errorf("%w: %s cannot read group context yet", errAgentIdentityUnsupported, key.Address)
-		}
-		if required == protocol.CapAgentReaction {
-			return fmt.Errorf("%w: %s cannot read assistant reactions yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
-		}
-		if required == protocol.CapProgress {
-			return fmt.Errorf("%w: %s cannot read nonterminal responder progress yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
-		}
-		if required == protocol.CapConvClear {
-			return fmt.Errorf("%w: %s cannot apply conversation deletions yet; it deletes it once updated", errAgentIdentityUnsupported, key.Address)
-		}
-		if required == protocol.CapRoom {
-			return fmt.Errorf("%w: %s cannot read room participation yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
-		}
-		return fmt.Errorf("%w: %s cannot read named agents yet; update all its active AgentNet sessions", errAgentIdentityUnsupported, key.Address)
+		return &NeedsUpdateError{Address: key.Address, Cap: required}
 	}
 	return nil
 }
@@ -249,6 +228,12 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 	if in.Target != nil && (in.Target.AgentID != p.AgentID || in.Target.Address != p.Host.Address || in.Target.Fingerprint != p.Host.Fingerprint) {
 		return reasonInvalid, errors.New("named request differs from its participation host")
 	}
+	if in.Human != nil && in.Human.AgentAuthor() {
+		p, err = a.participation(in.Conv, in.Human.AuthorPID)
+		if err != nil {
+			return reasonProof, err
+		}
+	}
 	if agent && (p.Role == protocol.RoleHuman || sender.Address != p.Host.Address || sender.Fingerprint() != p.Host.Fingerprint) {
 		return reasonInvalid, errors.New("an agent's turn is not from its participation's exact host")
 	}
@@ -292,7 +277,11 @@ func (a *Agent) verifyAgents(conv string, msgs []ConvMessage) {
 		if m.ExcerptPID != "" || m.PID == "" || !agentTurn(m.Sub, m.Kind, m.status, m.ReplyTo, m.PID, m.Origin) {
 			continue
 		}
-		p, seen := parts[m.PID]
+		author := m.PID
+		if m.Human != nil && m.Human.AgentAuthor() {
+			author = m.Human.AuthorPID
+		}
+		p, seen := parts[author]
 		if !seen {
 			if members == nil {
 				dm, err := a.dmMembers(conv)
@@ -301,10 +290,10 @@ func (a *Agent) verifyAgents(conv string, msgs []ConvMessage) {
 				}
 				members = &dm
 			}
-			if info, err := participationIn(a.store.db, conv, m.PID, *members, a.Address); err == nil {
+			if info, err := participationIn(a.store.db, conv, author, *members, a.Address); err == nil {
 				p = &info
 			}
-			parts[m.PID] = p
+			parts[author] = p
 		}
 		key := m.Key
 		if m.History {
@@ -313,3 +302,27 @@ func (a *Agent) verifyAgents(conv string, msgs []ConvMessage) {
 		msgs[i].VerifiedAgent = p != nil && p.Invite != "" && p.State != PartConflict && p.Role != protocol.RoleHuman && m.From == p.Host.Address && key == p.Host.Fingerprint
 	}
 }
+
+type NeedsUpdateError struct{ Address, Cap string }
+
+func (e *NeedsUpdateError) Error() string {
+	message := "cannot read named agents yet; update all its active AgentNet sessions"
+	switch e.Cap {
+	case protocol.CapHumanParticipation:
+		message = "cannot read human participation yet; update all its active AgentNet sessions"
+	case protocol.CapReplyReceiver:
+		message = "cannot read selected receiver delegation yet"
+	case protocol.CapGroup:
+		message = "cannot read group context yet"
+	case protocol.CapAgentReaction:
+		message = "cannot read assistant reactions yet; update all its active AgentNet sessions"
+	case protocol.CapProgress:
+		message = "cannot read nonterminal responder progress yet; update all its active AgentNet sessions"
+	case protocol.CapConvClear:
+		message = "cannot apply conversation deletions yet; it deletes it once updated"
+	case protocol.CapRoom:
+		message = "cannot read room participation yet; update all its active AgentNet sessions"
+	}
+	return fmt.Sprintf("%v: %s %s", errAgentIdentityUnsupported, e.Address, message)
+}
+func (e *NeedsUpdateError) Unwrap() error { return errAgentIdentityUnsupported }

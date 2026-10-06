@@ -21,7 +21,11 @@ type Live struct {
 	// timeout bounds each network request an action makes.
 	timeout time.Duration
 	staged  staged // files the page handed over, not sent yet
+	app     bool   // served by the AgentNet app (SetApp)
 }
+
+// SetApp says the page is the AgentNet app's window (overview.app).
+func (l *Live) SetApp(app bool) { l.app = app }
 
 // recommended is the build the Hub's operator recommends, only when it is
 // newer than this one: a preview newer than the stable release is never
@@ -54,11 +58,14 @@ func (l *Live) TopicOverview() (Overview, error) { return l.overview(false) }
 
 func (l *Live) overview(listArchived bool) (Overview, error) {
 	seq, _ := l.a.Changed()
-	o := Overview{Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
+	o := Overview{App: l.app, Me: Me{Address: l.a.Address, Fingerprint: l.a.Self().Fingerprint()}, Seq: seq, Version: protocol.Version,
 		Threads: []ThreadSummary{}, Review: []ReviewItem{}, NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: []QuarantineItem{}}
 	if r, err := l.a.Responder(); err == nil && r != nil {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir
 	}
+	o.Me.Agent, o.AgentDevices = l.a.AdvertisesAgent(), l.a.AgentDevices()
+	o.Workspace = &WorkspaceView{Name: l.a.WorkspaceName(), Server: l.a.RelayHost()}
+	words := l.a.PeerWords() // people never see addresses in sentences
 	o.Release = recommended(l.a.Release())
 	o.Directory = directoryOf(l.a.MemberView(), l.a.Address)
 	if n, err := l.notifyView(); err == nil {
@@ -106,18 +113,21 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 		return o, err
 	}
 	for _, c := range review.Conv {
-		o.NeedsYou = append(o.NeedsYou, convItem(c))
+		o.NeedsYou = append(o.NeedsYou, convItem(c, words))
 	}
 	countDecisions(&o)
 	for _, c := range review.Held {
-		o.Held = append(o.Held, convItem(c))
+		o.Held = append(o.Held, convItem(c, words))
 	}
 	for _, m := range review.Device {
-		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, m.From, m.Detail),
+		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, words(m.From), m.Detail),
 			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))}
+		if m.Kind == KindTask {
+			item.Proposal, _ = l.a.ProposalOf(m.ID) // the proposal it carries out, if any
+		}
 		if item.Notice {
 			if r, ok := l.a.NoticeReport(m); ok {
-				item.Report, item.Excerpt = &r, fmt.Sprintf("%s reported %d waiting request(s)", r.Host, len(r.Items))
+				item.Report, item.Excerpt = &r, fmt.Sprintf("%s reported %d waiting request(s)", r.Host, r.Waiting())
 			}
 		}
 		o.Review = append(o.Review, item)
@@ -125,14 +135,32 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 	if err := l.selfConsentReview(&o); err != nil { // own agents that joined without a click (liveselfconsent.go)
 		return o, err
 	}
+	notices, err := l.a.DeviceAdminNotices()
+	if err != nil {
+		return o, err
+	}
+	for _, n := range notices {
+		o.Review = append(o.Review, ReviewItem{ID: n.ID, Peer: n.By, Kind: KindMessage, Why: client.DeviceAdminNoticeText(n), At: time.Unix(n.At, 0), Notice: true, Reason: ReasonDeviceAdmin})
+	}
 	q, err := l.a.Quarantine()
 	if err != nil {
 		return o, err
 	}
-	for _, x := range q {
-		o.Quarantine = append(o.Quarantine, QuarantineItem{ID: x.ID, Peer: x.Sender, Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
+	o.Quarantine = quarantineItems(q)
+	for i := range o.Quarantine {
+		o.Quarantine[i].Reason = holdReason(q[i].Reason, words(q[i].Sender))
 	}
 	return o, nil
+}
+
+// quarantineItems is the overview's held-back list (never null): each
+// item's code says why (holdCode), so a page words it with the sender's name.
+func quarantineItems(q []client.Quarantined) []QuarantineItem {
+	out := make([]QuarantineItem, 0, len(q))
+	for _, x := range q {
+		out = append(out, QuarantineItem{ID: x.ID, Peer: x.Sender, Code: holdCode(x.Reason), Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
+	}
+	return out
 }
 
 // countDecisions sets each conversation's Decide: its requests among
@@ -151,16 +179,17 @@ func countDecisions(o *Overview) {
 }
 
 // convItem is a conversation item waiting for the person, as the page
-// lists it, with the decisions this installation takes on it.
-func convItem(c client.ConvReview) ConvItem {
+// lists it, with the decisions this installation takes on it. words names
+// its sender for the sentence (client.PeerWords).
+func convItem(c client.ConvReview, words func(string) string) ConvItem {
 	v := ConvItem{Reason: c.Reason, Conv: c.Conv, PID: c.PID, ID: c.ID, Peer: c.From, Kind: c.Kind, Excerpt: excerpt(c.Body), At: c.At, Unread: c.Unread}
 	switch c.Reason {
 	case client.ReviewInvite:
 		v.Why, v.Actions = c.Detail, []string{DoAccept, DoDecline}
 	case client.ReviewHeldTurn:
-		v.Why = DMStateText("in", c.Kind, c.State, c.From, c.Detail)
+		v.Why = DMStateText("in", c.Kind, c.State, words(c.From), c.Detail)
 	default:
-		v.Why, v.Actions = ReviewWhy(c.Kind, c.State, c.From, c.Detail), AgentActions(c.Kind, c.State)
+		v.Why, v.Actions = ReviewWhy(c.Kind, c.State, words(c.From), c.Detail), AgentActions(c.Kind, c.State)
 	}
 	return v
 }
@@ -236,6 +265,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 		for _, a := range approved {
 			if a == c.Peer {
 				t.Approved = true
+				t.QuestionTarget = c.Peer
 			}
 		}
 	}
@@ -243,8 +273,37 @@ func (l *Live) Thread(id string) (Thread, error) {
 		for _, g := range grants {
 			if g.Address == c.Peer {
 				t.TaskGrant = g.Status
+				t.TaskTarget = c.Peer
 			}
 		}
+	}
+	if person, qg, tg, e := l.a.PersonGrantForPeer(c.Peer, k.Pinned); e != nil {
+		return t, e
+	} else if person != "" {
+		if people, e := l.a.KnownPersons(); e != nil {
+			return t, e
+		} else {
+			for _, p := range people {
+				if p.Person == person {
+					v := personView(p)
+					t.PermissionPerson = &v
+					break
+				}
+			}
+		}
+		if qg {
+			t.Approved = true
+			t.QuestionTarget = person
+		}
+		if tg {
+			t.TaskGrant = "active"
+			t.TaskTarget = person
+		}
+	}
+	if questions, _, e := l.a.PermissionState(c.Peer, k.Pinned); e != nil {
+		return t, e
+	} else {
+		t.Approved = questions
 	}
 	replied := map[string]bool{}
 	for _, m := range c.Messages {
@@ -252,8 +311,9 @@ func (l *Live) Thread(id string) (Thread, error) {
 			replied[m.ReplyTo] = true
 		}
 	}
+	peer := l.a.PeerWords()(c.Peer) // the sentences name a person and device, never the address
 	for _, m := range c.Messages {
-		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, At: m.At,
+		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, At: m.At, SentAt: shownSent(m.SentAt, m.At),
 			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, Controls: m.Controls, Exec: m.Exec}
 		if m.Read != nil && !*m.Read {
 			v.Unread = true
@@ -274,15 +334,24 @@ func (l *Live) Thread(id string) (Thread, error) {
 		if m.AgentID != "" {
 			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}
 		}
-		v.StateText = StateText(m.Dir, m.Kind, m.State, c.Peer)
-		switch Next(m.Dir, m.Kind, m.State, c.Peer, replied[m.ID]) {
+		if m.Kind == KindAnswer && m.Status == envelope.StatusProposal && l.a.CanConfirmProposal(m.ID) {
+			v.Actions = []string{DoIt}
+		}
+		v.StateText = StateText(m.Dir, m.Kind, m.State, peer)
+		if m.Dir == "in" && m.Kind == KindTask {
+			v.Proposal, _ = l.a.ProposalOf(m.ID)
+		}
+		if m.Dir == "in" && (m.State == "running" || m.State == "cancel_requested") && m.Detail != "" {
+			v.StateText = m.Detail
+		}
+		switch Next(m.Dir, m.Kind, m.State, peer, replied[m.ID]) {
 		case "you":
 			v.Next = "Needs you"
 		case "your responder":
 			v.Next = "Your responder is on it"
 		case "":
 		default:
-			v.Next = "Waiting on " + c.Peer
+			v.Next = "Waiting on " + peer
 		}
 		t.Messages = append(t.Messages, v)
 	}
@@ -367,34 +436,16 @@ func (l *Live) Send(d Draft) (Sent, error) {
 	defer cleanup() // SendMessage encrypted them into the spool, or refused: either way the staged copies go
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	ctx = client.WithQueuedSend(ctx, d.ID)
 	target, err := l.namedSendTarget(ctx, d)
 	if err != nil {
 		return Sent{}, err
 	}
-	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Kind: d.Kind, Named: files, Target: target, ReplyReceiver: receiver})
+	res, err := l.a.SendMessage(ctx, client.Outgoing{To: d.To, Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote, Kind: d.Kind, Named: files, Target: target, ReplyReceiver: receiver})
 	if err != nil {
 		return Sent{}, Refuse(sentence(err))
 	}
-	l.awaitReceipt(res)
 	return Sent{ID: res.ID, State: res.State, Path: res.Path, Detail: res.Detail}, nil
-}
-
-// receiptWait is how long a send from the page waits for the recipient's
-// receipt, as agentnet send does by default.
-const receiptWait = 5 * time.Second
-
-// awaitReceipt waits once, in the background, for the receipt of a message
-// the Hub holds. A delivery is stored and so pushed to the page; the page
-// does not wait for it and nothing is asked again afterwards.
-func (l *Live) awaitReceipt(res client.SendResult) {
-	if res.Path != protocol.PathRelay || res.State != protocol.StateCustody {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), receiptWait+l.timeout)
-		defer cancel()
-		l.a.Status(ctx, res.ID, receiptWait)
-	}()
 }
 
 // Act implements Provider.
@@ -405,24 +456,32 @@ func (l *Live) Act(x Action) (string, error) {
 	note := ""
 	switch x.Do {
 	case DoReply:
+		ctx = client.WithQueuedSend(ctx, x.SendID)
 		if strings.TrimSpace(x.Body) == "" {
 			return "", Refuse("Write a reply first.")
 		}
 		var res client.SendResult
 		res, err = l.a.Reply(ctx, x.ID, x.Body)
-		l.awaitReceipt(res)
-		note = "Reply sent."
+		note = "Reply saved; sending."
+		if res.State == protocol.StateCustody || res.State == protocol.StateDelivered {
+			note = "Reply sent."
+		}
+	case DoIt:
+		_, err = l.a.ConfirmProposal(client.WithQueuedSend(ctx, x.SendID), x.ID)
+		note = "Task saved; sending to the same agent."
 	case DoAccept:
 		err = l.a.Accept(x.ID)
 		note = "Accepted. Your responder takes it from here."
 	case DoAcceptAlways:
 		var sender, fp string
 		sender, fp, err = l.a.AcceptAlways(x.ID)
-		note = fmt.Sprintf("Accepted. Later tasks from %s's key %s run without asking.", sender, shortFP(fp))
+		if protocol.ValidID(sender) {
+			note = "Accepted. Later tasks from " + l.a.PermissionLabel(sender) + "'s current and future verified devices run without asking."
+		} else {
+			note = fmt.Sprintf("Accepted. Later tasks from %s's key %s run without asking.", sender, shortFP(fp))
+		}
 	case DoDecline:
-		var res client.SendResult
-		res, err = l.a.Decline(ctx, x.ID, strings.TrimSpace(x.Reason))
-		l.awaitReceipt(res)
+		_, err = l.a.Decline(ctx, x.ID, strings.TrimSpace(x.Reason))
 		note = "Declined."
 	case DoResolve:
 		err = l.a.Resolve(x.ID)
@@ -432,10 +491,10 @@ func (l *Live) Act(x Action) (string, error) {
 		note = "Stopping your responder."
 	case DoApprove:
 		err = l.a.Approve(x.ID)
-		note = x.ID + "'s future questions are answered automatically."
+		note = l.a.PermissionLabel(x.ID) + "'s future questions are answered automatically."
 	case DoUnapprove:
 		err = l.a.Unapprove(x.ID)
-		note = x.ID + "'s questions wait for you again."
+		note = l.a.PermissionLabel(x.ID) + "'s questions wait for you again."
 	case DoTrust:
 		if x.Key == "" {
 			return "", Refuse("Compare the fingerprint first: trust names the key you compared.")
@@ -460,7 +519,19 @@ func (l *Live) Act(x Action) (string, error) {
 
 // sentence turns a client error into text for the person. Client errors are
 // written for people already; this only makes the first letter upper case.
-func sentence(err error) string { return capitalize(err.Error()) }
+func sentence(err error) string {
+	var update *client.NeedsUpdateError
+	if errors.As(err, &update) {
+		return "This person's app needs an update first."
+	}
+	return capitalize(strings.TrimPrefix(err.Error(), "cannot be retried: "))
+}
+func shownSent(sent, arrival time.Time) time.Time {
+	if sent.Unix() <= 0 || sent.Unix() >= maxClaimedUnix || sent.After(arrival) {
+		return arrival
+	}
+	return sent
+}
 
 func capitalize(s string) string {
 	if s == "" {
@@ -474,4 +545,21 @@ func shortFP(fp string) string {
 		return fp[:23] + "…"
 	}
 	return fp
+}
+
+// Preserve machine-readable capability errors internally; the page uses names.
+func (l *Live) updateSentence(err error) string {
+	var update *client.NeedsUpdateError
+	if errors.As(err, &update) {
+		if people, e := l.a.KnownPersons(); e == nil {
+			for _, p := range people {
+				for _, d := range p.Devices {
+					if d.Address == update.Address {
+						return p.Label + "’s app needs an update first."
+					}
+				}
+			}
+		}
+	}
+	return sentence(err)
 }

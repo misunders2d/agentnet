@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // Fixture is the demo Provider: invented peers and threads held in memory.
@@ -30,6 +33,10 @@ type Fixture struct {
 	history  []HistoryCopy
 	listed   []PersonView // invented people the demo server lists
 	dms      []*fxDM
+
+	workspace WorkspaceView // the demo workspace's own name and server
+	agents    []string      // devices that say they run an agent (overview.agent_devices)
+	invites   *fxInvites    // Invitations (fixtureapp.go)
 }
 
 type fxDM struct {
@@ -61,7 +68,7 @@ var thisComputer = Author{Label: "This computer",
 // NewFixture returns the demo data, with times relative to now.
 func NewFixture(now func() time.Time) *Fixture {
 	f := &Fixture{now: now, changed: make(chan struct{}), peers: map[string]*fxPeer{}, role: RoleUnset,
-		me: Me{Address: "alice/laptop", Fingerprint: "SHA256:5e1d 9a07 c3b2 11f4", Responder: "claude", ResponderDir: "~/work/api"}}
+		me: Me{Address: "alice/laptop", Fingerprint: "SHA256:5e1d 9a07 c3b2 11f4", Responder: "claude", ResponderDir: "~/work/api", Agent: true}}
 	t := now()
 	ago := func(min int) time.Time { return t.Add(-time.Duration(min) * time.Minute) }
 	f.peers["bob/desk"] = &fxPeer{presence: "Their computer is connected", approved: true, key: PeerKey{Pinned: "SHA256:0b7c 44e1 92aa 6d30"}}
@@ -108,7 +115,7 @@ func NewFixture(now func() time.Time) *Fixture {
 	cert := f.thread("dave/srv")
 	f.add(cert, &Message{Dir: "in", Kind: KindQuestion, At: ago(25), State: "held", Unread: true,
 		Body: "Is it safe to rotate the Hub TLS certificate tonight, or is anything still pinned to the old one?"})
-	f.quar = append(f.quar, QuarantineItem{ID: f.id(), Peer: "dave/srv", At: ago(300),
+	f.quar = append(f.quar, QuarantineItem{ID: f.id(), Peer: "dave/srv", At: ago(300), Code: HoldUnverified,
 		Reason: "It did not verify, so its content is not shown."})
 
 	// Announcements bob's agent sent without linking them: each is its own
@@ -150,6 +157,36 @@ func NewFixture(now func() time.Time) *Fixture {
 	erin := f.thread("erin/lab")
 	f.add(erin, &Message{Dir: "in", Kind: KindMessage, At: ago(2880),
 		Body: "I'm reinstalling this machine next week, so expect a new key from me."})
+
+	// Devices are not agents (MEL-529): this person's own phone runs none
+	// (what is typed there is this person's, and its questions come to
+	// this computer's agent), their Zenbook runs one, Vitalii's phone is
+	// Vitalii, and Bohdan's browser runs none. A second "Bob" shares a
+	// name with the first, so both show a short key.
+	f.peers["alice/pixel"] = &fxPeer{presence: "Their computer is connected", approved: true, key: PeerKey{Pinned: "SHA256:19c7 7bce 0a51 d2e4"}}
+	f.peers["alice/zenbook"] = &fxPeer{presence: "Their computer is connected", key: PeerKey{Pinned: "SHA256:7f02 c1a9 e4d0 58b3"}}
+	f.peers["vitalii/phone"] = &fxPeer{presence: "Their computer is connected", key: PeerKey{Pinned: "SHA256:b3e9 0c47 15fa 6d22"}}
+	pixel := f.thread("alice/pixel")
+	pq := f.add(pixel, &Message{Dir: "in", Kind: KindQuestion, At: ago(18), State: "answered", Responder: "claude",
+		Body: "Did the nightly backup finish?"})
+	f.add(pixel, &Message{Dir: "out", Kind: KindAnswer, At: ago(17), ReplyTo: pq.ID, Status: "done", State: "delivered", Path: "direct",
+		Body: "Yes: it finished at 03:12 and the archive verified."})
+	f.add(pixel, &Message{Dir: "in", Kind: KindMessage, At: ago(16), Body: "Thanks, heading out now."})
+	zen := f.thread("alice/zenbook")
+	zq := f.add(zen, &Message{Dir: "out", Kind: KindQuestion, At: ago(90), State: "delivered", Path: "direct",
+		Body: "Is the local test database still seeded?"})
+	f.add(zen, &Message{Dir: "in", Kind: KindAnswer, At: ago(89), ReplyTo: zq.ID, Status: "done", Body: "Yes, seeded this morning."})
+	vit := f.thread("vitalii/phone")
+	f.add(vit, &Message{Dir: "in", Kind: KindMessage, At: ago(50), Body: "Are we still on for the review at 4?"})
+	f.listed[0].Devices = []DeviceView{{Address: "vitalii/laptop", Name: "laptop", Fingerprint: "SHA256:d1a0 5e33 9b07 c2f8"},
+		{Address: "vitalii/phone", Name: "phone", Fingerprint: "SHA256:b3e9 0c47 15fa 6d22"}}
+	f.listed = append(f.listed,
+		PersonView{Label: "Bohdan", Address: "bohdan/windows-laptop", State: PersonListed, Devices: []DeviceView{
+			{Address: "bohdan/windows-laptop", Name: "windows-laptop", Fingerprint: "SHA256:6a1e 33f0 c9d2 8b47"},
+			{Address: "bohdan/laptop-browser", Name: "laptop-browser", Fingerprint: "SHA256:e28c 71b5 04da 9f16"}}},
+		PersonView{Label: "Bob", Address: "robert/desk", State: PersonListed, Fingerprint: "SHA256:4c90 e2b1 7d35 a608"})
+	f.agents = []string{"alice/zenbook", "bob/desk", "bohdan/windows-laptop", "carol/ci", "dave/srv", "erin/lab", "hub/ops"}
+	f.workspace = WorkspaceView{Name: "Mellanni", Server: "agentnet.example"}
 	return f
 }
 
@@ -235,6 +272,8 @@ func (f *Fixture) Overview() (Overview, error) {
 	defer f.mu.Unlock()
 	o := Overview{Demo: true, Me: f.me, Seq: f.seq, Version: "demo", Directory: f.directory(), Threads: []ThreadSummary{}, Review: []ReviewItem{},
 		NeedsYou: []ConvItem{}, Held: []ConvItem{}, Quarantine: append([]QuarantineItem{}, f.quar...)}
+	ws := f.workspace
+	o.Workspace, o.AgentDevices = &ws, append([]string{}, f.agents...)
 	for _, t := range f.threads {
 		first, last := t.msgs[0], t.msgs[len(t.msgs)-1]
 		s := ThreadSummary{ID: first.ID, Peer: t.peer, Title: excerpt(first.Body), Last: excerpt(last.Body), LastAt: last.At,
@@ -384,7 +423,10 @@ func (f *Fixture) Send(d Draft) (Sent, error) {
 	} else {
 		f.threads = append(f.threads, t)
 	}
-	m := f.add(t, &Message{Dir: "out", Kind: kind, At: f.now(), State: f.outState(d.To), Path: "relay", Body: body, ReplyTo: d.ReplyTo})
+	m := f.add(t, &Message{Dir: "out", Kind: kind, At: f.now(), State: f.outState(d.To), Path: "relay", Body: body, ReplyTo: d.ReplyTo, Quote: d.Quote})
+	if d.ID != "" {
+		m.ID = d.ID
+	}
 	f.bump()
 	return Sent{ID: m.ID, State: m.State, Path: m.Path}, nil
 }
@@ -448,7 +490,10 @@ func (f *Fixture) Act(a Action) (string, error) {
 			return "", Refuse("Write a reply first.")
 		}
 		m.State, m.Detail = "manual", ""
-		f.add(t, &Message{Dir: "out", Kind: replyKind, At: f.now(), ReplyTo: m.ID, Status: "done", State: f.outState(t.peer), Path: "relay", Body: body})
+		reply := f.add(t, &Message{Dir: "out", Kind: replyKind, At: f.now(), ReplyTo: m.ID, Status: "done", State: f.outState(t.peer), Path: "relay", Body: body})
+		if a.SendID != "" {
+			reply.ID = a.SendID
+		}
 	case DoAccept, DoAcceptAlways:
 		m.State, m.Detail, m.Responder = "running", "", f.me.Responder
 		if a.Do == DoAcceptAlways {
@@ -538,7 +583,9 @@ func (f *Fixture) CreatePerson(label string) (PersonView, string, error) {
 		return PersonView{}, "", Refuse("This installation is a service: it has no person.")
 	}
 	f.person = &PersonView{Person: "demo-person-me", Label: label, Address: f.me.Address, State: PersonSelf, Published: true,
-		Devices: []DeviceView{{Address: f.me.Address, Name: "laptop", Fingerprint: f.me.Fingerprint, This: true}}}
+		Devices: []DeviceView{{Address: f.me.Address, Name: "laptop", Fingerprint: f.me.Fingerprint, This: true},
+			{Address: "alice/pixel", Name: "pixel", Fingerprint: f.peers["alice/pixel"].key.Pinned},
+			{Address: "alice/zenbook", Name: "zenbook", Fingerprint: f.peers["alice/zenbook"].key.Pinned}}}
 	f.role = RolePerson
 	f.bump()
 	return *f.person, "Your person is set up (demo: nothing leaves this page).", nil
@@ -596,11 +643,11 @@ func (f *Fixture) SendDM(x DMDraft) (Sent, error) {
 	for _, d := range f.dms {
 		if d.id == x.Conv {
 			f.nextID++
-			m := DMMessage{ID: fmt.Sprintf("dmm%04d", f.nextID), Dir: "out", From: f.me.Address, Kind: KindMessage, Body: body,
-				ReplyTo: x.ReplyTo, Origin: "ui", State: "delivered", StateText: DMStateText("out", KindMessage, "delivered", d.peer.Address, ""), At: f.now()}
+			m := DMMessage{ID: fmt.Sprintf("dmm%04d", f.nextID), LID: x.ID, Dir: "out", From: f.me.Address, Kind: KindMessage, Body: body,
+				ReplyTo: x.ReplyTo, Quote: x.Quote, Origin: "ui", State: "delivered", StateText: DMStateText("out", KindMessage, "delivered", d.peer.Address, ""), At: f.now()}
 			d.msgs = append(d.msgs, m)
 			f.bump()
-			return Sent{ID: m.ID, State: m.State}, nil
+			return Sent{ID: m.ID, LID: m.LID, State: m.State}, nil
 		}
 	}
 	return Sent{}, NotFound("no conversation with that id")
@@ -632,7 +679,8 @@ func (f *Fixture) NewDeviceLink() (DeviceLink, error) {
 			RequestedAt: now, Expires: now.Add(10 * time.Minute), State: "pending"})
 		f.bump()
 	}
-	return DeviceLink{URL: "https://agentnet.example/#agentnet-link-v2:demo-only-not-a-real-link", Expires: now.Add(10 * time.Minute)}, nil
+	return DeviceLink{URL: "https://agentnet.example/#agentnet-link-v2:demo-only-not-a-real-link", Expires: now.Add(10 * time.Minute),
+		AppURL: "agentnet://open#agentnet-link-v2:demo-only-not-a-real-link"}, nil
 }
 
 // DecideLink implements Identity: an approved device joins the person and
@@ -675,4 +723,70 @@ func (f *Fixture) RemoveDevice(address string) (string, error) {
 		return d.Name + " is no longer one of your devices.", nil
 	}
 	return "", Refuse("That is not one of your devices.")
+}
+
+// WorkspaceInfo implements WorkspaceNamer: the demo device may rename the
+// demo workspace (nothing leaves this page).
+func (f *Fixture) WorkspaceInfo(context.Context) (WorkspaceInfoView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return WorkspaceInfoView{WorkspaceView: f.workspace, CanRename: true}, nil
+}
+
+// SetWorkspaceName implements WorkspaceNamer.
+func (f *Fixture) SetWorkspaceName(ctx context.Context, name string) (WorkspaceInfoView, error) {
+	if name != "" {
+		var ok bool
+		if name, ok = protocol.ValidWorkspaceName(name); !ok {
+			return WorkspaceInfoView{}, Refuse(renameInvalid)
+		}
+	}
+	f.mu.Lock()
+	f.workspace.Name = name
+	f.bump()
+	f.mu.Unlock()
+	return f.WorkspaceInfo(ctx)
+}
+
+// HubWorkspaceName is the demo workspace's own name.
+func (f *Fixture) HubWorkspaceName() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.workspace.Name
+}
+
+// Approvals exposes the demo's existing in-memory device decisions through the
+// same host contract as the daemon. It never reads real grants or runs work.
+func (f *Fixture) Approvals() (ApprovalsView, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v := ApprovalsView{Questions: []QuestionApproval{}, Tasks: []TaskGrantView{}, Participations: []ParticipationGrant{}}
+	var addresses []string
+	for address := range f.peers {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	for _, address := range addresses {
+		p := f.peers[address]
+		if p.approved {
+			v.Questions = append(v.Questions, QuestionApproval{Address: address})
+		}
+		if p.taskGrant != "" {
+			v.Tasks = append(v.Tasks, TaskGrantView{Address: address, Fingerprint: p.key.Pinned, Status: p.taskGrant})
+		}
+	}
+	return v, nil
+}
+func (f *Fixture) RevokeApproval(r ApprovalRevoke) (string, error) {
+	if r.Person != "" || r.PID != "" {
+		return "", Refuse("Choose an exact demo device grant.")
+	}
+	switch r.Kind {
+	case "question":
+		return f.Act(Action{Do: DoUnapprove, ID: r.Address})
+	case "task":
+		return f.Act(Action{Do: DoRevokeTasks, ID: r.Address})
+	default:
+		return "", Refuse("Choose an exact demo device grant.")
+	}
 }

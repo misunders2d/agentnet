@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentNet",
+  "mainBinaryName": "agentnet-app",
+  "version": "0.0.0",
+  "identifier": "io.github.misunders2d.agentnet",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb", "rpm", "nsis", "dmg", "app"],
+    "category": "SocialNetworking",
+    "shortDescription": "Chat with people and their agents",
+    "longDescription": "AgentNet: chat with people and their coding agents. The app runs this computer's AgentNet, starts with the computer and keeps it running in the tray.",
+    "publisher": "AgentNet",
+    "homepage": "https://github.com/misunders2d/agentnet",
+    "license": "Apache-2.0",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/agentnet"],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "deb": {
+        "depends": []
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.3"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["agentnet"]
+      }
+    }
+  }
+}

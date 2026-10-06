@@ -20,8 +20,9 @@ import { Tag } from "../ui/Tag";
 import { ScreenTitle } from "./Approvals.title";
 import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { Reports } from "./Approvals.reports";
-import { Body, Card, Landing, kindTag, useLand, useOpen } from "./Approvals.parts";
+import { Body, Card, OpenCard, Landing, kindTag, useLand, useOpen } from "./Approvals.parts";
 import { ConvRow, SelfConsentRow } from "./Approvals.conv";
+import { HeldBack } from "./Approvals.held";
 import { capital, decidable, inSentence, isSelfConsent, nameOf, peerAgent, whyWords } from "./Approvals.words";
 
 export { ApprovalCard } from "./Approvals.card";
@@ -112,8 +113,9 @@ export function OksView() {
   }
   const held = [...(o?.held || [])].sort(newestFirst);
   const joined = (o?.review || []).filter(isSelfConsent).sort(newestFirst);
-  const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r));
-  const keys = [...items.map((i) => i.key), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id)];
+  const security = (o?.review || []).filter((r) => r.reason === "device_admin").sort(newestFirst);
+  const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r) && r.reason !== "device_admin");
+  const keys = [...items.map((i) => i.key), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
   const { root, title, land } = useLanding(keys.join("\n"));
 
   if (!o) return loadError ? <Failed text={loadError} retry={() => store.retryNow()} /> : <Loading />;
@@ -149,17 +151,33 @@ export function OksView() {
           </ul>
         </section>
       )}
-      {joined.length > 0 && (
+      {(joined.length > 0 || security.length > 0) && (
         <section className="px-4 pt-6" aria-labelledby="oks-notices">
           <h2 id="oks-notices" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Just so you know</h2>
           <ul className="flex flex-col gap-3 pt-3">
+            {security.map((r) => <Listed key={"a:" + r.id} k={"a:" + r.id} land={land}><DeviceAdminRow r={r} /></Listed>)}
             {joined.map((r) => <Listed key={"s:" + r.id} k={"s:" + r.id} land={land}><SelfConsentRow r={r} o={o} names={names} /></Listed>)}
           </ul>
         </section>
       )}
       {notices.length > 0 && <Reports notices={notices} o={o} />}
+      <HeldBack o={o} />
     </div>
   );
+}
+
+function DeviceAdminRow({ r }: { r: T.ReviewItem }) {
+  const store = useApp(), land = useLand();
+  const [busy, setBusy] = useState(false);
+  return <article className="rounded-2xl border-[1.5px] border-ink/15 bg-sunken p-3.5">
+    <Body at={r.at} title={r.why}>
+      <Button variant="ghost" size="sm" disabled={busy} onClick={async () => {
+        setBusy(true);
+        await store.run(api => api.act({ do: "resolve", id: r.id }), "Notice hidden on this device. Company settings access is unchanged.");
+        setBusy(false); land();
+      }}>Hide notice</Button>
+    </Body>
+  </article>;
 }
 
 // ---- rows ---------------------------------------------------------------------
@@ -171,10 +189,9 @@ function ReviewRow({ r, o, names }: { r: T.ReviewItem; o: T.Overview; names: Rec
   const title = r.kind === "task" ? from + " gave " + inSentence(mine) + " a task" : r.kind === "question" ? from + " asked " + inSentence(mine) + " something"
     : mine + " needs you about " + from + "’s message";
   return (
-    <Card onOpen={() => go("thread", r.id, r.id)} current={isOpen(r.id)} label={title + ". Review it."}>
-      <AgentAvatar seed={r.peer} size={40} mood="waiting" />
-      <Body tag={kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} meta={whyWords(r.why, r.peer, o)} />
-    </Card>
+    <OpenCard onOpen={() => go("thread", r.id, r.id)} current={isOpen(r.id)} label={title + ". Review it."} face={<AgentAvatar seed={r.peer} size={40} mood="waiting" />} detail={<details><summary className="cursor-pointer font-semibold">Read the whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{whyWords(r.why, r.peer, o)}</p></details>}>
+      <Body tag={kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} />
+    </OpenCard>
   );
 }
 
@@ -219,7 +236,7 @@ function DeviceRow({ l }: { l: T.LinkRequest }) {
     <Card>
       <span className="grid size-10 shrink-0 place-items-center rounded-full bg-guest-bg text-guest-ink stroke" aria-hidden="true"><IconDeviceMobile size={20} /></span>
       <Body tag={<Tag tone="muted">New device</Tag>} at={l.requested_at} title={<>A new device, “{l.name}”, wants to join as you</>}
-        meta={"Approve it only if you just opened your link on it yourself. The request ends " + when(l.expires) + "."}>
+        meta={"Approve it only if you just signed in with Google or opened your device link on it yourself. The request ends " + when(l.expires) + "."}>
         <div className="mt-3 flex flex-wrap gap-2">
           <Button variant="act" size="sm" disabled={busy} onClick={() => setSure(true)}>Approve device</Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => decide(false)}>Refuse</Button>

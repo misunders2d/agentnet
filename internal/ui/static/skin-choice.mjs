@@ -24,10 +24,10 @@ export const mark = (skin) => Object.freeze({ ...skin, builtin: !skin.local && B
  *  package ("default", or "classic", the bundled app) opens Comic and is
  *  rewritten once (save is the value to store, or null); ?skin=default
  *  stays a name for Comic. An unknown id opens Comic. */
-export function choose(skins, { query = null, saved = null } = {}) {
+export function choose(skins, { query = null, saved = null, packageChoice = false } = {}) {
   const home = skins.find((s) => s.id === HOME) || null;
   let save = null;
-  if (saved === "default" || saved === "classic") saved = save = HOME;
+  if (saved === "default" || saved === "classic" && !packageChoice) saved = save = HOME;
   let requested = query || saved || HOME;
   if (requested === "default") requested = HOME;
   return { selected: skins.find((s) => s.id === requested) || home, home, save };

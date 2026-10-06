@@ -62,7 +62,11 @@ type Overview struct {
 	ReplyReceivers   bool                  `json:"reply_receivers"` // native local continuation selection/read-only state
 	ReplySessions    bool                  `json:"reply_sessions"`  // safe native registration catalog, not process liveness
 	Demo             bool                  `json:"demo"`
-	Me               Me                    `json:"me"`
+	// App says the page is the AgentNet app's window (cmd/agentnet app.go):
+	// the app updates as a whole, and the page offers its new version
+	// rather than a terminal command.
+	App bool `json:"app,omitempty"`
+	Me  Me   `json:"me"`
 	// Threads are the device threads, each with its topic state. A page
 	// that lists topics itself asks GET /api/overview?topics=1 and gets
 	// them without archived topics: those are counted per peer in Topics
@@ -107,6 +111,35 @@ type Overview struct {
 	Link    *LinkState    `json:"link,omitempty"`
 	Links   []LinkRequest `json:"links,omitempty"`
 	History []HistoryCopy `json:"history,omitempty"`
+
+	// The workspace as people see it (MEL-524): the name its admin set and
+	// the relay's host name, the fallback when none is set.
+	Workspace *WorkspaceView `json:"workspace,omitempty"`
+	// AgentDevices are the other devices that, as last listed, say they run
+	// an agent (MEL-529): the only "runs an agent" signal for skins, kept
+	// offline. A hint for display and offers, never authority.
+	AgentDevices []string `json:"agent_devices"`
+}
+
+// WorkspaceView is the workspace's own name ("" when its admin set none)
+// and its relay's host name.
+type WorkspaceView struct {
+	Name   string `json:"name"`
+	Server string `json:"server"`
+}
+
+// WorkspaceInfoView answers GET /api/workspace: the workspace view and
+// whether this device may rename it for everyone (it is a Hub admin, or a
+// device of a person who is; unknown counts as no).
+type WorkspaceInfoView struct {
+	WorkspaceView
+	CanRename bool `json:"can_rename"`
+}
+
+// WorkspaceNameChange is POST /api/workspace/name: the name for everyone;
+// an empty name clears it.
+type WorkspaceNameChange struct {
+	Name string `json:"name"`
 }
 
 // Roles an installation has (Overview.Role).
@@ -138,14 +171,114 @@ type Identity interface {
 type DeviceLink struct {
 	URL     string    `json:"url"`
 	Expires time.Time `json:"expires"`
+	// AppURL opens the same link in the AgentNet app on this computer
+	// (agentnet://open#code): a browser hands the link to the app it
+	// offers to install, so the app joins as this person.
+	AppURL string `json:"app_url,omitempty"`
 }
+
+// Invitations (MEL-533): an admin's device makes one invitation link per
+// new person, sees the unused ones and withdraws them. Live and the
+// browser engine serve the same routes (/api/invite, /api/invites,
+// /api/invite/revoke).
+type Invitations interface {
+	// Invite makes an invitation for a new person.
+	Invite(r InviteRequest) (InviteView, error)
+	// Invites says whether this device may invite people and lists the
+	// unused invitations (admins only).
+	Invites() (InvitesView, error)
+	// RevokeInvite withdraws an unused invitation by its id.
+	RevokeInvite(id string) error
+}
+
+// InviteRequest is the Invite people form: the person's name, whether they
+// become an admin, and how many days the link works (1, 7 or 30).
+type InviteRequest struct {
+	Name  string `json:"name"`
+	Admin bool   `json:"admin"`
+	Days  int    `json:"days"`
+}
+
+// InviteDays are the lifetimes an invitation can be given, in days.
+var InviteDays = []int{1, 7, 30}
+
+// InviteView is an invitation made: the link to share, the label the
+// person gets, when it stops working and a message ready to send.
+type InviteView struct {
+	Link    string    `json:"link"`
+	Label   string    `json:"label"`
+	Expires time.Time `json:"expires"`
+	Message string    `json:"message"`
+}
+
+// InvitesView answers GET /api/invites.
+type InvitesView struct {
+	CanInvite bool                `json:"can_invite"`
+	Invites   []PendingInviteView `json:"invites"`
+}
+
+// PendingInviteView is one unused invitation.
+type PendingInviteView struct {
+	ID      string    `json:"id"`
+	Name    string    `json:"name"`
+	Label   string    `json:"label"`
+	Admin   bool      `json:"admin"`
+	By      string    `json:"by"`
+	Created time.Time `json:"created,omitzero"` // zero (left out) for invitations made before the relay kept it
+	Expires time.Time `json:"expires"`
+}
+
+// GetAppView answers GET /api/get-app: where to download the AgentNet app
+// (static/getapp.json, one table for Go and the page) for this program's
+// version, and the platform this page runs on, if known.
+type GetAppView struct {
+	Version   string           `json:"version"`
+	Detected  string           `json:"detected,omitempty"`
+	Platforms []GetAppPlatform `json:"platforms"`
+}
+
+// GetAppPlatform is one download of the app.
+type GetAppPlatform struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// Folders is implemented where the page runs on the computer whose folders
+// it lists (the daemon, never a browser): the folder picker of Connect an
+// agent. Read-only.
+type Folders interface {
+	Folders(path string) (FoldersView, error)
+}
+
+// FoldersView is one folder's subfolders (hidden ones left out, at most
+// MaxFolders), with its parent and the person's home; Roots are the
+// drives on Windows.
+type FoldersView struct {
+	Path      string       `json:"path"`
+	Parent    string       `json:"parent,omitempty"`
+	Home      string       `json:"home"`
+	Roots     []string     `json:"roots,omitempty"`
+	Dirs      []FolderView `json:"dirs"`
+	Truncated bool         `json:"truncated,omitempty"`
+}
+
+// FolderView is one subfolder.
+type FolderView struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// MaxFolders bounds the subfolders one listing shows.
+const MaxFolders = 500
 
 // DeviceView is one device of a person.
 type DeviceView struct {
 	Address     string `json:"address"`
 	Name        string `json:"name"` // the device's own name, as its address shows it
 	Fingerprint string `json:"fingerprint"`
-	This        bool   `json:"this,omitempty"` // this installation
+	This        bool   `json:"this,omitempty"`  // this installation
+	Human       bool   `json:"human,omitempty"` // may enroll devices; false for an agent host
 }
 
 // LinkRequest is a new device asking to join this person, until decided.
@@ -201,6 +334,9 @@ const (
 type PersonView struct {
 	Person      string `json:"person,omitempty"`
 	Label       string `json:"label"`
+	Email       string `json:"email,omitempty"`
+	Picture     string `json:"picture,omitempty"`
+	PictureURL  string `json:"picture_url,omitempty"`
 	Address     string `json:"address"` // the one device the person speaks through
 	Fingerprint string `json:"fingerprint,omitempty"`
 	State       string `json:"state"`
@@ -269,6 +405,7 @@ type LastEvent struct {
 
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
+	Topics          []ThreadSummary   `json:"topics,omitempty"`
 	Kind            string            `json:"kind,omitempty"`
 	Title           string            `json:"title,omitempty"`
 	Members         []GroupMemberView `json:"members,omitempty"`
@@ -286,27 +423,31 @@ type DMThread struct {
 
 // DMMessage is one message of a DM.
 type DMMessage struct {
-	GroupRef    *protocol.GroupHistoryRef `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
-	ExcerptPID  string                    `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
-	ClaimedKey  string                    `json:"claimed_key,omitempty"` // forwarded authorship, never verified here
-	Target      *envelope.Target          `json:"target,omitempty"`
-	AgentID     string                    `json:"agent_id,omitempty"`
-	ID          string                    `json:"id"`
-	LID         string                    `json:"lid,omitempty"`
-	Dir         string                    `json:"dir"` // in or out
-	From        string                    `json:"from"`
-	Kind        string                    `json:"kind"`
-	Body        string                    `json:"body"`
-	ReplyTo     string                    `json:"reply_to,omitempty"`
-	Origin      string                    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
-	State       string                    `json:"state"`
-	StateText   string                    `json:"state_text"`
-	Detail      string                    `json:"detail,omitempty"`
-	At          time.Time                 `json:"at"`
-	Unread      bool                      `json:"unread,omitempty"`
-	Replica     bool                      `json:"replica,omitempty"`
-	PID         string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
-	Attachments []FileView                `json:"attachments,omitempty"`
+	Status         string                    `json:"status,omitempty"`
+	Topic          string                    `json:"topic,omitempty"`
+	TopicEvent     *envelope.TopicEvent      `json:"topic_event,omitempty"`
+	AgentAuthorPID string                    `json:"agent_author_pid,omitempty"`
+	GroupRef       *protocol.GroupHistoryRef `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
+	ExcerptPID     string                    `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
+	ClaimedKey     string                    `json:"claimed_key,omitempty"` // forwarded authorship, never verified here
+	Target         *envelope.Target          `json:"target,omitempty"`
+	AgentID        string                    `json:"agent_id,omitempty"`
+	ID             string                    `json:"id"`
+	LID            string                    `json:"lid,omitempty"`
+	Dir            string                    `json:"dir"` // in or out
+	From           string                    `json:"from"`
+	Kind           string                    `json:"kind"`
+	Body           string                    `json:"body"`
+	ReplyTo        string                    `json:"reply_to,omitempty"`
+	Origin         string                    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
+	State          string                    `json:"state"`
+	StateText      string                    `json:"state_text"`
+	Detail         string                    `json:"detail,omitempty"`
+	At             time.Time                 `json:"at"`
+	Unread         bool                      `json:"unread,omitempty"`
+	Replica        bool                      `json:"replica,omitempty"`
+	PID            string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
+	Attachments    []FileView                `json:"attachments,omitempty"`
 
 	// VerifiedAgent: an agent's turn as sent, by its participation's exact
 	// host key (client.ConvMessage.VerifiedAgent). UIs should label an
@@ -330,13 +471,17 @@ type DMMessage struct {
 	Exec       *client.ExecView `json:"exec,omitempty"` // a request: where its executing device last said it stands
 	// A request to this device's agent: what its person can do with it
 	// here (accept, cancel, resolve), and what the run left to say.
-	Actions   []string `json:"actions,omitempty"`
-	JobDetail string   `json:"job_detail,omitempty"`
+	Actions   []string             `json:"actions,omitempty"`
+	JobDetail string               `json:"job_detail,omitempty"`
+	Proposal  *client.ProposalView `json:"proposal,omitempty"`
 	// A participation record's type (invite, accept, decline, dismiss or
 	// scope) and its author (their person's label as known here, or their
 	// device's address), plainly, so a page never parses Event.
-	EventType string `json:"event_type,omitempty"`
-	EventBy   string `json:"event_by,omitempty"`
+	EventType string    `json:"event_type,omitempty"`
+	EventBy   string    `json:"event_by,omitempty"`
+	Quote     string    `json:"quote,omitempty"`
+	SentAt    time.Time `json:"sent_at,omitzero"`
+	Delivery  string    `json:"delivery,omitempty"`
 }
 
 // AgentActions are the decisions this device's person can take on a
@@ -374,6 +519,8 @@ type FileLimits struct {
 
 // CopyView is one device's copy of a message you sent.
 type CopyView struct {
+	Own    bool   `json:"own,omitempty"`
+	Person string `json:"person,omitempty"`
 	To     string `json:"to"`
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
@@ -568,6 +715,8 @@ type AgentInvite struct {
 
 // AgentAsk is a question (or task) for an active participation's agent.
 type AgentAsk struct {
+	Topic         string                  `json:"topic,omitempty"`
+	ID            string                  `json:"id,omitempty"` // optional local send correlation (logical id in a conversation)
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	PID           string                  `json:"pid"`
 	Kind          string                  `json:"kind"`
@@ -579,6 +728,9 @@ type AgentAsk struct {
 // installation runs it, who invited it, what it may be shown and who may
 // give it tasks. The host's person decides; either person can end it.
 type AgentView struct {
+	PIDs       []string     `json:"pids,omitempty"`
+	Member     bool         `json:"member,omitempty"`
+	Inviters   []PersonView `json:"inviters,omitempty"`
 	External   bool         `json:"external,omitempty"` // exact invited host outside the DM member persons
 	AgentID    string       `json:"agent_id,omitempty"`
 	PID        string       `json:"pid"`
@@ -602,22 +754,36 @@ type AgentView struct {
 // only: a DM's question or task would run nowhere yet. Files are the ids of
 // files the page handed over (Files.StageFile).
 type DMDraft struct {
+	Topic         string                  `json:"topic,omitempty"`
+	ID            string                  `json:"id,omitempty"`  // optional local send correlation (logical id in a conversation)
 	PID           string                  `json:"pid,omitempty"` // exact human author participation; not a receiver/executor
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	Conv          string                  `json:"conv"`
 	Body          string                  `json:"body"`
 	ReplyTo       string                  `json:"reply_to,omitempty"`
 	Files         []string                `json:"files,omitempty"`
+	Quote         string                  `json:"quote,omitempty"`
 }
 
 // DMStateText is what the page says about a DM message's state.
 func DMStateText(dir, kind, state, peer, detail string) string {
 	if dir == "out" {
 		if state == "waiting" {
-			if detail == "" {
-				detail = peer + " cannot read conversations now"
+			switch {
+			case strings.HasPrefix(detail, client.WaitPeerUpdate):
+				if peer == "You" || peer == "your other device" {
+					return "Your other device needs to update AgentNet"
+				}
+				return "Waiting for " + peer + " to update AgentNet"
+			case strings.HasPrefix(detail, client.WaitServerUpdate):
+				return "Your server needs an update before this can be sent"
+			case strings.HasPrefix(detail, client.WaitServerUnavailable):
+				return "Cannot reach your server; retries automatically"
+			case detail != "":
+				return "Kept here, not sent yet: " + detail
+			default:
+				return "Kept here, not sent yet"
 			}
-			return "Kept here, not sent yet: " + detail
 		}
 		return StateText("out", kind, state, peer)
 	}
@@ -645,10 +811,12 @@ type Me struct {
 	Fingerprint  string `json:"fingerprint"`
 	Responder    string `json:"responder"`     // harness, or "" when questions and tasks wait for the person
 	ResponderDir string `json:"responder_dir"` // where the responder runs
+	Agent        bool   `json:"agent"`         // this device runs an agent (a responder or a named agent): what it tells others
 }
 
 // ThreadSummary is one row of the thread list.
 type ThreadSummary struct {
+	Conv       string    `json:"conv,omitempty"`
 	ID         string    `json:"id"`
 	Peer       string    `json:"peer"`
 	Title      string    `json:"title"`
@@ -736,6 +904,10 @@ type ReviewItem struct {
 	// the host's answer to this device's last decision. A count-only
 	// notice has no Report and offers nothing but reading and dismissing.
 	Report *client.Report `json:"report,omitempty"`
+	// Proposal: a task that carries out an action this device's agent
+	// proposed (MEL-521): the question, the proposal and who confirmed
+	// it, for the person approving it. It grants nothing.
+	Proposal *client.ProposalView `json:"proposal,omitempty"`
 	// Reason ReasonSelfConsented (owner decision D3): a notice, not a
 	// received item, that this person's own agent AgentID ("" the default
 	// one) joined conversation Conv without their accept, invited from
@@ -750,6 +922,10 @@ type ReviewItem struct {
 // ReasonSelfConsented is ReviewItem.Reason for an own agent that joined
 // without the person's accept.
 const ReasonSelfConsented = "self_consented"
+
+// ReasonDeviceAdmin is a Hub-reported company-settings access change: a
+// local notice, never a request or permission. Resolve dismisses it here.
+const ReasonDeviceAdmin = "device_admin"
 
 // ConvItem is a conversation item waiting for the person
 // (client.ConvReview); Reason is one of client.ReviewAwaiting,
@@ -806,21 +982,48 @@ func IsReviewNotice(kind, status, replyTo string, files int) bool {
 }
 
 // QuarantineItem is a received envelope held back; its content is not shown.
+// Code says why (Hold*), so a page writes its own sentence with the
+// sender's name from its people list; Reason is the provider's own
+// sentence, a fallback that names the sender's address.
 type QuarantineItem struct {
 	ID     string    `json:"id"`
 	Peer   string    `json:"peer"`
+	Code   string    `json:"code"`
 	Reason string    `json:"reason"` // plain text
 	At     time.Time `json:"at"`
 }
 
+// Why a received message is held back (QuarantineItem.Code). The browser
+// engine gives the same codes (engine.mjs holdCode).
+const (
+	HoldKeyChanged = "key_changed"           // the sender's key changed: held until the person trusts the new one
+	HoldProof      = "proof_pending"         // the conversation or person it names cannot be checked here yet
+	HoldConflict   = "identity_conflict"     // it disagrees with the person record kept here
+	HoldDuplicate  = "conflicting_duplicate" // different content under a message already received
+	HoldUnverified = "unverified"            // it did not verify: its content is never shown
+)
+
+// holdCode is the code for a client quarantine reason; any reason not
+// named here did not verify.
+func holdCode(reason string) string {
+	switch reason {
+	case HoldKeyChanged, HoldProof, HoldConflict, HoldDuplicate:
+		return reason
+	}
+	return HoldUnverified
+}
+
 // Thread is one conversation with one peer.
 type Thread struct {
-	ID        string    `json:"id"`
-	Peer      string    `json:"peer"`
-	Key       PeerKey   `json:"key"`
-	Approved  bool      `json:"approved"`   // questions from this peer are answered automatically
-	TaskGrant string    `json:"task_grant"` // "" none, "active", or why a grant does not hold
-	Messages  []Message `json:"messages"`
+	ID               string      `json:"id"`
+	Peer             string      `json:"peer"`
+	Key              PeerKey     `json:"key"`
+	Approved         bool        `json:"approved"`                    // questions from this peer are answered automatically
+	PermissionPerson *PersonView `json:"permission_person,omitempty"` // verified current grant target
+	QuestionTarget   string      `json:"question_target,omitempty"`   // exact saved grant responsible
+	TaskTarget       string      `json:"task_target,omitempty"`
+	TaskGrant        string      `json:"task_grant"` // "" none, "active", or why a grant does not hold
+	Messages         []Message   `json:"messages"`
 	// Topic is this thread as a topic, archived or not (Topics providers).
 	Topic *ThreadSummary `json:"topic,omitempty"`
 }
@@ -868,7 +1071,10 @@ type Message struct {
 	// stands (client.ExecView): from the executing device only, never from
 	// delivery or presence; absent when it never said. Stale: that device
 	// is not connected now.
-	Exec *client.ExecView `json:"exec,omitempty"`
+	Exec     *client.ExecView     `json:"exec,omitempty"`
+	Quote    string               `json:"quote,omitempty"`
+	SentAt   time.Time            `json:"sent_at,omitzero"`
+	Proposal *client.ProposalView `json:"proposal,omitempty"`
 }
 
 // Controls is what reactions, edits and deletion did to a message, as
@@ -899,6 +1105,7 @@ type File struct {
 
 // Draft is a message to send.
 type Draft struct {
+	ID            string                  `json:"id,omitempty"` // optional local send correlation (logical id in a conversation)
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
 	AgentID       string                  `json:"agent_id,omitempty"`
 	To            string                  `json:"to"`
@@ -906,10 +1113,12 @@ type Draft struct {
 	Body          string                  `json:"body"`
 	ReplyTo       string                  `json:"reply_to,omitempty"`
 	Files         []string                `json:"files,omitempty"` // ids of files the page handed over (Files.StageFile)
+	Quote         string                  `json:"quote,omitempty"`
 }
 
 // Sent is the outcome of Send.
 type Sent struct {
+	LID    string `json:"lid,omitempty"`
 	ID     string `json:"id"`
 	State  string `json:"state"`
 	Path   string `json:"path,omitempty"`
@@ -918,6 +1127,7 @@ type Sent struct {
 
 // Action is a local decision.
 type Action struct {
+	SendID string   `json:"send_id,omitempty"`
 	Do     string   `json:"do"`
 	ID     string   `json:"id,omitempty"`     // message id, or peer address for peer actions
 	Body   string   `json:"body,omitempty"`   // reply text
@@ -928,13 +1138,14 @@ type Action struct {
 
 // Actions the page can request.
 const (
+	DoIt           = "do_it"         // confirm the stored proposal, with its original target and bytes
 	DoReply        = "reply"         // answer a received item by hand (takes it over)
 	DoAccept       = "accept"        // run a task once, let the responder answer a held question, or run again
-	DoAcceptAlways = "accept_always" // run this task and let later tasks from this exact key run
+	DoAcceptAlways = "accept_always" // run this task and grant its verified person (or exact device key)
 	DoDecline      = "decline"
 	DoResolve      = "resolve" // close a needs-human item without sending anything
 	DoCancel       = "cancel"
-	DoApprove      = "approve"   // ID = peer: answer its questions automatically
+	DoApprove      = "approve"   // ID = verified person or explicit device: answer future questions
 	DoUnapprove    = "unapprove" // ID = peer
 	DoTrust        = "trust"     // ID = peer: trust its changed key
 	DoRevokeTasks  = "revoke_tasks"
@@ -1126,7 +1337,7 @@ func ReviewWhy(kind, state, peer, detail string) string {
 		return detail
 	}
 	why := strings.TrimPrefix(StateText("in", kind, state, peer), "Needs you: ")
-	if strings.HasPrefix(why, peer) {
+	if strings.HasPrefix(why, peer) && strings.Contains(peer, "/") {
 		return why // an address keeps its case
 	}
 	return capitalize(why)

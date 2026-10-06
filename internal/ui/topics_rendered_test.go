@@ -16,7 +16,9 @@ import (
 
 // The topic bar, the open topic's menu, All topics and the end of a done
 // topic as the default messenger renders them over a real installation
-// with 48 topics with one agent, at 1800x960 and 390x844, light and dark:
+// with 48 topics with one standalone device (no agent), at 1800x960 and
+// 390x844, light and dark. MEL-529 names this peer as a device/person;
+// the conversation still has its topics and a named loading header:
 // the bar never scrolls and holds at most six chips (two topics on a
 // phone), topics that need the person and are not in the bar mark the All
 // topics chip, All topics lists, filters and searches (focus starts in its
@@ -63,6 +65,20 @@ func TestTopicsRendered(t *testing.T) {
 	for i, task := range ids[4:] {
 		if _, err := bob.Reply(ctx, task, fmt.Sprintf("%d bath sets\nall dry", 410+i+1)); err != nil {
 			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			topic, err := bob.TopicOf(task)
+			if err == nil && topic.Count == 2 {
+				if _, err = bob.MarkTopicDone(alice.Address, task, 2); err != nil {
+					t.Fatal(err)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("local manual reply was not stored")
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	var s *Server

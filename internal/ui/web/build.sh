@@ -23,6 +23,12 @@ out="$here/../static/skins/comic"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cp -R "$here/package.json" "$here/package-lock.json" "$here/tsconfig.json" "$here/src" "$here/package.mjs" "$work/"
+cp "$here/../static/pictures.mjs" "$here/../static/pictures.d.mts" "$work/src/"
+cp "$here/../static/optimistic.mjs" "$here/../static/optimistic.d.mts" "$work/src/"
+# Bundle the existing presentation-only Drive widgets; transports always
+# come from Comic's captured host. No dependency on page globals/assets.
+cp "$here/../skins/classic/src/drivespace.mjs" "$work/src/drive-space.mjs"
+cp "$here/../skins/classic/src/drivespace-setup.mjs" "$work/src/drive-setup.mjs"
 cd "$work"
 npm ci --ignore-scripts --no-audit --no-fund >/dev/null
 ./node_modules/.bin/tsc -p tsconfig.json
@@ -31,6 +37,7 @@ rm -rf "$out" && mkdir -p "$out"
 	--jsx=automatic --minify --legal-comments=eof --define:process.env.NODE_ENV='"production"' \
 	--log-level=warning --outfile="$out/entry.mjs"
 ./node_modules/.bin/tailwindcss -i src/styles.css -o "$work/tailwind.css" --minify >/dev/null 2>&1
+cat "$here/../skins/classic/src/drivespace.css" >> "$work/tailwind.css"
 # Fonts and emoji data are served from the package itself: no CDN, and
 # offline is normal. m/ holds exactly these files.
 mkdir -p "$out/m/fonts" "$out/m/emoji/en"

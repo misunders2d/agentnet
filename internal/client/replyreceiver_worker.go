@@ -294,11 +294,11 @@ func (a *Agent) receiverPrompt(ctx context.Context, j job, r *Responder) (string
 		}
 		fmt.Fprintf(&b, "\n## Existing local context %s\n%s\n", path, data)
 	}
-	rows, err := a.store.db.Query(`SELECT dir,id,body,who FROM (SELECT 'out' dir,min(id) id,body,recipient who,created_ms at FROM outbox WHERE reply_receiver=? GROUP BY coalesce(lid,id),body,recipient UNION ALL SELECT 'in',i.id,i.body,i.sender,i.received_ms FROM inbox i JOIN reply_receiver_inputs x ON x.inbox_id=i.id WHERE x.binding=?) ORDER BY at,id`, j.Receiver.ID, j.Receiver.ID)
+	rows, err := a.store.db.Query(`SELECT dir,id,body,who,key FROM (SELECT 'out' dir,min(id) id,body,recipient who,'' key,created_ms at FROM outbox WHERE reply_receiver=? GROUP BY coalesce(lid,id),body,recipient UNION ALL SELECT 'in',i.id,i.body,i.sender,coalesce(i.verified_by,''),i.received_ms FROM inbox i JOIN reply_receiver_inputs x ON x.inbox_id=i.id WHERE x.binding=?) ORDER BY at,id`, j.Receiver.ID, j.Receiver.ID)
 	if err != nil {
 		return "", err
 	}
-	type item struct{ dir, id, body, who string }
+	type item struct{ dir, id, body, who, key string }
 	var items []item
 	if j.Receiver.remote != nil && j.Receiver.remote.Role == "imported" {
 		request := j.Receiver.remote.Request
@@ -306,7 +306,7 @@ func (a *Agent) receiverPrompt(ctx context.Context, j job, r *Responder) (string
 	}
 	for rows.Next() {
 		var v item
-		if err = rows.Scan(&v.dir, &v.id, &v.body, &v.who); err != nil {
+		if err = rows.Scan(&v.dir, &v.id, &v.body, &v.who, &v.key); err != nil {
 			rows.Close()
 			return "", err
 		}
@@ -319,7 +319,13 @@ func (a *Agent) receiverPrompt(ctx context.Context, j job, r *Responder) (string
 	}
 	remaining := maxContext
 	for _, v := range items {
-		text := fmt.Sprintf("\n## Authorized AgentNet %s %s (%s)\n%s\n", v.dir, v.id, v.who, v.body)
+		who := v.who
+		if v.dir == "in" { // the sender as a person, when proven; the address stays
+			if s := a.sender(ctx, v.who, v.key, false); s.Relation != SenderUnverified {
+				who = s.Name() + " — " + v.who
+			}
+		}
+		text := fmt.Sprintf("\n## Authorized AgentNet %s %s (%s)\n%s\n", v.dir, v.id, who, v.body)
 		if len(text) > remaining {
 			return "", errors.New("selected binding context exceeds byte bound; nothing was run")
 		}

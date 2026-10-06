@@ -144,7 +144,7 @@ CREATE TABLE realm(
   CHECK ((initialized = 0 AND realm_id IS NULL) OR
          (initialized = 1 AND realm_id IS NOT NULL)));
 INSERT INTO realm(id, initialized) VALUES(1, 0);
-`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema}
+`, TeamSchema, driveStorageSchema, GroupHubSchema, agentCatalogSchema, receiptSchema, workspaceSchema, deviceAdminSchema, inviteHintsSchema, googleSchema, deviceAdminNoticeSchema}
 
 // addressTakenError refuses a join for an enrolled (or revoked) address
 // and names a free one to offer the person. The invite stays unused; the
@@ -227,12 +227,14 @@ func openStore(path string) (*store, error) {
 
 type agent struct {
 	Public        identity.Public
-	Admin         bool
+	Admin         bool // an admin invite made it one, or its person granted it (personadmin.go)
 	Revoked       bool
 	RevokedReason string // "refused" or "expired" for a device link nobody approved; "removed" from its person
 	Pending       bool   // joined with a device invite, waiting for its person's approval: not a member
 	PendingUntil  int64  // unix seconds: after this nobody can approve it any more
 	Person        string // the person it speaks for, if any
+	linked        bool
+	grantedBy     string
 }
 
 func (s *store) agent(address string) (agent, error) { return agentIn(s.db, address) }
@@ -240,13 +242,21 @@ func (s *store) agent(address string) (agent, error) { return agentIn(s.db, addr
 func agentIn(q interface {
 	QueryRow(string, ...any) *sql.Row
 }, address string) (agent, error) {
+	a, err := rawAgentIn(q, address)
+	if err == nil && a.Admin && a.linked {
+		a.Admin, err = deviceAdminHolds(q, address, a, map[string]bool{})
+	}
+	return a, err
+}
+
+func rawAgentIn(q querier, address string) (agent, error) {
 	var a agent
 	var pub string
 	var revoked sql.NullInt64
-	var reason, pending, person sql.NullString
+	var reason, pending, person, grantedBy sql.NullString
 	var until sql.NullInt64
-	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id FROM agents WHERE address = ?`, address).
-		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person)
+	err := q.QueryRow(`SELECT public, admin, revoked_at, revoked_reason, pending_person, pending_until, person_id, linked, admin_granted_by FROM agents WHERE address = ?`, address).
+		Scan(&pub, &a.Admin, &revoked, &reason, &pending, &until, &person, &a.linked, &grantedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, errNotFound
 	}
@@ -254,6 +264,7 @@ func agentIn(q interface {
 		return a, err
 	}
 	a.Revoked, a.RevokedReason, a.Pending, a.PendingUntil, a.Person = revoked.Valid, reason.String, pending.Valid, until.Int64, person.String
+	a.grantedBy = grantedBy.String
 	return a, json.Unmarshal([]byte(pub), &a.Public)
 }
 
@@ -262,12 +273,18 @@ type enrolledMember struct {
 	address string
 	joined  int64               // unix seconds
 	person  *protocol.PersonRef // the newest roster step of its person, if any
+	agent   bool                // its newest caps record lists protocol.CapAgent (a hint)
 }
 
 // members lists up to limit unrevoked agents, most recently enrolled first,
 // and whether more exist.
 func (s *store) members(limit int) ([]enrolledMember, bool, error) {
-	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash FROM agents a LEFT JOIN persons p ON p.person = a.person_id
+	// The agent hint comes from the device's newest signed caps record,
+	// not its last session's: a stream sets last_session on connect, before
+	// that session publishes, and the hint must not flicker on reconnect.
+	rows, err := s.db.Query(`SELECT a.address, a.created_at, p.person, p.seq, p.hash,
+		(SELECT c.record FROM caps c WHERE c.address = a.address ORDER BY c.ts DESC, c.session LIMIT 1)
+		FROM agents a LEFT JOIN persons p ON p.person = a.person_id
 		WHERE a.revoked_at IS NULL AND a.pending_person IS NULL ORDER BY a.created_at DESC, a.rowid DESC LIMIT ?`, limit+1)
 	if err != nil {
 		return nil, false, err
@@ -276,10 +293,14 @@ func (s *store) members(limit int) ([]enrolledMember, bool, error) {
 	var out []enrolledMember
 	for rows.Next() {
 		var m enrolledMember
-		var person, hash sql.NullString
+		var person, hash, caps sql.NullString
 		var seq sql.NullInt64
-		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash); err != nil {
+		if err := rows.Scan(&m.address, &m.joined, &person, &seq, &hash, &caps); err != nil {
 			return nil, false, err
+		}
+		if caps.Valid {
+			rec, err := protocol.ParseCapsRecord([]byte(caps.String))
+			m.agent = err == nil && rec.Has(protocol.CapAgent) // unreadable: no hint
 		}
 		if person.Valid {
 			m.person = &protocol.PersonRef{ID: person.String, Seq: seq.Int64, Hash: hash.String}
@@ -447,18 +468,34 @@ func (s *store) enroll(secret string, pub identity.Public, label string, link *p
 	return !createdBy.Valid, createdBy.String, tx.Commit()
 }
 
-func (s *store) revoke(address string) error {
+func (s *store) revoke(address string, from ...string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	by := address
+	if len(from) > 0 {
+		by = from[0]
+	}
+	target, err := rawAgentIn(tx, address)
+	if err != nil {
+		return err
+	}
+	if target.Admin && target.Person != "" && !target.Revoked {
+		if err := addDeviceAdminNotice(tx, target.Person, address, by, false); err != nil {
+			return err
+		}
+	}
 	res, err := tx.Exec(`UPDATE agents SET revoked_at = ? WHERE address = ? AND revoked_at IS NULL`, time.Now().Unix(), address)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return errNotFound
+	}
+	if err := revokeDeviceAdminGrants(tx, address, by); err != nil {
+		return err
 	}
 	if err := dropNotify(tx, address); err != nil { // its notification state goes with it
 		return err
@@ -565,23 +602,36 @@ func (s *store) messageState(id, requester string) (sender, recipient, state str
 // setDisposition records the recipient's receipt. custody may become
 // delivered or quarantined, quarantined may become delivered, and delivered
 // is final, so repeated or reordered acks cannot downgrade a message.
-func (s *store) setDisposition(id, recipient, state string) (string, error) {
-	res, err := s.db.Exec(`UPDATE messages SET state = ?, delivered_at = coalesce(delivered_at, ?)
-		WHERE id = ? AND recipient = ? AND (state = ? OR (state = ? AND ? = ?))`,
-		state, time.Now().Unix(), id, recipient,
-		protocol.StateCustody, protocol.StateQuarantined, state, protocol.StateDelivered)
+func (s *store) setDisposition(id, recipient, state string) (current, sender string, changed bool, err error) {
+	tx, err := s.db.Begin()
 	if err != nil {
-		return "", err
+		return
 	}
-	if n, _ := res.RowsAffected(); n == 1 {
-		return state, nil
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE messages SET state = ?, delivered_at = coalesce(delivered_at, ?) WHERE id = ? AND recipient = ? AND (state = ? OR (state = ? AND ? = ?))`, state, time.Now().Unix(), id, recipient, protocol.StateCustody, protocol.StateQuarantined, state, protocol.StateDelivered)
+	if err != nil {
+		return
 	}
-	var current string
-	err = s.db.QueryRow(`SELECT state FROM messages WHERE id = ? AND recipient = ?`, id, recipient).Scan(&current)
+	n, err := res.RowsAffected()
+	if err != nil {
+		return
+	}
+	changed = n == 1
+	err = tx.QueryRow(`SELECT state, sender FROM messages WHERE id = ? AND recipient = ?`, id, recipient).Scan(&current, &sender)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", errNotFound
+		err = errNotFound
 	}
-	return current, err
+	if err != nil {
+		return
+	}
+	if changed {
+		_, err = tx.Exec(`INSERT INTO receipts(sender,id,state,seq) SELECT ?,?,?,coalesce(max(seq),0)+1 FROM receipts WHERE sender=?`, sender, id, current, sender)
+		if err != nil {
+			return
+		}
+	}
+	err = tx.Commit()
+	return
 }
 
 type blobRow struct {
@@ -705,8 +755,60 @@ func (s *store) setBlobState(id, state string) error {
 
 // expireSession marks undelivered messages addressed only to an ended
 // session as expired, so their senders learn they were not delivered.
-func (s *store) expireSession(recipient, session string) error {
-	_, err := s.db.Exec(`UPDATE messages SET state = ? WHERE recipient = ? AND session = ? AND fallback = 0 AND state = ?`,
-		protocol.StateExpired, recipient, session, protocol.StateCustody)
-	return err
+func (s *store) expireSession(recipient, session string) ([]string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT DISTINCT sender FROM messages WHERE recipient=? AND session=? AND fallback=0 AND state=?`, recipient, session, protocol.StateCustody)
+	if err != nil {
+		return nil, err
+	}
+	var senders []string
+	for rows.Next() {
+		var sender string
+		if err = rows.Scan(&sender); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		senders = append(senders, sender)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.Exec(`INSERT INTO receipts(sender,id,state,seq) SELECT m.sender,m.id,?,coalesce((SELECT max(r.seq) FROM receipts r WHERE r.sender=m.sender),0)+row_number() OVER (PARTITION BY m.sender ORDER BY m.seq) FROM messages m WHERE m.recipient=? AND m.session=? AND m.fallback=0 AND m.state=?`, protocol.StateExpired, recipient, session, protocol.StateCustody)
+	if err != nil {
+		return nil, err
+	}
+	_, err = tx.Exec(`UPDATE messages SET state=? WHERE recipient=? AND session=? AND fallback=0 AND state=?`, protocol.StateExpired, recipient, session, protocol.StateCustody)
+	if err != nil {
+		return nil, err
+	}
+	return senders, tx.Commit()
+}
+
+const receiptSchema = `CREATE TABLE receipts(seq INTEGER NOT NULL, sender TEXT NOT NULL, id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(sender,seq));`
+
+func (s *store) receiptMax(sender string) (n int64, err error) {
+	err = s.db.QueryRow(`SELECT coalesce(max(seq),0) FROM receipts WHERE sender=?`, sender).Scan(&n)
+	return
+}
+func (s *store) receiptsFor(sender string, cursor int64) ([]protocol.ReceiptEvent, error) {
+	rows, err := s.db.Query(`SELECT id,state,seq FROM receipts WHERE sender=? AND seq>? ORDER BY seq LIMIT ?`, sender, cursor, protocol.ReceiptBatch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []protocol.ReceiptEvent
+	for rows.Next() {
+		var r protocol.ReceiptEvent
+		if err = rows.Scan(&r.ID, &r.State, &r.Seq); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

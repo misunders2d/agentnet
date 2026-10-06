@@ -223,7 +223,7 @@ func TestSignedRecordsRefuse(t *testing.T) {
 	otherJoin.Join = ed25519.Sign(phone.Sign, JoinBytes(vecPerson, 1, strings.Repeat("c", 64), phonePub))
 	bad("consent to another step", func() error { _, err := otherJoin.VerifyNext(r); return err }())
 	// Removing a device needs no consent; the removed device may sign it.
-	gone := PersonRoster{Person: vecPerson, Label: r1.Label, Seq: 2, Prev: r1.Hash(), Devices: []identity.Public{deskPub}, By: phonePub.Fingerprint()}
+	gone := PersonRoster{Person: vecPerson, Label: r1.Label, Seq: 2, Prev: r1.Hash(), Devices: []identity.Public{deskPub}, HumanKeys: r1.Humans(), By: phonePub.Fingerprint()}
 	gone.Sign(phone.Sign)
 	if added, err := gone.VerifyNext(r1); err != nil || added != nil {
 		t.Fatalf("self-removal: %v %v", added, err)

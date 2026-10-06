@@ -32,7 +32,7 @@ type reactionChoice struct {
 // The optional reaction, offered to an eligible run: as the reply's last
 // line (device requests) or just before its emotion line (conversations).
 const (
-	reactionPromptText     = "You may also react to this request with one emoji, if you want to: make the last line of your reply `reaction: EMOJI` (or `reaction: -EMOJI` to take your earlier reaction off). It is optional; nothing else is sent for it.\n"
+	reactionPromptText     = "You may also react to this request with one emoji, if you want to: put a line at the end of your reply `reaction: EMOJI` (or `reaction: -EMOJI` to take your earlier reaction off). It is optional; nothing else is sent for it.\n"
 	reactionConvPromptText = "You may also react to this request with one emoji, if you want to: put a line `reaction: EMOJI` (or `reaction: -EMOJI` to take your earlier reaction off) just before the emotion line. It is optional; nothing else is sent for it.\n"
 )
 

@@ -10,10 +10,11 @@ import {
 } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useApp, useWide } from "../context";
-import { deliveryWord, owner, personName, plain, timeOf } from "../model";
+import { deliveryWord, firstLine, owner, personName, plain, reminderOf, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { ApprovalCard } from "./Approvals";
+import { deviceWords } from "./Approvals.words";
 import { Markdown, type RenderMention } from "./Markdown";
 import { MessageFiles } from "./Message.files";
 import { EmojiDialog, Reactions } from "./Message.reactions";
@@ -22,6 +23,7 @@ import {
   agentLabel, agentOf, eventKind, ev, excerpt, guestOf, isReply, isRequest, isThreadMsg, joinedBefore, lower, problem, requestLabel, requestState, shownText, whoWrote,
   type AnyMsg, type Ctx, type Who,
 } from "./Message.model";
+import { RemindSheet, ReminderLine } from "./Reminders";
 import { WhatTheySaw } from "./RoomPanel.cards";
 import { room } from "./RoomPanel.model";
 
@@ -55,8 +57,12 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
   const [emoji, setEmoji] = useState<boolean | null>(null);
   const [hot, setHot] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [remind, setRemind] = useState<boolean | null>(null);
 
-  const live = !readOnly && !m.deleted && !excerpt(m);
+  const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
+  // A reminder: only on a received message, where this device keeps reminders (a computer).
+  const reminder = live && m.dir === "in" ? reminderOf(ctx.overview, m.id) : undefined;
+  const remindable = { id: m.id, text: firstLine(shownText(m), 90) };
   const has = (what: string) => live && (m.can || []).includes(what);
   const can: Can = {
     react: has("react"),
@@ -64,8 +70,10 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
     edit: has("edit"),
     del: has("delete"),
     select: live && !!ctx.dm && ctx.canReply && !!onSelect && (ctx.dm.role || "member") === "member",
+    remind: live && m.dir === "in" && !!ctx.overview?.remind,
   };
   const acts: Acts = {
+    topic:live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
     reply: () => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), replyTo: m.id }),
     copy: () => {
       navigator.clipboard?.writeText(plain(shownText(m))).then(() => store.toast("Copied", "ok"), () => store.toast("Couldn’t copy here", "error"));
@@ -74,15 +82,19 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
     del: () => setConfirm(true),
     details: () => setDetails(true),
     select: onSelect && (() => onSelect(m.id)),
+    remind: () => setRemind(true),
+    reminded: !!reminder,
   };
   const touch = useTouchGestures(() => (readOnly ? undefined : setSheet(true)), can.reply ? acts.reply : null);
   const mention = mentionFor(ctx);
 
   const text = useMemo(() => askChip(shownText(m), m, ctx), [m, ctx]);
   const time = <Meta m={m} who={who} />;
-  const parent = m.reply_to ? all.find((x) => x.id === m.reply_to || (!isThreadMsg(x) && x.lid === m.reply_to)) : undefined;
-  // An agent's answer right under its request needs no quote of it.
-  const quote = !!m.reply_to && (parent ? !(isReply(m) && adjacent(all, parent, m)) : !isReply(m));
+  const parent = referenceParent(all,m.quote);
+  const quote=!!m.quote;
+  const request=referenceParent(all,m.reply_to);
+  const output=isReply(m)||(isThreadMsg(m)&&m.status==="progress")||(!isThreadMsg(m)&&m.verified_agent&&m.kind==="message");
+  const link=output&&request&&!adjacent(all,request,m);
 
   const shape = who.agent ? "rounded-xl bg-agent text-ink"
     : who.mine ? "rounded-[20px] bg-mine text-mine-ink" + (last ? " rounded-br-md" : "")
@@ -97,6 +109,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
           {who.agent ? <AgentAvatar seed={who.seed} size={32} guest={who.guest} device={who.device} /> : <PersonAvatar name={who.name} seed={who.seed} size={32} guest={who.guest} />}
         </span>
       )}
+      {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
+      {m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
       {quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>
@@ -108,7 +122,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
   );
 
   return (
-    <div data-mid={m.id} className={first ? "mt-3.5" : "mt-1"}>
+    <div data-mid={m.id} className={"min-w-0 [overflow-wrap:anywhere] " + (first ? "mt-3.5" : "mt-1")}>
       <div className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={wide ? () => setHot(true) : undefined}
@@ -127,9 +141,11 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
           style={touch.dx ? { transform: "translateX(" + touch.dx + "px)" } : undefined}>
           {first && !who.mine && <NameLine m={m} who={who} />}
           {first && who.mine && excerpt(m) && <span className="mb-1 text-[13px] text-muted">From before you joined</span>}
+          {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
           {body}
           <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
-          <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} />
+          {!m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} />}
+          {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
         </div>
         {!wide && live && !selecting && (
           <button type="button" onClick={() => setSheet(true)} className="sr-only focus:not-sr-only focus:absolute focus:right-2 focus:top-0 focus:inline-flex focus:min-h-11 focus:items-center focus:rounded-full focus:bg-surface focus:px-3 focus:stroke">
@@ -140,7 +156,9 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
         {emoji !== null && <EmojiDialog open={emoji} onOpenChange={setEmoji} m={m} ctx={ctx} />}
         {details !== null && <DetailsSheet open={details} onOpenChange={setDetails} m={m} ctx={ctx} who={who.name} />}
         {confirm !== null && <DeleteMessage open={confirm} onOpenChange={setConfirm} m={m} ctx={ctx} />}
+        {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
       </div>
+      {!readOnly && !isThreadMsg(m) && m.job_detail && m.exec?.state === "needs_human" && !(m.actions || []).length && <section data-agent-needs-you tabIndex={-1} aria-label="Your agent says" className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4"><p className="font-bold">Your agent couldn’t finish — it needs your answer</p><p className="pt-1 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{m.job_detail}</p><p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p></section>}
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
       {!readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
         <div className="mx-auto mt-2.5 w-full max-w-[600px] px-3 empty:hidden sm:px-4">
@@ -170,7 +188,7 @@ function NameLine({ m, who }: { m: AnyMsg; who: Who }) {
 
 /** Meta: the time (and for your messages a delivery tick) at the end of the text. */
 function Meta({ m, who }: { m: AnyMsg; who: Who }) {
-  const s = m.state || "";
+  const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
   const tick = !who.mine || who.agent || excerpt(m) ? null
     : s === "delivered" ? <IconChecks size={15} className="text-ok-ink" />
       : s === "custody" ? <IconCheck size={15} />
@@ -180,7 +198,7 @@ function Meta({ m, who }: { m: AnyMsg; who: Who }) {
   return (
     <span className="float-right ml-2.5 mt-[0.5em] inline-flex items-center gap-1 text-[12px] leading-none text-muted tnum">
       {m.edited && !m.deleted && <span>edited</span>}
-      <time dateTime={m.at}>{timeOf(m.at)}</time>
+      <time dateTime={m.sent_at || m.at}>{new Date(m.sent_at || m.at).toDateString()!==new Date(m.at).toDateString()?new Date(m.sent_at || m.at).toLocaleDateString([], {month:"short",day:"numeric"})+" · ":""}{timeOf(m.sent_at || m.at)}</time>
       {tick && <span aria-hidden="true" className="-mr-0.5">{tick}</span>}
       {tick && <span className="sr-only">{deliveryWord(s)}</span>}
     </span>
@@ -220,7 +238,7 @@ function Under({ m, ctx, all, who, status, onDetails }: { m: AnyMsg; ctx: Ctx; a
     );
   }
   if (!who.mine || who.agent || m.deleted) return null;
-  const s = m.state || "";
+  const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
   if (!status && !problem(s)) return null;
   const word = deliveryWord(s);
   if (!word) return null;
@@ -364,3 +382,11 @@ function mentionFor(ctx: Ctx): RenderMention {
   };
 }
 
+
+function referenceParent(all: AnyMsg[], id?: string) {
+  if (!id) return undefined;
+  const exact = all.find(m => m.id === id);
+  if (exact) return exact;
+  const logical = all.filter(m => !isThreadMsg(m) && m.lid === id);
+  return logical.length === 1 ? logical[0] : undefined;
+}

@@ -35,8 +35,8 @@ export interface Speaker { name: string; seed: string; agent: boolean; me: boole
 
 /** speaker says who wrote a message in this conversation, in words. */
 export function speaker(m: T.DMMessage, t: T.DMThread, o: T.Overview | null, names: Record<string, string>): Speaker {
-  const a = m.pid ? (t.agents || []).find((x) => x.pid === m.pid) : undefined;
-  if (a && !m.target && holds(a.host, m.from) && (m.kind === "answer" || m.kind === "result" || !!m.agent_id))
+  const a = m.pid ? (t.agents || []).find((x) => x.pid === (m.agent_author_pid || m.pid)) : undefined;
+  if (a && m.verified_agent && holds(a.host, m.from))
     return { name: agentName(a.agent_id, names, a.host, o?.person), seed: a.agent_id || a.host.address, agent: true, me: false };
   if (m.dir === "out" || isMine(o, m.from)) return { name: "You", seed: o?.person?.person || o?.me.address || "me", agent: false, me: true };
   const people = [t.peer, ...(t.members || []), ...(t.guests || []).map((g) => g.host)];
@@ -59,18 +59,20 @@ export const shareable = (t: T.DMThread) => timeline(t).filter((m) => !m.excerpt
 
 // ---- the room -----------------------------------------------------------------
 
-export interface Member { key: string; name: string; seed: string; me: boolean; admin: boolean; online: boolean | null; note: string }
+export interface Member { email?: string; key: string; person?: string; name: string; seed: string; me: boolean; admin: boolean; online: boolean | null; note: string }
 
 export interface Guest {
   key: string;
   pid: string;
   kind: "agent" | "person";
+  member?: boolean;
   name: string;
   seed: string;
   who: string;                 // the invite sheet's key for this same person or agent ("Bring back")
   line: string;                // "Your agent · Laptop" / "Invited by you"
   device?: DeviceKind;
   online: boolean | null;
+  where?: string;
   hostName: string;            // whose agent, or the person
   hostHere: boolean;           // this installation hosts it (it is me, or my agent)
   invitedBy: string;           // "you" or the inviter's name
@@ -131,7 +133,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
     const agents = (t.agents || []).filter((a) => LIVE.has(a.state) && a.host.person && a.host.person === p.person).flatMap((a) => (a.agent_id && names[a.agent_id] ? [names[a.agent_id]] : []));
     const admin = "admin" in p && !!(p as T.GroupMemberView).admin;
     return {
-      key: p.person || p.address, name: personName(p), seed: p.person || p.address, me: self, admin,
+      key: p.person || p.address, person: p.person, email: p.email, name: personName(p), seed: p.person || p.address, me: self, admin,
       online: self ? null : online(o, p.address),
       note: agents.length ? agents.join(", ") + "’s owner" : "",
     };
@@ -142,7 +144,9 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
     return {
       key: "a:" + a.pid, pid: a.pid, kind: "agent", name, seed: a.agent_id || a.host.address,
       who: "a:" + a.host.address + "#" + (a.agent_id || ""),
-      line: agentWhere(a.host, a.host.address, me), device: deviceKind(a.host.address),
+      member: a.member,
+      line: a.member ? "Invited by " + (a.inviters?.length ? a.inviters : [a.inviter]).map(inviterWord).join(" and ") : agentWhere(a.host, a.host.address, me), device: a.member ? undefined : deviceKind(a.host.address),
+      where: a.host.person === me?.person ? "your computer" : niceDevice(a.host.address),
       online: online(o, a.host.address), hostName: a.host_here ? "you" : personName(a.host), hostHere: a.host_here,
       invitedBy: inviterWord(a.inviter), note: a.note?.trim() || undefined,
       state: a.state, stateText: a.state_text,
@@ -227,3 +231,13 @@ export const plural = (n: number, word: string) => n + " " + word + (n === 1 ? "
 
 /** span joins two times, once when they read the same. */
 export const span = (a: string, b: string) => (a === b ? a : a + "–" + b);
+
+/** Labels describe a wait; only a unique known person can be its DM target. */
+export function guestUpdatePeople(waiting: string[], candidates: (T.PersonView | null | undefined)[], self?: string) {
+  const people = [...new Map(candidates.filter((p): p is T.PersonView => !!p).map(p => [p.person || p.address, p])).values()];
+  return people.filter(p => p.person !== self && p.state !== "self" && waiting.includes(p.label) && people.filter(x => x.label === p.label).length === 1);
+}
+
+export function guestUpdateDraft(member: boolean) {
+  return (member ? "Could you update AgentNet? Our chat needs it for a guest to join." : "Could you update AgentNet? I'd like to bring you into a chat.") + " Get AgentNet: https://github.com/misunders2d/agentnet/releases";
+}

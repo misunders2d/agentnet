@@ -42,8 +42,10 @@ var ErrService = errors.New("this installation is a service: it speaks as itself
 
 // PersonInfo is a person as this installation knows it.
 type PersonInfo struct {
-	Person string `json:"person"`
-	Label  string `json:"label"` // the person's own claim, not verified
+	Person  string `json:"person"`
+	Label   string `json:"label"` // the person's own claim, not verified
+	Email   string `json:"email,omitempty"`
+	Picture string `json:"picture,omitempty"`
 	// Address and Fingerprint are the one device this view is about: this
 	// installation for its own person, the host or author device of a
 	// participation, otherwise the person's first current device.
@@ -61,6 +63,7 @@ type DeviceInfo struct {
 	Name        string `json:"name"` // the device's name, the part after the "/"
 	Fingerprint string `json:"fingerprint"`
 	This        bool   `json:"this,omitempty"` // this installation
+	Human       bool   `json:"human"`          // may enroll devices; false for an agent host
 	Added       int64  `json:"added"`          // the roster step it was added at
 }
 
@@ -109,6 +112,10 @@ func scanPersonIn(q dbq, where string, args ...any) (personRow, bool, error) {
 	if err := json.Unmarshal(p.raw, &p.roster); err != nil {
 		return p, false, err
 	}
+	if p.info.State != personConflict {
+		p.info.Email = p.roster.Email
+		p.info.Picture = p.roster.Picture
+	}
 	added := map[string]int64{}
 	if rows, err := q.Query(`SELECT address, added FROM person_devices WHERE person = ?`, p.info.Person); err == nil {
 		for rows.Next() {
@@ -122,7 +129,7 @@ func scanPersonIn(q dbq, where string, args ...any) (personRow, bool, error) {
 	}
 	for _, d := range p.roster.Devices {
 		_, name, _ := protocol.SplitAddress(d.Address)
-		p.info.Devices = append(p.info.Devices, DeviceInfo{Address: d.Address, Name: name, Fingerprint: d.Fingerprint(), Added: added[d.Address]})
+		p.info.Devices = append(p.info.Devices, DeviceInfo{Address: d.Address, Name: name, Fingerprint: d.Fingerprint(), Human: p.roster.Human(d.Fingerprint()), Added: added[d.Address]})
 	}
 	if len(p.roster.Devices) > 0 {
 		p = p.at(p.roster.Devices[0].Address)
@@ -227,6 +234,17 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 			personConflict, string(raw), other, personPinned); err != nil {
 			return res, err
 		}
+		check, e := s.db.Begin()
+		if e != nil {
+			return res, e
+		}
+		if e = demotePersonJobs(check); e != nil {
+			check.Rollback()
+			return res, e
+		}
+		if e = check.Commit(); e != nil {
+			return res, e
+		}
 		s.changed()
 		return res, errPersonConflict
 	}
@@ -270,6 +288,22 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 		return res, nil
 	}
 	raw, _ := json.Marshal(cur)
+	if cur.Email != "" {
+		var other string
+		e := tx.QueryRow(`SELECT person FROM persons WHERE person != ? AND json_extract(record, '$.email') = ? LIMIT 1`, person, cur.Email).Scan(&other)
+		if e == nil {
+			if _, e = tx.Exec(`INSERT INTO persons(person,label,seq,hash,record,state,pinned_at) VALUES(?,?,?,?,?,?,?)`, person, cur.Label, cur.Seq, cur.Hash(), string(raw), personConflict, time.Now().Unix()); e != nil {
+				return res, e
+			}
+			if e = s.done(tx.Commit()); e != nil {
+				return res, e
+			}
+			return res, errPersonConflict
+		}
+		if !errors.Is(e, sql.ErrNoRows) {
+			return res, e
+		}
+	}
 	lists := cur.Has(me.Address, me.Fingerprint())
 	_, haveSelf, err := scanPersonIn(tx, `state = ?`, personSelf)
 	if err != nil {
@@ -324,6 +358,21 @@ func (s *store) pinChain(person string, raws [][]byte, me identity.Public, adopt
 		if _, err := tx.Exec(`INSERT INTO person_devices(address, person, fingerprint, added) VALUES(?, ?, ?, ?)`, d.Address, person, d.Fingerprint(), added); err != nil {
 			return res, err
 		}
+	}
+	if head.info.State == personSelf || state == personSelf {
+		// This installation's own person changed: a device it removed (or
+		// whose key changed) no longer gives tasks here as the person's
+		// own, nor does any once this device left (ownDeviceHolds).
+		why := "that device is no longer one of yours"
+		if res.left {
+			why = "this device is no longer one of your devices"
+		}
+		if err := demoteLapsedOwnTasks(tx, why); err != nil {
+			return res, err
+		}
+	}
+	if err = demotePersonJobs(tx); err != nil {
+		return res, err
 	}
 	return res, s.done(tx.Commit())
 }
@@ -394,6 +443,11 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 	if err == nil && res.left {
 		a.Logf("this device is no longer a device of its person")
 		a.store.setConfig(map[string]string{"role": ""})
+	}
+	if err == nil && res.changed && stewardOf(a.store.db, person) {
+		// A steward's newer roster: a device it added gets the waiting
+		// requests by name now, one it removed stops deciding (MEL-532).
+		a.wakeWorker()
 	}
 	return res, err
 }
@@ -549,6 +603,27 @@ func (a *Agent) ListedPersons() ([]PersonInfo, error) {
 	defer a.listed.mu.Unlock()
 	seen := map[string]bool{}
 	var out []PersonInfo
+	emails := map[string]string{}
+	rows, err := a.store.db.Query(`SELECT person, record FROM persons`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var person, raw string
+		if err = rows.Scan(&person, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		var r protocol.PersonRoster
+		if json.Unmarshal([]byte(raw), &r) == nil && r.Email != "" {
+			emails[r.Email] = person
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
 	for _, m := range a.MemberView().Members.Members {
 		if m.Person == nil || seen[m.Person.ID] {
 			continue
@@ -563,7 +638,13 @@ func (a *Agent) ListedPersons() ([]PersonInfo, error) {
 			continue
 		}
 		seen[r.Person] = true
-		p := PersonInfo{Person: r.Person, Label: r.Label, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
+		p := PersonInfo{Person: r.Person, Label: r.Label, Email: r.Email, Picture: r.Picture, Seq: r.Seq, Roster: r.Hash(), State: "listed"}
+		if other := emails[r.Email]; r.Email != "" && other != "" && other != r.Person {
+			p.Email = ""
+			p.State = personConflict
+		} else if r.Email != "" {
+			emails[r.Email] = r.Person
+		}
 		for _, d := range r.Devices {
 			_, name, _ := protocol.SplitAddress(d.Address)
 			p.Devices = append(p.Devices, DeviceInfo{Address: d.Address, Name: name, Fingerprint: d.Fingerprint()})

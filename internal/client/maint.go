@@ -221,6 +221,25 @@ func (a *Agent) Doctor(ctx context.Context) []Check {
 			add("held messages", true, "%d message(s) held here, not shown (agentnet inbox --review says why)", n)
 		}
 	}
+	// A service nobody sits at needs someone who decides its waiting
+	// requests from their own devices: a steward (MEL-532).
+	if role, _ := a.Role(); role == "service" {
+		if who, err := a.store.deciders(); err != nil {
+			add("stewards", false, "%v", err)
+		} else if len(who) == 0 {
+			add("stewards", false, "nobody decides this machine's waiting requests from their own devices yet; whoever installed it can name a steward here: agentnet operator grant --person ADDRESS (one device of that person; all its devices then decide)")
+		} else {
+			var names []string
+			for _, d := range who {
+				if d.Label != "" {
+					names = append(names, fmt.Sprintf("%q (all their devices)", d.Label))
+				} else {
+					names = append(names, d.Address)
+				}
+			}
+			add("stewards", true, "%s decide this machine's waiting requests from their own devices", strings.Join(names, ", "))
+		}
+	}
 	if why, err := a.ReviewToHealth(); err != nil {
 		add("review-to", false, "%v", err)
 	} else if why != "" {

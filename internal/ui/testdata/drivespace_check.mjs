@@ -339,3 +339,46 @@ await adminSetup.provider.storageSetup({ action: 'publish', draft: setupDraft, c
 assert.equal(adminSetup.requests.filter(r => r.method === 'PUT').length, 1);
 assert.equal((await adminSetup.provider.storageSetup()).runtime, 'browser');
 console.log('Drive captured workspace transports and browser admin setup isolation PASS');
+
+// Public host Drive facades: actual WorkspaceShell bindings, captured JSON/raw
+// routes, stale rejection and synchronous browser gesture forwarding.
+const {WorkspaceShell}=await import('../static/workspaces.mjs');
+const memberA={id:'default',name:'A',handle:'1'.repeat(32),state:'enrolled'};
+const memberB={...memberA,id:'b'.repeat(32),name:'B',handle:'2'.repeat(32)};
+const driveCalls=[];let releaseDriveUpload;
+const driveShell=new WorkspaceShell({fetch:async(path,options)=>{
+ driveCalls.push({path,options});
+ if(path.includes('/api/drive/upload'))await new Promise(resolve=>releaseDriveUpload=resolve);
+ return {ok:true,json:async()=>({path}),arrayBuffer:async()=>new ArrayBuffer(0)};
+}});
+const publicA=driveShell.register(memberA),publicB=driveShell.register(memberB);
+assert(Object.isFrozen(publicA.drive));
+assert.deepEqual(Object.keys(publicA.drive).sort(),['drive','driveUpload']);
+await publicA.drive.drive({conv:'same-conversation',action:'status'});
+const uploadingA=publicA.drive.driveUpload('same-conversation',file,true);
+driveShell.select(memberB.id);
+await publicB.drive.drive({conv:'same-conversation',action:'create',name:'B'});
+releaseDriveUpload();const uploadedA=await uploadingA;
+assert(uploadedA.path.startsWith('/workspaces/default/'+memberA.handle+'/api/drive/upload?'));
+assert(driveCalls[0].path.startsWith('/workspaces/default/'+memberA.handle+'/api/drive?'));
+assert(driveCalls[2].path.startsWith('/workspaces/'+memberB.id+'/'+memberB.handle+'/api/drive'));
+assert(driveCalls[1].path.includes('confirm_outside_e2ee=true'));
+await assert.rejects(publicA.drive.driveUpload('same-conversation',file,false),/Confirm/);
+driveShell.members.get(memberA.id).connected=false;
+assert.throws(()=>publicA.drive.drive({conv:'same-conversation',action:'status'}),/Stale/);
+assert.throws(()=>publicA.drive.driveUpload('same-conversation',file,true),/Stale/);
+const gestures=[];
+function driveEngine(label){return{driveService:()=>({
+ drive:async request=>({label,request}),driveUpload:async()=>({label}),
+ prepareGoogle:async()=>{gestures.push('prepare-'+label);},
+ beginGoogleConsent(request){gestures.push('click-'+label);return Promise.resolve({label,request});},
+})};}
+const gestureShell=new WorkspaceShell(),browserA=gestureShell.register(memberA,driveEngine('A'));
+gestureShell.register(memberB,driveEngine('B'));
+await browserA.drive.prepareGoogle();gestureShell.select(memberB.id);
+const consentA=browserA.drive.beginGoogleConsent({conv:'same-conversation',confirm_account:true});
+assert.deepEqual(gestures,['prepare-A','click-A'],'consent reaches captured provider synchronously on click');
+assert.equal((await consentA).label,'A');
+gestureShell.members.get(memberA.id).connected=false;
+assert.throws(()=>browserA.drive.beginGoogleConsent({conv:'same-conversation',confirm_account:true}),/Stale/);
+console.log('Host Drive: captured native upload/JSON, stale rejection, browser gesture and workspace isolation PASS');

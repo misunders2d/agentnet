@@ -294,10 +294,17 @@ func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 // conv ("" : the page itself) where the platform takes clicks and the page
 // is served; nil otherwise.
 func (a *Agent) convClick(conv string) (argv []string, onClick func()) {
-	if a.openConv == nil {
-		return nil, nil
+	switch {
+	case a.openPage != nil: // the AgentNet app's window (RunOptions.OpenPage)
+		fragment := ""
+		if protocol.ValidHash(conv) {
+			fragment = "conv=" + conv
+		}
+		argv = a.openPage(fragment)
+	case a.openConv != nil:
+		argv = a.openConv(conv)
 	}
-	if argv = a.openConv(conv); len(argv) == 0 {
+	if len(argv) == 0 {
 		return nil, nil
 	}
 	return argv, func() {

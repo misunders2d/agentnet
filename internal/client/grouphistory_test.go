@@ -284,6 +284,7 @@ func TestGroupHistoryQueuedGrantSameKeyRejoinRefuses(t *testing.T) {
 }
 
 func TestGroupHistorySelectedTextAdmission(t *testing.T) {
+	t.Parallel()
 	w, p := groupOrdinaryPublication(t)
 	carol := proofReader(t, w, "history-carol")
 	defer func() {

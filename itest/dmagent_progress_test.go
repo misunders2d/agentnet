@@ -62,7 +62,7 @@ func TestCLIDMAgentProgressThenAnswer(t *testing.T) {
 	waitFor(t, "bob to see the invite", func() bool { return strings.Contains(c.run("--home", "bob", "dm", "agents", conv), pid+"  invited") })
 	c.run("--home", "bob", "dm", "accept-agent", pid)
 	waitFor(t, "alice to see it active", func() bool { return strings.Contains(c.run("--home", "alice", "dm", "agents", conv), pid+"  active") })
-	q := strings.Fields(c.run("--home", "alice", "dm", "ask-agent", pid, "progress-question"))[0]
+	q := strings.Fields(c.run("--home", "alice", "dm", "ask-agent", "--answer-wait", "0", pid, "progress-question"))[0]
 
 	messages := func(home string) []client.ConvMessage {
 		a, err := client.Open(filepath.Join(c.dir, home))
@@ -89,7 +89,13 @@ func TestCLIDMAgentProgressThenAnswer(t *testing.T) {
 	if p.PID != pid || p.Origin != "agent:claude" || p.Kind != "message" || p.ReplyTo == "" {
 		t.Fatalf("progress provenance %+v", p)
 	}
-	if !strings.Contains(dmShow(c, "bob", conv), "question pid "+pid+" (running)") {
+	running := false
+	for _, m := range messages("bob") {
+		if m.ID == q && m.PID == pid && m.Kind == "question" && m.State == "running" {
+			running = true
+		}
+	}
+	if !running || !strings.Contains(dmShow(c, "bob", conv), "question pid "+pid+" (running: Running since ") {
 		t.Fatalf("progress ended the run:\n%s", dmShow(c, "bob", conv))
 	}
 	if n, _ := count("alice", "AGENT RESULT done"); n != 0 {

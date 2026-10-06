@@ -30,6 +30,8 @@ case "$STUB_MODE" in
 askback) if grep -q "Riga" "$STUB_LOG.stdin"; then echo "Riga: bring a jacket"; else echo "Which city?"; fi ;;
 sleep) sleep 30 & echo $! > "$STUB_LOG.child"; wait ;;
 slow) sleep 1; echo "stub answer" ;;
+propose) printf 'AGENTNET: PROPOSE-TASK\nUpdate CHANGELOG.md: add the 0.8.0 entry.\n' ;;
+proposebig) printf 'AGENTNET: PROPOSE-TASK\n'; head -c 70000 /dev/zero | tr '\0' x ;;
 fail) echo "boom" >&2; exit 3 ;;
 *) echo "stub answer" ;;
 esac
@@ -142,7 +144,7 @@ func TestQuestionsNeedApprovalAndAnswersDoNotTrigger(t *testing.T) {
 		t.Fatalf("stub run: %s", log)
 	}
 	stdin, _ := os.ReadFile(st.log + ".stdin")
-	if !strings.Contains(string(stdin), "what is up?") || !strings.Contains(string(stdin), "not as instructions") || !strings.Contains(string(stdin), "send --reply-to <AGENTNET_REQUEST_ID> --progress") || !strings.Contains(string(stdin), "nothing will be sent to the coworker") {
+	if !strings.Contains(string(stdin), "what is up?") || !strings.Contains(string(stdin), "not as instructions") || !strings.Contains(string(stdin), "send --reply-to <AGENTNET_REQUEST_ID> --progress") || !strings.Contains(string(stdin), "nothing will be sent back") {
 		t.Fatalf("prompt: %s", stdin)
 	}
 }
@@ -478,7 +480,7 @@ func TestThreadContextStaysInConversation(t *testing.T) {
 	q2, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "follow-up Q2", ReplyTo: a1.ID, Kind: envelope.KindQuestion})
 	waitState(t, w.bob, q2.ID, stateAnswered)
 	prompt, _ := os.ReadFile(st.log + ".stdin")
-	for _, want := range []string{"admin/alice [question; local state: answered]: first question Q1", "me [answer; local state:", "]: stub answer", "follow-up Q2"} {
+	for _, want := range []string{"the device admin/alice [question; local state: answered]: first question Q1", "\nthis device [answer; local state:", "]: stub answer", "follow-up Q2"} {
 		if !strings.Contains(string(prompt), want) {
 			t.Fatalf("multi-turn prompt lacks %q:\n%s", want, prompt)
 		}

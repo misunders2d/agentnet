@@ -6,6 +6,10 @@ import type { Host } from "./host";
 
 export type { T };
 
+// Read-only folder listings use the daemon's generated contract.
+export type FoldersView = T.FoldersView;
+export type FolderEntry = T.FolderView;
+
 const q = (path: string, params: Record<string, string>) =>
   path + "?" + Object.entries(params).map(([k, v]) => k + "=" + encodeURIComponent(v)).join("&");
 
@@ -17,6 +21,7 @@ export function api(host: Host) {
     // topics=1: archived topics are counted, not listed (they are paged through topics below).
     overview: () => get<T.Overview>("/api/overview?topics=1"),
     dm: (id: string) => get<T.DMThread>(q("/api/dm", { id })),
+    approvals: () => get<T.ApprovalsView>("/api/approvals"),
     thread: (id: string) => get<T.Thread>(q("/api/thread", { id })),
     refresh: (id: string) => post<T.Presence>("/api/refresh", { id }),
 
@@ -34,6 +39,7 @@ export function api(host: Host) {
     changeAgents: (c: T.AgentCatalogChange) => post<T.AgentCatalogChangeResult>("/api/agents", c),
 
     // People invited to help in a DM
+    checkGuest: (c: T.GuestCheckRequest) => post<T.GuestCheck>("/api/dm/guest/check", c),
     inviteGuest: (a: T.GuestAction) => post<T.GuestView>("/api/dm/guest/invite", a),
     decideGuest: (pid: string, accept: boolean) => post<T.GuestView>("/api/dm/guest/decide", { pid, accept }),
     endGuest: (pid: string) => post<T.GuestView>("/api/dm/guest/end", { pid }),
@@ -59,9 +65,9 @@ export function api(host: Host) {
 
     // Topics (an agent's separate conversations): one page of the All topics
     // list, and the person's own changes, kept on this device only.
-    topics: (p: { peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
+    topics: (p: { conv?: string; peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
       get<T.TopicPage>(q("/api/topics", Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])))),
-    changeTopic: (what: "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
+    changeTopic: (what: "create" | "archive" | "delete" | "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
 
     // Files
     stage: (file: File) => host.stage(file),
@@ -72,15 +78,24 @@ export function api(host: Host) {
     // Typing (ephemeral; never content)
     typing: (scope: T.TypingScope) => get<T.TypingView>(q("/api/typing", { conv: scope.conv || "", peer: scope.peer || "", thread: scope.thread || "" })),
     sendTyping: (scope: T.TypingScope, active: boolean) => post<T.TypingResult>("/api/typing", { scope, active }),
+    typingPreferences: (p: T.TypingPreferences) => post<T.TypingPreferences>("/api/typing/preferences", p), // this device's own: share mine, show others
 
     // Me, my devices, my assistant
     createPerson: (label: string) => post<{ person: T.PersonView; note: string }>("/api/person", { label }),
+    setPersonPicture: (png: string) => post<T.PersonView>("/api/person/picture", { png }),
+    serviceRole: () => post<{ note: string }>("/api/device/service", {}),
     renamePerson: (label: string) => post<T.PersonView>("/api/person/label", { label }),
+	googleAccess: () => get<T.GoogleAccess>("/api/google/access"),
+	changeGoogleAccess: (c: T.GoogleAccessChange) => post<unknown>("/api/google/access", c),
     deviceLink: () => post<T.DeviceLink>("/api/device/link", {}),
     decideDevice: (id: string, accept: boolean) => post<{ note: string }>("/api/device/decide", { id, accept }),
     removeDevice: (address: string) => post<{ note: string }>("/api/device/remove", { address }),
     responder: () => get<T.ResponderView>("/api/responder"),
     setResponder: (c: T.ResponderChange) => post<T.ResponderView & { note?: string }>("/api/responder", c),
+    // Connecting coding sessions (hooks): read the tools, review a change, apply exactly that change.
+    assistantSetup: (r?: T.AssistantSetupRequest) => (r ? post<T.AssistantSetupView>("/api/assistant-setup", r) : get<T.AssistantSetupView>("/api/assistant-setup")),
+    // A folder on this computer and its subfolders, read-only: the folder browser (never a typed path).
+    folders: (path?: string) => get<FoldersView>(path ? q("/api/folders", { path }) : "/api/folders"),
 
     // Reminders and notifications
     remind: (id: string, due: Date) => post<unknown>("/api/remind", { id, due: Math.floor(due.getTime() / 1000) }), // unix seconds
@@ -94,6 +109,10 @@ export function api(host: Host) {
     changeTeam: (c: T.TeamChange) => post<T.TeamState>("/api/team", c),
     teamSnapshot: (teams: string[]) => post<T.TeamSnapshot>("/api/teams/snapshot", { teams }),
     storage: () => get<T.StorageSummary>("/api/storage"),
+
+    // The workspace's own name (its admin names it for everyone)
+    workspace: () => get<T.WorkspaceInfoView>("/api/workspace"),
+    renameWorkspaceForEveryone: (name: string) => post<T.WorkspaceInfoView>("/api/workspace/name", { name } satisfies T.WorkspaceNameChange),
   };
 }
 

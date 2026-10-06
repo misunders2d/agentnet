@@ -94,11 +94,16 @@ func tctx(t *testing.T) context.Context {
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
+	interval := 20 * time.Millisecond
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
-		time.Sleep(20 * time.Millisecond)
+		// Predicates often read and verify a whole conversation. Back off
+		// repeated reads while its daemon is still doing the work; retain
+		// the same predicate and overall deadline.
+		time.Sleep(interval)
+		interval = min(2*interval, 100*time.Millisecond)
 	}
 }
 
@@ -128,7 +133,8 @@ func newWorld(t *testing.T, publicURL string) *world {
 
 func mustJoin(t *testing.T, home, code, name string) *Agent {
 	t.Helper()
-	// Join creates the home (keys, SQLite schema) and then asks the Hub,
+	seedFixtureStore(t, home)
+	// Join creates fresh keys in the fixture home and then asks the Hub,
 	// all within its context: a longer budget than one request's for slow
 	// CI disks (Windows).
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -208,9 +214,15 @@ func TestStalledRequestIsBounded(t *testing.T) {
 		t.Fatalf("stalled request: err=%v after %s", err, time.Since(start))
 	}
 	// The push stream must not wait forever for response headers either.
-	a := &Agent{Address: "a/b", id: id, hub: conn, heartbeat: time.Hour, Logf: t.Logf}
+	// Receipt replay reads its durable cursor before opening the stream.
+	st, err := openStore(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.db.Close()
+	a := &Agent{Address: "a/b", id: id, store: st, hub: conn, heartbeat: time.Hour, Logf: t.Logf}
 	start = time.Now()
-	if _, err := a.streamOnce(context.Background()); err == nil || time.Since(start) > 5*time.Second {
+	if _, err := a.streamOnce(context.Background()); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
 		t.Fatalf("stalled stream: err=%v after %s", err, time.Since(start))
 	}
 }

@@ -1,4 +1,113 @@
-# Messenger release v0.6.0 — 2026-10-02
+# AgentNet release notes — 2026-10-05
+
+This release brings AgentNet closer to an ordinary chat app: open it from its
+icon, sign in, and talk to people and their agents in the same place.
+
+These notes describe the release candidate. The release number, published
+downloads and final installer checks are not confirmed by this record.
+
+## What changes for you
+
+- **One app on each computer.** Install AgentNet and open its icon. It keeps
+  working in the tray when you close the window. The app installs the
+  `agentnet` command too; people do not need terminal commands to use it.
+  The Windows installer makes that command available to coding agents in
+  new terminal sessions. Windows login startup handles account and install
+  folder names with spaces. Phones keep the browser/home-screen app.
+- **Sign in with Google.** In a workspace that enables Google sign-in, use
+  the account your workspace allows. Adding another device still needs an
+  OK from an existing human device of yours. Signing in does not give
+  someone else permission to use your agents.
+- **Topics in every chat.** People chats, groups and agent chats all have
+  New topic and All topics. Keep the main conversation, start a separate
+  topic, or turn a message into one. Follow-ups and agent replies stay in
+  their topic. In people chats and groups, Mark done and Reopen are shared;
+  a new or previously unseen message makes the topic active again.
+- **Handle several topics together.** Select topics in All topics to mark
+  them done, archive them or Delete for me. You get a confirmation and a
+  short Undo period. Archive is your own view. Deleting a topic in a people
+  chat removes the messages you hold from your linked devices; other people
+  keep their copies. Deleting an agent chat stays on this device.
+- **Agents belong to the group.** Everyone in the group can address an
+  accepted agent without inviting it again. It appears once; bringing it
+  in again shares more selected history. Agents can ask other agents in
+  the group and receive the reply. The owner's approvals still decide
+  what an agent may answer or do. New group agents receive future group
+  messages and files, including when their owner is outside the group;
+  earlier history is shared only when selected. Only a current group admin
+  can invite an agent whose owner is outside the group. Valid removals reach
+  members who join later or were offline; old admin rights do not authorize
+  a new invitation. Being in the group today does not prove someone received
+  an earlier message or may share it with an agent.
+- **Approve a person across their devices.** Approve Sergey once for
+  questions or tasks, and it covers his current verified devices and ones
+  he links later. Removing a device ends its access once the removal is
+  verified. Changed keys and conflicting identities still pause access.
+  Each approval belongs to the exact verified person ID; names never choose
+  who receives permission. A person's own human devices can add devices;
+  an agent-only host cannot.
+- **Your profile picture (MEL-520).** Choose a picture, crop it, preview it and save
+  it in Comic, Classic or Zoom, including on a phone. You can also use a
+  chat image as your picture, replace it or remove it. Other people see it
+  beside your messages and profile. Pictures are public on the workspace's
+  server; removing one from your profile does not erase the uploaded image.
+- **More controls in Comic.** Set a computer as a service or bot, manage
+  teams, and connect Google Drive or save a chat file to a project space.
+  Choosing a reply receiver or an existing agent session remains in Classic
+  and Zoom; Comic still lacks those controls. See the
+  [remaining Comic gap](COMIC_PARITY_GAPS.md).
+- **Read the whole request when an agent needs you.** Its full explanation
+  is visible to the people responsible for deciding, in the chat and on
+  the OKs card, with readable long text on a
+  narrow screen. Work in progress stays visible; stalled work is called
+  out. Ask again retries a question; Mark as handled clears it without
+  sending a reply or starting work.
+- **MEL-521 — PLACEHOLDER (Claude to fill after merge): Do it / no Answer–Do it toggle. Not claimed here yet.**
+- **Send keeps you writing.** Your sent draft clears immediately, one
+  Sending bubble shows progress, and you can write the next message while
+  delivery continues. A failed send keeps a way to retry without replacing
+  your newer draft. Sending is not a promise that a task has finished.
+- **Faster phone catch-up.** After time away, messages, files and receipts
+  are processed with fewer delays and fewer repeated screen refreshes.
+- **Unread follows what you see.** Reading an open chat clears the unread
+  messages shown there instead of leaving a stray badge. Your own
+  messages do not show as unread.
+- **Know which workspace you are joining.** Invitations name the workspace,
+  and people and agents are shown with readable names.
+
+## Limits to know
+
+The desktop packages are Linux AppImage, `.deb` and `.rpm`, a Windows
+per-user installer, and a universal Mac `.dmg` for Intel and Apple silicon.
+See the [installation guide](revival/INSTALL.md). Installers are unsigned.
+Mac installation and use are untested on a real Mac; Windows installer and
+real desktop behavior are also not qualified by these local test reports.
+Published installer downloads and real install/open/tray/startup behavior
+still need checking. Local builds and tests do not establish those results.
+
+Google sign-in was tested with a local stand-in, not a real Google account.
+Older identities are not converted to Google identities: Google-enabled
+workspaces require fresh enrollment. Physical phone catch-up and the
+reported live group incident still need real-device checks.
+
+The wider person identity work remains tracked in **MEL-525**; this release
+adds approvals across a verified person's devices, not the larger identity
+redesign. Remaining group-agent work and live acceptance stay tracked in
+**MEL-542**. Older limited guest invitations are not silently expanded to
+new group membership. An outside-owner agent requires a current group
+admin's invitation; if that inviting admin leaves or loses admin rights,
+a current admin must add it again. The later group fixes do not rewrite
+previously stored history-sharing permissions. Some older views can still
+need a fresh authorized removal if its author lost admin rights before the
+removal arrived. Custom agent pictures are not included; the new picture
+controls are for people.
+
+---
+
+The following v0.6.0 release record is historical. It does not establish
+publication, deployment or test results for the October 5 candidate above.
+
+# Historical release: Messenger v0.6.0 — 2026-10-02
 
 Published stable [v0.6.0](https://github.com/misunders2d/agentnet/releases/tag/v0.6.0) from
 `49d0f545da8d33dc13e8c4775048b9ee78afa297`; all seven uploaded asset
@@ -265,3 +374,33 @@ schema. Verify this with synthetic databases before accepting upgrade safety.
 Explicit exclusion added by the owner: `agentnet tui`, both standalone and
 possible Herdr integration, is a separate post-release debate and does not
 block this release. See [DECISIONS §8](DECISIONS.md#8-terminal-messenger-request-post-release-sep-30).
+
+## 2026-10-05 fixes: agent interaction (P4: MEL-537, MEL-532, MEL-521 backend)
+
+- MEL-537: `agentnet ask` from a Claude Code, Codex or Pi session is never
+  refused, for a missing channel or for transcript size; the answer goes to a
+  live session receiver or to this computer's inbox, announced by every
+  session's hooks. `ask` waits for the answer and prints it (`--answer-wait`,
+  default 90s), woken by the daemon's new owner-only `changes.sock`; no
+  polling. An ended session's undelivered answers go to the inbox.
+- MEL-532: stewards. A person named once on a server (`person service
+  --steward`, `operator grant --person`) decides its OKs from every device of
+  theirs; DM/group requests too; cards name who decides; the newest report
+  replaces older ones and an empty one clears the card. Existing servers need
+  `agentnet operator grant --person ADDRESS` once, run by the owner.
+- Responders have no default time limit (owner rule: no platform limits);
+  a limit the person set is still honoured. The 5m that earlier builds
+  stored as the default (default responder and named agents) is cleared
+  once when the new build first opens the home; a person who wants exactly
+  5m sets it again.
+- MEL-521 (backend, device threads): a device-thread question's run that
+  needs an action answers with the exact task it proposes (status
+  `proposal`); `agentnet do ID` confirms it as a task. The app shows it as
+  "suggested, not run" (its Do it button comes with P4's page slice); a
+  conversation's run hands the action to its person as before, until
+  conversation proposals can be confirmed. A task from another computer of yours that this
+  one trusts (`person approve --native`, the self-consent trust set) runs as
+  yours (device threads); one from a browser or phone key waits for the OK
+  here until the owner answers P4 question 1 (widening it is one predicate
+  condition, selfconsent.go). The Comic composer change and conversation
+  proposals follow P3.

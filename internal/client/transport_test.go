@@ -19,6 +19,7 @@ import (
 func enrolledAt(t *testing.T, url, certPEM string) *Agent {
 	t.Helper()
 	home := t.TempDir()
+	seedFixtureStore(t, home)
 	idPath, dbPath := paths(home)
 	id, err := identity.Generate()
 	if err == nil {

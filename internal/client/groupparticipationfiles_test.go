@@ -51,8 +51,18 @@ func TestGroupParticipationFilesLateLinkedRequestAndNamedOutput(t *testing.T) {
 		t.Fatal(e)
 	}
 	parts := []ParticipationInfo{}
-	for range 2 {
-		p, e := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, record.ID, nil, []string{w.alice.Self().Fingerprint()}, "exact PID file scope")
+	for i := range 2 {
+		agent := record
+		if i == 1 { // distinct named agents: re-inviting one now reuses its PID
+			agent, e = w.bob.CreateLocalAgent("second file reviewer", Responder{Harness: "agentstub", Dir: stub.dir})
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = w.bob.PublishAgentCatalog(tctx(t)); e != nil {
+				t.Fatal(e)
+			}
+		}
+		p, e := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, w.bob.Address, agent.ID, nil, []string{w.alice.Self().Fingerprint()}, "exact PID file scope")
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -154,8 +164,8 @@ func TestGroupParticipationFilesLateLinkedRequestAndNamedOutput(t *testing.T) {
 		if e = phone.accept(tctx(t), env); e != nil {
 			t.Fatal(e)
 		}
-		phone.retryProof(tctx(t))
 	}
+	// Replay the complete history batch before retrying held proof dependencies.
 	phone.retryProof(tctx(t))
 	oldSession := w.alice.session
 	runAgent(t, w.alice)
@@ -175,16 +185,25 @@ func TestGroupParticipationFilesLateLinkedRequestAndNamedOutput(t *testing.T) {
 	})
 	publishGroupFixtureCaps(t, w.alice, true)
 	publishGroupFixtureCaps(t, phone, true)
-	var positive fileMsg
-	for _, kind := range []string{envelope.KindQuestion, envelope.KindTask, envelope.KindAnswer, envelope.KindResult} {
+	kinds := []string{envelope.KindQuestion, envelope.KindTask, envelope.KindAnswer, envelope.KindResult}
+	fileIDs := make(map[string]string, len(kinds))
+	// Request independent files together, then verify every returned byte.
+	for _, kind := range kinds {
 		var id string
 		if e = phone.store.db.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND pid=? AND kind=?`, packet.State.Conv, refs[kind], parts[0].PID, kind).Scan(&id); e != nil {
 			t.Fatal(e)
 		}
-		for index, name := range []string{"z.txt", "a.txt"} {
+		fileIDs[kind] = id
+		for index := range 2 {
 			if e = phone.RequestFile(tctx(t), id, index); e != nil {
 				t.Fatalf("%s index%d: %v", kind, index, e)
 			}
+		}
+	}
+	var positive fileMsg
+	for _, kind := range kinds {
+		id := fileIDs[kind]
+		for index, name := range []string{"z.txt", "a.txt"} {
 			eventually(t, "late PID file offer", func() bool {
 				files, e := phone.store.attachments(id)
 				return e == nil && len(files) == 2 && !strings.HasPrefix(files[index].BlobID, historyBlob)

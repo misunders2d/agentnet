@@ -18,7 +18,7 @@ func TestAgentPromptNamesGuestAskerAndReaders(t *testing.T) {
 	if err := w.bob.Approve(carol.Address); err != nil {
 		t.Fatal(err)
 	}
-	guest := "Person of " + carol.Address + " (" + carol.Address + ")"
+	guest := "a guest whose chosen name is \"Person of " + carol.Address + "\" (" + carol.Address + ")"
 	readers := "It also reaches the guests present now, outside people invited only temporarily: " + guest + "."
 
 	q, err := carol.AskAgent(tctx(t), ap.PID, envelope.KindQuestion, "guest asks the assistant")
@@ -30,7 +30,7 @@ func TestAgentPromptNamesGuestAskerAndReaders(t *testing.T) {
 	if !strings.Contains(prompt, "## Question from "+guest+", an outside person present in this conversation only temporarily, as a guest\n") {
 		t.Fatalf("the guest is not named as the asker:\n%s", prompt)
 	}
-	if strings.Contains(prompt, "the other person") {
+	if strings.Contains(prompt, "## Question from another person") {
 		t.Fatalf("the guest's question is said to come from the other member:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "your reply is sent to both of them. "+readers) {
@@ -43,7 +43,7 @@ func TestAgentPromptNamesGuestAskerAndReaders(t *testing.T) {
 	}
 	replyAt(t, w.alice, conv, own.ID)
 	prompt = stub.last()
-	if !strings.Contains(prompt, "## Question from the other person, Person of "+w.alice.Address+"\n") || !strings.Contains(prompt, readers) {
+	if !strings.Contains(prompt, "## Question from another person, who calls themselves \"Person of "+w.alice.Address+"\", writing from their device Alice ("+w.alice.Address+", key ") || !strings.Contains(prompt, readers) {
 		t.Fatalf("a member's question beside a guest:\n%s", prompt)
 	}
 }

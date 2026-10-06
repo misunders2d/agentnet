@@ -41,7 +41,7 @@ type skinAsset struct {
 // BuiltinSkins are the packages embedded in this program, in the order the
 // catalog offers them; the first is the default. Their trust comes from
 // this fixed list (and loader.js's copy of it), never from a manifest.
-var BuiltinSkins = []string{"comic"}
+var BuiltinSkins = []string{"comic", "classic", "zoom"}
 
 // ReservedSkinIDs are the ids no installed or browser-local package may
 // use: the built-in skins, those to come, and the old name of the default.

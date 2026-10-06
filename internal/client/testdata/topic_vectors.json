@@ -1,149 +1,946 @@
 {
-  "comment": "Topic derivation vectors (client topics.go deriveTopic, engine.mjs deriveTopic). Times are unix seconds; now is 1790000000; messages are in thread order, oldest first; dir in = received here, out = sent from here.",
   "now": 1790000000,
   "archive_after": 604800,
   "cases": [
-    {"name": "the agent answered the latest question: done by the agent",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}],
-     "want": {"state": "done", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1789990060}},
-    {"name": "the agent's result failed: not done",
-     "messages": [
-       {"id": "t1", "dir": "out", "kind": "task", "state": "delivered", "at": 1789990000},
-       {"id": "r1", "dir": "in", "kind": "result", "status": "failed", "reply_to": "t1", "state": "", "at": 1789990060}],
-     "want": {"state": "active", "pending": false, "quiet_since": 1789990060}},
-    {"name": "an answer replied by hand carries no status: not done",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "", "reply_to": "q1", "state": "", "at": 1789990060}],
-     "want": {"state": "active", "pending": false, "quiet_since": 1789990060}},
-    {"name": "a sent question with no reply waits (the other agent may need a person): pending, never archived",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
-    {"name": "a progress update does not settle a request",
-     "messages": [
-       {"id": "t1", "dir": "out", "kind": "task", "state": "delivered", "at": 1780000000},
-       {"id": "p1", "dir": "in", "kind": "message", "status": "progress", "reply_to": "t1", "state": "", "at": 1780000060}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1780000060}},
-    {"name": "a received question held for the person: pending",
-     "messages": [
-       {"id": "q1", "dir": "in", "kind": "question", "state": "held", "at": 1780000000}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
-    {"name": "a received request the responder said needs a person: pending, not done",
-     "messages": [
-       {"id": "t1", "dir": "in", "kind": "task", "state": "needs_human", "at": 1780000000}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
-    {"name": "a request the responder is running: pending",
-     "messages": [
-       {"id": "t1", "dir": "in", "kind": "task", "state": "running", "at": 1780000000}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
-    {"name": "a received request interrupted here waits for the person to run it again or close it: pending, never archived",
-     "messages": [
-       {"id": "t1", "dir": "in", "kind": "task", "state": "interrupted", "at": 1780000000}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
-    {"name": "this device's responder answered a received question: done by the agent",
-     "messages": [
-       {"id": "q1", "dir": "in", "kind": "question", "state": "answered", "at": 1789990000},
-       {"id": "a1", "dir": "out", "kind": "answer", "status": "done", "reply_to": "q1", "state": "delivered", "at": 1789990030}],
-     "want": {"state": "done", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1789990030}},
-    {"name": "the person here answered a received task by hand (state manual): done by you, the result is their words",
-     "messages": [
-       {"id": "t1", "dir": "in", "kind": "task", "state": "manual", "at": 1789990000},
-       {"id": "r1", "dir": "out", "kind": "result", "status": "done", "reply_to": "t1", "state": "delivered", "at": 1789990030}],
-     "want": {"state": "done", "done_by": "you", "conclusion": "r1", "pending": false, "quiet_since": 1789990030}},
-    {"name": "the person here answered a received question by hand: no status, not done",
-     "messages": [
-       {"id": "q1", "dir": "in", "kind": "question", "state": "manual", "at": 1789990000},
-       {"id": "a1", "dir": "out", "kind": "answer", "status": "", "reply_to": "q1", "state": "delivered", "at": 1789990030}],
-     "want": {"state": "active", "pending": false, "quiet_since": 1789990030}},
-    {"name": "done and quiet for more than seven days: archived, still saying the agent finished it",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789300000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789300060}],
-     "want": {"state": "archived", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1789300060}},
-    {"name": "quiet exactly seven days: archived",
-     "messages": [
-       {"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789395200}],
-     "want": {"state": "archived", "pending": false, "quiet_since": 1789395200}},
-    {"name": "quiet a second under seven days: active",
-     "messages": [
-       {"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789395201}],
-     "want": {"state": "active", "pending": false, "quiet_since": 1789395201}},
-    {"name": "the person marked it done",
-     "messages": [
-       {"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789990000},
-       {"id": "m2", "dir": "in", "kind": "message", "state": "", "reply_to": "m1", "at": 1789990060}],
-     "local": {"mark": "done", "mark_at": 1789995000, "mark_count": 2},
-     "want": {"state": "done", "done_by": "you", "pending": false, "quiet_since": 1789995000}},
-    {"name": "a new message after Mark done makes it active again",
-     "messages": [
-       {"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789990000},
-       {"id": "m2", "dir": "in", "kind": "message", "state": "", "reply_to": "m1", "at": 1789990060},
-       {"id": "m3", "dir": "in", "kind": "message", "state": "", "reply_to": "m2", "at": 1789996000}],
-     "local": {"mark": "done", "mark_at": 1789995000, "mark_count": 2},
-     "want": {"state": "active", "pending": false, "quiet_since": 1789996000}},
-    {"name": "reopened after the agent finished: active",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}],
-     "local": {"mark": "open", "mark_at": 1789995000, "mark_count": 2},
-     "want": {"state": "active", "pending": false, "quiet_since": 1789995000}},
-    {"name": "after Reopen, the agent's next final answer makes it done again",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060},
-       {"id": "q2", "dir": "out", "kind": "question", "state": "delivered", "reply_to": "a1", "at": 1789996000},
-       {"id": "a2", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q2", "state": "", "at": 1789996060}],
-     "local": {"mark": "open", "mark_at": 1789995000, "mark_count": 2},
-     "want": {"state": "done", "done_by": "agent", "conclusion": "a2", "pending": false, "quiet_since": 1789996060}},
-    {"name": "a plain message after the agent's final answer makes it active again",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060},
-       {"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "reply_to": "a1", "at": 1789990100}],
-     "want": {"state": "active", "pending": false, "quiet_since": 1789990100}},
-    {"name": "the latest request failed though an earlier one was done: not done",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060},
-       {"id": "t2", "dir": "out", "kind": "task", "state": "delivered", "reply_to": "a1", "at": 1789990100},
-       {"id": "r2", "dir": "in", "kind": "result", "status": "failed", "reply_to": "t2", "state": "", "at": 1789990160}],
-     "want": {"state": "active", "pending": false, "quiet_since": 1789990160}},
-    {"name": "an answer to an earlier request while the latest still waits: pending, not done",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000},
-       {"id": "q2", "dir": "out", "kind": "question", "state": "delivered", "reply_to": "q1", "at": 1789990010},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1789990060}},
-    {"name": "Mark done while something waits: done by you, and not archived while it waits",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000}],
-     "local": {"mark": "done", "mark_at": 1780000100, "mark_count": 1},
-     "want": {"state": "done", "done_by": "you", "pending": true, "quiet_since": 1780000100}},
-    {"name": "an archived topic reopened: active, quiet since the reopen",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1780000060}],
-     "local": {"mark": "open", "mark_at": 1789999000, "mark_count": 2},
-     "want": {"state": "active", "pending": false, "quiet_since": 1789999000}},
-    {"name": "a request the Hub refused never waits: the topic can be archived",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "failed", "at": 1780000000}],
-     "want": {"state": "archived", "pending": false, "quiet_since": 1780000000}},
-    {"name": "an open review notice keeps its thread pending",
-     "messages": [
-       {"id": "n1", "dir": "in", "kind": "message", "status": "review_notice", "state": "needs_human", "notice": true, "at": 1780000000}],
-     "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
-    {"name": "a dismissed review notice does not",
-     "messages": [
-       {"id": "n1", "dir": "in", "kind": "message", "status": "review_notice", "state": "resolved", "notice": true, "at": 1780000000}],
-     "want": {"state": "archived", "pending": false, "quiet_since": 1780000000}},
-    {"name": "a reply handed to a local session is not work here",
-     "messages": [
-       {"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000},
-       {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "pending", "selected": true, "at": 1780000060}],
-     "want": {"state": "archived", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1780000060}}
+    {"name": "the agent answered the latest question: done by the agent", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060, "topic_done": true}], "want": {"state": "done", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1789990060}},
+    {"name": "the agent's result failed: not done", "messages": [{"id": "t1", "dir": "out", "kind": "task", "state": "delivered", "at": 1789990000}, {"id": "r1", "dir": "in", "kind": "result", "status": "failed", "reply_to": "t1", "state": "", "at": 1789990060}], "want": {"state": "active", "pending": false, "quiet_since": 1789990060}},
+    {"name": "an answer replied by hand carries no status: not done", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "", "reply_to": "q1", "state": "", "at": 1789990060}], "want": {"state": "active", "pending": false, "quiet_since": 1789990060}},
+    {"name": "a sent question with no reply waits (the other agent may need a person): pending, never archived", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000}], "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
+    {"name": "a progress update does not settle a request", "messages": [{"id": "t1", "dir": "out", "kind": "task", "state": "delivered", "at": 1780000000}, {"id": "p1", "dir": "in", "kind": "message", "status": "progress", "reply_to": "t1", "state": "", "at": 1780000060}], "want": {"state": "active", "pending": true, "quiet_since": 1780000060}},
+    {"name": "a received question held for the person: pending", "messages": [{"id": "q1", "dir": "in", "kind": "question", "state": "held", "at": 1780000000}], "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
+    {"name": "a received request the responder said needs a person: pending, not done", "messages": [{"id": "t1", "dir": "in", "kind": "task", "state": "needs_human", "at": 1780000000}], "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
+    {"name": "a request the responder is running: pending", "messages": [{"id": "t1", "dir": "in", "kind": "task", "state": "running", "at": 1780000000}], "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
+    {"name": "a received request interrupted here waits for the person to run it again or close it: pending, never archived", "messages": [{"id": "t1", "dir": "in", "kind": "task", "state": "interrupted", "at": 1780000000}], "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
+    {"name": "this device's responder answered a received question: done by the agent", "messages": [{"id": "q1", "dir": "in", "kind": "question", "state": "answered", "at": 1789990000}, {"id": "a1", "dir": "out", "kind": "answer", "status": "done", "reply_to": "q1", "state": "delivered", "at": 1789990030, "topic_done": true}], "want": {"state": "done", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1789990030}},
+    {"name": "a manual result leaves the topic active", "messages": [{"id": "t1", "dir": "in", "kind": "task", "state": "manual", "at": 1789990000}, {"id": "r1", "dir": "out", "kind": "result", "status": "done", "reply_to": "t1", "state": "delivered", "at": 1789990030}], "want": {"state": "active", "pending": false, "quiet_since": 1789990030}},
+    {"name": "the person here answered a received question by hand: no status, not done", "messages": [{"id": "q1", "dir": "in", "kind": "question", "state": "manual", "at": 1789990000}, {"id": "a1", "dir": "out", "kind": "answer", "status": "", "reply_to": "q1", "state": "delivered", "at": 1789990030}], "want": {"state": "active", "pending": false, "quiet_since": 1789990030}},
+    {"name": "done and quiet for more than seven days: archived, still saying the agent finished it", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789300000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789300060, "topic_done": true}], "want": {"state": "archived", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1789300060}},
+    {"name": "quiet exactly seven days: archived", "messages": [{"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789395200}], "want": {"state": "archived", "pending": false, "quiet_since": 1789395200}},
+    {"name": "quiet a second under seven days: active", "messages": [{"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789395201}], "want": {"state": "active", "pending": false, "quiet_since": 1789395201}},
+    {"name": "the person marked it done", "messages": [{"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789990000}, {"id": "m2", "dir": "in", "kind": "message", "state": "", "reply_to": "m1", "at": 1789990060}], "local": {"mark": "done", "mark_at": 1789995000, "mark_count": 2}, "want": {"state": "done", "done_by": "you", "pending": false, "quiet_since": 1789995000}},
+    {"name": "a new message after Mark done makes it active again", "messages": [{"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "at": 1789990000}, {"id": "m2", "dir": "in", "kind": "message", "state": "", "reply_to": "m1", "at": 1789990060}, {"id": "m3", "dir": "in", "kind": "message", "state": "", "reply_to": "m2", "at": 1789996000}], "local": {"mark": "done", "mark_at": 1789995000, "mark_count": 2}, "want": {"state": "active", "pending": false, "quiet_since": 1789996000}},
+    {"name": "reopened after the agent finished: active", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}], "local": {"mark": "open", "mark_at": 1789995000, "mark_count": 2}, "want": {"state": "active", "pending": false, "quiet_since": 1789995000}},
+    {"name": "after Reopen, the agent's next final answer makes it done again", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}, {"id": "q2", "dir": "out", "kind": "question", "state": "delivered", "reply_to": "a1", "at": 1789996000}, {"id": "a2", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q2", "state": "", "at": 1789996060, "topic_done": true}], "local": {"mark": "open", "mark_at": 1789995000, "mark_count": 2}, "want": {"state": "done", "done_by": "agent", "conclusion": "a2", "pending": false, "quiet_since": 1789996060}},
+    {"name": "a plain message after the agent's final answer makes it active again", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}, {"id": "m1", "dir": "out", "kind": "message", "state": "delivered", "reply_to": "a1", "at": 1789990100}], "want": {"state": "active", "pending": false, "quiet_since": 1789990100}},
+    {"name": "the latest request failed though an earlier one was done: not done", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}, {"id": "t2", "dir": "out", "kind": "task", "state": "delivered", "reply_to": "a1", "at": 1789990100}, {"id": "r2", "dir": "in", "kind": "result", "status": "failed", "reply_to": "t2", "state": "", "at": 1789990160}], "want": {"state": "active", "pending": false, "quiet_since": 1789990160}},
+    {"name": "an answer to an earlier request while the latest still waits: pending, not done", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "q2", "dir": "out", "kind": "question", "state": "delivered", "reply_to": "q1", "at": 1789990010}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060}], "want": {"state": "active", "pending": true, "quiet_since": 1789990060}},
+    {"name": "Mark done while something waits: done by you, and not archived while it waits", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000}], "local": {"mark": "done", "mark_at": 1780000100, "mark_count": 1}, "want": {"state": "done", "done_by": "you", "pending": true, "quiet_since": 1780000100}},
+    {"name": "an archived topic reopened: active, quiet since the reopen", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1780000060}], "local": {"mark": "open", "mark_at": 1789999000, "mark_count": 2}, "want": {"state": "active", "pending": false, "quiet_since": 1789999000}},
+    {"name": "a request the Hub refused never waits: the topic can be archived", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "failed", "at": 1780000000}], "want": {"state": "archived", "pending": false, "quiet_since": 1780000000}},
+    {"name": "an open review notice keeps its thread pending", "messages": [{"id": "n1", "dir": "in", "kind": "message", "status": "review_notice", "state": "needs_human", "notice": true, "at": 1780000000}], "want": {"state": "active", "pending": true, "quiet_since": 1780000000}},
+    {"name": "a dismissed review notice does not", "messages": [{"id": "n1", "dir": "in", "kind": "message", "status": "review_notice", "state": "resolved", "notice": true, "at": 1780000000}], "want": {"state": "archived", "pending": false, "quiet_since": 1780000000}},
+    {"name": "a reply handed to a local session is not work here", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1780000000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "pending", "selected": true, "at": 1780000060, "topic_done": true}], "want": {"state": "archived", "done_by": "agent", "conclusion": "a1", "pending": false, "quiet_since": 1780000060}},
+    {"name": "answer without explicit close stays active", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060, "topic_done": false}], "want": {"state": "active", "pending": false, "quiet_since": 1789990060}},
+    {"name": "explicit close then new message reopens", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060, "topic_done": true}, {"id": "next", "dir": "out", "kind": "message", "state": "delivered", "at": 1789990100}], "want": {"state": "active", "pending": false, "quiet_since": 1789990100}},
+    {"name": "close flag on progress is ignored", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "a1", "dir": "in", "kind": "message", "status": "progress", "reply_to": "q1", "state": "", "at": 1789990060, "topic_done": true}], "want": {"state": "active", "pending": true, "quiet_since": 1789990060}},
+    {"name": "close while another request pending stays active", "messages": [{"id": "q1", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990000}, {"id": "pending", "dir": "out", "kind": "question", "state": "delivered", "at": 1789990010}, {"id": "a1", "dir": "in", "kind": "answer", "status": "done", "reply_to": "q1", "state": "", "at": 1789990060, "topic_done": true}], "want": {"state": "active", "pending": true, "quiet_since": 1789990060}}
+  ]
+,
+  "chat_cases": [
+    {
+      "name": "Main and replies stay main",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        }
+      ],
+      "assigned": {},
+      "want": [],
+      "local": {}
+    },
+    {
+      "name": "Promotion moves seed and descendants",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Promotion arrives first",
+      "messages": [
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Shared done covers exact logical turns",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "d",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "d",
+          "sent": 1789999930,
+          "topic": "a",
+          "topic_event": {
+            "action": "done",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "d": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "done",
+          "Count": 2,
+          "DoneBy": "person",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Unseen old turn ends shared done",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "d",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "d",
+          "sent": 1789999930,
+          "topic": "a",
+          "topic_event": {
+            "action": "done",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        {
+          "lid": "c",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "c",
+          "sent": 1789999905,
+          "topic": "a"
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "d": "a",
+        "c": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 3,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Anyone reopens",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "d",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "d",
+          "sent": 1789999930,
+          "topic": "a",
+          "topic_event": {
+            "action": "done",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        {
+          "lid": "r",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "r",
+          "sent": 1789999940,
+          "topic": "a",
+          "topic_event": {
+            "action": "open",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "d": "a",
+        "r": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Explicit topics do not consume main",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "x",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "x",
+          "sent": 1789999990,
+          "topic": "x"
+        },
+        {
+          "lid": "y",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "y",
+          "sent": 1789999995,
+          "reply_to": "x"
+        }
+      ],
+      "assigned": {
+        "x": "x",
+        "y": "x"
+      },
+      "want": [
+        {
+          "ID": "x",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Cycle stays main",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900,
+          "reply_to": "b"
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        }
+      ],
+      "assigned": {},
+      "want": [],
+      "local": {}
+    },
+    {
+      "name": "Quiet topics archive",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789300000,
+          "topic": "a"
+        }
+      ],
+      "assigned": {
+        "a": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "archived",
+          "Count": 1,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Pending topic never archives",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "question",
+          "body": "a",
+          "sent": 1789300000,
+          "topic": "a",
+          "state": "delivered"
+        }
+      ],
+      "assigned": {
+        "a": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 1,
+          "DoneBy": "",
+          "Pending": true
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Answer does not close without trailer",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "question",
+          "body": "a",
+          "sent": 1789999900,
+          "topic": "a"
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "answer",
+          "body": "b",
+          "sent": 1789999910,
+          "topic": "a",
+          "reply_to": "a",
+          "status": "done"
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Explicit agent close",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "question",
+          "body": "a",
+          "sent": 1789999900,
+          "topic": "a"
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "answer",
+          "body": "b",
+          "sent": 1789999910,
+          "topic": "a",
+          "reply_to": "a",
+          "status": "done",
+          "topic_done": true
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "done",
+          "Count": 2,
+          "DoneBy": "agent",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Explicit archive local",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "archived",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {
+        "a": {
+          "mark": "archived",
+          "mark_at": 1789999990,
+          "mark_count": 3
+        }
+      }
+    },
+    {
+      "name": "Shared reopen ends local archive",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "r",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "r",
+          "sent": 1789999940,
+          "topic": "a",
+          "topic_event": {
+            "action": "open",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "r": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {
+        "a": {
+          "mark": "archived",
+          "mark_at": 1789999930,
+          "mark_count": 2
+        }
+      }
+    },
+    {
+      "name": "Same-second shared reopen invalidates archive",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789999900
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789999910,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1789999920,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        },
+        {
+          "lid": "open",
+          "dir": "in",
+          "from": "bob/desk",
+          "kind": "message",
+          "body": "Reopened this topic.",
+          "sent": 1789999990,
+          "topic": "a",
+          "reply_to": "p",
+          "topic_event": {
+            "action": "open",
+            "seen": [
+              "a",
+              "b"
+            ]
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a",
+        "open": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {
+        "a": {
+          "mark": "archived",
+          "mark_at": 1789999990,
+          "mark_count": 3
+        }
+      }
+    },
+    {
+      "name": "Old main flow promotion starts a fresh quiet interval",
+      "messages": [
+        {
+          "lid": "a",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "a",
+          "sent": 1789308800
+        },
+        {
+          "lid": "b",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "b",
+          "sent": 1789308800,
+          "reply_to": "a"
+        },
+        {
+          "lid": "p",
+          "dir": "out",
+          "from": "ann/desk",
+          "kind": "message",
+          "body": "p",
+          "sent": 1790000000,
+          "topic": "a",
+          "topic_event": {
+            "action": "create"
+          }
+        }
+      ],
+      "assigned": {
+        "a": "a",
+        "b": "a",
+        "p": "a"
+      },
+      "want": [
+        {
+          "ID": "a",
+          "State": "active",
+          "Count": 2,
+          "DoneBy": "",
+          "Pending": false
+        }
+      ],
+      "local": {}
+    },
+    {
+      "name": "Same-second agent output keeps physical request authorization and logical topic ordering",
+      "messages": [
+        {
+          "id": "physical-request",
+          "lid": "z",
+          "kind": "question",
+          "dir": "out",
+          "body": "Please finish",
+          "sent": 1790000000,
+          "topic": "flow"
+        },
+        {
+          "id": "physical-answer",
+          "lid": "a",
+          "kind": "answer",
+          "dir": "in",
+          "body": "Finished",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "physical-request",
+          "status": "done",
+          "topic_done": true
+        }
+      ],
+      "local": {},
+      "assigned": {
+        "z": "flow",
+        "a": "flow"
+      },
+      "want": [
+        {
+          "ID": "flow",
+          "State": "done",
+          "DoneBy": "agent",
+          "Count": 2,
+          "Pending": false
+        }
+      ]
+    },
+    {
+      "name": "Same-second follow-up continues its prior answer before explicit agent closure",
+      "messages": [
+        {
+          "id": "follow-up-request",
+          "lid": "b",
+          "kind": "question",
+          "dir": "out",
+          "body": "Please finish",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "y"
+        },
+        {
+          "id": "first-request",
+          "lid": "z",
+          "kind": "question",
+          "dir": "out",
+          "body": "What failed?",
+          "sent": 1790000000,
+          "topic": "flow"
+        },
+        {
+          "id": "last-answer",
+          "lid": "a",
+          "kind": "answer",
+          "dir": "in",
+          "body": "Finished",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "follow-up-request",
+          "status": "done",
+          "topic_done": true
+        },
+        {
+          "id": "first-answer",
+          "lid": "y",
+          "kind": "answer",
+          "dir": "in",
+          "body": "The deploy failed",
+          "sent": 1790000000,
+          "topic": "flow",
+          "reply_to": "first-request",
+          "status": "done"
+        }
+      ],
+      "local": {},
+      "assigned": {
+        "a": "flow",
+        "b": "flow",
+        "y": "flow",
+        "z": "flow"
+      },
+      "want": [
+        {
+          "ID": "flow",
+          "State": "done",
+          "Count": 4,
+          "DoneBy": "agent",
+          "Pending": false
+        }
+      ]
+    }
   ]
 }

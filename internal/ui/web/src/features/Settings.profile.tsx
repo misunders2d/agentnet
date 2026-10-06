@@ -13,14 +13,17 @@ import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
 import { Card, copyText, Details, Fact, GroupLabel, Hint, input, PageHead, Skeleton, Tile } from "./Settings.parts";
+import { usePortal } from "../owned";
+import { openPictureEditor } from "../pictures.mjs";
 import { QrCode } from "./Settings.qr";
+import { Confirm } from "./Message.actions";
 
 /** The words for this device's own request to join a person (Overview.link). */
 const ownLinkText: Record<string, string> = {
   pending: "Waiting for your other device to approve this one. Open AgentNet there and answer it.",
   refused: "Your other device refused this one, so it did not join as you.",
-  expired: "That link expired before this device was approved. Make a new one on your other device (Your devices → Add a device).",
-  stale: "That link is out of date because your devices changed meanwhile. Make a new one on your other device.",
+  expired: "This device was not approved in time. Sign in with Google again, or make a new device link on your other device.",
+  stale: "Your devices changed meanwhile. Sign in with Google again, or make a new device link on your other device.",
   failed: "Joining as you did not work.",
 };
 
@@ -45,7 +48,7 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
   const p = o.person;
   if (p) return <><PageHead title="Profile" titleRef={titleRef} lead="How you appear to people in your chats." /><Rename person={p} /></>;
 
-  const own = o.link && ownLinkText[o.link.state];
+  const own = o.role !== "service" && o.link && ownLinkText[o.link.state];
   return (
     <>
       <PageHead title="Set up your person" titleRef={titleRef} lead="A person is you, the human others chat with. A service or bot, like a server, doesn’t need one." />
@@ -63,12 +66,27 @@ export function ProfileSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
       ) : (
         <Card className="p-4"><p>This computer has no person yet.</p></Card>
       )}
+      {o.persons && o.role === "unset" && o.link?.state !== "pending" && store.host.platform !== "browser" && <ServiceRole />}
     </>
   );
 }
 
+function ServiceRole() {
+  const store = useApp();
+  const [open, setOpen] = useState(false);
+  return <div className="mt-4">
+    <Button variant="outline" onClick={() => setOpen(true)}>It is a service or bot…</Button>
+    <Confirm open={open} onOpenChange={setOpen} title="A service or bot" ok="It is a service or bot" danger={false}
+      onOk={() => store.run((a) => a.serviceRole(), "This computer is a service or bot.")}>
+      <p>This computer has no person. Nobody writes personal chats as a human here, or asks others to trust it as one. It keeps its device conversations and invitations.</p>
+      <p className="mt-2">Choose this for a server, automation or bot.</p>
+    </Confirm>
+  </div>;
+}
+
 function Rename({ person }: { person: T.PersonView }) {
   const store = useApp();
+  const portal = usePortal();
   const [name, setName] = useState(person.label);
   const [busy, setBusy] = useState(false);
   useEffect(() => setName(person.label), [person.label]); // a rename from another device shows here
@@ -87,6 +105,7 @@ function Rename({ person }: { person: T.PersonView }) {
         <PersonAvatar name={name.trim() || person.label} seed={person.person || person.address} size={72} />
         <div className="min-w-0 max-w-full">
           <p className="truncate font-display text-[28px] font-extrabold leading-tight">{name.trim() || person.label}</p>
+		  {person.email && <p className="mt-1 break-all text-sm text-muted">{person.email} · verified by this workspace</p>}
           <p className="mt-1 flex flex-wrap justify-center gap-1.5">
             {devices.map((d) => (
               <span key={d.address} className="inline-flex items-center gap-1 rounded-full stroke bg-surface px-2.5 py-0.5 text-[13px] font-semibold">
@@ -97,6 +116,10 @@ function Rename({ person }: { person: T.PersonView }) {
           {person.published === false && <Hint className="mt-2">Not on your server yet: AgentNet adds you when it connects.</Hint>}
         </div>
       </div>
+      {person.state === "self" && <div className="flex flex-wrap gap-2 p-4">
+        <Button onClick={async () => { if (await openPictureEditor({ into: portal, current: person.picture_url, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Choose picture</Button>
+        {person.picture && <Button disabled={busy} onClick={async () => { setBusy(true); await store.run(a => a.setPersonPicture(""), "Picture removed."); setBusy(false); }}>Remove picture</Button>}
+      </div>}
       {person.state === "self" && (
         <form onSubmit={save} className="space-y-2.5 p-4">
           <label htmlFor="settings-name" className="block font-semibold">Your name</label>
@@ -229,7 +252,7 @@ function DeviceRequest({ link }: { link: T.LinkRequest }) {
           <Tile color="#A8D8FF" size={44}><DeviceGlyph name={link.name} size={24} /></Tile>
           <h3 className="font-display text-[20px] font-bold leading-tight">“{link.name}” asks to join as you</h3>
         </div>
-        <p className="mt-3 text-[15px]">Approve it only if you just opened your link on it yourself. Once approved it is you: it sends and gets your chats, and your chats are copied to it.</p>
+        <p className="mt-3 text-[15px]">Approve it only if you just signed in with Google or opened your device link on it yourself. Once approved it is you: it sends and gets your chats, and your chats are copied to it.</p>
         <Details>
           <Fact name="Address">{link.address}</Fact>
           <Fact name="Key">{link.fingerprint}</Fact>

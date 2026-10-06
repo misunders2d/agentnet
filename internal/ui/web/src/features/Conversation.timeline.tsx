@@ -58,12 +58,15 @@ export function Timeline({ ctx, messages, focus, selected, onSelect, empty, foot
 
   useEffect(() => { if (focus && seen.current && box.current) flash(box.current, focus, true); }, [focus]);
 
-  // Pictures, reactions and the typing line change the height: stay pinned.
+  // Pictures, reactions and the typing line change the height, and a
+  // phone's keyboard (or a growing message box) shrinks the view: the
+  // latest message stays in sight while you are at the bottom.
   useEffect(() => {
     const el = box.current, content = inner.current;
     if (!el || !content) return;
     const ro = new ResizeObserver(() => { if (atBottom.current) el.scrollTop = el.scrollHeight; });
     ro.observe(content);
+    ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
@@ -134,7 +137,8 @@ function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
 function flash(box: HTMLElement, id: string, smooth: boolean) {
   const el = box.querySelector<HTMLElement>("[data-mid=\"" + CSS.escape(id) + "\"]");
   if (!el) return false;
-  el.scrollIntoView({ block: "center", behavior: smooth && !reduced() ? "smooth" : "auto" });
+  const target = el.querySelector<HTMLElement>("[data-agent-needs-you]") || el;
+  target.scrollIntoView({ block: target === el ? "center" : "start", behavior: smooth && !reduced() ? "smooth" : "auto" });
   el.animate([{ backgroundColor: "color-mix(in srgb, var(--an-act) 40%, transparent)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
   return true;
 }

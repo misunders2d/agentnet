@@ -318,6 +318,16 @@ func TestBrowserRoomTurnsMatchGo(t *testing.T) {
 		add("an agent participant's request", true, func(in *envelope.Inner) {
 			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindTask, target, protocol.NewID(), "agent:claude", "curious", turn(as.PID, guest, agent)
 		})
+		for _, op := range []string{"request", "delegate"} {
+			add("a member's captured receiver "+op, op == "request", func(in *envelope.Inner) {
+				in.Kind, in.Target, in.PID, in.Human = envelope.KindQuestion, target, protocol.NewID(), turn("", guest, agent)
+				in.ReceiverRoute = &envelope.ReceiverRoute{Op: op, Host: "fixture/host", HostKey: r.bob.Fingerprint(), RequestRef: in.LID, RequestDigest: strings.Repeat("a", 64), DelegationID: protocol.NewID()}
+			})
+		}
+		add("an agent redirecting a captured request", false, func(in *envelope.Inner) {
+			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindQuestion, target, protocol.NewID(), "agent:claude", "curious", turn(as.PID, guest, agent)
+			in.ReceiverRoute = &envelope.ReceiverRoute{Op: "request", Host: "fixture/host", HostKey: r.bob.Fingerprint(), RequestRef: in.LID, RequestDigest: strings.Repeat("a", 64), DelegationID: protocol.NewID()}
+		})
 		add("an agent origin for a person", false, func(in *envelope.Inner) {
 			in.Kind, in.Target, in.PID, in.Origin, in.Emotion, in.Human = envelope.KindTask, target, protocol.NewID(), "agent:claude", "curious", turn(gs.PID, guest, agent)
 		})
@@ -342,10 +352,11 @@ func TestBrowserRoomTurnsMatchGo(t *testing.T) {
 		// an agent's request and edits are kept; an agent origin for a person,
 		// an agent's unlabelled request or ordinary turn are refused.
 		for what, ok := range map[string]bool{"a guest's turn": true, "an agent participant's request": true, "a guest's edit": true, "a member's retraction": true,
+			"a member's captured receiver request": true, "a member's captured receiver delegate": false, "an agent redirecting a captured request": false,
 			"an agent origin for a person": false, "an agent's unlabelled request": false, "an agent's ordinary turn": false} {
 			in := cases[root.Kind+": "+what].in
 			item := client.HistoryItem{V: 1, From: r.bob.Address, FromKey: r.bob.Fingerprint(), ID: protocol.NewID(), LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body,
-				Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, Ref: in.Ref, Human: in.Human, At: 1}
+				Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, Ref: in.Ref, ReceiverRoute: in.ReceiverRoute, Human: in.Human, At: 1}
 			v := w.call(map[string]any{"op": "history", "json": marshal(t, item)})
 			if (v["error"] == nil) != ok || ok && v["json"] != marshal(t, item) {
 				t.Errorf("%s: %s as history: %v, want kept %v", root.Kind, what, v, ok)
@@ -420,4 +431,42 @@ func withField(m map[string]any, k string, v any) map[string]any {
 	}
 	out[k] = v
 	return out
+}
+
+func TestP6BrowserShareWireMatchesGo(t *testing.T) {
+	r := startRoomWire(t)
+	inv := r.invites()["group follower"]
+	ev := inv
+	ev.Type = protocol.EventShare
+	ev.Prev = inv.Hash()
+	ev.Until = 0
+	ev.TaskKeys = nil
+	ev.Note = ""
+	g := *ev.Group
+	g.TaskAdmissions = nil
+	ev.Group = &g
+	ev.Sign(r.bobID.Sign)
+	got := r.w.ok(map[string]any{"op": "parseEvent", "json": marshal(t, ev), "key": b64(r.bob.SignKey)})
+	if ev.Validate() != nil || got["hash"] != ev.Hash() {
+		t.Fatalf("signed share differs: %+v %v", got, ev.Validate())
+	}
+	for _, change := range []func(*protocol.ParticipationEvent){func(e *protocol.ParticipationEvent) { e.Prev = "" }, func(e *protocol.ParticipationEvent) { e.Note = "task consent" }, func(e *protocol.ParticipationEvent) { e.TaskKeys = []string{r.bob.Fingerprint()} }, func(e *protocol.ParticipationEvent) { e.Group = nil }, func(e *protocol.ParticipationEvent) { e.Until = 1 }} {
+		bad := ev
+		change(&bad)
+		bad.Sign(r.bobID.Sign)
+		if bad.Validate() == nil {
+			t.Fatal("Go accepted invalid share")
+		}
+		if v := r.w.call(map[string]any{"op": "parseEvent", "json": marshal(t, bad), "key": b64(r.bob.SignKey)}); v["error"] == nil {
+			t.Fatal("browser accepted invalid share")
+		}
+	}
+	raw := map[string]any{}
+	json.Unmarshal([]byte(marshal(t, ev)), &raw)
+	raw["author"] = withField(r.me, "group_admission", strings.Repeat("a", 64))
+	v := r.w.ok(map[string]any{"op": "event", "event": raw})
+	parsed, e := protocol.ParseParticipationEvent([]byte(v["json"].(string)))
+	if e != nil || parsed.Verify(r.dana.SignKey) != nil || parsed.Hash() != v["hash"] {
+		t.Fatalf("browser signed share: %v", e)
+	}
 }

@@ -10,6 +10,8 @@ export interface Workspace {
   realm: string;
   handle?: string;
   state: string;
+  /** The workspace's own name its admin set, as last listed ("Mellanni"); name is this device's own label ("" for none). */
+  hub_name?: string;
 }
 
 /** A catalog entry (host.skins): a built-in, installed or browser-local package. */
@@ -26,6 +28,17 @@ export interface SkinEntry {
 export type OpenKind = "channel" | "conversation" | "message" | "review";
 export interface OpenContext { conv?: string; dir?: "in" | "out" }
 
+/** Project-space operations use the host's captured membership. Google files
+ *  remain outside AgentNet encryption; the core/provider enforces consent. */
+export interface DriveRequest { conv: string; action: string; [key: string]: unknown }
+export interface DriveProvider {
+  drive<T = unknown>(request: DriveRequest): Promise<T>;
+  driveUpload<T = unknown>(conv: string, file: File, confirm: boolean): Promise<T>;
+  prepareGoogle?(): Promise<void>;
+  /** Call directly from a click after prepareGoogle, without an intervening await. */
+  beginGoogleConsent?<T = unknown>(request: { conv: string; full?: boolean; confirm_account: boolean }): Promise<T>;
+}
+
 export interface Host {
   version: number;
   platform: "daemon" | "browser";
@@ -33,6 +46,7 @@ export interface Host {
   listen(fn: (e: HostEvent) => void): () => void;
   file(id: string, index: number, dir?: string): Promise<{ bytes: Uint8Array }>;
   stage(file: File): Promise<unknown>;
+  drive?: DriveProvider;
   /** Registers notification routing; kinds lists the destinations handled
    *  beyond channel and conversation (the host offers the rest itself). */
   onOpen(fn: (target: string, kind?: OpenKind, context?: OpenContext) => void, kinds?: OpenKind[]): void;
@@ -62,5 +76,8 @@ export interface Host {
     // handle; it is not selected).
     disconnected?(): Promise<Workspace[]>;
     reconnect?(id: string): Promise<Host>;
+    // Present where the host can keep this device's own label of a
+    // membership: name "" clears it (the workspace's own name shows).
+    rename?(id: string, name: string): Promise<Workspace>;
   };
 }

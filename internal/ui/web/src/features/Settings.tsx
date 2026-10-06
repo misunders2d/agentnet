@@ -19,22 +19,24 @@ import { NotificationsSection, notifySummary } from "./Settings.notify";
 import { GroupLabel, Tile } from "./Settings.parts";
 import { DeviceGlyph, DevicesSection, devicesOf, pendingLinks, ProfileSection } from "./Settings.profile";
 import { AboutSection, StorageSection, WorkspacesSection } from "./Settings.system";
-import { workspaceLabel } from "./WorkspaceSwitcher";
+import { useWorkspaceLabel } from "./WorkspaceSwitcher";
+import { TeamsSection } from "./Teams";
 
 /** applySavedTheme applies the theme remembered in this browser; call it once at startup. */
 export function applySavedTheme() { applyTheme(savedTheme()); }
 
 type Id = "profile" | RowId;
-type RowId = "devices" | "assistant" | "permissions" | "notifications" | "appearance" | "workspaces" | "storage" | "about";
+type RowId = "devices" | "assistant" | "permissions" | "notifications" | "appearance" | "workspaces" | "storage" | "about" | "teams";
 
 const VIEWS: Record<Id, (p: { titleRef?: React.Ref<HTMLHeadingElement> }) => ReactNode> = {
   profile: ProfileSection, devices: DevicesSection, assistant: AssistantSection, permissions: PermissionsSection, notifications: NotificationsSection,
-  appearance: AppearanceSection, workspaces: WorkspacesSection, storage: StorageSection, about: AboutSection,
+  appearance: AppearanceSection, workspaces: WorkspacesSection, storage: StorageSection, about: AboutSection, teams: TeamsSection,
 };
 
 // Each row's sticker: pastel tiles with ink icons, in both themes (like avatars).
 const ROWS: Record<RowId, { label: string; icon: ReactNode; color: string }> = {
   devices: { label: "Your devices", icon: <IconDevices size={20} />, color: "#A8D8FF" },
+  teams: { label: "Teams", icon: <IconStack2 size={20} />, color: "#B5E3C4" },
   assistant: { label: "Your agent", icon: <IconRobot size={20} />, color: "#D9C2FF" },
   permissions: { label: "Permissions", icon: <IconShieldCheck size={20} />, color: "#B5E3C4" },
   notifications: { label: "Notifications", icon: <IconBell size={20} />, color: "#FFC6E0" },
@@ -45,7 +47,7 @@ const ROWS: Record<RowId, { label: string; icon: ReactNode; color: string }> = {
 };
 
 const GROUPS: { label: string; ids: RowId[] }[] = [
-  { label: "Your setup", ids: ["devices", "assistant", "permissions"] },
+  { label: "Your setup", ids: ["devices", "assistant", "permissions", "teams"] },
   { label: "This app", ids: ["notifications", "appearance", "workspaces"] },
   { label: "Behind the scenes", ids: ["storage", "about"] },
 ];
@@ -194,8 +196,9 @@ function summary(id: RowId, o: T.Overview | null, workspace: string, theme: Them
 function Row({ id, o, selected, desktop, first, onPick, rowRef }: { id: RowId; o: T.Overview | null; selected: boolean; desktop?: boolean; first: boolean; onPick: () => void; rowRef: (el: HTMLButtonElement | null) => void }) {
   const store = useApp();
   const theme = useTheme();
+  const labelOf = useWorkspaceLabel();
   const s = ROWS[id];
-  const value = summary(id, o, workspaceLabel(store.host.workspace), theme);
+  const value = summary(id, o, labelOf(), theme);
   const look = desktop
     ? "rounded-xl border-[1px] " + (selected ? "border-outline bg-surface" : "border-transparent hover:bg-sunken")
     : (first ? "" : "border-t border-hairline ") + "active:bg-sunken";

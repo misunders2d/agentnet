@@ -1,3 +1,4 @@
+import { validatePicture } from "./pictures.mjs";
 // The AgentNet wire format for a browser device: the same signed requests,
 // joins, session ads, directory entries and envelopes as the Go client
 // (internal/protocol, internal/identity, internal/envelope), with WebCrypto
@@ -45,9 +46,23 @@ export const validStateToken = (s) => typeof s === "string" && /^[a-z_]{1,32}$/.
 export const MaxCiphertext = 256 << 10;  // envelope.MaxCiphertext
 export const MaxAttachments = 8;         // envelope.MaxAttachments
 export const CapReplyReceiver = "rcv1"; // additive selected return route; not advertised
+// protocol.CapAgent: a state hint, "this session's program runs an agent".
+// A browser never runs one, so it never lists it; it grants nothing.
+export const CapAgent = "agent1";
+// validWorkspaceName is protocol.ValidWorkspaceName: the name trimmed, or
+// "" when it is not 1-120 characters with no control character (C0, DEL,
+// C1: Go's unicode.IsControl).
+export function validWorkspaceName(s) {
+  if (typeof s !== "string") return "";
+  const name = s.trim();
+  return name && [...name].length <= 120 && !/[\u0000-\u001f\u007f-\u009f]/.test(name) ? name : "";
+}
 // envelope.StatusProgress: a version 1 plain-text nonterminal update replying
 // to one exact request (never an answer); protocol.CapProgress reads it.
 export const StatusProgress = "progress", CapProgress = "prg1";
+// envelope.StatusProposal: an answer whose whole body is the exact task its
+// agent proposes (an offer the asker may confirm as a task; never a grant).
+export const StatusProposal = "proposal";
 // protocol.CapAgentReaction: this device reads an assistant's own reactions
 // (envelope.AssistantReaction).
 export const CapAgentReaction = "agr1";
@@ -61,6 +76,7 @@ export const defaultAssistantReaction = (n) => n.v === Version3 && n.sub === Sub
 // (client.HistoryItem.inner makes a control version 3): conversation only.
 export const historyAssistantReaction = (h) => h.sub === SubReaction && !!h.ref && (!!h.agent_id || !!h.pid);
 export const MaxBody = 1 << 20;          // protocol.MaxBody
+export const MaxLinkTTL = 10 * 60;      // protocol.MaxLinkTTL
 const kinds = new Set(["message", "question", "answer", "task", "result"]);
 const invitePrefix = "agentnet-invite-v1:";
 
@@ -74,6 +90,43 @@ const recipientPattern = /^age1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}$/;
 
 export const validName = (s) => typeof s === "string" && namePattern.test(s);
 export const validID = (s) => typeof s === "string" && idPattern.test(s);
+
+// protocol.NormalizeEmail's accepted normalized form (no local rewriting).
+export function validEmail(s) {
+  if (typeof s !== "string" || s.length > 254) return false;
+  const parts = s.split("@"); if (parts.length !== 2) return false;
+  const [local, domain] = parts;
+  return local.length > 0 && local.length <= 64 && /^[a-z0-9.!#$%&'*+\-/=?^_`{|}~]+$/.test(local) &&
+    !local.startsWith(".") && !local.endsWith(".") && !local.includes("..") &&
+    domain.length <= 253 && domain.includes(".") && domain.split(".").every(l => l.length > 0 && l.length <= 63 && /^[a-z0-9-]+$/.test(l) && !l.startsWith("-") && !l.endsWith("-"));
+}
+
+// nameCandidates is cmd/agentnet's nameCandidates: the device names tried
+// in turn when the server says one is taken (base, base-2 … n in all),
+// each shortened to stay a valid name.
+export function nameCandidates(base, n) {
+  const out = [];
+  for (let i = 1; i <= n; i++) {
+    let c = base;
+    if (i > 1) {
+      const suffix = "-" + i, max = 32 - suffix.length;
+      if (c.length > max) c = c.slice(0, max).replace(/-+$/, "");
+      c += suffix;
+    }
+    out.push(c);
+  }
+  return out;
+}
+
+// Invitation hints (protocol.ValidInviteHint): what the inviter wrote on an
+// invitation, short printable text without surrounding spaces, or nothing.
+export const MaxInviteHint = 64, MaxWorkspaceHint = 120;
+const hintPattern = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u;
+export function validInviteHint(s, max) {
+  if (s === "" ) return true;
+  return typeof s === "string" && [...s].length <= max && s.trim() === s && !s.startsWith(" ") && !s.endsWith(" ") && hintPattern.test(s);
+}
+const cleanHint = (s, max) => (typeof s === "string" && validInviteHint(s, max) ? s : "");
 
 // validAddress is protocol.SplitAddress: "label/agent", both valid names.
 export function validAddress(a) {
@@ -260,7 +313,10 @@ export function decodeInvite(code) {
   } catch (e) {
     throw new Error("damaged invite code");
   }
-  const inv = { hub: v.hub, label: v.label, secret: v.secret, cert: v.cert || "" };
+  // name, from and workspace are the inviter's words, unsigned: shown as
+  // what the invitation says, next to the server's own address.
+  const inv = { hub: v.hub, label: v.label, secret: v.secret, cert: v.cert || "",
+    name: cleanHint(v.name, MaxInviteHint), from: cleanHint(v.from, MaxInviteHint), workspace: cleanHint(v.workspace, MaxWorkspaceHint) };
   if (typeof inv.secret !== "string" || inv.secret === "" || !validName(inv.label)) throw new Error("incomplete invite code");
   inv.hub = hubOrigin(inv.hub);
   return inv;
@@ -286,6 +342,21 @@ export async function joinRequest(keys, address, secret, link) {
   const signed = (sig) => '{"secret":' + goString(secret) + ',"public":' + marshalPublic(pub) + linkJSON + ',"sig":' + goBytes(sig) + "}";
   const sig = await signBytes(keys, utf8.encode("agentnet-join-v1\n" + signed(null)));
   return signed(sig);
+}
+
+// GoogleRequest/GoogleNonce match protocol/google.go byte for byte.
+export async function googleNonce(pub) {
+  return b64url(await sha256(utf8.encode("agentnet-google-device-v1\n" + b64(pub.sign_key) + "\n" + pub.box_recipient)));
+}
+function googleLinkJSON(l) {
+  return '{"email":' + goString(l.email) + ',"person":' + goString(l.person) + ',"seq":' + goInt(l.seq, "seq") +
+    ',"roster":' + goString(l.roster) + ',"approver":{"address":' + goString(l.approver.address) + ',"fingerprint":' + goString(l.approver.fingerprint) +
+    '},"expires":' + goInt(l.expires, "expiry") + ',"offer":' + goString(l.offer) + ',"join":' + goBytes(l.join) + '}';
+}
+export async function googleRequest(keys, token, pub, first = null, link = null) {
+  const body = sig => '{"id_token":' + goString(token) + ',"public":' + marshalPublic(pub) +
+    (first ? ',"first":' + rosterJSON(first) : '') + (link ? ',"link":' + googleLinkJSON(link) : '') + ',"sig":' + goBytes(sig) + '}';
+  return body(await signBytes(keys, utf8.encode("agentnet-google-v1\n" + body(null))));
 }
 
 // signRequest returns the headers that authenticate a Hub request as agent
@@ -378,6 +449,10 @@ function marshalInner(n) {
   if (n.agent_id) s += ',"agent_id":' + goString(n.agent_id);
   if (n.receiver_route) s += ',"receiver_route":' + receiverRouteJSON(n.receiver_route);
   if (n.human) s += ',"human":' + humanJSON(n.human);
+  if (n.quote) s += ',"quote":' + goString(n.quote);
+  if (n.topic_done) s += ',"topic_done":true';
+  if (n.topic) s += ',"topic":'+goString(n.topic);
+  if (n.topic_event) s += ',"topic_event":'+topicEventJSON(n.topic_event);
   return s + "}";
 }
 
@@ -541,10 +616,21 @@ const goBlank = (s) => /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029
 // checkV2 is envelope.checkVersion2: the conversation fields, only in
 // version 2, and their shapes. (The pid rules follow the core as it is now;
 // participation is still in review there.)
+export function topicEventJSON(e) { return '{"action":'+goString(e.action)+(e.seen?.length?',"seen":['+e.seen.map(goString).join(',')+']':'')+'}'; }
+export function parseTopicEvent(e) { const v=strict(e,"topic event",{action:"string",seen:"array"}); if(!["create","done","open"].includes(v.action)||v.seen?.some(id=>typeof id!=="string"||!validID(id)))throw Error("invalid topic action");return {action:v.action,...(v.seen?.length?{seen:v.seen}:{})}; }
+export function checkTopic(n) {
+ if(n.topic && (n.v!==Version2||!validID(n.topic)||n.sub))throw Error("topic belongs only on a conversation turn");
+ if(n.topic_event){parseTopicEvent(n.topic_event);if(!n.topic||n.kind!=="message"||n.target||agentOrigin(n.origin)||n.status||n.attachments?.length)throw Error("topic event belongs only on a human conversation message");}
+ if(n.topic_done&&(![Version,Version2].includes(n.v)||n.status!=="done"||!["answer","result"].includes(n.kind)||n.v===Version2&&(!n.topic||!n.pid||!agentOrigin(n.origin))))throw Error("topic_done belongs only on a completed agent answer or result");
+}
 async function checkV2(n) {
+  if (n.quote && (!validID(n.quote) || n.quote === n.id || n.v === Version3 || n.sub || n.status || agentOrigin(n.origin) || !["message","question","task"].includes(n.kind))) throw new Error("quote belongs only on a person's turn and must name another message");
+  checkTopic(n);
   // Progress replies to one request in plain text: in version 1 (a named
   // executor's progress names it), or as a participation's nonterminal output.
   if (n.status === StatusProgress && (n.v !== Version && (n.v !== Version2 || !n.pid) || n.kind !== "message" || !n.reply_to || goBlank(n.body) || n.attachments.length || n.target || n.receiver_route || (n.human && n.v !== Version2) || n.sub)) throw new Error("progress is a plain-text update replying to one request, in version 1 or as a participation's output");
+  // A proposal: an answer carrying one plain-text task (envelope.StatusProposal).
+  if (n.status === StatusProposal && (n.kind !== "answer" || !n.reply_to || goBlank(n.body) || n.attachments.length || n.quote || n.topic_done || n.target || n.receiver_route || n.sub || n.v === Version3 || n.v === Version2 && !n.pid)) throw new Error("a proposal is an answer carrying one plain-text task, replying to one request, in version 1 or as a participation's output");
   if (n.human && n.v === Version3) {
     // An assistant's reaction to an addressed request, to that request's
     // captured audience (envelope/human.go): its host is the author and a
@@ -560,7 +646,7 @@ async function checkV2(n) {
     // An agent author (a room participant) only asks, labelled as an agent (ROOM_V1 §2.3).
     const h = n.human, author = h.author_pid || "", agent = agentAuthor(h);
     const ordinary = n.kind === "message" && !n.status && !n.target && !n.agent_id && !agentOrigin(n.origin) && !n.emotion && n.pid === author && !agent;
-    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && agentOrigin(n.origin) === agent && !n.status && !n.receiver_route;
+    const request = ["question", "task"].includes(n.kind) && n.target && n.pid && n.pid !== author && !n.agent_id && agentOrigin(n.origin) === agent && !n.status && (!n.receiver_route || !agent && !author && n.receiver_route.op === "request");
     const output = (["answer", "result"].includes(n.kind) || n.kind === "message" && n.status === StatusProgress) && !n.target && n.pid && !author && !n.receiver_route;
     if (!ordinary && !request && !output) throw new Error("human: ordinary turn, addressed request or assistant output only");
     await validateHumanTurn(n.human, n.conv);
@@ -653,7 +739,7 @@ export async function seal(m, keys, recipient) {
     reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status"),
     conv: m.conv || "", lid: m.lid || "", root: m.root || "", sub: m.sub || "", replica: !!m.replica,
     origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "",
-    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null };
+    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null, quote: m.quote || "", topic_done: !!m.topic_done, topic:m.topic||"",topic_event:m.topic_event?parseTopicEvent(m.topic_event):null };
   await checkV2(inner);
   if (v === Version2 && agentOrigin(inner.origin) && inner.sub === "" && !inner.emotion) throw new Error("an agent's turn must carry an emotion");
   const e = new Encrypter();
@@ -726,7 +812,7 @@ export async function open(json, keys, selfAddress, sender) {
   const f = strict(v, "inner", { v: "int", id: "string", from: "string", to: "string", ts: "int", kind: "string", body: "string",
     reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string",
     conv: "string", lid: "string", root: "object", sub: "string", replica: "boolean", origin: "string", emotion: "string",
-    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object" });
+    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object", quote: "string", topic_done: "boolean", topic:"string",topic_event:"object" });
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
   const ref = f.ref ? strict(f.ref, "ref", { id: "string", fingerprint: "string" }) : null;
   const fan = f.fan ? f.fan.map((x) => { const y = strict(x, "fan", { person: "string", roster: "string" }); return { person: y.person || "", roster: y.roster || "" }; }) : null;
@@ -737,7 +823,7 @@ export async function open(json, keys, selfAddress, sender) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.receiver_route ? { receiver_route: parseReceiverRoute(f.receiver_route) } : {}),
-    ...(f.human ? { human: parseHumanTurn(f.human) } : {}),
+    ...(f.human ? { human: parseHumanTurn(f.human) } : {}), quote: f.quote || "", topic_done: !!f.topic_done,topic:f.topic||"",topic_event:f.topic_event?parseTopicEvent(f.topic_event):null,
     ref: ref ? { id: ref.id || "", fingerprint: ref.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => {
       const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
@@ -905,7 +991,7 @@ function strictRecord(json, max, what, fields) {
 function marshalRoster(r, withSig) {
   return '{"person":' + goString(r.person) + ',"label":' + goString(r.label) + ',"seq":' + goInt(r.seq, "seq") +
     ',"prev":' + goString(r.prev) + ',"devices":' + (r.devices ? "[" + r.devices.map(marshalPublic).join(",") + "]" : "null") +
-    (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + "}";
+    (r.human_keys?.length ? ',"human_keys":[' + r.human_keys.map(goString).join(",") + ']' : "") + (r.by ? ',"by":' + goString(r.by) : "") + sigJSON(r, withSig) + (withSig && r.join && r.join.length ? ',"join":' + goBytes(r.join) : "") + (r.email ? ',"email":' + goString(r.email) : "") + (r.picture ? ',"picture":' + goString(r.picture) : "") + "}";
 }
 export const rosterJSON = (r) => marshalRoster(r, true);
 const rosterCanonical = (r) => utf8.encode(personDomain + marshalRoster(r, false));
@@ -929,6 +1015,8 @@ export const checkJoin = (person, seq, prev, dev, join) => verifyBytes(dev.sign_
 // validateRoster is PersonRoster.Validate: its shape and bounds, and each
 // device's entry (not the signatures of the record or the chain).
 export async function validateRoster(r) {
+  if (r.picture && !validHash(r.picture)) throw new Error("person: invalid picture hash");
+  if (r.email && !validEmail(r.email)) throw new Error("person: invalid email");
   if (!validID(r.person)) throw new Error("person: invalid id");
   validLabel(r.label);
   if (!Number.isSafeInteger(r.seq) || r.seq < 0) throw new Error("person: invalid seq");
@@ -946,6 +1034,10 @@ export async function validateRoster(r) {
     addrs.add(d.address);
     fps.add(fp);
   }
+  const humans=await rosterHumans(r);
+  if(!humans.length)throw Error("person: keep at least one human device");
+  const hs=new Set();
+  for(const fp of humans){if(!fps.has(fp)||hs.has(fp))throw Error("person: human keys must name distinct current devices");hs.add(fp);}
 }
 
 // rosterDevice is the device of r with key fingerprint fp, or null.
@@ -953,6 +1045,13 @@ export async function rosterDevice(r, fp) {
   for (const d of r.devices) if ((await fingerprint(d)) === fp) return d;
   return null;
 }
+
+export async function rosterHumans(r) {
+  if(r.human_keys?.length)return [...r.human_keys];
+  if(r.seq===0&&r.devices.length===1)return [await fingerprint(r.devices[0])];
+  return await rosterDevice(r,r.by)?[r.by]:[];
+}
+export const rosterHuman=async(r,fp)=>(await rosterHumans(r)).includes(fp);
 
 // rosterHas reports whether the device at address with fingerprint fp is in r.
 export async function rosterHas(r, address, fp) {
@@ -962,8 +1061,8 @@ export async function rosterHas(r, address, fp) {
 
 // newRoster creates this device's person, as the person asked: a random
 // id, the name they give, and this device (seq 0).
-export async function newRoster(keys, address, label) {
-  const r = { person: newID(), label, seq: 0, prev: "", devices: [await publicEntry(keys, address)], by: "", sig: null, join: null };
+export async function newRoster(keys, address, label, email = "") {
+  const r = { person: newID(), label, seq: 0, prev: "", devices: [await publicEntry(keys, address)], by: "", sig: null, join: null, email };
   await validateRoster(r);
   r.sig = await signBytes(keys, rosterCanonical(r));
   if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large; use a shorter label");
@@ -973,10 +1072,11 @@ export async function newRoster(keys, address, label) {
 // nextRoster is the step after prev with devices, signed by this device
 // (at address, a device of prev); join is an added device's consent (null
 // when none is added).
-export async function nextRoster(keys, address, prev, devices, join, label = prev.label) {
+export async function nextRoster(keys, address, prev, devices, join, label = prev.label, humanKeys = null, picture = prev.picture || "") {
   const by = await fingerprint(await publicEntry(keys, address));
   if (!(await rosterHas(prev, address, by))) throw new Error("person: this device is not in the roster it would follow");
-  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, by, sig: null, join: join || null };
+  const kept=new Set(await Promise.all(devices.map(fingerprint)));
+  const r = { person: prev.person, label, seq: prev.seq + 1, prev: await rosterHash(prev), devices, human_keys:humanKeys || (await rosterHumans(prev)).filter(fp=>kept.has(fp)), by, sig: null, join: join || null, email: prev.email || "", picture };
   await validateRoster(r);
   r.sig = await signBytes(keys, rosterCanonical(r));
   if (utf8.encode(rosterJSON(r)).length > MaxPersonRecord) throw new Error("person: the record is too large");
@@ -984,11 +1084,11 @@ export async function nextRoster(keys, address, prev, devices, join, label = pre
 }
 
 export async function parseRoster(json) {
-  const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array",
-    by: "string", sig: "string", join: "string" });
+  const f = strictRecord(json, MaxPersonRecord, "person", { person: "string", label: "string", seq: "int", prev: "string", devices: "array", human_keys:"array",
+    by: "string", sig: "string", join: "string", email: "string", picture: "string" });
   const devices = f.devices ? await Promise.all(f.devices.map((d) => parsePublicShape(d))) : null;
-  const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", devices, by: f.by || "",
-    sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null };
+  const r = { person: f.person || "", label: f.label || "", seq: f.seq || 0, prev: f.prev || "", devices, human_keys:f.human_keys || [], by: f.by || "",
+    sig: f.sig ? unb64(f.sig, "person signature") : null, join: f.join ? unb64(f.join, "join signature") : null, email: f.email || "", picture: f.picture || "" };
   await validateRoster(r);
   fitsRecord(rosterJSON(r), MaxPersonRecord, "person");
   return r;
@@ -1006,7 +1106,7 @@ export async function verifyFirst(r) {
 // added device, or null.
 export async function verifyNext(r, prev) {
   await validateRoster(r);
-  if (r.person !== prev.person || r.seq !== prev.seq + 1 || r.prev !== (await rosterHash(prev))) throw new Error("person: not the next roster of that chain");
+  if (r.person !== prev.person || r.seq !== prev.seq + 1 || r.prev !== (await rosterHash(prev)) || (r.email || "") !== (prev.email || "")) throw new Error("person: not the next roster of that chain");
   const signer = await rosterDevice(prev, r.by);
   if (!signer) throw new Error("person: signed by a device that is not in the roster before it");
   if (!(await verifyBytes(signer.sign_key, rosterCanonical(r), r.sig))) throw new Error("person: signature invalid");
@@ -1017,6 +1117,8 @@ export async function verifyNext(r, prev) {
     if (!old && added) throw new Error("person: more than one device added in one step");
     if (!old) added = d;
   }
+  const before=(await rosterHumans(prev)).sort(),after=(await rosterHumans(r)).sort();
+  if((added || JSON.stringify(before)!==JSON.stringify(after))&&!await rosterHuman(prev,r.by))throw Error("person: only an own human device may add devices or change human enrollment authority");
   if (!added) {
     if (r.join && r.join.length) throw new Error("person: a join without an added device");
     return null;
@@ -1113,14 +1215,16 @@ export function historyJSON(h) {
   }
   s += ',"at":' + goInt(h.at, "time");
   if (h.ref) s += ',"ref":{"id":' + goString(h.ref.id) + ',"fingerprint":' + goString(h.ref.fingerprint) + "}";
-  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + "}";
+  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + (h.quote ? ',"quote":' + goString(h.quote) : "") + (h.topic_done?',"topic_done":true':"") + (h.topic?',"topic":'+goString(h.topic):"") + (h.topic_event?',"topic_event":'+topicEventJSON(h.topic_event):"") + "}";
 }
 
 // parseHistory reads a history item strictly (as the core's decodeStrict).
 export function parseHistory(json) {
   const f = strict(JSON.parse(json), "history item", { v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
     kind: "string", body: "string", reply_to: "string", status: "string", sub: "string", origin: "string", emotion: "string",
-    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object" });
+    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string",topic_done:"boolean",topic:"string",topic_event:"object" });
+  checkTopic({...f,v:Version2});
+  if (f.quote && (!validID(f.quote) || f.quote===f.id || f.sub || f.status || agentOrigin(f.origin) || !["message","question","task"].includes(f.kind))) throw Error("history quote belongs only on a person's turn");
   if (f.group_admission && !validHash(f.group_admission)) throw Error("a malformed group admission stamp");
   if (f.v !== 1 || !validID(f.id) || !validID(f.lid) || !validAddress(f.from || "") || !validFingerprint(f.from_key || "")) throw new Error("a malformed history item");
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
@@ -1135,7 +1239,7 @@ export function parseHistory(json) {
   if (human) { // the same shapes as a live human turn (envelope/human.go)
     const pid = f.pid || "", author = human.author_pid || "", agent = agentAuthor(human);
     const ordinary = f.kind === "message" && !target && !f.agent_id && !agentOrigin(f.origin) && !f.emotion && !f.status && pid === author && !agent;
-    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && agentOrigin(f.origin) === agent && !f.status && !receiver;
+    const request = ["question", "task"].includes(f.kind) && target && pid && pid !== author && !f.agent_id && agentOrigin(f.origin) === agent && !f.status && (!receiver || !agent && !author && receiver.op === "request");
     const output = (["answer", "result"].includes(f.kind) || f.kind === "message" && f.status === StatusProgress) && !target && pid && !author && !receiver;
     const reaction = f.sub === SubReaction && historyAssistantReaction(f) && f.kind === "message" && pid && !author && !target && !receiver; // an assistant's reaction to its captured audience
     const edit = [SubRevision, SubRetraction].includes(f.sub) && ref && f.kind === "message" && !pid && !target && !receiver && !f.agent_id && !f.origin; // an edit to its turn's captured audience
@@ -1148,7 +1252,7 @@ export function parseHistory(json) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.group_admission ? { group_admission: f.group_admission } : {}),
-    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}),
+    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}), ...(f.quote ? {quote:f.quote} : {}),...(f.topic?{topic:f.topic}:{}),...(f.topic_done?{topic_done:true}:{}),...(f.topic_event?{topic_event:parseTopicEvent(f.topic_event)}:{}),
     attachments: (f.attachments || []).map((a) => { const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
       return { name: text(x.name || "", "attachment name"), size: x.size || 0, sha256: x.sha256 || "" }; }) };
 }
@@ -1478,7 +1582,7 @@ export async function verifyGroupProofPage(root, page, resolve, realm, { previou
   return head;
 }
 
-export const groupContextJSON = (p) => '{"root":' + rootJSON(p.root) + ',"proof":' + groupArray(p.proof, groupStateJSON) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals, groupWithdrawalJSON) + "}";
+export const groupContextJSON = (p) => '{"root":' + rootJSON(p.root) + ',"proof":' + groupArray(p.proof, groupStateJSON) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals, groupWithdrawalJSON) + (p.memberships?.length ? ',"memberships":' + groupArray(p.memberships, eventJSON) : '') + "}";
 // Exact json.Marshal field order from protocol.GroupInvitation/GroupConsent.
 export const groupInvitationJSON = p => '{"v":' + goInt(p.v,"version") + ',"root":' + rootJSON(p.root) + ',"state":' + groupStateJSON(p.state) + ',"withdrawals":' + groupArray(p.withdrawals,groupWithdrawalJSON) + ',"target":' + goString(p.target) + ',"roster":' + goString(p.roster) + ',"seq":' + goInt(p.seq,"seq") + ',"prev":' + goString(p.prev) + ',"history":' + groupArray(p.history,r => '{"lid":'+goString(r.lid)+',"author":'+goString(r.author)+',"hash":'+goString(r.hash)+'}') + '}';
 export const groupInvitationID = p => hashOf(utf8.encode("agentnet-group-invitation-v1\n" + groupInvitationJSON(p)));
@@ -1491,6 +1595,10 @@ export function groupHistoryContentHash(conv,n) {
   if(n.pid)json+=',"PID":'+goString(n.pid);if(n.agent_id)json+=',"AgentID":'+goString(n.agent_id);
   if(n.receiver_route)json+=',"ReceiverRoute":'+receiverRouteJSON(n.receiver_route);
   if(n.human)json+=',"Human":'+humanJSON(n.human);
+  if(n.quote)json+=',"Quote":'+goString(n.quote);
+  if(n.topic_done)json+=',"TopicDone":true';
+  if(n.topic)json+=',"Topic":'+goString(n.topic);
+  if(n.topic_event)json+=',"TopicEvent":'+topicEventJSON(n.topic_event);
   return hashOf(utf8.encode(json+'}'));
 }
 export function parseGroupInvitation(json) {
@@ -1512,8 +1620,8 @@ export function parseGroupConsent(json) {
   if(c.admission) validateGroupAdmission(c.admission); return c;
 }
 export function parseGroupContext(json) {
-  const f = strictRecord(json, MaxGroupState, "group context", { root: "object", proof: "array", state: "object", withdrawals: "array" });
-  const p = { root: parseGroupRoot(f.root || {}), proof: f.proof ? f.proof.map(parseGroupState) : null, state: parseGroupState(f.state || {}), withdrawals: f.withdrawals ? f.withdrawals.map(parseGroupWithdrawal) : null };
+  const f = strictRecord(json, MaxGroupState, "group context", { root: "object", proof: "array", state: "object", withdrawals: "array", memberships: "array" });
+  const p = { root: parseGroupRoot(f.root || {}), proof: f.proof ? f.proof.map(parseGroupState) : null, state: parseGroupState(f.state || {}), withdrawals: f.withdrawals ? f.withdrawals.map(parseGroupWithdrawal) : null, ...(f.memberships?.length?{memberships:f.memberships.map(e=>parseEvent(JSON.stringify(e)))}:{}) };
   if ((p.proof?.length || 0) > 4096) throw new Error("group: authority proof exceeds bound"); fitsRecord(groupContextJSON(p), MaxGroupState, "group context"); return p;
 }
 export async function verifyGroupContext(p, resolve) {
@@ -1654,7 +1762,7 @@ export const MaxTaskKeys = 16;
 export const MaxInviteNote = 1024;
 export const MaxParticipationEvent = 8192;
 const participationDomain = "agentnet-participation-v1\n";
-const eventTypes = new Set(["invite", "accept", "decline", "dismiss", "scope"]);
+const eventTypes = new Set(["invite", "accept", "decline", "dismiss", "scope", "share"]);
 // Go's unicode.IsPrint, plus a newline (an invite's note).
 const noteText = /^[\p{L}\p{M}\p{N}\p{P}\p{S} \n]*$/u;
 
@@ -1714,6 +1822,10 @@ function uniqueList(items, max, valid, what) {
 // null when absent, which matters: an accept, decline or dismiss may not
 // carry them even empty.
 export function validateEvent(e) {
+  if(e.type === "share") {
+    if(!validHash(e.prev)||!e.group||e.role||e.until||e.task_keys?.length||e.note) throw new Error("participation: a share names an existing group agent and selected context only");
+    return validateEvent({...e,type:"invite",prev:""});
+  }
   if (e.v !== 1 || !validHash(e.conv) || !validID(e.pid) || !(e.ts > 0)) throw new Error("participation: invalid event");
   const a = e.author;
   if (!validID(a.person) || !validHash(a.roster) || !validFingerprint(a.fingerprint)) throw new Error("participation: invalid author");
@@ -2043,3 +2155,6 @@ export async function validateReceiverRoute(n) {
  if(r.op==='delegate'||r.op==='catalog'&&!n.reply_to){if(r.host!==n.to)throw Error('receiver: setup must address its committed host');}else if(r.host!==n.from)throw Error('receiver: response must originate at its committed host');
  const o=await parseReceiverOperation(n.body,r,n.reply_to||'',n.attachments||[]);if(o.request&&o.request.from!==n.from)throw Error('receiver: delegate must originate at original author');
 }
+
+export { validatePicture };
+export const pictureHash = hashOf;

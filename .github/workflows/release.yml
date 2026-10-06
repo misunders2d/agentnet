@@ -1,0 +1,46 @@
+name: release
+# A tag vX.Y.Z makes a DRAFT release with the agentnet program for every
+# system (scripts/build.sh), the AgentNet app's installers (desktop.yml)
+# and one SHA256SUMS over all of them. The owner checks and publishes it;
+# the relay's "Get AgentNet" links work once it is published.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  app:
+    uses: ./.github/workflows/desktop.yml
+    with:
+      version: ${{ github.ref_name }}
+  program:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: scripts/build.sh "${{ github.ref_name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentnet-program
+          path: dist/agentnet-*
+          if-no-files-found: error
+          retention-days: 7
+  draft:
+    needs: [app, program]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # this job only: it creates the draft release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: checksums
+        run: cd files && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "$TAG" --notes "AgentNet $TAG. The AgentNet app (installers are not signed) and the agentnet program for agents and servers; check files against SHA256SUMS." files/*

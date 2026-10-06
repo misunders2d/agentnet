@@ -486,3 +486,29 @@ standalone module. users can build their own skins."
   retargeted at it. Fixture checks that serve the bundled app themselves
   (`bundled_app.cjs`, `onboarding_rendered_test.go` and the other
   `default.html` fixtures) keep running against its sources.
+
+
+### P8 Google enrollment review decisions (2026-10-05)
+
+Current identities are disposable test data. Google-enabled workspaces require
+fresh Google enrollment; there is no retrofit of pre-Google persons. Ordinary
+code invitations stay hidden/refused in the app. Device links and explicit
+admin CLI invitation fragments remain usable on the landing page.
+
+The workspace relay alone checks Google email ownership. First contact remains
+trust on first sight; signed rosters preserve that claim without independent
+Google attestation. Local pins keep earlier person/key bindings, and hide a
+conflicting person's claimed email. A fresh device cannot detect a dishonest
+relay claiming its enrollment is the first one. No new attestation service.
+
+Remove email access revokes active/pending/detached Google devices and deletes
+its subject/person binding in one transaction. Re-inviting permits a fresh
+person; previous devices stay revoked and peers retain their old pins and key
+warnings. Domain removal blocks new sign-ins; individually remove existing
+members shown in the access list. Invitations never demote admins.
+
+Exact-email invitations require a Google-managed address (matching hd, Gmail
+or Googlemail). Third-party addresses with only historical email_verified are
+refused: this avoids letting a past mailbox owner claim the invited identity.
+Later devices require approval by any existing active device of the person.
+Approval must be decided before expiry; publication gets PendingGrace.

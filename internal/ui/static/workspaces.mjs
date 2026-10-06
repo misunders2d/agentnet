@@ -1,3 +1,4 @@
+import { daemonDriveProvider, boundDriveProvider } from "./drivespace.mjs";
 // One shell; immutable per-membership transports. Separate stores prevent
 // accidental routing, not access by fully trusted code executing this origin.
 const ID = /^(default|[a-f0-9]{32})$/;
@@ -45,7 +46,9 @@ export class WorkspaceShell {
   old.connected=false;this.members.set(id,entry);
   return this.bind(id);
  }
- list(){return [...this.members.values()].map(e=>e.binding);}
+ // list gives each binding with hub_name, the workspace's own name its admin
+ // set (a browser workspace's engine keeps it; the daemon's list carries it).
+ list(){return [...this.members.values()].map(e=>e.engine?Object.freeze({...e.binding,hub_name:e.engine.workspaceName||undefined}):e.binding);}
  state(id=this.active){if(!this.states.has(id))throw new Error("Unknown workspace");return this.states.get(id);}
  select(id) {const e=this.members.get(id);if(!e?.connected)throw new Error("Disconnected workspace");const previous=this.active;this.active=id;for(const f of this.listeners)f({id,previous,host:this.bind(id),state:this.state(id)});}
  onChange(fn){this.listeners.add(fn);return()=>this.listeners.delete(fn);}
@@ -54,8 +57,12 @@ export class WorkspaceShell {
   const prefix="/workspaces/"+id+"/"+entry.binding.handle;
   const thisShell=this;
   const check=()=>{if(entry.blockedError)throw entry.blockedError;if(!entry.connected||this.members.get(id)!==entry)throw new Error("Stale workspace handle");};
-  const call=async(p,body)=>{check();route(p);if(body?.files?.some(f=>f&&typeof f==="object"&&f.workspace!==id))throw new Error("File belongs to another workspace");return entry.engine?entry.engine.api(p,body):json(this.fetch,prefix+p,body);};
+  const call=async(p,body)=>{check();route(p);if(body?.files?.some(f=>f&&typeof f==="object"&&f.workspace!==id))throw new Error("File belongs to another workspace");return entry.engine?entry.engine.api(p,body):json(this.fetch,prefix+p,body).then(v=>qualifyPictureURLs(v,prefix));};
+  const provider = entry.engine ? entry.engine.driveService?.() : daemonDriveProvider(call, (p, init) => {
+   check(); route(p); return thisShell.fetch(prefix + p, init);
+  });
   return Object.freeze({
+   ...(provider ? { drive: boundDriveProvider(provider, check) } : {}),
    workspace:entry.binding, platform:entry.engine?"browser":"daemon",api:call,
    listen:(fn)=>{check();if(entry.engine)return entry.engine.listen(seq=>{if(entry.connected)fn({type:"change",seq,workspace:id});});
     const es=this.eventSource(prefix+"/events");es.addEventListener("change",e=>{if(entry.connected)fn({type:"change",seq:Number(e.data),workspace:id});});
@@ -76,7 +83,8 @@ export class WorkspaceShell {
  }
  async join(body){const b=await json(this.fetch,"/api/workspaces/join",body);return this.register(b);}
  async rename(id,name) {
-  name=String(name).trim();if(!name||[...name].length>120||/[\u0000-\u001f\u007f]/.test(name))throw new Error("Enter a readable name, up to 120 characters");
+  // An empty name clears this device's label: the workspace's own name shows.
+  name=String(name).trim();if([...name].length>120||/[\u0000-\u001f\u007f-\u009f]/.test(name))throw new Error("Enter a readable name, up to 120 characters");
   const entry=this.members.get(id);if(!entry?.connected)throw new Error("Disconnected workspace");
   const old=entry.binding;
   const next=entry.engine?await this.renameBrowser(id,name):await json(this.fetch,"/api/workspaces/rename",{id,handle:old.handle,name});
@@ -118,13 +126,13 @@ export function mountWorkspaceSwitcher(root,shell,{beforeSwitch=()=>{},afterSwit
  const label=document.createElement("label"),labelText=document.createElement("span");labelText.className="workspace-label";labelText.textContent="Workspace ";label.append(labelText);
  const select=document.createElement("select");select.setAttribute("aria-label","Active workspace");
  const detail=document.createElement("span");detail.className="workspace-detail";
- const refresh=()=>{select.replaceChildren(...shell.list().map(b=>{const o=document.createElement("option");o.value=b.id;o.textContent=b.name||"Unnamed workspace";o.title=new URL(b.endpoint).host;return o;}));select.value=shell.active||"";const b=shell.members.get(shell.active)?.binding;detail.textContent=b?"Connected workspace":"No connected workspace";connectionText.textContent=b?new URL(b.endpoint).host+" · "+b.address:"No connection";};
+ const refresh=()=>{select.replaceChildren(...shell.list().map(b=>{const o=document.createElement("option");o.value=b.id;o.textContent=b.name||b.hub_name||new URL(b.endpoint).host;o.title=new URL(b.endpoint).host;return o;}));select.value=shell.active||"";const b=shell.members.get(shell.active)?.binding;detail.textContent=b?"Connected workspace":"No connected workspace";connectionText.textContent=b?new URL(b.endpoint).host+" · "+b.address:"No connection";};
  const connection=document.createElement("details"),summary=document.createElement("summary"),connectionText=document.createElement("span");summary.textContent="Connection details";connection.append(summary,connectionText);connection.className="workspace-detail";
  const rename=document.createElement("button");rename.type="button";rename.textContent="Rename";rename.className="workspace-rename";
  rename.onclick=()=>{
   const selectedID=shell.active,b=shell.members.get(selectedID)?.binding;if(!b)return;
   const dialog=document.createElement("dialog");dialog.className="workspace-name-dialog";const form=document.createElement("form"),title=document.createElement("h2"),input=document.createElement("input"),hint=document.createElement("p"),error=document.createElement("p"),actions=document.createElement("div"),save=document.createElement("button"),cancel=document.createElement("button");
-  title.textContent="Workspace name";input.value=b.name||"";input.maxLength=120;input.setAttribute("aria-label","Workspace display name");hint.textContent="Your name for this workspace on this installation. Identity, people, permissions and history stay unchanged.";error.setAttribute("role","alert");save.textContent="Save name";save.type="submit";cancel.textContent="Cancel";cancel.type="button";actions.className="workspace-name-actions";actions.append(cancel,save);form.append(title,hint,input,error,actions);dialog.append(form);root.append(dialog);
+  title.textContent="Workspace name";input.value=b.name||"";input.maxLength=120;input.setAttribute("aria-label","Workspace display name");hint.textContent="Your name for this workspace on this installation; leave it empty to use the workspace's own name. Identity, people, permissions and history stay unchanged.";error.setAttribute("role","alert");save.textContent="Save name";save.type="submit";cancel.textContent="Cancel";cancel.type="button";actions.className="workspace-name-actions";actions.append(cancel,save);form.append(title,hint,input,error,actions);dialog.append(form);root.append(dialog);
   const close=()=>{dialog.close();dialog.remove();rename.focus();};cancel.onclick=close;dialog.addEventListener("cancel",e=>{e.preventDefault();close();});
   form.onsubmit=async e=>{e.preventDefault();save.disabled=cancel.disabled=true;try{await shell.rename(selectedID,input.value);refresh();close();}catch(err){error.textContent=err.message;save.disabled=cancel.disabled=false;}};
   dialog.showModal();input.focus();
@@ -221,7 +229,7 @@ export class BrowserMemberships {
     record.state="enrolled";record.address=engine.address;this.save();
     const host=this.shell.register(record,engine);run.host=host;engine.start();ready(host);await released;
    }catch(e){failed(e);}
-   finally{run.engine?.stop();store?.close();this.runs.delete(record.id);}
+   finally{if(run.engine?.close)await run.engine.close();else run.engine?.stop();store?.close();this.runs.delete(record.id);}
   });run.finished.catch(failed);return started;
  }
  async join({name,invite,agent,id}) {
@@ -234,7 +242,7 @@ export class BrowserMemberships {
   if(!record){record={id:this.newID(),handle:this.newID(),name,endpoint,state:"joining"};this.records.push(record);this.save();}
   return this.start(record,{invite,agent});
  }
- adoptDefault(engine,{name="Current workspace",endpoint=engine.base,realm}={}) {
+ adoptDefault(engine,{name="",endpoint=engine.base,realm}={}) {
   endpoint=workspaceEndpoint(endpoint,{testLoopback:this.testLoopback});
   let record=this.records.find(r=>r.id==="default");
   if(record&&record.endpoint!==endpoint)throw new Error("Legacy workspace endpoint changed");
@@ -292,4 +300,13 @@ export function workspacePush(id,{navigator:nav=globalThis.navigator,Notificatio
   }
  };
  return adapter;
+}
+
+// Pictures follow the captured membership, exactly like host.api/file. Raw
+// daemon URLs otherwise point at the default workspace when another is open.
+function qualifyPictureURLs(value, prefix) {
+ if (!value || typeof value !== "object") return value;
+ if (typeof value.picture_url === "string" && /^\/api\/picture\/[a-f0-9]{64}$/.test(value.picture_url)) value.picture_url = prefix + value.picture_url;
+ for (const child of Object.values(value)) if (child && typeof child === "object") qualifyPictureURLs(child,prefix);
+ return value;
 }

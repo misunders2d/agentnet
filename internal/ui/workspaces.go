@@ -37,6 +37,18 @@ type workspaceProvider struct {
 type WorkspaceBinding struct {
 	client.Workspace
 	Handle string `json:"handle"`
+	// HubName is the workspace's own name its admin set, as last listed
+	// ("" when none, or not bound); Name stays this device's own label.
+	HubName string `json:"hub_name,omitempty"`
+}
+
+// named is b with the workspace's own name from its bound provider.
+func (e workspaceProvider) named() WorkspaceBinding {
+	b := e.WorkspaceBinding
+	if n, ok := e.provider.(hubNamer); ok {
+		b.HubName = n.HubWorkspaceName()
+	}
+	return b
 }
 
 func NewWorkspaceProviders() *WorkspaceProviders {
@@ -79,7 +91,7 @@ func (s *WorkspaceProviders) List() []WorkspaceBinding {
 	defer s.mu.RUnlock()
 	out := []WorkspaceBinding{}
 	for _, v := range s.entries {
-		out = append(out, v.WorkspaceBinding)
+		out = append(out, v.named())
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].ID == client.DefaultWorkspace {
@@ -118,7 +130,7 @@ func (s *Server) WorkspaceHandler(set *WorkspaceProviders) http.Handler {
 			for _, k := range known {
 				b := WorkspaceBinding{Workspace: k}
 				if e, ok := set.entries[k.ID]; ok {
-					b = e.WorkspaceBinding
+					b = e.named()
 				}
 				out = append(out, b)
 			}
@@ -241,7 +253,7 @@ func (s *Server) WorkspaceHandler(set *WorkspaceProviders) http.Handler {
 			}
 			entry.Name = renamed.Name
 			set.entries[body.ID] = entry
-			writeJSON(w, entry.WorkspaceBinding)
+			writeJSON(w, entry.named())
 		case r.URL.Path == "/api/workspaces/disconnect" && r.Method == "POST":
 			var body struct {
 				ID     string `json:"id"`

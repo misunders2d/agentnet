@@ -298,3 +298,21 @@ func TestDMGuestFromTheCLI(t *testing.T) {
 		t.Fatal("a member decided a guest's invitation for them")
 	}
 }
+
+func TestDMShowPrintsCopies(t *testing.T) {
+	var out bytes.Buffer
+	printConvMessages(&out, []client.ConvMessage{{ID: "a", Dir: "out", Body: "hello", Delivery: "delivered", State: "custody", At: 100, Sent: 90, Copies: []client.ConvCopy{{To: "you/phone", State: "custody", Own: true}, {To: "bob/laptop", State: "delivered"}}}})
+	for _, word := range []string{"(delivered; you/phone: custody; bob/laptop: delivered)", "hello"} {
+		if !strings.Contains(out.String(), word) {
+			t.Fatalf("missing %q in %s", word, out.String())
+		}
+	}
+}
+
+func TestDMShowPrintsSingleCopy(t *testing.T) {
+	var out bytes.Buffer
+	printConvMessages(&out, []client.ConvMessage{{ID: "a", Dir: "out", Body: "hello", Delivery: "delivered", State: "delivered", At: 100, Copies: []client.ConvCopy{{To: "bob/laptop", State: "delivered"}}}})
+	if !strings.Contains(out.String(), "(delivered; bob/laptop: delivered)") {
+		t.Fatal(out.String())
+	}
+}

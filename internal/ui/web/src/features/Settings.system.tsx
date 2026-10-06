@@ -12,8 +12,11 @@ import { AgentAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { harnessName } from "./Settings.assistant";
-import { JoinSheet, LeaveSheet, useDisconnected, useReconnect, workspaceLabel } from "./WorkspaceSwitcher";
+import { JoinSheet, LeaveSheet, RenameSheet, useDisconnected, useReconnect, useWorkspaceLabel, workspaceLabel } from "./WorkspaceSwitcher";
+import { errorText } from "../api";
 import { Card, Details, Fact, Failed, GroupLabel, Hint, PageHead, Skeleton, useLoad } from "./Settings.parts";
+import { GoogleMembers } from "./GoogleMembers";
+import { DriveSettings } from "./Drive";
 
 // ---- Storage -----------------------------------------------------------------
 
@@ -24,7 +27,7 @@ const days = (sec: number) => { const d = Math.round(sec / 86400); return d === 
 export function StorageSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const r = useLoad(() => store.api.storage(), []);
-  const head = <PageHead title="Storage" titleRef={titleRef} lead="What AgentNet keeps, as it reports it. Nothing here deletes anything." />;
+  const head = <><PageHead title="Storage" titleRef={titleRef} lead="What AgentNet keeps, as it reports it." /><DriveSettings /></>;
   if (r.error && !r.data) return <>{head}<Failed text={/not found|404/i.test(r.error) ? "This AgentNet doesn’t report storage yet." : "Storage couldn’t be read just now."} retry={r.reload} /></>;
   if (!r.data) return <>{head}<Skeleton lines={5} /></>;
   const { local, remote } = r.data;
@@ -116,12 +119,57 @@ function Remote({ r }: { r: T.RemoteStorage }) {
 const COINS = ["#FFB4A2", "#B5E3C4", "#A8D8FF", "#FFD6A5", "#D9C2FF", "#FFC6E0", "#C7F0E8", "#F6E3A1"];
 const hostOf = (endpoint: string) => { try { return new URL(endpoint).host; } catch { return endpoint; } };
 
-// Coin stands in until WorkspaceSwitcher exports its coin; joining and
-// leaving use WorkspaceSwitcher's own sheets.
-function Coin({ ws }: { ws: Workspace }) {
+// Coin stands in until WorkspaceSwitcher exports its coin; joining,
+// renaming and leaving use WorkspaceSwitcher's own sheets.
+function Coin({ ws, label }: { ws: Workspace; label?: string }) {
   return (
     <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-xl stroke font-display text-[17px] font-extrabold text-[#1B1530]"
-      style={{ background: COINS[hue(ws.realm || ws.id)] }}>{initials(workspaceLabel(ws))}</span>
+      style={{ background: COINS[hue(ws.realm || ws.id)] }}>{initials(label || workspaceLabel(ws))}</span>
+  );
+}
+
+/** NameForEveryone: the workspace's own name, which every member sees. Only a
+ *  device of a Hub admin may change it (a company setting, your own tap
+ *  here); others see it, read only. Empty clears it (members then see the
+ *  server's name). */
+function NameForEveryone() {
+  const store = useApp();
+  const r = useLoad(() => store.api.workspace(), []);
+  const [name, setName] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!r.data) return null;
+  const v = r.data, value = name ?? v.name;
+  if (!v.can_rename) return v.name ? <Hint className="mb-3">Its admin named this workspace “{v.name}” for everyone.</Hint> : null;
+  const save = async (next: string) => {
+    const n = next.trim();
+    if (n && ([...n].length > 120 || /[\u0000-\u001f\u007f-\u009f]/.test(n))) { setError("Use 1–120 readable characters."); return; }
+    setBusy(true); setError("");
+    try {
+      const done = await store.api.renameWorkspaceForEveryone(n);
+      setName(null); r.reload();
+      store.toast(done.name ? "Everyone now sees “" + done.name + "”." : "The name is cleared: everyone sees " + (done.server || "the server’s name") + ".", "ok");
+      void store.refetch();
+    } catch (e) { setError(errorText(e)); }
+    setBusy(false);
+  };
+  const field = "mt-1.5 block h-12 w-full rounded-xl bg-surface px-3 text-[16px] text-ink stroke placeholder:text-muted";
+  return (
+    <Card className="mb-4 p-4">
+      <form onSubmit={(e) => { e.preventDefault(); void save(value); }}>
+        <label className="block font-semibold">
+          Name for everyone
+          <input value={value} onChange={(e) => { setName(e.target.value); setError(""); }} maxLength={120} placeholder={v.server || "Workspace name"}
+            aria-invalid={!!error} className={field} />
+        </label>
+        <Hint className="mt-1">Every member sees it, on every device. You can change it for everyone because you’re an admin here; people can still use their own name for it.</Hint>
+        {error && <p role="alert" className="mt-2 text-[14px] font-semibold text-danger">{error}</p>}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" type="submit" disabled={busy || value.trim() === v.name}>{busy ? "Saving…" : "Save for everyone"}</Button>
+          {v.name && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save("")}>Clear</Button>}
+        </div>
+      </form>
+    </Card>
   );
 }
 
@@ -131,6 +179,8 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
   const [revision, refresh] = useReducer((n: number) => n + 1, 0);
   const [joining, setJoining] = useState(false);
   const [leaving, setLeaving] = useState<Workspace | null>(null);
+  const [renaming, setRenaming] = useState<Workspace | null>(null);
+  const labelOf = useWorkspaceLabel();
   useEffect(() => ws?.onChange(refresh), [ws]);
   const gone = useDisconnected(ws, revision);
   const { busy, error, done, reconnect } = useReconnect(ws, refresh);
@@ -146,10 +196,11 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
     focusOn.current = "";
     (row.querySelector<HTMLElement>("button:not([disabled])") || row).focus();
   });
-  const head = <PageHead title="Workspaces" titleRef={titleRef} lead="Each workspace is its own server, with its own people and chats. You switch between them here." />;
+  const head = <><PageHead title="Workspaces" titleRef={titleRef} lead="Each workspace is its own server, with its own people and chats. You switch between them here." /><GoogleMembers /></>;
   if (!ws) return (
     <>{head}
-      <Card className="flex items-center gap-3 p-4"><Coin ws={store.host.workspace} /><div><p className="font-semibold">{workspaceLabel(store.host.workspace)}</p><Hint>The only workspace on this {store.host.platform === "browser" ? "browser" : "computer"}.</Hint></div></Card>
+      <NameForEveryone />
+      <Card className="flex items-center gap-3 p-4"><Coin ws={store.host.workspace} label={labelOf()} /><div><p className="font-semibold">{labelOf()}</p><Hint>The only workspace on this {store.host.platform === "browser" ? "browser" : "computer"}.</Hint></div></Card>
     </>
   );
   const list = ws.list(), active = ws.active();
@@ -161,14 +212,15 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
   return (
     <div ref={box}>
       {head}
+      <NameForEveryone />
       <ul className="space-y-3">
         {list.map((w) => (
           <li key={w.id} data-ws={done === w.id ? w.id : undefined} tabIndex={done === w.id ? -1 : undefined} className="rounded-2xl">
             <Card className="px-4 pb-1 pt-4">
               <div className="flex items-center gap-3">
-                <Coin ws={w} />
+                <Coin ws={w} label={labelOf(w)} />
                 <div className="min-w-0 flex-1">
-                  <p className="flex flex-wrap items-center gap-2 font-semibold">{workspaceLabel(w)}{w.id === active && <Tag tone="ok">In use</Tag>}</p>
+                  <p className="flex flex-wrap items-center gap-2 break-words font-semibold [overflow-wrap:anywhere]">{labelOf(w)}{w.id === active && <Tag tone="ok">In use</Tag>}</p>
                   <Hint className="truncate">{hostOf(w.endpoint)}</Hint>
                 </div>
                 {w.id !== active && ws.has(w.id) && <Button size="sm" onClick={() => choose(w.id)}>Switch</Button>}
@@ -178,7 +230,10 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
                   <Fact name="You are">{w.address}</Fact>
                   <Fact name="Server">{w.endpoint}</Fact>
                 </Details>
-                {w.id !== "default" && ws.disconnect && <Button size="sm" variant="ghost" className="text-danger" aria-label={"Leave " + workspaceLabel(w)} onClick={() => setLeaving(w)}>Leave</Button>}
+                <span className="flex flex-wrap gap-1">
+                  {ws.rename && ws.has(w.id) && <Button size="sm" variant="ghost" aria-label={"Rename " + labelOf(w)} onClick={() => setRenaming(w)}>Rename</Button>}
+                  {w.id !== "default" && ws.disconnect && <Button size="sm" variant="ghost" className="text-danger" aria-label={"Leave " + labelOf(w)} onClick={() => setLeaving(w)}>Leave</Button>}
+                </span>
               </div>
             </Card>
           </li>
@@ -213,6 +268,7 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
       {ws.join && <Button variant="outline" size="lg" className="mt-5" icon={<IconPlus size={20} />} onClick={() => setJoining(true)}>Join a workspace</Button>}
       <JoinSheet ws={ws} open={joining} onClose={() => setJoining(false)} onJoined={refresh} />
       <LeaveSheet ws={ws} target={leaving} onClose={() => setLeaving(null)} onLeft={refresh} />
+      <RenameSheet ws={ws} target={renaming} onClose={() => setRenaming(null)} onRenamed={refresh} />
     </div>
   );
 }
@@ -222,6 +278,7 @@ export function WorkspacesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadi
 export function AboutSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
+  const labelOf = useWorkspaceLabel();
   const [paths, setPaths] = useState<T.HarnessView[] | null>(null);
   const loadPaths = () => { if (!paths && store.host.platform !== "browser") store.api.responder().then((r) => setPaths(r.harnesses || []), () => setPaths([])); };
   return (
@@ -250,7 +307,7 @@ export function AboutSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
               <Fact name="Address">{o.me.address}</Fact>
               <Fact name="Key">{o.me.fingerprint}</Fact>
               {o.person?.person && <Fact name="Person ID">{o.person.person}</Fact>}
-              <Fact name="Workspace">{store.host.workspace.name + " · " + store.host.workspace.endpoint}</Fact>
+              <Fact name="Workspace">{labelOf() + " · " + store.host.workspace.endpoint}</Fact>
               <Fact name="Runs as">{store.host.platform === "browser" ? "This browser" : "AgentNet on this computer"}</Fact>
               {o.me.responder && <Fact name="Agent">{harnessName(o.me.responder) + " in " + o.me.responder_dir}</Fact>}
               {(paths || []).filter((h) => h.path).map((h) => <Fact key={h.name} name={harnessName(h.name)}>{h.path}</Fact>)}

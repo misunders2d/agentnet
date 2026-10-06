@@ -36,7 +36,11 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; margin: 0; }
+/* The page is the part of the screen a phone's keyboard leaves visible.
+   Android shrinks the page itself (index.html: interactive-widget=
+   resizes-content); on iOS the host sets --an-viewport-h from the visual
+   viewport (loader.js fitViewport). */
+html, body { height: var(--an-viewport-h, 100%); margin: 0; }
 /* The page never scrolls: the switcher (when shown) sits on top and the
    skin's box (#skin) fills the rest and scrolls inside itself. */
 body { display: flex; flex-direction: column; overflow: hidden; background: var(--canvas);

@@ -29,16 +29,19 @@ var updateTS = flag.Bool("update", false, "rewrite web/src/api.gen.ts")
 //	go test ./internal/ui -run TestTypeScriptViewTypes -update
 var tsRoots = []any{
 	// responses
-	Overview{}, DMThread{}, Thread{}, Presence{}, Sent{}, AgentView{}, GuestView{},
+	Overview{}, DMThread{}, Thread{}, Presence{}, Sent{}, AgentView{}, GuestView{}, GuestCheck{}, GuestCheckRequest{},
 	GroupInvitationView{}, GroupChangeResult{}, ResponderView{}, AgentCatalogView{}, AgentCatalogChangeResult{},
 	ReplyReceiverBindingView{}, ReplySessionCatalogView{}, NotifyView{}, DeviceLink{}, AssistantSetupView{},
 	WorkspaceBinding{}, client.TeamsView{}, protocol.TeamState{}, protocol.TeamSnapshot{},
 	client.TypingView{}, client.TypingResult{}, client.StorageSummary{}, static.Skin{}, TopicPage{}, ApprovalsView{},
+	WorkspaceInfoView{},
+	InviteView{}, InvitesView{}, GetAppView{}, FoldersView{}, // the AgentNet app (MEL-533/534/536)
+	protocol.GoogleAccess{}, protocol.GoogleAccessChange{},
 	// requests
 	Draft{}, DMDraft{}, Action{}, ControlAction{}, AgentInvite{}, AgentAsk{}, GuestAction{},
 	GroupInviteDraft{}, GroupChange{}, DecisionAction{}, DeleteConversationAction{}, ResponderChange{},
 	AgentCatalogChange{}, WorkspaceJoin{}, client.TeamChange{}, protocol.TypingScope{}, AssistantSetupRequest{},
-	ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{},
+	ReplyReceiverSelection{}, TopicChange{}, ApprovalRevoke{}, WorkspaceNameChange{}, InviteRequest{},
 }
 
 func TestTypeScriptViewTypes(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -60,7 +61,14 @@ func joinLinked(t *testing.T, h *Hub, secret, address, offer string, head protoc
 func step(prev protocol.PersonRoster, signer member, joiner *member, devices ...identity.Public) protocol.PersonRoster {
 	r := protocol.PersonRoster{Person: prev.Person, Label: prev.Label, Seq: prev.Seq + 1, Prev: prev.Hash(), Devices: devices,
 		By: signer.id.Public(signer.addr).Fingerprint()}
+	// As a normal link: the person's human devices stay human, a joiner is one.
+	for _, fp := range prev.Humans() {
+		if slices.ContainsFunc(devices, func(d identity.Public) bool { return d.Fingerprint() == fp }) {
+			r.HumanKeys = append(r.HumanKeys, fp)
+		}
+	}
 	if joiner != nil {
+		r.HumanKeys = append(r.HumanKeys, joiner.id.Public(joiner.addr).Fingerprint())
 		r.Join = ed25519.Sign(joiner.id.Sign, protocol.JoinBytes(r.Person, r.Seq, r.Prev, joiner.id.Public(joiner.addr)))
 	}
 	r.Sign(signer.id.Sign)

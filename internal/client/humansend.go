@@ -44,7 +44,7 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	var x ParticipationInfo
 	switch {
 	case request:
-		if out.Kind != envelope.KindQuestion && out.Kind != envelope.KindTask || out.PID == "" || out.PID == h.AuthorPID || out.AgentID != "" || out.sub != "" || envelope.AgentOrigin(out.Origin) || out.claim != nil {
+		if out.Kind != envelope.KindQuestion && out.Kind != envelope.KindTask || out.PID == "" || out.PID == h.AuthorPID || out.AgentID != "" || out.sub != "" || envelope.AgentOrigin(out.Origin) || out.claim != nil && out.Origin != envelope.OriginUI {
 			return ConvSent{}, errors.New("human: an addressed request names its assistant only")
 		}
 		// Its local reply receiver binds the exact host copy (addConvOutbox);
@@ -87,12 +87,22 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		}
 		out.ReplyTo = parent
 	}
+	if out.Quote != "" {
+		parent, known, err := humanReplyParent(a.store.db, root.ID(), out.Quote)
+		if err != nil {
+			return ConvSent{}, err
+		}
+		if !known {
+			return ConvSent{}, errors.New("quote stays within its conversation")
+		}
+		out.Quote = parent
+	}
 	m, err := a.dmMembers(root.ID())
 	if err != nil {
 		return ConvSent{}, err
 	}
 	for id := range m.persons {
-		if _, err := a.refreshPerson(ctx, id, false); err != nil {
+		if _, err := a.refreshPerson(ctx, id, false); err != nil && !(root.Kind == protocol.ConvKindGroup && hubUnreachable(err)) {
 			return ConvSent{}, err
 		}
 	}
@@ -100,11 +110,17 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if err != nil {
 		return ConvSent{}, err
 	}
-	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: out.Body, ReplyTo: out.ReplyTo, Conv: root.ID(), LID: protocol.NewID(), Root: raw, PID: h.AuthorPID, Human: h, Origin: out.Origin}
+	lid, _ := sendID(ctx)
+	in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Body: out.Body, ReplyTo: out.ReplyTo, Quote: out.Quote, Topic: out.Topic, TopicEvent: out.TopicEvent, TopicDone: out.TopicDone, Conv: root.ID(), LID: lid, Root: raw, PID: h.AuthorPID, Human: h, Origin: out.Origin}
 	if request || output {
 		in.Kind, in.PID, in.Target, in.AgentID, in.Status, in.Emotion = out.Kind, out.PID, out.Target, out.AgentID, out.status, out.Emotion
 		if request && in.Target != nil {
-			in.LID = in.ID // the executable host copy's ID is the shared request LID (as external requests)
+			// The executable host copy still uses the shared request LID.
+			if queuedSend(ctx) {
+				in.ID = in.LID
+			} else {
+				in.LID = in.ID
+			}
 		}
 	}
 	if in.Origin == "" {
@@ -112,12 +128,30 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	}
 	var devices []identity.Public
 	seen := map[string]bool{}
-	for _, member := range root.Members {
+	members := root.Members
+	groupAdmission := ""
+	if root.Kind == protocol.ConvKindGroup {
+		if request || output {
+			return ConvSent{}, errors.New("group addressed turns use their participation route")
+		}
+		members = nil
+		for id := range m.persons {
+			members = append(members, protocol.ConvMember{Person: id})
+		}
+		admission, e := groupMemberAdmission(a.store.db, *m.group, a.Address, a.Self().Fingerprint())
+		if e != nil {
+			return ConvSent{}, e
+		}
+		groupAdmission = admission.Hash()
+	}
+	for _, member := range members {
 		p, ok := m.persons[member.Person]
 		if !ok {
 			return ConvSent{}, errors.New("human: original member proof missing")
 		}
-		in.Fan = append(in.Fan, envelope.Fan{Person: member.Person, Roster: p.info.Roster})
+		if root.Kind != protocol.ConvKindGroup {
+			in.Fan = append(in.Fan, envelope.Fan{Person: member.Person, Roster: p.info.Roster})
+		}
 		for _, d := range p.roster.Devices {
 			if d.Address != a.Address && !seen[d.Address] {
 				devices = append(devices, d)
@@ -207,6 +241,22 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		}
 		copyIn := in
 		copyIn.ID, copyIn.To = protocol.NewID(), device.Address
+		if root.Kind == protocol.ConvKindGroup {
+			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil && !hubUnreachable(err) {
+				return ConvSent{}, err
+			}
+			me, ok, e := a.store.selfPerson(a.Address)
+			if e != nil || !ok {
+				return ConvSent{}, errors.New("group sender person missing")
+			}
+			copyIn.Replica = me.has(device.Address, device.Fingerprint())
+			copyIn.Fan = []envelope.Fan{{Person: me.info.Person, Roster: me.info.Roster}}
+			for _, p := range m.persons {
+				if p.has(device.Address, device.Fingerprint()) && p.info.Person != me.info.Person {
+					copyIn.Fan = append(copyIn.Fan, envelope.Fan{Person: p.info.Person, Roster: p.info.Roster})
+				}
+			}
+		}
 		if request && (device.Address == x.Host.Address && device.Fingerprint() == x.Host.Fingerprint || out.selfJob && len(copies) == 0) {
 			copyIn.ID = in.LID // the host's executable copy (asked on the host: the first copy, whose ID its job takes)
 		}
@@ -223,10 +273,23 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 			a.releaseSpool(envelope.Envelope{Blobs: blobsOf(copyIn.Attachments)})
 			return ConvSent{}, err
 		}
-		copies = append(copies, outCopy{in: copyIn, env: sealed, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint()})
+		copies = append(copies, outCopy{in: copyIn, env: sealed, state: stateQueued, required: protocol.CapHumanParticipation, recipientFP: key.Fingerprint(), groupAdmission: groupAdmission})
 	}
 	guard := func(tx *sql.Tx, replyID string) error {
-		if out.claim != nil { // an output: the worker's claim decides with this write
+		if groupAdmission != "" {
+			current, e := groupTurnPacketIn(tx, root.ID())
+			if e != nil {
+				return e
+			}
+			admission, e := groupMemberAdmission(tx, current, a.Address, a.Self().Fingerprint())
+			if e != nil {
+				return e
+			}
+			if admission.Hash() != groupAdmission {
+				return ErrGroupContextPending
+			}
+		}
+		if out.claim != nil { // worker output or human confirmation: its claim decides with this write
 			if err := out.claim(tx, replyID); err != nil {
 				return err
 			}
@@ -245,11 +308,14 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 	if out.selfJob { // asked on the host itself: its job is recorded with it
 		jobKey, local.ID, local.To = a.Self().Fingerprint(), in.LID, a.Address
 	}
-	if err := a.store.addConvOutbox(copies, local, guard, jobKey, binding); err != nil {
+	if err := a.store.addConvOutbox(copies, local, a.queuedClaim(ctx, root.ID(), guard), jobKey, binding); err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, local.ID, in.LID), nil
+	}
 	if binding != nil && binding.setup != nil {
 		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {
 			return ConvSent{}, err

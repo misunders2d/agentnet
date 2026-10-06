@@ -31,7 +31,7 @@ const local = (version) => {
       const page = await ctx.newPage(), errors = [];
       page.on('pageerror', (e) => errors.push(e.message));
       page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
-      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && !['/api/workspaces', '/api/agents', '/api/responder', '/api/dm', '/api/refresh', '/favicon.ico'].includes(p)) errors.push(r.status() + ' ' + p); }); // the demo has no workspaces, agent catalog, responder or DMs (the Agents tab's data is read ahead at start) (the synthetic notification names one)
+      page.on('response', (r) => { const p = new URL(r.url()).pathname; if (r.status() >= 400 && !(r.status() === 404 && p === '/api/typing') && !['/api/workspaces', '/api/agents', '/api/responder', '/api/dm', '/api/refresh', '/favicon.ico'].includes(p)) errors.push(r.status() + ' ' + p); }); // the demo has no workspaces, agent catalog, responder or DMs (the Agents tab's data is read ahead at start) (the synthetic notification names one)
       const snap = (n) => shots && page.screenshot({ path: path.join(shots, 'skins-' + tag + '-' + n + '.png') });
       const origin = new URL(target).origin;
       // Comic is up: its root is mounted and has drawn (the chat list, or the conversation a destination opened).
@@ -40,7 +40,7 @@ const local = (version) => {
 
       // Comic, from a saved "default".
       await page.goto(target);
-      await page.evaluate(() => localStorage.setItem('agentnet.skin', 'default'));
+      await page.evaluate(() => (localStorage.removeItem('agentnet.skin.package'),localStorage.setItem('agentnet.skin', 'default')));
       await page.goto(origin + '/');
       await comicUp();
       const comic = await page.evaluate(async () => {
@@ -60,13 +60,24 @@ const local = (version) => {
       await noScroll('Comic');
       await snap('comic');
       for (const saved of ['classic', '']) {
-        await page.evaluate((s) => s ? localStorage.setItem('agentnet.skin', s) : localStorage.removeItem('agentnet.skin'), saved);
+        await page.evaluate((s) => { localStorage.removeItem('agentnet.skin.package'); s ? localStorage.setItem('agentnet.skin', s) : localStorage.removeItem('agentnet.skin'); }, saved);
         await page.goto(origin + '/');
         await comicUp();
         assert.equal(await page.evaluate(() => localStorage.getItem('agentnet.skin')), 'comic', tag + ': saved "' + saved + '" opens Comic');
       }
       await page.goto(origin + '/?skin=default');
       await comicUp();
+
+      for (const id of ['classic','zoom']) {
+        await page.goto(origin + '/?skin=' + id);
+        await page.waitForFunction(id=>document.querySelector('#skin')?.shadowRoot?.querySelector('.'+id+'-root #me')?.textContent==='This device',id);
+        assert.equal(await page.getByRole('button',{name:'Use this skin',exact:true}).count(),0,tag+': built-in never asks trust');
+        assert(await page.evaluate(()=>!!window.agentnet.drive&&typeof window.agentnet.drive.drive==='function'&&typeof window.agentnet.drive.driveUpload==='function'),tag+': real host Drive provider');
+        await page.goto(origin + '/');
+        await page.waitForFunction(id=>document.querySelector('#skin')?.shadowRoot?.querySelector('.'+id+'-root #me')?.textContent==='This device',id);
+        await noScroll(id);await snap(id);
+        await page.getByRole('button',{name:'Switch to Comic',exact:true}).click();await comicUp();
+      }
 
       // The installed Notebook: trust first, the switcher already there.
       await page.goto(origin + '/?skin=notebook');

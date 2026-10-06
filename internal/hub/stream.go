@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -131,6 +133,24 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "", "stream needs a valid signed session ad: "+err.Error())
 		return
 	}
+	var receiptCursor int64
+	receiptPush := r.URL.Query().Has(protocol.StreamReceipts)
+	if receiptPush {
+		value := r.URL.Query().Get(protocol.StreamReceipts)
+		receiptCursor, err = strconv.ParseInt(value, 10, 64)
+		if err != nil || receiptCursor < 0 || strings.Trim(value, "0123456789") != "" {
+			writeError(w, http.StatusBadRequest, "", "invalid receipt cursor")
+			return
+		}
+		max, e := h.store.receiptMax(caller)
+		if e != nil {
+			writeError(w, http.StatusInternalServerError, "", "storage error")
+			return
+		}
+		if receiptCursor > max {
+			receiptCursor = 0
+		}
+	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	sub := h.streams.add(caller, cancel)
@@ -177,7 +197,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	signals := h.signals.subscribe(caller, sub)
 	defer h.signals.unsubscribe(caller, sub)
-	var lastSeq int64
+	var lastSeq, adminNoticeCursor int64
 	sentRelease := int64(-1) // the release is sent on connect and when it changes
 	sentMembers := int64(-1) // so is the member list
 	sentLinks := int64(-1)   // and the devices waiting for this one's approval
@@ -229,6 +249,36 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			sentLinks = gen
+		}
+		notices, err := h.store.deviceAdminNotices(caller, adminNoticeCursor)
+		if err != nil {
+			return
+		}
+		for _, n := range notices {
+			data, _ := json.Marshal(n)
+			if !write("event: device_admin\ndata: %s\n\n", data) {
+				return
+			}
+			adminNoticeCursor = n.Seq
+		}
+		if len(notices) == 100 {
+			continue
+		}
+		if receiptPush {
+			receipts, err := h.store.receiptsFor(caller, receiptCursor)
+			if err != nil {
+				return
+			}
+			for _, receipt := range receipts {
+				data, _ := json.Marshal(receipt)
+				if !write("event: receipt\ndata: %s\n\n", data) {
+					return
+				}
+				receiptCursor = receipt.Seq
+			}
+			if len(receipts) == protocol.ReceiptBatch {
+				continue
+			}
 		}
 		msgs, err := h.store.pendingFor(caller, ad.Session, lastSeq)
 		if err != nil {

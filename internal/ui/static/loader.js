@@ -23,6 +23,35 @@
   "use strict";
   const page = document.getElementById("skin");
   const browser = window.agentnetEngine;
+
+  // ---- the page is what a phone's keyboard leaves visible
+  //
+  // Android shrinks the layout viewport with the keyboard (index.html:
+  // interactive-widget=resizes-content), so the page and every skin follow
+  // it by themselves. iOS ignores that and shrinks only the visual
+  // viewport: there the host sizes the page from it (--an-viewport-h, read
+  // by core.css) and says how much of the screen's bottom the keyboard
+  // covers (--an-keyboard, for a skin's fixed bottom popups). Both are the
+  // host's own names, set on <html> and inherited into the skin's shadow
+  // tree, and absent while nothing covers the page or the person zooms in.
+  // Events only, no polling.
+  const fitViewport = (vv) => {
+    const style = document.documentElement.style;
+    const fit = () => {
+      if (innerHeight - vv.height > 1 && Math.abs(vv.scale - 1) < 0.01) {
+        style.setProperty("--an-viewport-h", vv.height + "px");
+        style.setProperty("--an-keyboard", Math.max(0, innerHeight - vv.height - vv.offsetTop) + "px");
+        if (scrollX || scrollY) scrollTo(0, 0); // iOS scrolled the page to show the field; it fits now, so back to its top
+      } else {
+        style.removeProperty("--an-viewport-h");
+        style.removeProperty("--an-keyboard");
+      }
+    };
+    vv.addEventListener("resize", fit);
+    vv.addEventListener("scroll", fit);
+    fit();
+  };
+  if (window.visualViewport) fitViewport(window.visualViewport);
   // Which skin opens and whether it needs consent: built-in skins are
   // trusted by the host's fixed list, never by a manifest (skin-choice.mjs).
   const { HOME, mark, choose, trusted: isTrusted, takenName } = await import("/assets/skin-choice.mjs");
@@ -60,6 +89,9 @@
       return (await r.json()).id;
     },
   };
+
+  const { daemonDriveProvider, boundDriveProvider } = await import("/assets/drivespace.mjs");
+  single.drive = boundDriveProvider(browser ? browser.driveService() : daemonDriveProvider(json, (path, init) => fetch(path, init)));
 
   // ---- what every host carries: notification routing, the catalog
   //
@@ -118,6 +150,9 @@
   // Reconnect routes a membership disconnected here again: this computer's
   // program only (a browser enrollment has no program to ask).
   const canReconnect = !!shell && !memberships && typeof shell.reconnect === "function";
+  // Rename sets this device's own label of a membership ("" clears it, and
+  // the workspace's own name shows): wherever the shell can keep it.
+  const canRename = !!shell && (!memberships || typeof shell.renameBrowser === "function");
   const workspaces = shell ? Object.freeze({
     list: () => shell.list(),
     active: () => shell.active,
@@ -131,6 +166,7 @@
       disconnected: () => shell.disconnected(), // memberships disconnected here, with their state
       reconnect: (id) => shell.reconnect(id),
     } : {}),
+    ...(canRename ? { rename: (id, name) => shell.rename(id, name) } : {}),
   }) : null;
   const switchTo = (id) => { if (id !== shell.active) shell.select(id); };
 
@@ -139,6 +175,10 @@
   // the workspace list) is the same for every one. The identity a
   // membership proved in its overview is what host.reconnect checks.
   const known = new Map(); // membership id -> { address, fingerprint } from its own overview
+  // The skin bar's listeners: each overview a skin reads (it reads one on
+  // its changes anyway) also tells the bar its workspace's name, so the bar
+  // reads none per change of its own.
+  const overviewSeen = new Set();
   const canRebind = !!shell && !memberships && !browser && typeof shell.recoverNative === "function";
   let remount = null, rebinding = null;
   const hostFor = (id) => {
@@ -146,7 +186,10 @@
     const wid = bound.workspace.id;
     const api = async (path, body) => {
       const r = await bound.api(path, body);
-      if (body === undefined && path === "/api/overview" && r && r.me && r.me.fingerprint) known.set(wid, { address: r.me.address, fingerprint: r.me.fingerprint });
+      if (body === undefined && path === "/api/overview" && r) {
+        if (r.me && r.me.fingerprint) known.set(wid, { address: r.me.address, fingerprint: r.me.fingerprint });
+        for (const fn of [...overviewSeen]) { try { fn(wid, r); } catch (_) { /* the bar's own */ } }
+      }
       return r;
     };
     const host = Object.freeze(Object.assign({}, bound, common, { api, workspaces }, canRebind && bound.platform === "daemon" ? { reconnect: () => rebind(host) } : {}));
@@ -228,9 +271,9 @@
     await refreshSkins();
     // A choice saved before Comic was a package ("default", "classic")
     // opens Comic and is rewritten once; ?skin=default names Comic too.
-    let saved = null;
-    try { saved = localStorage.getItem("agentnet.skin"); } catch (_) { /* local preference */ }
-    const choice = choose(common.skins, { query: new URL(location.href).searchParams.get("skin"), saved });
+    let saved = null, packageChoice = false;
+    try { saved = localStorage.getItem("agentnet.skin"); packageChoice = localStorage.getItem("agentnet.skin.package") === saved; } catch (_) { /* local preference */ }
+    const choice = choose(common.skins, { query: new URL(location.href).searchParams.get("skin"), saved, packageChoice });
     const home = choice.home;
     if (!home) throw new Error("This program has no Comic skin");
     homeName = home.name;
@@ -244,8 +287,9 @@
       const { mountSkinBar } = await import("/assets/skinbar.mjs");
       bar = mountSkinBar(document.body, {
         skins: () => common.skins, selected, home, choose: (id) => go(id), host: () => window.agentnet, workspaces,
-        manage: common.manageLocalSkins || null,
+        manage: common.manageLocalSkins || null, overviews: (fn) => { overviewSeen.add(fn); return () => overviewSeen.delete(fn); },
       });
+      await bar.ready; // No unstyled host controls before the skin’s first paint.
     }
 
     let trusted = isTrusted(selected, null);
@@ -308,9 +352,30 @@
     // current workspace instead).
     const notice = (words, action) => { if (bar) bar.notify(words, action ? { label: action, run: () => go(HOME, location.hash) } : null); };
     const clear = () => history.replaceState(null, "", location.pathname + location.search);
+    // An invitation or device link opened in the AgentNet app once this
+    // computer has joined (agentnet://open#…): taken out of the address at
+    // once (it is a secret), never acted on. The same server needs no
+    // second person; another server is joined from the workspace menu.
+    // TODO(integrate:P2): open P2's workspace join sheet with it, the
+    // server's host shown and a click required.
+    const invitation = () => {
+      const hash = location.hash || "";
+      if (browser || !/^#agentnet-(invite-v1|link-v2):/.test(hash)) return false;
+      clear();
+      let host = "";
+      try {
+        const code = decodeURIComponent(hash.slice(1));
+        const raw = code.startsWith("agentnet-link-v2:") ? null : JSON.parse(atob(code.slice(code.indexOf(":") + 1).replace(/-/g, "+").replace(/_/g, "/")));
+        host = raw && typeof raw.hub === "string" ? new URL(raw.hub).host : "";
+      } catch (_) { host = ""; }
+      notice(hash.startsWith("#agentnet-link-v2:") ? "A device link opens on a new device: this computer is already one of yours."
+        : "This computer has joined AgentNet already. To join " + (host ? "the server " + host : "another server") + " with that invitation, use Join a workspace in the workspace menu.");
+      return true;
+    };
     const route = () => {
       const hash = location.hash || "";
       notice("");
+      if (invitation()) return;
       const review = hash === "#review" || hash.startsWith("#review&"), msg = hash.startsWith("#msg="), conv = hash.startsWith("#conv=");
       if (!review && !msg && !conv) return;
       const q = new URLSearchParams(hash.slice(1)), wid = q.get("workspace");
@@ -340,7 +405,7 @@
     };
     window.addEventListener("hashchange", route);
     route();
-    try { localStorage.setItem("agentnet.skin", selected.id); } catch (_) {}
+    try { localStorage.setItem("agentnet.skin", selected.id); localStorage.setItem("agentnet.skin.package", selected.id); } catch (_) {}
   } catch (e) {
     const box = text("div", "");
     box.className = "skin-root";

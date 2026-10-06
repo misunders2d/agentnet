@@ -7,7 +7,7 @@
 // stylesheet can hide or restyle it. Text from anywhere is inserted as text
 // nodes only.
 //
-// mountSkinBar(parent, options) draws it and returns { notify, element }:
+// mountSkinBar(parent, options) draws it and returns { ready, notify, element }:
 //   skins()          the catalog (host.skins), read each time the menu opens
 //   selected         the skin shown now ({ id, name, local?, builtin? })
 //   home             the default skin ({ id, name }): Comic
@@ -33,24 +33,52 @@ const icon = (name, size = 18) => {
   return s;
 };
 
-const generic = new Set(["", "current workspace", "this computer"]);
+const generic = new Set(["", "current workspace", "this computer", "this server"]);
+const hostName = (h) => { h = String(h || "").replace(/^www\./, ""); return !h || h === "localhost" || h.startsWith("[") || /^[\d.]+$/.test(h) ? "" : h; };
 const serverName = (endpoint) => {
-  try { const h = new URL(endpoint).hostname.replace(/^www\./, ""); return !h || h === "localhost" || h.startsWith("[") || /^[\d.]+$/.test(h) ? "" : h; } catch (_) { return ""; }
+  try { return hostName(new URL(endpoint).hostname); } catch (_) { return ""; }
 };
-// The same words as Comic's workspace menu (WorkspaceSwitcher.tsx).
-export const workspaceLabel = (w) => { const n = (w.name || "").trim(); return generic.has(n.toLowerCase()) ? serverName(w.endpoint) || "AgentNet" : n; };
+// The same words as Comic's workspace menu (WorkspaceSwitcher.tsx): this
+// device's own label, else the workspace's own name its admin set
+// (hub_name, or the current overview's workspace.name), else the relay's
+// host name (the overview's workspace.server, or the endpoint's), else
+// "AgentNet".
+export const workspaceLabel = (w, ws) => {
+  const n = (w.name || "").trim();
+  if (!generic.has(n.toLowerCase())) return n;
+  const own = ((ws && ws.name) || w.hub_name || "").trim();
+  return own || hostName(ws && ws.server) || serverName(w.endpoint) || "AgentNet";
+};
+// deviceWords is a device address in words (client.DeviceWords; vectors:
+// internal/ui/testdata/device_words.json): "admin/iphone" → "iPhone".
+const deviceSpecial = { iphone: "iPhone", ipad: "iPad", imac: "iMac", mac: "Mac", macbook: "MacBook" };
+export const deviceWords = (address) => {
+  const s = String(address || ""), i = s.indexOf("/");
+  return (i < 0 ? s : s.slice(i + 1)).split("-").filter(Boolean)
+    .map((w, j) => deviceSpecial[w.toLowerCase()] || (j === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ");
+};
+// whoText: "You are Sergey on Pixel in Mellanni." from an overview.
+export const whoText = (o, place) => {
+  const device = deviceWords(o && o.me && o.me.address), person = o && o.person && o.person.label;
+  return (person ? "You are " + person + " on " + device : "This device is " + device) + " in " + place + ".";
+};
 export const coinLetters = (label) => {
   const base = label.includes(".") && !label.includes(" ") ? label.split(".").slice(-2, -1)[0] || label : label;
   const words = base.replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   return words.length ? (words[0][0] + (words[1] ? words[1][0] : "")).toUpperCase() : "A";
 };
 
-export function mountSkinBar(parent, { skins, selected, home, choose, host, workspaces, manage }) {
+export function mountSkinBar(parent, { skins, selected, home, choose, host, workspaces, manage, overviews }) {
   const holder = document.createElement("div");
   holder.id = "skin-bar";
+  holder.style.visibility = "hidden";
   const root = holder.attachShadow({ mode: "open" });
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
   const css = el("link"); css.rel = "stylesheet"; css.href = "/assets/skinbar.css";
+  const ready = new Promise((resolve, reject) => {
+    css.onload = () => { holder.style.removeProperty("visibility"); resolve(); };
+    css.onerror = () => reject(new Error("Could not load the skin switcher’s styles"));
+  });
 
   // Menus and dialogs follow the device's light or dark setting.
   const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -194,13 +222,23 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
     const chev = icon("chevron", 16); chev.classList.add("chev");
     wsButton.append(coin, el("span", "key", "Workspace"), wsValue, chev);
     const current = () => workspaces.list().find((w) => w.id === workspaces.active()) || host().workspace;
+    // The current workspace's own name and server, from its overview: the
+    // ones the skin reads anyway (overviews: the host hands each to the bar),
+    // and one read of the bar's own on mount and on a switch, never one per
+    // change (an overview is the page's largest read).
+    let ownWs = null;
+    const readOwn = () => {
+      const wid = workspaces.active();
+      host().api("/api/overview").then((o) => { if (workspaces.active() === wid) { ownWs = (o && o.workspace) || null; label(); } }).catch(() => {});
+    };
+    if (typeof overviews === "function") overviews((wid, o) => { if (wid === workspaces.active() && o.workspace) { ownWs = o.workspace; label(); } });
     const label = () => {
-      const name = workspaceLabel(current());
+      const name = workspaceLabel(current(), ownWs);
       coin.textContent = coinLetters(name); wsValue.textContent = name;
       wsButton.setAttribute("aria-label", "Workspace: " + name + ". Switch or join another");
     };
-    label();
-    workspaces.onChange(() => { label(); if (openMenu === wsMenu) wsMenu.close(false); });
+    label(); readOwn();
+    workspaces.onChange(() => { ownWs = null; label(); readOwn(); if (openMenu === wsMenu) wsMenu.close(false); });
     const deviceName = () => { const a = (host().workspace && host().workspace.address) || ""; return a.includes("/") ? a.split("/").pop() : ""; };
     const wsMenu = makeMenu(wsButton, "Workspaces", (panel) => {
       const active = workspaces.active();
@@ -217,10 +255,11 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
       const tail = [];
       if (workspaces.join) tail.push(item("menuitem", glyph(icon("plus", 20), "dashed"), "Join a workspace…", "With an invitation from someone there", () => { wsMenu.close(false); joinDialog(); }));
       const cur = workspaces.list().find((w) => w.id === active);
+      if (workspaces.rename && cur) tail.push(item("menuitem", glyph(icon("brush", 20), "dashed"), "Rename…", "Your own name for it, on this device", () => { wsMenu.close(false); renameDialog(cur); }));
       if (workspaces.disconnect && cur && cur.id !== "default") tail.push(item("menuitem", glyph(icon("leave", 20)), "Leave " + workspaceLabel(cur) + "…", "Stop getting its messages on this device", () => { wsMenu.close(false); leaveDialog(cur); }, { cls: "danger" }));
       panel.replaceChildren(el("h2", "", "Workspaces"), who, ...group("Yours", rows), gone, ...(tail.length ? [el("hr", "sep"), ...tail] : []));
       // Who you are here, and the workspaces this computer left: read now, shown when they come.
-      host().api("/api/overview").then((o) => { if (!panel.hidden && o && o.me) who.textContent = "You are " + o.me.address + " in " + workspaceLabel(current()) + "."; }).catch(() => {});
+      host().api("/api/overview").then((o) => { if (!panel.hidden && o && o.me) { ownWs = o.workspace || ownWs; who.textContent = whoText(o, workspaceLabel(current(), ownWs)); } }).catch(() => {});
       if (workspaces.disconnected) workspaces.disconnected().then((list) => {
         if (panel.hidden || !list || !list.length) return;
         gone.replaceChildren(...group("Not connected", list.map((w) => {
@@ -239,7 +278,7 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
         f.append(el("p", "muted", "Use the invitation someone on that server gave you."));
         const field = (tag, text, attrs, hint) => { const l = el("label", "", text); const i = el(tag); Object.assign(i, attrs); l.append(i); if (hint) l.append(el("small", "", hint)); return [l, i]; };
         const [invL, invite] = field("textarea", "Invitation", { rows: 3, required: true, spellcheck: false, autocomplete: "off", placeholder: "Paste the invitation or its link" });
-        const [nameL, name] = field("input", "What you call it", { maxLength: 48, required: true, placeholder: "For example, Linen HQ" });
+        const [nameL, name] = field("input", "What you call it (optional)", { maxLength: 120, placeholder: "Leave empty to use the workspace’s own name" });
         const [devL, dev] = field("input", "This device’s name there", { maxLength: 32, required: true, autocomplete: "off", spellcheck: false, value: deviceName(), placeholder: "laptop" }, "Others there see it next to your name.");
         dev.setAttribute("autocapitalize", "none"); invite.setAttribute("autocapitalize", "none");
         const err = el("p", "error"); err.setAttribute("role", "alert");
@@ -248,7 +287,7 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
           e.preventDefault();
           const token = (invite.value.match(/agentnet-invite-v1:[^\s#&]+/) || [invite.value.trim()])[0];
           const body = { name: name.value.trim(), invite: token, agent: dev.value.trim(), ...(retryID ? { id: retryID } : {}) };
-          if (!body.invite || !body.name || !body.agent) { err.textContent = "Paste the invitation, give the workspace a name, and name this device."; return; }
+          if (!body.invite || !body.agent) { err.textContent = "Paste the invitation and name this device."; return; }
           go.disabled = true; go.textContent = "Joining…"; err.textContent = "";
           try {
             const h = await workspaces.join(body);
@@ -265,6 +304,23 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
           }
         };
         f.append(invL, nameL, devL, err, actions(go, btn("Cancel", "", () => dialog.close())));
+      }, wsButton);
+    };
+    // renameDialog sets this device's own label of a workspace; empty, or
+    // "Use the workspace’s own name", clears it.
+    const renameDialog = (w) => {
+      showDialog("Rename " + workspaceLabel(w, w.id === workspaces.active() ? ownWs : null), (f) => {
+        const l = el("label", "", "Your name for it"); const input = el("input");
+        Object.assign(input, { maxLength: 120, value: (w.name || "").trim() && !generic.has((w.name || "").trim().toLowerCase()) ? w.name.trim() : "", placeholder: workspaceLabel({ ...w, name: "" }, w.id === workspaces.active() ? ownWs : null) });
+        l.append(input, el("small", "", "Only on this device. Leave it empty to use the workspace’s own name."));
+        const err = el("p", "error"); err.setAttribute("role", "alert");
+        const save = async (name) => {
+          try { await workspaces.rename(w.id, name); dialog.close(); label(); say(name.trim() ? "Renamed to " + name.trim() + " on this device." : "Using the workspace’s own name."); }
+          catch (e) { err.textContent = e.message; }
+        };
+        const go = btn("Save", "act"); go.type = "submit";
+        f.onsubmit = (e) => { e.preventDefault(); save(input.value); };
+        f.append(l, err, actions(go, btn("Use the workspace’s own name", "", () => save("")), btn("Cancel", "", () => dialog.close())));
       }, wsButton);
     };
     const leaveDialog = (w) => {
@@ -288,6 +344,7 @@ export function mountSkinBar(parent, { skins, selected, home, choose, host, work
   root.append(css, bar, notice, dialog);
   parent.prepend(holder);
   return {
+    ready,
     // notify shows a notification the skin cannot open, with the way to
     // open it (action: { label, run }), or clears it ("").
     notify(text, action) { say(text, action); },

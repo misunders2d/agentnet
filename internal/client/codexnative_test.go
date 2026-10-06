@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,7 +53,7 @@ func TestCodexNativeExactReceipt(t *testing.T) {
 			r := codexReceiptRow(sid, text)
 			tc.change(r)
 			f := codexRollout(t, sid, r)
-			got, e := codexNativeReceipt(f, sid, text)
+			got, e := codexNativeReceipt(f, sid, text, 0)
 			if e != nil || got != tc.want {
 				t.Fatalf("receipt %v %v", got, e)
 			}
@@ -74,18 +75,29 @@ func TestCodexNativeRolloutIdentityAndBounds(t *testing.T) {
 	if _, e := codexNativeEntries(file, sid); e == nil {
 		t.Fatal("duplicate header accepted")
 	}
+	// Size never refuses (MEL-537): a record over the old 2 MiB line bound is
+	// read like any other, one over nativeRecordMax is skipped; an invalid
+	// record still fails closed.
+	big := codexReceiptRow(sid, strings.Repeat("t", 3<<20))
+	if entries, e := codexNativeEntries(codexRollout(t, sid, big), sid); e != nil || len(entries) != 2 {
+		t.Fatalf("a long record refused: %d %v", len(entries), e)
+	}
+	huge := codexReceiptRow(sid, strings.Repeat("t", nativeRecordMax))
+	if entries, e := codexNativeEntries(codexRollout(t, sid, huge), sid); e != nil || len(entries) != 1 {
+		t.Fatalf("an oversize record refused or kept: %d %v", len(entries), e)
+	}
 	file = codexRollout(t, sid)
 	f, e := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0600)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = f.Write(make([]byte, (2<<20)+1))
+	_, e = f.Write(make([]byte, 64))
 	f.Close()
 	if e != nil {
 		t.Fatal(e)
 	}
 	if _, e = codexNativeEntries(file, sid); e == nil {
-		t.Fatal("oversized record accepted")
+		t.Fatal("invalid record accepted")
 	}
 }
 func TestCodexUnavailableRouteCannotClaim(t *testing.T) {

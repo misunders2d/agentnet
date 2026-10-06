@@ -40,15 +40,20 @@ type ApprovalsView struct {
 	Unresolved []string `json:"unresolved,omitempty"`
 }
 
-// QuestionApproval is a device whose questions are answered automatically.
+// QuestionApproval is a person or explicit device whose questions are answered automatically.
 type QuestionApproval struct {
-	Address string `json:"address"`
+	Address string `json:"address,omitempty"`
+	Person  string `json:"person,omitempty"`
+	Label   string `json:"label,omitempty"`
+	Status  string `json:"status,omitempty"`
 }
 
-// TaskGrantView is a device whose tasks run without asking, from the key
-// granted: Status is "active", or why the grant does not hold now (the key
+// TaskGrantView is a person or explicit device whose tasks run without asking.
+// A device grant names the exact granted key: Status is "active", or why the grant does not hold now (the key
 // changed, or a change waits for trust).
 type TaskGrantView struct {
+	Person      string `json:"person,omitempty"`
+	Label       string `json:"label,omitempty"`
 	Address     string `json:"address"`
 	Fingerprint string `json:"fingerprint"`
 	Status      string `json:"status"`
@@ -74,6 +79,7 @@ type ParticipationGrant struct {
 // "participation" with the PID of this device's agent (agentnet dm
 // dismiss-agent: the agent leaves the conversation).
 type ApprovalRevoke struct {
+	Person  string `json:"person,omitempty"`
 	Kind    string `json:"kind"`
 	Address string `json:"address,omitempty"`
 	PID     string `json:"pid,omitempty"`
@@ -87,7 +93,13 @@ func (l *Live) Approvals() (ApprovalsView, error) {
 		return v, err
 	}
 	for _, q := range qs {
-		v.Questions = append(v.Questions, QuestionApproval{Address: q})
+		view := QuestionApproval{Address: q}
+		if allowed, _, e := l.a.PermissionState(q, ""); e != nil {
+			return v, e
+		} else if !allowed {
+			view.Status = "inactive: person frozen"
+		}
+		v.Questions = append(v.Questions, view)
 	}
 	ts, err := l.a.TaskGrants()
 	if err != nil {
@@ -95,6 +107,22 @@ func (l *Live) Approvals() (ApprovalsView, error) {
 	}
 	for _, g := range ts {
 		v.Tasks = append(v.Tasks, TaskGrantView{Address: g.Address, Fingerprint: g.Fingerprint, Status: g.Status})
+	}
+	pgs, err := l.a.PersonGrants()
+	if err != nil {
+		return v, err
+	}
+	for _, g := range pgs {
+		status := "active"
+		if g.State == "conflict" {
+			status = "inactive: person frozen"
+		}
+		if g.Questions {
+			v.Questions = append(v.Questions, QuestionApproval{Person: g.Person, Label: g.Label, Status: status})
+		}
+		if g.Tasks {
+			v.Tasks = append(v.Tasks, TaskGrantView{Person: g.Person, Label: g.Label, Status: status})
+		}
 	}
 	convs, err := l.a.Conversations()
 	if err != nil {
@@ -138,6 +166,30 @@ func participationGrant(p client.ParticipationInfo, people dmPeople) (Participat
 // revoked, through its own operation. A question approval or task grant
 // is looked up by itself, so no conversation can stand in its way.
 func (l *Live) RevokeApproval(r ApprovalRevoke) (string, error) {
+	if r.Person != "" {
+		gs, e := l.a.PersonGrants()
+		if e != nil {
+			return "", e
+		}
+		i := slices.IndexFunc(gs, func(g client.PersonGrant) bool {
+			return g.Person == r.Person && (r.Kind == "question" && g.Questions || r.Kind == "task" && g.Tasks)
+		})
+		if i < 0 {
+			return "", NotFound("No standing permission for that person.")
+		}
+		if r.Kind == "question" {
+			err := l.a.Unapprove(r.Person)
+			if err != nil {
+				return "", Refuse(sentence(err))
+			}
+		} else {
+			if _, err := l.a.RevokeTasks(r.Person); err != nil {
+				return "", Refuse(sentence(err))
+			}
+		}
+		l.a.NoteChange()
+		return gs[i].Label + "'s " + r.Kind + "s wait for you again.", nil
+	}
 	switch r.Kind {
 	case "question":
 		qs, err := l.a.QuestionApprovals()
@@ -204,7 +256,7 @@ func (s *Server) approvals(w http.ResponseWriter, r *http.Request) {
 }
 
 // revokeApproval serves POST /api/approvals/revoke: one exact grant, named
-// by its kind and its device's address or its agent's PID.
+// by its kind and person ID, explicit device address, or agent PID.
 func (s *Server) revokeApproval(w http.ResponseWriter, r *http.Request) {
 	var x ApprovalRevoke
 	if !readJSON(w, r, &x) {
@@ -214,9 +266,9 @@ func (s *Server) revokeApproval(w http.ResponseWriter, r *http.Request) {
 	valid := false
 	switch x.Kind {
 	case "question", "task":
-		valid = addrErr == nil && x.PID == ""
+		valid = x.PID == "" && (addrErr == nil && x.Person == "" || x.Address == "" && protocol.ValidID(x.Person))
 	case "participation":
-		valid = protocol.ValidID(x.PID) && x.Address == ""
+		valid = protocol.ValidID(x.PID) && x.Address == "" && x.Person == ""
 	}
 	if !valid {
 		writeErr(w, Refuse("Choose one standing grant to revoke."))

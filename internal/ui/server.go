@@ -57,10 +57,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.page)
 	mux.HandleFunc("GET /assets/{name}", s.asset)
-	mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
-		r.SetPathValue("name", "manifest.webmanifest")
-		s.asset(w, r)
-	})
 	mux.Handle("GET /assets/skins/", s.skins)
 	mux.HandleFunc("GET /assets/vendor/qr.mjs", s.qrModule)
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -72,6 +68,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/simulate", s.simulate)
 	mux.HandleFunc("POST /api/person", s.person)
 	mux.HandleFunc("POST /api/person/label", s.renamePerson)
+	mux.HandleFunc("POST /api/person/picture", s.setPicture)
+	mux.HandleFunc("GET /api/picture/{hash}", s.getPicture)
 	mux.HandleFunc("POST /api/device/{what}", s.device)
 	mux.HandleFunc("GET /api/dm", s.dm)
 	mux.HandleFunc("POST /api/dm/new", s.newDM)
@@ -80,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/dm/agent/decide", s.decideAgent)
 	mux.HandleFunc("POST /api/dm/agent/dismiss", s.dismissAgent)
 	mux.HandleFunc("POST /api/dm/agent/ask", s.askAgent)
+	mux.HandleFunc("POST /api/dm/guest/check", s.checkHuman)
 	mux.HandleFunc("POST /api/dm/guest/invite", s.changeHuman("invite"))
 	mux.HandleFunc("POST /api/dm/guest/decide", s.changeHuman("decide"))
 	mux.HandleFunc("POST /api/dm/guest/end", s.changeHuman("end"))
@@ -122,6 +121,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/agents", s.changeAgent)
 	mux.HandleFunc("POST /api/remind", s.remind)
 	mux.HandleFunc("POST /api/remind/{what}", s.remind)
+	// liveworkspacename.go: the workspace's own name; renaming it for
+	// everyone is admin only.
+	mux.HandleFunc("GET /api/workspace", s.workspaceInfo)
+	mux.HandleFunc("POST /api/workspace/name", s.renameWorkspace)
+	mux.HandleFunc("POST /api/invite", s.invite) // livegetapp.go, liveinvites.go: Invite people (MEL-533)
+	mux.HandleFunc("GET /api/invites", s.invites)
+	mux.HandleFunc("POST /api/invite/revoke", s.revokeInvite)
+	mux.HandleFunc("GET /api/google/access", s.googleAccess)
+	mux.HandleFunc("POST /api/google/access", s.googleAccess)
+	mux.HandleFunc("GET /api/get-app", s.getApp)  // where to get the AgentNet app (static/getapp.json)
+	mux.HandleFunc("GET /api/folders", s.folders) // Connect an agent's folder picker (livefolders.go)
 	mux.HandleFunc("GET /events", s.events)
 	return s.guard(mux)
 }
@@ -146,7 +156,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			// A notification's click opens the page without its token and
 			// relies on this browser's session; when that is gone, say how
 			// to get in again.
-			http.Error(w, "This page needs its address from this computer: run agentnet ui and open the address it prints.", http.StatusUnauthorized)
+			http.Error(w, "This page opens in the AgentNet app: open AgentNet from your apps (advanced: agentnet ui prints this page's address).", http.StatusUnauthorized)
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -160,6 +170,9 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			}
 			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			limit := int64(maxBody)
+			if r.URL.Path == "/api/person/picture" {
+				limit = 90 << 10
+			}
 			switch {
 			case (r.URL.Path == "/api/upload" || r.URL.Path == "/api/drive/upload") && mt == "application/octet-stream": // a file's bytes, handed to this computer's AgentNet (or its Drive space)
 				limit = maxUpload
@@ -187,20 +200,12 @@ func same(a, b string) bool {
 // page serves index.html. Arriving with the token sets the cookie and
 // redirects so the token leaves the address bar and history.
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Has("t") {
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.token, Path: "/",
-			HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
 	data, err := fs.ReadFile(static.Files, "index.html")
 	if err != nil {
 		http.Error(w, "missing page", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache") // an updated daemon serves a new page at the same address
-	w.Write(data)
+	s.serveHTML(w, r, data)
 }
 
 // asset serves one embedded file; there are no directory listings.
@@ -218,11 +223,12 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	}
 	types := map[string]string{"core.css": "text/css; charset=utf-8", "loader.js": "text/javascript; charset=utf-8",
 		"skin-base.css": "text/css; charset=utf-8", "skinbar.mjs": "text/javascript; charset=utf-8", "skinbar.css": "text/css; charset=utf-8", "skin-choice.mjs": "text/javascript; charset=utf-8",
-		"manifest.webmanifest": "application/manifest+json",
+		"setup.mjs":            "text/javascript; charset=utf-8", // the AgentNet app's first-run page (setup.go)
+		"landing.css":          "text/css; charset=utf-8",
 		"drivespace-setup.mjs": "text/javascript; charset=utf-8",
 		"assistant-setup.mjs":  "text/javascript; charset=utf-8",
 		"assistant-setup.css":  "text/css; charset=utf-8",
-		"drivespace.mjs":       "text/javascript; charset=utf-8", "drivespace.css": "text/css; charset=utf-8", "workspaces.mjs": "text/javascript; charset=utf-8", "workspaces.css": "text/css; charset=utf-8", "teams.mjs": "text/javascript; charset=utf-8", "typing.mjs": "text/javascript; charset=utf-8", "local-skins.mjs": "text/javascript; charset=utf-8", "sw.js": "text/javascript; charset=utf-8"}
+		"drivespace.mjs":       "text/javascript; charset=utf-8", "drivespace.css": "text/css; charset=utf-8", "workspaces.mjs": "text/javascript; charset=utf-8", "workspaces.css": "text/css; charset=utf-8", "teams.mjs": "text/javascript; charset=utf-8", "typing.mjs": "text/javascript; charset=utf-8", "local-skins.mjs": "text/javascript; charset=utf-8", "optimistic.mjs": "text/javascript; charset=utf-8", "pictures.mjs": "text/javascript; charset=utf-8", "sw.js": "text/javascript; charset=utf-8"}
 	ct, ok := types[name]
 	if !ok {
 		http.NotFound(w, r)
@@ -619,9 +625,10 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var v struct {
-		ID      string `json:"id"`
-		Accept  bool   `json:"accept"`
-		Address string `json:"address"`
+		ID        string `json:"id"`
+		Accept    bool   `json:"accept"`
+		AgentHost bool   `json:"agent_host,omitempty"`
+		Address   string `json:"address"`
 	}
 	if !readJSON(w, r, &v) {
 		return
@@ -634,6 +641,16 @@ func (s *Server) device(w http.ResponseWriter, r *http.Request) {
 		l, err := p.NewDeviceLink()
 		writeResult(w, l, err)
 	case "decide":
+		if v.AgentHost {
+			ap, ok := s.p.(interface{ ApproveAgentLink(string) (string, error) })
+			if !ok || !v.Accept {
+				writeErr(w, Refuse("Approve an agent host from your own human device."))
+				return
+			}
+			note, err := ap.ApproveAgentLink(v.ID)
+			writeResult(w, map[string]string{"note": note}, err)
+			return
+		}
 		note, err := p.DecideLink(v.ID, v.Accept)
 		writeResult(w, map[string]string{"note": note}, err)
 	case "remove":

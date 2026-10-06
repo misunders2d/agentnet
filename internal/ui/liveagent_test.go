@@ -81,7 +81,7 @@ func TestLiveAgentsInDMs(t *testing.T) {
 			private = s.ID
 		}
 	}
-	eventually("alice holds both", func() bool { return len(dm(pa, conv).Messages) == 2 })
+	eventually("alice holds both", func() bool { v, e := pa.DM(conv); return e == nil && len(v.Messages) == 2 })
 
 	// What cannot be invited is refused before anything is sent.
 	for _, bad := range []AgentInvite{

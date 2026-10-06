@@ -322,7 +322,7 @@ CREATE TABLE reported(
   recipient TEXT NOT NULL,
   sent_at INTEGER NOT NULL,
   PRIMARY KEY(item, recipient));
-`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema}
+`, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -414,6 +414,9 @@ func (s *store) pin(p identity.Public) error {
 			return err
 		}
 	}
+	if err = demotePersonJobs(tx); err != nil {
+		return err
+	}
 	return s.done(tx.Commit())
 }
 
@@ -430,6 +433,9 @@ func (s *store) setPending(p identity.Public) error {
 		return err
 	}
 	if err := demoteGranted(tx, p.Address, "", "the sender's key may have changed"); err != nil {
+		return err
+	}
+	if err = demotePersonJobs(tx); err != nil {
 		return err
 	}
 	return s.done(tx.Commit())
@@ -478,6 +484,9 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 		env.ID, env.To, in.Body, string(data), stateQueued, storeNow().Unix(), in.ReplyTo, followUp, in.Status, targetJSON(in.Target), in.AgentID, agentRequirement(in), recipientKey); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`UPDATE outbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=? WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, env.ID); err != nil {
+		return err
+	}
 	if len(selected) > 0 && selected[0].binding != nil {
 		if followUp != "" {
 			return errors.New("explicit reply receiver cannot use legacy follow-up")
@@ -486,7 +495,7 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 			return err
 		}
 	}
-	if err := replyEndsReminder(tx, in.ReplyTo, in.Status); err != nil {
+	if err := replyEndsReminder(tx, in.Conv, in.ReplyTo, in.Status); err != nil {
 		return err
 	}
 	for _, a := range in.Attachments {
@@ -529,8 +538,10 @@ func (s *store) releaseUploads(messageID string) error {
 // is recorded as reported.
 func (s *store) setOutboxState(id, state, errText, path string) error {
 	_, err := s.db.Exec(`UPDATE outbox SET state = ?, error = nullif(?, ''), path = coalesce(nullif(?, ''), path)
-		WHERE id = ? AND NOT (state = ? AND ? IN (?, ?, ?))`,
-		state, errText, path, id, stateNotDelivered, state, stateQueued, stateConvWaiting, stateFailed)
+		WHERE id = ? AND NOT (state = ? AND ? IN (?, ?, ?))
+		AND NOT (state IN ('delivered','expired') AND ? <> state)
+		AND NOT (state='quarantined' AND ? NOT IN ('quarantined','delivered'))`,
+		state, errText, path, id, stateNotDelivered, state, stateQueued, stateConvWaiting, stateFailed, state, state)
 	return s.done(err)
 }
 
@@ -562,7 +573,7 @@ func (s *store) coolRoute(endpoint string, until time.Time) error {
 func (s *store) queued() ([]envelope.Envelope, error) {
 	// A conversation message to a frozen (conflicting) person is not sent.
 	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
-		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?)) ORDER BY created_at`, stateQueued, personConflict)
+		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?)) ORDER BY created_at, rowid`, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}
@@ -589,8 +600,8 @@ func (s *store) seen(id string) (bool, error) {
 	return n > 0, err
 }
 
-const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id, received_ms)
-	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?)`
+const insertInbox = `INSERT OR IGNORE INTO inbox(id, sender, ts, kind, body, reply_to, received_at, session, status, state, verified_by, target, agent_id, received_ms, quote, topic_done)
+	VALUES(?, ?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), nullif(?, ''), nullif(?, ''), ?, nullif(?, ''), ?)`
 
 // Response states of received questions and tasks. They are independent of
 // read/unread: reading never makes anything run.
@@ -625,7 +636,7 @@ const (
 // An interrupted follow-up is no request: nobody waits on it.
 var reviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateConvHeld, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?) OR state IN ('running', 'cancel_requested') AND kind IN ('question', 'task')) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // alertReviewStates are the review states that ask for attention by the
 // legacy desktop review notification and the review notice to another
@@ -637,14 +648,14 @@ const inReview = `(state IN (?, ?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NO
 // inAlertReview.
 var alertReviewStates = []any{stateHeld, stateAwaiting, stateNeedHuman, stateInterrupt, envelope.KindQuestion, envelope.KindTask}
 
-const inAlertReview = `(state IN (?, ?, ?) OR state = ? AND kind IN (?, ?)) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
+const inAlertReview = `(state IN (?, ?, ?) OR state = ? AND kind IN (?, ?) OR state = 'running' AND kind IN ('question', 'task')) AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id=inbox.id)`
 
 // inboxArgs are insertInbox's arguments. The arrival is kept to the
 // millisecond too, as a conversation message's is, so that the inbox lists
 // both kinds in the order they arrived.
 func inboxArgs(in envelope.Inner, state, verifiedBy string) []any {
 	now := storeNow() // the clock of stored device-thread times (topics.go)
-	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID, now.UnixMilli()}
+	return []any{in.ID, in.From, in.TS, in.Kind, in.Body, in.ReplyTo, now.Unix(), in.Session, in.Status, state, verifiedBy, targetJSON(in.Target), in.AgentID, now.UnixMilli(), in.Quote, in.TopicDone}
 }
 
 // initialState decides whether a new message waits for anything.
@@ -658,16 +669,19 @@ func initialState(db querier, in envelope.Inner, verifiedBy string) (string, err
 	}
 	switch in.Kind {
 	case envelope.KindQuestion:
-		var n int
-		if err := db.QueryRow(`SELECT count(*) FROM approvals WHERE address = ?`, in.From).Scan(&n); err != nil {
+		approved, err := questionApproved(db, in.From, verifiedBy)
+		if err != nil {
 			return "", err
 		}
-		if n > 0 {
+		if approved {
 			return statePending, nil
 		}
 		return stateHeld, nil
 	case envelope.KindTask:
 		granted, err := taskGranted(db, in.From, verifiedBy)
+		if err == nil && !granted && in.Conv == "" {
+			granted, err = ownDeviceHolds(db, in.From, verifiedBy) // one of this person's own devices (selfconsent.go)
+		}
 		if err != nil || !granted {
 			return stateAwaiting, err
 		}
@@ -730,6 +744,27 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	if err != nil {
 		return err
 	}
+	// A proposal confirmed a second time (another device of the asker, a
+	// retry) is not run twice (proposal.go); the requester learns it from
+	// the request's status.
+	duplicate := ""
+	if proposal, err := proposalFor(tx, in, verifiedBy); err != nil {
+		return err
+	} else if proposal != "" {
+		if duplicate, err = proposalConfirmedBy(tx, proposal, in.From, verifiedBy, in.ID); err != nil {
+			return err
+		}
+		if duplicate != "" {
+			state = stateNotRun
+		}
+		if duplicate == "" && state == stateAwaiting {
+			if own, err := ownHumanDeviceHolds(tx, in.From, verifiedBy); err != nil {
+				return err
+			} else if own {
+				state = statePending
+			}
+		}
+	}
 	in = tombstoned(tx, in, verifiedBy) // a message deleted before it arrived here keeps no text
 	res, err := tx.Exec(insertInbox, inboxArgs(in, state, verifiedBy)...)
 	if err != nil {
@@ -743,8 +778,16 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 			return err
 		}
 	}
+	if duplicate != "" {
+		if _, err := tx.Exec(`UPDATE inbox SET detail = ? WHERE id = ?`, "that proposal was confirmed already, as task "+duplicate+": not run twice", in.ID); err != nil {
+			return err
+		}
+	}
 	if state == stateNeedHuman { // a review notice: say locally what it is
 		if _, err := tx.Exec(`UPDATE inbox SET detail = ? WHERE id = ?`, reviewNoticeDetail(in.From), in.ID); err != nil {
+			return err
+		}
+		if err := supersedeNotices(tx, in); err != nil { // one card per host (reviewsupersede.go)
 			return err
 		}
 	}
@@ -1040,17 +1083,19 @@ func (s *store) disposition(id string) (string, error) {
 
 // job is a received question or task the worker has claimed.
 type job struct {
-	ID, From, Kind, Body, ReplyTo, Status string
-	Attachments                           int
+	ID, From, Kind, Body, ReplyTo, Status, Quote string
+	TopicDone                                    bool
+	Attachments                                  int
 
 	AgentID  string
 	Executor *ExecutorStamp
 	Receiver *ReplyReceiverBinding // explicit local continuation, separate from wire author
 
 	// A request to this device's agent in a DM (agentjob.go).
-	Conv, PID, Key string // Key: the fingerprint that verified it
-	Target         *envelope.Target
-	Local          bool // asked here, by this device's own person
+	PermissionPerson string // a person grant's exact origin, for running membership fences
+	Conv, PID, Key   string // Key: the fingerprint that verified it
+	Target           *envelope.Target
+	Local            bool // asked here, by this device's own person
 
 	run *runDir // its run folder while it runs (runfiles.go)
 }
@@ -1079,13 +1124,13 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 		err = tx.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL,
    attempts = attempts + 1, last_attempt_at = unixepoch()
    WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
-    OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND sender IN (SELECT address FROM approvals))
-     OR (kind = ? AND `+taskGrantHolds+`))))
+    OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
+     OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`)))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     ORDER BY received_at, id LIMIT 1)
-   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,'')`,
+   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,'')`,
 			stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
-			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target)
+			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err = tx.Commit(); err != nil {
 				return job{}, false, err
@@ -1099,6 +1144,26 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 			return job{}, false, err
 		}
 		changed = true
+		if j.Kind == envelope.KindQuestion || j.Kind == envelope.KindTask {
+			person, e := permissionPersonIn(tx, j.From, j.Key)
+			if e != nil {
+				return job{}, false, e
+			}
+			if person != "" {
+				kind := "questions"
+				if j.Kind == envelope.KindTask {
+					kind = "tasks"
+				}
+				var granted bool
+				e = tx.QueryRow(`SELECT `+kind+` FROM person_grants WHERE person=?`, person).Scan(&granted)
+				if e != nil && !errors.Is(e, sql.ErrNoRows) {
+					return job{}, false, e
+				}
+				if granted {
+					j.PermissionPerson = person
+				}
+			}
+		}
 		if target != "" {
 			j.Target = &envelope.Target{}
 			if json.Unmarshal([]byte(target), j.Target) != nil {
@@ -1172,7 +1237,7 @@ func (s *store) finishJob(id, state, detail string) error {
 // waiting here.
 func (s *store) unnotified() (ids []string, total int, err error) {
 	args := append(append([]any{}, alertReviewStates...), envelope.KindMessage, envelope.StatusReviewNotice)
-	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`)`, args...)
+	rows, err := s.db.Query(`SELECT id, notified FROM inbox WHERE `+inAlertReview+` AND NOT (`+receivedNotice+`) AND (state != 'running' OR detail LIKE 'Seems stuck:%')`, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1228,17 +1293,18 @@ func (s *store) setRunGroup(id string, pgid int, start string) error {
 // the inbox (messages from peer) and the outbox (messages to peer). It stops
 // at any message that is not between this installation and peer, or whose
 // earlier link is unknown, so a sender cannot pull in other conversations by
-// naming their ids.
-func (s *store) threadText(peer, replyTo string, max int) ([]string, error) {
+// naming their ids. Lines from peer are headed peerName (Sender.Name), this
+// device's own "this device".
+func (s *store) threadText(peer, replyTo string, max int, peerName string) ([]string, error) {
 	var out []string
 	for id := replyTo; id != "" && len(out) < max; {
 		var who, body, next, kind, state, status string
 		err := s.db.QueryRow(`SELECT body, coalesce(reply_to, ''), kind, state, coalesce(status, '') FROM inbox WHERE id = ? AND sender = ?`, id, peer).Scan(&body, &next, &kind, &state, &status)
-		who = peer
+		who = peerName
 		if errors.Is(err, sql.ErrNoRows) {
 			// v1 keeps its kind in the envelope; the kind column belongs to DMs.
 			err = s.db.QueryRow(`SELECT body, coalesce(reply_to, ''), coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, '') FROM outbox WHERE id = ? AND recipient = ?`, id, peer).Scan(&body, &next, &kind, &state, &status)
-			who = "me"
+			who = "this device"
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			break
@@ -1295,3 +1361,7 @@ func (s *store) replyTo(id, peer string) (string, error) {
 	}
 	return reply, err
 }
+
+const messagingSchema = `ALTER TABLE inbox ADD COLUMN quote TEXT; ALTER TABLE outbox ADD COLUMN quote TEXT; ALTER TABLE inbox ADD COLUMN topic_done INTEGER NOT NULL DEFAULT 0; ALTER TABLE outbox ADD COLUMN topic_done INTEGER NOT NULL DEFAULT 0;`
+
+const deliveryPersonSchema = `ALTER TABLE outbox ADD COLUMN recipient_person TEXT;`

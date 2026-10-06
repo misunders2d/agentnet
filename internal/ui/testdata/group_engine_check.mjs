@@ -26,7 +26,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
  const liveHistory=wire.parseHistory(v.live_history_json);
  check(wire.historyJSON(liveHistory)===v.live_history_json,'native linked-live history admission stamp exact bytes');
  check(await wire.groupHistoryContentHash('1'.repeat(32),liveHistory)===v.history_hash,'native exact ordered selected file content hash');
- const alicePub=await wire.parsePublic(v.challenge.rosters[0].devices[0]);
+ const alicePub=await wire.parsePublic(v.challenge.rosters[0].devices[0]), bobPub=await wire.parsePublic(v.challenge.rosters[1].devices[0]);
  const aliceKeys={sign:await crypto.subtle.importKey('pkcs8',bytes(v.challenge.alice_private),{name:'Ed25519'},false,['sign'])};
  const names=[];
  const world=async()=>{
@@ -44,7 +44,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    throw Error('unexpected fixture fetch '+u.pathname);
   };
   const recovery=new Set(),track=engine=>{const run=engine.recoverGroupIntents.bind(engine);engine.recoverGroupIntents=(...args)=>{const work=run(...args);recovery.add(work);work.then(()=>recovery.delete(work),()=>recovery.delete(work));return work;};};
-  const drain=async()=>{if(e.retrying)await e.retrying;while(recovery.size)await Promise.allSettled([...recovery]);};
+  const drain=async()=>{if(e.retrying)await e.retrying;if(e.disclosing)await e.disclosing;while(recovery.size)await Promise.allSettled([...recovery]);};
   let e=new Engine({store:st,base:'http://127.0.0.1:1',fetch});track(e);e.keys=keys;e.address=address;e.fp=await wire.fingerprint(pub);e.realm=root.realm;
   for(const raw of [...v.challenge.rosters,v.invited_roster]){const r=await wire.parseRoster(raw);await wire.verifyFirst(r);const p=await e.personRecord([r],r.person===roster.person?'self':'pinned',null);if(r.person===roster.person){e.me=p;await st.write([{s:'kv',k:'person',v:p}]);}else await st.write([{s:'persons',k:p.person,v:p}]);await e.pinDevices(p);}
   await st.write([{s:'kv',k:'identity',v:{keys,address,fingerprint:e.fp}}]);
@@ -65,6 +65,19 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   // not just changes to already-read keys. A second real IDB connection is
   // the competing admission; no synthetic lock or store replacement.
   w=await world();
+  {
+   const id=wire.newID(),row={id,conv:'receipt-scope',body:'SIGNED',state:'custody',detail:''};
+   await w.st.write([{s:'outbox',k:id,v:row}]);
+   const checks=[];await w.e.authorityRows({conv:'receipt-scope'},checks);
+   const other=realIDB?await openIDB(w.name):w.st;
+   await other.write([{s:'outbox',k:id,v:{...row,state:'delivered',detail:''}}]);
+   await w.st.write([{s:'kv',k:'receipt-scope-pass',v:true}],checks);
+   check(await w.st.get('kv','receipt-scope-pass')===true,'delivery update from another connection preserves authority');
+   await other.write([{s:'outbox',k:id,v:{...row,body:'ALTERED'}}]);
+   let refused=false;try{await w.st.write([{s:'kv',k:'receipt-scope-pass',v:false}],checks);}catch(e){refused=e.message==='storage changed during verification';}
+   check(refused,'signed content mutation still invalidates authority');
+   if(other!==w.st)other.close();await w.st.write([{s:'outbox',k:id}]);
+  }
   for(const mode of ['new-dismissal','new-invite','new-request','delete-request','change-request','unrelated']){
    const pid=wire.newID(),lid=wire.newID(),scope=mode.includes('request')?{conv,lid}:{conv,pid,sub:'event'};
    const initial={id:wire.newID(),conv,pid,lid,sub:scope.sub||'',body:'verified source',kind:scope.sub?'message':'question'};
@@ -83,8 +96,171 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const remove=(await w.st.all('inbox')).map(r=>({s:'inbox',k:r.id}));if(remove.length)await w.st.write(remove);
   }
   await w.close();
+  // Receiving a delayed turn cannot turn the current roster into proof
+  // that the newly admitted person held that old sealed copy.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  await w.receive(c['p26-proof']);await w.receive(c['p26-context']);
+  {
+   const pv=v.participations,old=pv['p26-before-join'].inner,authorFP=await wire.fingerprint(alicePub);
+   check(!(await w.st.all('inbox')).some(r=>r.lid===old.lid),'delayed pre-join turn has not arrived');
+   for(const type of ['invite','scope','accept'])await w.receive(pv['p6-0-'+type]);
+   await w.receive(pv['p26-before-join']);
+   check(!!await w.st.get('inbox',old.id),'pre-join sealed turn admitted after later membership');
+   const packet=await w.e.groupCurrentState(conv),ref={lid:old.lid,fingerprint:authorFP};
+   for(const p of packet.state.members) {
+    const reader=!!await w.st.get('kv',w.e.roomReaderKey(conv,ref,p.person,await wire.groupAdmissionHash(p.admission)));
+    check(reader===old.fan.some(f=>f.person===p.person),'received copy proves only signed fan '+p.person);
+   }
+   check(!old.human,'pre-agent turn carries no consent for future agent context');
+   await w.receive(pv['p26-share-late-reader']);
+   const denied=(await w.e.agentConv(pv['p6-source'])).info,share=pv['p26-share-late-reader'].inner;
+   check(!!await w.st.get('inbox',share.id)&&denied.shares.includes(share.body),'valid current member share recorded under exact admission');
+   check(denied.grant.length===0,'new member cannot share an unreceived pre-join turn');
+   await w.receive(pv['p26-share-author']);
+   const positive=(await w.e.agentConv(pv['p6-source'])).info;
+   check(positive.grant.length===1&&positive.grant[0].lid===old.lid,'verified original author may still share selected earlier turn');
+   await w.receive(pv['p26-no-fan']);
+   check(!!await w.st.get('inbox',pv['p26-no-fan'].inner.id),'legacy group copy admitted without fabricating reader proof');
+   const legacy={lid:pv['p26-no-fan'].inner.lid,fingerprint:authorFP};
+   for(const p of packet.state.members)check(!await w.st.get('kv',w.e.roomReaderKey(conv,legacy,p.person,await wire.groupAdmissionHash(p.admission))),'missing fan grants no inferred reader '+p.person);
+   await w.reload();check((await w.e.agentConv(pv['p6-source'])).info.grant.length===1,'reader proof and accepted exact share survive reload');
+   // Exercise the real sealed outbox path, with fixture transport only.
+   w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};
+   const sent=await w.e.sendDM({conv,body:'P26 sender exact sealed roster'}),copies=(await w.st.all('outbox')).filter(r=>r.lid===sent.lid);
+   check(copies.length===packet.state.members.length-1&&copies.every(r=>r.envelope&&r.group_admission),'sender seals copies for every exact current recipient');
+   for(const p of packet.state.members)check(!!await w.st.get('kv',w.e.roomReaderKey(conv,{lid:sent.lid,fingerprint:w.e.fp},p.person,await wire.groupAdmissionHash(p.admission))),'sender retains exact sealed roster reader '+p.person);
+  }
+  await w.close();
+  // Current authority is independent of the sequence chosen by an inviter.
+  w=await world();for(let i=0;i<=4;i++)await w.receive(c['proof'+'x'.repeat(i)]);await w.receive(c.contextxxxx);
+  {
+   const forged=v.p6_backdated.map(wire.parseEvent),sender=await wire.parsePublic(v.challenge.rosters[1].devices[0]);
+   await wire.verifyEvent(forged[0],sender.sign_key);
+   const events=await Promise.all(forged.map(async e=>({e,hash:await wire.eventHash(e)}))),members=await w.e.dmMembers(await w.e.groupRecord(conv),events);
+   for(const {e,hash} of events.filter(x=>['invite','scope'].includes(x.e.type)))check(!members.groupInvites.has(hash),'demoted admin old '+e.type+' slot grants no outside authority');
+   await w.receive(c['p6-backdated-memberships']);
+   check((await w.st.get('held',wire.parseEnvelope(c['p6-backdated-memberships'].envelope).id))?.reason==='invalid','current admin carrier cannot import demoted admin backdated outside invite');
+   check(!await w.st.get('kv','room-memberships/'+conv),'rejected backdated carrier installs no membership proof');
+  }
+  await w.close();
+  // A non-admin or outside host cannot revive an agent by replaying its old
+  // signed lifecycle evidence. The independently signed state still installs.
+  for(const who of ['nonadmin','outsider']) {
+   w=await world();await w.receive(c.proof);await w.receive(c.context);
+   const carried=c['p6-'+who+'-memberships'];await w.receive(carried);
+   check(!await w.st.get('held',wire.parseEnvelope(carried.envelope).id),'untrusted '+who+' lifecycle claims do not block valid group state');
+   check(!await w.st.get('kv','room-memberships/'+conv),'untrusted '+who+' carrier installs no old lifecycle authority');
+   check((await w.e.groupThread(conv)).agents.length===0&&!(await w.e.groupCurrent(conv)).memberships?.length,'untrusted '+who+' replay creates no group agent or stored membership payload');
+   w.e.groupSupport=async()=>{};await w.e.sendDM({conv,body:'AFTER_REMOVED_OUTSIDE_HOST'});
+   check((await w.st.all('outbox')).every(r=>r.to!==v.invited_roster.devices[0].address),'untrusted '+who+' replay makes no copy to outside host');
+   await w.close();
+  }
+  // Ends count in a late member's first carrier, only under the original
+  // author's removal right; a carrier publisher cannot confer that right.
+  for(const mode of ['host','inviter','admin','non-admin','wrong-parent','bad-signature']) {
+   w=await world();const last=mode==='admin'?3:0;
+   for(let i=0;i<=last;i++)await w.receive(c['proof'+'x'.repeat(i)]);
+   await w.receive(c['context'+'x'.repeat(last)]);
+   await w.receive(c['p20-'+mode]);
+   const valid=['host','inviter','admin'].includes(mode),id=wire.parseEnvelope(c['p20-'+mode].envelope).id;
+   check(!!await w.st.get('held',id)===!valid,'carried '+mode+' end requires original removal authority and exact parent/signature');
+   if(valid) {
+    check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','late member imports '+mode+' dismissal');
+    const record=await w.e.groupRecord(conv),events=await w.e.convEvents(conv),members=await w.e.dmMembers(record,events);
+    const proof=await w.e.roomMemberships(record,events,members);
+    check(proof.some(e=>e.pid===v.participations['p6-target']&&e.type==='dismiss'),'next carrier retains counted '+mode+' end');
+    await w.reload();check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','carried '+mode+' end survives reload');
+    w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};await w.e.sendDM({conv,body:'AFTER_CARRIED_END'});
+    check((await w.st.all('outbox')).every(r=>r.to!==v.invited_roster.devices[0].address),'carried '+mode+' end prevents future outside copy');
+   } else check(!await w.st.get('kv','room-memberships/'+conv),'invalid '+mode+' end installs no lifecycle authority');
+   await w.close();
+  }
+  // A declined-then-dismissed agent never had a carried acceptance.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  for(const name of ['p6-1-invite','p6-1-scope','p20-declined-decline','p20-declined-dismiss'])await w.receive(v.participations[name]);
+  {
+   const record=await w.e.groupRecord(conv),events=await w.e.convEvents(conv),members=await w.e.dmMembers(record,events);
+   check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','declined membership can end without becoming active');
+   check((await w.e.roomMemberships(record,events,members)).length===0,'producer omits never-accepted dismissed membership');
+   await w.e.discloseHumanAudience();check((await w.st.all('outbox')).length===0,'never-accepted membership has no automatic end fan-out');
+  }
+  await w.close();
+  // Previously counted former-admin ends stay local, without poisoning a
+  // newly published context or forwarding a bare acceptance as active again.
+  w=await world();for(let i=0;i<=3;i++)await w.receive(c['proof'+'x'.repeat(i)]);await w.receive(c.contextxxx);await w.receive(c['p20-admin']);
+  await w.receive(c.proofxxxx);await w.receive(c.contextxxxx);
+  {
+   const record=await w.e.groupRecord(conv),events=await w.e.convEvents(conv),members=await w.e.dmMembers(record,events),proof=await w.e.roomMemberships(record,events,members);
+   check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','originally counted admin end remains locally counted after demotion');
+   check(proof.length===3&&proof.every(e=>e.pid!==v.participations['p6-target']),'producer omits former-admin end and its acceptance together');
+   const fresh=await world();for(let i=0;i<=4;i++)await fresh.receive(c['proof'+'x'.repeat(i)]);
+   const packet={root,state:states[4],memberships:proof},carried=await fresh.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON(packet)),4,records[4].hash);
+   await fresh.receive(carried);
+   check(!await fresh.st.get('held',wire.parseEnvelope(carried.envelope).id)&&(await fresh.e.groupCurrent(conv)).state.seq===4,'former-admin end cannot poison valid new context carrier');
+   await fresh.close();
+  }
+  await w.close();
+  // A delayed end follows an already carried acceptance without requiring a
+  // new group publication. An unrelated author or changed signature cannot.
+  for(const mode of ['host','non-admin','bad-signature']) {
+   w=await world();await w.receive(c.proof);await w.receive(c.context);await w.receive(c['p6-memberships']);
+   await w.receive(v.participations['p20-forward-'+mode]);
+   const valid=mode==='host',info=(await w.e.agentConv(v.participations['p6-target'])).info;
+   check(info.state===(valid?'dismissed':'active'),'forwarded '+mode+' exact counted end authority');
+   check(!!await w.st.get('held',wire.parseEnvelope(v.participations['p20-forward-'+mode].envelope).id)===!valid,'forwarded '+mode+' author signature checked before admission');
+   if(valid) {
+    await w.e.discloseHumanAudience();
+    const endRows=()=>w.st.all('outbox').then(rows=>rows.filter(r=>r.pid===info.pid&&r.sub==='event'&&wire.parseEvent(r.body).type==='dismiss'));
+    const before=await endRows();
+    check(before.length===2&&before.every(r=>r.recipient_fp&&r.group_admission&&r.required_cap===wire.CapGroup),'counted end queues exact current member copies');
+    await w.e.discloseHumanAudience();await w.e.discloseHumanAudience();
+    check((await endRows()).length===before.length,'end retry idempotent per exact member key/admission');
+    const nativeEnd=v.participations['p20-forward-host'].inner.body;
+    check(before.every(r=>r.body===nativeEnd),'end forwarding retains exact native signed bytes');
+    const gated=before[0],pin=await w.st.get('pins',gated.to);
+    await w.st.write([{s:'pins',k:gated.to,v:{...pin,pending:{fingerprint:'changed-key'}}}]);
+    check(!!(await w.e.externalGate(await w.e.groupRecord(conv),gated,[])).why,'queued end holds on recipient key change');
+    await w.st.write([{s:'pins',k:gated.to,v:pin}]);
+   }
+   await w.close();
+  }
+  // A new reader receives the original signed membership records quietly,
+  // with no earlier message body and no host-local permission grants.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  await w.receive(c['p6-bad-memberships']);
+  check((await w.st.get('held',wire.parseEnvelope(c['p6-bad-memberships'].envelope).id))?.reason==='invalid','membership carrier rejects altered original signature');
+  check(!await w.st.get('kv','room-memberships/'+conv),'rejected carrier installs no membership metadata');
+  await w.receive(c['p6-memberships']);
+  for(const pid of [v.participations['p6-source'],v.participations['p6-target']])check((await w.e.agentConv(pid)).info.member&&(await w.e.agentConv(pid)).info.state==='active','quiet original membership carrier restores same accepted PID');
+  check((await w.e.groupThread(conv)).messages.length===0,'membership carrier supplies no earlier body');
+  await w.reload();
+  check((await w.e.agentConv(v.participations['p6-target'])).info.member,'membership proof survives reload');
+  check((await w.e.groupCurrent(conv)).memberships.length>0,'departure fixture retains private membership payload before leave');
+  {
+   const contextPayloads=[],copy=w.e.groupCarrierCopy.bind(w.e);
+   w.e.groupCarrierCopy=async(...args)=>{if(args[1]===wire.SubGroupContext&&args[5]?.pid)contextPayloads.push(wire.parseGroupContext(args[3]));return copy(...args);};
+   await w.e.leaveGroup(conv);
+   check(contextPayloads.length>0&&contextPayloads.every(p=>!p.memberships?.length&&p.withdrawals.length>0),'departure visitor contexts strip every private original invite and retain signed withdrawal');
+   check((await w.st.all('outbox')).filter(r=>r.sub===wire.SubGroupContext&&r.pid).length===contextPayloads.length,'stripped visitor contexts produce real sealed outbox copies');
+  }
+  await w.close();
   w=await world();await w.receive(c.proof);await w.receive(c.context);
   const pv=v.participations;
+  for(const i of [0,1])for(const type of ['invite','scope','accept'])await w.receive(pv['p6-'+i+'-'+type]);
+  check((await w.e.agentConv(pv['p6-source'])).info.member && (await w.e.agentConv(pv['p6-target'])).info.member,'permanent group agent membership has no expiry');
+  await w.receive(pv['p6-ordinary']);check((await w.e.groupThread(conv)).messages.some(m=>m.body==='P6 future group message'),'native captured future group message is admitted without execution');
+  await w.receive(pv['p6-root']);await w.receive(pv['p6-ask']);await w.receive(pv['p6-status']);
+  let p6=await w.e.groupThread(conv),q=p6.messages.find(m=>m.lid===pv['p6-ask'].inner.lid);
+  check(q?.verified_agent && q.agent_author_pid===pv['p6-source'] && q.pid===pv['p6-target'],'agent asks retain verified author distinct from target');
+  check(q?.exec?.state==='awaiting','agent request owner approval is correlated to its exact request');
+  await w.receive(pv['p6-answer']);
+  p6=await w.e.groupThread(conv);
+  check(p6.messages.some(m=>m.body==='P6 verified agent answer'&&m.verified_agent&&m.reply_to===q.id),'captured group answer read and correlated');
+  await w.receive(pv['p6-wrong-correlation']);check((await w.st.get('held',pv['p6-wrong-correlation'].inner.id))?.reason==='invalid','output to a different agent request rejected');
+  await w.receive(pv['p6-wrong-author']);check((await w.st.get('held',pv['p6-wrong-author'].inner.id))?.reason==='invalid','claimed asking agent does not replace exact host author');
+  await w.receive(pv['p6-share']);check((await w.e.agentConv(pv['p6-target'])).info.grant.length===1,'signed sharing adds exact grant without a second membership');
+  await w.reload();p6=await w.e.groupThread(conv);check(p6.agents.filter(a=>a.pid===pv['p6-target']).length===1 && p6.agents.some(a=>a.pid===pv['p6-target']&&a.member),'browser reload keeps one permanent agent card');
+
   for(const role of ['member','visitor']){
    await w.receive(pv[role+'-invite']);await w.receive(pv[role+'-accept']);
    check((await w.e.agentConv(pv[role+'-pid'])).info.state==='active','native '+role+' named group participation consciously accepted');
@@ -140,6 +316,14 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check(linkedView.messages.filter(m=>m.kind==='answer').length===2&&linkedView.messages.every(m=>!m.unread&&!!m.synced_from),'late linked PID outputs retain source attribution and remain quiet');
   for(const role of ['member','visitor']){const lq=linkedView.messages.find(m=>m.id===pv[role+'-question'].inner.id),lb=lq?.reactions?.find(r=>r.emoji==='🎉')?.by||[];
    check(lb.length===1&&lb[0].id==='assistant:'+pv[role+'-pid']&&lb[0].assistant,'late linked browser restores the '+role+' assistant reactor from own history');}
+  for(const i of [0,1])for(const type of ['invite','scope','accept'])await w.receive(pv['p6-'+i+'-'+type]);
+  for(const name of ['p6-root','p6-ask','p6-answer']) {
+    const n=pv[name].inner,body=pv['history-'+name];
+    check(wire.historyJSON(wire.parseHistory(body))===body,'native captured '+name+' history exact bytes');
+    const env=await historyEnvelope(body);await w.receive({envelope:env});
+    const stored=await w.st.get('inbox',n.id);
+    check(!await w.st.get('held',wire.parseEnvelope(env).id)&&stored?.history&&stored.state===''&&wire.humanJSON(stored.human)===wire.humanJSON(wire.parseHumanTurn(n.human)),'captured '+name+' own history keeps signed audience and remains inert');
+  }
   const otherStamp=JSON.parse(pv['history-member-assistant-reaction']);otherStamp.group_admission='e'.repeat(64);const otherStampEnv=await historyEnvelope(JSON.stringify(otherStamp));await w.receive({envelope:otherStampEnv});
   check((await w.st.get('held',wire.parseEnvelope(otherStampEnv).id))?.reason==='invalid','assistant reaction history refuses a different own admission');
   // This browser's own history copy of an assistant reaction for its linked
@@ -199,7 +383,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check((await w.st.get('held',wire.parseEnvelope(wrongHistory).id))?.reason==='invalid','late linked history refuses different own admission');
   const alien=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000101,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:pv['history-member-answer']},aliceKeys,pub);
   await w.receive({envelope:alien});check((await w.st.get('held',wire.parseEnvelope(alien).id))?.reason==='invalid','other member cannot forward own linked PID history');
-  await w.reload();check((await w.e.groupThread(conv)).messages.filter(m=>m.kind==='answer').length===2,'late linked participation history survives durable reload');await w.close();
+  await w.reload();check((await w.e.groupThread(conv)).messages.filter(m=>m.kind==='answer').length===3,'late linked participation and captured history survive durable reload');await w.close();
   w=await world();const outside=v.outside_browser, outsideConv=outside.state.conv;
   for(const sub of ['group-proof','group-context'])w.blobs.set(outside[sub+'-file'].blob,bytes(outside[sub+'-file'].ct));
   await w.receive(outside['group-context']);check((await w.st.get('held',outside['group-context'].inner.id))?.reason==='proof_pending','outside browser context before exact signed invite stays held');
@@ -226,11 +410,20 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   const selectedItem=await w.e.groupAgentSelection(outsideConv,selectedSource,selectedMembers);
   check(selectedSource.replica&&selectedItem.from_key===await wire.fingerprint(alicePub),'native ordinary own-linked replica selects exact original author');
   const selectedFile=await w.e.openFile(selectedSource.id,0,'in');check(new TextDecoder().decode(selectedFile.bytes)===outside['own-ordinary-file'].bytes,'native ordinary own-linked selected file exact bytes');
-  const inviteSend=w.e.sendConv.bind(w.e);let selectedInvite;w.e.sendConv=async(c,n)=>{selectedInvite=wire.parseEvent(n.body);return {id:wire.newID()};};
+  const inviteSend=w.e.sendConv.bind(w.e);let selectedInvite;w.e.sendConv=async(c,n)=>{const ev=wire.parseEvent(n.body);if(ev.type==="invite"||ev.type==="share")selectedInvite=ev;const id=wire.newID();await w.st.write([{s:"outbox",k:id,v:{...n,id,conv:c.id,to:alicePub.address,at:1700000100000}}]);return {id};};
   await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,share:[selectedSource.id]});
+  const selectedPID=selectedInvite.pid;
   check(selectedInvite.grant.length===1&&selectedInvite.grant[0].lid===selectedSource.lid&&selectedInvite.grant[0].fingerprint===selectedItem.from_key,'production invite retains native own-linked selected logical ID and original author');
   const selectedInfo={...(await w.e.agentConv(outside['own-pid'])).info,grant:selectedInvite.grant};
   check(w.e.agentView(selectedInfo,[selectedSource],null,[w.e.me],"member").shared[0]===selectedSource.id,'group shared context projection retains verified own-linked original');
+  // Tasks without asking (Comic's per-person choice, MEL-528): a member key is named with exactly the admission a receiver checks it against.
+  const taskKey=selectedItem.from_key;await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:[taskKey]});
+  check(selectedInvite.type==='share'&&selectedInvite.pid===selectedPID&&!selectedInvite.task_keys&&!selectedInvite.group.task_admissions,'sharing an existing membership never widens its accepted task permission');
+  const existingAgents=w.e.agentsOf.bind(w.e);w.e.agentsOf=async()=>[]; // fresh invitation vector
+  await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:[taskKey]});
+  check(JSON.stringify(selectedInvite.task_keys)===JSON.stringify([taskKey])&&selectedInvite.group.task_admissions?.length===1&&!!selectedInvite.group.task_admissions[0]&&selectedInvite.group.task_admissions[0]===selectedMembers.epochs.get(taskKey),'group invite with tasks from a member names its key with that exact admission');
+  let strangerRefused=false;try{await w.e.inviteAgent({conv:outsideConv,host:alicePub.address,tasks_from:['f'.repeat(32)]});}catch(e){strangerRefused=/not the key of a member/.test(e.message);}check(strangerRefused,'group invite refuses tasks from a key that is not a member');
+  w.e.agentsOf=existingAgents;
   for(const change of [{fp:'f'.repeat(64)},{group_admission:'e'.repeat(64)},{pid:wire.newID()},{history:true},{excerpt_pid:wire.newID()}]) {let refused=false;try{await w.e.groupAgentSelection(outsideConv,{...selectedSource,...change},selectedMembers);}catch{refused=true;}check(refused,'group selected context refuses forged/PID/history/changed epoch '+Object.keys(change)[0]);}
   const retract=w.e.isRetracted.bind(w.e);w.e.isRetracted=async()=>true;let retractedRefused=false;try{await w.e.groupAgentSelection(outsideConv,selectedSource,selectedMembers);}catch{retractedRefused=true;}check(retractedRefused,'retracted original cannot become agent context');w.e.isRetracted=retract;w.e.sendConv=inviteSend;
   await w.receive(outside.ordinary);check((await w.st.get('held',outside.ordinary.inner.id))?.reason==='invalid','ordinary group own-copy replica rule remains strict');await w.close();
@@ -344,7 +537,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   w=await world();await w.receive(c.proof);
   const fresh=await wire.newKeys(),nextPub=await wire.publicEntry(fresh,'browser/other');
   const join=await wire.joinConsent(fresh,nextPub.address,roster.person,1,await wire.rosterHash(roster));
-  const next=await wire.nextRoster(keys,address,roster,[nextPub],join);await wire.verifyNext(next,roster);
+  const next=await wire.nextRoster(keys,address,roster,[nextPub],join,roster.label,[await wire.fingerprint(nextPub)]);await wire.verifyNext(next,roster);
   w.extraChains.set(roster.person,[JSON.parse(wire.rosterJSON(roster)),JSON.parse(wire.rosterJSON(next))]);
   w.e.me=await w.e.personRecord([roster,next],'self',w.e.me);await w.st.write([{s:'kv',k:'person',v:w.e.me}]);
   await w.receive(c.context);check(!(await w.st.get('kv','group/'+conv)).context&&(await w.st.get('held',wire.parseEnvelope(c.context.envelope).id)).reason==='invalid','removed exact own key cannot install');
@@ -359,7 +552,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    w=await world();await w.receive(c.proof);const original=w.st.write.bind(w.st);let fired=false;
    let nextSelf,leave,changedChain;
    if(race==='own-roster'){
-    const fresh=await wire.newKeys(),np=await wire.publicEntry(fresh,'browser/linked');const join=await wire.joinConsent(fresh,np.address,roster.person,1,await wire.rosterHash(roster));const next=await wire.nextRoster(keys,address,roster,[np],join);await wire.verifyNext(next,roster);
+    const fresh=await wire.newKeys(),np=await wire.publicEntry(fresh,'browser/linked');const join=await wire.joinConsent(fresh,np.address,roster.person,1,await wire.rosterHash(roster));const next=await wire.nextRoster(keys,address,roster,[np],join,roster.label,[await wire.fingerprint(np)]);await wire.verifyNext(next,roster);
     nextSelf=await w.e.personRecord([roster,next],'self',w.e.me);changedChain=[JSON.parse(wire.rosterJSON(roster)),JSON.parse(wire.rosterJSON(next))];
    }else{
     const m=wire.groupMember(states[0],roster.person);leave=await wire.signGroupWithdrawal(keys,{conv,realm:root.realm,person:roster.person,admission:await wire.groupAdmissionHash(m.admission),roster:await wire.rosterHash(roster),by:w.e.fp});

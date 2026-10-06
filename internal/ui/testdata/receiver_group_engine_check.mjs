@@ -24,7 +24,7 @@ async function checks(v){
   if(p.startsWith('/v1/blobs/')){const b=blobs.get(p.split('/')[3]);if(p.endsWith('/data'))return new Response(b.ct);if(p.endsWith('/complete'))b.state='stored';else if(o.method==='PUT'){b.ct.set(new Uint8Array(o.body),b.received);b.received+=o.body.byteLength;}return json(b);}
   throw Error('unexpected synthetic path '+p);
  };
- const e=new Engine({store:memoryStore(),base:'https://synthetic.invalid',fetch,now:()=>now});e.keys=keys;e.address=address;e.fp=await wire.fingerprint(pub);e.realm=root.realm;
+ const e=new Engine({store:memoryStore(),base:'https://synthetic.invalid',fetch,now:()=>now});e.keys=keys;e.address=address;e.fp=await wire.fingerprint(pub);e.realm=root.realm;e.connected=true;
  for(const raw of [...v.challenge.rosters,v.invited_roster]){const r=await wire.parseRoster(raw),p=await e.personRecord([r],r.person===roster.person?'self':'pinned',null);if(r.person===roster.person){e.me=p;await e.store.write([{s:'kv',k:'person',v:p}]);}else await e.store.write([{s:'persons',k:p.person,v:p}]);await e.pinDevices(p);}
  await e.store.write([{s:'kv',k:'identity',v:{keys,address,fingerprint:e.fp}}]);
  for(const carrier of [v.carriers.proof,v.carriers.context])await e.onMessage(carrier.envelope);
@@ -38,6 +38,7 @@ async function checks(v){
  const prepared=[];
  const file={name:'chosen.txt',bytes:new TextEncoder().encode('EXACT GROUP RECEIVER BYTES')};
  async function accepted(sent,expect){
+  await e.outboxPass;
   assert.equal(sent.state,'receiver_waiting');const setupRow=(await e.store.all('outbox')).find(r=>r.receiver_setup?.request.conv===conv&&r.receiver_setup.request.lid===sent.lid);assert.ok(setupRow);prepared.push(setupRow);
   const operation=await wire.parseReceiverOperation(setupRow.body,setupRow.receiver_route,'',setupRow.attachments||[]);expect(operation.request);
   assert.equal(operation.request.group_admission,await wire.groupAdmissionHash(wire.groupMember(v.states[0],roster.person).admission));

@@ -5,17 +5,22 @@ import { useState } from "react";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconChevronLeft, IconDotsVertical, IconUserPlus, IconUsers, IconBell, IconBellOff, IconTrash, IconHandStop,
+  IconAlarm, IconPencil, IconDoorExit, IconMessageCheck, IconMessagePause, IconBoltOff,
 } from "@tabler/icons-react";
 import type { Api, T } from "../api";
 import { useApp } from "../context";
 import { useStore } from "../store";
-import { deviceKind, niceDevice, personName, timeOf, type DeviceKind } from "../model";
+import { deviceKind, niceDevice, personName, threadRow, reminderOf, timeOf, type DeviceKind } from "../model";
 import { AgentAvatar, GroupAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button, IconButton } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import { Confirm } from "./Message.actions";
+import { RemindSheet, latestReceived } from "./Reminders";
+import { groupRights, useGroupChange } from "./GroupAdmin";
+import { DeviceGrantConfirm, type GrantChange } from "./Trust";
 import { agentLabel, eventKind, hostOf, roomTitle, threadAgentName, type Ctx } from "./Message.model";
 import { usePortal } from "../owned";
+import { ProjectSpaceSheet } from "./Drive";
 
 // ---- who is helping -------------------------------------------------------------------
 
@@ -24,6 +29,7 @@ export interface Helper {
   who: string;             // the invite sheet's key for them, to bring them back ("p:<person>", "a:<host>#<agent id>")
   name: string;
   agent: boolean;
+  member?: boolean;
   seed: string;
   device?: DeviceKind;     // an agent's device badge
   sub: string;             // "since 10:33", "Waiting for your OK", "Waiting for Anna to join"
@@ -42,7 +48,7 @@ export function helpers(ctx: Ctx, run: <R>(fn: (a: Api) => Promise<R>) => Promis
     if (a.state !== "active" && a.state !== "invited") continue;
     const since = joined(a.pid) || a.invited;
     out.push({
-      pid: a.pid, who: "a:" + a.host.address + "#" + (a.agent_id || ""), name: agentLabel(a, ctx), agent: true, seed: a.agent_id || a.host.address, device: deviceKind(a.host.address), active: a.state === "active",
+      pid: a.pid, who: "a:" + a.host.address + "#" + (a.agent_id || ""), name: agentLabel(a, ctx), agent: true, member:!!a.member, seed: a.agent_id || a.host.address, device: a.member ? undefined : deviceKind(a.host.address), active: a.state === "active",
       // An agent joins once its owner says OK (the room panel's words).
       sub: a.state === "active" ? "since " + timeOf(since) : a.host_here ? "Waiting for your OK" : "Waiting for " + personName(a.host) + "’s OK",
       dismiss: a.can_dismiss ? () => run((x) => x.dismissAgent(a.pid)) : undefined, review: a.can_decide,
@@ -62,13 +68,18 @@ export function helpers(ctx: Ctx, run: <R>(fn: (a: Api) => Promise<R>) => Promis
 
 /** headcount: "2 guests", "1 guest · 1 invited" — someone invited is not a guest yet. */
 export function headcount(hs: Helper[]): string {
+  const members=hs.filter(h=>h.member&&h.active).length;
+  if(members) {
+    const rest=hs.filter(h=>!h.member||!h.active);
+    return members+(members===1?" agent":" agents")+(rest.length?" · "+headcount(rest):"");
+  }
   const here = hs.filter((h) => h.active).length, asked = hs.length - here;
   return [here && here + (here === 1 ? " guest" : " guests"), asked && asked + " invited"].filter(Boolean).join(" · ");
 }
 
 /** HelperTag: GUEST while in the room; INVITED (yellow when it waits for you) until then. */
 function HelperTag({ h }: { h: Helper }) {
-  return h.active ? <Tag tone="guest">Guest</Tag> : <Tag tone={h.review ? "act" : "muted"}>Invited</Tag>;
+  return h.active ? h.member ? <Tag>Agent</Tag> : <Tag tone="guest">Guest</Tag> : <Tag tone={h.review ? "act" : "muted"}>Invited</Tag>;
 }
 
 // ---- presence -------------------------------------------------------------------------
@@ -95,6 +106,16 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   const overview = ctx.overview;
   const t = ctx.dm, th = ctx.thread;
   const [del, setDel] = useState(false);
+  const [remind, setRemind] = useState<boolean | null>(null);
+  const [grant, setGrant] = useState<GrantChange | null>(null);
+  const [space, setSpace] = useState(false);
+  const rights = groupRights(t, overview);
+  const change = useGroupChange(t);
+  // "Remind me about this chat": its newest received message (a computer keeps reminders; a browser doesn't).
+  const latest = overview?.remind ? latestReceived((t ? t.messages : th?.messages) || []) : null;
+  const latestReminder = latest ? reminderOf(overview, latest.id) : undefined;
+  // Standing permissions for a device's agent: kept on a computer only.
+  const grants = !!th && store.host.platform !== "browser";
   const unread = useStore(store, (s) => [...(s.overview?.dms || []), ...(s.overview?.threads || [])].reduce((n, c) => n + (c.id === ctx.conv || c.id === ctx.thread?.topic?.id ? 0 : c.unread), 0)
     + (s.overview?.topics || []).reduce((n, c) => n + c.archived_unread, 0)); // archived topics are counted, not listed
 
@@ -120,11 +141,15 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
     sub = p.text;
     avatar = <PersonAvatar name={title} seed={t.peer.person || t.peer.address} size={wide ? 48 : 40} online={online} />;
   } else if (th) {
-    title = threadAgentName(ctx);
+    // An agent only where one runs (model.threadRow): your phone is you, Vitalii's phone is Vitalii.
+    const row = threadRow(th.peer, overview, ctx.names);
+    title = row.title;
     const p = presence([th.peer], overview);
     online = p.online;
-    sub = [hostOf(th.peer, overview) ? "on " + niceDevice(th.peer) : "Agent", p.text.replace(/ · .*$/, "")].filter(Boolean).join(" · ");
-    avatar = <AgentAvatar seed={th.peer} size={wide ? 48 : 40} device={deviceKind(th.peer)} mood={online === false ? "asleep" : "neutral"} />;
+    sub = [row.subtitle, p.text.replace(/ · .*$/, "")].filter(Boolean).join(" · ");
+    avatar = row.kind === "agent"
+      ? <AgentAvatar seed={row.seed} size={wide ? 48 : 40} device={deviceKind(row.local ? overview?.me.address : th.peer)} mood={online === false && !row.local ? "asleep" : "neutral"} />
+      : <PersonAvatar name={row.title} seed={row.seed} size={wide ? 48 : 40} online={online} />;
   }
 
   const notify = overview?.notify;
@@ -174,18 +199,32 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
           <Menu.Positioner side="bottom" align="end" sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {t && <Menu.Item className={item} onClick={() => store.setPanel(true)}><IconUsers size={20} />In this chat</Menu.Item>}
+              {t?.peer.person && <Menu.Item className={item} onClick={() => setSpace(true)}><IconUsers size={20} />Project space</Menu.Item>}
               {t && notify?.available && (
                 <Menu.Item className={item} onClick={() => void store.run((a) => a.notify("mute", { conv: t.id, muted: !muted }), muted ? "Notifications on for this chat" : "This chat won’t notify you")}>
                   {muted ? <IconBell size={20} /> : <IconBellOff size={20} />}{muted ? "Turn notifications on" : "Mute notifications"}
                 </Menu.Item>
               )}
+              {latest && (
+                <Menu.Item className={item} onClick={() => setRemind(true)}><IconAlarm size={20} />{latestReminder ? "Change reminder…" : "Remind me about this chat…"}</Menu.Item>
+              )}
+              {rights.admin && <Menu.Item className={item} onClick={() => change.pick("rename")}><IconPencil size={20} />Rename group…</Menu.Item>}
+              {grants && th && (th.approved
+                ? <Menu.Item className={item} onClick={() => setGrant("unapprove")}><IconMessagePause size={20} />Stop answering their questions automatically…</Menu.Item>
+                : <Menu.Item className={item} onClick={() => setGrant("approve")}><IconMessageCheck size={20} />Answer their questions automatically…</Menu.Item>)}
+              {grants && th?.task_grant && <Menu.Item className={item} onClick={() => setGrant("revoke_tasks")}><IconBoltOff size={20} />Stop running their tasks without asking…</Menu.Item>}
               {(t || th) && <Menu.Separator className="mx-2 my-1 h-px bg-hairline" />}
+              {rights.member && <Menu.Item className={item + " text-danger"} onClick={() => change.pick("leave")}><IconDoorExit size={20} />Leave group…</Menu.Item>}
               {(t || th) && <Menu.Item className={item + " text-danger"} onClick={() => setDel(true)}><IconTrash size={20} />{th ? "Delete topic…" : "Delete conversation…"}</Menu.Item>}
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>
       </Menu.Root>
 
+      {change.sheet}
+      {t?.peer.person && <ProjectSpaceSheet conv={t.id} open={space} onOpenChange={setSpace} />}
+      {remind !== null && latest && <RemindSheet open={remind} onOpenChange={setRemind} m={latest} r={latestReminder} />}
+      {grants && th && <DeviceGrantConfirm change={grant} onClose={() => setGrant(null)} peer={grant === "revoke_tasks" ? (th.task_target || th.peer) : grant === "unapprove" ? (th.question_target || th.peer) : th.peer} thread={th} />}
       <Confirm open={del} onOpenChange={setDel} ok="Delete" onOk={remove}
         title={th ? "Delete this topic from this device?" : "Delete this conversation from your devices?"}>
         {th ? <p>It’s stored on this device only, so it’s deleted here and nowhere else. {title} keeps its copy.</p> : <>
@@ -246,7 +285,7 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
   };
   return (
     <div className="flex h-[52px] shrink-0 items-center gap-2.5 border-b-[1.5px] border-outline bg-guest-bg pl-3 pr-2">
-      {h.agent ? <AgentAvatar seed={h.seed} size={32} guest device={h.device} mood={h.active ? "neutral" : "waiting"} /> : <PersonAvatar name={h.name} seed={h.seed} size={32} guest />}
+      {h.agent ? <AgentAvatar seed={h.seed} size={32} guest={!h.member} device={h.device} mood={h.active ? "neutral" : "waiting"} /> : <PersonAvatar name={h.name} seed={h.seed} size={32} guest />}
       <span className="min-w-0 flex-1 leading-tight">
         <span className="flex items-center gap-1.5"><b className="truncate text-[14px] font-bold">{h.name}</b><HelperTag h={h} /></span>
         <span className={"block truncate text-[13px] " + (!h.active && h.review ? "font-semibold text-approval-ink" : "text-text-2")}>{h.sub}</span>
@@ -254,9 +293,8 @@ export function GuestBar({ helpers: hs, onDismissed }: { helpers: Helper[]; onDi
       {h.review ? <Button size="sm" variant="act" onClick={() => store.setPanel(true)}>Review</Button>
         : h.dismiss && (
           <Button size="sm" variant="outline" icon={<IconHandStop size={18} />} disabled={busy} onClick={dismiss}
-            title="Stops new messages. What was already shared stays with them.">Dismiss</Button>
+            title="Stops new messages. What was already shared stays with them.">{h.member ? "Remove agent" : "Dismiss"}</Button>
         )}
     </div>
   );
 }
-

@@ -105,6 +105,9 @@ func TestLiveIdentity(t *testing.T) {
 	if !strings.HasPrefix(link.URL, "agentnet-link-v2:") || !link.Expires.After(time.Now()) {
 		t.Fatalf("the link: %q %v", link.URL, link.Expires)
 	}
+	if link.AppURL != "agentnet://open#"+link.URL { // the same link, for the AgentNet app (TestDeviceLinkAppURL)
+		t.Fatalf("the app's link: %q", link.AppURL)
+	}
 	phoneHome := filepath.Join(t.TempDir(), "phone")
 	phone, err := client.JoinAndLink(ctx, phoneHome, link.URL, "phone")
 	if err != nil {

@@ -89,6 +89,7 @@ func (a *Agent) convSync(ctx context.Context) {
 	if work&(convRetry|convRetryMore) != 0 {
 		a.recoverHumanExcerpts(ctx)
 		a.discloseHumanAudience(ctx)
+		a.discloseRoomDismissals(ctx, feats)
 		if work&convRetry != 0 {
 			a.convWork.mu.Lock()
 			a.convWork.pos = heldPos{}
@@ -132,18 +133,64 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // requires). Every session of a device advertises the same list: the
 // relay takes a device to support only what ALL its live sessions do, so a
 // session that said less (link.go's waiting one) would keep senders
-// holding controls, Drive records and statuses for it. It is at most
-// protocol.MaxAdvertisedCaps long; rm1 (protocol.CapRoom) says this program
-// enforces every room reader rule (ROOM_V1 §2.1).
-var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapReplyReceiver, protocol.CapRoom, protocol.CapTyping}
+// holding controls, Drive records and statuses for it. With the agent
+// hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
+// rm1 (protocol.CapRoom) says this program enforces every room reader rule
+// (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
+var ownCaps = []string{protocol.CapAgentIdentity, protocol.CapAgentReaction, protocol.CapExternalParticipation, protocol.CapConvClear, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroup, protocol.CapHeadless, protocol.CapHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapRoom, protocol.CapTyping}
+
+// capsPublisher is the one publisher of this run's capability records:
+// the daemon's and link.go's waiting session share the session id, and the
+// relay keeps a session's record only when its ts is newer, so every
+// record gets a ts above the last one.
+type capsPublisher struct {
+	mu        sync.Mutex
+	lastTS    int64
+	published bool // a record reached the relay this run
+	agent     bool // the agent hint of that record
+}
+
+// advertisedCaps is ownCaps plus the agent hint (protocol.CapAgent) while
+// this device runs an agent, sorted.
+func (a *Agent) advertisedCaps() (caps []string, agent bool) {
+	caps = slices.Clone(ownCaps)
+	if agent = a.AdvertisesAgent(); agent {
+		caps = append(caps, protocol.CapAgent)
+		slices.Sort(caps)
+	}
+	return caps, agent
+}
+
+// putCaps publishes the signed capability record of session.
+func (a *Agent) putCaps(ctx context.Context, session string) error {
+	p := &a.capsPub
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	caps, agent := a.advertisedCaps()
+	p.lastTS = max(time.Now().Unix(), p.lastTS+1)
+	rec := protocol.CapsRecord{Address: a.Address, Session: session, Caps: caps, TS: p.lastTS}
+	rec.Sign(a.id.Sign)
+	if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
+		return err
+	}
+	p.published, p.agent = true, agent
+	return nil
+}
+
+// agentHintStale reports whether the published agent hint no longer says
+// what AdvertisesAgent does (a responder or named agent was set or removed).
+func (a *Agent) agentHintStale() bool {
+	p := &a.capsPub
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.published && p.agent != a.AdvertisesAgent()
+}
 
 // publishOwn publishes this run's capability record and, once per roster,
 // this installation's person.
 func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 	if slices.Contains(feats, protocol.FeatureCaps) && a.session != "" {
-		rec := protocol.CapsRecord{Address: a.Address, Session: a.session, Caps: ownCaps, TS: time.Now().Unix()}
-		rec.Sign(a.id.Sign)
-		if err := a.hub.do(ctx, "PUT", "/v1/caps", rec, nil); err != nil {
+		if err := a.putCaps(ctx, a.session); err != nil {
 			return err
 		}
 	}
@@ -160,7 +207,7 @@ func (a *Agent) publishOwn(ctx context.Context, feats []string) error {
 // listed session reads it.
 func (a *Agent) convSupport(ctx context.Context, address string, key identity.Public, feats []string) (ok bool, why string, notify bool) {
 	if !slices.Contains(feats, protocol.FeatureEnv2) || !slices.Contains(feats, protocol.FeatureCaps) {
-		return false, "your Hub cannot carry conversations (it needs an update)", false
+		return false, WaitServerUpdate + "your Hub cannot carry conversations (it needs an update)", false
 	}
 	label, name, err := protocol.SplitAddress(address)
 	if err != nil {
@@ -168,13 +215,13 @@ func (a *Agent) convSupport(ctx context.Context, address string, key identity.Pu
 	}
 	var prof protocol.Profile
 	if err := a.hub.do(ctx, "GET", "/v1/agents/"+label+"/"+name+"/profile", nil, &prof); err != nil {
-		return false, "cannot ask the Hub what " + address + " can read: " + err.Error(), false
+		return false, WaitServerUnavailable + "cannot ask the Hub what " + address + " can read: " + err.Error(), false
 	}
 	if r, err := protocol.ParsePersonRoster(prof.Person); err == nil { // fresh evidence, checked before anything is sent
 		a.observeRef(ctx, &protocol.PersonRef{ID: r.Person, Seq: r.Seq, Hash: r.Hash()})
 	}
 	if !prof.Supports(address, key.SignKey, protocol.CapEnv2) || !prof.Supports(address, key.SignKey, protocol.CapPerson) {
-		return false, address + " needs to update AgentNet before it can take part in conversations (an older program, or it has not connected since updating)", false
+		return false, WaitPeerUpdate + address + " needs to update AgentNet before it can take part in conversations (an older program, or it has not connected since updating)", false
 	}
 	return true, "", slices.Contains(feats, protocol.FeatureNotify) && prof.Supports(address, key.SignKey, protocol.CapNotify)
 }
@@ -324,7 +371,10 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 		// from another device of this person (Via) is a received copy.
 		a.markOpenable(msgs[i].Attachments, msgs[i].Dir == "out" && msgs[i].Via == "")
 	}
-	return msgs, a.decorateConv(conv, msgs)
+	if err := a.decorateConv(conv, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, a.privateNeedsYou(msgs)
 }
 
 // ConvOutgoing is a message to send in a conversation.
@@ -332,6 +382,10 @@ type ConvOutgoing struct {
 	Kind          string // message (default), question or task
 	Body          string
 	ReplyTo       string
+	Quote         string
+	Topic         string
+	TopicEvent    *envelope.TopicEvent
+	TopicDone     bool
 	Origin        string           // envelope.OriginUI (default) or "agent:<harness>"
 	Emotion       string           // required with an agent origin
 	Target        *envelope.Target // the one execution recipient of a question or task, if any
@@ -344,7 +398,8 @@ type ConvOutgoing struct {
 	sub     string                                 // envelope.SubEvent for participation events (participation.go)
 	status  string                                 // an agent output's status (agentjob.go)
 	claim   func(tx *sql.Tx, replyID string) error // decides, with the outbox write, that it may be stored (agentjob.go)
-	selfJob bool                                   // a request to this device's own agent: its job is recorded with it
+	human   *envelope.HumanTurn
+	selfJob bool // a request to this device's own agent: its job is recorded with it
 }
 
 // ConvSent is what became of a conversation message: one copy per device
@@ -362,6 +417,7 @@ type ConvCopy struct {
 	To     string `json:"to"`
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
+	Person string `json:"person,omitempty"`
 	Own    bool   `json:"own,omitempty"` // in a conversation's view: to another device of this person
 }
 
@@ -404,6 +460,20 @@ type outCopy struct {
 // to this person's own devices are replicas (history: never executed),
 // except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
+	if _, err := sendID(ctx); err != nil {
+		return ConvSent{}, err
+	}
+	var err error
+	if m.Topic, err = a.outgoingTopic(conv, m.Topic, m.ReplyTo); err != nil {
+		return ConvSent{}, err
+	}
+	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && (m.Kind == "" || m.Kind == envelope.KindMessage || m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && !envelope.AgentOrigin(m.Origin) {
+		// Addressed questions/tasks continue the same causal topic chain as chat.
+		m.ReplyTo, err = a.chatTopicHead(conv, m.Topic)
+		if err != nil {
+			return ConvSent{}, err
+		}
+	}
 	binding, err := a.prepareReplyReceiver(m.ReplyReceiver)
 	if err != nil {
 		return ConvSent{}, err
@@ -465,6 +535,21 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			}
 			return a.sendExternalParticipation(ctx, root, raw, info, m)
 		}
+		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) {
+			infos, e := a.Participations(conv)
+			if e != nil {
+				return ConvSent{}, e
+			}
+			for _, p := range infos {
+				if p.Following() {
+					h, e := a.roomAudience(conv, "")
+					if e != nil {
+						return ConvSent{}, e
+					}
+					return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+				}
+			}
+		}
 		return a.sendGroupTurn(ctx, conv, m, binding)
 	}
 	if m.PID != "" {
@@ -501,11 +586,33 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if m.Origin == "" && m.sub != envelope.SubDriveSpace { // a dedicated record carries no origin
 		m.Origin = envelope.OriginUI
 	}
-	if m.ReplyTo != "" { // a reply stays within its own conversation
-		if c, err := a.store.convOf(m.ReplyTo); err != nil {
+	if m.Quote != "" {
+		parent, known, err := humanReplyParent(a.store.db, conv, m.Quote)
+		if err != nil {
 			return ConvSent{}, err
+		}
+		if !known {
+			return ConvSent{}, errors.New("quote stays within its conversation")
+		}
+		m.Quote = parent
+	}
+	if m.ReplyTo != "" && (m.claim == nil || m.Origin == envelope.OriginUI) && !envelope.AgentOrigin(m.Origin) { // human replies use a logical parent
+		parent, known, e := humanReplyParent(a.store.db, conv, m.ReplyTo)
+		if e != nil {
+			return ConvSent{}, e
+		}
+		if !known {
+			return ConvSent{}, errors.New("a reply stays within its conversation")
+		}
+		m.ReplyTo = parent
+	}
+
+	if m.ReplyTo != "" && (m.claim != nil && m.Origin != envelope.OriginUI || envelope.AgentOrigin(m.Origin)) {
+		// Agent output authorization still names the held request's physical ID.
+		if c, e := a.store.convOf(m.ReplyTo); e != nil {
+			return ConvSent{}, e
 		} else if c != conv {
-			return ConvSent{}, fmt.Errorf("message %s is not in this conversation: a reply stays within its conversation", m.ReplyTo)
+			return ConvSent{}, errors.New("a reply stays within its conversation")
 		}
 	}
 	if len(m.Files) > 0 {
@@ -562,7 +669,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			devices, own[d.Address] = append(devices, d), true
 		}
 	}
-	lid := protocol.NewID()
+	lid, _ := sendID(ctx)
 	var copies []outCopy
 	for _, f := range m.Files { // this device's own copy, for its person's other devices to ask for later
 		if err := a.keepSent(f.Path); err != nil {
@@ -616,7 +723,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
-			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
+			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
 			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID}
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid
@@ -633,7 +740,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			}
 			c.in.Attachments = append(c.in.Attachments, att)
 		}
-		supported, why, notify := false, "cannot reach the Hub", false
+		supported, why, notify := false, WaitServerUnavailable+"cannot reach the Hub", false
 		if ferr == nil {
 			supported, why, notify = a.convSupport(ctx, dev.Address, key, feats)
 			if supported && m.sub == envelope.SubDriveSpace { // a dedicated record: only devices that read it
@@ -681,12 +788,15 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if err := a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
 	}
-	if err := a.store.addConvOutbox(copies, local, m.claim, jobKey, binding); err != nil {
+	if err := a.store.addConvOutbox(copies, local, a.queuedClaim(ctx, conv, m.claim), jobKey, binding); err != nil {
 		return ConvSent{}, err
 	}
 	receiverStored = true
 	if m.stored != nil {
 		m.stored()
+	}
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, local.ID, lid), nil
 	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
@@ -940,9 +1050,12 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return a.admitGroupTurn(ctx, env, in, root, me, sp, sender, fromQuarantine, hold)
 	}
 	if root.Kind == protocol.ConvKindGroup && in.PID != "" && in.Human != nil {
-		// A request or output to a group's captured audience: the group
-		// participation path does not read the audience (ROOM_V1 P3/P4).
-		return hold(reasonInvalid, "group: a request or output carrying a captured audience is not read yet")
+		for _, e := range in.Human.Proof {
+			if e.Role == protocol.RoleHuman {
+				return hold(reasonInvalid, "group human guest execution audience is not enabled")
+			}
+		}
+		return a.admitHumanTurn(ctx, env, in, root, sp, sender, fromQuarantine, hold)
 	}
 	if root.Kind == protocol.ConvKindGroup && in.PID != "" {
 		if handled, e := a.admitGroupVisitorInvite(ctx, env, in, root, me, sp, sender, fromQuarantine, hold); handled {

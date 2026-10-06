@@ -451,6 +451,7 @@ func TestGroupCarrierCiphertextTamperAndOrdinaryRedownload(t *testing.T) {
 }
 
 func TestGroupCarrierMalformedAuthorityAndContext(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"signature", "realm", "context root", "context signature", "recipient key"} {
 		t.Run(name, func(t *testing.T) {
 			w, p, c := newGroupPublicationFixture(t)
@@ -727,6 +728,7 @@ func TestGroupCarrierReorderHeldDuplicateRestart(t *testing.T) {
 }
 
 func TestGroupCarrierAtomicRecoveryExactlyOnce(t *testing.T) {
+	t.Parallel()
 	for _, responseLoss := range []bool{false, true} {
 		t.Run(map[bool]string{false: "local insert failure", true: "CAS response loss"}[responseLoss], func(t *testing.T) {
 			w, p, c := newGroupPublicationFixture(t)

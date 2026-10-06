@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -65,8 +66,10 @@ func convPageCommand(home, conv string) []string {
 	return []string{"xdg-open", page.String()}
 }
 
-// runUI prints the running daemon's messenger page address, or serves the
-// invented demo data with --demo (no home, Hub, network or harness).
+// runUI opens the AgentNet app when this home has one (app-exe, written by
+// the app), and otherwise prints the running daemon's messenger page
+// address (advanced use), or serves the invented demo data with --demo (no
+// home, Hub, network or harness).
 func runUI(ctx context.Context, home string, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -82,7 +85,10 @@ func runUI(ctx context.Context, home string, args []string, out io.Writer) error
 		if *listen != "127.0.0.1:0" {
 			return errors.New("--listen is for --demo; the daemon's page address is chosen with agentnet daemon --ui")
 		}
-		noPage := errors.New("no messenger page is running for this home: start the daemon with `agentnet daemon --ui 127.0.0.1:0` (see agentnet help ui)")
+		if started, err := openApp(home); started || err != nil {
+			return err // the app shows its window (one app per computer: a running one comes to the front)
+		}
+		noPage := errors.New("no messenger page is running for this home: start the daemon with `agentnet daemon --ui 127.0.0.1:0` (see agentnet help ui), or get the AgentNet app: " + getAppURL)
 		data, err := secfile.Read(filepath.Join(home, uiURLFile))
 		if errors.Is(err, os.ErrNotExist) {
 			return noPage
@@ -97,6 +103,7 @@ func runUI(ctx context.Context, home string, args []string, out io.Writer) error
 			return noPage
 		}
 		fmt.Fprintf(out, "Open: %s\n", strings.TrimSpace(string(data)))
+		fmt.Fprintf(out, "Get the AgentNet app to open it from your apps: %s\n", getAppURL)
 		return nil
 	}
 	ln, err := listenLoopback(*listen)
@@ -134,7 +141,7 @@ func startDaemonUI(a *client.Agent, home, listen string, logf func(string, ...an
 		if ln, err = listenLoopback(prev); err == nil {
 			token = prevToken
 		} else {
-			logf("messenger page: the previous address %s is taken; serving on a new one (run `agentnet ui`)", prev)
+			logf("messenger page: the previous address %s is taken; serving on a new one (agentnet ui prints it)", prev)
 			ln = nil
 		}
 	}
@@ -162,7 +169,7 @@ func startDaemonUI(a *client.Agent, home, listen string, logf func(string, ...an
 			logf("messenger page stopped: %v", err)
 		}
 	}()
-	logf("messenger page on http://%s (run `agentnet ui` for the address to open)", addr)
+	logf("messenger page on http://%s (open the AgentNet app; advanced: agentnet ui prints the address)", addr)
 	return func() {
 		if a != nil {
 			if r := a.UpdateSwitching(); r != nil {
@@ -221,4 +228,27 @@ func takeUIHandoff(home, listen string) (addr, token string) {
 		return "", "" // the daemon now asks for another address
 	}
 	return h.Addr, h.Token
+}
+
+// openApp starts the AgentNet app this home recorded (app-exe), detached:
+// the app shows its window, and one already running comes to the front.
+// It reports false, with no error, when this home has no app.
+func openApp(home string) (bool, error) {
+	data, err := secfile.Read(filepath.Join(home, appExeFile))
+	if err != nil {
+		return false, nil
+	}
+	exe := strings.TrimSpace(string(data))
+	st, err := os.Stat(exe)
+	if exe == "" || !filepath.IsAbs(exe) || err != nil || st.IsDir() || (runtime.GOOS != "windows" && st.Mode().Perm()&0o111 == 0) {
+		return false, nil // moved or removed: the address below, as without the app
+	}
+	cmd := exec.Command(exe)
+	if abs, err := filepath.Abs(home); err == nil {
+		cmd.Env = append(os.Environ(), "AGENTNET_HOME="+abs)
+	}
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("could not open the AgentNet app (%s): %w", exe, err)
+	}
+	return true, cmd.Process.Release()
 }

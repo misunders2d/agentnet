@@ -198,7 +198,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	waiting := ""
 	for _, member := range packet.State.Members {
 		if _, err = a.refreshPerson(ctx, member.Person, false); hubUnreachable(err) {
-			waiting = "cannot reach the Hub: " + err.Error()
+			waiting = WaitServerUnavailable + "cannot reach the Hub: " + err.Error()
 			break
 		} else if err != nil {
 			return ConvSent{}, err
@@ -219,12 +219,16 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	if err != nil {
 		return ConvSent{}, err
 	}
+	quote, err := groupReplyLID(a.store.db, conv, m.Quote)
+	if err != nil {
+		return ConvSent{}, err
+	}
 	withdrawals, err := a.groupWithdrawals(conv)
 	if err != nil {
 		return ConvSent{}, err
 	}
 	raw, _ := json.Marshal(packet.Root)
-	lid := protocol.NewID()
+	lid, _ := sendID(ctx)
 	release, err := lockfile.Wait(a.spoolLockPath())
 	if err != nil {
 		return ConvSent{}, err
@@ -280,7 +284,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			if person.roster.Person != me.roster.Person {
 				fan = append(fan, envelope.Fan{Person: person.roster.Person, Roster: person.roster.Hash()})
 			}
-			in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: lid, From: a.Address, To: device.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: raw, Body: m.Body, ReplyTo: reply, Origin: m.Origin, Emotion: m.Emotion, Replica: person.roster.Person == me.roster.Person, Fan: fan}
+			in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), LID: lid, From: a.Address, To: device.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Conv: conv, Root: raw, Body: m.Body, ReplyTo: reply, Quote: quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Origin: m.Origin, Emotion: m.Emotion, Replica: person.roster.Person == me.roster.Person, Fan: fan}
 			copies = append(copies, outCopy{in: in, state: stateQueued, required: protocol.CapGroup, recipientFP: key.Fingerprint(), groupAdmission: admission.Hash()})
 			if waiting != "" {
 				copies[len(copies)-1].state, copies[len(copies)-1].why = stateConvWaiting, waiting
@@ -306,7 +310,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		return ConvSent{}, err
 	}
 	beforeOutbox()
-	err = a.store.addConvOutbox(copies, envelope.Inner{}, func(tx *sql.Tx, _ string) error {
+	err = a.store.addConvOutbox(copies, envelope.Inner{}, a.queuedClaim(ctx, conv, func(tx *sql.Tx, _ string) error {
 		current, e := groupTurnPacketIn(tx, conv)
 		if e != nil {
 			return e
@@ -332,12 +336,15 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 			}
 		}
 		return nil
-	}, "", binding)
+	}), "", binding)
 	if err != nil {
 		return ConvSent{}, err
 	}
 	stored = true
 	release()
+	if queuedSend(ctx) {
+		return a.queuedConv(copies, copies[0].env.ID, lid), nil
+	}
 	if binding != nil && binding.setup != nil {
 		if _, e := a.deliver(ctx, binding.setup.env, nil); e != nil && !retryable(e) {
 			return ConvSent{}, e
@@ -536,6 +543,24 @@ func (a *Agent) mayDeliverGroupTurn(env envelope.Envelope) (bool, bool, error) {
 			return true, false, nil
 		}
 		return false, false, nil
+	}
+	if required == protocol.CapHumanParticipation && sub == "" {
+		var in envelope.Inner
+		var human string
+		if err = a.store.db.QueryRow(`SELECT coalesce(pid,''),kind,coalesce(human,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.PID, &in.Kind, &human); err != nil {
+			return true, false, err
+		}
+		if human != "" {
+			if err = json.Unmarshal([]byte(human), &in.Human); err != nil {
+				return true, false, err
+			}
+			admission, e := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
+			if e != nil || grant == "" || admission.Hash() != grant {
+				return true, false, a.store.setOutboxState(env.ID, stateNotDelivered, "group sender admission changed", "")
+			}
+			in.Conv = conv
+			return a.mayDeliverHuman(env, in, state, fp)
+		}
 	}
 	if state != stateQueued {
 		return true, false, nil

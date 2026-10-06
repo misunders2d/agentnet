@@ -23,7 +23,7 @@ const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core
 const [target, ...dirs] = process.argv.slice(2);
 if (!target || !dirs.length) { console.error('usage: skin_contract_check.cjs DAEMON_URL SKIN_DIR...'); process.exit(2); }
 const daemon = new URL(target), token = daemon.searchParams.get('t');
-const hostModules = { '/assets/typing.mjs': path.join(__dirname, '..', 'static', 'typing.mjs') };
+const hostModules = Object.fromEntries(['typing.mjs', 'core.css', 'skin-base.css'].map(name => ['/assets/' + name, path.join(__dirname, '..', 'static', name)]));
 const marker = crypto.randomBytes(8).toString('hex'); // the harness host's own requests carry it
 const types = { '.mjs': 'text/javascript', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2', '.png': 'image/png', '.svg': 'image/svg+xml', '.webp': 'image/webp' };
 
@@ -69,10 +69,24 @@ const host = Object.freeze({
   },
   async file(id, index, dir) { const r = await own('/api/files/' + encodeURIComponent(id) + '/' + index + (dir ? '?dir=' + dir : '')); if (!r.ok) throw new Error(r.statusText); return { bytes: new Uint8Array(await r.arrayBuffer()) }; },
   async stage(file) { const r = await own('/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }); if (!r.ok) throw new Error((await r.text()).trim() || r.statusText); return (await r.json()).id; },
-  onOpen(fn) { openHandler = fn; },
+  onOpen(fn, kinds) { if (kinds !== undefined && !Array.isArray(kinds)) throw new Error("onOpen kinds must be an array"); openHandler = fn; window.__openKinds = kinds || []; },
   skins: [{ api: 1, id: 'comic', name: 'Comic', builtin: true }, { api: 1, id: 'example', name: 'Example', digest: '0'.repeat(64) }], onSkinsChange() { return () => {}; },
   selectSkin() { throw new Error('Switching is not part of this check'); },
 });
+window.__openP3 = async () => {
+ const overview=await json('/api/overview');
+ for(const dm of overview.dms) {
+  const view=await json('/api/dm?id='+dm.id),m=view.messages.find(m=>m.body==='P3 QUOTED TEXT');
+  if(m) {openHandler(m.id,'message',{conv:dm.id,dir:'out'});return m.id;}
+ }
+ throw Error('prepared P3 quote fixture not found');
+};
+window.__openDevice = async () => {
+ if (!window.__openKinds.includes('message')) throw new Error('skin did not take message notifications');
+ const overview = await json('/api/overview'), thread = overview.threads.find(t => t.peer === 'bob/desk' && t.count > 1 && !t.notice_only);
+ const view = await json('/api/thread?id=' + thread.id), message = view.messages.find(m => m.id === thread.id);
+ openHandler(message.id, 'message', {dir:message.dir});
+};
 // The skin's own direct transport (around the host's captured originals).
 window.fetch = (input, init) => { const u = new URL(typeof input === 'string' ? input : input.url, location.href); if (/^\\/(api|events)\\b/.test(u.pathname)) report.direct.push('fetch ' + u.pathname); return realFetch(input, init); };
 window.EventSource = function (url, o) { report.direct.push('EventSource ' + url); return new RealES(url, o); };
@@ -119,6 +133,9 @@ Object.defineProperty(document, 'adoptedStyleSheets', { configurable: true, get(
 for (const m of ['add', 'delete', 'clear']) { const f = document.fonts[m].bind(document.fonts); document.fonts[m] = (...a) => { report.outside.push('document.fonts.' + m); return f(...a); }; }
 window.__pageSheetsKept = () => { const now = sheets.get.call(document); return now.length === pageSheets.length && now.every((s, i) => s === pageSheets[i]); };
 const holder = document.getElementById('skin'), shadow = holder.attachShadow({ mode: 'open' });
+// The public root contract includes the host base sheet and a page-filling box.
+const baseLink = document.createElement('link'); baseLink.rel = 'stylesheet'; baseLink.href = '/assets/skin-base.css'; shadow.append(baseLink);
+await new Promise(r => { baseLink.onload = r; baseLink.onerror = r; });
 if (manifest.style) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = base + manifest.style; shadow.append(l); await new Promise((r) => { l.onload = r; l.onerror = r; }); }
 const module = await import(base + manifest.entry);
 new MutationObserver((list) => { for (const m of list) report.outside.push(m.type + ' ' + m.target.nodeName + (m.attributeName ? '@' + m.attributeName : '')); })
@@ -154,13 +171,13 @@ const proxy = (req, res) => {
 let cookie = '';
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x'), send = (type, data) => { res.setHeader('Content-Type', type + '; charset=utf-8'); res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' blob:; connect-src 'self'"); res.end(data); };
-  if (u.pathname === '/') return send('text/html', '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Contract check</title><div id="skin"></div><script type="module" src="/harness.mjs"></script>');
+  if (u.pathname === '/') return send('text/html', '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Contract check</title><link rel="stylesheet" href="/assets/core.css"><div id="skin"></div><script type="module" src="/harness.mjs"></script>');
   if (u.pathname === '/harness.mjs') return send('text/javascript', harness);
   if (/^\/(api|events)\b/.test(u.pathname)) {
     if (req.headers['x-contract-host'] !== marker && u.searchParams.get('contract-host') !== marker) directHits.push(req.method + ' ' + u.pathname);
     return proxy(req, res);
   }
-  if (hostModules[u.pathname]) return send('text/javascript', fs.readFileSync(hostModules[u.pathname]));
+  if (hostModules[u.pathname]) return send(types[path.extname(u.pathname)] || 'application/octet-stream', fs.readFileSync(hostModules[u.pathname]));
   for (const p of packages) if (u.pathname.startsWith(p.base)) {
     const name = decodeURIComponent(u.pathname.slice(p.base.length));
     if (p.files.has(name)) { res.setHeader('Content-Type', (types[path.extname(name)] || 'application/octet-stream') + '; charset=utf-8'); return res.end(p.files.get(name)); }
@@ -188,6 +205,14 @@ async function staysModal(page, role, what) {
   }
 }
 let sent = 0;
+
+const messageShot = async (page, skin) => {
+  const times=await page.locator('time[datetime]').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('datetime')));
+  assert.ok(times.length>0,skin+': rendered sent time exists');
+  assert.ok(times.every(t=>Date.parse(t)>0),skin+': no year-one sent time');
+  await page.waitForTimeout(300); // capture the settled message view after its transition
+  if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS, 'contract-'+skin+'-'+page.viewportSize().width+'-message.png')});
+};
 
 // What each skin must show and do, through its own words.
 const journeys = {
@@ -234,6 +259,34 @@ const journeys = {
     await page.waitForTimeout(400);
     await page.keyboard.press('Escape');
   },
+  classic: async (page) => {
+    await page.locator('#conv-list button.contact').first().waitFor();
+    await page.evaluate(()=>window.__openDevice());
+    await page.locator('#timeline .msg').first().waitFor();
+    await messageShot(page,'classic');
+    const text='Classic contract send '+(++sent);
+    await page.locator('#body').fill(text);await page.locator('#composer').evaluate(form=>form.requestSubmit());
+    await page.locator('#timeline').getByText(text,{exact:true}).waitFor();
+  },
+  zoom: async (page) => {
+    await page.locator('#zoom .thread-row').first().waitFor();
+    await page.evaluate(()=>window.__openDevice());await page.locator('#zoom .zoom-message').waitFor();
+    await messageShot(page,'zoom');
+    await page.keyboard.press('Escape');await page.locator('#zoom .mini-chat').waitFor();
+    const text='Zoom contract send '+(++sent);
+    await page.locator('#zoom').getByRole('button',{name:'Write in this conversation…',exact:true}).click();
+    await page.locator('#write-body').fill(text);await page.locator('#dialog-ok').click();
+    await page.locator('#zoom .mini-chat').getByText(text,{exact:true}).waitFor();
+    await messageShot(page,'zoom-chat');
+    await page.locator('#zoom .mc-bubble').filter({hasText:text}).click();
+    await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('#zoom .zoom-layer').length===1);
+    await page.locator('#zoom .zoom-message').focus();
+    for(const level of [2,1,0]){
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('#zoom .zoom-layer').length===1);
+      assert.equal(await page.locator('#zoom .rung').nth(level).getAttribute('aria-current'),'step','Zoom Escape level '+level);
+    }
+  },
   notebook: async (page) => {
     await page.getByRole('heading', { name: 'Notebook', exact: true }).waitFor({ timeout: 20000 });
     await page.locator('.notebook nav button').first().click();
@@ -269,6 +322,21 @@ const journeys = {
         }
       });
       if (journey) await journey(page);
+      if(process.env.AGENTNET_P3_REVIEW && p.manifest.id!=='notebook') {
+        try {
+          const id=await page.evaluate(()=>window.__openP3());
+          const quoted=page.locator(p.manifest.id==='comic'?'[data-mid="'+id+'"]':p.manifest.id==='classic'?'#m-'+id:'.zoom-message');
+          await quoted.waitFor();assert.match(await quoted.textContent(),/P3 QUOTED TEXT/,p.manifest.id+': quoted message');
+          const reference=p.manifest.id==='comic'?quoted.getByRole('button').filter({hasText:'P3 PARENT TEXT'}):quoted.locator('.replyref');
+          await reference.waitFor();assert.equal(await reference.count(),1,p.manifest.id+': exactly one explicit quote');
+          assert.match(await reference.textContent(),/P3 PARENT TEXT/,p.manifest.id+': quoted text');
+          await page.getByText('Cannot reach your server; retries automatically',{exact:false}).first().waitFor();
+          await messageShot(page,p.manifest.id+'-p3');
+        } catch(e) {
+          if(process.env.AGENTNET_SCREENSHOTS) await page.screenshot({path:path.join(process.env.AGENTNET_SCREENSHOTS,'contract-'+p.manifest.id+'-p3-'+w+'-FAIL.png')});
+          throw Error(p.manifest.id+' at '+w+': '+e.message);
+        }
+      }
       if (process.env.AGENTNET_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.AGENTNET_SCREENSHOTS, 'contract-' + p.manifest.id + '-' + w + '.png') });
       // A/B/A: unmount, mount again, unmount, mount again.
       const left1 = await page.evaluate(() => window.__unmount());

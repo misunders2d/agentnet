@@ -55,7 +55,7 @@ export function App() {
     // Cards are keyed by conversation and the one below comes first, so the
     // card that was open keeps its elements (and scroll) as it goes under.
     return (
-      <div className="relative h-dvh overflow-hidden bg-canvas">
+      <div className="relative h-full overflow-clip bg-canvas">
         {under && (
           <div inert={!!card.shown && !card.leaving} className={"flex h-full flex-col bg-canvas " + (card.leaving ? "an-under-out" : card.shown ? "an-under-in" : "")}>
             <PhoneTabs tab={tab} oks={oks} overview={overview} store={store} main={main} scroll={listScroll} />
@@ -115,7 +115,7 @@ function PhoneTabs({ tab, oks, overview, store, main, scroll }: { tab: Tab; oks:
   return (
       <>
         <ConnectionBanner />
-        <Swap id={tab} className="min-h-0 flex-1 overflow-hidden" side="h-full" {...pages} ms={MOTION.page} label="tab">
+        <Swap id={tab} className="min-h-0 flex-1 overflow-clip" side="h-full" {...pages} ms={MOTION.page} label="tab">
           <div ref={box} className="h-full overflow-y-auto" onScroll={(e) => { if (tab === "chats") scroll.current = e.currentTarget.scrollTop; }}>{main}</div>
         </Swap>
         <nav aria-label="Main" className="grid grid-cols-4 border-t-[1.5px] border-outline bg-surface pb-[env(safe-area-inset-bottom)]">
@@ -146,7 +146,7 @@ function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; o
   // conversation, or Settings. Topics of one agent are one pane.
   const pane = settings ? "settings" : open ? convKey(open, views) : "none";
   return (
-    <div className="grid h-dvh grid-cols-[76px_minmax(300px,360px)_1fr] bg-canvas">
+    <div className="grid h-full grid-cols-[76px_minmax(300px,360px)_1fr] bg-canvas">
       <nav aria-label="Main" className="flex flex-col items-center gap-2 border-r-[1.5px] border-outline bg-[#1B1530] py-3 text-white">
         <WorkspaceCoin />
         {tabs.map((t) => (
@@ -164,7 +164,7 @@ function Desktop({ tab, oks, overview, store, main }: { tab: Tab; oks: number; o
         <button type="button" aria-label="You: profile and devices" onClick={() => store.showTab("settings", "profile")} className="grid size-11 place-items-center rounded-full"><PersonAvatar name={overview?.person?.label || "Me"} seed={overview?.person?.person || "me"} size={40} /></button>
       </nav>
       <aside className="min-h-0 border-r-[1.5px] border-outline bg-canvas">
-        <Swap id={tab} className="h-full overflow-hidden" side="h-full overflow-y-auto" {...pages} ms={MOTION.page} label="list">{main}</Swap>
+        <Swap id={tab} className="h-full overflow-clip" side="h-full overflow-y-auto" {...pages} ms={MOTION.page} label="list">{main}</Swap>
       </aside>
       <main className="flex min-h-0 min-w-0">
         <div className="flex min-w-0 flex-1 flex-col">

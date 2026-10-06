@@ -71,7 +71,12 @@ async function world() {
     e.connected = true; await caps(e); await caps(owner); users.push(e); await e.load(); return e;
   };
   const receive = async (raw, e) => { const env = wire.parseEnvelope(raw); await e.admit(raw, env); return env.id; };
-  const drain = async (e) => { for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); } };
+  const drain = async (e) => {
+    // MEL-547 returns after saving; wait for the synthetic relay to have
+    // the asynchronously posted copies before delivering them to a peer.
+    await Promise.all(users.map(user => user.outboxPass));
+    for (const raw of posts) { const env = wire.parseEnvelope(raw); if (env.to === e.address && !await e.store.get('inbox', env.id) && !await e.store.get('held', env.id)) await receive(raw, e); }
+  };
   const settle = async (e) => { while (e.erasing) await e.erasing; };
   return { alice, bob, users, posts, caps, sibling, receive, drain, settle, offline: (v) => { offline = v; } };
 }

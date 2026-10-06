@@ -4,24 +4,26 @@
 // sheet on long-press. Nothing destructive happens by gesture alone: delete
 // always asks first.
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconArrowBackUp, IconCopy, IconDots, IconPencil, IconTrash, IconInfoCircle, IconMoodSmile, IconSquareCheck,
-  IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown,
+  IconChecks, IconCheck, IconClock, IconAlertTriangle, IconChevronDown, IconAlarm,
 } from "@tabler/icons-react";
 import { useApp } from "../context";
-import { plain, timeOf } from "../model";
+import { MESSAGES, deviceName, plain, timeOf } from "../model";
 import { Sheet } from "../ui/Sheet";
 import { Button } from "../ui/Button";
 import { Markdown } from "./Markdown";
 import { ReactPopover, controlRef, useReact } from "./Message.reactions";
 import { QuickReactions } from "./Emoji";
 import { decode, encode, shift } from "./Composer.mentions";
+import { focusComposer } from "./Composer.focus";
 import { copyText, deviceWords, isRequest, isThreadMsg, shownText, type AnyMsg, type Ctx } from "./Message.model";
-import { useModal, usePortal } from "../owned";
+import { useModal, useOwned, usePortal } from "../owned";
 
-export interface Can { react: boolean; reply: boolean; edit: boolean; del: boolean; select: boolean }
+export interface Can { react: boolean; reply: boolean; edit: boolean; del: boolean; select: boolean; remind: boolean }
 
 export interface Acts {
   reply: () => void;
@@ -30,6 +32,9 @@ export interface Acts {
   del: () => void;
   details: () => void;
   select?: () => void;
+  remind?: () => void;        // "Remind me…" (or "Change reminder…" when it has one)
+  reminded?: boolean;         // it has a pending reminder
+  topic?:()=>void;
 }
 
 // ---- desktop: the hover toolbar ---------------------------------------------------
@@ -69,7 +74,9 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
   return (
     <>
       {text && render(<IconCopy size={20} />, "Copy text", acts.copy)}
+      {acts.topic && render(<IconSquareCheck size={20}/>,"Make a topic",acts.topic)}
       {can.select && acts.select && render(<IconSquareCheck size={20} />, "Select", acts.select)}
+      {can.remind && acts.remind && render(<IconAlarm size={20} />, acts.reminded ? "Change reminder…" : "Remind me…", acts.remind)}
       {can.edit && render(<IconPencil size={20} />, "Edit", acts.edit)}
       {render(<IconInfoCircle size={20} />, "Details", acts.details)}
       {can.del && render(<IconTrash size={20} />, "Delete…", acts.del, true)}
@@ -82,7 +89,12 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
 export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMoreEmoji }: {
   open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx; can: Can; acts: Acts; who: string; onMoreEmoji: () => void;
 }) {
+  const { root } = useOwned();
   const close = (fn: () => void) => () => { onOpenChange(false); fn(); };
+  // Reply puts the cursor in the message field within this tap (iOS opens
+  // its keyboard only for a focus() in the tap's own handler): the sheet
+  // lets go of the app first, then the field takes the focus.
+  const reply = () => { flushSync(() => onOpenChange(false)); acts.reply(); focusComposer(root, ctx.conv); };
   const react = useReact(m, ctx);
   const mine = (m.reactions || []).filter((r) => r.mine).map((r) => r.emoji);
   const snippet = plain(shownText(m)).split("\n")[0];
@@ -95,8 +107,8 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
         </div>
       )}
       <div className="flex flex-col">
-        {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={close(acts.reply)} />}
-        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select) }} m={m}
+        {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={reply} />}
+        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select), remind: acts.remind && close(acts.remind), topic: acts.topic && close(acts.topic) }} m={m}
           render={(icon, label, onClick, danger) => <SheetItem key={label} icon={icon} label={label} onClick={onClick} danger={danger} />} />
       </div>
     </Sheet>
@@ -249,9 +261,11 @@ const copyIcon = (state: string) =>
 
 export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolean; onOpenChange: (o: boolean) => void; m: AnyMsg; ctx: Ctx; who: string }) {
   const copies = isThreadMsg(m) ? [] : (m.copies || []);
-  const at = new Date(m.at);
+  const at = new Date(m.sent_at || m.at);
   const origin = (m as { origin?: string }).origin || "";
   const rows: [string, string][] = [
+    ["Sent", at.toLocaleString()],
+    ...(Date.parse(m.at)-at.getTime()>=MESSAGES.ARRIVED_NOTE_AFTER*1000?[["Arrived here",new Date(m.at).toLocaleString()] as [string,string]]:[]),
     ["Message", m.id],
     ["Kind", m.kind],
     ["Stored state", m.state || "—"],
@@ -266,7 +280,7 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
   ];
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Message details"
-      description={(m.dir === "out" ? "Sent " : "Received ") + at.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) + " at " + timeOf(m.at)}>
+      description={"Sent " + at.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) + " at " + timeOf(m.sent_at || m.at)}>
       <div className="flex flex-col gap-4 pb-2">
         {m.dir === "out" && copies.length > 0 && (
           <section>
@@ -276,8 +290,8 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
                 <li key={c.to} className="flex items-center gap-3 px-3.5 py-2.5">
                   <span aria-hidden="true">{copyIcon(c.state)}</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block font-semibold">{capital(deviceWords(c.to, ctx.overview))}</span>
-                    <span className="block text-[13px] text-text-2">{copyText(c.state)}{c.detail ? " · " + c.detail : ""}</span>
+                    <span className="block font-semibold">{capital(c.own?"your "+deviceName(c.to):(c.person||"Someone")+"’s "+deviceName(c.to))}</span>
+                    <span className="block text-[13px] text-text-2">{copyText(c.state)}</span>
                   </span>
                 </li>
               ))}

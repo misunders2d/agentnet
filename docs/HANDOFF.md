@@ -1,6 +1,123 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
-> **Current release — v0.7.0:** [published](https://github.com/misunders2d/agentnet/releases/tag/v0.7.0)
+## Current work — October 5 release candidate
+
+The October 5 candidate includes the app, Google sign-in, topics, person
+approvals, group agents, sending, catch-up, unread and readable needs-you
+fixes combined at `c049c6c7`, plus the later profile picture, Comic parity,
+Windows installation and group security fixes below.
+Read the [release notes](NEXT_RELEASE.md) for
+what people see and the [installation guide](revival/INSTALL.md) for setup.
+This entry records the candidate, not a published release or a production
+upgrade. No release number is assigned here.
+
+People install one AgentNet app per computer and open its icon. It brings
+its own `agentnet` command; command-line setup is for agents, server
+operators and advanced use. Phones use the browser/home-screen app. Comic,
+Classic and Zoom are all standalone interface packages in this candidate.
+Windows installation adds the bundled command to the current user's PATH;
+new terminal/agent sessions pick it up. Its login startup entry quotes the
+whole executable path, including account/install paths containing spaces.
+Existing enabled entries are repaired; a saved disabled choice stays disabled.
+
+The current behavior is:
+
+- Google-enabled workspaces admit allowed Google accounts. A later device
+  asks an existing human device of that person for an OK. Old identities
+  are not converted; joining afresh is the recorded choice for this rollout.
+- Every chat has topics. Done and Reopen are shared in people chats and
+  groups; later unseen messages reopen a topic. Bulk actions offer a
+  confirmation and Undo. Archive stays local. Delete for me in people
+  chats reaches the person's linked devices; an agent-chat deletion stays
+  on the deleting device.
+- New accepted group agents are members that anyone in the group can ask.
+  Adding the same agent again shares selected history instead of making
+  another entry. Agents can ask each other and use permitted replies in
+  that group. Their owners' approvals still decide execution; joining the
+  group is not a permission to run tasks. An outside-owner agent requires
+  a current admin with the exact current group admission; an old admin
+  record gives no authority. Valid signed removals are retained in membership
+  context and retried to current devices, including late joiners, without
+  waiting for another group message. The receive path records only readers
+  proven by the message's signed recipients, not everyone currently in the
+  group; being a current member cannot authorize sharing old messages.
+- Person approvals cover current and future verified devices. Only a
+  person's own human devices can enroll more devices. Removed devices,
+  changed keys and conflicting identities do not retain automatic access.
+  Grants select the exact verified person ID (or an explicit advanced device
+  address); a display name, even a unique one, never selects a grant target.
+- Person profile pictures use the existing signed roster. All three skins
+  offer choose/crop/preview/save/replace/remove and Use as my picture from a
+  chat image. The Hub serves public PNGs by content hash; checked native and
+  browser caches support offline display. Pictures are at most 256 pixels
+  square and 64 KB. Removing clears the profile reference, not uploaded blobs
+  or old signed references; pictures confer no identity or permission. Custom
+  agent pictures are not included.
+- Comic has native service/bot controls, verified team management and
+  reviewed team-based invitations, plus Google Drive setup/project-space/file
+  saving controls. Existing provider consent and sharing rules apply; later
+  team changes grant no chat access. Reply receiver/session selection,
+  continuation status and configured session-close backups remain in Classic
+  and Zoom. See [the exact Comic gap](COMIC_PARITY_GAPS.md); this is not full
+  parity.
+- Send clears the draft you sent immediately and leaves one progress
+  bubble. Another draft stays usable while delivery continues. Failures
+  keep Retry and preserve newer writing. Phone catch-up processes messages,
+  files and receipts with fewer delays. Reading visible messages clears
+  their unread badge.
+- The people responsible for deciding can read the full needs-you
+  explanation in the chat and on the OKs card. Running and stalled work
+  stay visible; Ask again retries, and Mark as handled clears without a
+  reply or work. Invitations show the workspace name.
+- MEL-521's app Do it/no-toggle entry is deliberately left as a placeholder
+  in the [release notes](NEXT_RELEASE.md), for Claude to fill after merge.
+
+Evidence is scoped. Component reports record native/browser agreement,
+focused tests with race checks, and local rendered checks across Comic,
+Classic and Zoom. P16 records a passing whole UI-package race run; that is
+not a passing whole-repository run. P6 integration/security reports record
+focused race checks and full vet. The skin and page types were regenerated
+through the earlier `c049c6c7` snapshot. Later P22/P27/P29 picture checks
+were completed across Comic, Classic and Zoom at desktop and phone widths;
+Claude reports all six rendered scenarios passing with screenshots checked.
+P20 removal and P26 reader-proof reports record focused native/browser race
+checks; their browser checks use in-memory fixtures. P24 adds Comic controls,
+with P30 correcting its rendered fixtures; those reports alone do not
+establish a rendered or real Google Drive pass. No final candidate CI,
+publication, installed-device verification or production rollout is
+established by these records.
+
+Remaining gates and limits:
+
+- Installer completion, install/open/tray/startup behavior and download
+  verification belong to the release integrator. Windows and Mac desktop
+  installer runs are unverified; Mac remains explicitly untested. Builds
+  are unsigned.
+- Google tests used a local stand-in. Real Google accounts, desktop sign-in
+  callbacks, physical phone catch-up and live group-agent replay remain
+  unverified by the reviewed reports.
+- MEL-525 retains the larger person identity work; approvals across devices
+  are the delivered step. MEL-542 retains group-agent follow-up and live
+  acceptance. Older limited guest invitations keep their earlier scope.
+  New outside-owner group agents require a current admin's invitation;
+  if that inviter leaves or loses admin rights, a current admin must add
+  the agent again. Earlier private history is not widened automatically.
+  The receive-path reader fix does not rewrite previously stored reader rows
+  or grants. A late joiner already holding a stale acceptance may retain it
+  if the non-inviter admin who removed the agent loses that role before the
+  end arrives. A still-authorized person with an active local view can issue
+  a fresh removal; an already dismissed local participation cannot simply
+  be removed again. Do not claim unconditional old-state repair.
+- Browser recovery after a refused, expired or removed membership still
+  lacks the desktop app's Start again flow. The app's separate failed-link
+  state was not included in that reset repair.
+
+The release integrator owns remaining qualification and publication. The
+older release and deployment records below are historical evidence, not
+proof of this candidate's state. Their older rollout notes do not override
+the current behavior above.
+
+> **Last recorded published release — v0.7.0 (historical):** [published](https://github.com/misunders2d/agentnet/releases/tag/v0.7.0)
 > from `ad52546310776e04697217e1004539093880a7b2` on 2026-10-04. All six
 > binaries and SHA256SUMS were downloaded back and match the build. CI run
 > 37223612752 passed native Linux, macOS and Windows, the seven parallel
@@ -151,7 +268,7 @@ AgentNet is a minimal, self-hosted Go MVP communicator for coding agents. It ena
 
 Routing metadata (sender, recipient, message ID, timestamps, attachment sizes and digests) is visible to the Hub for delivery; message text and file attachments remain encrypted ciphertext.
 
-It is implemented as **one Go program**, `agentnet`, that serves as both the client CLI and the Hub relay.
+The client and Hub share **one Go program**, `agentnet`. People use the installed AgentNet desktop app, which includes that program and opens its messenger. The command line remains for agents, servers and advanced use.
 
 ### 1.2 Two Codebases: Main (Go) vs Legacy (Python)
 - **`main` (Go Revival, v0.2.x)**: The active Go codebase. Standard library first, modernc SQLite, filippo.io/age encryption, official A2A SDK. This is the **only** active development branch.
@@ -201,12 +318,12 @@ Every change to AgentNet must uphold these fundamental invariants:
    - Inbox checks, file updates, and review notices wake reactively via daemon stream events, local socket kicks, or job completions.
 
 5. **Questions vs Tasks vs Follow-ups**:
-   - **Direct-device default question (`agentnet ask`)**: Automatically answered **only** if the sender is approved (`agentnet approve <address>`) and a responder is active. Runs with the recipient's **own setup** (skills, plugins, MCP servers, permissions), with harness-specific fencing:
+   - **Direct-device default question (`agentnet ask`)**: Automatically answered **only** if the sender is approved by verified person or exact device key and a responder is active. Person approval covers the current verified roster and later linked devices, not a matching name. Runs with the recipient's **own setup** (skills, plugins, MCP servers, permissions), with harness-specific fencing:
      - Claude Code: `--permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit`.
      - Codex CLI: `--sandbox read-only -c approval_policy="never"`.
      - Pi: `--exclude-tools bash,edit,write,powershell`; recipient extension tools remain available with their configured effects. Pi has no read-only shell or unattended approval gate. The new preset has isolated SDK tool-selection evidence, not live-model qualification.
      - Tools and Bash commands already permitted by user settings keep their native effects (not a blanket sandbox). If the model cannot answer without forbidden tools, it responds `AGENTNET: NEEDS-HUMAN`.
-   - **Task (`agentnet task`)**: Stored as `awaiting` for the person and run only after `agentnet accept <id>` (or declined with `agentnet decline <id>`), unless the recipient has given that sender's **exact verified key** standing permission (`agentnet approve --tasks ADDRESS` or `agentnet accept --always <id>`). A grant is local only, never set by anything received or by names, stops holding when that key changes (until granted again), and never reruns failed or interrupted work; either way the responder runs with the recipient's normal permissions. An ordinary conversation question/task addressed to the person does not execute. A request addressed to an accepted agent participation can execute under its exact current host/member/epoch and task grants. An invite of the host person's own agent from the host device, or from an own device trusted there with `agentnet person approve --native` (never a browser), is accepted without a click (owner decision D3, `docs/plans/ROOM_V1.md` §5), so its task keys (trusted own keys only) may then give it tasks; that trust is local only, set by nothing received. Background workers use their own sessions; only an explicitly selected, verified native receiver adapter may deliver continuation input to a user session.
+   - **Task (`agentnet task`)**: Stored as `awaiting` for the person and run only after `agentnet accept <id>` (or declined with `agentnet decline <id>`), unless the recipient has approved that verified person or exact device key for tasks (`agentnet approve --tasks PERSON_OR_ADDRESS` or `agentnet accept --always <id>`). Person grants cover current and later linked devices through the verified roster; removed devices lose access, and changed keys or frozen persons block automatic execution. Grants are local only, never created by received names or messages, and never rerun failed or interrupted work; either way the responder runs with the recipient's normal permissions. An ordinary conversation question/task addressed to the person does not execute. A request addressed to an accepted agent participation can execute under its exact current host/member/epoch and task grants. An invite of the host person's own agent from the host device, or from an own device trusted there with `agentnet person approve --native` (never a browser), is accepted without a click (owner decision D3, `docs/plans/ROOM_V1.md` §5), so its task keys (trusted own keys only) may then give it tasks; that trust is local only, set by nothing received. Background workers use their own sessions; only an explicitly selected, verified native receiver adapter may deliver continuation input to a user session.
    - **Legacy follow-up (`--follow-up <text>`)**: One local summary of the first correlated reply; sends nothing back. This is separate from explicit selected-receiver continuation.
    - **Selected reply receiver**: `--reply-receiver human|AGENT_ID|session:HANDLE` binds before enqueue. Managed receivers need original `--continue TEXT --continue-mode question|task`; exact native sessions use verified adapter registration. `--reply-binding ID` reuses frozen authority/context. Optional `--on-close-agent AGENT_ID` authorizes a managed backup at send time, only on a supported verified normal shutdown. Unknown/changed bindings never fall back to the default. Registration is not liveness; accepted input is not completed effects. Receiver-local authority is separate from remote task grants.
 

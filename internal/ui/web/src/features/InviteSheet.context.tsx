@@ -1,14 +1,23 @@
-// "What can Bohdan see?": the recent messages (a stepper) or exactly the
-// selected ones, and a preview of every line that will be shared. Nothing
-// earlier than what is listed leaves this computer.
+// "What can Bohdan see?": the recent messages (a stepper), exactly the
+// selected ones, or everything since a date (MEL-528), and a preview of
+// every line that will be shared. Nothing earlier than what is listed
+// leaves this computer.
 import { useState, type ReactNode } from "react";
-import { IconCheck, IconLock, IconMinus, IconPlus } from "@tabler/icons-react";
+import { IconCalendarTime, IconCheck, IconLock, IconMinus, IconPlus } from "@tabler/icons-react";
 import type { T } from "../api";
 import { timeOf, sameDay, when } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { lineOf, plural, span, speaker } from "./RoomPanel.model";
 
-export type Mode = "recent" | "selected";
+export type Mode = "recent" | "selected" | "since";
+
+/** sinceShared: the messages at or after since, and the newest cap of them when
+ *  there are more than one invitation carries (over says so). */
+export function sinceShared<M extends { at: string }>(list: M[], since: string, cap: number): { shared: M[]; total: number; over: boolean } {
+  const from = Date.parse(since);
+  const all = Number.isNaN(from) ? [] : list.filter((m) => Date.parse(m.at) >= from);
+  return { shared: all.slice(Math.max(0, all.length - cap)), total: all.length, over: all.length > cap };
+}
 
 const LADDER = [0, 1, 2, 3, 5, 10, 15, 20, 30, 50, 75, 100, 150, 200];
 
@@ -19,8 +28,9 @@ export function step(n: number, max: number, dir: 1 | -1): number {
   return [...rungs].reverse().find((x) => x < n) ?? 0;
 }
 
-export function ContextChoice({ mode, onMode, recent, max, onRecent, picked, label, available }: {
+export function ContextChoice({ mode, onMode, recent, max, onRecent, picked, label, available, since, onSince, sinceCount, cap }: {
   mode: Mode; onMode: (m: Mode) => void; recent: number; max: number; onRecent: (n: number) => void; picked: number; label: string; available: number;
+  since: string; onSince: (v: string) => void; sinceCount: number; cap: number;
 }) {
   return (
     <fieldset className="grid grid-cols-2 gap-2.5">
@@ -36,16 +46,32 @@ export function ContextChoice({ mode, onMode, recent, max, onRecent, picked, lab
       <Option on={mode === "selected"} onSelect={() => onMode("selected")} label="Selected messages">
         <span className="mt-1.5 block text-[13px] font-semibold leading-snug text-text-2">{picked ? (label ? label + " · " + plural(picked, "message") : plural(picked, "message") + " picked") : "Pick exactly which"}</span>
       </Option>
+      <Option on={mode === "since"} onSelect={() => onMode("since")} label="Since a date" wide>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <label className="flex min-w-0 items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            <IconCalendarTime size={18} aria-hidden="true" className="shrink-0" />
+            <span className="sr-only">Share messages since</span>
+            <input type="datetime-local" value={since} max={localNow()} onChange={(e) => { onSince(e.target.value); onMode("since"); }} onFocus={() => onMode("since")}
+              className="min-h-11 min-w-0 rounded-xl stroke bg-surface px-2.5 text-[16px] text-ink outline-none focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]" />
+          </label>
+          <span className="text-[13px] font-semibold text-text-2 tnum">
+            {sinceCount === 0 ? "Nothing since then" : sinceCount > cap ? "The newest " + cap + " of " + sinceCount : plural(sinceCount, "message")}
+          </span>
+        </div>
+      </Option>
     </fieldset>
   );
 }
 
-function Option({ on, onSelect, label, children }: { on: boolean; onSelect: () => void; label: string; children: ReactNode }) {
+/** localNow: now as a datetime-local value (a date to share from is never in the future). */
+const localNow = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16); };
+
+function Option({ on, onSelect, label, children, wide }: { on: boolean; onSelect: () => void; label: string; children: ReactNode; wide?: boolean }) {
   return (
     // The whole card selects its mode; the radio inside keeps keyboard and screen reader semantics.
     <div onClick={onSelect}
       className={"relative min-w-0 cursor-pointer rounded-2xl stroke px-3 py-2.5 transition-[background-color,box-shadow,transform] duration-200 ease-out-soft has-[:focus-visible]:outline-3 has-[:focus-visible]:outline-agent-ink "
-        + (on ? "bg-act text-act-ink shadow-pop" : "bg-surface hover:bg-sunken")}>
+        + (wide ? "col-span-2 " : "") + (on ? "bg-act text-act-ink shadow-pop" : "bg-surface hover:bg-sunken")}>
       <label className="flex cursor-pointer items-center gap-1.5 text-[14px] font-extrabold leading-tight">
         <input type="radio" name="invite-context" checked={on} onChange={onSelect} className="sr-only" />
         {label}
@@ -105,8 +131,8 @@ export function Checklist({ list, t, o, names, selected, onToggle, onClear }: {
 }
 
 /** Preview lists exactly what will be shared, author and first line, newest last. */
-export function Preview({ who, shared, after, t, o, names, gapless }: {
-  who: string; shared: T.DMMessage[]; after: string; t: T.DMThread; o: T.Overview | null; names: Record<string, string>; gapless: boolean;
+export function Preview({ who, shared, after, t, o, names, gapless, limit }: {
+  who: string; shared: T.DMMessage[]; after: string; t: T.DMThread; o: T.Overview | null; names: Record<string, string>; gapless: boolean; limit?: string;
 }) {
   const [all, setAll] = useState(false);
   const rows = all || shared.length <= 4 ? shared : shared.slice(-4);
@@ -118,6 +144,7 @@ export function Preview({ who, shared, after, t, o, names, gapless }: {
         <h4 className="truncate text-[13px] font-extrabold uppercase tracking-wide text-text-2">{who} will see</h4>
         {range && <span className="shrink-0 text-[12px] font-bold text-muted tnum">{range}</span>}
       </div>
+      {limit && <p className="mb-1.5 text-[13px] font-semibold text-approval-ink">{limit}</p>}
       {shared.length > rows.length && (
         <button type="button" onClick={() => setAll(true)} className="-ml-1.5 flex min-h-11 items-center px-1.5 text-[13px] font-bold text-text-2 hover:text-ink">
           <span className="rounded-full border-[1.5px] border-hairline bg-surface px-2.5 py-0.5">+{shared.length - rows.length} more</span>

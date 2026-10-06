@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
@@ -37,6 +38,9 @@ const (
 	reasonInvalid    = "invalid"
 )
 
+// ErrDaemonRunning means another process holds this home's daemon lock.
+var ErrDaemonRunning = errors.New("another agentnet daemon is already running")
+
 // Run holds the push stream open until ctx ends, reconnecting with jittered
 // exponential backoff. It never polls: the Hub pushes messages and sparse
 // pings. A message that cannot be processed yet ends the connection; the Hub
@@ -47,7 +51,7 @@ const (
 func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 	release, err := lockfile.Acquire(filepath.Join(a.home, "daemon.lock"))
 	if errors.Is(err, lockfile.ErrLocked) {
-		return fmt.Errorf("another agentnet daemon is already running for %s", a.home)
+		return fmt.Errorf("%w for %s", ErrDaemonRunning, a.home)
 	}
 	if err != nil {
 		return err
@@ -68,7 +72,7 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		return a.startFailed(err)
 	}
 	defer stopWorker()
-	a.openConv = opts.OpenConv
+	a.openConv, a.openPage = opts.OpenConv, opts.OpenPage
 	alertCtx, stopAlerts := context.WithCancel(ctx)
 	alertsDone := make(chan struct{})
 	go func() { defer close(alertsDone); a.alertLoop(alertCtx, a.alertWake) }()
@@ -135,8 +139,8 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 		if ctx.Err() != nil {
 			return stopped()
 		}
-		if errors.Is(err, ErrRevoked) {
-			return err
+		if errors.Is(err, ErrRevoked) || errors.Is(err, ErrLinkRefused) || errors.Is(err, ErrLinkExpired) {
+			return err // the Hub ended this agent: reconnecting cannot help
 		}
 		if healthy {
 			reconnect.Reset()
@@ -156,7 +160,12 @@ func (a *Agent) Run(ctx context.Context, opts RunOptions) error {
 func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	req, err := a.hub.request(ctx, "GET", "/v1/stream"+a.adQuery, nil)
+	cursor, _ := a.store.config("receipt_cursor")
+	seq, _ := strconv.ParseInt(cursor, 10, 64)
+	if seq < 0 {
+		seq = 0
+	}
+	req, err := a.hub.request(ctx, "GET", "/v1/stream"+a.adQuery+"&receipts="+strconv.FormatInt(seq, 10), nil)
 	if err != nil {
 		return false, err
 	}
@@ -297,6 +306,15 @@ func (a *Agent) sync(ctx context.Context) {
 
 func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 	switch event {
+	case "device_admin":
+		return a.onDeviceAdminNotice([]byte(data))
+	case "receipt":
+		var receipt protocol.ReceiptEvent
+		if err := decodeStrict([]byte(data), &receipt); err != nil || !protocol.ValidID(receipt.ID) || receipt.Seq <= 0 || (receipt.State != protocol.StateDelivered && receipt.State != protocol.StateQuarantined && receipt.State != protocol.StateExpired) {
+			a.Logf("invalid receipt event ignored")
+			return nil
+		}
+		return a.store.applyReceipt(receipt)
 	case "message":
 		var env envelope.Envelope
 		if err := json.Unmarshal([]byte(data), &env); err != nil {
@@ -434,6 +452,23 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 				return a.hold(env, reasonInvalid)
 			}
 		}
+		// A person grant needs verified membership before initialState, including
+		// a newly linked device. A current grant refreshes its signed chain at
+		// this request boundary; a Hub outage retries custody, never lends stale
+		// membership authority. This is not periodic polling.
+		if in.Kind == envelope.KindQuestion || in.Kind == envelope.KindTask {
+			if p, e := a.personOfKey(ctx, in.From, sender); e == nil {
+				var grants int
+				if e = a.store.db.QueryRow(`SELECT count(*) FROM person_grants WHERE person=?`, p.info.Person).Scan(&grants); e != nil {
+					return e
+				}
+				if grants > 0 {
+					if _, e = a.refreshPerson(ctx, p.info.Person, false); e != nil {
+						return e
+					}
+				}
+			}
+		}
 		// The key that verified it is the evidence, not whatever is pinned
 		// by the time it is stored.
 		if err := a.store.addInbox(in, sender.Fingerprint()); err != nil {
@@ -492,6 +527,7 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.Logf("run folders left by an earlier run: %v", err)
 	}
 	a.notifyTried, a.reviewTried, a.reviewGen, a.releaseTried = nil, nil, "", "" // a new run tries failed notices once more
+	a.reviewAgain.reset()
 	wake := make(chan struct{}, 1)
 	a.wakeWorker = func() {
 		select {
@@ -512,6 +548,10 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.wakeStatus() // a status another process noted (noteStatus)
 		a.changes.bump()
 		a.convWork.due(convHistory | convServe | convFetch | convRetry | convRelease) // convRetry: a local participation record shares its public scope with guests now
+		// A responder or named agent was set or removed: say so.
+		if a.agentHintStale() {
+			a.convWork.due(convPublish)
+		}
 		a.kickNow()
 	})
 	if err != nil {
@@ -519,11 +559,25 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		a.Logf("local wake-up socket unavailable (%v); accept/cancel apply at the next Hub ping", err)
 		stopKicks = func() {}
 	}
+	// A command waiting for an answer here is woken by each local change
+	// (answerwait.go): it never polls.
+	stopChanges, err := listenChanges(a.home, a.Changed)
+	if err != nil {
+		a.Logf("local change socket unavailable (%v); a command waiting for an answer returns at once", err)
+		stopChanges = func() {}
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { defer close(done); a.worker(ctx, wake) }()
 	a.wakeWorker()
-	return func() { cancel(); <-done; stopKicks(); a.wakeWorker = func() {}; notify.Close() }, nil
+	return func() {
+		cancel()
+		<-done
+		stopKicks()
+		stopChanges()
+		a.wakeWorker = func() {}
+		notify.Close()
+	}, nil
 }
 
 // stopSurvivors stops the harnesses an earlier daemon left running (it

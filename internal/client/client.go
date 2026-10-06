@@ -45,6 +45,11 @@ type Agent struct {
 	Address string
 	Logf    func(format string, args ...any)
 
+	deliveryLocks  sync.Map // envelope id -> cancellation-aware lock, shared by immediate sends and retry passes
+	flushOnce      sync.Once
+	flushLock      chan struct{} // one ordered outbox pass at a time
+	routeHints     sync.Map      // optional verified first-attempt direct route; never queue storage
+	posting        backgroundPosts
 	humanMu        sync.RWMutex  // local human end commits serialize with ordinary copy/file delivery
 	statusLocks    sync.Map      // request id → *sync.Mutex: one status of a request at a time (headless.go)
 	statusWake     chan struct{} // wakes this process's status sender (statusLoop)
@@ -67,14 +72,19 @@ type Agent struct {
 	members        memberState                // the Hub's member list from the push stream (members.go)
 	session        string                     // this run's session id (Run); "" outside Run
 	convWork       convWork                   // conversation upkeep due on the next sync (conv.go)
+	capsPub        capsPublisher              // this run's capability records (conv.go)
 	agentSweep     agentSweep                 // the worker's look at requests to its agent (agentjob.go)
 	alertWake      chan struct{}              // wakes the desktop alert loop (alerts.go)
 	openConv       func(conv string) []string // RunOptions.OpenConv
+
+	openPage func(fragment string) []string // RunOptions.OpenPage (the AgentNet app's window)
 
 	notify       func(title, body string, argv []string, onClick func()) error // desktop notification; argv and onClick may be nil
 	notifyTried  map[string]bool                                               // review items a notification was attempted for, this run
 	reviewTried  map[string]bool                                               // review items a review notice was attempted for, this run
 	reviewGen    string                                                        // review_to_gen those attempts were made under
+	reviewMu     sync.Mutex                                                    // one review notice pass at a time (the worker's, or one during a run)
+	reviewAgain  reviewAgain                                                   // operator devices skipped as not reading reports yet, looked at again after a member list event (reviewnotice.go)
 	releaseTried string                                                        // release a notification was attempted for, this run
 
 	exe       string                       // the daemon's program file as started (RunOptions.Executable)
@@ -221,6 +231,14 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, err
 	}
+	if err := st.settleLeftoverNotices(); err != nil { // once: one review card per host (reviewsupersede.go)
+		st.db.Close()
+		return nil, err
+	}
+	if err := st.clearOldDefaultLimit(); err != nil { // once: no platform time limit on agent work (responder.go)
+		st.db.Close()
+		return nil, err
+	}
 	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify,
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bump
@@ -244,6 +262,7 @@ func Open(home string) (*Agent, error) {
 
 // Close releases local storage and the agent's unused Hub connections.
 func (a *Agent) Close() error {
+	a.stopBackgroundPosts()
 	a.typingDisconnected()
 	a.hub.release()
 	return a.store.db.Close()
@@ -313,13 +332,15 @@ type SendResult struct {
 
 // Outgoing is a message to send.
 type Outgoing struct {
-	To       string // person/agent, or person/agent#session for one running daemon
-	Body     string
-	ReplyTo  string
-	Files    []string
-	Named    []OutgoingFile // more files, each with the name it is shown under (a page's staged uploads)
-	Fallback bool           // if the addressed session has ended, deliver to the agent's inbox
-	Kind     string         // envelope.KindMessage (default), KindQuestion or KindTask
+	To        string // person/agent, or person/agent#session for one running daemon
+	Body      string
+	ReplyTo   string
+	Quote     string
+	TopicDone bool
+	Files     []string
+	Named     []OutgoingFile // more files, each with the name it is shown under (a page's staged uploads)
+	Fallback  bool           // if the addressed session has ended, deliver to the agent's inbox
+	Kind      string         // envelope.KindMessage (default), KindQuestion or KindTask
 	// Wait, if positive, waits up to this long for the recipient's receipt
 	// after the Hub takes custody (one request, woken by the receipt).
 	Wait    time.Duration
@@ -363,6 +384,10 @@ func (a *Agent) Send(ctx context.Context, to, body, replyTo string, files ...str
 // are encrypted into a private spool first; if the Hub is unreachable the
 // message stays queued and the daemon resumes it.
 func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error) {
+	id, err := sendID(ctx)
+	if err != nil {
+		return SendResult{}, err
+	}
 	binding, err := a.prepareReplyReceiver(m.ReplyReceiver)
 	if err != nil {
 		return SendResult{}, err
@@ -393,6 +418,13 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	if err != nil {
 		return SendResult{}, err
 	}
+	if m.Quote != "" {
+		var peer string
+		err := a.store.db.QueryRow(`SELECT sender FROM inbox WHERE id=? AND conv IS NULL UNION ALL SELECT recipient FROM outbox WHERE id=? AND conv IS NULL`, m.Quote, m.Quote).Scan(&peer)
+		if err != nil || peer != to {
+			return SendResult{}, errors.New("quote stays within its device conversation")
+		}
+	}
 	peer, err := a.sendKey(ctx, to)
 	if err != nil {
 		return SendResult{}, err
@@ -412,8 +444,8 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		m.Kind = envelope.KindMessage
 	}
 	in := envelope.Inner{
-		ID: protocol.NewID(), From: a.Address, To: to, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Session: session, Fallback: m.Fallback, Status: m.Status,
+		ID: id, From: a.Address, To: to, TS: time.Now().Unix(),
+		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, TopicDone: m.TopicDone, Session: session, Fallback: m.Fallback, Status: m.Status,
 		Target: m.Target, AgentID: m.AgentID,
 	}
 	if namedAgentFields(in) {
@@ -518,10 +550,19 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		return SendResult{}, err
 	}
 	receiverStored = true
-	defer notifyDaemon(a.home) // a messenger page open in the daemon shows the message and its state
 	if m.releaseSpoolLock != nil {
 		m.releaseSpoolLock()
 	}
+	if queuedSend(ctx) {
+		if route != nil {
+			a.routeHints.Store(env.ID, route)
+		}
+		a.NoteChange()
+		a.postOutboxBackground()
+		state, _, _, _ := a.store.outboxState(env.ID)
+		return SendResult{ID: env.ID, State: state}, nil
+	}
+	defer notifyDaemon(a.home)
 	if binding != nil && binding.remote != nil && binding.remote.Role == "origin" {
 		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {
 			return SendResult{ID: env.ID, State: stateReceiverWaiting, Detail: err.Error()}, err
@@ -557,10 +598,17 @@ func blobsOf(atts []envelope.Attachment) []envelope.Blob {
 // deliver tries the direct route (if any) and then the Hub. The spool is
 // released only once one of them has confirmed custody of the message.
 func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *protocol.SessionAd) (SendResult, error) {
-	if state, _, found, e := a.store.outboxState(env.ID); e != nil {
+	lock, _ := a.deliveryLocks.LoadOrStore(env.ID, make(chan struct{}, 1))
+	select {
+	case lock.(chan struct{}) <- struct{}{}:
+	case <-ctx.Done():
+		return SendResult{}, ctx.Err()
+	}
+	defer func() { <-lock.(chan struct{}) }()
+	if state, path, found, e := a.store.outboxState(env.ID); e != nil {
 		return SendResult{}, e
-	} else if found && state == stateReceiverWaiting {
-		return SendResult{ID: env.ID, State: state}, nil
+	} else if found && (state == stateReceiverWaiting || state == protocol.StateCustody || state == protocol.StateDelivered || state == protocol.StateQuarantined || state == protocol.StateExpired) {
+		return SendResult{ID: env.ID, State: state, Path: path}, nil
 	}
 	if ok, err := a.receiverOriginalMayDeliver(env); err != nil || !ok {
 		state, _, _, _ := a.store.outboxState(env.ID)
@@ -668,7 +716,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
 			if (conv != "" || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
-				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, err.Error(), "")
+				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {
 				return SendResult{ID: env.ID, State: stateQueued, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateQueued, err.Error(), "")
@@ -737,6 +785,13 @@ func (a *Agent) handedOver(env envelope.Envelope, state, path string) (SendResul
 
 // FlushOutbox retries every queued message once.
 func (a *Agent) FlushOutbox(ctx context.Context) error {
+	a.flushOnce.Do(func() { a.flushLock = make(chan struct{}, 1) })
+	select {
+	case a.flushLock <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-a.flushLock }()
 	if _, err := a.holdEndedOutputs(""); err != nil {
 		return err
 	}
@@ -744,9 +799,47 @@ func (a *Agent) FlushOutbox(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	blocked := map[string]bool{}
+	// Readable turns share a FIFO. Controls, history, context carriers and
+	// private receiver operations pass their existing gates independently.
+	const turn = `ref_id IS NULL AND coalesce(sub,'') NOT IN ('history','file','drive-space','group-proof','group-context','group-invite','group-consent','group-withdrawal')
+		AND NOT (conv IS NULL AND reply_receiver IS NULL AND (coalesce(required_cap,'')='rcv1' OR coalesce(required_cap,'')='hpm1' AND human IS NULL))`
 	for _, env := range envs {
-		if _, err := a.deliver(ctx, env, nil); err != nil && !retryable(err) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		var conv string
+		var ordered bool
+		if err := a.store.db.QueryRow(`SELECT coalesce(conv, ''), `+turn+` FROM outbox WHERE id=?`, env.ID).Scan(&conv, &ordered); err != nil {
+			return err
+		}
+		key := conv + "\x00" + env.To
+		if ordered {
+			// An older waiting turn stays a barrier until its normal
+			// capability/receiver release makes it sendable.
+			var older int
+			if err := a.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE `+turn+` AND recipient=? AND coalesce(conv,'')=? AND rowid<(SELECT rowid FROM outbox WHERE id=?) AND state IN (?,?,?)`, env.To, conv, env.ID, stateQueued, stateConvWaiting, stateReceiverWaiting).Scan(&older); err != nil {
+				return err
+			}
+			if older > 0 {
+				blocked[key] = true
+			}
+		} else {
+			key = "aux\x00" + env.ID
+		}
+		if blocked[key] {
+			continue
+		}
+		var route *protocol.SessionAd
+		if hint, ok := a.routeHints.LoadAndDelete(env.ID); ok {
+			route = hint.(*protocol.SessionAd)
+		}
+		res, err := a.deliver(ctx, env, route)
+		if err != nil && !retryable(err) {
 			a.Logf("message %s to %s rejected: %v", env.ID, env.To, err)
+		}
+		if res.State == stateQueued || retryable(err) {
+			blocked[key] = true
 		}
 	}
 	return nil
@@ -987,26 +1080,6 @@ func inviteTTL(ttl time.Duration) error {
 		return fmt.Errorf("invite lifetime %s is out of range: choose more than 0 and at most %gh (30 days); nothing was created", ttl, protocol.MaxInviteTTL.Hours())
 	}
 	return nil
-}
-
-// BrowserInvite creates an invite for a browser invitation link (admin
-// only). The Hub refuses before creating anything unless its advertised
-// endpoint serves the browser messenger over platform TLS. The admin may
-// still connect through an older pinned endpoint after that migration;
-// its connection's pin says nothing about the endpoint in the new invite.
-func (a *Agent) BrowserInvite(ctx context.Context, label string, ttl time.Duration, admin bool) (string, error) {
-	if err := inviteTTL(ttl); err != nil {
-		return "", err
-	}
-	var out struct{ Code string }
-	if err := a.hub.do(ctx, "POST", "/v1/admin/invites", protocol.InviteRequest{Label: label, TTL: ttl, Admin: admin, Browser: true}, &out); err != nil {
-		var he *HubError
-		if errors.As(err, &he) && he.Status == 400 { // an older Hub refuses the unknown field
-			return "", fmt.Errorf("%w (a Hub that cannot create browser invitations needs an update)", err)
-		}
-		return "", err
-	}
-	return out.Code, nil
 }
 
 // Revoke revokes address on the Hub (admin only).

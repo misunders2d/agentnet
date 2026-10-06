@@ -128,6 +128,41 @@ type Inner struct {
 	// ReceiverRoute commits a selected own-device return route, never execution authority.
 	ReceiverRoute *ReceiverRoute `json:"receiver_route,omitempty"`
 	Human         *HumanTurn     `json:"human,omitempty"`
+	Quote         string         `json:"quote,omitempty"`
+	TopicDone     bool           `json:"topic_done,omitempty"`
+	Topic         string         `json:"topic,omitempty"`
+	TopicEvent    *TopicEvent    `json:"topic_event,omitempty"`
+}
+
+// TopicEvent is a shared human action. Seen names exact logical turns covered
+// by done/open; a later or previously unseen turn always ends the mark.
+type TopicEvent struct {
+	Action string   `json:"action"`
+	Seen   []string `json:"seen,omitempty"`
+}
+
+// CheckTopic is shared by live envelopes and retained history.
+func CheckTopic(in Inner) error {
+	if in.Topic != "" && (in.V != Version2 || !validID(in.Topic) || in.Sub != "") {
+		return errors.New("topic belongs only on a conversation turn")
+	}
+	if e := in.TopicEvent; e != nil {
+		if in.Topic == "" || in.Kind != KindMessage || in.Target != nil || AgentOrigin(in.Origin) || in.Status != "" || len(in.Attachments) != 0 {
+			return errors.New("topic event belongs only on a human conversation message")
+		}
+		if e.Action != "create" && e.Action != "done" && e.Action != "open" {
+			return errors.New("invalid topic action")
+		}
+		for _, id := range e.Seen {
+			if !validID(id) {
+				return errors.New("invalid topic seen message")
+			}
+		}
+	}
+	if in.TopicDone && (in.V != Version && in.V != Version2 || in.Status != StatusDone || in.Kind != KindAnswer && in.Kind != KindResult || in.V == Version2 && (in.Topic == "" || in.PID == "" || !AgentOrigin(in.Origin))) {
+		return errors.New("topic_done belongs only on a completed agent answer or result")
+	}
+	return nil
 }
 
 // Ref names one earlier message exactly: its id (a device message's
@@ -179,6 +214,15 @@ const (
 	// exact request as a nonterminal update. It never settles that request,
 	// feeds a selected receiver or counts as an answer.
 	StatusProgress = "progress"
+
+	// StatusProposal marks an answer whose whole body is the exact,
+	// self-contained task its agent proposes instead of an action its
+	// question run may not take (MEL-521). It is an offer: the asker may
+	// confirm it as a task, which then meets the recipient's normal task
+	// approval. It runs nothing and grants nothing. Only on an answer
+	// replying to one request (version 1, or a participation's output),
+	// with a non-blank plain body: no files, target, route or sub.
+	StatusProposal = "proposal"
 
 	// StatusReviewNotice on a plain message with no reply_to and no files
 	// says only that items wait for a person on the sender's machine. It is
@@ -580,15 +624,34 @@ type Target struct {
 // AgentOrigin reports whether origin says an agent wrote the turn.
 func AgentOrigin(origin string) bool { return strings.HasPrefix(origin, OriginAgentPrefix) }
 
+// CheckQuote validates the quote rule shared by envelopes and retained history.
+func CheckQuote(in Inner) error {
+	if in.Quote != "" && (!validID(in.Quote) || in.Quote == in.ID || in.V == Version3 || in.Sub != "" || in.Status != "" || AgentOrigin(in.Origin) || (in.Kind != KindMessage && in.Kind != KindQuestion && in.Kind != KindTask)) {
+		return errors.New("quote belongs only on a person's turn and must name another message")
+	}
+	return nil
+}
+
 // checkVersion2 validates the version 2 fields of in (or their absence in
 // version 1).
 func checkVersion2(in Inner) error {
+	if err := CheckQuote(in); err != nil {
+		return err
+	}
+	if err := CheckTopic(in); err != nil {
+		return err
+	}
 	// Progress replies to one request in plain text: in version 1 (a named
 	// executor's progress names it), or as a conversation participation's
 	// nonterminal output with its PID (and its agent, when named).
 	if in.Status == StatusProgress && (in.V != Version && (in.V != Version2 || in.PID == "") || in.Kind != KindMessage || in.ReplyTo == "" || strings.TrimSpace(in.Body) == "" ||
 		len(in.Attachments) != 0 || in.Target != nil || in.ReceiverRoute != nil || in.Human != nil && in.V != Version2 || in.Sub != "") { // a participation's progress may carry its captured human audience (human.go)
 		return errors.New("progress is a plain-text update replying to one request, in version 1 or as a participation's output")
+	}
+	// A proposal carries neither a display quote nor a topic completion hint.
+	if in.Status == StatusProposal && (in.Kind != KindAnswer || in.ReplyTo == "" || strings.TrimSpace(in.Body) == "" || len(in.Attachments) != 0 ||
+		in.Quote != "" || in.TopicDone || in.Target != nil || in.ReceiverRoute != nil || in.Sub != "" || in.V == Version3 || in.V == Version2 && in.PID == "") {
+		return errors.New("a proposal is an answer carrying one plain-text task, replying to one request, in version 1 or as a participation's output")
 	}
 	if err := validateHumanInner(in); err != nil {
 		return err

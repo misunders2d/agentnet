@@ -35,15 +35,21 @@ program, `agentnet`, that is both the laptop client and the Hub.
   If an answer needs an action the harness may not take, the result is
   needs-human, not an invented answer. **Tasks** run only after the
   recipient accepts them (`accept ID`), or when the recipient has granted
-  that sender's exact verified key standing permission (`approve --tasks`,
-  `accept --always`); a grant is local only, never set by anything received
-  or by names, stops holding when that key changes (until granted again) and
-  never reruns failed or interrupted work. Self-invite consent (owner
+  that sender's verified person or exact device key standing permission
+  (`approve --tasks`, `accept --always`). Person grants cover current and
+  future devices of the current verified roster; removed devices lose that
+  access, pending key changes and frozen persons fail closed. Only own human
+  keys may enroll roster devices, never agent hosts. Grants are local only,
+  never set by received names or messages. Exact device grants need renewal
+  after a changed key is trusted. Neither kind of grant
+  reruns failed or interrupted work. Self-invite consent (owner
   decision D3, docs/plans/ROOM_V1.md §5) is the one invite accepted without
   a click: the host person's own agent, invited from the host device or an
-  own device the person trusted there with `person approve --native` (never
-  a browser), with task keys only of trusted own devices, which may then
-  give it tasks; that trust too is local only. Either way the harness's normal
+  own device trusted there with `person approve --native`, with task keys
+  only of trusted own devices. Separately, the person's own approved human
+  devices, phones included (risk recorded on MEL-525), may confirm their
+  own agent's exact bound proposal without a second approval. Agent-host
+  keys have no such right; that trust too is local only. Either way the harness's normal
   permissions apply — nothing is bypassed. Workers never touch the user's
   open sessions.
 - **Fail closed:** TLS is never skipped (pinned certificate or system CAs),
@@ -72,7 +78,10 @@ program, `agentnet`, that is both the laptop client and the Hub.
   `Co-authored-by: Codex <noreply@openai.com>` and Claude uses
   `Co-authored-by: Claude <noreply@anthropic.com>`. Credit actual contributors;
   do not invent account emails for other assistants.
-- Tests: `go vet ./...` and `go test -race -count=1 -timeout 600s ./...`.
+- Tests: `go vet ./...` and `go test -race -count=1 -timeout 600s $(go list ./... | grep -v /internal/client$)`,
+  plus `./internal/client` in four runs of the same command with `-run '^Test[A-F]'`, `-run '^TestG'`,
+  `-run '^Test[H-P]'` and `-run '^Test[Q-Z]'` (781 tests; under race the package needs ~1500 s, each part
+  ~350-440 s on a quiet machine). Never raise the timeout to make a run fit.
   Add a focused regression for every bug. Tests that need a real model or
   infrastructure are opt-in (`AGENTNET_LIVE=claude`, `scripts/hub-container-test.sh`).
 - Claims must match evidence: cross-compiling is not running on that OS;

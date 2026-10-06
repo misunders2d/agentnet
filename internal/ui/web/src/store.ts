@@ -5,6 +5,7 @@
 // One store serves one membership's host: the UI host mounts the interface
 // again with a new host when the person switches workspace, so nothing here
 // can act on another workspace by accident.
+import { pendingSends } from "./optimistic.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
@@ -19,7 +20,7 @@ export interface Draft {
   text: string;
   replyTo?: string;          // a message id in the open conversation
   agent?: string;            // the addressed assistant's participation id
-  doIt?: boolean;            // a task (Do it) rather than a question (Answer)
+  topic?: string;
   newTopic?: boolean;        // in an agent's conversation: start a separate one with the next send
   files?: StagedFile[];
 }
@@ -71,6 +72,7 @@ const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export class Store {
   readonly api: Api;
+  readonly sends: ReturnType<typeof pendingSends>;
   private state: State;
   private subs = new Set<() => void>();
   private stopListen: (() => void) | null = null;
@@ -83,6 +85,10 @@ export class Store {
 
   constructor(readonly host: Host) {
     this.api = api(host);
+    this.sends = pendingSends(host, () => {
+      const o = this.state?.open;
+      if (o) this.set(this.viewPatch(o, this.state.views[o.id] ?? null, true));
+    });
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [],
       conn: "loading", version: "", newVersion: "", drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, panel: false, section: "", agentNames: {},
@@ -106,9 +112,12 @@ export class Store {
 
   stop() {
     this.alive = false;
+    this.sends.dispose();
     this.stopListen?.();
     this.stopListen = null;
   }
+
+  isActive() { return this.alive; }
 
   private listen() {
     this.stopListen?.();
@@ -208,8 +217,10 @@ export class Store {
   // viewPatch: the state that shows o with view v (null: not loaded yet).
   private viewPatch(o: NonNullable<Open>, v: View | null, same: boolean): Partial<State> {
     if (same && !v) return {};
+    if (v) v = { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(o.id, v.messages || []) } as View;
     const typing = same ? {} : { typing: null };
-    return o.kind === "dm" ? { dm: (v as T.DMThread | null), thread: null, ...typing } : { thread: (v as T.Thread | null), dm: null, ...typing };
+    const views = v ? { views: { ...this.state.views, [o.id]: v } } : {};
+    return o.kind === "dm" ? { dm: (v as T.DMThread | null), thread: null, ...views, ...typing } : { thread: (v as T.Thread | null), dm: null, ...views, ...typing };
   }
 
   // prefetch loads a conversation the person is about to open (a press or a
@@ -232,6 +243,7 @@ export class Store {
 
   // keep remembers a loaded view (the most recent VIEWS_KEPT, and the open one).
   private keep(id: string, v: View) {
+    v = { ...v, messages: this.sends.merge<T.DMMessage | T.Message>(id, v.messages || []) } as View;
     const views: Record<string, View> = { ...this.state.views };
     delete views[id];
     views[id] = v;
@@ -342,7 +354,7 @@ export class Store {
     try {
       const raw = JSON.parse(localStorage.getItem(draftsKey(this.host.workspace.id)) || "{}");
       const out: Record<string, Draft> = {};
-      for (const [k, v] of Object.entries(raw as Record<string, Draft>)) if (v && typeof v.text === "string") out[k] = { text: v.text, replyTo: v.replyTo, agent: v.agent, doIt: v.doIt };
+      for (const [k, v] of Object.entries(raw as Record<string, Draft>)) if (v && typeof v.text === "string") out[k] = { text: v.text, replyTo: v.replyTo, agent: v.agent };
       return out;
     } catch { return {}; }
   }
@@ -350,7 +362,7 @@ export class Store {
   private saveDrafts(drafts: Record<string, Draft>) {
     try {
       const keep: Record<string, Draft> = {};
-      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent, doIt: d.doIt };
+      for (const [k, d] of Object.entries(drafts)) if (d.text || d.replyTo || d.agent) keep[k] = { text: d.text, replyTo: d.replyTo, agent: d.agent };
       localStorage.setItem(draftsKey(this.host.workspace.id), JSON.stringify(keep));
     } catch { /* a convenience only */ }
   }
@@ -359,7 +371,7 @@ export class Store {
 
   setDraft(conv: string, d: Draft) {
     const drafts = { ...this.state.drafts };
-    if (!d.text && !d.replyTo && !d.agent && !d.doIt && !d.newTopic && !(d.files && d.files.length)) delete drafts[conv];
+    if (!d.text && !d.replyTo && !d.agent && !d.newTopic && !d.topic && !(d.files && d.files.length)) delete drafts[conv];
     else drafts[conv] = d;
     this.set({ drafts });
     this.saveDrafts(drafts);

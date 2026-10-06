@@ -478,8 +478,9 @@ func TestReplyWithoutEmotionIsNeutral(t *testing.T) {
 }
 
 // A review destination that is not a granted operator gets the count and
-// nothing else, even though it could read reports; it stays quiet and
-// read-only. (A granted operator's report alerts: TestOperatorDecidesOnHeadlessHost.)
+// who decides (MEL-532), nothing else, even though it could read reports; it
+// stays quiet and read-only. (A granted operator's report alerts:
+// TestOperatorDecidesOnHeadlessHost.)
 func TestCountOnlyReportsStayQuiet(t *testing.T) {
 	w := newWorld(t, "")
 	n := fakeNotify(w.alice)
@@ -492,7 +493,7 @@ func TestCountOnlyReportsStayQuiet(t *testing.T) {
 	waitState(t, w.bob, q.ID, stateHeld)
 	eventually(t, "alice gets the report", func() bool { return len(mustNotices(t, w.alice)) == 1 })
 	m := mustNotices(t, w.alice)[0]
-	if _, ok := w.alice.NoticeReport(m); ok || strings.Contains(m.Body, q.ID) || strings.Contains(m.Body, "held question") || !strings.HasPrefix(m.Body, "1 request(s) wait") {
+	if r, ok := w.alice.NoticeReport(m); !ok || len(r.Items) != 0 || r.Count != 1 || strings.Contains(m.Body, q.ID) || strings.Contains(m.Body, "held question") {
 		t.Fatalf("a non-operator's notice carries more than the count: %q", m.Body)
 	}
 	quiet(t, w.alice, n, 0)

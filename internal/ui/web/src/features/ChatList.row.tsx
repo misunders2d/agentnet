@@ -1,7 +1,7 @@
 // One row of the chat list: who, the newest line, and what the server says
 // about it (unread, waiting for your OK, asked of you, an agent at work,
 // read only).
-import { IconClock, IconLock } from "@tabler/icons-react";
+import { IconClock, IconLock, IconShieldExclamation } from "@tabler/icons-react";
 import type { T } from "../api";
 import { deviceKind, when } from "../model";
 import { AgentAvatar, GroupAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
@@ -39,7 +39,7 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
   const avatar = item.kind === "agent" ? <AgentAvatar seed={item.avatarSeed} size={48} mood={mood} device={deviceKind(item.avatarSeed)} />
     : item.kind === "group" ? <GroupAvatar names={groupFaces(summary, me, item)} seed={item.avatarSeed} size={48} />
     : <PersonAvatar name={item.title} seed={item.avatarSeed} size={48} online={presence(overview, peerDevices)} />;
-  const subtitle = guestHere ? "You’re a guest here" : item.kind === "agent" ? item.subtitle || "" : "";
+  const subtitle = guestHere ? "You’re a guest here" : item.kind === "agent" || item.open.kind === "thread" ? item.subtitle || "" : ""; // a device thread says whose device it is
 
   // Phones show one screen at a time: only the desktop column marks the open chat; a
   // phone outlines the chat being opened, at once, while it loads.
@@ -55,8 +55,13 @@ export function ChatRow({ item, summary, overview, selected, wide, onOpen }: {
           {item.guests > 0 && <span className="shrink-0 text-[13px] font-bold text-guest-ink">+{item.guests} {item.guests === 1 ? "guest" : "guests"}</span>}
           <time dateTime={item.lastAt} className={"ml-auto shrink-0 text-[12px] tnum " + (unread ? "font-extrabold text-ink" : "font-semibold text-muted")}>{when(item.lastAt)}</time>
         </span>
-        {(subtitle || item.note || item.needsYou > 0 || item.held > 0) && (
+        {(subtitle || item.note || item.needsYou > 0 || item.held > 0 || item.keyChanged) && (
           <span className="mt-1 flex min-w-0 items-center gap-2">
+            {item.keyChanged && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-danger-bg px-2 py-px text-[12px] font-extrabold leading-[18px] text-danger stroke">
+                <IconShieldExclamation size={13} stroke={2.4} aria-hidden="true" />Identity changed
+              </span>
+            )}
             {item.needsYou > 0 && (
               <span className="shrink-0 rounded-full bg-act px-2 py-px text-[12px] font-extrabold leading-[18px] text-act-ink stroke">
                 {item.needsYou > 1 ? item.needsYou + " need your OK" : "Needs your OK"}

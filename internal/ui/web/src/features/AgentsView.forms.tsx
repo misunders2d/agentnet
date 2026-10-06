@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { T } from "../api";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
+import { FolderField } from "./AssistantSetup.folders";
 
 export interface AgentSetup { label: string; harness: string; dir: string }
 
@@ -56,10 +57,10 @@ export function AgentSheet({ open, onOpenChange, harnesses, agent, onSave }: {
           ))}
         </div>
       </fieldset>
-      <label htmlFor="agent-dir" className="mt-5 block text-[14px] font-bold">Works in</label>
-      <input id="agent-dir" value={dir} onChange={(e) => setDir(e.target.value)} autoComplete="off" spellCheck={false} placeholder="/home/you/projects/warehouse"
-        className="mt-1.5 min-h-12 w-full rounded-2xl bg-surface stroke px-3.5 font-mono text-[15px] outline-none focus-visible:ring-2 focus-visible:ring-agent-ink" />
-      <p className="pt-2 text-[13px] text-muted">A folder on this computer, written in full. Saving runs nothing. Whether the program is signed in shows the first time it works.</p>
+      <div className="mt-5">
+        <FolderField label="Works in" value={dir} onChange={setDir} disabled={busy}
+          hint="Saving runs nothing. Whether the program is signed in shows the first time it works." />
+      </div>
     </Sheet>
   );
 }

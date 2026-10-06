@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconBolt, IconCheck, IconClock, IconFileText, IconLock, IconPlayerStop, IconRefresh, IconShieldCheck, IconUser, IconEye, IconSparkles, IconArrowBackUp } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { deliveryWord, deviceKind, timeOf } from "../model";
+import { deliveryWord, deviceKind, personName, timeOf } from "../model";
 import { useOwned } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
@@ -16,16 +16,35 @@ import {
   participationOf, phaseOf, placeOf, requestText, waitsElsewhere, type Asker, type Phase, type Req,
 } from "./Approvals.words";
 import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
+import { focusComposer } from "./Composer.focus";
+import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
 
 export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const names = useAgentNames();
+  if ((message.actions || []).includes("do_it")) return <ProposalConfirmation m={message}/>;
   const phase = phaseOf(message);
   if (phase) return <OwnerCard m={message} dm={dm} thread={thread} o={o} names={names} phase={phase} />;
   if (waitsElsewhere(message)) return <WaitingLine m={message} o={o} />;
   return null;
+}
+
+function ProposalConfirmation({m}: {m: Req}) {
+ const store=useApp(), pending=useRef(false);
+ const [busy,setBusy]=useState(false);
+ const confirm=async () => {
+  if (pending.current) return;
+  pending.current=true; setBusy(true);
+  try { await store.run(a=>a.act({do:"do_it",id:m.id}),"Task sent to the same agent."); }
+  finally { pending.current=false; setBusy(false); }
+ };
+ return <div className="rounded-2xl bg-agent px-4 py-3 text-agent-ink stroke" data-proposal-confirm>
+  <p className="font-semibold">Suggested task</p>
+  <p className="pt-1 text-[13px]">Send this exact suggestion to the same agent. Its owner’s task permissions apply.</p>
+  <Button variant="act" className="mt-3" disabled={busy} onClick={()=>void confirm()}>{busy ? "Sending…" : "Do it"}</Button>
+ </div>;
 }
 
 // ---- the requester's view ---------------------------------------------------
@@ -33,7 +52,7 @@ export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMT
 function WaitingLine({ m, o }: { m: Req; o: T.Overview | null }) {
   const e = m.exec!;
   const who = isMine(e.host, o) ? "your OK on " + deviceWords(e.host, o) : nameOf(e.host, o) + "’s OK";
-  const delivered = m.dir === "out" ? deliveryWord(m.state || "") : "";
+  const delivered = m.dir === "out" ? deliveryWord(("delivery" in m ? m.delivery : undefined) ?? m.state ?? "") : "";
   const since = e.at ? "waiting since " + timeOf(new Date(e.at * 1000).toISOString()) : "";
   return (
     <div role="status" className="mx-auto flex w-full max-w-[560px] items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-approval-ink/60 bg-surface px-3.5 py-2.5">
@@ -65,8 +84,12 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const named = mine.named;
   const notice = isThreadMsg(m) && m.kind === "message" && m.status === "review_notice";
   const conv = dm?.id || thread?.id || "";
-  const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
+	const said = (isThreadMsg(m) ? m.detail : m.job_detail) || "";
+	const proposal = m.proposal;
 
+  const permissionPerson = thread?.permission_person;
+  const permissionName = permissionPerson ? personName(permissionPerson) : asker.name;
+  const permissionTarget = permissionPerson?.person || m.from;
   const act = async (a: T.Action, ok: string) => {
     setBusy(a.do);
     await store.run((api) => api.act(a), ok);
@@ -75,8 +98,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const allow = () => act({ do: "accept", id: m.id }, phase === "decide" ? "Allowed once." : "Running it again.");
   const reply = () => {
     store.setDraft(conv, { ...store.draft(conv), replyTo: m.id });
-    // The composer's own field (Composer.tsx); it shows the reply it now carries.
-    requestAnimationFrame(() => root.querySelector<HTMLElement>('form[aria-label="Write a message"] textarea')?.focus());
+    focusComposer(root, conv); // this conversation's field, within the tap; it shows the reply it now carries
   };
   const replyHere = !!conv && (isThreadMsg(m) ? can("reply") : !dm?.frozen);
 
@@ -87,13 +109,13 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           <h3 id={"appr-" + m.id} className="font-display text-[19px] font-bold leading-snug">
             {notice ? capital(deviceWords(m.from, o)) + " has requests waiting for a person there" : capital(agent) + "’s follow-up needs a person"}
           </h3>
-          <p className="pt-1.5 text-text-2">{notice ? "Decide on that device. Nothing here can approve them." : said || requestText(m)}</p>
-          <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Close it"}</Button>
+          <p className="pt-1.5 text-text-2">{notice ? decidersWords(o?.review?.find((r) => r.id === m.id)?.report, m.from, o) : said || requestText(m)}</p>
+          <Button className="mt-3.5" disabled={!!busy} onClick={() => setSheet("close")}>{notice ? "Dismiss report" : "Mark as handled"}</Button>
         </div>
         <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
-          title={notice ? "Dismiss this report?" : "Close without replying?"}
-          body={notice ? "It's cleared on this computer only. The requests still wait for a person on " + deviceWords(m.from, o) + "." : "Nothing is sent to " + asker.name + "."}
-          confirm={notice ? "Dismiss" : "Close it"} onConfirm={() => act({ do: "resolve", id: m.id }, notice ? "Report dismissed." : "Closed. Nothing was sent.")} />
+          title={notice ? "Dismiss this report?" : "Mark as handled?"}
+          body={notice ? "It's cleared on this computer only. A newer report from " + deviceWords(m.from, o) + " shows again if requests still wait." : "Nothing is sent to " + asker.name + "."}
+          confirm={notice ? "Dismiss" : "Mark as handled"} onConfirm={() => act({ do: "resolve", id: m.id }, notice ? "Report dismissed." : "Marked as handled. Nothing was sent.")} />
       </Shell>
     );
   }
@@ -127,9 +149,16 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           </h3>
         </div>
 
+        {phase === "running" && said && <p role="status" className="mx-4 mt-3 whitespace-pre-wrap text-[14px] text-text-2 [overflow-wrap:anywhere]">{said}</p>}
+        {proposal && <Details label="How this task was chosen" className="mx-4 mt-3">
+          <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{nameOf(proposal.asker, o)} asked: {proposal.question}</p>
+          <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">Your agent suggested: {proposal.proposal}</p>
+          <p className="mt-2">{nameOf(proposal.confirmed_by, o)} chose Do it. This uses only their usual task approval.</p>
+        </Details>}
+
         {phase === "needs_human" || (phase === "stopped" && said) ? (
-          <div className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
-            <p className="text-[13px] font-bold uppercase tracking-wide">{capital(agent)} says</p>
+          <div data-agent-needs-you={phase === "needs_human" || undefined} role="region" aria-label="Your agent says" tabIndex={-1} className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
+            <p className="text-[13px] font-bold">{phase === "needs_human" ? "Your agent couldn’t finish — it needs your answer" : capital(agent) + " says"}</p>
             <p className="pt-0.5 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{said || "It needs a person to decide. It didn't say more."}</p>
           </div>
         ) : null}
@@ -158,13 +187,13 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {can("decline") && <Button variant="outline" size="lg" className="min-h-12!" disabled={!!busy} onClick={() => setSheet("decline")}>Decline</Button>}
             {can("reply") && replyHere && <TextButton onClick={reply} icon={<IconArrowBackUp size={18} />}>Answer it yourself</TextButton>}
             {can("accept_always") && <TextButton onClick={() => setSheet("always")} disabled={!!busy}>{named ? "Always allow " + asker.name + " → " + agent + "…" : "Always allow tasks from " + asker.name + "…"}</TextButton>}
-            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy}>Always answer questions from {asker.name}…</TextButton>}
+            {can("approve") && <TextButton onClick={() => setSheet("approve")} disabled={!!busy}>Approve {permissionName}…</TextButton>}
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
             {replyHere && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={reply}>Reply</Button>}
-            {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Run again"}</Button>}
-            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Close without replying…</TextButton>}
+            {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
+            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
           </>}
           {phase === "stopped" && <>
             {can("accept") && <Button variant="act" size="lg" icon={<IconRefresh size={20} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Run it again"}</Button>}
@@ -184,17 +213,17 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
       <ConfirmSheet open={sheet === "always"} onOpenChange={(v) => setSheet(v ? "always" : null)}
         title={named ? "Always allow " + asker.name + " → " + agent + "?" : "Always allow tasks from " + asker.name + "?"}
-        body={asker.name + " can give " + agent + " any task without asking you. It ends if their key changes. Turn it off in Settings → Permissions."}
+        body={permissionName + (permissionPerson ? " can give tasks from all current and future verified devices. Removing a device ends its access; key changes and person conflicts block it." : " can give tasks from this exact device key without asking you.") + " Your agent's normal permissions still apply. Turn it off in Settings → Permissions."}
         confirm="Always allow" onConfirm={() => act({ do: "accept_always", id: m.id }, "Allowed. Later tasks from " + asker.name + " run without asking.")}
         other="Just once" onOther={allow}>
-        <TurnOff cmd={"agentnet unapprove --tasks " + m.from} what="Turns it off. Their tasks wait for you again." />
+        <TurnOff cmd={"agentnet unapprove --tasks " + permissionTarget} what="Turns it off. Their tasks wait for you again." />
       </ConfirmSheet>
       <ConfirmSheet open={sheet === "approve"} onOpenChange={(v) => setSheet(v ? "approve" : null)}
-        title={"Always answer questions from " + asker.name + "?"}
-        body={capital(agent) + " answers questions from " + asker.name + " without asking you, with your setup minus editing tools. Tools you already allow keep their effects. Tasks still wait for you. Turn it off in Settings → Permissions."}
-        confirm="Always answer" onConfirm={() => act({ do: "approve", id: m.from }, asker.name + "’s questions are answered automatically from now on.")}
+        title={"Approve " + permissionName + "?"}
+        body={capital(agent) + " answers questions from " + permissionName + (permissionPerson ? " on all current and future verified devices." : " on this device.") + " Removing a device or a person conflict ends person permission; key changes block until trusted. Your question settings apply; tools you already allow keep their effects. Tasks still wait for you."}
+        confirm={"Approve " + permissionName} onConfirm={() => act({ do: "approve", id: permissionTarget }, permissionName + "’s questions are answered automatically from now on.")}
         other="Just this one" onOther={allow}>
-        <TurnOff cmd={"agentnet unapprove " + m.from} what="Turns it off. Their questions wait for you again." />
+        <TurnOff cmd={"agentnet unapprove " + permissionTarget} what="Turns it off. Their questions wait for you again." />
       </ConfirmSheet>
       <DeclineSheet open={sheet === "decline"} onOpenChange={(v) => setSheet(v ? "decline" : null)} who={asker.person} kind={kind}
         onDecline={(reason) => act({ do: "decline", id: m.id, reason }, "Declined. " + asker.person + " is told.")} />
@@ -202,8 +231,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         title={"Stop " + agent + "?"} body="It stops working on this now. Whatever it already did stays done."
         confirm="Stop" tone="danger" onConfirm={() => act({ do: "cancel", id: m.id }, "Stopping.")} />
       <ConfirmSheet open={sheet === "close"} onOpenChange={(v) => setSheet(v ? "close" : null)}
-        title="Close without replying?" body={"Nothing is sent to " + asker.person + ". You can still write to them in the chat."}
-        confirm="Close it" onConfirm={() => act({ do: "resolve", id: m.id }, "Closed. Nothing was sent.")} />
+        title="Mark as handled?" body={"Nothing is sent to " + asker.person + ". You can still write to them in the chat."}
+        confirm="Mark as handled" onConfirm={() => act({ do: "resolve", id: m.id }, "Marked as handled. Nothing was sent.")} />
     </section>
   );
 }
