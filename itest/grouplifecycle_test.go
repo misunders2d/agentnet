@@ -20,9 +20,10 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// The production capability stays unadvertised. This fixture signs grp1 only
-// for its two disposable, known-current native daemon sessions, as the existing
-// native group carrier tests do. It never changes either binary or user config.
+// Sign group carrier and nonce-invitation support only for these disposable,
+// known-current native daemon sessions. Keep this explicit fixture aligned with
+// the current invitation contract; grp1 alone is a legacy reader. It never
+// changes either binary or user config.
 func groupCLIFixtureCaps(t *testing.T, c *cli, addr, home, address, cert string, before ...[]string) []string {
 	t.Helper()
 	id, err := identity.Load(filepath.Join(c.dir, home, "identity.json"))
@@ -80,7 +81,7 @@ func groupCLIFixtureCaps(t *testing.T, c *cli, addr, home, address, cert string,
 		}
 		return true
 	})
-	caps := []string{protocol.CapAgentIdentity, protocol.CapExternalParticipation, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapHeadless, protocol.CapNotify, protocol.CapPerson, protocol.CapTyping, protocol.CapGroup}
+	caps := []string{protocol.CapAgentIdentity, protocol.CapExternalParticipation, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapHeadless, protocol.CapNotify, protocol.CapPerson, protocol.CapTyping, protocol.CapGroup, protocol.CapGroupInvitationControl}
 	slices.Sort(caps)
 	for _, session := range p.Sessions {
 		rec := protocol.CapsRecord{Address: address, Session: session, Caps: caps, TS: time.Now().Unix() + 200}
