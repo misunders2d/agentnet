@@ -182,11 +182,14 @@ for (const [what, rec, want] of [
   delete e.groupCurrent;
 }
 
-// ---- X8: a browser never decides a group guest invitation (yet).
+// ---- X8: a group guest decision requires verified current group context.
+// The public valid-context lifecycle is covered by human_engine_check.mjs.
 {
   const e = carol, saved = e.agentConv;
   e.agentConv = async () => ({ c: { id: 'b'.repeat(64), kind: 'group', root: '{}' }, info: { pid: G.pid, role: 'human', state: 'invited', held: 0, host: host(carol), grant: [] } });
-  await assert.rejects(e.changeHuman('decide', { pid: G.pid, accept: true }), /group as its guest/); checks++;
+  const sentBefore = posts.length, queuedBefore = (await e.store.all('outbox')).length;
+  await assert.rejects(e.changeHuman('decide', { pid: G.pid, accept: true }), err => err.reason === 'proof_pending' && /group current context missing/.test(err.message)); checks++;
+  check(posts.length === sentBefore && (await e.store.all('outbox')).length === queuedBefore, 'no guest decision is stored or sent without verified group context');
   e.agentConv = saved;
 }
-console.log('PASS room receiver engine: ' + checks + ' checks (followers and agent authors of a captured audience, guest edits from their author only, group guest turns, group requests carrying an audience not read yet, no group guest decision here)');
+console.log('PASS room receiver engine: ' + checks + ' checks (followers and agent authors of a captured audience, guest edits from their author only, group guest turns, group requests carrying an audience not read yet, no guest decision without verified group context)');

@@ -235,7 +235,7 @@ try {
   // Real ordered stream/caps hooks using the existing eventsource-parser, no socket.
   {
     const f = await fixture(), { e } = f, durable = await f.count();
-    for (const method of ["publishPerson", "flushReceipts", "retryHeld", "flushOutbox", "retryApproved", "runHistory", "runServes", "keepFiles", "reconcileNotify", "fillListed"]) e[method] = async () => {};
+    for (const method of ["publishPerson", "flushReceipts", "retryHeld", "flushOutbox", "retryApproved", "runHistory", "runServes", "keepFiles", "reconcileNotify", "fillListed", "syncReadMarks"]) e[method] = async () => {};
     let controller; f.stream(() => new Response(new ReadableStream({ start(c) { controller = c; } }), { headers: { "Agentnet-Members": "1", "Agentnet-Signals": "1" } }));
     const connected = new Promise((resolve) => { const un = e.listen(() => { if (e.connected && e.typing.connected && !e.members.current) { un(); resolve(); } }); });
     const running = e.streamOnce(); await connected;
