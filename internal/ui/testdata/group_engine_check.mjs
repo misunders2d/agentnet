@@ -21,6 +21,9 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
  const invitation=await wire.validateGroupInvitation(wire.parseGroupInvitation(v.invitation_json));
  check(wire.groupInvitationJSON(invitation)===v.invitation_json,'native group invitation JSON exact bytes');
  check(await wire.groupInvitationID(invitation)===v.invitation_id,'native group invitation ID exact hash');
+ const nativeNonce=await wire.validateGroupInvitation(wire.parseGroupInvitation(v.nonce_invitation_json));
+ check(wire.groupInvitationJSON(nativeNonce)===v.nonce_invitation_json&&await wire.groupInvitationID(nativeNonce)===v.nonce_invitation_id,'native nonce invitation canonical bytes and ID exactly match browser');
+ check(wire.groupConsentJSON(wire.parseGroupConsent(v.cancel_consent_json))===v.cancel_consent_json,'native cancellation consent canonical bytes exactly match browser');
  check(wire.groupConsentJSON(wire.parseGroupConsent(v.decline_json))===v.decline_json,'native explicit group decline JSON exact bytes');
  check(wire.groupConsentJSON(wire.parseGroupConsent(v.accept_json))===v.accept_json,'native signed accepted consent selected history exact bytes');
  const liveHistory=wire.parseHistory(v.live_history_json);
@@ -125,7 +128,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    for(const p of packet.state.members)check(!await w.st.get('kv',w.e.roomReaderKey(conv,legacy,p.person,await wire.groupAdmissionHash(p.admission))),'missing fan grants no inferred reader '+p.person);
    await w.reload();check((await w.e.agentConv(pv['p6-source'])).info.grant.length===1,'reader proof and accepted exact share survive reload');
    // Exercise the real sealed outbox path, with fixture transport only.
-   w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};
+   w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.requireGroupHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};
    const sent=await w.e.sendDM({conv,body:'P26 sender exact sealed roster'}),copies=(await w.st.all('outbox')).filter(r=>r.lid===sent.lid);
    check(copies.length===packet.state.members.length-1&&copies.every(r=>r.envelope&&r.group_admission),'sender seals copies for every exact current recipient');
    for(const p of packet.state.members)check(!!await w.st.get('kv',w.e.roomReaderKey(conv,{lid:sent.lid,fingerprint:w.e.fp},p.person,await wire.groupAdmissionHash(p.admission))),'sender retains exact sealed roster reader '+p.person);
@@ -170,7 +173,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     const proof=await w.e.roomMemberships(record,events,members);
     check(proof.some(e=>e.pid===v.participations['p6-target']&&e.type==='dismiss'),'next carrier retains counted '+mode+' end');
     await w.reload();check((await w.e.agentConv(v.participations['p6-target'])).info.state==='dismissed','carried '+mode+' end survives reload');
-    w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};await w.e.sendDM({conv,body:'AFTER_CARRIED_END'});
+    w.e.groupSupport=async()=>{};w.e.requireHumanSupport=async()=>{};w.e.requireGroupHumanSupport=async()=>{};w.e.supports=async()=>[true,''];w.e.post=async()=>{};await w.e.sendDM({conv,body:'AFTER_CARRIED_END'});
     check((await w.st.all('outbox')).every(r=>r.to!==v.invited_roster.devices[0].address),'carried '+mode+' end prevents future outside copy');
    } else check(!await w.st.get('kv','room-memberships/'+conv),'invalid '+mode+' end installs no lifecycle authority');
    await w.close();
@@ -357,7 +360,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    check(decode.decode(await wire.decryptFile(bytes(nativeFile.ct),nativeAttachment,keys))===nativeFile.bytes,'actual native PID current file decrypts exact bytes '+file.name);
    let foreign=false;try{await w.e.groupFileAuthorized(filePacket.packet,filePacket.members,alicePub.address,await wire.fingerprint(alicePub),{...exactFile,group_admission:await wire.groupAdmissionHash(wire.groupMember(filePacket.packet.state,wire.parseEvent(pv['member-invite'].inner.body).author.person).admission)});}catch{foreign=true;}check(foreign,'PID historical bytes cannot be shared to another group person '+file.name);
   }
-  w.e.groupSupport=async()=>{}; // Existing synthetic signed transport boundary; real capability negotiation is the rendered gate.
+  w.e.requireGroupHumanSupport=async()=>{};w.e.groupSupport=async()=>{}; // Existing synthetic signed transport boundary; real capability negotiation is the rendered gate.
   await w.e.requestGroupFile(linkedRequest,0);
   const requestedPID=await w.st.get('inbox',linkedRequest.id), requestJobs=(await w.st.all('kv')).filter(x=>x?.message?.type==='request'&&x.message.lid===linkedRequest.lid), requestOut=(await w.st.all('outbox')).filter(x=>x.sub==='file');
   check(requestedPID.attachments[0].availability==='requested'&&linkedRequest.attachments[0].availability==='requestable'&&requestJobs.length===1&&requestOut.length===1,'actual own-linked PID file request preserves expected snapshot and commits one atomic request');
@@ -494,6 +497,13 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check(conflicted&&posted.length===5&&JSON.stringify(posted[3])===JSON.stringify(posted[4]),'direct rename repeats only exact pending encrypted custody after conditional conflict');
   check((await w.e.groupCurrent(created)).state.title==='Direct rename after conditional conflict','direct rename completes without repeated user action');
 
+  const newTarget=await wire.parseRoster(v.challenge.rosters[1]);
+  const [firstLive,secondLive]=await Promise.all([w.e.inviteGroup({conv:created,person:newTarget.person}),w.e.inviteGroup({conv:created,person:newTarget.person})]);
+  check(firstLive.id===secondLive.id,'concurrent repeated browser Invite keeps one exact live proposal');
+  await w.e.cancelGroup({id:firstLive.id});await w.e.cancelGroup({id:firstLive.id});
+  check((await w.st.get('kv','group-invitation/out/'+firstLive.id)).status==='cancelled','browser cancel is durable and idempotent');
+  const refreshed=await w.e.refreshGroup({id:firstLive.id}),again=await w.e.refreshGroup({id:firstLive.id});
+  check(refreshed.id!==firstLive.id&&refreshed.id===again.id,'browser explicit Refresh maps one exact new successor across retries');
   const beforeHeadCopies=(await w.st.all('outbox')).length;let headConflict=false;
   w.st.write=async(ops,checks)=>{if(!headConflict&&ops.some(o=>o.k==='group-publication/'+created+'/3'&&o.v===undefined)){headConflict=true;await publicationWrite([{s:'kv',k:'group-head/'+created,v:{conv:created,bootstrap:createdPacket.root.creator.fingerprint,seq:4,hash:'e'.repeat(64)}}]);}return publicationWrite(ops,checks);};
   let staleHead=false;try{await w.e.manageGroup({conv:created,action:'rename',title:'Must not install behind changed head'});}catch(e){staleHead=e.reason==='proof_pending';}
@@ -534,6 +544,19 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check((await w.st.all('inbox')).length===0&&(await w.st.all('outbox')).length===0,'invitation stays quiet until explicit choice');
   await w.reload();check((await w.e.groupInvitations())[0].status==='pending','invitation survives store reload');
   let unknown=false;try{await w.e.decideGroup({id:wire.newID(),accept:true});}catch(_){unknown=true;}check(unknown&&(await w.st.all('outbox')).length===0,'unknown invitation cannot generate consent');
+  const withNonce={...invitation,nonce:wire.newID()},nonceID=await wire.groupInvitationID(withNonce);
+  check(nonceID!==v.invitation_id&&wire.parseGroupInvitation(wire.groupInvitationJSON(withNonce)).nonce===withNonce.nonce,'fresh nonce changes proposal identity while preserving exact admission binding');
+  const wrongCancel=await w.make(wire.SubGroupConsent,{v:1,invitation:v.invitation_id,decision:'cancelled'},invitation.seq,'e'.repeat(64));
+  await w.receive(wrongCancel);check((await w.st.get('kv','group-invitation/in/'+v.invitation_id)).status==='pending','signed cancellation with wrong exact transition cannot cancel proposal');
+  const cancel=await w.make(wire.SubGroupConsent,{v:1,invitation:v.invitation_id,decision:'cancelled'},invitation.seq,invitation.prev);
+  await w.receive(cancel);await w.reload();check((await w.st.get('kv','group-invitation/in/'+v.invitation_id)).status==='cancelled','signed exact cancellation durable across reload');
+  let cancelledJoin=false;try{await w.e.decideGroup({id:v.invitation_id,accept:true});}catch(e){cancelledJoin=/cancelled/.test(e.message);}check(cancelledJoin&&(await w.st.all('outbox')).length===0,'cancelled invitation cannot emit consent or gain membership');
+  const earlyCancel=await w.make(wire.SubGroupConsent,{v:1,invitation:nonceID,decision:'cancelled'},withNonce.seq,withNonce.prev);
+  await w.receive(earlyCancel);await w.reload();
+  const delayedInvite=await w.make(wire.SubGroupInvite,JSON.parse(wire.groupInvitationJSON(withNonce)),withNonce.state.seq,await wire.groupStateHash(withNonce.state));await w.receive(delayedInvite);
+  check((await w.st.get('kv','group-invitation/in/'+nonceID)).status==='cancelled','cancellation before proposal prevents delayed proposal revival');
+  const nextProposal={...invitation,nonce:wire.newID()},nextID=await wire.groupInvitationID(nextProposal),nextInvite=await w.make(wire.SubGroupInvite,JSON.parse(wire.groupInvitationJSON(nextProposal)),nextProposal.state.seq,await wire.groupStateHash(nextProposal.state));await w.receive(nextInvite);
+  check((await w.st.get('kv','group-invitation/in/'+nextID)).status==='pending'&&!await w.e.groupRecord(conv),'new nonce at unchanged head remains explicit pending invitation with no membership');
   await w.close();
   w=await world();await w.receive(c.context);check((await w.st.get('held',wire.parseEnvelope(c.context.envelope).id)).reason==='proof_pending','context before proof held');await w.reload();await w.receive(c.proof);check(!!(await w.e.groupCurrent(conv)).state,'proof arrival retries context across reload');await w.receive(c.proof);check(!(await w.st.all('held')).length,'duplicate physical carrier quiet');const n=await wire.open(c.proof.envelope,keys,address,alicePub);const twin={...n,id:wire.newID()};w.blobs.delete(c.proof.blob);await w.receive({envelope:await wire.seal(twin,aliceKeys,pub)});check(!await w.st.get('held',twin.id)&&!!await w.st.get('kv','group-carrier/'+twin.id),'logical carrier dedup before ciphertext fetch');const conflict={...n,id:wire.newID(),body:wire.groupCarrierJSON({v:1,seq:0,hash:'e'.repeat(64),to_key:w.e.fp})};await w.receive({envelope:await wire.seal(conflict,aliceKeys,pub)});check((await w.st.get('held',conflict.id)).reason==='conflicting_duplicate','logical carrier conflicting content held');check((await w.st.get('kv','group/'+conv)).records[0]===wire.groupCommitJSON(records[0]),'original opaque proof byte equal');await quiet(w);await w.close();
   w=await world();await w.receive(c.proofx);check((await w.st.get('held',wire.parseEnvelope(c.proofx.envelope).id)).reason==='proof_pending','missing public prefix held');await w.receive(c.proof);check((await w.st.get('kv','group/'+conv)).records.length===2,'out of order proof resumes');await w.receive(c.contextx);check((await w.e.groupCurrent(conv)).state.seq===1,'cold current admission from exact public slots');await w.receive(c.context);check((await w.st.get('kv','group/'+conv)).context===wire.groupContextJSON({root,proof:null,state:states[1],withdrawals:null}),'old context cannot rewind');await quiet(w);await w.close();

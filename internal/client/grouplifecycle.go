@@ -34,11 +34,13 @@ var errGroupDecisionRecorded = errors.New("group: exact decision already recorde
 var errGroupInvitationOutdated = errors.New("group: this invitation is out of date because the group changed; accept the newer invitation for this group, or ask the inviter for one")
 
 type GroupInvitationInfo struct {
-	ID        string                   `json:"id"`
-	Direction string                   `json:"direction"`
-	State     string                   `json:"status"`
-	Inviter   string                   `json:"inviter"`
-	Proposal  protocol.GroupInvitation `json:"proposal"`
+	ID         string                   `json:"id"`
+	CanCancel  bool                     `json:"can_cancel"`
+	CanRefresh bool                     `json:"can_refresh"`
+	Direction  string                   `json:"direction"`
+	State      string                   `json:"status"`
+	Inviter    string                   `json:"inviter"`
+	Proposal   protocol.GroupInvitation `json:"proposal"`
 }
 
 type groupInvitationRow struct {
@@ -88,6 +90,7 @@ func (a *Agent) GroupInvitations() ([]GroupInvitationInfo, error) {
 		if e != nil {
 			return nil, e
 		}
+		r.CanCancel, r.CanRefresh = a.groupInvitationCapabilities(r)
 		result = append(result, r.GroupInvitationInfo)
 	}
 	return result, nil
@@ -160,7 +163,7 @@ func (a *Agent) verifyGroupInvitationState(ctx context.Context, p protocol.Group
 		return ErrGroupContextPending
 	}
 	if max.Int64 > p.State.Seq {
-		return ErrGroupInvitationStale
+		return fmt.Errorf("%w: group advanced from state %d to %d; inviter must refresh the invitation", ErrGroupInvitationStale, p.State.Seq, max.Int64)
 	}
 	var seq int64
 	var hash string
@@ -169,7 +172,7 @@ func (a *Agent) verifyGroupInvitationState(ctx context.Context, p protocol.Group
 		return err
 	}
 	if err == nil && (seq > p.State.Seq || seq == p.State.Seq && hash != p.State.Hash()) {
-		return ErrGroupInvitationStale
+		return fmt.Errorf("%w: latest group head differs from this proposal; inviter must refresh the invitation", ErrGroupInvitationStale)
 	}
 	packet := GroupContext{Root: p.Root, State: p.State, Withdrawals: p.Withdrawals}
 	resolve, err := a.groupResolver(ctx, packet)
@@ -206,7 +209,7 @@ func (a *Agent) verifyGroupInvitationState(ctx context.Context, p protocol.Group
 		return err
 	}
 	if !ok || target.info.State == personConflict || target.roster.Hash() != p.Roster {
-		return ErrGroupInvitationStale
+		return fmt.Errorf("%w: invited person's verified devices changed; inviter must refresh the invitation", ErrGroupInvitationStale)
 	}
 	if m, member := p.State.Member(p.Target); member && !p.State.Withdrawn(m, withdrawals) {
 		return errors.New("group: target already has effective membership")
@@ -257,6 +260,10 @@ func (a *Agent) groupInvitationOwner(r groupInvitationRow) error {
 // InviteGroup is a persisted local administration intent. Receipt of its
 // exact consent can publish it automatically; unrelated remote consents cannot.
 func (a *Agent) InviteGroup(ctx context.Context, conv, person string, history []protocol.GroupHistoryRef) (GroupInvitationInfo, error) {
+	return a.inviteGroup(ctx, conv, person, history, "")
+}
+
+func (a *Agent) inviteGroup(ctx context.Context, conv, person string, history []protocol.GroupHistoryRef, refreshID string) (GroupInvitationInfo, error) {
 	defer notifyDaemon(a.home)
 	var info GroupInvitationInfo
 	packet, err := a.GroupContext(conv)
@@ -273,23 +280,31 @@ func (a *Agent) InviteGroup(ctx context.Context, conv, person string, history []
 	if !ok || target.info.State != personPinned {
 		return info, errors.New("group: target must be an independently pinned person")
 	}
-	p := protocol.GroupInvitation{V: 1, Root: packet.Root, State: packet.State, Withdrawals: packet.Withdrawals, Target: person, Roster: target.roster.Hash(), Seq: packet.State.Seq + 1, Prev: packet.State.Hash(), History: slices.Clone(history)}
+	p := protocol.GroupInvitation{V: 1, Root: packet.Root, State: packet.State, Withdrawals: packet.Withdrawals, Target: person, Roster: target.roster.Hash(), Seq: packet.State.Seq + 1, Prev: packet.State.Hash(), History: slices.Clone(history), Nonce: protocol.NewID()}
 	if err = a.ownGroupInvitation(ctx, p); err != nil {
 		return info, err
 	}
 	if _, err = a.groupHistorySelectionIn(a.store.db, conv, history); err != nil {
 		return info, err
 	}
-	if old, e := groupInvitationIn(a.store.db, p.ID(), "out"); e == nil {
-		return old.GroupInvitationInfo, nil
-	} else if !errors.Is(e, sql.ErrNoRows) {
-		return info, e
-	}
+
 	release, err := lockfile.Wait(a.spoolLockPath())
 	if err != nil {
 		return info, err
 	}
 	defer release()
+	if old, found, e := a.reusableGroupInvitation(p); e != nil {
+		return info, e
+	} else if found {
+		if refreshID != "" {
+			if _, e = a.store.db.Exec(`INSERT INTO group_invitation_refreshes(id,successor)VALUES(?,?) ON CONFLICT(id)DO NOTHING`, refreshID, old.ID); e != nil {
+				return info, e
+			}
+		}
+		old.CanCancel, old.CanRefresh = a.groupInvitationCapabilities(old)
+		return old.GroupInvitationInfo, nil
+	}
+
 	copies, err := a.groupInvitationCopies(ctx, p, target.roster)
 	if err != nil {
 		return info, err
@@ -321,6 +336,11 @@ func (a *Agent) InviteGroup(ctx context.Context, conv, person string, history []
 		if _, err := tx.Exec(`INSERT INTO group_invitations(id,direction,conv,peer_person,peer_address,peer_fp,payload,state)VALUES(?,'out',?,?,?,?,?,'pending')`, p.ID(), conv, self.roster.Person, a.Address, a.Self().Fingerprint(), raw); err != nil {
 			return err
 		}
+		if refreshID != "" {
+			if _, err = tx.Exec(`INSERT INTO group_invitation_refreshes(id,successor)VALUES(?,?)`, refreshID, p.ID()); err != nil {
+				return err
+			}
+		}
 		return associateGroupInvitationCopies(tx, p.ID(), "out", copies)
 	}, "")
 	if err != nil {
@@ -328,7 +348,7 @@ func (a *Agent) InviteGroup(ctx context.Context, conv, person string, history []
 	}
 	stored = true
 	a.kickNow()
-	return GroupInvitationInfo{ID: p.ID(), Direction: "out", State: "pending", Inviter: a.Address, Proposal: p}, nil
+	return GroupInvitationInfo{ID: p.ID(), Direction: "out", State: "pending", Inviter: a.Address, Proposal: p, CanCancel: true, CanRefresh: true}, nil
 }
 
 func groupInvitationTarget(q dbq, p protocol.GroupInvitation) error {

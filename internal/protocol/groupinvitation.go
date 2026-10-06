@@ -19,6 +19,7 @@ type GroupInvitation struct {
 	Seq         int64             `json:"seq"`
 	Prev        string            `json:"prev"`
 	History     []GroupHistoryRef `json:"history"`
+	Nonce       string            `json:"nonce,omitempty"`
 }
 
 func (p GroupInvitation) ID() string {
@@ -27,6 +28,9 @@ func (p GroupInvitation) ID() string {
 }
 
 func (p GroupInvitation) Validate() error {
+	if p.Nonce != "" && !ValidID(p.Nonce) {
+		return errors.New("group: invalid invitation nonce")
+	}
 	if p.V != 1 || ValidateGroupRoot(p.Root) != nil || p.State.Validate() != nil || p.State.Conv != p.Root.ID() || p.State.Realm != p.Root.Realm || !ValidID(p.Target) || !ValidHash(p.Roster) || p.Seq != p.State.Seq+1 || p.Prev != p.State.Hash() {
 		return errors.New("group: invalid invitation binding")
 	}
@@ -42,8 +46,9 @@ func (p GroupInvitation) Validate() error {
 	return nil
 }
 
-// GroupConsent carries only an explicit local decision about one exact
-// proposal. A signed envelope authenticates the sender; accept additionally
+// GroupConsent carries an explicit local decision about one exact proposal.
+// Cancelled is the original inviter withdrawing their unpublished intent; it
+// never removes membership. A signed envelope authenticates the sender; accept additionally
 // requires the original GroupAdmission signature. Neither is a task.
 type GroupConsent struct {
 	V          int             `json:"v"`
@@ -56,7 +61,7 @@ func (c GroupConsent) Validate() error {
 	if c.V != 1 || !ValidHash(c.Invitation) {
 		return errors.New("group: invalid consent proposal")
 	}
-	if c.Decision == "declined" && c.Admission == nil {
+	if (c.Decision == "declined" || c.Decision == "cancelled") && c.Admission == nil {
 		return nil
 	}
 	if c.Decision == "accepted" && c.Admission != nil {

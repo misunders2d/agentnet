@@ -182,6 +182,10 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 			t.Fatal(err)
 		}
 		vectors["invitation_json"], vectors["invitation_id"] = marshal(t, proposal), proposal.ID()
+		nonceProposal := proposal
+		nonceProposal.Nonce = protocol.NewID()
+		vectors["nonce_invitation_json"], vectors["nonce_invitation_id"] = marshal(t, nonceProposal), nonceProposal.ID()
+		vectors["cancel_consent_json"] = marshal(t, protocol.GroupConsent{V: 1, Invitation: proposal.ID(), Decision: "cancelled"})
 		vectors["decline_json"] = marshal(t, protocol.GroupConsent{V: 1, Invitation: proposal.ID(), Decision: "declined"})
 		accepted := protocol.GroupAdmission{Conv: s0.Conv, Realm: root.Realm, Person: rr.Person, Roster: rr.Hash(), Seq: proposal.Seq, Prev: proposal.Prev, History: []protocol.GroupHistoryRef{{LID: protocol.NewID(), Author: bp.Fingerprint(), Hash: strings.Repeat("c", 64)}}, By: bp.Fingerprint()}
 		accepted.Sign(bob.Sign)

@@ -183,7 +183,19 @@ func (a *Agent) mayDeliverGroupLifecycle(env envelope.Envelope) (bool, bool, err
 	r, err := groupInvitationIn(a.store.db, id, direction)
 	if err == nil {
 		if direction == "out" {
-			if r.State != "pending" && r.State != "accepted" {
+			if r.State == "cancelled" && sub == envelope.SubGroupConsent {
+				err = a.groupInvitationOwner(r)
+				if err == nil {
+					target, ok, e := a.store.personByID(r.Proposal.Target)
+					err = e
+					if err == nil && (!ok || target.info.State == personConflict || !target.has(env.To, fp)) {
+						err = ErrGroupInvitationStale
+					}
+				}
+				if err == nil {
+					return true, true, nil
+				}
+			} else if r.State != "pending" && r.State != "accepted" {
 				err = ErrGroupInvitationStale
 			} else {
 				err = a.ownRecordedGroupInvitation(context.Background(), r)
@@ -269,6 +281,9 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 		if err == nil {
 			err = consent.Validate()
 		}
+		if err == nil && consent.Decision == "cancelled" {
+			return a.admitGroupInvitationCancellation(env, in, root, sender, person, consent, desc, fromQuarantine, hold)
+		}
 		if err == nil {
 			existing, err = groupInvitationIn(a.store.db, consent.Invitation, "out")
 			if errors.Is(err, sql.ErrNoRows) {
@@ -331,7 +346,15 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 			if e != nil && !errors.Is(e, sql.ErrNoRows) {
 				return e
 			}
-			if _, e = tx.Exec(`INSERT INTO group_invitations(id,direction,conv,peer_person,peer_address,peer_fp,payload,state)VALUES(?,'in',?,?,?,?,?,'pending') ON CONFLICT(id,direction)DO NOTHING`, proposal.ID(), in.Conv, person.roster.Person, env.From, sender.Fingerprint(), raw); e != nil {
+			cancelled, e := groupInvitationCancelledIn(tx, proposal.ID(), root.ID(), person.roster.Person, env.From, sender.Fingerprint(), proposal.Seq, proposal.Prev)
+			if e != nil {
+				return e
+			}
+			initialState := "pending"
+			if cancelled {
+				initialState = "cancelled"
+			}
+			if _, e = tx.Exec(`INSERT INTO group_invitations(id,direction,conv,peer_person,peer_address,peer_fp,payload,state)VALUES(?,'in',?,?,?,?,?,?) ON CONFLICT(id,direction)DO NOTHING`, proposal.ID(), in.Conv, person.roster.Person, env.From, sender.Fingerprint(), raw, initialState); e != nil {
 				return e
 			}
 			// This one is verified at the group's current state: an earlier
