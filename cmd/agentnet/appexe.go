@@ -14,7 +14,7 @@ import (
 
 // bundledWith is "app" in the agentnet program built into the AgentNet app
 // (desktop/build.sh: -ldflags "-X main.bundledWith=app"): the app updates
-// it as a whole, so `agentnet update` refuses to replace it.
+// it as a whole, so `agentnet update` requests the app updater.
 var bundledWith string
 
 // appStable is set when the AgentNet app runs this program from a place

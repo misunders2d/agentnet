@@ -676,12 +676,12 @@ func TestUIOpensApp(t *testing.T) {
 	}
 }
 
-func TestUpdateRefusesBundled(t *testing.T) {
+func TestUpdateBundledRequiresRunningApp(t *testing.T) {
 	old := bundledWith
 	t.Cleanup(func() { bundledWith = old })
 	bundledWith = "app"
 	err := runUpdate(context.Background(), t.TempDir(), nil)
-	if err == nil || !strings.Contains(err.Error(), "came with the AgentNet app") {
+	if err == nil || !strings.Contains(err.Error(), "open the installed AgentNet app") {
 		t.Fatalf("update in the app's program: %v", err)
 	}
 	if err := runUpdate(context.Background(), t.TempDir(), []string{"--check"}); err == nil {

@@ -92,6 +92,7 @@ type appRunner struct {
 
 	commandMu     sync.Mutex
 	command       appCommandStatus
+	activeAgent   atomic.Pointer[client.Agent]
 	updating      atomic.Bool
 	updateReplies chan bool
 	outMu         sync.Mutex
@@ -393,6 +394,8 @@ func (r *appRunner) openPage(workspace string) func(fragment string) []string {
 // app's address. started, from a join on the first-run page, hears when
 // the page is served (or why not).
 func (r *appRunner) daemon(ctx context.Context, a *client.Agent, started chan error) error {
+	r.activeAgent.Store(a)
+	defer r.activeAgent.Store(nil)
 	answer := func(err error) {
 		if started != nil {
 			started <- err

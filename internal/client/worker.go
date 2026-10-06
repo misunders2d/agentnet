@@ -98,6 +98,10 @@ func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
 
 // runNext claims and runs one job; it reports whether it did.
 func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
+	if !a.appUpdateMu.TryLock() {
+		return false
+	}
+	defer a.appUpdateMu.Unlock()
 	if ctx.Err() != nil {
 		return false
 	}
@@ -842,4 +846,13 @@ func proposePrompt(asker string) string {
 	return fmt.Sprintf("If answering needs an action you may not take for a question (changing files, running something with effects, sending something), do not do it and do not guess: "+
 		"make your first line exactly %q and write below it only the exact, self-contained task that would do it, as you would give it to an agent that sees nothing else. "+
 		"Nothing runs: %s may confirm it as a task, which then needs its usual OK here.\n", proposeMarker, asker)
+}
+
+// PauseForAppUpdate refuses active work and fences new claims until resumed.
+// The owning desktop process holds this fence until its checked replacement.
+func (a *Agent) PauseForAppUpdate() (func(), error) {
+	if !a.appUpdateMu.TryLock() {
+		return nil, errors.New("A job is running. Wait for it to finish, then update again.")
+	}
+	return func() { a.appUpdateMu.Unlock(); a.wakeWorker() }, nil
 }

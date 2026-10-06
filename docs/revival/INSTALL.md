@@ -447,6 +447,8 @@ the download and checksum steps above, stop the daemon when no job is
 running, replace the binary, and start the daemon again with the same home.
 Keep your home: it contains your keys and message history.
 
+For an app-managed command, `agentnet update` requests the same whole-app updater as About: the desktop app and bundled CLI update together. Open the installed app for the same home before running it. If closed, its saved installation path may be opened; retry the command once the app is ready. Active jobs refuse the update with a retry message; the update holds a fence against new job starts until handoff or failure. `--check` checks availability without installing; a named release is supported. Custom commands are preserved by the existing app ownership checks. Standalone CLI and relay installs update only their CLI; this does not install or update a desktop app.
+
 `agentnet update` installs the latest official release (or `agentnet update
 vX.Y.Z` a named one) over the program's file: it downloads this system's
 asset from the project's GitHub releases, checks it against that release's

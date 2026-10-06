@@ -67,6 +67,7 @@ type Agent struct {
 	kickMu         sync.Mutex                 // guards kick for kickNow
 	prefetchFailed map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
 	wakeWorker     func()                     // sends a coalesced local wake; stable for this Agent handle
+	appUpdateMu    sync.Mutex                 // holds job claim/run against whole-app replacement
 	workerWake     chan struct{}              // pending local job wake survives worker startup
 	changes        *changeFeed                // local state changed (changes.go)
 	listed         listedCache                // rosters the Hub lists for persons not pinned here (persons.go)

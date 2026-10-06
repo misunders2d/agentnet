@@ -94,13 +94,22 @@ func appUpdateAsset(goos, app string) (string, string, error) {
 
 // Downloads are complete and checked before the shell is asked to quit.
 func (r *appRunner) stageAppUpdate(ctx context.Context) (string, string, error) {
+	return r.stageAppUpdateTo(ctx, "")
+}
+
+func (r *appRunner) stageAppUpdateTo(ctx context.Context, tag string) (string, string, error) {
 	name, kind, err := appUpdateAsset(runtime.GOOS, r.exe)
 	if err != nil {
 		return "", "", err
 	}
-	tag, err := latestRelease(ctx)
-	if err != nil {
-		return "", "", err
+	if tag == "" {
+		tag, err = latestRelease(ctx)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if _, ok := parseRelease(tag); !ok {
+		return "", "", errors.New("invalid release")
 	}
 	current, known := parseRelease(protocol.Version)
 	if base, ok := devBase(protocol.Version); ok {
@@ -246,11 +255,30 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 		r.commandMu.Unlock()
 		reply(status)
 	case "/api/app/update":
+		var choice struct {
+			Version string `json:"version"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024)).Decode(&choice) != nil {
+			http.Error(w, "Invalid update request.", 400)
+			return true
+		}
 		if !r.updating.CompareAndSwap(false, true) {
 			http.Error(w, "An update is already being prepared.", 409)
 			return true
 		}
-		helper, plan, err := r.stageAppUpdate(req.Context())
+		resume, err := r.pauseForAppUpdate()
+		if err != nil {
+			r.updating.Store(false)
+			http.Error(w, err.Error(), 409)
+			return true
+		}
+		keepPaused := false
+		defer func() {
+			if !keepPaused {
+				resume()
+			}
+		}()
+		helper, plan, err := r.stageAppUpdateTo(req.Context(), choice.Version)
 		if err != nil {
 			r.updating.Store(false)
 			http.Error(w, err.Error(), 400)
@@ -260,6 +288,7 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return true
 		}
+		keepPaused = true
 		reply(map[string]string{"state": "restarting", "message": "Restarting AgentNet with the update…"})
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
@@ -495,4 +524,15 @@ func (r *appRunner) handoffAppUpdate(ctx context.Context, helper, plan string) e
 	case <-timer.C:
 		return errors.New("The app did not answer the update request. Close and reopen AgentNet before trying again.")
 	}
+}
+
+func (r *appRunner) pauseForAppUpdate() (func(), error) {
+	if a := r.activeAgent.Load(); a != nil {
+		return a.PauseForAppUpdate()
+	}
+	release, err := lockfile.Acquire(filepath.Join(r.home, "daemon.lock"))
+	if err != nil {
+		return nil, errors.New("Another daemon owns this home. Stop it when idle, then update from the app.")
+	}
+	return release, nil
 }
