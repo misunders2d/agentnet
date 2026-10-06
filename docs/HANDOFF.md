@@ -1,5 +1,9 @@
 # AgentNet Revival — Fresh Agent & Contributor Handoff Guide
 
+Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
+Unreleased as they are implemented. Move shipped entries into a dated version
+section at release; keep detailed verification and remaining work here.
+
 ## Current release — October 6 v0.8.1
 
 [v0.8.1](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) is published

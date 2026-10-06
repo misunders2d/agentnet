@@ -12,7 +12,7 @@ It is built for everyday company work: sales, operations, purchasing,
 accounting, customer support—and the people who build the systems behind them.
 You do not need to write code to use it.
 
-[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) · [Get started](#get-started) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
+[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
 
 ## Start with a topic
 
@@ -472,6 +472,9 @@ recipient, workspace and approval checks in both native and browser engines.
 
 Read [AGENTS.md](AGENTS.md) before changing code. Use Go 1.26 or later for the
 program; frontend and browser checks use the Node version pinned in CI.
+Record notable user-facing changes under **Unreleased** in
+[CHANGELOG.md](CHANGELOG.md) alongside the implementation, and move only
+shipped entries into a dated version section when publishing a release.
 Desktop builds have additional Rust/platform dependencies recorded in the
 [desktop build workflow](.github/workflows/desktop.yml). Ordinary users do not
 need these build tools.
