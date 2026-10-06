@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,6 +169,7 @@ func TestGroupInvitationCancelRefusesPublicationCustody(t *testing.T) {
 	next.State.Seq = inv.Proposal.Seq
 	next.State.Prev = inv.Proposal.Prev
 	next.State.Members = append(next.State.Members, protocol.GroupMember{ConvMember: protocol.ConvMember{Person: admission.Person, Roster: admission.Roster}, Admission: admission})
+	slices.SortFunc(next.State.Members, func(a, b protocol.GroupMember) int { return strings.Compare(a.Person, b.Person) })
 	next, err = w.alice.SignGroupState(tctx(t), next)
 	if err != nil {
 		t.Fatal(err)

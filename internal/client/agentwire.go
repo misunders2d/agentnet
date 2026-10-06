@@ -134,7 +134,7 @@ func copyRequirement(c outCopy) string {
 }
 
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
-	if required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
+	if required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)
@@ -308,6 +308,8 @@ type NeedsUpdateError struct{ Address, Cap string }
 func (e *NeedsUpdateError) Error() string {
 	message := "cannot read named agents yet; update all its active AgentNet sessions"
 	switch e.Cap {
+	case protocol.CapGroupInvitationControl:
+		message = "cannot handle refreshable group invitations yet; update all its active AgentNet sessions"
 	case protocol.CapGroupHumanParticipation:
 		message = "cannot handle group human guests yet; update all its active AgentNet sessions"
 	case protocol.CapHumanParticipation:

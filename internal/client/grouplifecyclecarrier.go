@@ -45,6 +45,12 @@ func (a *Agent) groupLifecycleCopy(root protocol.ConvRoot, sub string, descripto
 		copy.in.PID = pids[0]
 	}
 	copy.state, copy.required, copy.recipientFP = stateQueued, protocol.CapGroup, key.Fingerprint()
+	if p, ok := value.(protocol.GroupInvitation); ok && p.Nonce != "" {
+		copy.required = protocol.CapGroupInvitationControl
+	}
+	if c, ok := value.(protocol.GroupConsent); ok && c.Decision == "cancelled" {
+		copy.required = protocol.CapGroupInvitationControl
+	}
 	path, cleanup, err := a.StageUpload(sub+".json", bytes.NewReader(raw))
 	if err != nil {
 		return copy, err
@@ -169,8 +175,8 @@ func (a *Agent) mayDeliverGroupLifecycle(env envelope.Envelope) (bool, bool, err
 	if sub != envelope.SubGroupProof && sub != envelope.SubGroupInvite && sub != envelope.SubGroupConsent {
 		return false, false, nil
 	}
-	var id, direction, state, fp string
-	err := a.store.db.QueryRow(`SELECT c.invitation,c.direction,o.state,coalesce(o.recipient_fp,'') FROM group_invitation_copies c JOIN outbox o ON o.id=c.id WHERE c.id=?`, env.ID).Scan(&id, &direction, &state, &fp)
+	var id, direction, state, fp, required string
+	err := a.store.db.QueryRow(`SELECT c.invitation,c.direction,o.state,coalesce(o.recipient_fp,''),coalesce(o.required_cap,'') FROM group_invitation_copies c JOIN outbox o ON o.id=c.id WHERE c.id=?`, env.ID).Scan(&id, &direction, &state, &fp, &required)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -179,6 +185,21 @@ func (a *Agent) mayDeliverGroupLifecycle(env envelope.Envelope) (bool, bool, err
 	}
 	if state != stateQueued {
 		return true, false, nil
+	}
+	if required == protocol.CapGroupInvitationControl {
+		key, e := a.sendKey(context.Background(), env.To)
+		if e == nil && key.Fingerprint() == fp {
+			e = a.requireParticipationCaps(context.Background(), key, required)
+		}
+		if errors.Is(e, errAgentIdentityUnsupported) {
+			return true, false, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+e.Error(), "")
+		}
+		if e != nil {
+			return true, false, e
+		}
+		if key.Fingerprint() != fp {
+			return true, false, nil
+		}
 	}
 	r, err := groupInvitationIn(a.store.db, id, direction)
 	if err == nil {

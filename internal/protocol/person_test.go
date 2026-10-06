@@ -335,7 +335,7 @@ func TestCapsRoomImplicationAndHeadroom(t *testing.T) {
 			t.Errorf("rm1 does not imply %s", name)
 		}
 	}
-	for _, name := range []string{CapGroupHumanParticipation, CapPerson, CapControl, CapHeadless, CapDriveSpace, CapNotify, CapTyping} {
+	for _, name := range []string{CapGroupInvitationControl, CapGroupHumanParticipation, CapPerson, CapControl, CapHeadless, CapDriveSpace, CapNotify, CapTyping} {
 		if room.Supports("vitalii/desk", pub, name) {
 			t.Errorf("rm1 implies %s, which it does not list", name)
 		}

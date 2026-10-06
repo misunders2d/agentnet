@@ -5,6 +5,10 @@ import (
 	"errors"
 )
 
+// CapGroupInvitationControl explicitly advertises nonce-bound proposals and cancellation.
+// It is not implied by grp1 or rm1.
+const CapGroupInvitationControl = "gic1"
+
 // GroupInvitation is a proposal, not membership. Original public authority
 // records arrive separately through bounded GroupJournalPage carriers. The
 // semantic ID is shared by all devices of the invited person; delivery keys

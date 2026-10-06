@@ -412,9 +412,11 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    w.e.post=async()=>{throw Error('local control must not contact relay');};
    await w.e.messageControl('edit',{conv,id,dir:'out',text:'edited alone'});
    check((await w.e.groupThread(conv)).messages.find(m=>m.id===id)?.text==='edited alone','last browser person can edit');
+   check((await w.e.overview()).dms.find(d=>d.id===conv)?.last==='edited alone','sidebar uses latest revision');
    await w.e.messageControl('delete',{conv,id,dir:'out'});
    check((await w.st.get('outbox',id)).body===''&&(await w.e.groupThread(conv)).messages.find(m=>m.id===id)?.deleted,'last browser person can delete and erase text');
    await w.reload();check((await w.e.groupThread(conv)).messages.find(m=>m.id===id)?.deleted,'last-person browser deletion survives reload');
+   check((await w.e.overview()).dms.find(d=>d.id===conv)?.last==='Message deleted','sidebar shows deletion after reload');
   }
   await w.close();
   w=await world();const outside=v.outside_browser, outsideConv=outside.state.conv;
@@ -499,6 +501,21 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
 
   const newTarget=await wire.parseRoster(v.challenge.rosters[1]);
   const [firstLive,secondLive]=await Promise.all([w.e.inviteGroup({conv:created,person:newTarget.person}),w.e.inviteGroup({conv:created,person:newTarget.person})]);
+  const controlCopies=(await w.st.all('outbox')).filter(x=>x.group_lifecycle===firstLive.id&&x.sub===wire.SubGroupInvite);
+  check(controlCopies.length>0&&controlCopies.every(x=>x.required_cap===wire.CapGroupInvitationControl),'nonce proposal requires explicit gic1 at final handoff');
+  const oldSession=wire.newID(),newSession=wire.newID();
+  const oldCaps=JSON.parse(wire.capsJSON(await wire.newCaps(keys,address,oldSession,[wire.CapEnv2,wire.CapRoom]))),newCaps=JSON.parse(wire.capsJSON(await wire.newCaps(keys,address,newSession,[wire.CapEnv2,wire.CapRoom,wire.CapGroupInvitationControl])));
+  let controlProfile={live:true,sessions:[oldSession,newSession],caps:[oldCaps,newCaps]};
+  const controlGate={pubOf:async()=>pub,profile:async()=>controlProfile};
+  let oldBlocked=false;try{await Engine.prototype.requireGroupInvitationControl.call(controlGate,address,{});}catch(e){oldBlocked=e.message.includes('gic1');}
+  check(oldBlocked&&!wire.RoomImplies.includes(wire.CapGroupInvitationControl),'mixed signed grp1/rm1 sessions cannot receive nonce or cancellation; gic1 not implied');
+  const sealedBefore=JSON.stringify(controlCopies[0]);
+  const finalControlGate={pinned:async()=>({fingerprint:controlCopies[0].recipient_fp}),requireGroupInvitationControl:(a,p)=>Engine.prototype.requireGroupInvitationControl.call(controlGate,address,p)};
+  const finalControl=await Engine.prototype.groupLifecycleGate.call(finalControlGate,controlCopies[0]);
+  check(finalControl.why.includes('gic1')&&JSON.stringify(controlCopies[0])===sealedBefore,'after-queue old session blocks final lifecycle handoff without changing sealed copy');
+
+  controlProfile={live:true,sessions:[newSession],caps:[newCaps]};await Engine.prototype.requireGroupInvitationControl.call(controlGate,address,{});
+  check(true,'explicit signed gic1 current session permits invitation controls');
   check(firstLive.id===secondLive.id,'concurrent repeated browser Invite keeps one exact live proposal');
   await w.e.cancelGroup({id:firstLive.id});await w.e.cancelGroup({id:firstLive.id});
   check((await w.st.get('kv','group-invitation/out/'+firstLive.id)).status==='cancelled','browser cancel is durable and idempotent');
