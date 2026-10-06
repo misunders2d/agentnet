@@ -528,6 +528,13 @@ messages must belong to an explicitly approved scope; its boundaries and
 end conditions remain to be designed. Joining a project cannot silently grant
 access to every room, file, Drive folder or harness tool.
 
+Two invitation choices must remain explicit: **Invite member** gives permanent
+Project membership until an admin removes that member; **Invite guest** gives
+temporary or one-off access to the selected/approved context. A guest invite
+must never silently become permanent membership. The future design must make
+the member's project access and admin removal effects enforceable, rather than
+claiming that unrelated child-room grants automatically follow a catalog change.
+
 ### Current behavior is not the proposed access model
 
 AgentNet topics organize a conversation; they are not access-control
