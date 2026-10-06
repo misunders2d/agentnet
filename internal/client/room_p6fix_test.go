@@ -301,6 +301,11 @@ func TestP6FixCapturedTurnsOnlyAndEpochFence(t *testing.T) {
 	if err = w.alice.store.db.QueryRow(`SELECT count(*) FROM room_context WHERE conv=? AND pid=? AND lid=?`, conv, from.PID, early.LID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("late earlier turn granted: %d %v", n, err)
 	}
+	// Bob can capture only consent he has received, not Alice's local state.
+	eventually(t, "sender knows accepted membership", func() bool {
+		p := stateAt(t, w.bob, from.PID)
+		return p.Claimable() && p.Invite == from.Invite && p.Decision == from.Decision
+	})
 	future, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "AFTER_MEMBERSHIP"})
 	if err != nil {
 		t.Fatal(err)

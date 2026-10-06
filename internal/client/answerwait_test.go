@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 // The command that asked waits for the answer and gets it, woken by the
@@ -89,9 +90,10 @@ func TestChangesSocketWakesWithoutPolling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(changesSockPath(w.alice.home))
-	if err != nil || info.Mode().Perm()&0o077 != 0 {
-		t.Fatalf("socket not owner-only: %v %v", info, err)
+	// An existing path is checked without changing it: Unix permissions or
+	// the Windows DACL, where FileMode's Unix bits do not express access.
+	if err := secfile.Touch(changesSockPath(w.alice.home)); err != nil {
+		t.Fatalf("socket not owner-only: %v", err)
 	}
 	c, err := net.Dial("unix", changesSockPath(w.alice.home))
 	if err != nil {

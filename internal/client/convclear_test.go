@@ -375,7 +375,7 @@ func TestDeleteKeepsUnfinishedWorkUntilItEnds(t *testing.T) {
 // the change that records its hand-over (as delivery records it) erases it.
 func TestDeleteKeepsUnsentCopyUntilHandedOver(t *testing.T) {
 	w := newWorld(t, "")
-	runAgent(t, w.alice)
+	stopAlice := runAgent(t, w.alice)
 	runAgent(t, w.bob)
 	persons(t, w.alice, w.bob)
 	conv := newDM(t, w.bob, w.alice)
@@ -383,7 +383,9 @@ func TestDeleteKeepsUnsentCopyUntilHandedOver(t *testing.T) {
 	eventually(t, "the DM here", func() bool { return len(convBodies(t, w.alice, conv)) == 1 })
 	sent := sendConv(t, w.alice, conv, ConvOutgoing{Body: "going out"})
 	eventually(t, "the turn at bob", func() bool { return len(convBodies(t, w.bob, conv)) == 2 })
-	// The copy as it stands before the Hub takes it.
+	// Freeze the sender before simulating an unsent copy. Otherwise a real
+	// retry can hand it over and legitimately erase its text during deletion.
+	stopAlice()
 	if _, err := w.alice.store.db.Exec(`UPDATE outbox SET state = ? WHERE lid = ?`, stateQueued, sent.LID); err != nil {
 		t.Fatal(err)
 	}
@@ -396,6 +398,7 @@ func TestDeleteKeepsUnsentCopyUntilHandedOver(t *testing.T) {
 	if err := w.alice.store.setOutboxState(sent.ID, protocol.StateCustody, "", ""); err != nil {
 		t.Fatal(err)
 	}
+	runAgent(t, w.alice)
 	eventually(t, "the handed-over copy's text erased", func() bool {
 		return count(t, w.alice, "outbox WHERE lid = '"+sent.LID+"' AND body <> ''") == 0
 	})
