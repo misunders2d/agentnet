@@ -4,9 +4,10 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Release candidate — October 6 v0.8.2
+## Current published release — October 6 v0.8.2
 
-The release candidate adds group human guests, explicit permanent-member invites,
+[v0.8.2](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2) was published
+at 17:58 UTC from `ac9dab82ddcc31bb510b0644a9edf1a561c015cf`. It adds group human guests, explicit permanent-member invites,
 retract/refresh controls, corrected OKs/navigation, current edited previews,
 person notification controls, worker wake, quieter internal records and
 whole-app CLI updates. The owner approved encrypted exact read-state sharing
@@ -42,8 +43,13 @@ passed all native Linux/Windows/macOS tests, six client race shards, other
 race and real browser-storage tests, the container journey and desktop builds
 at `2082b4f34dd237bff8295b527afd647cb9f84124`. Only release documentation
 follows that tested code. A Windows outbox-flush timeout passed on an unchanged
-commit rerun; no test deadline was raised. Release asset checks and publication
-are the remaining gates. No live installations have been changed for v0.8.2;
+commit rerun; no test deadline was raised. The
+[release workflow](https://github.com/misunders2d/agentnet/actions/runs/37506258479)
+passed. All 12 assets matched GitHub digests and all 11 packages matched
+`SHA256SUMS`; the downloaded Linux CLI reported v0.8.2, protocol 1, schema 50.
+The public release is marked latest. A duplicate full CI run on the final
+documentation-only commit was cancelled; the code is identical to the qualified
+candidate. No live installations have been changed for v0.8.2;
 physical Windows/macOS updates remain unverified. The opt-in
 `TestLiveOwnAgentTopicClosure` passed against installed Codex in 81.541s:
 two ordinary answers kept one topic active, then an explicit close marked it

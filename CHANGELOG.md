@@ -62,6 +62,19 @@ This record starts with v0.8.1; earlier releases remain on the
 - Linked the separate [skin collection](https://github.com/misunders2d/agentnet-skins)
   and its reusable creator and compatibility workflow.
 
+### Verification and remaining limits
+
+Native Linux/Windows/macOS CI, race tests, real browser-storage checks,
+container checks and desktop builds passed. A Windows outbox-flush timeout
+passed on the unchanged candidate's rerun. All release assets were checksum
+verified. An isolated real Codex journey verified ordinary replies keep a
+topic open and an explicit close ends it.
+
+No existing installation was upgraded for qualification. Interactive
+Windows/macOS installation, physical-device read-state convergence and a live
+in-app upgrade remain unverified. The worker-wake fix does not establish that
+every startup delay is eliminated. Private Projects remain a design discussion.
+
 ## [0.8.1] — 2026-10-06
 
 ### Added

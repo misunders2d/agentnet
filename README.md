@@ -514,9 +514,10 @@ passed native Linux/Windows/macOS tests, all race shards, real browser-storage
 checks, the container journey and desktop builds. The tested code is
 `2082b4f34dd237bff8295b527afd647cb9f84124`; only release documentation follows it.
 One Windows outbox-flush timeout passed on the same commit's rerun; no timeout
-was increased. Release packages are checked against `SHA256SUMS` and GitHub
-asset digests before publication. See the [handoff](docs/HANDOFF.md) for the
-publication record.
+was increased. The [release workflow](https://github.com/misunders2d/agentnet/actions/runs/37506258479)
+passed. All 12 release assets matched GitHub digests and all 11 packages
+matched `SHA256SUMS` before publication. The downloaded Linux CLI reported
+v0.8.2. See the [handoff](docs/HANDOFF.md) for the publication record.
 
 v0.8.2 adds group human guests, invitation retraction/refresh, exact read-state
 sync across your devices, correct approval navigation, current message previews,

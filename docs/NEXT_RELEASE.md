@@ -57,12 +57,15 @@ Focused native/browser regressions and rendered Comic, Classic and Zoom
 checks passed. [Candidate CI](https://github.com/misunders2d/agentnet/actions/runs/37498756845)
 passed native Linux/Windows/macOS tests, all race shards, real browser storage,
 container checks and desktop builds. One Windows outbox-flush timeout passed
-on the unchanged candidate's rerun; no deadline was increased. Release packages
-are checked against SHA256SUMS and GitHub asset digests before publication;
-the [handoff](HANDOFF.md) records the completed release checks. An isolated three-turn real
-Codex check passed: two ordinary replies kept the same topic active, and an
-explicit request closed it. No existing device or relay was upgraded during qualification. Interactive Windows/macOS installation and physical-device read
-state convergence remain separate live checks. The worker-wake fix does not
+on the unchanged candidate's rerun; no deadline was increased. The
+[release workflow](https://github.com/misunders2d/agentnet/actions/runs/37506258479)
+passed; all 12 asset digests and all 11 package checksums were verified before
+publication. The downloaded Linux CLI reported v0.8.2, protocol 1, schema 50.
+The [handoff](HANDOFF.md) records the release checks. An isolated three-turn
+real Codex check passed: two ordinary replies kept the same topic active, and
+an explicit request closed it. No existing device or relay was upgraded during
+qualification. Interactive Windows/macOS installation and physical-device
+read-state convergence remain separate live checks. The worker-wake fix does not
 establish that every agent startup delay is eliminated.
 
 Private Projects are a [design discussion](DECISIONS.md#10-private-projects-and-selected-guest-context-discussion-oct-6),
