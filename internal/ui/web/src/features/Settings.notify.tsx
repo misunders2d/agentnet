@@ -2,7 +2,6 @@
 // only "AgentNet: New activity", never what was written. Each chat can be
 // muted, and a person who started a chat with you alerts you only once
 // you allow them.
-import { IconBellOff } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
@@ -118,47 +117,59 @@ function NotifyBody({ n, dms }: { n: T.NotifyView; dms: T.DMSummary[] }) {
   );
 }
 
-// Chats is one switch per person chat: on when that chat may alert you
-// (not muted, and its person allowed). Turning one on allows the person
-// too; turning it off mutes just that chat.
+// Person permission and per-conversation mutes are separate choices. Opening
+// this page preserves both; changing a person grant never clears a mute.
+export function notificationPeople(dms: T.DMSummary[], allowed: string[]) {
+  const people = new Map<string, { peer: T.PersonView; conversations: T.DMSummary[]; allowed: boolean }>();
+  for (const d of dms) {
+    if (d.kind === "group" || !d.peer.person) continue;
+    let p = people.get(d.peer.person);
+    if (!p) { p = { peer: d.peer, conversations: [], allowed: false }; people.set(d.peer.person, p); }
+    p.conversations.push(d);
+    p.allowed ||= [d.peer.address, ...(d.peer.devices || []).map(x => x.address)].some(a => allowed.includes(a));
+  }
+  return [...people.values()];
+}
+
 function Chats({ n, dms }: { n: T.NotifyView; dms: T.DMSummary[] }) {
   const store = useApp();
   const [busy, setBusy] = useState("");
-  const mutes = n.mutes || [], allowed = n.allowed || [];
-  const set = async (d: T.DMSummary, on: boolean) => {
-    setBusy(d.id);
-    const name = personName(d.peer);
-    if (!on) await store.run((a) => a.notify("mute", { conv: d.id, muted: true }), "Chat with " + name + " is muted.");
-    else {
-      if (mutes.includes(d.id)) await store.run((a) => a.notify("mute", { conv: d.id, muted: false }));
-      if (!allowed.includes(d.peer.address)) await store.run((a) => a.notify("allow", { person: d.peer.person, allowed: true }));
-      store.toast("Chat with " + name + " can alert you.", "ok");
-    }
+  const mutes = n.mutes || [];
+  const people = notificationPeople(dms, n.allowed || []);
+  const change = async (key: string, body: { person: string; allowed: boolean } | { conv: string; muted: boolean }) => {
+    setBusy(key);
+    await store.run(a => a.notify("person" in body ? "allow" : "mute", body));
     setBusy("");
   };
-  if (!dms.length) return <Hint className="px-1">Once you chat with someone, you can mute that chat here.</Hint>;
+  if (!people.length) return <Hint className="px-1">People you chat with will appear here.</Hint>;
   return (
     <section aria-labelledby="notify-chats">
-      <GroupLabel id="notify-chats">Chats that can alert you</GroupLabel>
+      <GroupLabel id="notify-chats">People who can alert you</GroupLabel>
       <Card className="divide-y divide-hairline">
-        {dms.map((d) => {
-          const muted = mutes.includes(d.id), ok = allowed.includes(d.peer.address);
-          const name = personName(d.peer);
-          return (
-            <div key={d.id} className="flex min-h-16 items-center gap-3 px-4 py-2.5">
-              <PersonAvatar name={name} seed={d.peer.person || d.peer.address} size={40} />
+        {people.map(p => {
+          const name = personName(p.peer), id = p.peer.person!;
+          const mutedCount = p.conversations.filter(d => mutes.includes(d.id)).length;
+          return <div key={id} className="px-4 py-3">
+            <div className="flex min-h-12 items-center gap-3">
+              <PersonAvatar name={name} seed={id} size={40} />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{name}</p>
-                <p className="flex items-center gap-1 text-[13px] text-muted">
-                  {muted ? <><IconBellOff size={14} aria-hidden="true" />Muted</> : ok ? "Alerts you" : "Off until you allow " + name}
-                </p>
+                <p className="text-[13px] text-muted">{p.allowed ? "Allowed to alert you" : "Alerts from this person are off"}{mutedCount ? ` · ${mutedCount} muted` : ""}</p>
               </div>
-              <Toggle label={"Alerts from the chat with " + name} checked={!muted && ok} disabled={busy === d.id} onChange={(on) => set(d, on)} />
+              <Toggle label={"Allow alerts from " + name} checked={p.allowed} disabled={!!busy || p.peer.state !== "pinned"} onChange={allowed => void change(id, { person: id, allowed })} />
             </div>
-          );
+            <details className="mt-2">
+              <summary className="cursor-pointer py-2 text-sm font-semibold text-text-2">Conversation overrides ({p.conversations.length})</summary>
+              <p className="pb-2 text-sm text-muted">A muted conversation stays quiet even when this person is allowed.</p>
+              {p.conversations.map(d => <div key={d.id} className="flex min-h-12 items-center gap-3 border-t border-hairline py-2">
+                <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{d.title || "Main conversation"}</p><p className="text-xs text-muted">Started {new Date(d.created).toLocaleString()}</p></div>
+                <Toggle label={"Mute conversation " + (d.title || "started " + d.created)} checked={mutes.includes(d.id)} disabled={!!busy} onChange={muted => void change(d.id, { conv: d.id, muted })} />
+              </div>)}
+            </details>
+          </div>;
         })}
       </Card>
-      <Hint className="mt-2 px-1">People you started a chat with can alert you. Someone who started one with you can alert you only after you turn it on here.</Hint>
+      <Hint className="mt-2 px-1">These choices apply on this device. Turning a person on or off preserves your conversation overrides.</Hint>
     </section>
   );
 }

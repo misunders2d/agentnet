@@ -92,7 +92,7 @@ export interface Guest {
 
 export interface Waiting { id: string; text: string; asker: string; agent: string; decider: string; mine: boolean }
 
-export interface GroupInvite { id: string; target: string; name: string; state: string }
+export interface GroupInvite { id: string; target: string; name: string; state: string; canCancel: boolean; canRefresh: boolean }
 
 /** Outbound proposals are invitations, never members before publication. */
 export function pendingGroupInvites(t: T.DMThread, o: T.Overview | null): GroupInvite[] {
@@ -100,10 +100,10 @@ export function pendingGroupInvites(t: T.DMThread, o: T.Overview | null): GroupI
   const members = new Set((t.members || []).map(m => m.person));
   const seen = new Set<string>();
   return (o?.group_invitations || []).filter(i => i.conv === t.id && i.direction === "out" &&
-    (i.status === "pending" || i.status === "accepted") && !members.has(i.target)).flatMap(i => {
+    (["pending", "accepted", "stale", "reissue", "history-unavailable"].includes(i.status)) && !members.has(i.target)).sort((a, b) => Number(["pending", "accepted"].includes(b.status)) - Number(["pending", "accepted"].includes(a.status))).flatMap(i => {
       if (seen.has(i.target)) return [];
       seen.add(i.target);
-      return [{ id: i.id, target: i.target, state: i.status,
+      return [{ id: i.id, target: i.target, state: i.status, canCancel: !!i.can_cancel, canRefresh: !!i.can_refresh,
         name: o?.people?.find(p => p.person === i.target)?.label || "Person " + i.target.slice(0, 8) }];
     });
 }

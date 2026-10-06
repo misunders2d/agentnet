@@ -6,6 +6,30 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Group conversations offer scoped human guests by default. Adding a permanent
+  member is a separate admin choice. Guests receive selected earlier context
+  and new conversation messages until dismissed; they gain no membership or
+  invitation rights.
+- Pending member invitations can be retracted or refreshed with fresh consent.
+- Comic keeps running requests out of approval counts, offers Stop separately,
+  and opens the request's actual topic without losing an unsent draft.
+- Edited or deleted messages update conversation previews.
+- Notification settings show one row per verified person, with separate
+  conversation mutes that preserve existing choices.
+- New Chat prefers a person's populated conversation; conversation and topic
+  counts explain their different scopes.
+- Local queued agent work wakes promptly. Ordinary answers no longer instruct
+  the agent to close an ongoing topic; explicit topic closure stays available.
+- Internal review-status records stay out of chat messages and topic titles.
+
+### Updates
+
+- The app-managed `agentnet update` command uses the About page's whole-app
+  updater, updating the desktop app and its bundled command together. Active
+  jobs block preparation; standalone CLI and relay deployments remain separate.
+
 ### Documentation
 
 - Reworked the README around company work: topics, guests, existing assistants,

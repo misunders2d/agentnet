@@ -38,7 +38,7 @@ export function api(host: Host) {
     agents: (hostAddress?: string) => get<T.AgentCatalogView>(hostAddress ? q("/api/agents", { host: hostAddress }) : "/api/agents"),
     changeAgents: (c: T.AgentCatalogChange) => post<T.AgentCatalogChangeResult>("/api/agents", c),
 
-    // People invited to help in a DM
+    // People invited as guests in a DM or group
     checkGuest: (c: T.GuestCheckRequest) => post<T.GuestCheck>("/api/dm/guest/check", c),
     inviteGuest: (a: T.GuestAction) => post<T.GuestView>("/api/dm/guest/invite", a),
     decideGuest: (pid: string, accept: boolean) => post<T.GuestView>("/api/dm/guest/decide", { pid, accept }),
@@ -50,6 +50,8 @@ export function api(host: Host) {
     inviteToGroup: (d: T.GroupInviteDraft) => post<T.GroupInvitationView>("/api/groups/invite", d),
     decideGroup: (id: string, accept: boolean) => post<{ recorded: boolean }>("/api/groups/decide", { id, accept }),
     publishGroup: (id: string) => post<{ published: boolean }>("/api/groups/publish", { id }),
+    cancelGroup: (id: string) => post<{ cancelled: boolean }>("/api/groups/cancel", { id }),
+    refreshGroup: (id: string) => post<T.GroupInvitationView>("/api/groups/refresh", { id }),
     manageGroup: (c: T.GroupChange) => post<T.GroupChangeResult>("/api/groups/manage", c),
 
     // Messages

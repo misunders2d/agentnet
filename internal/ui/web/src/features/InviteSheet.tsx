@@ -1,6 +1,6 @@
 // "Bring someone in": choose a person or an agent, choose exactly what they
-// may see, and send the one invitation that fits (an agent, a guest in a
-// two-person chat, or a new member of a group). Nothing joins until the
+// may see, and explicitly choose guest or permanent group membership.
+// Nothing joins until the
 // right person says yes; the sheet says who that is.
 import { useEffect, useMemo, useState } from "react";
 import { IconAt, IconInfoCircle, IconLock, IconPaperclip, IconSearch, IconCheck } from "@tabler/icons-react";
@@ -10,7 +10,7 @@ import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
-import { TASK_KEYS_MAX, capFor, catalogHosts, pool, readCatalog, routeFor, taskKeys, taskPeople, useCatalogs, type Candidate, type Route, type TaskPerson } from "./InviteSheet.candidates";
+import { TASK_KEYS_MAX, capFor, catalogHosts, pool, readCatalog, routeFor, taskKeys, taskPeople, useCatalogs, type Candidate, type HumanInviteMode, type Route, type TaskPerson } from "./InviteSheet.candidates";
 import { Checklist, ContextChoice, Preview, sinceShared, type Mode } from "./InviteSheet.context";
 import { dueText, localInput } from "../model";
 import { callName, canBringIn, plural, shareable } from "./RoomPanel.model";
@@ -57,14 +57,16 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const allowed = canBringIn(t);
   const hosts = useMemo(() => (t && o ? catalogHosts(t, o) : []), [t?.id, o?.seq]);
   const catalogs = useCatalogs(store.api, hosts, open && allowed && !!o?.agents);
+  const [humanMode, setHumanMode] = useState<HumanInviteMode>("guest");
+  const admin = t?.kind === "group" && !!t.members?.some(m => m.person === o?.person?.person && m.admin);
   const [sent, setSent] = useState<{ key: string; name: string }[]>([]); // people invited to a group from this sheet
   const p = useMemo(() => {
     if (!t || !o) return null;
-    const x = pool(t, o, catalogs, names, invitations, store.host.platform);
+    const x = pool(t, o, catalogs, names, invitations, store.host.platform, humanMode);
     // Until the invitation list catches up, someone just invited stays marked here.
     const asked = new Set(sent.map((s) => s.key));
     return { ...x, candidates: x.candidates.map((c) => (asked.has(c.key) && !c.unavailable ? { ...c, unavailable: "Invited · waiting for them to accept" } : c)) };
-  }, [t, o, catalogs, names, invitations, sent]);
+  }, [t, o, catalogs, names, invitations, sent, humanMode]);
 
   // Who to preselect ("Bring back") and what the selection is ("Since they left").
   const preset = { who: invite.who || "", label: invite.label || "" };
@@ -90,7 +92,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [teamPeople, setTeamPeople] = useState<Pick<T.PersonRef, "id">[]>([]);
   const [teamHistory, setTeamHistory] = useState(false);
 
-  const route: Route | null = c && t ? routeFor(c, t) : null;
+  const route: Route | null = c && t ? routeFor(c, t, humanMode) : null;
   const [guestCheck,setGuestCheck]=useState<T.GuestCheck|null>(null);
   const [checkError,setCheckError]=useState("");
   useEffect(()=>{let alive=true;setGuestCheck(null);setCheckError("");if(route==="guest"&&c?.person?.address&&t)store.api.checkGuest({conv:t.id,host:c.person.address}).then(v=>{if(alive)setGuestCheck(v);}).catch(e=>{if(alive)setCheckError(errorText(e));});return()=>{alive=false;};},[route,c?.key,t?.id]);
@@ -203,7 +205,19 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     <Quiet>{t.frozen ? "This chat can’t change right now, so no one can be brought in." : "Only the people in this chat can bring someone in."}</Quiet>
   ) : (
     <>
-      {t.kind === "group" && <section aria-label="Invite team people" className="mb-4 space-y-2">
+      {t.kind === "group" && <fieldset className="mb-4 space-y-2">
+        <legend className="font-bold">How should people join?</legend>
+        <label className="flex min-h-12 items-start gap-3 rounded-xl stroke bg-surface p-3">
+          <input type="radio" name="human-invite-mode" value="guest" checked={humanMode === "guest"} disabled={busy} onChange={() => { setHumanMode("guest"); setTeamPeople([]); setError(""); }} className="mt-1" />
+          <span><b>Invite as a guest</b><span className="block text-sm text-text-2">Choose earlier messages to share. They see who is in the group and new messages while here; any member can end their visit.</span></span>
+        </label>
+        <label className="flex min-h-12 items-start gap-3 rounded-xl stroke bg-surface p-3">
+          <input type="radio" name="human-invite-mode" value="member" checked={humanMode === "member"} disabled={busy || !admin} onChange={() => { setHumanMode("member"); setError(""); }} className="mt-1" />
+          <span><b>Add as a permanent member</b><span className="block text-sm text-text-2">They join the team and receive future group messages.{!admin && " Only an admin can add members."}</span></span>
+        </label>
+        <p className="text-sm text-muted">Agents join as group members; their owners decide what runs.</p>
+      </fieldset>}
+      {t.kind === "group" && humanMode === "member" && admin && <section aria-label="Invite team people" className="mb-4 space-y-2">
         <TeamPeople selected={teamPeople} onChange={setTeamPeople} disabled={busy || offline}
           excluded={[...(t.members || []).map((p) => p.person!), ...sent.map((p) => p.key.slice(2)), ...(invitations || []).filter((i) => i.conv === t.id && i.direction === "out" && i.status === "pending").map((i) => i.target)]} />
         {!!teamPeople.length && <>
@@ -237,7 +251,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           {route === "group" && (
             <p className="mt-1.5 flex gap-2 rounded-xl bg-sunken px-3 py-2 text-[13px] font-semibold text-text-2">
               <IconInfoCircle size={17} className="mt-px shrink-0" aria-hidden="true" />
-              People you add to a group become members, not guests: once they accept, they see everything new and stay until an admin removes them.
+              You chose permanent membership. Once they accept, they receive new group messages until they leave or an admin removes them.
             </p>
           )}
           {list.length === 0 ? (
@@ -284,7 +298,8 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     </>
   );
 
-  const ready = !!c && !c.unavailable && !tooMany && !tooManyKeys && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck);
+  const groupGuestBlocked = route === "guest" && t?.kind === "group" && guestCheck && !guestCheck.ready;
+  const ready = !!c && !c.unavailable && !tooMany && !tooManyKeys && !needFiles && !offline && !busy && (route !== "guest" || !!guestCheck) && !groupGuestBlocked;
   const footer = t && allowed ? (
     <div>
       {sent.length > 0 && !error && (
@@ -293,7 +308,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           <span>Invited {joinNames(sent.map((s) => s.name))}. {sent.length === 1 ? "They become a member" : "Each becomes a member"} once they accept.{c ? "" : " Choose someone else, or you’re done."}</span>
         </p>
       )}
-      {route === "guest" && <p role="status" className="text-sm text-muted">{checkError || guestCheck?.text || (!guestCheck ? "Checking their app…" : "")}</p>}
+      {route === "guest" && <p role="status" className="text-sm text-muted">{checkError || (groupGuestBlocked ? "Update the guest’s app and all group members’ devices before inviting a guest. Nothing has been sent." : guestCheck?.text) || (!guestCheck ? "Checking their app…" : "")}</p>}
       {error && <p role="alert" className="mb-2 rounded-xl bg-danger-bg px-3 py-2 text-[14px] font-semibold text-danger">{error}</p>}
       {offline && <p role="status" className="mb-2 text-[13px] font-semibold text-guest-ink">You’re offline. Invitations go out once you’re connected again.</p>}
       {needFiles && !offline && <p role="status" className="mb-2 text-[13px] font-semibold text-text-2">These messages carry {plural(files, "file")}: tick “Also share” above, or pick messages without files.</p>}
@@ -302,7 +317,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
       ) : (
         <Button variant="act" size="lg" disabled={!ready} onClick={bring} className="min-h-14 text-[17px]"
           icon={c ? <CandidateAvatar c={c} size={28} /> : undefined}>
-          {!c ? "Choose who to bring in" : busy ? (c.alreadyHere ? "Sharing more messages…" : "Bringing " + shownName + " in…") : c.alreadyHere ? "Share more messages with " + shownName : route === "guest" && guestCheck?.needs_update?.some(p => p.role === "guest") ? "Invite " + shownName + " — waits for update" : "Bring " + shownName + " in" + (now ? " now" : "")}
+          {!c ? "Choose who to bring in" : busy ? (c.alreadyHere ? "Sharing more messages…" : "Bringing " + shownName + " in…") : c.alreadyHere ? "Share more messages with " + shownName : route === "guest" && guestCheck?.needs_update?.some(p => p.role === "guest") ? "Invite " + shownName + " — waits for update" : route === "guest" ? "Invite " + shownName + " as a guest" : route === "group" ? "Invite " + shownName + " as a member" : "Bring " + shownName + " in" + (now ? " now" : "")}
         </Button>
       )}
       {c && route && <p className="mt-2.5 pb-1 text-center text-[13px] font-semibold leading-snug text-muted">{consentText(c, route)}</p>}
@@ -312,7 +327,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   return (
     <Sheet open={open} onOpenChange={(v) => { if (!v) store.closeInvite(); }} title="Bring someone in"
       description={t?.kind === "group"
-        ? "People and agents can join as members. Agents stay until removed; their owners decide what runs."
+        ? "Bring a guest into the conversation, or explicitly add a permanent team member."
         : "They join as a guest and see only what you share. Anyone here can dismiss them."} footer={footer}>
       {body}
     </Sheet>

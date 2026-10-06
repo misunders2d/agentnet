@@ -1097,6 +1097,30 @@ function peopleSection() {
     ...groupsSection(), ...teamsSection()];
 }
 
+// Invitation controls belong to the exact outgoing inviter, as reported by the provider.
+function groupInvitationActions(i) {
+  if (i.direction !== "out") return [];
+  const host = currentHost, gen = state.gen, ws = wsNow();
+  const current = () => host === currentHost && gen === state.gen && ws === wsNow();
+  const action = what => {
+    const refresh = what === "refresh", label = refresh ? "Refresh invitation" : "Retract invitation";
+    dialog({title: label + " for " + personLabelOf(i.target) + "?", ok: label,
+      body: [el("p", {}, (refresh ? "Retract this exact invitation and send a fresh proposal for " : "Retract this exact invitation to ") + personLabelOf(i.target) + " in “" + i.title + "”."),
+        el("p", {class:"hint"}, refresh ? "The person must review the current group and selected earlier context, then Join again. Prior acceptance does not apply to the fresh invitation. Membership remains unchanged until publication." : "This withdraws the pending invitation, including an acceptance that has not been published. It does not remove an existing member or recall copies already received.")],
+      run: async () => {
+        if (!current()) throw Error("Conversation or workspace changed. Review this invitation again.");
+        const latest = (state.overview?.group_invitations || []).find(n => n.id === i.id);
+        if (latest?.direction !== "out" || latest["can_" + (refresh ? "refresh" : "cancel")] !== true) throw Error("This invitation can no longer be changed here. Refresh the conversation and review it again.");
+        await api("/api/groups/" + (refresh ? "refresh" : "cancel"), {id:i.id}, host);
+        if (!current()) return;
+        announce(refresh ? "Fresh invitation sent; they must Join again. Membership is unchanged." : "Invitation retracted; membership is unchanged.");
+        await loadOverview(); if (current() && state.dm === i.conv) await loadDM(false);
+      }});
+  };
+  return [i.can_cancel === true && el("button", {type:"button",class:"text-btn",onclick:()=>action("cancel")}, "Retract invitation…"),
+    i.can_refresh === true && el("button", {type:"button",class:"text-btn",onclick:()=>action("refresh")}, "Refresh invitation…")];
+}
+
 function groupInvitationNotices(t) {
   const o = state.overview, records = o?.group_invitations || [];
   return records.filter(i => {
@@ -1125,7 +1149,7 @@ function groupsSection(open = openDM) {
   return [el("li", { class: "result-head" }, "Groups", el("button", { type: "button", class: "text-btn", onclick: newGroupDialog }, "New group…")),
     ...(o.group_invitations || []).filter(i => i.direction === "in" && i.status === "pending").map(i => el("li", {},
       el("button", { type: "button", class: "thread-row", onclick: () => groupInvitationDialog(i) }, "Invitation: " + i.title + " · from " + i.inviter))),
-    ...groupInvitationNotices().map(i => el("li", { class: "hint" }, groupInvitationNotice(i), i.direction === "out" && el("button", { type: "button", class: "text-btn", onclick: () => reviewFreshGroupInvitation(i, open) }, "Review fresh invitation for " + personLabelOf(i.target) + "…"))),
+    ...groupInvitationNotices().map(i => el("li", { class: "hint" }, groupInvitationNotice(i), groupInvitationActions(i), i.direction === "out" && el("button", { type: "button", class: "text-btn", onclick: () => reviewFreshGroupInvitation(i, open) }, "Review fresh invitation for " + personLabelOf(i.target) + "…"))),
     ...(o.dms || []).filter(humanGroup).map(d => dmRow(d, open))];
 }
 
@@ -1212,6 +1236,7 @@ function groupInvitationDialog(i) {
 }
 
 function inviteGroupDialog(t, initialPerson) {
+  if (!inviteRights(t).people || !t.members.some(p=>p.person===state.overview?.person?.person && p.admin)) { announce("Only a current administrator can invite a permanent member."); return; }
   const host = currentHost, gen = state.gen, ws = wsNow();
   const people = (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !(t.members || []).some(m => m.person === p.person));
   const person = el("select", { id: "group-invite-person" }, people.map(p => el("option", { value: p.person }, p.label + (p.email ? " · " + p.email : ""))));
@@ -1260,15 +1285,17 @@ function groupMemberCount(t) {
 
 function renderGroupMembers(t, box = $("agents")) {
   const me = state.overview?.person?.person;
-  const admin = !t.frozen && !dmVisitor(t) && t.members.some(m => m.person === me && m.admin);
+  const admin = !t.frozen && !dmVisitor(t) && !dmHumanGuest(t) && t.members.some(m => m.person === me && m.admin);
   box.hidden = false;
   fill(box, el("details", {}, el("summary", {}, groupMemberCount(t)),
     el("ul", {}, t.members.map(m => el("li", {}, m.label + " · " + m.address + (m.admin ? " · Administrator" : " · Member"),
       admin && [el("button", { type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,m.admin?"demote":"promote",m) }, m.admin?"Remove administrator role":"Make administrator"), el("button",{type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"remove",m)},"Remove member")])))),
-    ...groupInvitationNotices(t).filter(i => i.direction === "out").map(i => el("p", { class: "hint" }, groupInvitationNotice(i), admin && el("button", {type:"button",class:"text-btn",onclick:()=>inviteGroupDialog(t,i.target)},"Review fresh invitation for " + personLabelOf(i.target) + "…"))),
+    ...pendingGroupPeople(t).map(i=>el("p", {class:"hint"}, personLabelOf(i.target) + (i.status === "accepted" ? " · Accepted · waiting to join" : " · Invited · waiting for them to accept"), groupInvitationActions(i))),
+    ...groupInvitationNotices(t).filter(i => i.direction === "out").map(i => el("p", { class: "hint" }, groupInvitationNotice(i), groupInvitationActions(i), admin && el("button", {type:"button",class:"text-btn",onclick:()=>inviteGroupDialog(t,i.target)},"Review fresh invitation for " + personLabelOf(i.target) + "…"))),
     admin && el("button", {type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"rename")},"Rename group…"),
-    admin && el("button", { type: "button", class: "text-btn", onclick: () => inviteGroupDialog(t) }, "Invite a person…"),
-    !t.frozen && !dmVisitor(t) && el("button",{type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"leave")},"Leave group…"));
+    inviteRights(t).people && el("button", {type:"button",class:"text-btn",onclick:()=>inviteHumanDialog(t)},"Bring in human…"),
+    admin && el("button", { type: "button", class: "text-btn", onclick: () => inviteGroupDialog(t) }, "Invite permanent member…"),
+    !t.frozen && t.role === "member" && el("button",{type:"button",class:"text-btn",onclick:()=>groupChangeDialog(t,"leave")},"Leave group…"));
 }
 
 // deleteConversationDialog: this person's copy of the open conversation from
@@ -1996,7 +2023,7 @@ async function loadDM(scrollToEnd) {
   t.guests = t.guests || [];
   state.dmData = t;
   fill($("conv-name"), humanGroup(t) ? t.title : t.peer.label);
-  $("conv-topic").textContent = humanGroup(t) ? dmVisitor(t) ? "Invited agent context · visitor to this group" : "Group conversation · " + groupMemberCount(t) : dmVisitor(t) ? "Invited agent context · you are not a member of this DM"
+  $("conv-topic").textContent = humanGroup(t) ? dmVisitor(t) ? "Invited agent context · visitor to this group" : dmHumanGuest(t) ? "Human guest in this group · no membership rights" : "Group conversation · " + groupMemberCount(t) : dmVisitor(t) ? "Invited agent context · you are not a member of this DM"
     : dmHumanGuest(t) ? "Temporary human participation · same private conversation" : "DM with a person · started " + when(t.created) + (t.mine ? " by you" : " by them");
   $("conv-avatar").replaceWith(Object.assign(avatar(humanGroup(t) ? t.title : t.peer.label || t.peer.address), { id: "conv-avatar" }));
   const online = presenceOf(t.peer.address); // the server's pushed view, only while current
@@ -2210,9 +2237,9 @@ async function loadDMNames(t) {
 // inviteRights: whether you may invite assistants and people into t (the
 // participants list and @ both offer only these existing consent paths).
 function inviteRights(t) {
-  const open = !!t && !t.frozen && !dmVisitor(t) && !dmHumanGuest(t);
+  const open = !!t && !t.frozen && !dmVisitor(t) && !dmHumanGuest(t) && (!humanGroup(t) || t.role === "member" && t.members.some(p=>p.person===state.overview?.person?.person));
   return { assistants: open && !!(state.overview?.agents && state.overview?.person),
-    people: open && (humanGroup(t) ? t.members.some(p => p.person === state.overview?.person?.person && p.admin) : !!state.overview?.person) };
+    people: open && (humanGroup(t) ? t.role === "member" && t.members.some(p => p.person === state.overview?.person?.person) : !!state.overview?.person) };
 }
 function renderAgents(t) {
   const box = $("agents");
@@ -2223,7 +2250,7 @@ function renderAgents(t) {
     humanGroup(t) && t.frozen && el("span", {class: "hint"}, groupMemberCount(t)),
     people.map(p => el("span", { class: "participant" }, avatar(p.label || p.address, "sm"), p.state === "self" ? "You" : p.label)),
     humanGroup(t) && pendingGroupPeople(t).map(i => el("span", { class: "participant invited-person", "aria-label": "Invited person" },
-      avatar(personLabelOf(i.target), "sm"), personLabelOf(i.target), el("span", { class: "tag" }, i.status === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept"))),
+      avatar(personLabelOf(i.target), "sm"), personLabelOf(i.target), el("span", { class: "tag" }, i.status === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept"), groupInvitationActions(i))),
     (t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => el("button", { type: "button", class: "participant human-participant", title: g.host.address + " · participation " + g.pid, onclick: () => dialog({ title: g.host.label + " · human participation", body: [guestCard(g, t)], ok: "Close", run: async () => {} }) }, avatar(g.host.label || "Someone", "sm"), g.host_here ? "You" : g.host.label, el("span", { class: "tag" }, g.state === "active" ? "Guest" : g.state === "dismissed" ? "Ended here" : g.state))),
     t.agents.filter(a => !["dismissed", "declined"].includes(a.state)).map(a => el("button", {
       type: "button", class: "participant assistant-participant", title: (a.agent_id || a.pid) + " · " + a.host.address + " · participation " + a.pid,
@@ -2232,17 +2259,17 @@ function renderAgents(t) {
     (canInvite || canInvitePeople) && el("button", { type: "button", class: "text-btn invite-assistant", onclick: () => participantsDialog(t) }, "+ Add participants")));
 }
 
-// Human guests reuse explicit signed invitation/acceptance in this exact DM.
-// Groups keep their existing consent paths. Neither path recalls shared copies.
+// Human guests use signed consent in this exact conversation. Permanent
+// group membership is separate. Neither path recalls previously shared copies.
 function participantsDialog(t) {
   const gen = state.gen, ws = wsNow();
   const current = () => gen === state.gen && ws === wsNow() && state.dm === t.id;
-  const admin = humanGroup(t) && t.members.some(p => p.person === state.overview?.person?.person && p.admin);
+  const admin = inviteRights(t).people && humanGroup(t) && t.members.some(p => p.person === state.overview?.person?.person && p.admin);
   dialog({title: "Add participants", body: [
     el("p", {}, "People and assistants join this conversation only through their existing invitation and consent rules."),
-    humanGroup(t) ? el("button", {type: "button", class: "btn", disabled: !admin, onclick: () => { if (current()) inviteGroupDialog(t); }}, "Invite a person…")
-      : el("button", {type: "button", class: "btn", onclick: () => { if (current()) inviteHumanDialog(t); }}, "Invite a person…"),
-    humanGroup(t) && el("p", {class: "hint"}, admin ? "Choose earlier context explicitly. People can leave; an administrator can remove them in Conversation details. Shared copies remain. There is no automatic expiry." : "Only a current administrator can invite or remove people. You can leave in Conversation details."),
+    el("button", {type: "button", class: "btn", disabled: !inviteRights(t).people, onclick: () => { if (current()) inviteHumanDialog(t); }}, "Bring in human…"),
+    humanGroup(t) && admin && el("button", {type: "button", class: "btn", onclick: () => { if (current()) inviteGroupDialog(t); }}, "Invite permanent member…"),
+    humanGroup(t) && el("p", {class: "hint"}, "Any current member can invite a human guest. Guests receive selected earlier context and new messages while present, without group membership or invitation rights. Only administrators can add permanent members. Shared copies remain."),
     state.overview?.agents && el("button", {type: "button", class: "btn", onclick: () => { if (current()) inviteDialog(t); }}, "Invite an assistant…"),
     el("p", {class: "hint"}, "An assistant gets only selected history; its owner accepts the invitation. Address it with @mention. Ordinary chat never runs it.")], ok: "Close", run: async () => {}});
 }
@@ -2254,6 +2281,7 @@ function guestCard(g, t) {
     guestUpdateTargets(g,t).map(p => el("button", {type:"button",class:"btn",onclick:()=>askGuestUpdate(p).catch(e=>announce(e.message))}, "Ask "+p.label+" to update")),
     el("p", {}, g.state === "active" ? "Joined this conversation." : g.state === "dismissed" ? "No longer in the active audience here. Other devices may still be updating." : g.state === "invited" ? "Invitation waiting for a response." : g.state_text),
     el("p", { class: "hint" }, "Invited by " + g.inviter.label),
+    humanGroup(t) && el("p", {class:"hint"}, "Guest participation only: no group membership or invitation rights. Current members: " + joinedNames((t.members || []).map(p=>p.label || p.address))),
     el("details", { class: "tech" }, el("summary", {}, "Details"), el("p", {}, "Device: " + niceGoogleDevice(g.host.address)), el("p", { class: "mono" }, "Participation: " + g.pid)),
     el("p", { class: "hint" }, g.shared.length ? plural(g.shared.length, "selected earlier message", "selected earlier messages") + ". Available attached files are included only after acceptance." : "No earlier messages or files selected."),
     el("details", {class:"tech"}, el("summary", {}, "Sharing and leaving"), el("p", {}, "Only selected earlier context and new conversation messages are shared while present. No assistant runs automatically. Leaving or removing ends future local access, not previously received copies. Other devices may still be updating. No automatic expiry.")),
@@ -2268,6 +2296,7 @@ function guestActionDialog(g, t, action) {
   const transport = currentHost, gen = state.gen, ws = wsNow(), accepting = action === "accept", deciding = accepting || action === "decline";
   dialog({ title: accepting ? "Join conversation?" : deciding ? "Decline invitation?" : action === "leave" ? "Leave conversation?" : "Remove " + g.host.label + "?",
     body: [el("p", {}, accepting ? "Join " + joinedNames(guestAudienceNames(t)) + " in this conversation. You’ll receive the selected earlier messages and files, plus new messages while you’re here." : deciding ? "The selected earlier messages and files won’t be shared with you." : action === "leave" ? "You’ll stop receiving new messages here. Messages and files already received remain." : g.host.label + " will no longer receive new messages here. Messages and files already received remain."),
+      humanGroup(t) && el("p", {class:"hint"}, "Group guest participation grants no membership or invitation rights. Current members: " + joinedNames((t.members || []).map(p=>p.label || p.address))),
       !deciding && el("p", {class:"hint"}, "Other devices may still be updating."),
       accepting && el("p", { class: "hint" }, g.shared.length ? plural(g.shared.length, "earlier message", "earlier messages") + " selected, with available attached files." : "No earlier messages or files selected.")],
     ok: accepting ? "Join conversation" : deciding ? "Decline" : action === "leave" ? "Leave conversation" : "Remove " + g.host.label,
@@ -2279,15 +2308,16 @@ function guestActionDialog(g, t, action) {
 }
 
 function inviteHumanDialog(t, address = "") {
-  if (dmVisitor(t) || dmHumanGuest(t) || humanGroup(t)) { announce("Only original private DM members invite a human guest here."); return; }
+  if (!inviteRights(t).people) { announce("Only current conversation members can invite a human guest here."); return; }
   const transport = currentHost, gen = state.gen, ws = wsNow(), current = () => gen === state.gen && ws === wsNow() && state.dm === t.id;
-  const members = [state.overview.person, t.peer], addresses = new Set(members.flatMap(p => [p.address, ...(p.devices || []).map(d => d.address)]));
+  const members = humanGroup(t) ? t.members : [state.overview.person, t.peer], addresses = new Set(members.flatMap(p => [p.address, ...(p.devices || []).map(d => d.address)]));
   const host = el("input", { id: "guest-host", type: "text", placeholder: "person/device, e.g. carol/desk", autocomplete: "off", spellcheck: "false", maxlength: "65" });
   host.value = address; // chosen from @ (an exact directory entry), still editable here
   const candidates = directory().current ? directory().members.filter(p => !addresses.has(p.address)) : [];
   const updateNote=el("p",{class:"hint",role:"status"});let checkedHost="";
   const checkHost=async()=>{const chosen=host.value.trim();checkedHost="";updateNote.textContent="Checking their app…";try{const v=await api("/api/dm/guest/check",{conv:t.id,host:chosen},transport);if(current()&&host.value.trim()===chosen){checkedHost=chosen;updateNote.textContent=v.text||"";$("dialog-ok").textContent=v.needs_update?.some(p=>p.role==="guest")?"Invite · waits for update":"Invite person";}}catch(e){if(current()&&host.value.trim()===chosen)updateNote.textContent="Could not check this person’s app. Try again.";}};
-  host.addEventListener("change",checkHost);
+  // Blur must not insert status text between a checkbox pointer-down and up.
+  host.addEventListener("input",()=>{checkedHost="";updateNote.textContent="";});
   const picks = candidates.map(p => el("button", { type: "button", class: "text-btn", onclick: () => { host.value = p.address;void checkHost(); } }, el("strong", {}, p.label || "Someone"), " · ", el("small", {}, niceGoogleDevice(p.address))));
   const ref = m => m.lid || m.id;
   const share = t.messages.filter(m => !m.event && !m.excerpt_pid && !m.deleted).slice(-30).map(m => choice("checkbox", "guest-share", ref(m), el("span", {}, dmAuthor(m, t) + ": " + (firstLine(m.body, 70) || "(files only)"), (m.attachments || []).map(f => el("span", { class: "tag" }, f.name + " · " + size(f.size))))));
@@ -2296,16 +2326,17 @@ function inviteHumanDialog(t, address = "") {
   const note = el("input", { id: "guest-note", type: "text", maxlength: "200", autocomplete: "off" });
   fileConsent.input.addEventListener("change", () => { if (fileConsent.input.checked && $("dialog-error").textContent === "Selected context includes files. Confirm file sharing, or deselect those messages.") $("dialog-error").textContent = ""; });
   if(address)void checkHost();
-  dialog({ title: "Invite person", body: [updateNote,
+  dialog({ title: "Bring in human", body: [updateNote,
+    humanGroup(t) && el("p", {class:"hint"}, "Current group members shared with the guest: " + joinedNames(members.map(p => p.label || p.address)) + ". This is guest participation, not permanent membership. Guests cannot invite or manage members."),
     el("p", {}, "Selected earlier messages and files are shared after they join. They’ll also receive new messages while they’re here."),
-    el("label", { for: "guest-host", class: "field-label" }, "Person’s address"), host, el("div", { class: "agent-actions" }, picks),
+    el("label", { for: "guest-host", class: "field-label" }, "Person’s address"), host, el("button",{type:"button",class:"text-btn",onclick:()=>void checkHost()},"Check app compatibility"), el("div", { class: "agent-actions" }, picks),
     el("fieldset", { class: "choices" }, el("legend", {}, "Earlier context to share after acceptance"), share.length ? share.map(c => c.row) : el("p", { class: "hint" }, "No earlier messages."), el("p", { class: "hint" }, "None unless selected. Unselected earlier text and files remain private.")), fileConsent.row,
     el("label", { for: "guest-note", class: "field-label" }, "Optional note"), note,
-    el("p", {class:"hint"}, "Either original person can remove them; they can leave. Already shared copies remain.")], ok: "Invite person",
+    el("p", {class:"hint"}, humanGroup(t) ? "Current members can remove this guest; the guest can leave. No group membership or task permission is granted. Already shared copies remain." : "Either original person can remove them; they can leave. Already shared copies remain.")], ok: "Invite person",
     run: async () => {
       if (!current()) throw new Error("Conversation or workspace changed. Reopen the invitation there.");
       const address = host.value.trim(), selected = share.filter(c => c.input.checked).map(c => c.input.value);
-      if (!address || addresses.has(address)) throw new Error("Choose the exact address of someone outside this private DM.");
+      if (!address || addresses.has(address)) throw new Error("Choose the exact address of someone outside this conversation.");
       if (t.messages.some(m => selected.includes(ref(m)) && (m.attachments || []).length) && !fileConsent.input.checked) throw new Error("Selected context includes files. Confirm file sharing, or deselect those messages.");
       if(checkedHost!==address){await checkHost();if(checkedHost!==address)throw Error("Could not check this person’s app. Try again.");}
       await api("/api/dm/guest/invite", { conv: t.id, host: address, share: selected, note: note.value }, transport);
@@ -2429,7 +2460,7 @@ function mentionInvites(t, query) {
   if (rights.people && query) {
     const inside = new Set([...(humanGroup(t) ? t.members : [state.overview?.person, t.peer]).filter(Boolean).flatMap(p => [p.person, p.address, ...(p.devices || []).map(d => d.address)]),
       ...(t.guests || []).filter(g => !["dismissed", "declined"].includes(g.state)).map(g => g.host?.address)]);
-    const pool = humanGroup(t) ? (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !inside.has(p.person)).map(p => ({ name: p.label, person: p.person, title: niceGoogleDevice(p.address) }))
+    const pool = humanGroup(t) ? (state.overview?.people || []).filter(p => p.person && p.state === "pinned" && !inside.has(p.person) && !inside.has(p.address)).map(p => ({ name: p.label, person: p.person, address: p.address, title: niceGoogleDevice(p.address) }))
       : directory().current ? directory().members.filter(p => !inside.has(p.address)).map(p => ({ name: p.label || "Someone", address: p.address, title: niceGoogleDevice(p.address) })) : [];
     for (const p of pool.filter(p => p.name && p.name.toLowerCase().includes(query)).slice(0, 5)) out.push({ kind: "invite-person", ...p });
   }
@@ -2441,7 +2472,7 @@ function mentionRow(it, i) {
   const [label, sub] = it.kind === "assistant" ? ["@" + it.name, whoseAgent(it.a) ? whoseAgent(it.a) + " assistant" : "Assistant"]
     : it.kind === "person" ? ["@" + it.name, it.role]
     : it.kind === "invite-person" ? ["Invite " + it.name + "…", "Not in this conversation · joins only if they accept"]
-    : it.kind === "invite-people" ? ["Invite a person…", "Choose who joins and what earlier context they see"]
+    : it.kind === "invite-people" ? ["Bring in human…", "Guest participation · choose what earlier context they see"]
     : ["Invite an assistant…", "Its owner accepts; it runs only when asked"];
   const title = it.kind === "assistant" ? (it.a.agent_id || it.a.pid) + " · " + it.a.host.address + " · participation " + it.a.pid : it.title || "";
   return el("button", { id: "mention-" + i, type: "button", class: "mention-row" + (it.kind.startsWith("invite") ? " mention-invite" : "") + (!i ? " selected" : ""),
@@ -2469,7 +2500,7 @@ function pickMention(i) {
   if (!it || v.gen !== state.gen || v.conv !== state.dm || !t || it.kind === "assistant" && !agentOf(it.a.pid)?.can_ask) { closeMentions(); return; }
   if (it.kind.startsWith("invite")) { // the existing consent dialog decides; nothing is granted here
     closeMentions();
-    if (it.kind === "invite-assistant") inviteDialog(t); else if (humanGroup(t)) inviteGroupDialog(t, it.person); else inviteHumanDialog(t, it.address || "");
+    if (it.kind === "invite-assistant") inviteDialog(t); else inviteHumanDialog(t, it.address || "");
     return;
   }
   if (v.start !== null || it.kind === "person") {
@@ -3876,7 +3907,8 @@ function renderTarget() {
     const d = state.dmData;
     if (!d) { set("", "", "Send"); return; }
     if (humanGroup(d) && !state.dmAgent) {
-      set(d.title, (d.frozen ? "· Last verified audience: " : "· ") + (d.members || []).map(p => p.state === "self" ? "You" : p.label).join(", ") + (state.dmReply ? " · reply" : ""), "Send to " + d.title); return;
+      const guestNames = (d.guests || []).filter(g => g.state === "active" && !g.host_here).map(g => g.host.label);
+      set(d.title, (d.frozen ? "· Last verified audience: " : "· ") + (d.members || []).map(p => p.state === "self" ? "You" : p.label).join(", ") + (guestNames.length ? " · Guests: " + joinedNames(guestNames) : "") + (dmHumanGuest(d) ? " · You are a guest, not a member" : "") + (state.dmReply ? " · reply" : ""), "Send to " + d.title); return;
     }
     if (state.dmAgent) {
       const a = agentOf(state.dmAgent);
@@ -4904,7 +4936,8 @@ function writeDialog(t, m) {
       el("p", { class: "hint" }, m ? "Your answer takes this " + m.kind + " over from your responder." : "It joins this conversation.")],
     ok: "Send", focus: body,
     run: async () => {
-      if (!alive || gen !== state.gen || host !== currentHost) throw Error("Workspace changed; reopen this draft there.");
+      if (!alive || gen !== state.gen || host !== currentHost || state.dm !== d.id) throw Error("Conversation or workspace changed; reopen this draft there.");
+      if (dmHumanGuest(state.dmData) && !guestAuthor()) throw Error("Sending is unavailable here. Your draft stays here.");
       if (!body.value.trim() && !(canFiles && state.files.length)) throw Error("Write a message or add a file first.");
       $("body").value = body.value; body.value = "";
       setKind(kind.value); setAnswering(m || null);
@@ -4918,19 +4951,21 @@ function writeDialog(t, m) {
 // dmWriteDialog writes a message in DM d without the composer (Zoom). Its
 // files are this DM's draft files, the same the composer shows.
 function dmWriteDialog(d) {
+  if (dmHumanGuest(d) && !guestAuthor(d)) { announce("Join before sending. Your draft stays here."); return; }
   const host = currentHost, gen = state.gen;
   const body = el("textarea", { id: "write-body", rows: "4" });
   body.value = $("body").value;
   body.addEventListener("input", () => { $("body").value = body.value; keepDraft(); });
-  const canFiles = !!fileLimits() && !d.frozen;
+  const canFiles = filesAllowed();
   dialog({
     title: "Write to " + (humanGroup(d) ? d.title : d.peer.label),
     body: [el("label", { for: "write-body", class: "field-label" }, "Message"), body,
       canFiles && dialogFiles(body),
-      el("p", { class: "hint" }, humanGroup(d) ? "It goes to the current group members. Ordinary messages do not run agents." : "It goes to this DM only. A DM is for the person; nothing runs it.")],
+      el("p", { class: "hint" }, humanGroup(d) ? "It goes to current group members and accepted guests. Guest participation grants no membership rights. Ordinary messages do not run agents." : "It goes to this DM only. A DM is for the person; nothing runs it.")],
     ok: "Send", focus: body,
     run: async () => {
-      if (!alive || gen !== state.gen || host !== currentHost) throw Error("Workspace changed; reopen this draft there.");
+      if (!alive || gen !== state.gen || host !== currentHost || state.dm !== d.id) throw Error("Conversation or workspace changed; reopen this draft there.");
+      if (dmHumanGuest(state.dmData) && !guestAuthor()) throw Error("Sending is unavailable here. Your draft stays here.");
       if (!body.value.trim() && !(canFiles && state.files.length)) throw Error("Write a message or add a file first.");
       $("body").value = body.value; body.value = "";
       void sendDM(); // further writing stays available while this captured turn is stored
@@ -5222,13 +5257,19 @@ const Zoom = {
     const me = state.overview && state.overview.person ? state.overview.person.label : "You";
     return el("div", { class: "zoom-scene" },
       el("header", { class: "zoom-head" }, el("div", {},
-        el("p", { class: "hint" }, humanGroup(d) ? "Group: " + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · " + devicesText(d.peer)),
+        el("p", { class: "hint" }, humanGroup(d) ? (dmHumanGuest(d) ? "Guest in group: " : "Group: ") + d.title + " · " + groupMemberCount(d) : "DM with " + d.peer.label + " (the name they give) · " + devicesText(d.peer)),
         el("h2", {}, title))),
       d.frozen && el("p", { class: "notice" }, d.frozen),
       humanGroup(d) && pendingGroupPeople(d).length > 0 && el("section", {"aria-label":"Invited people", class:"participant-list"},
         pendingGroupPeople(d).map(i => el("span", {class:"participant invited-person"},
           avatar(personLabelOf(i.target), "sm"), personLabelOf(i.target),
-          el("span", {class:"tag"}, i.status === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept")))),
+          el("span", {class:"tag"}, i.status === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept"), groupInvitationActions(i)))),
+      humanGroup(d) && el("details", {class:"zoom-agents", "aria-label":"People in this group"},
+        el("summary", {}, "Current members and human guests"),
+        el("ul", {}, (d.members || []).map(p=>el("li", {}, p.label + (p.admin ? " · Administrator" : " · Member")))),
+        dmHumanGuest(d) && el("p", {class:"hint"}, "You are a guest, not a group member. Guests cannot invite or manage members."),
+        (d.guests || []).map(g=>guestCard(g,d)),
+        inviteRights(d).people && el("button", {type:"button",class:"text-btn",onclick:()=>participantsDialog(d)}, "+ Add participants")),
       humanGroup(d) && el("details", {class:"zoom-agents", "aria-label":"Agents in this group"},
         el("summary", {}, d.agents.filter(a=>!["dismissed","declined"].includes(a.state)).length + " agents in this group"),
         d.agents.filter(a=>!["dismissed","declined"].includes(a.state)).map(a=>agentCard(a,d)),
@@ -5251,8 +5292,8 @@ const Zoom = {
           (m.actions || []).includes("do_it") && el("div", {class:"acts"}, actionButton("do_it",m,d,true)),
           (m.delivery || m.state_text) && el("p", { class: "narr" }, m.dir === "out" && m.delivery ? deliveryText(m) : m.state_text));
       })),
-      el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen || state.sending, onclick: () => dmWriteDialog(d) },
-        d.frozen ? "Nothing more can be sent in this conversation" : humanGroup(d) ? "Write in this group…" : "Write in this DM…")));
+      el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen || state.sending || dmHumanGuest(d) && !guestAuthor(d), onclick: () => dmWriteDialog(d) },
+        d.frozen ? "Nothing more can be sent in this conversation" : dmHumanGuest(d) && !guestAuthor(d) ? "Join before writing in this group" : humanGroup(d) ? "Write in this group…" : "Write in this DM…")));
   },
 
   // Level 3 for a person: one DM message with everything known about it.

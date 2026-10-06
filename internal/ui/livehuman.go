@@ -106,9 +106,9 @@ func guestView(info client.ParticipationInfo, member bool, end guestEnd) GuestVi
 	if info.State == client.PartDismissed {
 		switch {
 		case end.left:
-			v.StateText = "Left this DM. Previously shared copies remain."
+			v.StateText = "Left this conversation. Previously shared copies remain."
 		case end.unheard:
-			v.StateText = "Ended here. Until every device in this DM has stored the end, one that has not may still send to them. Previously shared copies remain."
+			v.StateText = "Ended here. Until every device in this conversation has stored the end, one that has not may still send to them. Previously shared copies remain."
 			v.AudiencePending = true
 		default:
 			v.StateText = "Ended. Previously shared copies remain."
@@ -127,7 +127,7 @@ func (l *Live) guestMember(conv string) bool {
 	}
 	for _, c := range list {
 		if c.ID == conv {
-			return c.Role == "member" && c.Kind == protocol.ConvKindDM
+			return c.Role == "member" && c.Frozen == "" && (c.Kind == protocol.ConvKindDM || c.Kind == protocol.ConvKindGroup)
 		}
 	}
 	return false

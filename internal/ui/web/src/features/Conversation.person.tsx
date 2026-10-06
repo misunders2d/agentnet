@@ -17,15 +17,16 @@ export function PersonConversations({ dm }: { dm: T.DMThread | null }) {
   const conversations = chat?.conversations || [];
   if (!dm || conversations.length < 2) return null;
   const current = conversations.find((d) => d.id === dm.id);
+  const empty = conversations.filter(d => !d.count).length;
   const title = (d: T.DMSummary) => firstLine(d.title, 90) || "Empty conversation";
   const started = (d: T.DMSummary) => new Date(d.created).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const shown = conversations.filter((d) => [d.title, d.last, started(d)].some((s) => s.toLowerCase().includes(query.trim().toLowerCase())));
   return <>
     <div className="flex min-w-0 items-center gap-3 border-b border-hairline bg-surface px-4 py-2">
-      <span className="min-w-0 flex-1 truncate text-[13px] text-text-2">{current ? title(current) : "Conversation"}</span>
+      <span className="min-w-0 flex-1 text-[13px] text-text-2"><span className="block truncate">Viewing: {current ? title(current) : "Conversation"}</span><span className="block text-xs text-muted">Topics below belong to this conversation.</span></span>
       <Button size="sm" variant="outline" onClick={() => { setQuery(""); setOpen(true); }}>Conversations ({conversations.length})</Button>
     </div>
-    <Sheet open={open} onOpenChange={setOpen} title={"Conversations with " + personName(dm.peer)} description="Separate conversations, together in one chat.">
+    <Sheet open={open} onOpenChange={setOpen} title={"Conversations with " + personName(dm.peer)} description={`${conversations.length} separate conversations${empty ? `, including ${empty} empty` : ""}, together in one chat. Each has its own topics and history.`}>
       <label className="mb-3 block">
         <span className="sr-only">Search conversations</span>
         <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search conversations" className="h-11 w-full rounded-xl bg-surface px-3 text-[16px] stroke" />

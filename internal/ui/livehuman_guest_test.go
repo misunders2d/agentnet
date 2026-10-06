@@ -182,7 +182,7 @@ func TestLiveGuestEndSettlesAudience(t *testing.T) {
 		t.Fatalf("pending cleared while bob's device has not stored the end: %+v", g)
 	}
 	for _, text := range []string{ended.StateText, guestOfText(t, lives["alice"], conv, removed.PID)} {
-		if !strings.Contains(text, "Until every device in this DM has stored the end") {
+		if !strings.Contains(text, "Until every device in this conversation has stored the end") {
 			t.Fatalf("pending end worded as if only the guest's device mattered: %q", text)
 		}
 	}

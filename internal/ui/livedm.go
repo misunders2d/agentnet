@@ -122,7 +122,7 @@ func (l *Live) dmOverview(o *Overview) error {
 			}
 		}
 		s.Kind, s.Frozen = c.Kind, c.Frozen
-		if c.Role == "visitor" && c.Kind == protocol.ConvKindDM {
+		if c.Role == "visitor" {
 			views, e := l.guestViews(c.ID)
 			if e != nil {
 				return e
@@ -163,6 +163,12 @@ func (l *Live) dmOverview(o *Overview) error {
 		}
 		if len(shown) > 0 {
 			line := func(m client.ConvMessage) string { // a participation record in words, not its body
+				if m.Deleted {
+					return "Message deleted"
+				}
+				if m.Edited {
+					return firstLine(m.Text)
+				}
 				if m.Sub == envelope.SubEvent {
 					return eventText(m.Body, people)
 				}
@@ -352,7 +358,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 		for _, guest := range t.Guests {
 			t.AudiencePending = t.AudiencePending || guest.AudiencePending
 		}
-		if c.Role == "visitor" && c.Kind != protocol.ConvKindGroup {
+		if c.Role == "visitor" {
 			t.Frozen = "Invited agent context only: this host cannot send ordinary room messages."
 			if guest, ok := hostGuest(t.Guests); ok {
 				t.Role = "human_guest"

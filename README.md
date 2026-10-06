@@ -196,9 +196,9 @@ upgrade does not need re-enrollment.
 
 **From v0.8.1 onward**, use **Settings → About → Update AgentNet** for whole-app
 updates. It updates the app, its command and managed AgentNet connections for
-your tools. It does not update the agent tools themselves. The terminal
-command `agentnet update` is for a standalone command-line installation;
-it does not replace your desktop app.
+your tools. It does not update the agent tools themselves. Starting with
+v0.8.2, the app's installed `agentnet update` command uses this same whole-app
+updater. A separately installed standalone command updates only that command.
 
 ## Guides for agents and maintainers
 
@@ -329,6 +329,7 @@ These are different operations:
 | --- | --- |
 | v0.8.0 desktop app | Install v0.8.1's matching desktop package once. Keep the same data home and app location. |
 | v0.8.1+ desktop app | Settings → About → Update AgentNet. The app checks the latest published release, verifies its package and restarts after preparation. |
+| v0.8.2+ app-managed command | `agentnet update` uses the same whole-app updater. An active agent job must finish first. |
 | Standalone CLI | `agentnet update` or `agentnet update v0.8.1`; this changes the executing CLI, not a desktop package. |
 | Relay | Replace the deployed server binary/image separately, after a stopped-state backup, keeping the existing volume and configuration. |
 

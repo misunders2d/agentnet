@@ -8,6 +8,7 @@ import { agentName, agentWhere, bringInDevices, deviceKind, personName, runsAgen
 import { isMine, online, speaker } from "./RoomPanel.model";
 
 export type Route = "agent" | "guest" | "group";
+export type HumanInviteMode = "guest" | "member";
 
 export interface Candidate {
   key: string;                 // "p:<person>" | "a:<host>#<agent id or empty>"
@@ -76,7 +77,7 @@ export interface Pool { candidates: Candidate[]; peopleNote: string; pick: strin
 /** pool lists the candidates for t, people first, each with what an invite
  *  would do. invitations are this computer's group invitations (for "already
  *  invited"); platform is the host's ("browser": no agent of its own to offer). */
-export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<string, string>, invitations: T.GroupInvitationView[] = [], platform = "daemon"): Pool {
+export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<string, string>, invitations: T.GroupInvitationView[] = [], platform = "daemon", mode: HumanInviteMode = "guest"): Pool {
   const me = o.person;
   const group = t.kind === "group";
   const admin = group && (t.members || []).some((m) => m.person && m.person === me?.person && m.admin);
@@ -90,7 +91,7 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
 
   const out: Candidate[] = [];
   let peopleNote = "";
-  if (group && !admin) peopleNote = "Only a group admin can add people here. You can still bring in an agent.";
+  if (group && mode === "member" && !admin) peopleNote = "Only a group admin can add permanent members. You can invite a guest instead.";
   else {
     for (const p of o.people || []) {
       if (p.state !== "pinned" || !p.person || inside.has(p.person)) continue;
@@ -98,9 +99,9 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
       const was = asked.get(p.person);
       out.push({
         key: "p:" + p.person, kind: "person", name: personName(p), seed: p.person, online: on, person: p,
-        subtitle: [group && "Becomes a member", on === true ? "Online" : on === false ? "Offline" : ""].filter(Boolean).join(" · ").replace(" · O", " · o"),
+        subtitle: [group && mode === "member" ? "Becomes a member" : "Joins as a guest", on === true ? "Online" : on === false ? "Offline" : ""].filter(Boolean).join(" · ").replace(" · O", " · o"),
         unavailable: was === "pending" ? "Invited · waiting for them to accept" : was ? "Accepted · not added yet"
-          : !group && guestsHere >= 16 ? "This chat already has 16 guests." : undefined,
+          : (!group || mode === "guest") && guestsHere >= 16 ? "This chat already has 16 guests." : undefined,
       });
     }
   }
@@ -173,7 +174,7 @@ function mentions(text: string | undefined, p: T.PersonView): boolean {
 }
 
 /** routeFor: which invitation a candidate takes in t. */
-export const routeFor = (c: Candidate, t: T.DMThread): Route => (c.kind === "agent" ? "agent" : t.kind === "group" ? "group" : "guest");
+export const routeFor = (c: Candidate, t: T.DMThread, mode: HumanInviteMode = "guest"): Route => (c.kind === "agent" ? "agent" : t.kind === "group" && mode === "member" ? "group" : "guest");
 
 /** How many earlier messages each invitation may carry. */
 export const capFor = (r: Route) => (r === "group" ? 64 : 200);

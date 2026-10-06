@@ -17,6 +17,8 @@ type Groups interface {
 	InviteGroup(context.Context, GroupInviteDraft) (GroupInvitationView, error)
 	DecideGroup(context.Context, string, bool) error
 	PublishGroup(context.Context, string) error
+	CancelGroup(context.Context, string) error
+	RefreshGroup(context.Context, string) (GroupInvitationView, error)
 	ManageGroup(context.Context, GroupChange) (GroupChangeResult, error)
 }
 
@@ -75,14 +77,16 @@ type GroupMemberView struct {
 }
 
 type GroupInvitationView struct {
-	ID        string                     `json:"id"`
-	Conv      string                     `json:"conv"`
-	Direction string                     `json:"direction"`
-	State     string                     `json:"status"`
-	Title     string                     `json:"title"`
-	Inviter   string                     `json:"inviter"`
-	Target    string                     `json:"target"`
-	History   []protocol.GroupHistoryRef `json:"history"`
+	ID         string                     `json:"id"`
+	Conv       string                     `json:"conv"`
+	Direction  string                     `json:"direction"`
+	State      string                     `json:"status"`
+	Title      string                     `json:"title"`
+	Inviter    string                     `json:"inviter"`
+	Target     string                     `json:"target"`
+	History    []protocol.GroupHistoryRef `json:"history"`
+	CanCancel  bool                       `json:"can_cancel,omitempty"`
+	CanRefresh bool                       `json:"can_refresh,omitempty"`
 }
 
 type GroupInviteDraft struct {
@@ -96,7 +100,7 @@ type GroupInviteDraft struct {
 }
 
 func groupInvitationView(i client.GroupInvitationInfo) GroupInvitationView {
-	return GroupInvitationView{ID: i.ID, Conv: i.Proposal.State.Conv, Direction: i.Direction, State: i.State, Title: i.Proposal.State.Title, Inviter: i.Inviter, Target: i.Proposal.Target, History: i.Proposal.History}
+	return GroupInvitationView{ID: i.ID, Conv: i.Proposal.State.Conv, Direction: i.Direction, State: i.State, Title: i.Proposal.State.Title, Inviter: i.Inviter, Target: i.Proposal.Target, History: i.Proposal.History, CanCancel: i.CanCancel, CanRefresh: i.CanRefresh}
 }
 
 func (l *Live) GroupInvitations() ([]GroupInvitationView, error) {
@@ -151,6 +155,25 @@ func (l *Live) PublishGroup(ctx context.Context, id string) error {
 		return Refuse(sentence(err))
 	}
 	return nil
+}
+
+func (l *Live) CancelGroup(ctx context.Context, id string) error {
+	ctx, cancel := context.WithTimeout(ctx, l.timeout)
+	defer cancel()
+	if err := l.a.CancelGroupInvitation(ctx, id); err != nil {
+		return Refuse(sentence(err))
+	}
+	return nil
+}
+
+func (l *Live) RefreshGroup(ctx context.Context, id string) (GroupInvitationView, error) {
+	ctx, cancel := context.WithTimeout(ctx, l.timeout)
+	defer cancel()
+	i, err := l.a.RefreshGroupInvitation(ctx, id)
+	if err != nil {
+		return GroupInvitationView{}, Refuse(sentence(err))
+	}
+	return groupInvitationView(i), nil
 }
 
 func (l *Live) groupMembers(c client.ConversationInfo) ([]GroupMemberView, error) {
@@ -219,6 +242,19 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 		}
 		err = p.PublishGroup(r.Context(), d.ID)
 		v = map[string]bool{"published": err == nil}
+	case "/api/groups/cancel", "/api/groups/refresh":
+		var d struct {
+			ID string `json:"id"`
+		}
+		if !readJSON(w, r, &d) {
+			return
+		}
+		if r.URL.Path == "/api/groups/cancel" {
+			err = p.CancelGroup(r.Context(), d.ID)
+			v = map[string]bool{"cancelled": err == nil}
+		} else {
+			v, err = p.RefreshGroup(r.Context(), d.ID)
+		}
 	case "/api/groups/manage":
 		var d GroupChange
 		if !readJSON(w, r, &d) {

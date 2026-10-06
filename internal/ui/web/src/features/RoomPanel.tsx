@@ -4,7 +4,7 @@
 // the server's can_* flags; dismissing stops what is new, never what was shared.
 import { useEffect, useState } from "react";
 import { IconLock, IconUserPlus, IconX } from "@tabler/icons-react";
-import type { T } from "../api";
+import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
 import { useStore, type Store } from "../store";
 import { PersonAvatar } from "../ui/Avatar";
@@ -12,7 +12,7 @@ import { Button, IconButton } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
 import { GuestCard, PastRow, PendingCard, WaitingRow, type Act } from "./RoomPanel.cards";
-import { callName, canBringIn, room, shareable, type Guest } from "./RoomPanel.model";
+import { callName, canBringIn, room, shareable, type Guest, type GroupInvite } from "./RoomPanel.model";
 import { BringBackSnack, type Snack } from "./RoomPanel.snack";
 import { GroupFooter, MemberMenu, groupRights, useGroupChange } from "./GroupAdmin";
 
@@ -94,6 +94,42 @@ function bringIn(store: Store, t: T.DMThread, wide: boolean, who?: string, since
   store.openInvite(t.id, later.length ? later : undefined, who ? { who, label: "Since they left" } : undefined);
 }
 
+function GroupInviteCard({ invite: i }: { invite: GroupInvite }) {
+  const store = useApp();
+  const [action, setAction] = useState<"cancel" | "refresh" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const run = async () => {
+    if (!action || busy) return;
+    setBusy(true); setError("");
+    try {
+      if (action === "cancel") await store.api.cancelGroup(i.id);
+      else await store.api.refreshGroup(i.id);
+      store.toast(action === "cancel" ? "Invitation retracted. Their device updates when it connects." : "Fresh invitation sent. They need to accept it again.", "ok");
+      setAction(null);
+      await store.refetch();
+    } catch (e) { setError(errorText(e)); }
+    finally { setBusy(false); }
+  };
+  return <li className="min-w-0 rounded-2xl stroke bg-sunken p-3">
+    <div className="flex items-center gap-3"><PersonAvatar name={i.name} seed={i.target} size={36} />
+      <div className="min-w-0 flex-1"><p className="break-words font-bold">{i.name}</p>
+        <p className="text-[13px] text-text-2">{i.state === "accepted" ? "Accepted · waiting to join" : i.state === "pending" ? "Invited as a member · waiting for them to accept" : "Invitation needs refreshing"}</p>
+      </div>
+    </div>
+    {(i.canCancel || i.canRefresh) && <div className="mt-2 flex flex-wrap gap-2">
+      {i.canCancel && <Button size="sm" variant="outline" onClick={() => { setAction("cancel"); setError(""); }}>Retract invitation</Button>}
+      {i.canRefresh && <Button size="sm" variant="ghost" onClick={() => { setAction("refresh"); setError(""); }}>Refresh invitation</Button>}
+    </div>}
+    <Sheet open={!!action} onOpenChange={v => { if (!v && !busy) setAction(null); }}
+      title={(action === "cancel" ? "Retract invitation for " : "Send a fresh invitation to ") + i.name + "?"}
+      footer={<Button variant="act" disabled={busy} onClick={() => void run()}>{busy ? "Saving…" : action === "cancel" ? "Retract invitation" : "Send fresh invitation"}</Button>}>
+      <p>{action === "cancel" ? "This invitation will no longer let them join. Their device learns about the cancellation when it connects. Existing members stay in the group." : "The old invitation is replaced with the group’s current details and the same selected history. They must review and accept the fresh invitation."}</p>
+      {error && <p role="alert" className="mt-3 text-danger">{error}</p>}
+    </Sheet>
+  </li>;
+}
+
 function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) => void }) {
   const store = useApp();
   const wide = useWide();
@@ -159,12 +195,7 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
 
       {r.groupInvites.length > 0 && <>
         <Label n={r.groupInvites.length}>Invited people</Label>
-        <ul aria-label="Invited people" className="space-y-2">{r.groupInvites.map(i => <li key={i.id} className="flex min-w-0 items-center gap-3 rounded-2xl stroke bg-sunken p-3">
-          <PersonAvatar name={i.name} seed={i.target} size={36} />
-          <div className="min-w-0 flex-1"><p className="break-words font-bold">{i.name}</p>
-            <p className="text-[13px] text-text-2">{i.state === "accepted" ? "Accepted · waiting to join" : "Invited · waiting for them to accept"}</p>
-          </div>
-        </li>)}</ul>
+        <ul aria-label="Invited people" className="space-y-2">{r.groupInvites.map(i => <GroupInviteCard key={i.id} invite={i} />)}</ul>
       </>}
 
       {r.invited.length > 0 && <>

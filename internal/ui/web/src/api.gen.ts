@@ -464,6 +464,8 @@ export interface GroupInvitationView {
   inviter: string;
   target: string;
   history: GroupHistoryRef[] | null;
+  can_cancel?: boolean;
+  can_refresh?: boolean;
 }
 
 export interface GroupInviteDraft {

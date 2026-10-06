@@ -73,7 +73,8 @@ upgraded by updating AgentNet.
 
 For advanced commands, use that installed program or the standalone setup
 below. `agentnet ui` opens the installed app. App builds update as a whole;
-`agentnet update` does not replace the command inside the app.
+from v0.8.2, their managed `agentnet update` command requests the same updater
+as the About page instead of replacing one component alone.
 
 ### Your profile and interface
 
@@ -402,8 +403,13 @@ refresh with it. This does not update Claude, Codex, Pi or unrelated settings.
 Custom/unrecognized CLI copies require the owner's **Replace command…**
 choice. Package-manager authorization may be required for deb/rpm.
 
-The app-bundled command refuses `agentnet update`; that command is for the
-standalone installation below. The v0.8.1 Linux AppImage replacement and
+The v0.8.1 app-bundled command refuses `agentnet update`; use its About page
+to upgrade to v0.8.2. From v0.8.2, the app-bundled command requests the same
+whole-app updater. `--status` shows its last recorded helper result; verify
+the running app and command versions after restart. An active job blocks
+preparation; retry after it finishes. If a separate daemon owns the same
+data home, stop that daemon when idle before using the app updater.
+The v0.8.1 Linux AppImage replacement and
 visible About controls have live evidence; a future in-app update and
 interactive Windows/macOS installation remain unverified.
 

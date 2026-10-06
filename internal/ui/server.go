@@ -101,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/drive/setup", s.driveSetup)
 	mux.HandleFunc("GET /api/teams", s.teams) // liveteams.go: this realm's teams (pJ module)
 	mux.HandleFunc("GET /api/groups/invitations", s.groups)
-	for _, action := range []string{"new", "invite", "decide", "publish", "manage"} {
+	for _, action := range []string{"new", "invite", "decide", "publish", "cancel", "refresh", "manage"} {
 		mux.HandleFunc("POST /api/groups/"+action, s.groups)
 	}
 	mux.HandleFunc("POST /api/team", s.changeTeam)

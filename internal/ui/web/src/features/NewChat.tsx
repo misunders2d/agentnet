@@ -35,9 +35,10 @@ export interface Candidate {
 export function candidates(o: T.Overview | null): { people: Candidate[]; server: Candidate[] } {
   if (!o || !o.persons || !o.person) return { people: [], server: [] };
   const known = new Set<string>((o.person.devices || []).map((d) => d.address).concat(o.person.address));
-  // Your own DMs (not ones you are a guest in), newest first, open ones before read-only ones.
+  // Prefer existing history over a newer empty root, as the chat list does.
+  // Keep every separate signed conversation reachable from its chooser.
   const chats = (o.dms || []).filter((d) => d.kind !== "group" && (!d.role || d.role === "member"))
-    .sort((a, b) => Number(!!a.frozen) - Number(!!b.frozen) || (b.last_at || "").localeCompare(a.last_at || ""));
+    .sort((a, b) => Number(b.count > 0) - Number(a.count > 0) || Number(!!a.frozen) - Number(!!b.frozen) || (b.last_at || "").localeCompare(a.last_at || ""));
   const reaches = (d: T.DMSummary, p: T.PersonView) => p.person ? d.peer.person === p.person
     : [p.address, ...(p.devices || []).map((x) => x.address)].includes(d.peer.address);
   const people = (o.people || []).map((p): Candidate => {

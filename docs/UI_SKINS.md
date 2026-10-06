@@ -19,7 +19,9 @@ checks; adding a skin requires no AgentNet source change or relay-wide rollout.
 Shared skins should show what people will install. Include current, real
 rendered previews in the repository's README or linked gallery, covering
 desktop and phone layouts and supported light/dark appearances. Use fictional
-people and messages; keep private workspace data, keys and fixture URLs out.
+people, companies and messages. Invent names; never borrow names, photos or
+identities from the owner's coworkers or contacts, even for synthetic messages.
+Keep private workspace data, keys and fixture URLs out.
 Label concept mockups as concepts, never as previews of a working package.
 The agentnet-skins collection requires previews before listing a skin as
 available. Visual previews complement the compatibility checks below; they
