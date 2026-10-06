@@ -579,7 +579,8 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		b.WriteString(lookupText)
 	}
 	b.WriteString(reactionConvPromptText)
-	b.WriteString("Close a finished topic only on purpose: add topic: done before emotion. Omit it while work or follow-up remains.\n")
+	b.WriteString(topicClosurePromptText)
+	b.WriteString("If an explicitly requested topic close is included, put topic: done before emotion.\n")
 	if j.proposalEligible() {
 		b.WriteString(proposePrompt(asker))
 		fmt.Fprintf(&b, "If %s must decide something only they can before this can go further (a choice, a permission, money), make your first line exactly %q and then say what they need to decide; nothing will be sent.\n", host, needsHumanMarker)

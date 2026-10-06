@@ -532,13 +532,8 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 	}
 	a.notifyTried, a.reviewTried, a.reviewGen, a.releaseTried = nil, nil, "", "" // a new run tries failed notices once more
 	a.reviewAgain.reset()
-	wake := make(chan struct{}, 1)
-	a.wakeWorker = func() {
-		select {
-		case wake <- struct{}{}:
-		default:
-		}
-	}
+	// The stable per-handle wake avoids a startup/stop race with local commits.
+	wake := a.workerWake
 	// A wake from another agentnet process means it changed local state:
 	// the worker looks again, and so does a messenger page; the stream's
 	// worker picks up what it queued (history for a device it linked, file
@@ -579,7 +574,6 @@ func (a *Agent) startWorker(ctx context.Context) (func(), error) {
 		<-done
 		stopKicks()
 		stopChanges()
-		a.wakeWorker = func() {}
 		notify.Close()
 	}, nil
 }

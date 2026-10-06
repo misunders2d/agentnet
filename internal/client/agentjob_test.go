@@ -836,12 +836,16 @@ func TestChatTopicAgentReply(t *testing.T) {
 	if answer.Topic == "" || answer.TopicDone {
 		t.Fatalf("ordinary answer: %+v", answer)
 	}
+	if !strings.Contains(st.last(), topicClosurePromptText) || strings.Contains(st.last(), "Close a finished topic only on purpose") {
+		t.Fatal("participant prompt still infers topic closure from finishing an answer")
+	}
+
 	topics, err := w.alice.ChatTopics(conv)
 	if err != nil || len(topics) != 1 || topics[0].State != TopicActive || topics[0].Pending {
 		t.Fatalf("ordinary answer topics: %+v %v", topics, err)
 	}
 	st.mode("closed")
-	next, err := w.alice.AskAgentInTopic(tctx(t), pid, envelope.KindQuestion, "Please finish.", answer.Topic, nil)
+	next, err := w.alice.AskAgentInTopic(tctx(t), pid, envelope.KindQuestion, "Please close this topic.", answer.Topic, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

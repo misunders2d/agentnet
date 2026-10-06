@@ -555,7 +555,13 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			return err
 		}
 	}
-	return s.done(tx.Commit())
+	if err := s.done(tx.Commit()); err != nil {
+		return err
+	}
+	if jobKey != "" && s.onJobReady != nil {
+		s.onJobReady()
+	}
+	return nil
 }
 
 // turnClosesHeld closes the questions and tasks held for the person

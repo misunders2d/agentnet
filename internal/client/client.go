@@ -66,7 +66,8 @@ type Agent struct {
 	kick           func()                     // wakes the current stream's retry worker
 	kickMu         sync.Mutex                 // guards kick for kickNow
 	prefetchFailed map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
-	wakeWorker     func()                     // wakes the question/task worker; a no-op outside Run
+	wakeWorker     func()                     // sends a coalesced local wake; stable for this Agent handle
+	workerWake     chan struct{}              // pending local job wake survives worker startup
 	changes        *changeFeed                // local state changed (changes.go)
 	listed         listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
 	members        memberState                // the Hub's member list from the push stream (members.go)
@@ -239,9 +240,16 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, err
 	}
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, wakeWorker: func() {}, notify: desktopNotify,
+	wake := make(chan struct{}, 1)
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, wakeWorker: func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}, notify: desktopNotify,
 		changes: newChangeFeed(), alertWake: make(chan struct{}, 1), statusWake: make(chan struct{}, 1)}
 	st.onChange = a.changes.bump
+	st.onJobReady = func() { a.wakeWorker(); notifyDaemon(a.home) }
 	var hubURL, cert string
 	if a.Address, err = st.config("address"); err == nil {
 		if hubURL, err = st.config("hub"); err == nil {

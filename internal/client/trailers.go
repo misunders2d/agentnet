@@ -6,7 +6,8 @@ import (
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
-const topicPromptText = "If this reply finishes the work of this topic and nothing more is expected, add a last line `topic: done`. Leave it out while the conversation may go on. The optional topic and reaction lines may appear in either order at the end.\n"
+const topicClosurePromptText = "Answering one request or finishing its task does not close this conversation topic. Never infer topic closure from a successful answer or from having nothing more to report. Add `topic: done` only when the requester explicitly asks to close or end the topic; otherwise leave it open for follow-up.\n"
+const topicPromptText = topicClosurePromptText + "The optional topic and reaction lines may appear in either order at the end.\n"
 
 // splitTrailers accepts each optional trailer once, in either order. A close
 // is a display hint on a successful nonempty reply, never work authority.

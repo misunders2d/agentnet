@@ -275,6 +275,10 @@ func TestTopicCloseSignal(t *testing.T) {
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)
 	q, answer := ask(t, w, "")
+	prompt, promptErr := os.ReadFile(st.log + ".stdin")
+	if promptErr != nil || !strings.Contains(string(prompt), topicClosurePromptText) {
+		t.Fatal("direct worker prompt lacks explicit-request-only topic closure instruction")
+	}
 	eventually(t, "explicit close received", func() bool { return topicOf(t, w.alice, q).State == TopicDone })
 	topic := topicOf(t, w.alice, q)
 	if topic.DoneBy != DoneByAgent || topic.Conclusion != "finished" {

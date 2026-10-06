@@ -331,8 +331,9 @@ const (
 )
 
 type store struct {
-	db       *sql.DB
-	onChange func() // set by the Agent: local state changed (changes.go)
+	db         *sql.DB
+	onChange   func() // set by the Agent: local state changed (changes.go)
+	onJobReady func() // local own-agent request committed; wake before remote delivery
 }
 
 func openStore(path string) (*store, error) {
