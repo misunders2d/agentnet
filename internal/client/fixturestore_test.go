@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 // Fixture enrollment needs a current, empty store, not hundreds of repeats
@@ -34,7 +36,9 @@ var fixtureStoreImage = sync.OnceValues(func() ([]byte, error) {
 
 func seedFixtureStore(t *testing.T, home string) {
 	t.Helper()
-	if err := os.MkdirAll(home, 0700); err != nil {
+	// As in Join, restrict the home before creating the store. On
+	// Windows, the copy inherits its owner's ACL, not the temp root's access.
+	if err := secfile.EnsureDir(home); err != nil {
 		t.Fatal(err)
 	}
 	_, path := paths(home)
@@ -96,8 +100,8 @@ func TestFixtureStoresKeepIndependentPersistentState(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(home, "identity.json")); !os.IsNotExist(err) {
 			t.Fatalf("schema image carried an identity: %v", err)
 		}
-		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
-			t.Fatalf("fixture permissions: %v %v", info, err)
+		if _, err := secfile.Read(path); err != nil {
+			t.Fatalf("fixture permissions: %v", err)
 		}
 	}
 }
