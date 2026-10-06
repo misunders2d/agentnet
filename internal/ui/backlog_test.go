@@ -172,8 +172,12 @@ func backlogCatchUp(t *testing.T, n int, files bool) {
 	if a := int(st["acksAtOnce"].(float64)); !measure && a < 4 {
 		t.Errorf("receipts went one round trip after another (at most %d at once)", a)
 	}
-	if c := int(st["changed"].(float64)); c > n/4 {
-		t.Errorf("the page was told of %d changes for %d arrivals", c, n)
+	// Files arriving slowly can end one burst and start another. Each quiet
+	// gap permits a final notification and the next burst's first one; the
+	// engine's burstQuiet is 250 ms. Fast catch-up still checks coalescing.
+	changesBudget := n/4 + 2*int(acked/(250*time.Millisecond))
+	if c := int(st["changed"].(float64)); c > changesBudget {
+		t.Errorf("the page was told of %d changes for %d messages and %d files over %v (budget %d)", c, n, want, acked, changesBudget)
 	}
 	if rows, _ := scans["inbox"].(float64); page == "" && int(rows) > 5*(before+n) {
 		t.Errorf("catching up read %v inbox rows for %d held: every message held was read again per message", rows, before+n)
