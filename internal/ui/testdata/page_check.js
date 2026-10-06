@@ -523,8 +523,11 @@ const ev = { preventDefault() {} };
   calls.length = 0;
   const before = streams.length;
   es.fire("restart");
-  await pause(40);
-  check(streams.length === before && !$("lost").hidden && $("updating").hidden, "a daemon that does not return: the page says so and stops");
+  // Timer turns may take longer than 40 ms on Windows or a busy runner.
+  // Wait for the bounded recovery's terminal state, not a wall-clock guess.
+  const recoveryDeadline = Date.now() + 2000;
+  while (run("state.updating") && Date.now() < recoveryDeadline) await pause(5);
+  check(streams.length === before && es.closed && !$("lost").hidden && $("updating").hidden && $("live").textContent.includes("AgentNet did not come back at this address"), "a daemon that does not return: the page says so and stops");
   down = false;
   await run("reconnect")();
 
