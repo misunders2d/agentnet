@@ -4,9 +4,9 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## In progress — v0.8.2
+## Release candidate — October 6 v0.8.2
 
-The local candidate adds group human guests, explicit permanent-member invites,
+The release candidate adds group human guests, explicit permanent-member invites,
 retract/refresh controls, corrected OKs/navigation, current edited previews,
 person notification controls, worker wake, quieter internal records and
 whole-app CLI updates. The owner approved encrypted exact read-state sharing
@@ -37,15 +37,20 @@ must be stopped when idle first. Standalone CLI and relay updates remain
 separate operations. v0.8.1 users use About once to reach this command behavior.
 
 Focused native/browser regressions and rendered Comic/Classic/Zoom checks
-pass for the implemented paths. Full candidate CI and release asset checks
-are still pending. No live installations have been changed for v0.8.2;
+pass for the implemented paths. [Candidate CI](https://github.com/misunders2d/agentnet/actions/runs/37498756845)
+passed all native Linux/Windows/macOS tests, six client race shards, other
+race and real browser-storage tests, the container journey and desktop builds
+at `2082b4f34dd237bff8295b527afd647cb9f84124`. Only release documentation
+follows that tested code. A Windows outbox-flush timeout passed on an unchanged
+commit rerun; no test deadline was raised. Release asset checks and publication
+are the remaining gates. No live installations have been changed for v0.8.2;
 physical Windows/macOS updates remain unverified. The opt-in
 `TestLiveOwnAgentTopicClosure` passed against installed Codex in 81.541s:
 two ordinary answers kept one topic active, then an explicit close marked it
 done. It used synthetic participants, temporary AgentNet homes and a local
 TLS relay; no open user sessions or existing installations were touched.
 
-## Current published release — October 6 v0.8.1
+## Previous release — October 6 v0.8.1
 
 [v0.8.1](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) is published
 from `daddab38d229f695936a6d975702668b381f3135`, based on v0.8.0 (`d99dcc85`). It fixes

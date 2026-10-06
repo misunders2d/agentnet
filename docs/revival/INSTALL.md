@@ -9,11 +9,12 @@ People do not need Go, Rust, Docker or a database server on their computer.
 ## People: install and open the app
 
 The current published release is
-[v0.8.1](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1), dated
+[v0.8.2](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2), dated
 October 6, 2026. Download the matching package below and `SHA256SUMS` from
-that release. An existing Linux AppImage installation was upgraded and opened
-successfully. Interactive Windows/macOS installation remains unverified
-despite passing native CI and installer builds.
+that release. Native CI and installer builds passed. No existing device was
+upgraded during v0.8.2 qualification; interactive Windows/macOS installation
+and a live in-app upgrade remain unverified. The earlier v0.8.1 Linux
+AppImage replacement was opened successfully.
 
 | Device | Package to choose | How to open it |
 | --- | --- | --- |
@@ -370,10 +371,10 @@ be copied the same way: stop the daemon, then copy the home directory.
 
 ### Installed app
 
-**v0.8.0 to v0.8.1:** install the matching desktop package once. v0.8.0 has
+**From v0.8.0:** install the matching desktop package once. v0.8.0 has
 no in-app installer; its About notice incorrectly directs desktop users to
 `agentnet update`. If **What's new** does nothing, open the
-[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1)
+[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2)
 directly.
 
 - **AppImage:** download `AgentNet-linux-x86_64.AppImage`, verify its entry
@@ -390,7 +391,7 @@ directly.
 
 Keep the local AgentNet data directory: it contains identity, history and
 permissions. Do not reset or re-enroll for an ordinary update. Let active jobs
-finish first. Check **Settings → About → v0.8.1**, then inspect
+finish first. Check **Settings → About → v0.8.2**, then inspect
 `agentnet version` in a fresh terminal separately. If an older manually
 managed daemon owns the home, follow [existing installs and recovery](#existing-installs-and-recovery)
 before assuming the new AppImage changed that daemon.
@@ -440,7 +441,7 @@ admin device:
 
 ```bash
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.1 v0.8.1
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.2 v0.8.2
 ```
 
 That publishes advice only. It installs nothing on the relay or clients.

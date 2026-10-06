@@ -1,6 +1,6 @@
-# AgentNet v0.8.2 — release candidate
+# AgentNet v0.8.2
 
-This version is being verified; v0.8.1 remains the published release.
+Fixes for group guests, invitations, unread state, approvals and whole-app updates.
 See the [changelog](../CHANGELOG.md) for release history and the
 [installation/update guide](revival/INSTALL.md#updating-and-downgrading)
 for desktop, standalone command and relay instructions.
@@ -11,6 +11,8 @@ for desktop, standalone command and relay instructions.
   the guest can participate in that conversation until dismissed. Adding a
   permanent member is a separate admin choice. Guests gain no member,
   invitation or agent-execution permissions.
+  Edits and deletions follow the original message's audience among guests
+  still participating; guests can correct their own messages too.
 - **Retract or refresh a pending member invitation.** Each refreshed proposal
   needs fresh consent. A stale Join cannot accept a different proposal.
 - **OKs shows requests that need a decision.** Running requests have a separate
@@ -52,12 +54,16 @@ shared only among your current verified human devices.
 ## Verification and remaining limits
 
 Focused native/browser regressions and rendered Comic, Classic and Zoom
-checks have passed. Full candidate race tests, native CI, desktop builds and
-release-asset verification are still pending. An isolated three-turn real
+checks passed. [Candidate CI](https://github.com/misunders2d/agentnet/actions/runs/37498756845)
+passed native Linux/Windows/macOS tests, all race shards, real browser storage,
+container checks and desktop builds. One Windows outbox-flush timeout passed
+on the unchanged candidate's rerun; no deadline was increased. Release packages
+are checked against SHA256SUMS and GitHub asset digests before publication;
+the [handoff](HANDOFF.md) records the completed release checks. An isolated three-turn real
 Codex check passed: two ordinary replies kept the same topic active, and an
-explicit request closed it. No existing device or relay has been upgraded to
-this candidate. Interactive Windows/macOS installation and physical-device read
-state convergence remain separate live checks.
+explicit request closed it. No existing device or relay was upgraded during qualification. Interactive Windows/macOS installation and physical-device read
+state convergence remain separate live checks. The worker-wake fix does not
+establish that every agent startup delay is eliminated.
 
 Private Projects are a [design discussion](DECISIONS.md#10-private-projects-and-selected-guest-context-discussion-oct-6),
 not part of this release. The proposed model separates lasting member invites

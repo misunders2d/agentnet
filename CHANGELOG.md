@@ -6,12 +6,16 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.2] — 2026-10-06
+
 ### Fixed
 
 - Group conversations offer scoped human guests by default. Adding a permanent
   member is a separate admin choice. Guests receive selected earlier context
   and new conversation messages until dismissed; they gain no membership or
   invitation rights.
+- Edits and deletions reach the guests who received the original message and
+  are still participating, including a guest's corrections to their own messages.
 - Pending member invitations can be retracted or refreshed with fresh consent.
 - Comic keeps running requests out of approval counts, offers Stop separately,
   and opens the request's actual topic without losing an unsent draft.
@@ -32,6 +36,14 @@ This record starts with v0.8.1; earlier releases remain on the
 - The app-managed `agentnet update` command uses the About page's whole-app
   updater, updating the desktop app and its bundled command together. Active
   jobs block preparation; standalone CLI and relay deployments remain separate.
+
+### Upgrade notes
+
+- From v0.8.1, use **Settings → About → Update AgentNet** once. After installing
+  v0.8.2, the app-managed command can also update the whole app. A v0.8.0 desktop
+  installation needs the matching desktop package installed manually once.
+- Keep your existing identity, data directory and permissions. A separately
+  managed daemon sharing the app's home must be stopped when idle first.
 
 ### Compatibility
 
@@ -127,4 +139,5 @@ guide and test/rollout evidence in the handoff.
 
 </details>
 
+[0.8.2]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.2
 [0.8.1]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.1

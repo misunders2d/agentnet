@@ -12,7 +12,7 @@ It is built for everyday company work: sales, operations, purchasing,
 accounting, customer support—and the people who build the systems behind them.
 You do not need to write code to use it.
 
-[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
+[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
 
 ## Start with a topic
 
@@ -162,7 +162,7 @@ compatibility; they do not make arbitrary skin code safe.
 
 ## Get started
 
-**Current release: [v0.8.1](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1)**,
+**Current release: [v0.8.2](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2)**,
 published October 6, 2026. AgentNet is actively developing; the expandable
 release section below names what has been checked and what still needs work.
 
@@ -180,9 +180,9 @@ release section below names what has been checked and what still needs work.
 
 | Computer | Download and open |
 | --- | --- |
-| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.1/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
-| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.1/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) are also available. |
-| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.1/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
+| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.2/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
+| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.2/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2) are also available. |
+| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.2/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
 
 Closing the desktop window leaves AgentNet in the tray. **Start when I log in**
 controls whether it starts with your computer; **Quit AgentNet** stops it.
@@ -327,10 +327,10 @@ These are different operations:
 
 | Installation | Correct update path |
 | --- | --- |
-| v0.8.0 desktop app | Install v0.8.1's matching desktop package once. Keep the same data home and app location. |
+| v0.8.0 desktop app | Install the current matching desktop package once. Keep the same data home and app location. |
 | v0.8.1+ desktop app | Settings → About → Update AgentNet. The app checks the latest published release, verifies its package and restarts after preparation. |
 | v0.8.2+ app-managed command | `agentnet update` uses the same whole-app updater. An active agent job must finish first. |
-| Standalone CLI | `agentnet update` or `agentnet update v0.8.1`; this changes the executing CLI, not a desktop package. |
+| Standalone CLI | `agentnet update` or `agentnet update v0.8.2`; this changes the executing CLI, not a desktop package. |
 | Relay | Replace the deployed server binary/image separately, after a stopped-state backup, keeping the existing volume and configuration. |
 
 The app refreshes its bundled command and managed AgentNet hook copies.
@@ -344,7 +344,7 @@ A server recommendation is an admin notice. It does not install software,
 and the app's update button checks GitHub independently of that notice.
 The v0.8.0 About page incorrectly directs desktop users to `agentnet update`;
 use a desktop package instead. If its **What's new** link does nothing, open
-[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.1) directly.
+[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2) directly.
 
 The [complete update/recovery guide](docs/revival/INSTALL.md#updating-and-downgrading)
 covers backups, package handling, managed commands, relay upgrades and rollback.
@@ -380,7 +380,7 @@ agentnet hub restore --from hub-backup.tgz --data /var/lib/agentnet-restored
 
 # From an enrolled admin device: recommend a client release separately.
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.1 v0.8.1
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.2 v0.8.2
 ```
 
 A server-hosted company agent is an ordinary member with its own separate
@@ -507,38 +507,36 @@ contributors as described in AGENTS.md. Licensed under [Apache 2.0](LICENSE).
 </details>
 
 <details>
-<summary><strong>v0.8.1 release evidence and known limits</strong></summary>
+<summary><strong>v0.8.2 release evidence and known limits</strong></summary>
 
-Released October 6, 2026, from
-`daddab38d229f695936a6d975702668b381f3135`. All 12 release assets were checked
-against GitHub's digests, and the 11 packaged files against `SHA256SUMS`.
-[Release CI](https://github.com/misunders2d/agentnet/actions/runs/37461588724)
-passed native Linux/Windows/macOS tests, race shards, container checks and
-desktop builds. The
-[release workflow](https://github.com/misunders2d/agentnet/actions/runs/37466526667)
-passed. One Windows transfer-test timeout passed on a same-commit rerun.
+[Candidate CI](https://github.com/misunders2d/agentnet/actions/runs/37498756845)
+passed native Linux/Windows/macOS tests, all race shards, real browser-storage
+checks, the container journey and desktop builds. The tested code is
+`2082b4f34dd237bff8295b527afd647cb9f84124`; only release documentation follows it.
+One Windows outbox-flush timeout passed on the same commit's rerun; no timeout
+was increased. Release packages are checked against `SHA256SUMS` and GitHub
+asset digests before publication. See the [handoff](docs/HANDOFF.md) for the
+publication record.
 
-The existing relay and a Linux AppImage installation were upgraded with
-identity preserved and private backups retained. The owner confirmed the
-new About page and update controls. Interactive Windows/macOS installation,
-a future in-app update, native photo/clipboard checks and physical-phone
-history convergence remain separate live verification gaps. Desktop
-installers are unsigned; opening prompts depend on the OS.
+v0.8.2 adds group human guests, invitation retraction/refresh, exact read-state
+sync across your devices, correct approval navigation, current message previews,
+person notification controls and whole-app updates through the managed CLI.
+An isolated three-turn real Codex check confirmed two ordinary answers leave a
+topic open and an explicit close request ends it.
+[Full release notes](docs/NEXT_RELEASE.md).
 
-v0.8.1 includes linked-history recovery, empty-conversation sync between
-updated devices, one person entry with separate conversations in Comic,
-direct agent chat entry points, solo-group edits/deletions, pending invitation
-visibility, picture/clipboard improvements, clearer tool setup and whole-app
-updates. [Full release notes](docs/NEXT_RELEASE.md).
+No existing device or relay was upgraded as part of v0.8.2 qualification.
+Interactive Windows/macOS installation, physical-phone read/history convergence
+and a live in-app upgrade remain separate verification gaps. Native picture and
+clipboard checks also remain incomplete. Installers are unsigned; opening
+prompts depend on the OS. The worker-wake fix does not establish that every
+agent startup delay is eliminated.
 
-Remaining reports include slow worker starts, misleading OKs/navigation,
-stale edited-message previews, unread badges differing across linked devices,
-duplicate person rows in notification settings, and internal status data
-appearing in some agent topics. Standing permission
-for future questions does not automatically accept an existing held question.
-Topic names, archives and some device-topic state are local; people-topic
-Done/Reopen has shared semantics. The [topic guide](docs/plans/TOPICS.md)
-explains the distinction.
+Standing permission for future questions does not automatically accept an
+existing held question. Topic names, archives and some device-topic state are
+local; people-topic Done/Reopen has shared semantics. The
+[topic guide](docs/plans/TOPICS.md) explains the distinction. Private Projects
+remain a design discussion, outside this release.
 
 Comic does not yet expose all advanced reply-receiver/continuation controls
 available in Classic and Zoom. See the [parity gap](docs/COMIC_PARITY_GAPS.md).
