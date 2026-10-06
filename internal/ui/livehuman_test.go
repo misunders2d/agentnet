@@ -104,7 +104,7 @@ func TestHumanGuestProjectionTruthAndPositiveAuthority(t *testing.T) {
 	p.Held = 0
 	p.State = client.PartDismissed
 	v = guestView(p, true, guestEnd{unheard: true})
-	if v.CanSend || v.CanEnd || !v.AudiencePending || !strings.Contains(v.StateText, "Previously shared copies remain") || !strings.Contains(v.StateText, "Until every device in this DM has stored the end") {
+	if v.CanSend || v.CanEnd || !v.AudiencePending || !strings.Contains(v.StateText, "Previously shared copies remain") || !strings.Contains(v.StateText, "Until every device in this conversation has stored the end") {
 		t.Fatal("ended state claims global recall or grants sends")
 	}
 	// Once the guest's device holds the end, or the guest left, nothing new
