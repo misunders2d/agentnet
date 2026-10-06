@@ -750,6 +750,11 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		if err == nil {
 			return a.handedOver(env, r.State, protocol.PathDirect)
 		}
+		var stopped *directDeliveryStopped
+		if errors.As(err, &stopped) {
+			state, _, _, _ := a.store.outboxState(env.ID)
+			return SendResult{ID: env.ID, State: state}, stopped.cause
+		}
 		a.Logf("direct delivery to %s failed (%v); using the Hub", route.Endpoint, err)
 		if err := a.store.coolRoute(route.Endpoint, time.Now().Add(routeCooldown)); err != nil {
 			a.Logf("route cooldown: %v", err)

@@ -98,6 +98,15 @@ func (a *Agent) directConn(ad protocol.SessionAd) (*hubConn, error) {
 	}, nil
 }
 
+// directDeliveryStopped is an authority/capability refusal, not a failed route.
+// Its caller must keep the stored state rather than retrying through the Hub.
+type directDeliveryStopped struct{ cause error }
+
+func (e *directDeliveryStopped) Error() string {
+	return "direct handoff stopped by current delivery gate"
+}
+func (e *directDeliveryStopped) Unwrap() error { return e.cause }
+
 // sendDirect uploads attachments and the envelope straight to the peer. It
 // succeeds only when the peer answers that it stored the message.
 func (a *Agent) sendDirect(ctx context.Context, env envelope.Envelope, ad protocol.SessionAd) (protocol.Receipt, error) {
@@ -110,6 +119,14 @@ func (a *Agent) sendDirect(ctx context.Context, env envelope.Envelope, ad protoc
 		if err := a.upload(ctx, conn, "/v1/direct/blobs", env.To, b); err != nil {
 			return r, err
 		}
+	}
+	// Uploads and connection setup take time. Recheck exact stored authority
+	// immediately before handoff, just as the relay path does.
+	if ok, err := a.receiverOriginalMayDeliver(env); err != nil || !ok {
+		return r, &directDeliveryStopped{cause: err}
+	}
+	if ok, err := a.mayDeliver(env); err != nil || !ok {
+		return r, &directDeliveryStopped{cause: err}
 	}
 	if err := conn.do(ctx, "POST", "/v1/direct/messages", env, &r); err != nil {
 		return r, err
