@@ -36,7 +36,7 @@ assert.equal((await e.threadSummaries())[0].waiting, true, 'progress must not cl
 await store.write([{ s: 'inbox', k: a, v: { v: 1, id: a, from: 'bob/b', kind: 'answer', body: 'done', reply_to: q, at: 3, read: true, state: '' } }]);
 assert.equal((await e.threadSummaries())[0].waiting, false, 'terminal answer settles Waiting');
 
-// Published signed caps: prg1 read support, human participation still off.
+// Signed profile negotiation honors rm1 readers; new release capabilities stay explicit.
 const puts = [];
 const c = new Engine({ store: memoryStore(), base: 'https://synthetic.invalid', fetch: async (url, o = {}) => {
   const path = new URL(url).pathname;
@@ -49,5 +49,13 @@ await c.onConnect().catch(() => {});
 assert.equal(puts.length, 1);
 const rec = wire.parseCaps(puts[0]);
 await wire.verifyCaps(rec, pub.sign_key);
-assert(rec.caps.includes(wire.CapProgress) && rec.caps.includes(wire.CapHumanParticipation));
+const profile={sessions:[rec.session],caps:[JSON.parse(puts[0])]},basic=[wire.CapProgress,wire.CapHumanParticipation],explicit=[wire.CapGroupHumanParticipation,wire.CapGroupInvitationControl,wire.CapReadSync];
+assert(rec.caps.length<=wire.MaxAdvertisedCaps,'published record fits advertisement bound');
+for(const cap of [...basic,...explicit])assert(await wire.profileSupports(profile,c.address,pub.sign_key,cap),'signed profile reads '+cap);
+const old=await wire.newCaps(keys,c.address,'5'.repeat(32),[wire.CapRoom]),mixed={sessions:[rec.session,old.session],caps:[...profile.caps,JSON.parse(wire.capsJSON(old))]};
+for(const cap of basic)assert(await wire.profileSupports(mixed,c.address,pub.sign_key,cap),'rm1 implies '+cap);
+for(const cap of explicit){
+ assert(rec.caps.includes(cap)&&!wire.capsReads(old,cap),'new capability stays explicit: '+cap);
+ assert(!await wire.profileSupports(mixed,c.address,pub.sign_key,cap),'old session blocks new capability: '+cap);
+}
 console.log(JSON.stringify({ verdicts, shapes, waiting: 'ok', caps: rec.caps }));

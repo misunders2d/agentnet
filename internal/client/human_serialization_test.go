@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"testing"
 )
@@ -43,17 +44,50 @@ func TestHumanHistoryReceiverSerializationAndLegacyAbsence(t *testing.T) {
 	if agentRequirement(carrier) != protocol.CapHumanParticipation {
 		t.Fatal("human history queue capability lost")
 	}
-	for _, c := range []string{protocol.CapHumanParticipation, protocol.CapAgentReaction, protocol.CapConvClear} {
-		if !containsCap(ownCaps, c) {
-			t.Fatalf("qualified capability %s not advertised", c)
+	// Negotiation uses the signed record's Reads contract: rm1 already
+	// guarantees its shipped readers, preserving advertisement headroom.
+	key, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := protocol.CapsRecord{Address: "fixture/desk", Session: protocol.NewID(), TS: 1, Caps: append([]string(nil), ownCaps...)}
+	rec.Sign(key.Sign)
+	if err = rec.Verify(key.Public(rec.Address).SignKey); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := protocol.Profile{Sessions: []string{rec.Session}, Caps: []json.RawMessage{raw}}
+	basic := []string{protocol.CapHumanParticipation, protocol.CapAgentReaction, protocol.CapConvClear, protocol.CapProgress}
+	explicit := []string{protocol.CapGroupHumanParticipation, protocol.CapGroupInvitationControl, protocol.CapReadSync}
+	for _, c := range append(append([]string(nil), basic...), explicit...) {
+		if !profile.Supports(rec.Address, key.Public(rec.Address).SignKey, c) {
+			t.Fatalf("signed current profile cannot negotiate %s", c)
 		}
 	}
-}
-func containsCap(caps []string, want string) bool {
-	for _, cap := range caps {
-		if cap == want {
-			return true
+	if len(rec.Caps)+1 > protocol.MaxAdvertisedCaps {
+		t.Fatal("agent hint exceeds advertisement bound")
+	}
+	room := protocol.CapsRecord{Address: rec.Address, Session: protocol.NewID(), TS: 1, Caps: []string{protocol.CapRoom}}
+	room.Sign(key.Sign)
+	oldRaw, err := json.Marshal(room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := protocol.Profile{Sessions: []string{rec.Session, room.Session}, Caps: []json.RawMessage{raw, oldRaw}}
+	for _, c := range basic {
+		if !mixed.Supports(rec.Address, key.Public(rec.Address).SignKey, c) {
+			t.Fatalf("rm1 lost implied support for %s", c)
 		}
 	}
-	return false
+	for _, c := range explicit {
+		if !rec.Has(c) || room.Reads(c) {
+			t.Fatalf("new capability %s must remain explicit, never rm1-implied", c)
+		}
+		if mixed.Supports(rec.Address, key.Public(rec.Address).SignKey, c) {
+			t.Fatalf("mixed old/new sessions incorrectly negotiate %s", c)
+		}
+	}
 }

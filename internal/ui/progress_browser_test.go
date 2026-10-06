@@ -135,7 +135,14 @@ func TestBrowserProgressMatchesGo(t *testing.T) {
 			t.Errorf("%s: browser %q, Go %q", name, got.Verdicts[name], verdict)
 		}
 	}
-	if got.Waiting != "ok" || !slices.Contains(got.Caps, "prg1") || !slices.Contains(got.Caps, protocol.CapHumanParticipation) {
-		t.Fatalf("waiting %q caps %v", got.Waiting, got.Caps)
+	record := protocol.CapsRecord{Caps: got.Caps}
+	if got.Waiting != "ok" || !record.Reads(protocol.CapProgress) || !record.Reads(protocol.CapHumanParticipation) || len(got.Caps) > protocol.MaxAdvertisedCaps {
+		t.Fatalf("waiting %q negotiated readers %v", got.Waiting, got.Caps)
+	}
+	roomOnly := protocol.CapsRecord{Caps: []string{protocol.CapRoom}}
+	for _, cap := range []string{protocol.CapGroupHumanParticipation, protocol.CapGroupInvitationControl, protocol.CapReadSync} {
+		if !slices.Contains(got.Caps, cap) || roomOnly.Reads(cap) {
+			t.Fatalf("new capability %s must remain explicit: %v", cap, got.Caps)
+		}
 	}
 }
