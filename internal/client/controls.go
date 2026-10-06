@@ -255,6 +255,10 @@ func (a *Agent) deleted(ref ControlRef) bool {
 // mayAuthor refuses an edit or deletion of a message this device's person
 // did not send.
 func (a *Agent) mayAuthor(ref ControlRef) error {
+	if _, captured, e := a.capturedHumanEdit(a.store.db, ref); captured {
+		return e
+	}
+
 	if ref.Conv == "" {
 		if ref.Fingerprint != a.Self().Fingerprint() {
 			return errors.New("only the sender edits or deletes a message")
@@ -355,6 +359,14 @@ func (a *Agent) sendControl(ctx context.Context, ref ControlRef, sub, body strin
 // the receiving device (protocol.CapControl for message controls,
 // protocol.CapHeadless for status and decisions).
 func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, cap string) (ControlSent, error) {
+	var captured *envelope.HumanTurn
+	if sub == envelope.SubRevision || sub == envelope.SubRetraction {
+		var e error
+		captured, _, e = a.capturedHumanEdit(a.store.db, ref)
+		if e != nil {
+			return ControlSent{}, e
+		}
+	}
 	feats, err := a.relayFeatures(ctx)
 	if err != nil {
 		return ControlSent{}, err
@@ -467,7 +479,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			if _, e := a.groupStatusScope(a.store.db, ref, a.Address, a.Self().Fingerprint()); e != nil {
 				return ControlSent{}, e
 			}
-		} else if !members.device(a.Address, a.Self().Fingerprint()) {
+		} else if captured == nil && !members.device(a.Address, a.Self().Fingerprint()) {
 			return ControlSent{}, errors.New("group: control sender is not a current member")
 		}
 
@@ -484,6 +496,23 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 					own[d.Address] = person.roster.Person == me.roster.Person
 				}
 			}
+		}
+		if captured != nil {
+			hosts, e := a.humanHostDevices(captured)
+			if e != nil {
+				return ControlSent{}, e
+			}
+			seen := map[string]bool{}
+			for _, d := range devices {
+				seen[d.Address] = true
+			}
+			for _, d := range hosts {
+				if !seen[d.Address] {
+					devices = append(devices, d)
+					seen[d.Address] = true
+				}
+			}
+			peerRequired = len(devices) > 0
 		}
 		group = &packet
 	} else {
@@ -538,6 +567,16 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			sent.Skipped = append(sent.Skipped, why)
 			continue
 		}
+		if captured != nil {
+			if e := a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation); e != nil {
+				sent.Skipped = append(sent.Skipped, e.Error())
+				continue
+			}
+			if e := a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation); e != nil {
+				sent.Skipped = append(sent.Skipped, e.Error())
+				continue
+			}
+		}
 		if group != nil {
 			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil {
 				sent.Skipped = append(sent.Skipped, dev.Address+": "+err.Error())
@@ -549,7 +588,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			return ControlSent{}, err
 		}
 		in := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
-			Kind: envelope.KindMessage, Sub: sub, Body: body, Ref: eref, Conv: ref.Conv, LID: lid, Replica: own[dev.Address], Fan: fan}
+			Kind: envelope.KindMessage, Sub: sub, Body: body, Ref: eref, Conv: ref.Conv, LID: lid, Replica: own[dev.Address], Fan: fan, Human: captured}
 		if group != nil {
 			members, e := controlMembers(a.store.db, ref.Conv)
 			if e != nil {
@@ -567,7 +606,11 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			return ControlSent{}, err
 		}
 		copies = append(copies, outCopy{env: env, in: in, state: stateQueued})
-		if group != nil {
+		if captured != nil {
+			copy := &copies[len(copies)-1]
+			copy.required = protocol.CapHumanParticipation
+			copy.recipientFP = key.Fingerprint()
+		} else if group != nil {
 			fence, e := groupControlEpochFence(a.store.db, *group, a.Address, a.Self().Fingerprint(), dev.Address, key.Fingerprint())
 			if sub == envelope.SubStatus {
 				adm, statusErr := groupMemberAdmission(a.store.db, *group, dev.Address, key.Fingerprint())
@@ -592,7 +635,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		return sent, fmt.Errorf("%w: %s", ErrNoControls, strings.Join(sent.Skipped, "; "))
 	}
 	local := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
-		Kind: envelope.KindMessage, Sub: sub, Body: body, Ref: eref, Conv: ref.Conv, LID: lid, Fan: fan}
+		Kind: envelope.KindMessage, Sub: sub, Body: body, Ref: eref, Conv: ref.Conv, LID: lid, Fan: fan, Human: captured}
 	if len(copies) == 0 {
 		// The last person still owns their messages, even on one device.
 		// Keep a signed local copy in the usual control/history store. It is
@@ -614,7 +657,23 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			required: protocol.CapGroup, recipientFP: a.Self().Fingerprint(), groupAdmission: fence})
 	}
 	var guard func(*sql.Tx, string) error
-	if group != nil {
+	if captured != nil {
+		guard = func(tx *sql.Tx, _ string) error {
+			current, _, e := a.capturedHumanEdit(tx, ref)
+			if e != nil {
+				return e
+			}
+			if humanJSON(current) != humanJSON(captured) {
+				return errors.New("captured edit audience changed during send")
+			}
+			for _, copy := range copies {
+				if e = humanAuthorization(tx, ref.Conv, captured, a.Address, a.Self().Fingerprint(), copy.env.To, copy.recipientFP); e != nil {
+					return e
+				}
+			}
+			return nil
+		}
+	} else if group != nil {
 		guard = func(tx *sql.Tx, _ string) error {
 			current, e := groupTurnPacketIn(tx, ref.Conv)
 			if e != nil {
@@ -1196,13 +1255,14 @@ type controlRow struct {
 	id, sub, author, authorFP, refID, refFP, body string
 	ms                                            int64
 	pid, agentID, origin                          string // an assistant reaction's reactor (assistantreaction.go)
+	human                                         string // captured HumanEdit authority, admitted against its original
 }
 
 // legacyControls loads the controls of the device thread with peer.
 func (s *store) legacyControls(peer, self, selfFP string) ([]controlRow, error) {
-	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
+	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, ''), coalesce(human,'')
 		  FROM inbox WHERE conv IS NULL AND ref_id IS NOT NULL AND sender = ?
-		UNION ALL SELECT id, sub, ?, ?, ref_id, ref_fp, body, coalesce(created_ms, created_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
+		UNION ALL SELECT id, sub, ?, ?, ref_id, ref_fp, body, coalesce(created_ms, created_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, ''), coalesce(human,'')
 		  FROM outbox WHERE conv IS NULL AND ref_id IS NOT NULL AND recipient = ?`, peer, self, selfFP, peer)
 	if err != nil {
 		return nil, err
@@ -1213,9 +1273,9 @@ func (s *store) legacyControls(peer, self, selfFP string) ([]controlRow, error) 
 // convControls loads the controls of conversation conv, once per logical
 // id for copies this device sent, each under its logical id.
 func (s *store) convControls(conv, self, selfFP string) ([]controlRow, error) {
-	rows, err := s.db.Query(`SELECT coalesce(lid, id), sub, sender, coalesce(verified_by, claimed_fp, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, '')
+	rows, err := s.db.Query(`SELECT coalesce(lid, id), sub, sender, coalesce(verified_by, claimed_fp, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, ''), coalesce(human,'')
 		  FROM inbox WHERE conv = ? AND ref_id IS NOT NULL AND local = 0
-		UNION ALL SELECT coalesce(o.lid, o.id), o.sub, ?, ?, o.ref_id, o.ref_fp, o.body, coalesce(o.created_ms, o.created_at * 1000), coalesce(o.pid, ''), coalesce(o.agent_id, ''), coalesce(o.origin, '')
+		UNION ALL SELECT coalesce(o.lid, o.id), o.sub, ?, ?, o.ref_id, o.ref_fp, o.body, coalesce(o.created_ms, o.created_at * 1000), coalesce(o.pid, ''), coalesce(o.agent_id, ''), coalesce(o.origin, ''), coalesce(o.human,'')
 		  FROM outbox o WHERE o.conv = ? AND o.ref_id IS NOT NULL AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid)`,
 		conv, self, selfFP, conv)
 	if err != nil {
@@ -1229,7 +1289,7 @@ func scanControls(rows *sql.Rows) ([]controlRow, error) {
 	var out []controlRow
 	for rows.Next() {
 		var r controlRow
-		if err := rows.Scan(&r.id, &r.sub, &r.author, &r.authorFP, &r.refID, &r.refFP, &r.body, &r.ms, &r.pid, &r.agentID, &r.origin); err != nil {
+		if err := rows.Scan(&r.id, &r.sub, &r.author, &r.authorFP, &r.refID, &r.refFP, &r.body, &r.ms, &r.pid, &r.agentID, &r.origin, &r.human); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -1508,6 +1568,9 @@ func (a *Agent) convAuthority(conv string, m dmMembers, me personRow) (auth auth
 		return p
 	}
 	auth = func(c controlRow, target ControlRef) (who, label string, mine, mayReact, mayAuthor bool) {
+		if who, label, mine, ok := a.capturedHumanControlAuthor(conv, c, target, me); m.root.Kind == protocol.ConvKindGroup && ok {
+			return who, label, mine, false, true
+		}
 		if who, ok := assistantWho(c); ok { // admitted as the participation's own: never a person's mark
 			host := c.author
 			if p, e := a.participation(conv, c.pid); e == nil && p.Host.Label != "" {
@@ -1583,6 +1646,15 @@ func (a *Agent) decorateConv(conv string, msgs []ConvMessage) error {
 		msg.Controls = resolved[ControlRef{ID: msg.LID, Fingerprint: fp}]
 		if msg.Deleted && msg.Kind == envelope.KindMessage {
 			msg.Body = ""
+		}
+		if !msg.Deleted && m.root.Kind == protocol.ConvKindGroup && humanGuestScope(msg.Human) && !envelope.AgentOrigin(msg.Origin) && fp == selfFP && msg.Dir == "out" && msg.Via == "" {
+			if a.mayAuthor(ControlRef{Conv: conv, ID: msg.LID, Fingerprint: fp}) == nil {
+				msg.Can = []string{CanEdit, CanDelete}
+			}
+			if mayControl {
+				msg.Can = append([]string{CanReact}, msg.Can...)
+			}
+			continue
 		}
 		if !msg.Deleted && mayControl {
 			msg.Can = []string{CanReact}

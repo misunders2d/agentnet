@@ -852,6 +852,12 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 // looked at.
 func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	if env.V == envelope.Version3 {
+		if handled, allowed, err := a.groupGuestDeliveryGate(env); handled {
+			return allowed, err
+		}
+		if handled, allowed, err := a.mayDeliverCapturedHumanEdit(env); handled {
+			return allowed, err
+		}
 		if handled, allowed, err := a.mayDeliverGroupStatus(env); handled {
 			return allowed, err
 		}
