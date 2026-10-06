@@ -16,6 +16,15 @@ This document remains the authoritative Host API v1 contract. A collection
 skin must produce a self-contained package and pass the contract and runtime
 checks; adding a skin requires no AgentNet source change or relay-wide rollout.
 
+Shared skins should show what people will install. Include current, real
+rendered previews in the repository's README or linked gallery, covering
+desktop and phone layouts and supported light/dark appearances. Use fictional
+people and messages; keep private workspace data, keys and fixture URLs out.
+Label concept mockups as concepts, never as previews of a working package.
+The agentnet-skins collection requires previews before listing a skin as
+available. Visual previews complement the compatibility checks below; they
+do not replace them or belong inside the installable package.
+
 - **Comic** (`comic`) is AgentNet's own skin and the default: the messenger,
   built from `internal/ui/web` into the package `internal/ui/static/skins/comic/`
   and embedded in the program.

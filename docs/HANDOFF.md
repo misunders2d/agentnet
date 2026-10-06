@@ -69,6 +69,16 @@ of a working native UI.
 
 ### Open follow-ups after v0.8.1
 
+- MEL-523 is required for **v0.8.2**: an ordinary agent answer can still close
+  an ongoing topic. The earlier status-based closure rule was removed, but
+  the agent prompt still encourages `topic: done` when it infers completion.
+  Separate answering one request from ending the topic; preserve intentional
+  closure and manual Done/Reopen. Verify a real multi-turn own-agent chat.
+- MEL-494: conversation counts cover all separate roots for a person, while
+  topic counts cover only the selected conversation. Empty roots remain
+  reachable. New Chat and sidebar entry points need the same preference for
+  an existing populated conversation and clearer scope labels; never merge
+  or delete signed histories to simplify these counts.
 - MEL-539: running work can be shown in OKs without an approval action; the
   arrow can retain the wrong topic. Standing question approval affects future
   eligible questions; an already held question still needs its own acceptance.
