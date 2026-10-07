@@ -3,6 +3,8 @@ package ui
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -102,8 +104,21 @@ func TestGuardRefusesWhatItShould(t *testing.T) {
 func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 	ts, _ := newTestServer(t)
 	resp := do(t, ts, "GET", "/?t="+testToken, "", nil)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/" {
-		t.Fatalf("status %d location %q", resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Refresh") != "" || resp.Header.Get("Location") != "" {
+		t.Fatalf("handoff status %d refresh %q location %q", resp.StatusCode, resp.Header.Get("Refresh"), resp.Header.Get("Location"))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || string(body) != `<!doctype html><script>location.replace("/"+location.hash);</script>` {
+		t.Fatalf("handoff must commit only its fixed replacement script: bytes=%d err=%v", len(body), err)
+	}
+	if resp.Header.Get("Content-Type") != "text/html; charset=utf-8" || resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Fatal("handoff lost document type or token privacy headers")
+	}
+	script := strings.TrimSuffix(strings.TrimPrefix(string(body), "<!doctype html><script>"), "</script>")
+	sum := sha256.Sum256([]byte(script))
+	policy := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(policy, "script-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'") || strings.Contains(policy, "script-src 'self'") || strings.Contains(policy, "unsafe-inline") {
+		t.Fatal("handoff CSP must permit only the fixed replacement script")
 	}
 	c := resp.Cookies()
 	if len(c) != 1 || c[0].Value != testToken || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
@@ -113,7 +128,7 @@ func TestTokenBecomesCookieAndLeavesTheAddress(t *testing.T) {
 		t.Fatalf("wrong token: %d", resp.StatusCode)
 	}
 	page := do(t, ts, "GET", "/", "", authed(ts, nil))
-	body, _ := io.ReadAll(page.Body)
+	body, _ = io.ReadAll(page.Body)
 	if page.StatusCode != 200 || !strings.Contains(string(body), "/assets/loader.js") {
 		t.Fatalf("page %d", page.StatusCode)
 	}

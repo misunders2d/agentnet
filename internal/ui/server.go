@@ -198,7 +198,7 @@ func same(a, b string) bool {
 }
 
 // page serves index.html. Arriving with the token sets the cookie and
-// redirects so the token leaves the address bar and history.
+// commits a same-origin document before opening the tokenless page.
 func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 	data, err := fs.ReadFile(static.Files, "index.html")
 	if err != nil {

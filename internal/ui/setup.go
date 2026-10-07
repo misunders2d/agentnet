@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/misunders2d/agentnet/internal/ui/static"
 )
@@ -162,13 +165,22 @@ func NewSetup(p SetupProvider, host, token string) http.Handler {
 	return s.guard(mux)
 }
 
+const tokenHandoffScript = `location.replace("/"+location.hash);`
+
 // serveHTML serves a page. Arriving with the token sets the cookie and
-// redirects so the token leaves the address bar and history.
+// commits a same-origin document before replacing it with the tokenless page.
+// A HTTP redirect from the native splash keeps a cross-site initiator and
+// withholds the Strict cookie. The replacement keeps deep-link fragments and
+// removes the token entry from history; only this fixed script may run.
 func (s *Server) serveHTML(w http.ResponseWriter, r *http.Request, data []byte) {
 	if r.URL.Query().Has("t") {
 		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.token, Path: "/",
 			HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		sum := sha256.Sum256([]byte(tokenHandoffScript))
+		policy := strings.Replace(w.Header().Get("Content-Security-Policy"), "script-src 'self'", "script-src 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'", 1)
+		w.Header().Set("Content-Security-Policy", policy)
+		fmt.Fprintf(w, "<!doctype html><script>%s</script>", tokenHandoffScript)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

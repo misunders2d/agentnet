@@ -50,7 +50,7 @@ func TestSetupPage(t *testing.T) {
 	if r := do(t, ts, "GET", "/", "", nil); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("no token: %d", r.StatusCode)
 	}
-	if r := do(t, ts, "GET", "/?t="+testToken, "", nil); r.StatusCode != http.StatusSeeOther || !strings.Contains(r.Header.Get("Set-Cookie"), testToken) {
+	if r := do(t, ts, "GET", "/?t="+testToken, "", nil); r.StatusCode != http.StatusOK || r.Header.Get("Refresh") != "" || !strings.Contains(r.Header.Get("Set-Cookie"), testToken) {
 		t.Fatalf("token: %d", r.StatusCode)
 	}
 	r := do(t, ts, "GET", "/", "", authed(ts, nil))

@@ -17,12 +17,17 @@ This record starts with v0.8.1; earlier releases remain on the
 - Native update controls recognize the app's authenticated session after its
   normal sign-in redirect removes the URL token. The session cookie and bound
   page must still match before an update can run.
+- Restarted apps establish their session before opening the main page, avoiding
+  an authorization error after the splash screen. Conversation and invitation
+  links survive the handoff; the session token leaves the address and history.
 
 ### Upgrading from v0.8.3 or v0.8.4
 
 Those AppImages contain the earlier updater. After installing this update,
 open AgentNet once from your launcher if it closes without reopening. The new
 updater takes effect after that first launch.
+If v0.8.4's Update button is unavailable, use `agentnet update v0.8.5` once
+for the registered desktop installation, then reopen AgentNet after it closes.
 
 ## [0.8.4] — 2026-10-07
 
