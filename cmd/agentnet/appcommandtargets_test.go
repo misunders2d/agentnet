@@ -186,6 +186,80 @@ func TestAppCommandBundledSourceOnPATHIsNotAnExtraTarget(t *testing.T) {
 	}
 }
 
+func TestAppCommandAdoptsOnlyExactUnrecordedBundledPATHCopy(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "exact private copy", true: "changed private copy"}[changed], func(t *testing.T) {
+			home, user := t.TempDir(), t.TempDir()
+			name := "agentnet"
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			src := filepath.Join(t.TempDir(), name)
+			private := filepath.Join(home, appStableExeDir, name)
+			original := []byte("current bundled app command")
+			if err := os.WriteFile(src, original, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if changed {
+				original = append(original, []byte(" with arbitrary changes")...)
+			}
+			if err := os.MkdirAll(filepath.Dir(private), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(private, original, 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", filepath.Dir(private))
+			// External CLI registration still has no trusted source. Even the
+			// exact copy needs a saved record or an official release checksum.
+			if err := registerAppCommandTarget(context.Background(), home, private); err == nil {
+				t.Fatal("requesting terminal adopted unrecorded arbitrary bytes")
+			}
+			status := installAppCommand(context.Background(), src, home, user, false)
+			got, err := os.ReadFile(private)
+			if err != nil || !bytes.Equal(got, original) {
+				t.Fatalf("initial adoption replaced PATH bytes: %q %v", got, err)
+			}
+			record, err := readAppCommandRecord(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed {
+				if status.State != "error" || status.Path != private || len(record.Targets) != 0 {
+					t.Fatalf("changed unrecorded copy was adopted: %+v %+v", status, record)
+				}
+				return
+			}
+			if status.State != "installed" || len(record.Targets) != 1 || record.Targets[0].Path != private {
+				t.Fatalf("exact bundle copy not adopted: %+v %+v", status, record)
+			}
+			// Its captured ownership now permits subsequent app versions to
+			// refresh both the inherited private PATH and primary command.
+			canonical := appCommandPath(user)
+			if canonical == "" {
+				canonical = src
+			}
+			for _, next := range []string{"next bundled app command", "next bundled app command"} {
+				if err := os.WriteFile(src, []byte(next), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if status := installAppCommand(context.Background(), src, home, user, false); status.State != "installed" {
+					t.Fatalf("repeated app update rejected owned private PATH: %+v", status)
+				}
+				for _, path := range []string{private, canonical} {
+					got, err := os.ReadFile(path)
+					if err != nil || string(got) != next {
+						t.Fatalf("repeated update missed %s: %q %v", path, got, err)
+					}
+				}
+			}
+			if record, err := readAppCommandRecord(home); err != nil || len(record.Targets) != 1 {
+				t.Fatalf("repeated adoption duplicated ownership: %+v %v", record, err)
+			}
+		})
+	}
+}
+
 func TestAppCommandReadCheckReportsFailingRegisteredTarget(t *testing.T) {
 	home, bin := t.TempDir(), t.TempDir()
 	t.Setenv("PATH", bin)

@@ -75,9 +75,12 @@ func registerAppCommandTarget(ctx context.Context, home, path string) error {
 		return e
 	}
 	defer release()
-	return registerAppCommandTargetLocked(ctx, home, path)
+	return registerAppCommandTargetLocked(ctx, "", home, path)
 }
-func registerAppCommandTargetLocked(ctx context.Context, home, path string) error {
+
+// Only the app installer supplies its trusted bundled source. A requesting
+// terminal cannot establish ownership by comparing an arbitrary copy to itself.
+func registerAppCommandTargetLocked(ctx context.Context, src, home, path string) error {
 	release, e := lockfile.Acquire(updateLockPath(path))
 	if e != nil {
 		return e
@@ -94,7 +97,7 @@ func registerAppCommandTargetLocked(ctx context.Context, home, path string) erro
 	if e != nil {
 		return e
 	}
-	if !appOwnsCommand(ctx, "", path, filepath.Join(home, "app-command.json")) {
+	if !appOwnsCommand(ctx, src, path, filepath.Join(home, "app-command.json")) {
 		return errors.New("command target is custom or its official checksum cannot be verified")
 	}
 	sum, e := fileSum(path)
@@ -143,7 +146,7 @@ func installAppCommand(ctx context.Context, src, home, userHome string, replace 
 	if effective, e := exec.LookPath("agentnet"); e == nil {
 		effective, e = filepath.Abs(effective)
 		if e == nil && effective != dst && effective != src {
-			if e = registerAppCommandTargetLocked(ctx, home, effective); e != nil {
+			if e = registerAppCommandTargetLocked(ctx, src, home, effective); e != nil {
 				discoveryProblem = &appCommandStatus{Path: effective, State: "error", Problem: "The command earlier on PATH could not be verified: " + e.Error() + ". Move this command off PATH or restore a verified official command at " + effective + ", then retry."}
 			} else {
 				targets = append(targets, effective)
