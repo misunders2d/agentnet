@@ -41,12 +41,16 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb
       - name: build the app
         shell: bash
         run: desktop/build.sh "${{ inputs.version }}"
       - name: the shell's tests
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
+      - name: Linux AppImage replacement and restart
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24 -nolisten tcp' python3 scripts/test-appimage-update.py
       - uses: actions/upload-artifact@v4
         with:
           name: agentnet-app-${{ runner.os }}
