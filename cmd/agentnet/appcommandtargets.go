@@ -144,7 +144,7 @@ func installAppCommand(ctx context.Context, src, home, userHome string, replace 
 		effective, e = filepath.Abs(effective)
 		if e == nil && effective != dst && effective != src {
 			if e = registerAppCommandTargetLocked(ctx, home, effective); e != nil {
-				discoveryProblem = &appCommandStatus{Path: effective, State: "custom", Problem: e.Error()}
+				discoveryProblem = &appCommandStatus{Path: effective, State: "error", Problem: "The command earlier on PATH could not be verified: " + e.Error() + ". Move this command off PATH or restore a verified official command at " + effective + ", then retry."}
 			} else {
 				targets = append(targets, effective)
 			}
@@ -161,10 +161,14 @@ func installAppCommand(ctx context.Context, src, home, userHome string, replace 
 		}
 		seen[target] = true
 		if e = validateAppCommandTarget(target); e != nil {
-			return fail(fmt.Errorf("command target %s: %w", target, e))
+			return appCommandStatus{Path: target, State: "error", Problem: fmt.Sprintf("Required command target %s: %v. Restore this managed command target, then retry.", target, e)}
 		}
 		s := installAppCommandAt(ctx, src, home, userHome, target, false, false)
 		if s.State != "installed" {
+			if s.State == "custom" {
+				s.Problem = "The command is custom or its official checksum cannot be verified. Restore an unchanged app-owned or verified official command at this path, then retry."
+			}
+			s.State = "error"
 			s.Problem = "Required command target " + target + ": " + s.Problem
 			return s
 		}
@@ -202,14 +206,17 @@ func checkAppCommand(home, src string) appCommandStatus {
 	}
 	for _, target := range targets {
 		if !filepath.IsAbs(target.Path) {
+			state.Path = target.Path
 			return fail("Invalid managed command path.")
 		}
 		st, e := os.Lstat(target.Path)
 		if e != nil || !st.Mode().IsRegular() {
+			state.Path = target.Path
 			return fail("Command target is missing or is a symlink: " + target.Path)
 		}
 		have, e := fileSum(target.Path)
 		if e != nil || target.Sum != expected || !bytes.Equal(have, want) {
+			state.Path = target.Path
 			return fail("Command target does not match the running app: " + target.Path)
 		}
 	}

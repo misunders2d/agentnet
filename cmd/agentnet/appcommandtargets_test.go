@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/misunders2d/agentnet/internal/secfile"
@@ -75,9 +76,22 @@ func TestAppCommandRegisteredPATHShadowRefreshesWithCanonical(t *testing.T) {
 }
 
 func TestAppCommandChangedRegisteredTargetPreservedAndIncomplete(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(map[bool]string{false: "automatic", true: "replace canonical"}[replace], func(t *testing.T) {
+			testAppCommandChangedRegisteredTarget(t, replace)
+		})
+	}
+}
+
+func testAppCommandChangedRegisteredTarget(t *testing.T, replace bool) {
+	t.Helper()
 	home, user, bin := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("PATH", bin)
-	shadow := filepath.Join(bin, "agentnet")
+	name := "agentnet"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	shadow := filepath.Join(bin, name)
 	os.WriteFile(shadow, []byte("owned"), 0755)
 	ownedCommandTarget(t, home, shadow)
 	if e := registerAppCommandTarget(context.Background(), home, shadow); e != nil {
@@ -85,7 +99,7 @@ func TestAppCommandChangedRegisteredTargetPreservedAndIncomplete(t *testing.T) {
 	}
 	os.WriteFile(shadow, []byte("custom replacement"), 0755)
 	before, _ := secfile.Read(filepath.Join(home, "app-command.json"))
-	if s := checkAppCommand(home, shadow); s.State == "installed" {
+	if s := checkAppCommand(home, shadow); s.State != "error" || s.Path != shadow {
 		t.Fatal("read-only check accepted changed recorded bytes")
 	}
 	after, _ := secfile.Read(filepath.Join(home, "app-command.json"))
@@ -94,9 +108,9 @@ func TestAppCommandChangedRegisteredTargetPreservedAndIncomplete(t *testing.T) {
 	}
 	src := filepath.Join(t.TempDir(), "bundled")
 	os.WriteFile(src, []byte("new app CLI"), 0755)
-	s := installAppCommand(context.Background(), src, home, user, false)
-	if s.State == "installed" {
-		t.Fatal("partial update claimed complete")
+	s := installAppCommand(context.Background(), src, home, user, replace)
+	if s.State != "error" || s.Path != shadow || strings.Contains(s.Problem, "Replace command") {
+		t.Fatalf("unsafe action offered for a separate registered target: %+v", s)
 	}
 	if b, _ := os.ReadFile(shadow); string(b) != "custom replacement" {
 		t.Fatal("custom target overwritten")
@@ -107,6 +121,94 @@ func TestAppCommandChangedRegisteredTargetPreservedAndIncomplete(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(canonical); string(b) != "new app CLI" {
 		t.Fatal("canonical copy not refreshed")
+	}
+	if s := checkAppCommand(home, src); s.State != "error" || s.Path != shadow {
+		t.Fatalf("read-only check must report the changed target: %+v", s)
+	}
+}
+
+func TestAppCommandCustomPATHShadowNeverOffersCanonicalReplacement(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		t.Run(map[bool]string{false: "automatic", true: "replace canonical"}[replace], func(t *testing.T) {
+			home, user, bin := t.TempDir(), t.TempDir(), t.TempDir()
+			name := "agentnet"
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			shadow := filepath.Join(bin, name)
+			original := []byte("custom command; must never execute or overwrite")
+			if e := os.WriteFile(shadow, original, 0755); e != nil {
+				t.Fatal(e)
+			}
+			t.Setenv("PATH", bin)
+			src := filepath.Join(t.TempDir(), "bundled")
+			if e := os.WriteFile(src, []byte("new app CLI"), 0755); e != nil {
+				t.Fatal(e)
+			}
+			s := installAppCommand(context.Background(), src, home, user, replace)
+			if s.State != "error" || s.Path != shadow || !strings.Contains(s.Problem, "off PATH") || strings.Contains(s.Problem, "Replace command") {
+				t.Fatalf("unsafe action offered for an earlier PATH command: %+v", s)
+			}
+			if b, e := os.ReadFile(shadow); e != nil || !bytes.Equal(b, original) {
+				t.Fatalf("custom PATH command changed: %q %v", b, e)
+			}
+			if s := checkAppCommand(home, src); s.State != "error" || s.Path != shadow {
+				t.Fatalf("read-only check must report the PATH shadow: %+v", s)
+			}
+		})
+	}
+}
+
+func TestAppCommandBundledSourceOnPATHIsNotAnExtraTarget(t *testing.T) {
+	home, user, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	name := "agentnet"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	src := filepath.Join(bin, name)
+	if e := os.WriteFile(src, []byte("bundled app CLI"), 0755); e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("PATH", bin)
+	if s := installAppCommand(context.Background(), src, home, user, false); s.State != "installed" {
+		t.Fatal(s)
+	}
+	r, e := readAppCommandRecord(home)
+	if e != nil || len(r.Targets) != 0 {
+		t.Fatalf("bundled source registered as a separate target: %+v %v", r, e)
+	}
+	primary := appCommandPath(user)
+	if primary == "" {
+		primary = src // Windows installed executable is the primary command.
+	}
+	if r.Path != primary {
+		t.Fatalf("wrong primary command: %+v", r)
+	}
+}
+
+func TestAppCommandReadCheckReportsFailingRegisteredTarget(t *testing.T) {
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("PATH", bin)
+	src := filepath.Join(t.TempDir(), "bundled")
+	if e := os.WriteFile(src, []byte("bundled app CLI"), 0755); e != nil {
+		t.Fatal(e)
+	}
+	ownedCommandTarget(t, home, src)
+	missing := filepath.Join(t.TempDir(), "missing")
+	r, e := readAppCommandRecord(home)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r.Targets = []appCommandTarget{{Path: missing, Sum: r.Sum}}
+	b, _ := json.Marshal(r)
+	if e := secfile.Write(filepath.Join(home, "app-command.json"), b); e != nil {
+		t.Fatal(e)
+	}
+	if s := checkAppCommand(home, src); s.State != "error" || s.Path != missing {
+		t.Fatalf("wrong failing command reported: %+v", s)
+	}
+	if s := installAppCommand(context.Background(), src, home, t.TempDir(), true); s.State != "error" || s.Path != missing {
+		t.Fatalf("wrong invalid registered command reported: %+v", s)
 	}
 }
 
