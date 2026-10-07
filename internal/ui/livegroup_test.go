@@ -224,11 +224,13 @@ func TestLiveRefreshAsksAboutEveryHeldCopy(t *testing.T) {
 	})
 	wait("the phone receipt pushed", func() bool { return stateOf(phone.Address) == protocol.StateDelivered })
 	// A pre-upgrade local row may still say custody although the peer holds it.
-	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
+	// The daemon still writes this database; use the store's lock-wait policy.
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(1)
 	if _, err = db.Exec("UPDATE outbox SET state='custody' WHERE conv=? AND recipient=?", conv, phone.Address); err != nil {
 		t.Fatal(err)
 	}
