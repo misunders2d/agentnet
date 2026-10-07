@@ -4,13 +4,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/misunders2d/agentnet/internal/lockfile"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/misunders2d/agentnet/internal/lockfile"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
@@ -111,4 +119,72 @@ func TestBundledUpdateNeedsExactAppAcknowledgement(t *testing.T) {
 	if e := requestAppUpdate(context.Background(), home, false, ""); e == nil {
 		t.Fatal("ordinary page claimed a whole-app update")
 	}
+}
+
+func TestBundledUpdateStartsClosedAppWithoutLimitingAcceptedStaging(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("isolated /bin/sh app-launch fixture")
+	}
+	f := newGlobalUpdateFixture(t)
+	f.server.Close()
+	if err := os.Remove(filepath.Join(f.home, uiURLFile)); err != nil {
+		t.Fatal(err)
+	}
+	previousTimeout := appUpdateStartTimeout
+	appUpdateStartTimeout = 2 * time.Second
+	t.Cleanup(func() { appUpdateStartTimeout = previousTimeout })
+	var calls atomic.Int32
+	var cancelled atomic.Bool
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		calls.Add(1)
+		cookie, err := req.Cookie("agentnet_ui")
+		if err != nil || cookie.Value != f.runner.token || req.Method != http.MethodPost || req.URL.Path != "/api/app/update" || req.Header.Get("Origin") != "http://"+req.Host {
+			t.Error("closed app did not receive the authenticated whole-app request")
+		}
+		// An accepted stage must survive the readiness deadline. The former
+		// requestAppUpdateOnce(wait, ...) cancelled this request while waiting.
+		select {
+		case <-req.Context().Done():
+			cancelled.Store(true)
+			return
+		case <-time.After(appUpdateStartTimeout + 300*time.Millisecond):
+		}
+		if !f.runner.appAPI(w, req) {
+			t.Error("closed app did not use the real updater handler")
+		}
+	}))
+	f.runner.addr = server.Listener.Addr().String()
+	server.Start()
+	defer server.Close()
+	stub := filepath.Join(t.TempDir(), "fictional-installed-app")
+	// The stub publishes only its synthetic endpoint and launch marker. Its
+	// interpreter is explicit; the isolated PATH cannot launch any live app.
+	script := fmt.Sprintf("#!/bin/sh\numask 077\nprintf 'launched\\n' >> \"$AGENTNET_HOME/closed-app-started\"\nprintf '%%s\\n' '%s/?t=%s' > \"$AGENTNET_HOME/%s\"\n", server.URL, f.runner.token, uiURLFile)
+	if err := os.WriteFile(stub, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := secfile.Write(filepath.Join(f.home, appExeFile), []byte(stub)); err != nil {
+		t.Fatal(err)
+	}
+	before := f.snapshot(t)
+	if err := runUpdate(context.Background(), f.home, []string{"--check", protocol.Version}); !errors.Is(err, errAppUpdateNotReady) {
+		t.Fatalf("closed-app check must remain read-only: %v", err)
+	}
+	if after := f.snapshot(t); !reflect.DeepEqual(before, after) || calls.Load() != 0 {
+		t.Fatal("closed-app check launched or modified the app")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := diagnosticOutput(t, func() error { return runUpdate(ctx, f.home, []string{protocol.Version}) })
+	if err != nil || !strings.Contains(out, "Opening the installed AgentNet app") || !strings.Contains(out, "App and terminal command verified at "+protocol.Version) {
+		t.Fatalf("closed-app update failed after accepting staging: %q %v", out, err)
+	}
+	if cancelled.Load() || calls.Load() != 1 {
+		t.Fatalf("accepted update cancelled or repeated: cancelled=%v calls=%d", cancelled.Load(), calls.Load())
+	}
+	launches, err := os.ReadFile(filepath.Join(f.home, "closed-app-started"))
+	if err != nil || string(launches) != "launched\n" {
+		t.Fatalf("closed app not launched exactly once: %q %v", launches, err)
+	}
+	f.assertComplete(t)
 }
