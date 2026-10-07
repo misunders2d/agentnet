@@ -57,7 +57,20 @@ checked private captures. These tests do not claim a live model execution.
 
 Interactive Windows/macOS upgrades and a graphical About-button click remain
 unverified. Installers remain unsigned. Qualification changed no existing
-installation; the separately authorized relay deployment remains v0.8.2.
+installation. After publication, the owner separately authorized the relay
+upgrade recorded below.
+
+### Relay deployment — October 7, after publication
+
+The owner explicitly requested the published release on the Contabo relay.
+The official v0.8.3 binary matched its release checksum and was verified in a
+new image before cutover. Hub was stopped for a consistent private backup;
+the archive was checked before switching only the Compose image. Previous
+v0.8.2 image and configuration remain available for rollback. The existing
+volume, realm, TLS/sign-in configuration and networking were preserved.
+Running container and public HTTPS version endpoint report v0.8.3 at the
+release revision, with zero restarts and no OOM. Backup/rollback paths are in
+the private project handoff. No desktop or phone was updated.
 
 ### Follow-up ownership
 
