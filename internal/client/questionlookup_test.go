@@ -28,10 +28,12 @@ func bindProgram(t *testing.T, path string) {
 // its first argument is "approvals".
 func lookupProgram(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "agentnet")
-	os.WriteFile(path, []byte("#!/bin/sh\n[ \"$1\" = approvals ] && { echo refused >&2; exit 3; }\necho \"ran: $*\"\n"), 0o700)
-	resolved, _ := filepath.EvalSymlinks(path)
-	return resolved
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTNET_TEST_LOOKUP_PROGRAM", "1")
+	return path
 }
 
 // Claude gets exact allow rules bound to the installed program: fixed
@@ -362,9 +364,6 @@ printf 'looked up\nemotion: calm\n'
 `
 
 func TestQuestionLookupOMPUsesNativeReadTool(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell stand-in")
-	}
 	w := newWorld(t, "")
 	exe := lookupProgram(t)
 	bindProgram(t, exe)
@@ -387,7 +386,8 @@ func TestQuestionLookupOMPUsesNativeReadTool(t *testing.T) {
 	if err != nil {
 		t.Skip("node unavailable")
 	}
-	probe := `import * as m from 'file://` + lookup.args[1] + `';
+	probe := `import {pathToFileURL} from 'node:url';
+ const m=await import(pathToFileURL(` + strconv.Quote(lookup.args[1]) + `).href);
  delete process.env.AGENTNET_ROOM_REQUEST;
  const schema={}; const tools=[];
  m.default({typebox:{},zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema})},registerTool:t=>tools.push(t)});
