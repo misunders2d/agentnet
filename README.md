@@ -12,7 +12,7 @@ It is built for everyday company work: sales, operations, purchasing,
 accounting, customer support—and the people who build the systems behind them.
 You do not need to write code to use it.
 
-[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
+[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.4) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
 
 ## Start with a topic
 
@@ -162,7 +162,7 @@ compatibility; they do not make arbitrary skin code safe.
 
 ## Get started
 
-**Current release: [v0.8.3](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3)**,
+**Current release: [v0.8.4](https://github.com/misunders2d/agentnet/releases/tag/v0.8.4)**,
 published October 7, 2026. AgentNet is actively developing; the expandable
 release section below names what has been checked and what still needs work.
 
@@ -180,9 +180,9 @@ release section below names what has been checked and what still needs work.
 
 | Computer | Download and open |
 | --- | --- |
-| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.3/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
-| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.3/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3) are also available. |
-| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.3/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
+| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.4/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
+| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.4/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.4) are also available. |
+| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.4/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
 
 Closing the desktop window leaves AgentNet in the tray. **Start when I log in**
 controls whether it starts with your computer; **Quit AgentNet** stops it.
@@ -199,13 +199,20 @@ once. v0.8.3 fixes the case where the app updated but an older official
 `agentnet` command remained in your terminal. It recognizes and updates those
 unchanged official copies automatically.
 
-**With v0.8.3 installed**, the button and `agentnet update` update AgentNet
+**With v0.8.4 installed**, the button and `agentnet update` update AgentNet
 as a whole: the desktop app, terminal command and AgentNet connections used by
 your tools. An already-current app can repair an older command left behind.
 The command opens the app if needed. Custom or modified commands stay protected;
 an error identifies anything needing attention. Updates finish only when the
 restarted app and its required commands match. This does not update Codex,
 Claude, Pi, other devices or your workspace server.
+
+If an independently running daemon owns your app data, About now exposes the
+update controls instead of requiring a manual daemon shutdown. The
+switch waits for accepted work to finish. An older busy daemon may refuse
+preparation; retry after its current job finishes. If an older attached app
+has no Update control, install the current desktop package once, keeping the
+existing identity and data.
 
 ## Guides for agents and maintainers
 
@@ -336,8 +343,8 @@ These are different operations:
 | --- | --- |
 | v0.8.0 desktop app | Install the current matching desktop package once. Keep the same data home and app location. |
 | v0.8.1+ desktop app | Settings → About → Update AgentNet. The app checks the latest published release, verifies its package and restarts after preparation. |
-| v0.8.3 command with a registered desktop app | `agentnet update` uses the same whole-app updater and includes verified official PATH copies. An active agent job must finish first. |
-| CLI-only installation, without a registered desktop app | `agentnet update` or `agentnet update v0.8.3`; this changes the executing CLI. |
+| v0.8.3+ command with a registered desktop app | `agentnet update` uses the same whole-app updater and includes verified official PATH copies. An active agent job must finish first. |
+| CLI-only installation, without a registered desktop app | `agentnet update` or `agentnet update v0.8.4`; this changes the executing CLI. |
 | Relay | Replace the deployed server binary/image separately, after a stopped-state backup, keeping the existing volume and configuration. |
 
 The app refreshes its bundled command, verified official terminal copies and
@@ -354,7 +361,7 @@ A server recommendation is an admin notice. It does not install software,
 and the app's update button checks GitHub independently of that notice.
 The v0.8.0 About page incorrectly directs desktop users to `agentnet update`;
 use a desktop package instead. If its **What's new** link does nothing, open
-[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3) directly.
+[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.4) directly.
 
 The [complete update/recovery guide](docs/revival/INSTALL.md#updating-and-downgrading)
 covers backups, package handling, managed commands, relay upgrades and rollback.
@@ -390,7 +397,7 @@ agentnet hub restore --from hub-backup.tgz --data /var/lib/agentnet-restored
 
 # From an enrolled admin device: recommend a client release separately.
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.3 v0.8.3
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.4 v0.8.4
 ```
 
 A server-hosted company agent is an ordinary member with its own separate
@@ -517,7 +524,28 @@ contributors as described in AGENTS.md. Licensed under [Apache 2.0](LICENSE).
 </details>
 
 <details>
-<summary><strong>v0.8.3 release evidence and known limits</strong></summary>
+<summary><strong>v0.8.4 release evidence and known limits</strong></summary>
+
+Published October 7, 2026 at 15:54 UTC. The [source CI](https://github.com/misunders2d/agentnet/actions/runs/37642753786) and [release workflow](https://github.com/misunders2d/agentnet/actions/runs/37645700324)
+passed on `ac084454e767b5f1f8096533b64c0c57b2d822b3`. All 12 asset digests and
+sizes matched GitHub, and all 11 package entries matched `SHA256SUMS`. The
+downloaded Linux command reports v0.8.4 and that exact clean source revision.
+Both isolated Linux update journeys passed with the final downloaded AppImage.
+The relay was upgraded after a verified stopped-state backup, preserving its
+existing volume and realm. Its public version and client recommendation both
+report v0.8.4. No existing desktop or phone installation was updated.
+
+All three production skins passed desktop/phone rendering checks. Isolated
+Linux qualification covers genuine v0.8.3 package and independently managed
+daemon upgrades, preserving accepted jobs. Interactive Windows/macOS upgrades,
+physical phone notification/clipboard behavior and the older published UI’s
+network update-button journey remain unverified. Installers are unsigned.
+See [current release notes](docs/NEXT_RELEASE.md) and [handoff](docs/HANDOFF.md).
+
+</details>
+
+<details>
+<summary><strong>Historical v0.8.3 release evidence and known limits</strong></summary>
 
 [Candidate CI](https://github.com/misunders2d/agentnet/actions/runs/37592322850)
 and the [release workflow](https://github.com/misunders2d/agentnet/actions/runs/37592386488)

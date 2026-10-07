@@ -4,9 +4,28 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Next patch candidates — October 7, after v0.8.3
+## Current release — v0.8.4, October 7, 2026
 
-The owner expanded the proposed v0.8.4 patch to the core chat, agent setup,
+[Download v0.8.4](https://github.com/misunders2d/agentnet/releases/tag/v0.8.4).
+Released source: `ac084454e767b5f1f8096533b64c0c57b2d822b3`.
+Published October 7, 2026 at 15:54 UTC. The [source CI](https://github.com/misunders2d/agentnet/actions/runs/37642753786) and [release workflow](https://github.com/misunders2d/agentnet/actions/runs/37645700324)
+passed on `ac084454e767b5f1f8096533b64c0c57b2d822b3`. All 12 asset digests and
+sizes matched GitHub, and all 11 package entries matched `SHA256SUMS`. The
+downloaded Linux command reports v0.8.4 and that exact clean source revision.
+Both isolated Linux update journeys passed with the final downloaded AppImage.
+The relay was upgraded after a verified stopped-state backup, preserving its
+existing volume and realm. Its public version and client recommendation both
+report v0.8.4. No existing desktop or phone installation was updated.
+
+The implementation record below describes focused qualification; final release
+CI/package/relay facts belong above. Tests and cross-compilation do not certify
+interactive Windows/macOS installation or a physical phone journey. The local
+Pi stall repair was a separate custom extension cleanup, not a shipped AgentNet
+performance change. No reset, re-enrollment or permission migration is required.
+
+## v0.8.4 implementation and focused qualification — October 7
+
+The owner expanded the v0.8.4 patch to the core chat, agent setup,
 notification and desktop usability fixes below. GPT-6.1-sol helpers own source
 and focused qualification; root owns review, integration and release gates.
 Published v0.8.3 remains immutable. No installed AgentNet client identity, history or
@@ -22,8 +41,8 @@ OMP authentication and settings, without opening or resuming a user session.
   may initially choose differently when available history differs. No new Hub
   authority or rewritten history. Production-source Chromium fixtures cover all
   three skins at desktop/phone widths, reload, late metadata, exact routing,
-  drafts and native bulk actions. Final embedded-bundle integration checks remain
-  a release gate; browser fixtures do not prove a physical phone journey.
+  drafts and native bulk actions. Final embedded-bundle integration checks
+  passed; browser fixtures do not prove a physical phone journey.
 - **Chat notifications (MEL-564/MEL-560):** ordinary admitted chats default
   unmuted under the device's global opt-in. A person-chat mute derives from
   existing muted signed member-DM roots, covers Main and Topics, and also covers
@@ -109,7 +128,7 @@ OMP authentication and settings, without opening or resuming a user session.
   first output, with no content/tool arguments logged. Missing-executable tests
   retain terminal failure and prove no automatic rerun. No new model timeout,
   telemetry service or background job system. Native Windows CI passed the
-  previous integration head; final combined-head CI remains a release gate.
+  final release source.
   Startup diagnostics do not establish faster answers. The separate local Pi
   incident was traced to a custom Google extension leaving its OAuth listener
   alive after a completed answer. A local extension cleanup was verified with
@@ -151,7 +170,7 @@ OMP authentication and settings, without opening or resuming a user session.
   accepted. Desktop/phone source-browser preview tests passed. Physical native
   clipboard behavior remains unverified; existing clipboard guards/unit tests
   and actionable OKs regressions are retained (MEL-539/MEL-519/MEL-555).
-- **Updater (MEL-551), still qualifying:** stable replacement cwd and immediate
+- **Updater (MEL-551), focused qualification:** stable replacement cwd and immediate
   child-failure regressions pass. Actual isolated Linux Tauri plus the real Go
   backend exercised the independently managed daemon control bridge, old-style
   fetch, and refusal of unrelated actions/CLI operations. A real whole-package
@@ -163,8 +182,36 @@ OMP authentication and settings, without opening or resuming a user session.
   the candidate package. Preparation uses the existing 30-second bound: a busy
   old daemon can refuse preparation without changing installed bytes or killing
   its job; retry after that work completes. The published v0.8.3 UI button/network
-  download journey and the owner's original v0.8.2 cause remain unproven. Final
-  approved UI packages and native-platform CI remain release gates.
+  download journey and the owner's original v0.8.2 cause remain unproven. The final
+  downloaded packages and native-platform CI passed the release gates above.
+
+- **Agent addressing and nested questions:** prompts name configured agents
+  alongside exact participation IDs. The existing scheduler can claim an exact
+  selected same-host child caused by the running parent in the same group,
+  allowing that child to execute while the parent waits; this does not grant
+  unrelated queued work new authority. Pi and OMP question extensions expose
+  the existing room ask/wait path for questions. Claude and Codex retain their
+  own question restrictions; no blanket question-delegation support is claimed.
+  All skins show the exact selected recipient and distinguish an existing
+  approval proposal using its authoritative metadata. Final embedded addressing,
+  proposal and terminal-not-run rendering passed six cases
+  across all three skins at desktop/phone widths; body and exact PID were retained,
+  with no sends. Native question-tool/name races passed in 3.654 seconds.
+  Canonical locked builds, bundle integrity and all three digest checks passed;
+  integrated CI passed on the released source.
+- **Own sent-message reminders:** the existing personal-device reminder path
+  accepts locally stored inbox/outbox message IDs, preserving its time bounds,
+  deletion checks, scheduler and schema. Outgoing copies retain their exact
+  local IDs; the existing reply-ending rule matches logical aliases only within
+  the same conversation. The new own-sent regression failed before the fix.
+  Focused reminder races passed in 17.339 seconds; final actual direct/DM and
+  synthetic fanout-copy/reopen checks passed in 4.238 seconds. Menu guards retain
+  native reminder capability checks; browser-only support is not added. Final
+  embedded own/incoming create, reload retention and Move/reopen rendering
+  passed six cases across all three skins at desktop/phone widths. Rendering
+  used fictional API persistence; real native persistence is qualified by the
+  separate client tests above. Group reminder notifications open the chat;
+  exact-message focus for that notification is not claimed.
 
 Focused core races and actual source-browser fixtures pass within those scopes.
 Root's `go vet ./...` passed on the integration candidate.
@@ -172,8 +219,9 @@ Two macOS CI failures were repaired as fixture synchronization assumptions:
 count only the exact new group publication rather than independent queued
 history deliveries, and wait for a signed DM root to arrive before inspecting
 its timeline. Security and message assertions were retained. Final combined
-source CI, embedded skins, native packages and checksums remain release gates;
-no v0.8.4 publication or installed-device recovery is claimed. Generated local
+source CI, embedded skins, native packages and checksums were pending at this
+focused-qualification stage; final published evidence is recorded above.
+These checks do not establish every installed device’s recovery. Generated local
 screenshots and verification logs stay private and must not be published.
 
 The owner deferred unified direct-agent history to **MEL-569**, the Appearance
@@ -183,9 +231,11 @@ records a future Assign to my agent action for any existing accessible message,
 reusing task/context facilities instead of retyping another person's request.
 It is discussion/backlog only, outside this patch. Preview versus immediate
 assignment, chosen agent/device/default, context/attachments and result audience
-remain owner decisions; no delegation behavior was implemented.
+remain owner decisions; no selected-message assignment behavior was implemented.
+Reusable team/person tags (**MEL-502**) and collapsed participant presentation
+(**MEL-498**) remain deferred; neither is part of this release.
 
-## Current published release — October 7 v0.8.3
+## Historical release — October 7 v0.8.3
 
 [v0.8.3](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3) was published at 08:39 UTC from
 `5aec119649807befe711135c97805a89f1aa3b90`. The final combined candidate includes

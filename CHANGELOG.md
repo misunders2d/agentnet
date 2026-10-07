@@ -6,8 +6,17 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.4] — 2026-10-07
+
 ### Fixed
 
+- Remind me is available on your own sent messages as well as received messages,
+  using the same personal reminder editor and saved message reference.
+- Group agents see configured agent names and exact recipient identities.
+  Pi and OMP questions can ask another admitted group agent and wait for its
+  answer through the existing room tools; selected local child work can run
+  while its parent waits. Message details distinguish the selected recipient
+  and an existing approval proposal from an ordinary request.
 - Comic reminders have separate, labeled Date and Time fields. Typed hour and
   minute changes persist, including when reopening the reminder editor.
 - Browser requests time out if their headers or response body stall, allowing
@@ -237,6 +246,7 @@ guide and test/rollout evidence in the handoff.
 
 </details>
 
+[0.8.4]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.4
 [0.8.3]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.3
 [0.8.2]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.2
 [0.8.1]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.1
