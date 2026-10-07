@@ -594,8 +594,31 @@ func TestLiveReminders(t *testing.T) {
 	if !o.Remind || len(o.Reminders) != 0 {
 		t.Fatalf("before any reminder: %v %v", o.Remind, o.Reminders)
 	}
-	if err := pb.SetReminder(mine.ID, time.Now().Add(time.Hour)); !errors.Is(err, ErrRefused) {
+	if err := pb.SetReminder(mine.ID, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("a reminder on one's own message: %v", err)
+	}
+	ownThread, err := pb.DM(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownFound := false
+	for _, message := range ownThread.Messages {
+		if message.ID == mine.ID && message.Dir == "out" {
+			ownFound = true
+		}
+	}
+	if !ownFound {
+		t.Fatal("own reminded outgoing message missing from DM")
+	}
+	if own, ok, err := bob.Reminder(mine.ID); err != nil || !ok || own.Message != mine.ID || own.Conv != conv {
+		t.Fatalf("stored own reminder: %+v, %v, %v", own, ok, err)
+	}
+	if err := pb.CancelReminder(mine.ID); err != nil {
+		t.Fatal(err)
+	}
+	o, _ = pb.Overview()
+	if len(o.Reminders) != 0 {
+		t.Fatalf("own reminder cleanup: %+v", o.Reminders)
 	}
 	if err := pb.SetReminder(q.ID, time.Now().Add(-time.Minute)); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a reminder in the past: %v", err)

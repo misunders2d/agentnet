@@ -421,7 +421,7 @@ func (l *Live) DM(id string) (DMThread, error) {
 				// This device executes its own request. Its local job is the
 				// execution state; the outgoing row still keeps transport state.
 				dm.Exec = &client.ExecView{State: m.Job, Host: l.a.Address}
-				if text := DMStateText("in", m.Kind, m.Job, words(c.Peer.Address), ""); text != "" {
+				if text := DMStateText("in", m.Kind, m.Job, words(c.Peer.Address), m.JobDetail); text != "" {
 					dm.StateText = "Your agent: " + strings.ToLower(text[:1]) + text[1:]
 				}
 			}
