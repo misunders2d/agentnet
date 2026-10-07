@@ -2,11 +2,15 @@ package itest
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -46,6 +50,18 @@ func TestCLIGroupSelectedHistoryFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	conv := packet.Root.ID()
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		// Capture before process cleanup. Only local status/count metadata
+		// is emitted: never envelopes, consent bytes, identities or errors.
+		for _, home := range []string{"alice", "bob"} {
+			for _, line := range groupHistoryStateSummary(filepath.Join(c.dir, home, "agent.db"), conv) {
+				t.Logf("group-state %s %s", home, line)
+			}
+		}
+	}()
 	var bobInvite client.GroupInvitationInfo
 	if err = json.Unmarshal([]byte(c.run("--home", "alice", "group", "invite", conv, persons["bob"])), &bobInvite); err != nil || len(bobInvite.Proposal.History) != 0 {
 		t.Fatal("default selected implicit history")
@@ -64,7 +80,9 @@ func TestCLIGroupSelectedHistoryFile(t *testing.T) {
 	unselected := c.writeRandom("unselected.bin", 8193)
 	_ = unselected
 	c.run("--home", "alice", "dm", "send", "--file", "unselected.bin", conv, "UNSELECTED earlier private turn")
-	waitFor(t, "Bob receives parent", func() bool { return strings.Contains(dmShowArriving(c, "bob", conv), "UNSELECTED earlier private turn") })
+	waitFor(t, "Bob receives parent", func() bool {
+		return strings.Contains(dmShowArriving(c, "bob", conv), "UNSELECTED earlier private turn")
+	})
 	data := c.writeRandom("selected.bin", 45001)
 	c.run("--home", "bob", "dm", "send", "--file", "selected.bin", conv, "SELECTED exact historical turn")
 	waitFor(t, "Alice receives selected source", func() bool { return strings.Contains(dmShow(c, "alice", conv), "SELECTED exact historical turn") })
@@ -138,4 +156,94 @@ func TestCLIGroupSelectedHistoryFile(t *testing.T) {
 	}
 	c.run("--home", "carol", "dm", "send", conv, "new ordinary future turn")
 	waitFor(t, "normal future group turns unchanged", func() bool { return strings.Contains(dmShow(c, "bob", conv), "new ordinary future turn") })
+}
+
+// The diagnostic reader must not migrate the store or modify its journal.
+// The exact group is bound as a query argument and is never printed.
+func groupHistoryStateSummary(path, conv string) []string {
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=busy_timeout(100)")
+	if err != nil {
+		return []string{"database unavailable"}
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var result []string
+	for _, query := range []struct{ label, sql string }{
+		{"invitation", `SELECT direction||':'||state,count(*) FROM group_invitations WHERE conv=? GROUP BY direction,state ORDER BY direction,state`},
+		{"outbound-control", `SELECT sub||':'||state||CASE WHEN coalesce(error,'')<>'' THEN ':has-error' ELSE '' END,count(*) FROM outbox WHERE conv=? AND sub IN('group-invite','group-consent','group-proof','group-context') GROUP BY sub,state,coalesce(error,'')<>'' ORDER BY sub,state`},
+		{"admitted-control", `SELECT sub,count(*) FROM inbox WHERE conv=? AND sub IN('group-invite','group-consent','group-proof','group-context') GROUP BY sub ORDER BY sub`},
+		{"publication", `SELECT 'seq='||seq||':published='||published,count(*) FROM group_publications WHERE conv=? GROUP BY seq,published ORDER BY seq`},
+		{"context", `SELECT 'seq='||json_extract(payload,'$.state.seq'),count(*) FROM group_context WHERE conv=? GROUP BY json_extract(payload,'$.state.seq')`},
+		{"proof", `SELECT 'seq='||seq,count(*) FROM group_proof_records WHERE conv=? GROUP BY seq ORDER BY seq`},
+		{"known-head", `SELECT 'seq='||seq,count(*) FROM group_known_heads WHERE conv=? GROUP BY seq ORDER BY seq`},
+	} {
+		rows, err := db.QueryContext(ctx, query.sql, conv)
+		if err != nil {
+			result = append(result, query.label+" unavailable")
+			continue
+		}
+		found := false
+		for rows.Next() {
+			var state string
+			var count int
+			if err = rows.Scan(&state, &count); err != nil {
+				break
+			}
+			found = true
+			result = append(result, fmt.Sprintf("%s %s count=%d", query.label, state, count))
+		}
+		if err != nil || rows.Err() != nil {
+			result = append(result, query.label+" unavailable")
+		} else if !found {
+			result = append(result, query.label+" count=0")
+		}
+		rows.Close()
+	}
+	return result
+}
+
+func TestGroupHistoryStateSummaryRedactsAndDoesNotWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+CREATE TABLE group_invitations(conv, direction, state, consent);
+CREATE TABLE outbox(conv, sub, state, error);
+CREATE TABLE inbox(conv, sub);
+CREATE TABLE group_publications(conv, seq, published);
+CREATE TABLE group_context(conv, payload);
+CREATE TABLE group_proof_records(conv, seq);
+CREATE TABLE group_known_heads(conv, seq);
+INSERT INTO group_invitations VALUES('private-id','in','accepted','private-consent');
+INSERT INTO outbox VALUES('private-id','group-consent','custody','private-error');
+INSERT INTO inbox VALUES('private-id','group-context');
+INSERT INTO group_publications VALUES('private-id',1,0);
+INSERT INTO group_context VALUES('private-id','{"state":{"seq":1},"private":"private-payload"}');
+INSERT INTO group_proof_records VALUES('private-id',0);
+INSERT INTO group_invitations VALUES('another-group','out','pending','other-private-consent');`)
+	closeErr := db.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("diagnostic fixture: %v / %v", err, closeErr)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(groupHistoryStateSummary(path, "private-id"), "\n")
+	for _, want := range []string{"invitation in:accepted count=1", "outbound-control group-consent:custody:has-error count=1", "admitted-control group-context count=1", "publication seq=1:published=0 count=1", "context seq=1 count=1", "proof seq=0 count=1", "known-head count=0"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing diagnostic %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "private-") || strings.Contains(text, "pending") || strings.Contains(text, "unavailable") {
+		t.Fatalf("diagnostic leaked content, another group, or failed: %s", text)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("diagnostic changed database: %v", err)
+	}
 }

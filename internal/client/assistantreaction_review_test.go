@@ -18,6 +18,9 @@ import (
 // nothing; a reaction never goes to a replacement of the requester's key.
 func TestAssistantReactionExactKeys(t *testing.T) {
 	w := newWorld(t, "")
+	// Install the wrapper before the daemon's HTTP requests can read it;
+	// individual fault rules are added later under the wrapper's mutex.
+	f := injectFaults(w.bob)
 	runAgent(t, w.bob)
 	progressReader(t, w.alice, w.bob)
 	withAgentReaction(t, w.alice, w.bob)
@@ -55,7 +58,6 @@ func TestAssistantReactionExactKeys(t *testing.T) {
 	// The requests' statuses are told first: their capability reads must not
 	// take the fault meant for the reaction's.
 	eventually(t, "statuses told", func() bool { return inboxCount(t, w.bob, "status_due > 0") == 0 })
-	f := injectFaults(w.bob)
 	f.addAfter("GET", "/profile", 1, 1, false) // the send-time control check passes; delivery's capability read is lost
 	queued, err := w.bob.reactAsAssistant(tctx(t), q1, "claude", "🎉", false)
 	if err != nil {

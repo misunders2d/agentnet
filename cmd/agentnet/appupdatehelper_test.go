@@ -37,6 +37,11 @@ func TestAppUpdateHelperRestartsFromStableDirectory(t *testing.T) {
 		return
 	}
 	home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\npwd -P > \"$AGENTNET_HOME/restart-cwd\"\nprintf '%s' \"$DBUS_SESSION_BUS_ADDRESS\" > \"$AGENTNET_HOME/restart-session\"\n"))
+	// macOS's temporary home may name /var while pwd -P names /private/var.
+	physicalHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAppUpdateHelperRestartsFromStableDirectory$")
 	cmd.Env = append(os.Environ(), "AGENTNET_TEST_REMOVED_CWD_PLAN="+plan, "DBUS_SESSION_BUS_ADDRESS=unix:path=/fixture-session")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -47,7 +52,7 @@ func TestAppUpdateHelperRestartsFromStableDirectory(t *testing.T) {
 		cwd, e1 := os.ReadFile(filepath.Join(home, "restart-cwd"))
 		session, e2 := os.ReadFile(filepath.Join(home, "restart-session"))
 		if e1 == nil && e2 == nil {
-			if strings.TrimSpace(string(cwd)) != home || string(session) != "unix:path=/fixture-session" {
+			if strings.TrimSpace(string(cwd)) != physicalHome || string(session) != "unix:path=/fixture-session" {
 				t.Fatalf("restart cwd/session = %q / %q", cwd, session)
 			}
 			break
