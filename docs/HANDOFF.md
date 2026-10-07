@@ -4,7 +4,46 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Current release — v0.8.4, October 7, 2026
+## Current release — v0.8.5, October 7, 2026
+
+[Download v0.8.5](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5).
+Updater-only hotfix: retain host search paths for AppImage restart, detect
+immediate child exits, resume verified app/CLI reconciliation after reopening,
+and restore native controls/session loading after the URL token is removed.
+The handoff keeps the Strict HttpOnly session cookie and uses a fixed,
+hash-authorized same-origin navigation. No data/schema migration.
+
+Published October 7, 2026 at 19:26 UTC from
+`591690c55fb1c29b206c6774433af9f3c69739d6`. [Source CI](https://github.com/misunders2d/agentnet/actions/runs/37671163931)
+and [installer builds](https://github.com/misunders2d/agentnet/actions/runs/37671250480) passed. All 12 asset digests and sizes,
+and all 11 `SHA256SUMS` entries, matched. The downloaded Linux command reports
+v0.8.5 and that exact clean revision. The relay was deployed at 19:27 UTC after
+a verified stopped-state backup, retaining its data volume and realm. Its
+public version and client recommendation both report v0.8.5.
+
+The final downloaded AppImage passed an isolated native FUSE journey:
+Comic Settings → About → Update, automatic restart into a private next-version
+fixture, a usable About page without reload, and matching app/command copies.
+The private next version is only a test artifact, not a published release.
+Identity stayed unchanged, the session token left the address/history, and a
+controlled link fragment survived. Separate genuine v0.8.3 UI and v0.8.4 CLI
+journeys verified the one-time manual reopen and independent-daemon recovery.
+Busy-daemon behavior has protocol regression coverage; an interactive busy
+update and interactive Windows/macOS updates remain unverified. Installers are
+unsigned. No existing desktop or phone installation was changed during testing.
+Mobile sending/history issues remain open; this release is updater-only.
+
+**Upgrading a v0.8.3/v0.8.4 AppImage:** its old updater still needs one
+manual reopen after installing v0.8.5. Open AgentNet from its launcher if it
+closes without returning. If v0.8.4's Update button is unavailable, run
+`agentnet update v0.8.5` for the registered desktop installation, then reopen
+once. Updates started by v0.8.5 include the restart fix.
+
+Release work is complete; workers and fixtures are drained. Remaining phone
+Sending/history reports are tracked on MEL-546/MEL-558. Future product/design
+work stays deferred; resume only when the owner asks.
+
+## Historical release — v0.8.4, October 7, 2026
 
 [Download v0.8.4](https://github.com/misunders2d/agentnet/releases/tag/v0.8.4).
 Released source: `ac084454e767b5f1f8096533b64c0c57b2d822b3`.

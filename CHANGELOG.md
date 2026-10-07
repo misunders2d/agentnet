@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.5] — 2026-10-07
+
 ### Fixed
 
 - Linux AppImage updates preserve host command-search paths when removing the
