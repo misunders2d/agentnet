@@ -42,8 +42,18 @@ func sendAt(t *testing.T, from, to *Agent, conv string, m ConvOutgoing) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the message at "+to.Address, func() bool { return inboxCount(t, to, `id = ?`, sent.ID) == 1 })
-	return sent.ID
+	id := ""
+	for _, copy := range sent.Copies {
+		if copy.To == to.Address {
+			id = copy.ID
+			break
+		}
+	}
+	if id == "" {
+		t.Fatal("message has no copy for the expected recipient")
+	}
+	eventually(t, "the message at "+to.Address, func() bool { return inboxCount(t, to, `id = ?`, id) == 1 })
+	return id
 }
 
 func pendingAlerts(t *testing.T, a *Agent) int { return inboxlessCount(t, a, "alerts") }
@@ -159,18 +169,26 @@ func TestDesktopAlertPresentationAndKinds(t *testing.T) {
 	}
 }
 
-// Two DMs with one person mute separately; turning alerts off drops the
-// pending ones; a sender frozen before the deadline is not shown.
+// A person-chat mute covers both native DM roots. After explicitly unmuting,
+// turning alerts off drops pending ones; a sender frozen before the deadline
+// is not shown.
 func TestDesktopAlertMuteOffAndFreeze(t *testing.T) {
 	w, conv, n, _ := alertWorld(t, time.Second)
 	other := newDM(t, w.alice, w.bob)
 	allowAliceAt(t, w, other)
 	sendAt(t, w.alice, w.bob, other, ConvOutgoing{Body: "muted DM"})
+	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "same muted person, another root"})
+	if pendingAlerts(t, w.bob) != 0 || n.count() != 0 {
+		t.Fatal("person-chat mute did not cover both native DM roots")
+	}
+	// The off/freeze cases need an unmuted chat, not another root of the
+	// still-muted person. Clearing preferences removes its existing anchors.
+	allowAliceAt(t, w)
 	queued := time.Now()
 	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "open DM"})
 	var pendingConv string
 	w.bob.store.db.QueryRow(`SELECT conv FROM alerts`).Scan(&pendingConv)
-	// The muted DM never queues one; the open DM's waits until it is due.
+	// The unmuted chat's alert waits until it is due.
 	if p := pendingAlerts(t, w.bob); p > 1 || p == 1 && pendingConv != conv || p == 0 && beforeDue(queued) {
 		t.Fatalf("pending %d for %s", p, pendingConv)
 	}

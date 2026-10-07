@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,13 @@ import (
 
 func TestAppBridgeUsesExistingHandlerAndFences(t *testing.T) {
 	var out bytes.Buffer
-	r := &appRunner{home: t.TempDir(), addr: "127.0.0.1:17443", token: "private-app", exe: "fixture.AppImage", out: &out}
+	exe := "fixture.AppImage"
+	if runtime.GOOS == "darwin" {
+		exe = "/Applications/AgentNet.app/Contents/MacOS/agentnet-app"
+	} else if runtime.GOOS == "windows" {
+		exe = `C:\Users\fixture\AppData\Local\AgentNet\agentnet-app.exe`
+	}
+	r := &appRunner{home: t.TempDir(), addr: "127.0.0.1:17443", token: "private-app", exe: exe, out: &out}
 	r.controlsReady.Store(true)
 	for _, test := range []struct {
 		action, body string
