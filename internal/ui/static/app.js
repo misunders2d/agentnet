@@ -2686,7 +2686,8 @@ function rerender() {
 }
 
 function renderReview(items) {
-  const decisions = items.filter((it) => !it.notice);
+  const decisions = items.filter((it) => !it.notice && it.reason !== "agent_running");
+  const working = items.filter((it) => !it.notice && it.reason === "agent_running");
   const reports = items.filter((it) => it.notice);
   const btn = $("review-btn");
   const n = decisions.length;
@@ -2704,7 +2705,11 @@ function renderReview(items) {
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
       el("span", { class: "review-text" }, it.excerpt)))) : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
-  fill($("activity-extra"), remindersSection(), ...linkNotices().map((n) => el("li", {}, n)));
+  fill($("activity-extra"), remindersSection(), ...working.map(it => el("li", {},
+    el("button", {type:"button", onclick:()=>{ toggleReview(false); openThread(it.id, it.id); }},
+      el("strong", {}, "Working · ", who(it.peer)),
+      el("span", {class:"review-why"}, it.why),
+      el("span", {class:"review-text"}, it.excerpt)))), ...linkNotices().map((n) => el("li", {}, n)));
   const senders = [...new Set(reports.map((it) => it.peer))];
   const contacts = contactsOf(state.overview.threads);
   fill($("report-list"), ...senders.map((peer) => {

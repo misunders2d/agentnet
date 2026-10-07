@@ -554,6 +554,8 @@ export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_hum
 
 /** Working is stoppable, but never an outstanding approval. */
 export const isWorkingItem = (c: T.ConvItem) => (c.actions || []).includes("cancel");
+/** Device requests use review, with a reason set from their local job state. */
+export const isWorkingReview = (r: T.ReviewItem) => !r.notice && r.reason === "agent_running";
 /** Items this device decides; other-device and running items stay visible apart. */
 export const decidable = (o: T.Overview | null) => (o?.needs_you || []).filter((c) => !c.decide_on && !isWorkingItem(c));
 

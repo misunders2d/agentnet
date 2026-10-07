@@ -297,8 +297,9 @@ func (f *Fixture) Overview() (Overview, error) {
 			case v.Next == "Needs you":
 				s.Review++
 				o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail), Excerpt: excerpt(m.Body), At: m.At})
-			case m.State == "running" && m.Dir == "in":
+			case (m.State == "running" || m.State == "cancel_requested") && m.Dir == "in":
 				s.Running++
+				o.Review = append(o.Review, ReviewItem{ID: m.ID, Peer: t.peer, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, t.peer, m.Detail), Excerpt: excerpt(m.Body), At: m.At, Reason: reviewReason(m.Kind, m.State)})
 			case strings.HasPrefix(v.Next, "Waiting on"):
 				s.Waiting = true
 			}

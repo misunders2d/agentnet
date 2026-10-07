@@ -34,16 +34,18 @@ func reviewOf(t *testing.T, f *Fixture, peer, kind string) string {
 func TestFixtureOverviewIsThreads(t *testing.T) {
 	f := testFixture()
 	o := overview(t, f)
-	decisions, notices := 0, 0
+	decisions, notices, working := 0, 0, 0
 	for _, it := range o.Review {
 		if it.Notice {
 			notices++
+		} else if it.Reason == "agent_running" {
+			working++
 		} else {
 			decisions++
 		}
 	}
-	if !o.Demo || decisions != 3 || notices != 2 || len(o.Quarantine) != 1 {
-		t.Fatalf("demo %v decisions %d notices %d quarantine %d", o.Demo, decisions, notices, len(o.Quarantine))
+	if !o.Demo || decisions != 3 || notices != 2 || working != 1 || len(o.Quarantine) != 1 {
+		t.Fatalf("demo %v decisions %d notices %d working %d quarantine %d", o.Demo, decisions, notices, working, len(o.Quarantine))
 	}
 	perPeer := map[string]int{}
 	for i, s := range o.Threads {

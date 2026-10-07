@@ -11,7 +11,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { IconDeviceMobile, IconUsersGroup } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { agentName, firstLine, isWorkingItem, when } from "../model";
+import { agentName, firstLine, isWorkingItem, isWorkingReview, when } from "../model";
 import { focusedIn } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar } from "../ui/Avatar";
@@ -29,7 +29,7 @@ export { ApprovalCard } from "./Approvals.card";
 
 const groupInvites = (o: T.Overview) => (o.group_invitations || []).filter((i) => i.direction === "in" && i.status === "pending");
 const deviceAsks = (o: T.Overview) => (o.links || []).filter((l) => l.state === "pending");
-const reviewAsks = (o: T.Overview) => (o.review || []).filter((r) => !r.notice);
+const reviewAsks = (o: T.Overview) => (o.review || []).filter((r) => !r.notice && !isWorkingReview(r));
 
 /** needsYouCount: the decisions waiting for this device, as the overview
  *  lists them: requests to your agent and invitations for it that are
@@ -101,6 +101,7 @@ export function OksView() {
   const items: Item[] = [];
   const elsewhere: T.ConvItem[] = [];
   const working: T.ConvItem[] = [];
+  const workingReviews = (o?.review || []).filter(isWorkingReview).sort(newestFirst);
   if (o) {
     for (const r of reviewAsks(o)) items.push({ key: "r:" + r.id, at: r.at, node: <ReviewRow r={r} o={o} names={names} /> });
     for (const c of o.needs_you || []) {
@@ -118,7 +119,7 @@ export function OksView() {
   const joined = (o?.review || []).filter(isSelfConsent).sort(newestFirst);
   const security = (o?.review || []).filter((r) => r.reason === "device_admin").sort(newestFirst);
   const notices = (o?.review || []).filter((r) => r.notice && !isSelfConsent(r) && r.reason !== "device_admin");
-  const keys = [...items.map((i) => i.key), ...working.map((c) => "w:" + c.conv + ":" + c.id), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
+  const keys = [...items.map((i) => i.key), ...working.map((c) => "w:" + c.conv + ":" + c.id), ...workingReviews.map((r) => "w:r:" + r.id), ...held.map((c) => "h:" + c.conv + ":" + c.id), ...elsewhere.map((c) => "e:" + c.conv + ":" + (c.id || c.pid)), ...joined.map((r) => "s:" + r.id), ...security.map((r) => "a:" + r.id)];
   const { root, title, land } = useLanding(keys.join("\n"));
 
   if (!o) return loadError ? <Failed text={loadError} retry={() => store.retryNow()} /> : <Loading />;
@@ -135,13 +136,14 @@ export function OksView() {
             {items.map((i) => <Listed key={i.key} k={i.key} land={land}>{i.node}</Listed>)}
           </ul>
         </div>
-      ) : !held.length && !elsewhere.length && !working.length && <AllClear />}
-      {working.length > 0 && (
+      ) : !held.length && !elsewhere.length && !working.length && !workingReviews.length && <AllClear />}
+      {(working.length > 0 || workingReviews.length > 0) && (
         <section className="px-4 pt-6" aria-labelledby="oks-working">
           <h2 id="oks-working" className="text-[12px] font-extrabold uppercase tracking-[.08em] text-muted">Working</h2>
           <p className="pt-1 text-[14px] text-text-2">These requests are already running. Stop them here if needed.</p>
           <ul className="flex flex-col gap-3 pt-3" aria-label="Working">
             {working.map((c) => { const k = "w:" + c.conv + ":" + c.id; return <Listed key={k} k={k} land={land}><ConvRow c={c} o={o} /></Listed>; })}
+            {workingReviews.map((r) => { const k = "w:r:" + r.id; return <Listed key={k} k={k} land={land}><ReviewRow r={r} o={o} names={names} /></Listed>; })}
           </ul>
         </section>
       )}
@@ -198,11 +200,13 @@ function ReviewRow({ r, o, names }: { r: T.ReviewItem; o: T.Overview; names: Rec
   const { isOpen, go } = useOpen();
   const from = capital(peerAgent(r.peer, o, names).name);
   const mine = o.person ? agentName(undefined, names, o.person, o.person) : "Your agent";
-  const title = r.kind === "task" ? from + " gave " + inSentence(mine) + " a task" : r.kind === "question" ? from + " asked " + inSentence(mine) + " something"
+  const working = isWorkingReview(r);
+  const title = working ? mine + " is working on " + inSentence(from) + "’s " + (r.kind === "task" ? "task" : "question")
+    : r.kind === "task" ? from + " gave " + inSentence(mine) + " a task" : r.kind === "question" ? from + " asked " + inSentence(mine) + " something"
     : mine + " needs you about " + from + "’s message";
   return (
-    <OpenCard onOpen={() => go("thread", r.id, r.id)} current={isOpen(r.id)} label={title + ". Review it."} face={<AgentAvatar seed={r.peer} size={40} mood="waiting" />} detail={<details><summary className="cursor-pointer font-semibold">Read the whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{whyWords(r.why, r.peer, o)}</p></details>}>
-      <Body tag={kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} />
+    <OpenCard onOpen={() => go("thread", r.id, r.id)} current={isOpen(r.id)} label={title + (working ? ". Open running request." : ". Review it.")} face={<AgentAvatar seed={r.peer} size={40} mood={working ? "working" : "waiting"} />} detail={<details><summary className="cursor-pointer font-semibold">Read the whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{whyWords(r.why, r.peer, o)}</p></details>}>
+      <Body tag={working ? <Tag tone="agent">Working</Tag> : kindTag(r.kind)} at={r.at} title={title} quote={firstLine(r.excerpt, 160)} meta={working ? "Already running" : undefined} />
     </OpenCard>
   );
 }

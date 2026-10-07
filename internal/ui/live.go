@@ -121,7 +121,7 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 	}
 	for _, m := range review.Device {
 		item := ReviewItem{ID: m.ID, Peer: m.From, Kind: m.Kind, Why: ReviewWhy(m.Kind, m.State, words(m.From), m.Detail),
-			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments))}
+			Excerpt: excerpt(m.Body), At: m.ReceivedAt, Notice: IsReviewNotice(m.Kind, m.Status, m.ReplyTo, len(m.Attachments)), Reason: reviewReason(m.Kind, m.State)}
 		if m.Kind == KindTask {
 			item.Proposal, _ = l.a.ProposalOf(m.ID) // the proposal it carries out, if any
 		}

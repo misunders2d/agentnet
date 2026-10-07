@@ -4,7 +4,31 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Next patch — v0.8.3 global updater, not released
+## Next patch — v0.8.3 global updater and direct-device OKs, not released
+
+**October 7 scope addition: publication held for the direct-device OKs fix.**
+The owner found a running agent/device question counted as "1 thing needs you"
+and explicitly required the fix in the next release. v0.8.2 filtered running
+conversation items but missed the separate `review` device list. Native
+overview now marks trusted local running/stopping requests with the existing
+`agent_running` reason; all bundled skins separate them from approval counts
+while preserving request navigation and Stop. This does not change permissions
+or infer job state from message text. Focused native race tests pass (3.231s), including a real signed request
+received over an isolated relay, held/running/stopping/cancelled projection,
+and the exact public Stop action. Real-browser fixtures pass in Comic, Classic
+and Zoom at desktop and phone widths: waiting decisions count, running work
+does not, navigation opens the exact request and Stop keeps its target. These
+fixtures stage worker state; they do not claim an actual model run. Bundled
+skin integrity, page logic and focused vet pass. The rebuilt candidate still
+needs its own native CI and release-package qualification before publication.
+
+The earlier updater-only candidate `aeada228` passed full CI `37588166980`
+and release workflow `37588911958`, including an isolated real AppImage
+replacement/restart. All 12 draft assets matched GitHub digests; all 11
+packages matched the manifest, and the Linux CLI reported the exact clean
+tag revision. That release remains an unpublished draft and must be rebuilt
+with the later owner-requested OKs fix. Those earlier results do not qualify
+the added fix. No installed device was updated.
 
 The owner resumed the October 6 pause on October 7. MEL-551 and MEL-557 remain
 In Progress. Both update entry points now route through the registered desktop

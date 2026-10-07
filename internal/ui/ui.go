@@ -908,7 +908,9 @@ type ReviewItem struct {
 	// proposed (MEL-521): the question, the proposal and who confirmed
 	// it, for the person approving it. It grants nothing.
 	Proposal *client.ProposalView `json:"proposal,omitempty"`
-	// Reason ReasonSelfConsented (owner decision D3): a notice, not a
+	// Reason agent_running: a local request already running or stopping,
+	// visible for status/Stop but never an outstanding approval.
+	// ReasonSelfConsented (owner decision D3): a notice, not a
 	// received item, that this person's own agent AgentID ("" the default
 	// one) joined conversation Conv without their accept, invited from
 	// their own trusted device Peer; ID is the participation's id. It is
@@ -1341,6 +1343,15 @@ func ReviewWhy(kind, state, peer, detail string) string {
 		return why // an address keeps its case
 	}
 	return capitalize(why)
+}
+
+// reviewReason exposes the local workflow state separately from human text.
+// Details may come from a responder; their wording never decides the badge.
+func reviewReason(kind, state string) string {
+	if (kind == KindQuestion || kind == KindTask) && (state == "running" || state == "cancel_requested") {
+		return client.ReviewRunning
+	}
+	return ""
 }
 
 // excerpt is the first line of s, shortened.

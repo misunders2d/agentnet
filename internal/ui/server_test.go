@@ -250,7 +250,13 @@ func TestSendAndDecideThroughTheAPI(t *testing.T) {
 	}
 	var o Overview
 	get("/api/overview", &o)
-	if !o.Demo || len(o.Review) != 5 || len(o.Threads) == 0 {
+	working := 0
+	for _, item := range o.Review {
+		if item.Reason == "agent_running" {
+			working++
+		}
+	}
+	if !o.Demo || len(o.Review) != 6 || working != 1 || len(o.Threads) == 0 {
 		t.Fatalf("demo %v review %d threads %d", o.Demo, len(o.Review), len(o.Threads))
 	}
 	if code := get("/api/thread?id=nope", &Thread{}); code != http.StatusNotFound {
@@ -279,7 +285,7 @@ func TestSendAndDecideThroughTheAPI(t *testing.T) {
 	// responder, once.
 	var task string
 	for _, it := range o.Review {
-		if it.Kind == KindTask {
+		if it.Kind == KindTask && it.Reason != "agent_running" {
 			task = it.ID
 		}
 	}

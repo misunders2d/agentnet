@@ -8,6 +8,10 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ### Fixed
 
+- Direct agent/device requests already running or stopping no longer count
+  as waiting for your OK. They remain visible as Working, with access to
+  their request and Stop control. This completes the conversation-only fix
+  shipped in v0.8.2.
 - With a desktop app registered, both About and `agentnet update` include
   the app, its private command and verified official terminal copies, including
   an earlier copy on PATH. A closed app opens for the update; an unavailable

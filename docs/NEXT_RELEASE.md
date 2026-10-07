@@ -1,10 +1,14 @@
 # AgentNet v0.8.3 — candidate, not released
 
-A focused patch for updating AgentNet as a whole on a computer. The published
+A patch for updating AgentNet as a whole and correcting false OKs. The published
 release remains [v0.8.2](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2).
 
 ## Changes
 
+- **Only real decisions need your OK.** Direct agent/device requests already
+  running or stopping appear as Working without increasing approval counts.
+  Their request and Stop control remain reachable. v0.8.2 fixed conversation
+  requests but missed this separate direct-device list.
 - **Update the app and command together.** About and the new `agentnet update`
   use the registered desktop app's updater, including official terminal copies
   elsewhere on PATH and the private command used by connected tools. A closed
@@ -38,9 +42,12 @@ Focused update regressions, command-package race tests and vet pass. An
 isolated compiled backend with a temporary enrolled device and actual official
 old CLI files verifies startup adoption and same-version repair through About
 and the managed command. It checks all resulting versions and executable bytes.
-It does not exercise a graphical package restart or physical Windows/macOS
-installation. Final native CI and package-upgrade qualification are pending;
-this document is not a release announcement.
+A separate Linux package test exercises real AppImage replacement and restart;
+it passed on the earlier updater-only candidate. Direct-device OKs native
+regressions and rendered Comic/Classic/Zoom desktop and phone checks pass.
+The combined candidate still needs final native CI and package qualification.
+Interactive Windows/macOS upgrades remain unverified; this document is not a
+release announcement.
 
 See [the handoff](HANDOFF.md) for exact commits, evidence and remaining gates,
 and [the changelog](../CHANGELOG.md) for published release history. Projects and
