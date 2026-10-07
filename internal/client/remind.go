@@ -12,7 +12,7 @@ import (
 )
 
 // "Remind me later" (S-R; docs/MESSENGER_ARCHITECTURE.md §16): a personal,
-// local reminder on one received message, due at a time the person chose.
+// local reminder on one locally stored message, due at a time the person chose.
 // It only asks for attention: it never answers, accepts, declines or runs
 // anything, never changes the message's own state, and nothing is sent.
 // Only a reply to that very message, stored here by any reply path (a reply
@@ -38,9 +38,9 @@ const (
 	ReminderReplied   = "replied"   // a reply to the message was stored here
 )
 
-// Reminder is a reminder on one received message.
+// Reminder is a reminder on one locally stored message.
 type Reminder struct {
-	Message string `json:"message"`        // the received message's id
+	Message string `json:"message"`        // the message's local id
 	Conv    string `json:"conv,omitempty"` // its DM ("" : a direct message thread)
 	From    string `json:"from"`           // its sender
 	Due     int64  `json:"due"`            // unix seconds
@@ -55,7 +55,7 @@ var ErrNoReminder = errors.New("no pending reminder on that message")
 // maxReminderAhead bounds how far ahead a reminder may be set.
 const maxReminderAhead = 10 * 365 * 24 * time.Hour
 
-// SetReminder sets the reminder on received message id to due, or moves an
+// SetReminder sets the reminder on locally stored message id to due, or moves an
 // existing one (a new revision: its attention is asked for again at the new
 // time). due must be in the future, and the message not one its sender
 // deleted.
@@ -71,16 +71,18 @@ func (a *Agent) SetReminder(id string, due time.Time) (Reminder, error) {
 		return Reminder{}, fmt.Errorf("invalid message id %q", id)
 	}
 	var conv sql.NullString
-	err := a.store.db.QueryRow(`SELECT conv FROM inbox WHERE id = ? AND local = 0`, id).Scan(&conv)
+	var ref, key string
+	err := a.store.db.QueryRow(`SELECT conv, coalesce(nullif(lid, ''), id), coalesce(verified_by, claimed_fp, '') FROM inbox WHERE id = ?
+		UNION ALL SELECT conv, coalesce(nullif(lid, ''), id), ? FROM outbox WHERE id = ? LIMIT 1`, id, a.Self().Fingerprint(), id).Scan(&conv, &ref, &key)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Reminder{}, fmt.Errorf("no received message %s", id)
+		return Reminder{}, fmt.Errorf("no locally stored message %s", id)
 	}
 	if err != nil {
 		return Reminder{}, err
 	}
 	if retracted, err := a.store.retracted(id); err != nil {
 		return Reminder{}, err
-	} else if retracted {
+	} else if retracted || retractedRef(a.store.db, conv.String, ref, key) {
 		return Reminder{}, errors.New("its sender deleted this message: there is nothing to be reminded of")
 	}
 	_, err = a.store.db.Exec(`INSERT INTO reminders(message, conv, due_at, state, rev, notified_rev, created_at, updated_at)
@@ -128,12 +130,12 @@ func replyEndsReminder(tx *sql.Tx, conv, replyTo, status string) error {
 	// physical copy. Keep aliases within that conversation.
 	_, err := tx.Exec(`UPDATE reminders SET state = ?, updated_at = ?
 		WHERE state = ? AND coalesce(conv, '') = ?
-		AND (message = ? OR message IN (SELECT id FROM inbox WHERE conv = ? AND lid = ?))`,
-		ReminderReplied, time.Now().Unix(), ReminderPending, conv, replyTo, conv, replyTo)
+		AND (message = ? OR message IN (SELECT id FROM inbox WHERE conv = ? AND lid = ? UNION ALL SELECT id FROM outbox WHERE conv = ? AND lid = ?))`,
+		ReminderReplied, time.Now().Unix(), ReminderPending, conv, replyTo, conv, replyTo, conv, replyTo)
 	return err
 }
 
-const reminderCols = `r.message, coalesce(r.conv, ''), coalesce(i.sender, ''), r.due_at, r.state, r.notified_rev = r.rev`
+const reminderCols = `r.message, coalesce(r.conv, ''), coalesce(i.sender, CASE WHEN o.id IS NOT NULL THEN ? END, ''), r.due_at, r.state, r.notified_rev = r.rev`
 
 func scanReminder(row interface{ Scan(...any) error }, now time.Time) (Reminder, error) {
 	var r Reminder
@@ -144,8 +146,8 @@ func scanReminder(row interface{ Scan(...any) error }, now time.Time) (Reminder,
 
 // Reminder returns the reminder on message id, if any.
 func (a *Agent) Reminder(id string) (Reminder, bool, error) {
-	r, err := scanReminder(a.store.db.QueryRow(`SELECT `+reminderCols+` FROM reminders r LEFT JOIN inbox i ON i.id = r.message
-		WHERE r.message = ?`, id), time.Now())
+	r, err := scanReminder(a.store.db.QueryRow(`SELECT `+reminderCols+` FROM reminders r LEFT JOIN inbox i ON i.id = r.message LEFT JOIN outbox o ON o.id = r.message
+		WHERE r.message = ?`, a.Address, id), time.Now())
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, false, nil
 	}
@@ -155,8 +157,8 @@ func (a *Agent) Reminder(id string) (Reminder, bool, error) {
 // Reminders lists the pending reminders (overdue ones included), soonest
 // first; with all, the ended ones too.
 func (a *Agent) Reminders(all bool) ([]Reminder, error) {
-	rows, err := a.store.db.Query(`SELECT `+reminderCols+` FROM reminders r LEFT JOIN inbox i ON i.id = r.message
-		WHERE ? OR r.state = ? ORDER BY r.due_at, r.message`, all, ReminderPending)
+	rows, err := a.store.db.Query(`SELECT `+reminderCols+` FROM reminders r LEFT JOIN inbox i ON i.id = r.message LEFT JOIN outbox o ON o.id = r.message
+		WHERE ? OR r.state = ? ORDER BY r.due_at, r.message`, a.Address, all, ReminderPending)
 	if err != nil {
 		return nil, err
 	}

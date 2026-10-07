@@ -388,14 +388,70 @@ func TestQuestionLookupOMPUsesNativeReadTool(t *testing.T) {
 		t.Skip("node unavailable")
 	}
 	probe := `import * as m from 'file://` + lookup.args[1] + `';
+ delete process.env.AGENTNET_ROOM_REQUEST;
  const schema={}; const tools=[];
  m.default({typebox:{},zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema})},registerTool:t=>tools.push(t)});
  if(tools.length!==1||tools[0].name!=='agentnet_lookup'||tools[0].approval!=='read')throw Error('OMP tool registration failed');
  const result=await tools[0].execute('lookup',{lookup:'version'});
  if(result.content[0].text.trim()!=='ran: version')throw Error('fixed lookup did not execute');
- let blocked=false;try{await tools[0].execute('lookup',{lookup:'arbitrary'});}catch{blocked=true;}if(!blocked)throw Error('arbitrary operation allowed');`
+ let blocked=false;try{await tools[0].execute('lookup',{lookup:'arbitrary'});}catch{blocked=true;}if(!blocked)throw Error('arbitrary operation allowed');
+ process.env.AGENTNET_ROOM_REQUEST='0123456789abcdef0123456789abcdef';
+ const groupTools=[];m.default({zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema})},registerTool:t=>groupTools.push(t)});
+ const room=groupTools.find(t=>t.name==='agentnet_room');if(!room||room.approval!=='read')throw Error('OMP scoped room tool missing');
+ const answer=await room.execute('room',{action:'ask',pid:process.env.AGENTNET_ROOM_REQUEST,text:'hello'});
+ if(!answer.content[0].text.includes(' --kind question -- hello'))throw Error('OMP room operation lost question-only binding');`
 	cmd := exec.Command(node, "--input-type=module", "-e", probe)
 	if out, e := cmd.CombinedOutput(); e != nil {
 		t.Fatalf("OMP API/read-lookup regression: %v %s", e, out)
+	}
+}
+
+// The native question tool delegates only scoped questions through the exact
+// existing room CLI; it provides no shell, task switch or unbound recipient.
+func TestQuestionRoomPiTool(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	dir := t.TempDir()
+	src := strings.Replace(piLookupSource, "%s", strconv.Quote(lookupProgram(t)), 1)
+	if piAI := os.Getenv("AGENTNET_PI_AI"); piAI != "" {
+		if err := os.MkdirAll(filepath.Join(dir, "node_modules", "@earendil-works"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(piAI, filepath.Join(dir, "node_modules", "@earendil-works", "pi-ai")); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		src = strings.Replace(src, `import { Type } from "@earendil-works/pi-ai";`, `const Type = new Proxy({}, {get:()=> (...args)=>args});`, 1)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ext.mjs"), []byte(src), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+import assert from 'node:assert/strict';
+import ext,{roomArgs} from './ext.mjs';
+const pid='0123456789abcdef0123456789abcdef';
+delete process.env.AGENTNET_ROOM_REQUEST;
+assert.throws(()=>roomArgs({action:'ask',pid,text:'hello'}));
+let tools=[];ext({registerTool:t=>tools.push(t)});assert.deepEqual(tools.map(t=>t.name),['agentnet_lookup']);
+process.env.AGENTNET_ROOM_REQUEST=pid;
+tools=[];ext({registerTool:t=>tools.push(t)});
+const room=tools.find(t=>t.name==='agentnet_room');assert.ok(room);
+if(process.env.AGENTNET_PI_AI)assert.deepEqual(room.parameters.properties.action.anyOf.map(s=>s.const),['ask','wait']);
+assert.deepEqual(roomArgs({action:'ask',pid,text:'-literal question'}),['room','ask','--pid',pid,'--kind','question','--','-literal question']);
+assert.deepEqual(roomArgs({action:'wait',id:pid}),['room','wait',pid]);
+for(const p of [{action:'task',pid,text:'x'},{action:'ask',pid:'x;evil',text:'x'},{action:'ask',pid,text:''},{action:'wait',id:'x'}])assert.throws(()=>roomArgs(p));
+const out=await room.execute('test',{action:'ask',pid,text:'hello'});
+assert.equal(out.content[0].text.trim(),'ran: room ask --pid '+pid+' --kind question -- hello');
+const abort=new AbortController();abort.abort();
+await assert.rejects(room.execute('test',{action:'wait',id:pid},abort.signal));
+console.log('room question tool bound, scoped, correlated-wait and cancellation PASS');
+`
+	os.WriteFile(filepath.Join(dir, "test.mjs"), []byte(script), 0600)
+	cmd := exec.Command(node, "test.mjs")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("room tool: %v\n%s", err, out)
 	}
 }

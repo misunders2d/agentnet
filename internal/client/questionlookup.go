@@ -182,7 +182,30 @@ export function runLookup(params, signal) {
 	});
 }
 
+export function roomArgs(params) {
+	if (!ID.test(process.env.AGENTNET_ROOM_REQUEST || "")) throw new Error("room tools require this running group request");
+	if (params?.action === "ask") {
+		if (!ID.test(params.pid || "") || typeof params.text !== "string" || !params.text.trim() || params.text.length > 65536) throw new Error("choose an exact group PID and question");
+		return ["room", "ask", "--pid", params.pid, "--kind", "question", "--", params.text];
+	}
+	if (params?.action === "wait" && ID.test(params.id || "")) return ["room", "wait", params.id];
+	throw new Error("choose ask or wait with its exact identifier");
+}
+
 export default function (pi) {
+	if (ID.test(process.env.AGENTNET_ROOM_REQUEST || "")) pi.registerTool({
+		name: "agentnet_room", label: "Ask a group agent",
+		description: "Ask another active agent in this exact group a question by roster PID, or wait for an existing permitted request. Returns its correlated reply. Existing request authority and cancellation apply; cannot assign tasks or grant permissions.",
+		parameters: Type.Object({ action: Type.Union([Type.Literal("ask"), Type.Literal("wait")]), pid: Type.Optional(Type.String()), text: Type.Optional(Type.String()), id: Type.Optional(Type.String()) }),
+		async execute(_id, params, signal) {
+			const args = roomArgs(params);
+			const result = await new Promise((resolve, reject) => execFile(PROGRAM, args, { shell: false, maxBuffer: 1 << 20, signal }, (err, stdout, stderr) => {
+				if (err) reject(new Error("AgentNet room request failed: " + (String(stderr).trim() || err.message)));
+				else resolve(String(stdout));
+			}));
+			return { content: [{ type: "text", text: result }], details: undefined };
+		},
+	});
 	pi.registerTool({
 		name: "agentnet_lookup",
 		label: "AgentNet lookup",
@@ -231,6 +254,8 @@ func (a *Agent) writeQuestionLookup(exe, harness string) (string, error) {
 			lookup: pi.zod.enum(["version", "whoami", "inbox", "approvals", "status"]),
 			id: pi.zod.string().optional(),
 		}),`), 1)
+		content = bytes.Replace(content, []byte(`parameters: Type.Object({ action: Type.Union([Type.Literal("ask"), Type.Literal("wait")]), pid: Type.Optional(Type.String()), text: Type.Optional(Type.String()), id: Type.Optional(Type.String()) }),`), []byte(`parameters: pi.zod.object({ action: pi.zod.enum(["ask", "wait"]), pid: pi.zod.string().optional(), text: pi.zod.string().optional(), id: pi.zod.string().optional() }),`), 1)
+		content = bytes.Replace(content, []byte(`name: "agentnet_room",`), []byte(`name: "agentnet_room", approval: "read",`), 1)
 		content = bytes.Replace(content, []byte(`name: "agentnet_lookup",`), []byte(`name: "agentnet_lookup",
  approval: "read",`), 1)
 	}

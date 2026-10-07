@@ -793,6 +793,12 @@ func DMStateText(dir, kind, state, peer, detail string) string {
 	case "part_waiting": // a request to this device's agent, not claimed yet
 		return "For your agent. It has not run yet: it runs here only with a responder chosen on this computer, while the invitation allows it."
 	case "not_run":
+		if detail == "not run: originating local run stopped" {
+			return "Not run: the agent request that started this request finished or stopped first."
+		}
+		if detail == "not run: selected agent unavailable" {
+			return "Not run: the selected agent is unavailable on its host."
+		}
 		if strings.Contains(detail, "asking guest's participation ended") { // agentjob.go: the guest's end, not the assistant's
 			return "Not run: the guest who asked left or was removed first."
 		}

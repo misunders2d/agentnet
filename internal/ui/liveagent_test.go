@@ -788,3 +788,16 @@ func TestLiveFiles(t *testing.T) {
 		t.Fatalf("bob's page lists his sent file: %+v", d.Messages[0])
 	}
 }
+
+func TestDMNotRunUsesExactCauseReason(t *testing.T) {
+	for _, c := range []struct{ detail, want string }{
+		{"not run: originating local run stopped", "Not run: the agent request that started this request finished or stopped first."},
+		{"not run: selected agent unavailable", "Not run: the selected agent is unavailable on its host."},
+		{"not run: the asking guest's participation ended", "Not run: the guest who asked left or was removed first."},
+		{"not run: the agent's participation is dismissed", "Not run: the agent's part in this DM ended first."},
+	} {
+		if got := DMStateText("in", "question", "not_run", "", c.detail); got != c.want {
+			t.Errorf("%q: %q, want %q", c.detail, got, c.want)
+		}
+	}
+}

@@ -60,8 +60,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
   const [remind, setRemind] = useState<boolean | null>(null);
 
   const live = !m._local && !readOnly && !m.deleted && !excerpt(m);
-  // A reminder: only on a received message, where this device keeps reminders (a computer).
-  const reminder = live && m.dir === "in" ? reminderOf(ctx.overview, m.id) : undefined;
+  // A reminder on a stored message, where this device keeps reminders (a computer).
+  const reminder = live ? reminderOf(ctx.overview, m.id) : undefined;
   const remindable = { id: m.id, text: firstLine(shownText(m), 90) };
   const has = (what: string) => live && (m.can || []).includes(what);
   const can: Can = {
@@ -70,7 +70,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
     edit: has("edit"),
     del: has("delete"),
     select: live && !!ctx.dm && ctx.canReply && !!onSelect && (ctx.dm.role || "member") === "member",
-    remind: live && m.dir === "in" && !!ctx.overview?.remind,
+    remind: live && !!ctx.overview?.remind,
   };
   const acts: Acts = {
     topic:live&&ctx.dm&&ctx.canReply&&!isThreadMsg(m)&&!m.topic&&!m.topic_event?()=>{void store.run(a=>a.changeTopic("create",{conv:ctx.dm!.id,peer:"",id:m.lid||m.id})).then(r=>{if(r)store.setDraft(ctx.conv,{...store.draft(ctx.conv),topic:m.lid||m.id,newTopic:false});});}:undefined,
@@ -113,6 +113,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
       )}
       {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
       {m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
+      {!m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
+      {!m.deleted && !isThreadMsg(m) && m.proposal && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{who.mine ? "You approved" : "Approved"} {agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) + "’s" : "the agent’s"} suggested task</p>}
       {quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>

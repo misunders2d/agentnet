@@ -151,6 +151,66 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 	return true
 }
 
+// runRoomChildren serves only exact local asks caused by this still-running
+// job. Ordinary admission and output fences retain the parent chain authority.
+func (a *Agent) runRoomChildren(ctx context.Context, parent job) {
+	for ctx.Err() == nil {
+		_, changed := a.Changed()
+		pos := int64(0)
+		for ctx.Err() == nil {
+			if !a.appUpdateMu.TryRLock() {
+				break
+			}
+			// A pending idle switch fences new root jobs, but this exact child
+			// is needed to finish its already-running parent before that switch.
+			r, err := a.Responder()
+			name := ""
+			if r != nil {
+				name = r.Harness
+			}
+			resolve := func(q dbq, id string) (*ExecutorStamp, error) { return a.ResolveExecutorIn(q, id, r) }
+			var child job
+			var found, full bool
+			var next int64
+			var told []string
+			if err == nil {
+				child, found, next, full, told, err = a.store.claimAgentPageForCause(name, a.Address, a.id.Public(a.Address).Fingerprint(), pos, agentPage, parent.Conv, parent.ID, resolve)
+			}
+			for _, id := range told {
+				a.noteStatus(id)
+			}
+			if err != nil {
+				a.Logf("nested room worker: %v", err)
+			}
+			if found {
+				if child.Executor != nil {
+					r = &child.Executor.Responder
+				}
+				if r == nil {
+					a.endJob(child.ID, stateNotRun, "no selected executor")
+				} else {
+					a.noteStatus(child.ID)
+					a.runJob(ctx, child, r, nil)
+				}
+			}
+			a.appUpdateMu.RUnlock()
+			if err != nil || !found && !full {
+				break
+			}
+			if found {
+				pos = 0
+			} else {
+				pos = next
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-changed:
+		}
+	}
+}
+
 func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan struct{}) {
 	selectedAt := time.Now()
 	var storedAt int64
@@ -247,6 +307,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	args := append(append(plan.args, lookup.args...), j.run.args(h)...)
 	runCtx, cancel := runContext(ctx, r.Timeout)
 	defer cancel()
+	if j.PID != "" && j.Conv != "" {
+		nestedDone := make(chan struct{})
+		go func() { defer close(nestedDone); a.runRoomChildren(runCtx, j) }()
+		defer func() { cancel(); <-nestedDone }()
+	}
 	activity := newRunActivity()
 	if _, err := a.store.markRunVisibility(j.ID, false); err != nil {
 		a.Logf("run visibility: %v", err)

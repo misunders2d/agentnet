@@ -21,13 +21,20 @@ const views={
  [ids.guest]:{id:ids.guest,created:'2024-01-01T00:00:00Z',role:'human_guest',messages:[msg('guest-turn','Separate guest audience')],topics:[],guests:[]}
 };
 for(const view of Object.values(views))Object.assign(view,{peer,kind:'dm',mine:true,role:view.role||'member',members:[me,peer],agents:[],frozen:''});
+if (${process.env.AGENTNET_ADDRESSING==='1'}) {
+ const pi='5'.repeat(32),codex='6'.repeat(32);
+ views[ids.main].agents=[{pid:pi,agent_id:'7'.repeat(32),state:'active',host:me,inviter:me,invited_by:me,shared:[],host_here:true,member:true,can_ask:false},{pid:codex,agent_id:'8'.repeat(32),state:'active',host:me,inviter:me,invited_by:me,shared:[],host_here:true,member:true,can_ask:false}];
+ views[ids.main].messages.push(msg('agent-ask','Are you the reviewer?',{kind:'question',from:me.address,origin:'agent:room',verified_agent:true,agent_author_pid:pi,agent_id:'7'.repeat(32),pid:codex,target:{address:me.address,agent_id:'8'.repeat(32)},state:'delivered',delivery:'delivered',exec:{state:'not_run',host:me.address},job_detail:'not run: originating local run stopped',state_text:'Not run: originating local run stopped'}),msg('approved-task','Review the fictional plan.',{dir:'out',from:me.address,kind:'task',origin:'ui',pid:pi,target:{address:me.address,agent_id:'7'.repeat(32)},proposal:{proposal_id:'fictional-proposal',confirmed_by:me.address,asker:me.address,proposal:'Review the fictional plan.'}}));
+}
 const summary=v=>({id:v.id,created:v.created,peer,kind:v.kind,role:v.role,count:v.messages.length,title:v.messages[0]?.deleted?'Message deleted':v.messages[0]?.body||'',last:v.messages.at(-1)?.deleted?'Message deleted':v.messages.at(-1)?.body||'',last_at:v.id===ids.other?'2026-10-07T12:00:00Z':at,unread:0,held:0,waiting:0,guests:v.guests.length});
 const overview={version:'fictional',seq:1,topic_list:true,me:{address:me.address,fingerprint:'own'},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:[],dms:[ids.main,ids.other,ids.deleted,ids.empty,ids.guest].map(id=>summary(views[id])),directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[],needs_you:[],held:[],agent_devices:[]};
+overview.remind=${process.env.AGENTNET_OWN_REMIND==='1'};overview.reminders=JSON.parse(localStorage.getItem('fictional-reminders')||'[]');
 if(localStorage.getItem('fictional-late'))overview.dms.push(summary(views[ids.late]));
 let changed,open,release;
 const requests=[];window.fixture={ids,views,overview,requests,native,delay:'',release:()=>release?.(),open:(...args)=>open(...args),addLate:()=>{localStorage.setItem('fictional-late','1');if(!overview.dms.some(d=>d.id===ids.late))overview.dms.push(summary(views[ids.late]));changed?.({type:'change',seq:++overview.seq});},tick:()=>changed?.({type:'change',seq:++overview.seq})};
 const host={version:1,platform:'daemon',workspace:{id:'r4-fictional',name:'Fictional workspace',address:me.address,realm:'fictional'},workspaces:null,skins:[],skin:{id:skin},skinURL:'/assets/skins/'+skin+'/',listen(fn){changed=fn;return()=>{};},onOpen(fn){open=fn;},onSkinsChange(){return()=>{};},selectSkin(){},file(){throw Error('No fixture files');},stage(){throw Error('No fixture files');},api:async(p,body)=>{
  requests.push({path:p,body:body||null});const url=new URL(p,location.origin);
+ if(url.pathname==='/api/remind'){const m=views[ids.main].messages.find(m=>m.id===body.id);if(!m)throw Error('Exact stored message required');const r={message:m.id,conv:ids.main,from:m.from,title:m.body,due:new Date(body.due*1000).toISOString(),overdue:false};overview.reminders=overview.reminders.filter(x=>x.message!==m.id).concat(r);localStorage.setItem('fictional-reminders',JSON.stringify(overview.reminders));changed?.({type:'change',seq:++overview.seq});return{note:'Fictional reminder stored.'};}
  if(url.pathname==='/api/overview')return structuredClone(overview);
  if(url.pathname==='/api/dm'){const id=url.searchParams.get('id');if(id===fixture.delay){fixture.delay='';await new Promise(resolve=>release=resolve);}if(!views[id])throw Error('Unknown fictional root');return structuredClone(views[id]);}
  if(url.pathname==='/api/dm/send'){const view=views[body.conv];const m=msg(body.id,body.body,{dir:'out',from:me.address,topic:body.topic||'',reply_to:body.reply_to,at:new Date().toISOString()});view.messages.push(m);overview.dms=overview.dms.map(d=>d.id===view.id?summary(view):d);changed?.({type:'change',seq:++overview.seq});return{id:m.id,lid:m.id,state:'delivered'};}
@@ -36,7 +43,7 @@ const host={version:1,platform:'daemon',workspace:{id:'r4-fictional',name:'Ficti
  if(url.pathname==='/api/message/react')return{note:'Fictional reaction recorded.'};
  if(p.includes('/groups/invitations'))return[];
  if(p.startsWith('/api/typing/status'))return{send:false,scopes:[]};
- if(p.startsWith('/api/agents'))return{host:peer.address,agents:[],sessions:[],local:false};
+ if(p.startsWith('/api/agents'))return{host:${process.env.AGENTNET_ADDRESSING==='1'}?me.address:peer.address,agents:${process.env.AGENTNET_ADDRESSING==='1'}?[{record:{id:'7'.repeat(32),label:'Pi',host:me.address}},{record:{id:'8'.repeat(32),label:'Codex',host:me.address}}]:[],sessions:[],local:${process.env.AGENTNET_ADDRESSING==='1'}};
  return{};
 }};
 const base='/assets/skins/'+skin+'/',manifest=await(await fetch(base+'skin.json')).json();
@@ -70,7 +77,45 @@ const server=http.createServer((req,res)=>{
    if(skin==='comic')await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Casey/}).first().click();
    else if(skin==='classic')await page.locator('.contact-item').getByRole('button',{name:/Casey/}).first().click();
    else await page.locator('.zoom-content').getByRole('button',{name:/Casey/}).first().click();
-   await shown('Main planning').waitFor();
+   try { await shown(process.env.AGENTNET_ADDRESSING==='1'?'Review the fictional plan.':'Main planning').waitFor(); } catch(e) { await shot('failed');console.error(errors);console.error((await page.evaluate(()=>document.querySelector('#skin').shadowRoot.textContent)).slice(-5000));throw e; }
+   if(process.env.AGENTNET_OWN_REMIND==='1'){
+    const own=skin==='comic'?page.locator('[data-mid="waiting-turn"]'):skin==='classic'?page.locator('#m-waiting-turn'):shown('Waiting recipient proof');
+    if(skin==='comic'){
+     if(width===390){await own.getByRole('button',{name:'Message actions',exact:true}).focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'Remind me…',exact:true}).click();}
+     else{await own.locator('[role="group"]').hover();await own.getByRole('button',{name:'More actions'}).click();await page.getByRole('menuitem',{name:'Remind me…'}).click();}
+    }else if(skin==='classic')await own.getByRole('button',{name:'Remind me…',exact:true}).click();
+    else{await own.click();await page.getByRole('button',{name:'Remind me…',exact:true}).click();}
+    const sheet=page.getByRole('dialog',{name:'Remind me later',exact:true});await sheet.waitFor();await shot('own-reminder-open');
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/remind').length),0,'opening own reminder does not submit');
+    await sheet.getByText(/In 30 minutes/).first().click();await sheet.getByRole('button',{name:'Remind me',exact:true}).click();await sheet.waitFor({state:'hidden'});
+    const posted=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/remind').map(r=>r.body));assert.equal(posted.length,1);assert.equal(posted[0].id,'waiting-turn');assert(posted[0].due>Math.floor(Date.now()/1000),'future reminder');
+    await page.reload();await page.waitForFunction(()=>window.ready);
+    if(skin==='comic')await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Casey/}).first().click();
+    else if(skin==='classic'){const chat=page.locator('.contact-item').getByRole('button',{name:/Casey/}).first();if(await chat.isVisible())await chat.click();}
+    else {await page.getByRole('button',{name:'Everyone',exact:true}).click();await page.locator('.zoom-content .reminder-item').filter({hasText:'Waiting recipient proof'}).click();}
+    if(skin==='zoom')await page.locator('.zoom-message').getByText('Waiting recipient proof',{exact:true}).waitFor();else await shown('Main planning').waitFor();
+    const ownAgain=skin==='comic'?page.locator('[data-mid="waiting-turn"]'):skin==='classic'?page.locator('#m-waiting-turn'):page.locator('.zoom-content');
+    await ownAgain.getByRole('button',{name:'Change…',exact:true}).click();await page.getByRole('dialog',{name:'Move the reminder',exact:true}).waitFor();await shot('own-reminder-reopened');
+    assert.equal(await page.evaluate(()=>fixture.overview.reminders.filter(r=>r.message==='waiting-turn').length),1,'own reminder remains after reload');
+    await page.getByRole('dialog',{name:'Move the reminder',exact:true}).getByRole('button',{name:/^(Close|Cancel)$/,exact:true}).click();
+    if(skin==='zoom')await page.keyboard.press('Escape');
+    const incoming=skin==='comic'?page.locator('[data-mid="main-turn"]'):skin==='classic'?page.locator('#m-main-turn'):shown('Main planning');
+    if(skin==='comic'){if(width===390){await incoming.getByRole('button',{name:'Message actions',exact:true}).focus();await page.keyboard.press('Enter');await page.getByRole('button',{name:'Remind me…',exact:true}).click();}else{await incoming.locator('[role="group"]').hover();await incoming.getByRole('button',{name:'More actions'}).click();await page.getByRole('menuitem',{name:'Remind me…'}).click();}}
+    else if(skin==='classic')await incoming.getByRole('button',{name:'Remind me…',exact:true}).click();else{await incoming.click();await page.getByRole('button',{name:'Remind me…',exact:true}).click();}
+    await page.getByRole('dialog',{name:'Remind me later',exact:true}).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/remind').length),0,'incoming open unchanged; no accidental second submit');
+    assert.deepEqual(errors,[]);console.log('Own/incoming reminder menu PASS '+skin+' '+width);await context.close();continue;
+   }
+   if(process.env.AGENTNET_ADDRESSING==='1'){
+    await page.getByText('To @Codex',{exact:true}).waitFor();
+    await page.getByText('You approved Pi’s suggested task',{exact:true}).waitFor();
+    await page.getByText(/Not run/).first().waitFor();await page.getByText('not run: originating local run stopped',{exact:true}).first().waitFor();
+    const recipient=page.locator('[data-agent-recipient]').filter({hasText:'Codex'});
+    assert.equal(await recipient.getAttribute('title'),'6'.repeat(32),'recipient label uses exact request PID');
+    const row=await recipient.evaluate(e=>e.closest('.msg,.mc,[data-mid]').innerText);assert(!/Delivered|reply\s*pending/i.test(row),'terminal execution row has no contradictory pending/delivery claim');
+    assert.equal(await page.evaluate(()=>fixture.views[fixture.ids.main].messages.find(m=>m.id==='agent-ask').body),'Are you the reviewer?','recipient projection leaves signed body unchanged');
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.body&&['/api/dm/send','/api/action'].includes(r.path)).length),0,'rendering grants no action');
+    await shot('agent-addressing');assert.deepEqual(errors,[]);console.log('Agent addressing/proposal PASS '+skin+' '+width);await context.close();continue;
+   }
    if(skin==='classic')assert.equal(await page.locator('#hub-back').isVisible(),false,'flat person chat has no intermediate DM hierarchy');
    assert.equal(await page.getByRole('button',{name:/Conversations \(/}).count(),0,'no competing Conversations navigation');
    const waitingBefore=await page.evaluate(()=>structuredClone(fixture.views[fixture.ids.main].messages.find(m=>m.id==='waiting-turn')));

@@ -509,10 +509,10 @@ function dueText(iso) {
 // localInput is d as a datetime-local input's value (this computer's time).
 const localInput = (d) => new Date(+d - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
 
-// reminderLine is a received message's reminder: set one, or the one it
+// reminderLine is a stored message's reminder: set one, or the one it
 // has, with its time, and change, done and cancel.
 function reminderLine(m) {
-  if (!canRemind() || m.dir !== "in" || m.event) return null;
+  if (!canRemind() || m.event) return null;
   const r = reminderOf(m.id);
   if (!r) return el("button", { type: "button", class: "text-btn", onclick: () => remindDialog(m) }, "Remind me…");
   const act = (path) => () => remindAct(path, m.id).catch((e) => announce(e.message));
@@ -2222,8 +2222,9 @@ function dmMsg(m, t, prev) {
         proposalCard(m.proposal),
         m.job_detail && !acts.includes("resolve") && m.exec?.state !== "needs_human" && el("p", {class:"hint"}, m.job_detail),
         el("div", { class: "acts" }, acts.map((a, i) => actionButton(a, m, t, i === 0)))),
+      m.exec?.state === "not_run" && m.job_detail && el("p", {class:"hint"}, m.job_detail),
       sharedWith.length > 0 && el("p", { class: "shared-note" }, "Shared with " + sharedWith.map((a) => agentName(a).replace(/^Your/, "your")).join(" and ")),
-      el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && (m.delivery||m.state_text) && el("span", {}, m.dir==="out"&&m.delivery?(deliveryText(m)):m.state_text),
+      el("div", { class: "foot" }, execLine(m, t), !held && !acts.length && m.exec?.state !== "not_run" && (m.delivery||m.state_text) && el("span", {}, m.dir==="out"&&m.delivery?(deliveryText(m)):m.state_text),
         !t.frozen && !dmVisitor(t) && !m.excerpt_pid && !m.deleted && el("button", { type: "button", class: "text-btn", onclick: () => { setDMReply(m); $("body").focus(); } }, "Reply"),
         !t.frozen&&!dmVisitor(t)&&!m.topic&&!m.topic_event&&!m.excerpt_pid&&!m.deleted&&el("button",{type:"button",class:"text-btn",onclick:async()=>{try{await api("/api/topic/create",{conv:t.id,peer:"",id:m.lid||m.id});topicSelections[t.id]=m.lid||m.id;await loadDM(false);}catch(e){announce(e.message);}}},"Make a topic"),
         reminderLine(m),
@@ -3424,7 +3425,10 @@ const lineOf = (m, n) => firstLine(isReport(m) ? reportText(m) : m.body || "(fil
 function bodyOf(m) {
   if (m.deleted) return el("p", { class: "body tombstone" }, "Message deleted");
   if (isReport(m)) return el("p", { class: "body report-body" }, reportText(m)); // a report from another machine: what it says, never its raw record
-  return el("p", { class: "body" }, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+  const target = (m.kind === "question" || m.kind === "task") && m.pid ? agentOf(m.pid) : null;
+  const recipient = (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"addressed-agent", "data-agent-recipient":"", title:m.pid}, "To @" + (target ? agentName(target) : "agent") + "\n");
+  const provenance = m.proposal && el("span", {class:"proposal-provenance", "data-proposal-provenance":""}, (m.dir === "out" ? "You approved " : "Approved ") + (target ? agentName(target) + "’s" : "the agent’s") + " suggested task\n");
+  return el("p", { class: "body" }, recipient, provenance, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
 }
 
 // controlDetails are the rows Details adds: the original text of an edited

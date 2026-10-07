@@ -506,10 +506,10 @@ function dueText(iso) {
 // localInput is d as a datetime-local input's value (this computer's time).
 const localInput = (d) => new Date(+d - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
 
-// reminderLine is a received message's reminder: set one, or the one it
+// reminderLine is a stored message's reminder: set one, or the one it
 // has, with its time, and change, done and cancel.
 function reminderLine(m) {
-  if (!canRemind() || m.dir !== "in" || m.event) return null;
+  if (!canRemind() || m.event) return null;
   const r = reminderOf(m.id);
   if (!r) return el("button", { type: "button", class: "text-btn", onclick: () => remindDialog(m) }, "Remind me…");
   const act = (path) => () => remindAct(path, m.id).catch((e) => announce(e.message));
@@ -3260,7 +3260,10 @@ const lineOf = (m, n) => firstLine(isReport(m) ? reportText(m) : m.body || "(fil
 function bodyOf(m) {
   if (m.deleted) return el("p", { class: "body tombstone" }, "Message deleted");
   if (isReport(m)) return el("p", { class: "body report-body" }, reportText(m)); // a report from another machine: what it says, never its raw record
-  return el("p", { class: "body" }, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+  const target = (m.kind === "question" || m.kind === "task") && m.pid ? agentOf(m.pid) : null;
+  const recipient = (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"addressed-agent", "data-agent-recipient":"", title:m.pid}, "To @" + (target ? agentName(target) : "agent") + "\n");
+  const provenance = m.proposal && el("span", {class:"proposal-provenance", "data-proposal-provenance":""}, (m.dir === "out" ? "You approved " : "Approved ") + (target ? agentName(target) + "’s" : "the agent’s") + " suggested task\n");
+  return el("p", { class: "body" }, recipient, provenance, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
 }
 
 // controlDetails are the rows Details adds: the original text of an edited
@@ -5306,8 +5309,11 @@ const Zoom = {
         if (m.event) return el("li", { class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
         const mine = m.dir === "out";
         const to = m.target && m.target.agent_id ? namedAgentLabel(m.target.agent_id, m.target.address, undefined, whoseAgent(m.pid && agentOf(m.pid))) : m.to && agentOf(m.pid) ? agentName(agentOf(m.pid)) : "";
+        const execution = execLine(m, d);
         const bubble = el("button", { type: "button", class: "mc-bubble" },
           el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + (to ? " · to " + to : "") + " · " + sentWhen(m)),
+          !m.deleted && (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"mc-who", "data-agent-recipient":"", title:m.pid}, "To @" + (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "agent")),
+          !m.deleted && m.proposal && el("span", {class:"mc-who", "data-proposal-provenance":""}, (m.dir === "out" ? "You approved " : "Approved ") + (agentOf(m.pid) ? agentName(agentOf(m.pid)) + "’s" : "the agent’s") + " suggested task"),
           el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
           !m.deleted && (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
@@ -5316,7 +5322,9 @@ const Zoom = {
           m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
           proposalCard(m.proposal),
           (m.actions || []).includes("do_it") && el("div", {class:"acts"}, actionButton("do_it",m,d,true)),
-          (m.delivery || m.state_text) && el("p", { class: "narr" }, m.dir === "out" && m.delivery ? deliveryText(m) : m.state_text));
+          execution && el("p", {class:"narr", "data-agent-execution":""}, execution),
+          m.exec?.state === "not_run" && m.job_detail && el("p", {class:"hint"}, m.job_detail),
+          m.exec?.state !== "not_run" && (m.delivery || m.state_text) && el("p", { class: m.exec?.state ? "hint" : "narr" }, m.dir === "out" && m.delivery ? deliveryText(m) : m.state_text));
       })),
       el("div", { class: "zoom-write" }, el("button", { type: "button", class: "btn", disabled: !!d.frozen || state.sending || dmHumanGuest(d) && !guestAuthor(d), onclick: () => dmWriteDialog(d) },
         d.frozen ? "Nothing more can be sent in this conversation" : dmHumanGuest(d) && !guestAuthor(d) ? "Join before writing in this group" : humanGroup(d) ? "Write in this group…" : "Write in this DM…")));
@@ -5334,6 +5342,7 @@ const Zoom = {
       messageReference(m,state.dmData?.messages.includes(m)?state.dmData:state.data),
       m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
       bodyOf(m),
+      !m.deleted && reminderLine(m),
       !m.deleted && fileChips(m, m.attachments),
       reactionsRow(m, d.id), messageMenu(m, d.id, { querySelector: () => null }),
       m.state_text && el("p", { class: "hint" }, m.state_text),
@@ -5396,6 +5405,7 @@ const Zoom = {
         kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.sent_at || m.at }, sentWhen(m))),
       messageReference(m,state.dmData?.messages.includes(m)?state.dmData:state.data),
       bodyOf(m),
+      !m.deleted && reminderLine(m),
       !m.deleted && m.files && m.files.length && el("p", { class: "hint" }, "Files: " + m.files.map((f) => f.name + " (" + size(f.size) + ")").join(", ")),
       reactionsRow(m, ""), messageMenu(m, "", { querySelector: () => null }),
       m.summary && el("div", { class: "note" }, el("p", { class: "note-label" }, "Summary written on this computer by your responder"), el("p", { class: "body" }, m.summary)),

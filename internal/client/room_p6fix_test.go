@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -421,7 +420,7 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 		Harnesses[name] = harness{bin: script, stdin: true}
 		t.Cleanup(func() { delete(Harnesses, name) })
 	}
-	os.WriteFile(rootScript, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'root:%s:%s\\n' \"$AGENTNET_ROOM_REQUEST\" \"$AGENTNET_REQUEST_ID\" >>\"$P6_ENV_LOG\"\n\"$P6_CLI\" --home \"$AGENTNET_HOME\" room ask --pid \"$P6_CHILD_PID\" CHILD_REQUEST\n"), 0700)
+	os.WriteFile(rootScript, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'root:%s:%s\\n' \"$AGENTNET_ROOM_REQUEST\" \"$AGENTNET_REQUEST_ID\" >>\"$P6_ENV_LOG\"\nwhile [ ! -f \"$P6_ENV_LOG.ask\" ]; do sleep 0.02; done\n\"$P6_CLI\" --home \"$AGENTNET_HOME\" room ask --pid \"$P6_CHILD_PID\" CHILD_REQUEST\n"), 0700)
 	os.WriteFile(childScript, []byte("#!/bin/sh\ncat >/dev/null\nprintf 'child:%s:%s\\n' \"$AGENTNET_ROOM_REQUEST\" \"$AGENTNET_REQUEST_ID\" >>\"$P6_ENV_LOG\"\nwhile [ ! -f \"$P6_RELEASE\" ]; do sleep 0.02; done\n\"$P6_CLI\" --home \"$AGENTNET_HOME\" room ask --pid \"$P6_REMOTE_PID\" REMOTE_REQUEST\n"), 0700)
 	named, err := w.alice.CreateLocalAgent("nested", Responder{Harness: "p6child", Dir: stub.dir})
 	if err != nil {
@@ -452,20 +451,40 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventually(t, "parent is running before nested ask", func() bool { return jobState(t, w.alice, ask.ID) == stateRunning })
+	if resume, err := w.alice.PauseForAppUpdate(); err == nil {
+		resume()
+		t.Fatal("update admitted while parent was preparing nested ask")
+	}
+	// The accepted idle-switch state must block unrelated roots without
+	// deadlocking exact descendants of work that already owns the idle fence.
+	w.alice.update.Lock()
+	w.alice.update.pending = &UpdateRequest{ID: "nested-pending-update", To: "v9.9.9"}
+	w.alice.update.Unlock()
+	if w.alice.runNext(tctx(t), nil) {
+		t.Fatal("pending update admitted a new root job")
+	}
+	if err := os.WriteFile(log+".ask", nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, "nested local job exists", func() bool {
 		var n int
-		e := w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE pid=? AND state=? AND local=1`, child.PID, stateAgentWaiting).Scan(&n)
+		e := w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE pid=? AND state IN (?,?) AND local=1`, child.PID, stateAgentWaiting, stateRunning).Scan(&n)
 		return e == nil && n > 0
 	})
-	ctx, cancel := context.WithTimeout(tctx(t), 30*time.Second)
-	defer cancel()
-	done := make(chan bool, 1)
-	go func() { done <- w.alice.runNext(ctx, make(chan struct{})) }()
+	// The real daemon must claim the same-host child while its parent waits;
+	// no test-only second runNext may hide serial scheduler deadlock.
 	eventually(t, "parent and nested local jobs both running", func() bool {
 		var n int
 		err := w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE pid IN (?,?) AND state=? AND local=1`, from.PID, child.PID, stateRunning).Scan(&n)
 		return err == nil && n == 2
 	})
+	if w.alice.updatePending() == nil {
+		t.Fatal("nested claim discarded pending update")
+	}
+	w.alice.update.Lock()
+	w.alice.update.pending = nil
+	w.alice.update.Unlock()
 	if resume, err := w.alice.PauseForAppUpdate(); err == nil {
 		resume()
 		t.Fatal("whole-app update allowed while parent and child jobs were running")
@@ -474,14 +493,6 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	replyAt(t, w.alice, conv, ask.LID)
-	select {
-	case ran := <-done:
-		if !ran {
-			t.Fatal("nested job not claimed")
-		}
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
 	eventually(t, "nested runs release whole-app idle fence", func() bool {
 		resume, err := w.alice.PauseForAppUpdate()
 		if err != nil {
@@ -490,12 +501,38 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 		resume()
 		return true
 	})
+	// A cancelled waiting parent must cancel its already-running child, never
+	// detach it into fresh authority or emit the remote follow-up.
+	if err := os.Remove(log + ".release"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := w.alice.AskAgent(tctx(t), from.PID, envelope.KindQuestion, "CANCEL_PARENT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "second parent and child run naturally", func() bool {
+		var n int
+		e := w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE pid IN (?,?) AND state=? AND local=1`, from.PID, child.PID, stateRunning).Scan(&n)
+		return e == nil && n == 2
+	})
+	eventually(t, "second child harness started", func() bool {
+		data, err := os.ReadFile(log)
+		return err == nil && len(strings.Split(strings.TrimSpace(string(data)), "\n")) == 4
+	})
+	if err := w.alice.Cancel(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "cancelled parent stops local descendant", func() bool {
+		var n int
+		e := w.alice.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE pid IN (?,?) AND state=? AND local=1`, from.PID, child.PID, stateRunning).Scan(&n)
+		return e == nil && n == 0 && jobState(t, w.alice, second.ID) == stateCancelled
+	})
 	data, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 2 {
+	if len(lines) != 4 {
 		t.Fatalf("env runs %q", data)
 	}
 	for _, line := range lines {

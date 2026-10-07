@@ -356,8 +356,8 @@ func TestReminderRange(t *testing.T) {
 	}
 }
 
-// Only a received message takes a reminder.
-func TestReminderOnlyOnReceivedMessages(t *testing.T) {
+// A locally stored sent message takes the same personal reminder.
+func TestReminderOnOwnSentMessages(t *testing.T) {
 	w := newWorld(t, "")
 	runAgent(t, w.alice)
 	runAgent(t, w.bob)
@@ -365,7 +365,43 @@ func TestReminderOnlyOnReceivedMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{sent.ID, strings.Repeat("0", 32), "nope"} {
+	due := time.Now().Add(time.Hour).Truncate(time.Second)
+	r, err := w.bob.SetReminder(sent.ID, due)
+	if err != nil || r.Message != sent.ID || r.From != w.bob.Address || r.Due != due.Unix() || r.State != ReminderPending {
+		t.Fatalf("own reminder: %+v %v", r, err)
+	}
+	again, err := Open(w.bobHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	stored, ok, err := again.Reminder(sent.ID)
+	if err != nil || !ok || stored != r {
+		t.Fatalf("reopened reminder: %+v %v %v", stored, ok, err)
+	}
+	ref, err := w.bob.RefOf("", sent.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.bob.Retract(tctx(t), ref, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.bob.SetReminder(sent.ID, due); err == nil || !strings.Contains(err.Error(), "deleted") {
+		t.Fatalf("deleted own reminder: %v", err)
+	}
+	persons(t, w.alice, w.bob)
+	conv := newDM(t, w.bob, w.alice)
+	turn, err := w.bob.SendConv(tctx(t), conv, ConvOutgoing{Body: "own linked-person turn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, copy := range turn.Copies {
+		r, err := w.bob.SetReminder(copy.ID, due)
+		if err != nil || r.Message != copy.ID || r.Conv != conv || r.From != w.bob.Address {
+			t.Fatalf("own DM reminder: %+v %v", r, err)
+		}
+	}
+	for _, id := range []string{strings.Repeat("0", 32), "nope"} {
 		if _, err := w.bob.SetReminder(id, time.Now().Add(time.Hour)); err == nil {
 			t.Errorf("a reminder on %q", id)
 		}
@@ -396,5 +432,55 @@ func TestReminderRefusedOnDeletedMessage(t *testing.T) {
 	}
 	if _, ok, _ := w.bob.Reminder(id); ok {
 		t.Fatal("a refused reminder was stored")
+	}
+}
+
+// Fanout copies keep their exact local reminder IDs; a logical reply ends
+// matching copies only within its signed conversation, as for incoming turns.
+func TestReminderOwnFanoutCopies(t *testing.T) {
+	w := newWorld(t, "")
+	lid := protocol.NewID()
+	ids := []string{protocol.NewID(), protocol.NewID(), protocol.NewID()}
+	due := time.Now().Add(time.Hour).Truncate(time.Second)
+	for i, conv := range []string{"group", "group", "other"} {
+		if _, err := w.bob.store.db.Exec(`INSERT INTO outbox(id,recipient,body,envelope,state,created_at,conv,lid,kind) VALUES(?, 'peer/device', 'own turn', '{}', 'delivered', 1, ?, ?, 'message')`, ids[i], conv, lid); err != nil {
+			t.Fatal(err)
+		}
+		r, err := w.bob.SetReminder(ids[i], due)
+		if err != nil || r.Message != ids[i] || r.Conv != conv || r.From != w.bob.Address {
+			t.Fatalf("copy %d: %+v %v", i, r, err)
+		}
+	}
+	again, err := Open(w.bobHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	for _, id := range ids {
+		r, ok, err := again.Reminder(id)
+		if err != nil || !ok || r.Message != id || r.Due != due.Unix() {
+			t.Fatalf("reopen %s: %+v %v %v", id, r, ok, err)
+		}
+	}
+	tx, err := w.bob.store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replyEndsReminder(tx, "group", lid, ""); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids {
+		r, _, err := w.bob.Reminder(id)
+		want := ReminderReplied
+		if i == 2 {
+			want = ReminderPending
+		}
+		if err != nil || r.State != want {
+			t.Fatalf("reply copy %d: %+v %v", i, r, err)
+		}
 	}
 }
