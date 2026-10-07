@@ -14,6 +14,9 @@ This record starts with v0.8.1; earlier releases remain on the
 - Reopening after a failed restart resumes app and command verification. An
   independently running daemon still waits for active jobs and must confirm
   its new version before the update reports completion.
+- Native update controls recognize the app's authenticated session after its
+  normal sign-in redirect removes the URL token. The session cookie and bound
+  page must still match before an update can run.
 
 ### Upgrading from v0.8.3 or v0.8.4
 
