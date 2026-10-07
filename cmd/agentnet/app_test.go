@@ -462,10 +462,19 @@ func TestAppAttachedNeverOpensTheHome(t *testing.T) {
 }
 
 func TestAppStopsWhenTheShellIsGone(t *testing.T) {
+	if home := os.Getenv("AGENTNET_TEST_SHELL_EOF_HOME"); home != "" {
+		appFirstAddr = os.Getenv("AGENTNET_TEST_SHELL_EOF_ADDR")
+		if err := runApp(context.Background(), home, nil, os.Stdin, os.Stdout); err != nil {
+			t.Fatal(err)
+		}
+		if runtime.GOOS != "windows" && (!appStable.on || appStable.home != home) {
+			t.Fatal("child did not exercise the stable app state")
+		}
+		return
+	}
 	before := appStable
 	t.Run("stable app", func(t *testing.T) {
 		if runtime.GOOS != "windows" {
-			// Exercise macOS's stable-copy state on Linux too.
 			t.Setenv("APPIMAGE", filepath.Join(t.TempDir(), "AgentNet.AppImage"))
 		}
 		home := t.TempDir()
@@ -474,19 +483,62 @@ func TestAppStopsWhenTheShellIsGone(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer release()
-		app := startApp(t, home, nil)
-		if e := app.next("event"); e.Event != "error" || !strings.Contains(e.Text, "without its page") {
-			t.Fatalf("a daemon without a page: %+v", e)
+		// EOF ends the sidecar process. An in-process run leaves its OS lock
+		// waiter alive after return; that waiter can create daemon.lock during
+		// TempDir cleanup. Wait for the genuine child process, not only runApp.
+		t.Setenv("SHELL", fakeShell(t, "/usr/bin"))
+		t.Setenv("AGENTNET_TEST_SHELL_EOF_HOME", home)
+		t.Setenv("AGENTNET_TEST_SHELL_EOF_ADDR", freeAddr(t))
+		t.Setenv("AGENTNET_NOTIFY", "off")
+		self, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
 		}
-		app.stdin.Close() // EOF: the shell died
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, self, "-test.run=^TestAppStopsWhenTheShellIsGone$")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		t.Cleanup(func() { cmd.Process.Kill(); <-done })
+		go func() { err := cmd.Wait(); done <- err }()
+		line, err := bufio.NewReader(stdout).ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("app event: %v", err)
+		}
+		var event appEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("app event: %q: %v", line, err)
+		}
+		if event.Event != "error" || !strings.Contains(event.Text, "without its page") {
+			t.Fatalf("a daemon without a page: %+v", event)
+		}
+		stdin.Close()
 		select {
-		case err := <-app.done:
-			app.done <- err
+		case err := <-done:
+			done <- err
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("app EOF: %v: %s", err, stderr.String())
 			}
 		case <-time.After(time.Minute):
 			t.Fatal("the app kept running without its shell")
+		}
+		if unlocked, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")); !errors.Is(err, lockfile.ErrLocked) {
+			if unlocked != nil {
+				unlocked()
+			}
+			t.Fatalf("EOF stopped or unlocked independently managed daemon: %v", err)
 		}
 	})
 	if appStable != before {

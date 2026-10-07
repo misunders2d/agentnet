@@ -135,7 +135,7 @@ for (const [what, rec, want] of [
   await bobCaps([wire.CapEnv2, wire.CapPerson, wire.CapRoom]);
   await alice.post({ ...kept, state: 'queued', detail: '' });
   kept = await alice.store.get('outbox', rec.id);
-  check(kept.state === 'custody' && posts.length === before + 1, 'and goes once that device reads rm1');
+  check(kept.state === 'custody' && posts.length === before + 1, 'and goes once that device reads rm1: ' + JSON.stringify({ state: kept.state, delivery: kept.delivery || '', detail: kept.detail || '', posts_before: before, posts_after: posts.length }));
 }
 
 // ---- a group turn over stubbed group evidence: routing and storage.
