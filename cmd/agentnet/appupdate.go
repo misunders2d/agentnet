@@ -217,22 +217,20 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 	}
 	reply := func(v any) { w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(v) }
 	if req.Method == http.MethodGet && req.URL.Path == "/api/app/status" {
-		r.commandMu.Lock()
-		status := r.command
-		r.commandMu.Unlock()
+		status := r.currentCommandStatus()
 		_, _, updateErr := appUpdateAsset(runtime.GOOS, r.exe)
 		problem := ""
 		if updateErr != nil {
 			problem = updateErr.Error()
 		}
-		result, _ := secfile.Read(filepath.Join(r.home, appUpdateResultFile))
+		result, _ := appUpdateResultText(r.home)
 		reply(struct {
 			appCommandStatus
 			Version   string `json:"version"`
 			Supported bool   `json:"app_update_supported"`
 			Problem   string `json:"problem,omitempty"`
 			Result    string `json:"update_result,omitempty"`
-		}{status, protocol.Version, updateErr == nil, problem, string(result)})
+		}{status, protocol.Version, updateErr == nil, problem, result})
 		return true
 	}
 	mt, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
@@ -262,6 +260,10 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 			http.Error(w, "Invalid update request.", 400)
 			return true
 		}
+		if _, _, err := appUpdateAsset(runtime.GOOS, r.exe); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return true
+		}
 		if !r.updating.CompareAndSwap(false, true) {
 			http.Error(w, "An update is already being prepared.", 409)
 			return true
@@ -276,8 +278,24 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 		defer func() {
 			if !keepPaused {
 				resume()
+				r.updating.Store(false)
 			}
 		}()
+		if choice.Version == "" {
+			choice.Version, err = latestRelease(req.Context())
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return true
+			}
+		}
+		if choice.Version == protocol.Version {
+			if err = r.repairCurrentAppCommand(choice.Version); err != nil {
+				http.Error(w, err.Error(), 409)
+				return true
+			}
+			reply(map[string]string{"state": "complete", "version": choice.Version, "message": "App and command are up to date: " + choice.Version})
+			return true
+		}
 		helper, plan, err := r.stageAppUpdateTo(req.Context(), choice.Version)
 		if err != nil {
 			r.updating.Store(false)
@@ -317,25 +335,30 @@ func runAppUpdateHelper(home string, args []string, stdin io.Reader) error {
 	if !filepath.IsAbs(dir) || filepath.Dir(dir) != filepath.Clean(home) || !strings.HasPrefix(filepath.Base(dir), "app-update-") || filepath.Dir(p.Asset) != dir {
 		return errors.New("invalid app update location")
 	}
+	if err = writeAppUpdateResult(home, p.Version, "pending", "Waiting for the app to restart and verify its commands."); err != nil {
+		return err
+	}
 	_, err = io.Copy(io.Discard, stdin)
 	if err != nil {
+		_ = writeAppUpdateResult(home, p.Version, "failed", "App shutdown handoff failed: "+err.Error())
 		return err
 	}
 	err = applyAppUpdate(p)
 	if err != nil {
-		secfile.Write(filepath.Join(home, appUpdateResultFile), []byte("Update failed. Your previous app is still available: "+err.Error()))
-	} else {
-		secfile.Write(filepath.Join(home, appUpdateResultFile), []byte("Updated to "+p.Version))
+		_ = writeAppUpdateResult(home, p.Version, "failed", "Your previous app is still available: "+err.Error())
 	}
+	// Replacing a package is not proof that its app and CLI started.
 	// Clear AppImage mount variables before opening either version.
 	cmd := exec.Command(p.App)
 	if p.Kind == "dmg" {
 		cmd = exec.Command("open", macAppBundle(p.App))
 	}
-	cmd.Env = appRestartEnv(os.Environ())
+	cmd.Env = append(appRestartEnv(os.Environ()), "AGENTNET_HOME="+home)
 	startErr := cmd.Start()
 	if startErr == nil {
 		cmd.Process.Release()
+	} else if err == nil {
+		_ = writeAppUpdateResult(home, p.Version, "failed", "App could not restart: "+startErr.Error())
 	}
 	if runtime.GOOS != "windows" && err == nil {
 		os.RemoveAll(dir)
@@ -344,6 +367,76 @@ func runAppUpdateHelper(home string, args []string, stdin io.Reader) error {
 		return err
 	}
 	return startErr
+}
+
+// Reads actual files; cached installation success alone cannot prove an update.
+func (r *appRunner) currentCommandStatus() appCommandStatus {
+	src, err := appCommandExecutable()
+	if err != nil {
+		return appCommandStatus{State: "error", Problem: err.Error()}
+	}
+	r.commandMu.Lock()
+	defer r.commandMu.Unlock()
+	status := checkAppCommand(r.home, src)
+	if status.State != "installed" && r.command.State == "custom" {
+		// Preserve the existing explicit choice for the canonical custom copy.
+		return r.command
+	}
+	if status.State == "installed" && r.command.State == "error" {
+		return r.command
+	}
+	if status.State == "installed" && appStable.on && appStable.home == r.home {
+		name := "agentnet"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		private := filepath.Join(r.home, appStableExeDir, name)
+		want, e1 := fileSum(src)
+		have, e2 := fileSum(private)
+		if e1 != nil || e2 != nil || !bytes.Equal(want, have) {
+			return appCommandStatus{Path: private, State: "error", Problem: "The command for connected tools does not match the running app."}
+		}
+	}
+	return status
+}
+
+// The app calls this after it serves its own page, never from the old helper.
+func (r *appRunner) confirmAppUpdate() {
+	if err := reconcileAppUpdateResult(r.home, protocol.Version, r.currentCommandStatus()); err != nil && r.logf != nil {
+		r.logf("could not record app update verification: %v", err)
+	}
+}
+
+func (r *appRunner) repairCurrentAppCommand(version string) error {
+	if _, ok := parseRelease(version); !ok {
+		return errors.New("This development app cannot verify a release update.")
+	}
+	if err := writeAppUpdateResult(r.home, version, "pending", "Checking the app's commands."); err != nil {
+		return err
+	}
+	r.commandMu.Lock()
+	r.command = r.installCommand(false)
+	installed := r.command
+	r.commandMu.Unlock()
+	if installed.State == "installed" && appStable.on && appStable.home == r.home {
+		src, err := appCommandExecutable()
+		if err == nil {
+			_, err = stableCopy(src, r.home)
+		}
+		if err != nil {
+			installed = appCommandStatus{State: "error", Problem: err.Error()}
+		}
+	}
+	if installed.State == "installed" {
+		installed = r.currentCommandStatus()
+	}
+	if err := reconcileAppUpdateResult(r.home, version, installed); err != nil {
+		return err
+	}
+	if installed.State != "installed" {
+		return fmt.Errorf("App is %s, but the command update is incomplete: %s", version, installed.Problem)
+	}
+	return nil
 }
 
 func appRestartEnv(env []string) []string {

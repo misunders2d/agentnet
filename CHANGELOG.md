@@ -8,6 +8,16 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ### Fixed
 
+- With a desktop app registered, both About and `agentnet update` include
+  the app, its private command and verified official terminal copies, including
+  an earlier copy on PATH. A closed app opens for the update; an unavailable
+  app reports the problem without silently updating only the CLI.
+- An already-current app repairs an outdated official command. Update status
+  stays pending until the restarted app and all required command copies match;
+  failed launches and partial command updates never report success.
+- Custom or inaccessible commands identify the exact blocked path. The
+  canonical Replace command choice never claims it replaces a different PATH
+  entry. Check and status commands remain read-only.
 - Recognize an official standalone CLI's module-version metadata before
   checksum verification, so a desktop upgrade adopts it instead of incorrectly
   labeling it a custom build. Custom or modified binaries remain protected.

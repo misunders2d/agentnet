@@ -411,8 +411,22 @@ the running app and command versions after restart. An active job blocks
 preparation; retry after it finishes. If a separate daemon owns the same
 data home, stop that daemon when idle before using the app updater.
 The v0.8.1 Linux AppImage replacement and
-visible About controls have live evidence; a future in-app update and
-interactive Windows/macOS installation remain unverified.
+visible About controls have live evidence. The owner also updated the AppImage
+through About to v0.8.2, exposing the separate official-CLI adoption bug;
+interactive Windows/macOS installation remains unverified.
+
+**Next patch, implemented on main but not in v0.8.2:** a registered desktop app
+owns updates from both About and an official standalone `agentnet update`.
+The CLI opens a closed app, includes its own verified executable as an update
+target, and never silently falls back to updating only itself if the app is
+unavailable. An already-current app still repairs outdated official commands.
+Completion requires the restarted app's version and matching canonical,
+registered/PATH and private command copies. Pending, failed and partial states
+remain explicit. `--check` and `--status` do not install, launch or adopt files.
+Custom/modified files remain protected; the canonical Replace choice does not
+authorize replacing a different PATH entry. Without a registered desktop app,
+standalone CLI updates continue as before. See [the handoff](../HANDOFF.md)
+for qualification evidence and remaining release gates.
 
 ### Relay / Hub
 

@@ -1147,14 +1147,17 @@ Do not silently retry failed questions or accepted tasks.`,
 	"update": `Usage: agentnet update [--check] [vX.Y.Z]
        agentnet update --status
 
-For the command installed by the desktop app (v0.8.2 and later), update the
-app and bundled CLI together through the same updater as Settings > About.
-Open the installed app for this data home first. Active jobs block the update;
-retry after they finish. --check changes nothing; --status shows the last
-whole-app helper result. Custom command copies stay under your control.
+When a desktop app is registered for this data home, update the app and its
+terminal command together through the same updater as Settings > About. An
+official standalone command is included too. A closed app opens automatically.
+Active jobs block the update; retry after they finish. An already-current app
+can repair an outdated official command. --check changes nothing; --status
+shows pending, incomplete, failed or verified completion. Custom command
+copies stay under your control; an unavailable app never falls back to a
+CLI-only update.
 This does not update another device or a relay deployment.
 
-For a standalone CLI installation:
+Without a registered desktop app:
 Install an official release of agentnet over this program's file: the
 latest stable release by default, or the one named. It downloads the file for this
 system (agentnet-OS-ARCH, .exe on Windows) from

@@ -141,10 +141,10 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 		}
 		cancel()
 	}()
+	addLoginShellPath(r.logf)
 	if bundledWith == "app" && exe != "" {
 		r.command = r.installCommand(false)
 	}
-	addLoginShellPath(r.logf)
 	if os.Getenv("APPIMAGE") != "" || runtime.GOOS == "darwin" {
 		appStable.on, appStable.home = true, home
 		if bundledWith == "app" && exe != "" {
@@ -454,6 +454,7 @@ func (r *appRunner) runOptions(a *client.Agent, answer func(error)) client.RunOp
 			return nil, err
 		}
 		r.serve(handler)
+		r.confirmAppUpdate()
 		r.logf("messenger page on http://%s (in the AgentNet app)", r.addr)
 		r.emit(appEvent{Event: "page", Mode: "daemon", URL: r.pageURL()})
 		answer(nil)
@@ -491,6 +492,7 @@ func (r *appRunner) setup(ctx context.Context, state string) (*client.Agent, cha
 	}
 	s := &appSetup{r: r, ctx: ctx, state: state, device: autoDeviceName(runtime.GOOS, hasBattery()), joined: make(chan appJoined)}
 	r.serve(ui.NewSetup(s, r.addr, r.token))
+	r.confirmAppUpdate()
 	r.emit(appEvent{Event: "page", Mode: "setup", URL: r.pageURL()})
 	select {
 	case <-ctx.Done():

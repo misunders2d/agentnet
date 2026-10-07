@@ -252,8 +252,12 @@ func ensureAppCommandPATH(userHome string) error {
 	return nil
 }
 
+// Separate from the requesting CLI's executable seam: an app update request
+// crosses a process boundary, and each process has its own installed program.
+var appCommandExecutable = os.Executable
+
 func (r *appRunner) installCommand(replace bool) appCommandStatus {
-	src, err := os.Executable()
+	src, err := appCommandExecutable()
 	if err != nil {
 		return appCommandStatus{State: "error", Problem: err.Error()}
 	}

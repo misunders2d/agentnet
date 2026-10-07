@@ -4,13 +4,57 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Next patch — v0.8.3 global updater, not released
+
+The owner resumed the October 6 pause on October 7. MEL-551 and MEL-557 remain
+In Progress. Both update entry points now route through the registered desktop
+app; an official standalone CLI registers its own verified path before an
+actual update. Startup discovers the login PATH before refreshing commands.
+Same-version requests repair stale commands. Completion uses pending/failed/
+partial/complete records and requires the restarted app plus exact command
+bytes, including the private connected-tool copy. Legacy helper success text
+is unverified until reconciled. Check/status stay read-only; unavailable or
+unsupported apps never cause a silent standalone-only update. An ambiguous
+POST failure is not retried. The startup deadline never cancels an accepted
+download. Custom and shadow PATH failures name the actual target without
+offering an unrelated canonical Replace action.
+
+The previous checkpoint CI `37511917588` failed only the macOS fixture
+`TestLiveRefreshAsksAboutEveryHeldCopy`: its raw SQLite connection lacked the
+production busy timeout. `b1dbb8d` applies the production connection settings
+to that fixture; three focused race repetitions passed (12.630s). Command
+target correction `12d0e683`, durable result helper `91f1870`, and public-entry
+regressions `cc4ea2b` are part of this candidate. Focused updater race tests
+passed (1.342s); `go vet ./cmd/agentnet ./internal/ui` passed. The first wider
+command race run found an obsolete assertion expecting the old manual-launch
+error; that assertion now checks the unavailable-app error identity. The wider
+command-package race rerun passed (136.634s). A closed-app regression passed
+(3.545s) and failed against the old startup-context behavior (2.544s), proving
+accepted downloads keep their full update deadline. New native CI is pending.
+No release/tag or device upgrade is
+authorized by these test results alone. Isolated real installed-layout upgrade
+proof and native installer limitations must remain explicit before release.
+
 ## Current published release — October 6 v0.8.2
+
+### Relay deployment — October 7
+
+The owner explicitly requested deployment. The existing Contabo relay was
+upgraded from v0.8.1 to the official v0.8.2 Linux binary at release revision
+`ac9dab82ddcc31bb510b0644a9edf1a561c015cf`. The binary checksum matched the
+published manifest; its version was checked inside the new image before
+cutover. A stopped-state Hub backup and the old image were retained. Compose
+keeps the original data volume, configuration and realm. After restart, the
+public HTTPS version endpoint and the running container both report v0.8.2;
+the container is running with zero restarts and no OOM. Backup/rollback paths
+are in the private project handoff. No desktop or phone was updated by this
+deployment.
 
 ### Post-release CLI adoption correction — implemented, unreleased
 
 The owner updated the Linux AppImage to v0.8.2 through the app. The bundled
-CLI at `~/.config/agentnet/bin/agentnet` reports v0.8.2/schema 50, while the
-terminal copy at `~/.local/bin/agentnet` remains v0.8.1/schema 48. Its hash
+CLI at `~/.config/agentnet/bin/agentnet` became v0.8.2/schema 50, while the
+terminal copy at `~/.local/bin/agentnet` remained v0.8.1/schema 48. Its hash
 matches the official v0.8.1 release, but no `app-command.json` ownership record
 exists. `appOwnsCommand` only read a retained `-ldflags` version; the actual
 release stores its tag in Go's `Main.Version` without that flag. This wrongly
@@ -22,8 +66,9 @@ The correction uses module-version metadata as a checksum-manifest selector;
 only a matching published hash authorizes replacement. It does not execute an
 unknown CLI or weaken custom/symlink protection. It is not in the immutable
 v0.8.2 tag. Current users can choose **Settings → Your agent → Replace command…**
-once to adopt the bundled CLI. The owner retains control; this investigation
-has not changed the installed terminal copy.
+once to adopt the bundled CLI. The owner subsequently ran the standalone
+updater: both copies now report v0.8.2/schema 50, but that manual action did
+not establish app ownership. No assistant desktop update was performed.
 
 ### Publication and qualification
 
@@ -70,8 +115,9 @@ passed. All 12 assets matched GitHub digests and all 11 packages matched
 `SHA256SUMS`; the downloaded Linux CLI reported v0.8.2, protocol 1, schema 50.
 The public release is marked latest. A duplicate full CI run on the final
 documentation-only commit was cancelled; the code is identical to the qualified
-candidate. No live installations have been changed for v0.8.2;
-physical Windows/macOS updates remain unverified. The opt-in
+candidate. No live installations were changed during qualification. Later
+owner and relay updates are recorded above; physical Windows/macOS updates
+remain unverified. The opt-in
 `TestLiveOwnAgentTopicClosure` passed against installed Codex in 81.541s:
 two ordinary answers kept one topic active, then an explicit close marked it
 done. It used synthetic participants, temporary AgentNet homes and a local

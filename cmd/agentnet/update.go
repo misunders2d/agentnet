@@ -22,6 +22,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
+	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 // Self-update: `agentnet update` replaces this executable with an official
@@ -115,12 +116,16 @@ func assetName() string {
 func runUpdate(ctx context.Context, home string, args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	check := fs.Bool("check", false, "only show what would be installed")
-	status := fs.Bool("status", false, "show whether this home's daemon switched after the last update")
+	status := fs.Bool("status", false, "show the last app update or daemon switch")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	app, err := usesAppUpdater(home)
+	if err != nil {
+		return err
+	}
 	if *status {
-		if bundledWith == "app" {
+		if app {
 			return appUpdateStatus(home)
 		}
 		return updateStatus(home)
@@ -128,10 +133,24 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	if fs.NArg() > 1 {
 		return errors.New("usage: update [--check] [vX.Y.Z]")
 	}
-	if bundledWith == "app" {
+	if app {
+		if !*check && bundledWith != "app" {
+			if tag := fs.Arg(0); tag != "" {
+				if _, ok := parseRelease(tag); !ok {
+					return errors.New("invalid release (vX.Y.Z)")
+				}
+			}
+			path, err := executable()
+			if err != nil {
+				return err
+			}
+			if err := registerAppCommandTarget(ctx, home, path); err != nil {
+				return fmt.Errorf("cannot include terminal command in the app update: %w", err)
+			}
+		}
 		return requestAppUpdate(ctx, home, *check, fs.Arg(0))
 	}
-	fmt.Println("Standalone CLI update: desktop app and relay deployments are updated separately.")
+	fmt.Println("No desktop app registered for this home; updating the standalone CLI.")
 	current := protocol.Version
 	cur, isRelease := parseRelease(current)
 	base, isDev := devBase(current)
@@ -221,6 +240,26 @@ func runUpdate(ctx context.Context, home string, args []string) error {
 	asked := switchDaemon(home, exe, current, target)
 	reportRunning(home, exe, asked)
 	return nil
+}
+
+// A standalone official CLI may predate installation of the desktop app.
+// The app's owner-only registration, not the CLI build flag, owns that choice.
+// A stale/broken registration must never silently select a CLI-only update.
+func usesAppUpdater(home string) (bool, error) {
+	if bundledWith == "app" {
+		return true, nil
+	}
+	b, err := secfile.Read(filepath.Join(home, appExeFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot read installed app registration: %w", err)
+	}
+	if !filepath.IsAbs(strings.TrimSpace(string(b))) {
+		return false, errors.New("invalid installed app registration; open the installed AgentNet app to repair it")
+	}
+	return true, nil
 }
 
 // updateStatus shows what became of the last switch request of this home,
