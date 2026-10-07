@@ -689,6 +689,45 @@ func TestUpdateBundledRequiresInstalledApp(t *testing.T) {
 	}
 }
 
+func TestAppRefreshesInheritedPrivateCommandBeforeCheckingPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AppImage/macOS private command layout")
+	}
+	home, user := t.TempDir(), t.TempDir()
+	private := filepath.Join(home, appStableExeDir, "agentnet")
+	if err := os.MkdirAll(filepath.Dir(private), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(private, []byte("previous app private command"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", user)
+	t.Setenv("USERPROFILE", user)
+	previous := bundledWith
+	bundledWith = "app"
+	t.Cleanup(func() { bundledWith = previous })
+	appPath := filepath.Join(t.TempDir(), "AgentNet.AppImage")
+	p := startApp(t, home, map[string]string{
+		"AGENTNET_APP_EXE": appPath,
+		"APPIMAGE":         appPath,
+		"PATH":             filepath.Dir(private) + string(os.PathListSeparator) + "/usr/bin",
+	})
+	event := p.next("setup")
+	if event.Event != "page" || event.Mode != "setup" {
+		t.Fatalf("unexpected startup event: %s %s", event.Event, event.Mode)
+	}
+	cl, base := pageClient(t, event.URL)
+	code, body := pageCall(t, cl, base, "/api/app/status", nil)
+	var status appCommandStatus
+	if code != http.StatusOK || json.Unmarshal(body, &status) != nil || status.State != "installed" {
+		t.Fatalf("inherited app-private PATH copy was treated as custom: %d %s", code, body)
+	}
+	src, err := os.Executable()
+	if err != nil || !bytes.Equal(mustSum(t, src), mustSum(t, private)) {
+		t.Fatalf("private command not refreshed from current app: %v", err)
+	}
+}
+
 func TestAdminInviteName(t *testing.T) {
 	for _, args := range [][]string{
 		{"invite", "--name", "Bohdan", "bohdan"},      // --name without --link

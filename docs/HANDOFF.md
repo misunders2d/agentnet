@@ -35,6 +35,25 @@ No release/tag or device upgrade is
 authorized by these test results alone. Isolated real installed-layout upgrade
 proof and native installer limitations must remain explicit before release.
 
+Candidate `de632a60` was pushed for CI `37585437408`. A subsequent real-backend
+journey found a missed transition: the daemon prepends its private bundled
+command to PATH, but later registration compared that copy only with the
+standalone release checksum. `139cb15` lets the internal app installer prove
+an exact current-source copy while external CLI registration still requires
+recorded/published ownership. Startup refreshes the known private command
+before checking inherited PATH copies. Focused races including the startup
+regression passed (5.353s); command-package vet passed.
+
+After that correction, a compiled candidate backend with a temporary enrolled
+device and loopback TLS relay adopted genuine, published-checksum-verified
+v0.8.2 commands. Both About's same-version request and the managed CLI's update
+request restored intentionally old terminal copies: the backend, canonical,
+earlier PATH and private commands all reported v0.8.3 and matched exact bytes.
+Temporary identities were removed. This proves real executable adoption and
+repair, not a Tauri window restart or Windows/macOS installer execution. No
+existing installation was modified. The final correction needs its own CI;
+the earlier candidate's jobs alone do not qualify it.
+
 ## Current published release — October 6 v0.8.2
 
 ### Relay deployment — October 7

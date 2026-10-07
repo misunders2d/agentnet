@@ -142,9 +142,6 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 		cancel()
 	}()
 	addLoginShellPath(r.logf)
-	if bundledWith == "app" && exe != "" {
-		r.command = r.installCommand(false)
-	}
 	if os.Getenv("APPIMAGE") != "" || runtime.GOOS == "darwin" {
 		appStable.on, appStable.home = true, home
 		if bundledWith == "app" && exe != "" {
@@ -152,6 +149,11 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 				r.logf("the app's command for connected tools could not be refreshed: %v", err)
 			}
 		}
+	}
+	// The daemon puts this private copy first on PATH. Refresh it before
+	// reconciling terminal commands, including a PATH inherited from an old app.
+	if bundledWith == "app" && exe != "" {
+		r.command = r.installCommand(false)
 	}
 	if exe != "" {
 		if err := secfile.Write(filepath.Join(home, appExeFile), []byte(exe+"\n")); err != nil {
