@@ -93,11 +93,20 @@ export function RemindSheet({ open, onOpenChange, m, r }: { open: boolean; onOpe
         <legend className="mb-1 text-[13px] font-extrabold uppercase tracking-wide text-muted">When</legend>
         {times.map((t, i) => choice(i, t.label, dueText(t.at)))}
         {choice("custom", "At a time I choose")}
-        <label className="ml-9 mt-1 block">
-          <span className="sr-only">Date and time</span>
-          <input type="datetime-local" value={at} min={localInput(new Date())} onChange={(e) => { setAt(e.target.value); setPick("custom"); }} onFocus={() => setPick("custom")}
-            className="min-h-12 w-full max-w-[280px] rounded-xl stroke bg-surface px-3 text-[16px] text-ink outline-none focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]" />
-        </label>
+        <div className="ml-9 mt-1 flex max-w-sm flex-col gap-3 sm:flex-row">
+          <label className="block min-w-0 flex-1">
+            <span className="mb-1 block text-[13px] font-semibold text-text-2">Date</span>
+            <input type="date" defaultValue={at.split("T")[0]} min={localInput(new Date()).split("T")[0]}
+              onChange={(e) => { setAt(e.target.value + "T" + (at.split("T")[1] || "")); setPick("custom"); }} onFocus={() => setPick("custom")}
+              className="min-h-12 min-w-0 w-full rounded-xl stroke bg-surface px-3 text-[16px] text-ink outline-none focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]" />
+          </label>
+          <label className="block min-w-0 flex-1">
+            <span className="mb-1 block text-[13px] font-semibold text-text-2">Time</span>
+            <input type="time" defaultValue={at.split("T")[1] || ""}
+              onChange={(e) => { setAt((at.split("T")[0] || "") + "T" + e.target.value); setPick("custom"); }} onFocus={() => setPick("custom")}
+              className="min-h-12 min-w-0 w-full rounded-xl stroke bg-surface px-3 text-[16px] text-ink outline-none focus-visible:outline-3 focus-visible:outline-agent-ink lg:text-[15px]" />
+          </label>
+        </div>
       </fieldset>
       <p className="mt-3 text-[13px] leading-snug text-muted">
         Times are this computer’s{zone ? " (" + zone + ")" : ""}. When it’s due, this computer shows a notification, even with this window closed, while AgentNet runs here.

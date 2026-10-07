@@ -12,10 +12,13 @@ export function AppControls({ command = false }: { command?: boolean }) {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   const [replace, setReplace] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
     let alive = true;
     host.appStatus?.().then((v) => { if (alive) setStatus(v); }, (e) => {
-      if (alive && !/404|not found/i.test(errorText(e))) setError(errorText(e));
+      if (!alive) return;
+      if (/404|not found/i.test(errorText(e))) setUnavailable(true);
+      else setError(errorText(e));
     });
     return () => { alive = false; };
   }, [host]);
@@ -28,7 +31,14 @@ export function AppControls({ command = false }: { command?: boolean }) {
     } catch (e) { if (store.isActive()) setError(errorText(e)); }
     finally { if (store.isActive()) setBusy(false); }
   };
-  if (!status) return error ? <p role="alert" className="text-danger">{error}</p> : null;
+  if (!status) {
+    if (unavailable) return <Card className="space-y-2 p-4">
+      <h3 className="font-bold">{command ? "AgentNet command for your tools" : "Update this computer"}</h3>
+      {!command && <Button variant="act" disabled>Update AgentNet</Button>}
+      <Hint>This page does not expose the app’s update controls. If a separately managed daemon owns this home, stop it when idle using its normal service manager, then reopen the installed AgentNet app to update.</Hint>
+    </Card>;
+    return error ? <p role="alert" className="text-danger">{error}</p> : null;
+  }
   return <Card className="space-y-2 p-4">
     {command ? <>
       <h3 className="font-bold">AgentNet command for your tools</h3>

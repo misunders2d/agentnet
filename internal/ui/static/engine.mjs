@@ -546,20 +546,33 @@ export class Engine {
     const headers = {};
     if (text) headers["Content-Type"] = "application/json";
     if (signed) Object.assign(headers, await wire.signRequest(this.keys, this.address, method, path, text));
-    let r;
+    // A stalled request must not hold onConnect (and therefore reconnect)
+    // forever. Bound headers and body below the stream's heartbeat watchdog.
+    const ctrl = new AbortController(), parents = [...new Set([signal, this.sendAbort.signal].filter(Boolean))];
+    const abort = () => ctrl.abort();
+    for (const parent of parents) {
+      parent.addEventListener("abort", abort, { once: true });
+      if (parent.aborted) abort();
+    }
+    const timer = setTimeout(abort, 30_000);
+    let r, t;
     try {
-      r = await this.fetch(this.base + path, { method, headers, body: text || undefined, cache: "no-store", signal: signal || this.sendAbort.signal });
+      r = await this.fetch(this.base + path, { method, headers, body: text || undefined, cache: "no-store", signal: ctrl.signal });
+      if (r.ok) t = await r.text();
+      else {
+        let j = {};
+        try { j = await r.json(); } catch (e) { if (ctrl.signal.aborted) throw e; }
+        const err = new HubError(r.status, j.code || "", j.error || r.statusText || "server error");
+        if (err.code === "revoked") await this.setRevoked();
+        throw err;
+      }
     } catch (e) {
+      if (e instanceof HubError) throw e;
       throw new HubError(0, "", "cannot reach your server");
+    } finally {
+      clearTimeout(timer);
+      for (const parent of parents) parent.removeEventListener("abort", abort);
     }
-    if (!r.ok) {
-      let j = {};
-      try { j = await r.json(); } catch (e) { /* no JSON body */ }
-      const err = new HubError(r.status, j.code || "", j.error || r.statusText || "server error");
-      if (err.code === "revoked") await this.setRevoked();
-      throw err;
-    }
-    const t = await r.text();
     return t ? JSON.parse(t) : null;
   }
 

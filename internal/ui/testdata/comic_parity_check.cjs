@@ -13,7 +13,7 @@ const addresses = (process.env.PARITY_ADDRESSES || '').split(',').filter(Boolean
 const shots = process.env.AGENTNET_SCREENSHOTS || '';
 const T = { timeout: 15000 };
 
-// localValue: a datetime-local value in this machine's time (the browser's too).
+// localValue: date and time in this machine's time (the browser's too).
 const localValue = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
 
 async function noAddresses(p, name, what) {
@@ -75,7 +75,9 @@ async function desktop(browser) {
   const move = p.getByRole('dialog', { name: 'Move the reminder' });
   await move.waitFor(T);
   const later = new Date(Date.now() + 26 * 3600e3);
-  await move.locator('input[type="datetime-local"]').fill(localValue(later));
+  const [date, time] = localValue(later).split('T');
+  await move.getByLabel('Date', { exact: true }).fill(date);
+  await move.getByLabel('Time', { exact: true }).fill(time);
   await move.getByRole('button', { name: 'Move it' }).click();
   await move.waitFor({ state: 'hidden', ...T });
   await msg.getByText(/^Reminder (tomorrow|\w{3}, )/).waitFor(T);

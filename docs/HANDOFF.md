@@ -4,6 +4,44 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Next patch candidates — October 7, after v0.8.3
+
+The owner prioritized these usability bugs over Classic/Zoom polish. Three
+GPT-6.1-sol helpers implemented isolated candidates; root owns review,
+integration and release qualification. No installed device was changed.
+
+- **Reminders (MEL-528):** separate Date and Time fields in Comic, preserving
+  incomplete native edits. Real Chromium tests type hours/minutes, dismiss and
+  reopen, create and move reminders, and check exact submitted timestamps in
+  New York/Kyiv across DST at desktop and phone widths. A phone-sized native
+  fixture does not add reminder support to browser-only devices.
+- **Browser sends/reconnect (MEL-546):** HTTP headers and body now share a
+  30-second deadline; caller and engine-close cancellation remain effective.
+  A reproduced stalled onConnect no longer blocks reconnect indefinitely, and
+  the original durable queued request is retried without creating a new ID.
+  The physical phone's observed Sending stall is not yet attributed or proven
+  recovered. Read-only relay checks found no crash/restart; phone was offline.
+- **Existing history copying (MEL-558):** outgoing group controls retain their
+  original signed timestamp rather than their later local persistence time.
+  Regression reproduces the exact historical-control admission failure before
+  the fix and passes afterward, including restart/resume and tamper rejection.
+  Signature checks and history cursors are unchanged. Live copying after an
+  upgrade remains unverified.
+- **Updater (MEL-551):** stable replacement cwd and immediate child-failure
+  reporting pass focused regressions. Comic's attached-daemon 404 now explains
+  unavailable update controls. This fallback does not implement automatic
+  updating of an independently managed daemon. The actual old-AppImage About
+  handoff and the owner's original automatic-restart failure remain unverified.
+
+Targeted regressions and `go vet ./...` passed locally. Full CI and package
+qualification remain release gates; v0.8.3 remains immutable. Generated local
+screenshots and verification logs are private and must not be published.
+
+The owner deferred unified direct-agent history to **MEL-569**, a low-priority
+feature: do not add that sharing model to this bug patch. Appearance's future
+link to the public skin repository is recorded in existing **MEL-526**.
+Projects remains the existing **MEL-527** discussion. Keep these scopes separate.
+
 ## Current published release — October 7 v0.8.3
 
 [v0.8.3](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3) was published at 08:39 UTC from

@@ -6,6 +6,18 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Comic reminders have separate, labeled Date and Time fields. Typed hour and
+  minute changes persist, including when reopening the reminder editor.
+- Browser requests time out if their headers or response body stall, allowing
+  reconnect and queued sends to resume with their original message IDs.
+- Linked-device group history preserves signed timestamps for edits, deletions
+  and reactions even when local storage finishes in a later second.
+- Desktop updates restart from a stable directory and report immediate launch
+  failures. About explains when a separate daemon makes update controls
+  unavailable instead of silently hiding them.
+
 ## [0.8.3] — 2026-10-07
 
 ### Fixed

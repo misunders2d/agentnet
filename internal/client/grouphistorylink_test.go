@@ -97,6 +97,55 @@ func groupHistoryLinkedFixture(t *testing.T) (*world, *Agent, *Agent, GroupConte
 	return w, w.alice, phone, packet
 }
 
+func TestGroupHistoryLinkOutgoingControlPersistenceTime(t *testing.T) {
+	_, a, phone, packet := groupHistoryLinkedFixture(t)
+	sent, err := a.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := a.RefOf(packet.State.Conv, sent.ID, "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.Revise(tctx(t), ref, "revised"); err != nil {
+		t.Fatal(err)
+	}
+	// Sealing precedes addConvOutbox's local persistence clock. Model a
+	// second boundary without changing any signed envelope or admission.
+	if _, err = a.store.db.Exec(`UPDATE outbox SET created_at=json_extract(envelope,'$.ts')+1 WHERE conv=? AND sub='revision'`, packet.State.Conv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.historyPageFor(phone.Self(), historyPos{}); err != nil {
+		t.Fatalf("persistence time blocked signed control history: %v", err)
+	}
+	var body string
+	if err = a.store.db.QueryRow(`SELECT body FROM outbox WHERE recipient=? AND sub='history' AND json_extract(body,'$.sub')='revision'`, phone.Address).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	var item HistoryItem
+	if err = json.Unmarshal([]byte(body), &item); err != nil {
+		t.Fatal(err)
+	}
+	var signedTS int64
+	if err = a.store.db.QueryRow(`SELECT json_extract(envelope,'$.ts') FROM outbox WHERE id=?`, item.ID).Scan(&signedTS); err != nil || item.TS != signedTS {
+		t.Fatalf("copied timestamp %d, signed %d: %v", item.TS, signedTS, err)
+	}
+	reopened, err := Open(a.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.historyStep(tctx(t))
+	var state string
+	if err = reopened.store.db.QueryRow(`SELECT state FROM history_jobs WHERE device=?`, phone.Address).Scan(&state); err != nil || state != "done" {
+		t.Fatalf("history did not finish after restart: %s %v", state, err)
+	}
+	item.TS++
+	if _, err = reopened.groupControlSourceAdmission(reopened.store.db, packet, item, nil); err == nil || err.Error() != "group: historical control differs from original outbox" {
+		t.Fatalf("changed signed timestamp admitted: %v", err)
+	}
+}
+
 func groupHistoryCarrierCount(t *testing.T, a *Agent, to, conv string) int {
 	t.Helper()
 	var n int

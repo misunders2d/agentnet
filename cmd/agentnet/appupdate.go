@@ -354,13 +354,31 @@ func runAppUpdateHelper(home string, args []string, stdin io.Reader) error {
 		cmd = exec.Command("open", macAppBundle(p.App))
 	}
 	cmd.Env = append(appRestartEnv(os.Environ()), "AGENTNET_HOME="+home)
+	// The old AppImage mount may disappear when its shell exits. Never
+	// carry that working directory into the replacement app.
+	cmd.Dir = home
 	startErr := cmd.Start()
 	if startErr == nil {
-		cmd.Process.Release()
-	} else if err == nil {
+		if p.Kind == "dmg" {
+			// open is a launcher, not the replacement app's lifetime.
+			cmd.Process.Release()
+		} else {
+			// Starting a process alone does not prove it survived startup.
+			// Observe immediate failures without waiting for the app to close.
+			exited := make(chan error, 1)
+			go func() { exited <- cmd.Wait() }()
+			timer := time.NewTimer(2 * time.Second)
+			select {
+			case startErr = <-exited:
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
+	}
+	if startErr != nil && err == nil {
 		_ = writeAppUpdateResult(home, p.Version, "failed", "App could not restart: "+startErr.Error())
 	}
-	if runtime.GOOS != "windows" && err == nil {
+	if runtime.GOOS != "windows" && err == nil && startErr == nil {
 		os.RemoveAll(dir)
 	} // Windows cannot remove the running helper.
 	if err != nil {

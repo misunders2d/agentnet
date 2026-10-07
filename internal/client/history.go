@@ -782,6 +782,8 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 	self := a.Self().Fingerprint()
 	// Local request execution stamps are not signed author identities and
 	// must not be exported as the original question/task's AgentID.
+	// Group controls must retain their signed timestamp: created_at records
+	// persistence after sealing and may fall in a later second.
 	var items []struct {
 		conv string
 		dir  string
@@ -798,7 +800,7 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 		    FROM inbox WHERE conv IS NOT NULL AND local = 0 AND coalesce(sub, '') NOT IN ('root-sync', 'history', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
 		     AND NOT `+erasedInFor("inbox")+`
 		  UNION ALL
-		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub='status') AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done
+		  SELECT o.conv, o.created_ms, o.id, 'out', ?, ?, NULL, CASE WHEN coalesce(o.topic,'') <> '' OR (coalesce(o.pid,'') <> '' OR o.sub IN ('status','reaction','revision','retraction')) AND o.conv IN (SELECT conv FROM group_context) THEN json_extract(o.envelope,'$.ts') ELSE o.created_at END, o.kind, o.body, o.reply_to, o.status, o.sub, o.origin, o.emotion, o.target, o.pid, o.lid, o.ref_id, o.ref_fp, o.agent_id,o.quote,o.topic,o.topic_event,o.topic_done
 		    FROM outbox o WHERE o.conv IS NOT NULL AND coalesce(o.sub, '') NOT IN ('root-sync', 'history', 'file', 'clear', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')
 		     AND o.rowid = (SELECT min(rowid) FROM outbox f WHERE f.conv = o.conv AND f.lid = o.lid) AND NOT `+erasedOut+`)
 		WHERE (conv, ms, id) > (?, ?, ?) AND conv IN (SELECT id FROM conversations UNION SELECT conv FROM group_context)
