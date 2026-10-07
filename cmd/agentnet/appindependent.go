@@ -180,7 +180,7 @@ func (r *appRunner) beginIndependentSwitch() (err error) {
 	r.independentSwitchMu.Lock()
 	defer r.independentSwitchMu.Unlock()
 	result, readErr := readAppUpdateResult(r.home)
-	if readErr != nil || result.Independent == nil || result.Version != protocol.Version || result.State == "failed" || result.SwitchID != "" {
+	if readErr != nil || result.Independent == nil || result.Version != protocol.Version || (result.State == "failed" && !appUpdateRestartFailure(result)) || result.SwitchID != "" {
 		return nil
 	}
 	defer func() {

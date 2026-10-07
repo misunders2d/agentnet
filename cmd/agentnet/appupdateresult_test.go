@@ -105,3 +105,36 @@ func TestAppUpdateResultLegacyAndFailure(t *testing.T) {
 		t.Fatalf("malformed result: %v", err)
 	}
 }
+
+func TestAppUpdateRestartFailureRecoversOnlyFromFreshProof(t *testing.T) {
+	for _, tc := range []struct{ name, requested, problem, running, cli, want string }{
+		{"verified restart", "v0.8.5", "App could not restart: exit status 127", "v0.8.5", "installed", "complete"},
+		{"old app", "v0.8.5", "App could not restart: exit status 127", "v0.8.4", "installed", "failed"},
+		{"custom CLI", "v0.8.5", "App could not restart: exit status 127", "v0.8.5", "custom", "failed"},
+		{"unverified CLI", "v0.8.5", "App could not restart: exit status 127", "v0.8.5", "error", "failed"},
+		{"install failure", "v0.8.5", "Your previous app is still available: install failed", "v0.8.5", "installed", "failed"},
+		{"shutdown failure", "v0.8.5", "App shutdown handoff failed: closed pipe", "v0.8.5", "installed", "failed"},
+		{"legacy failure", "", "App could not restart: exit status 127", "v0.8.5", "installed", "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := writeAppUpdateResult(home, tc.requested, "failed", tc.problem); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := os.ReadFile(filepath.Join(home, appUpdateResultFile))
+			if err := reconcileAppUpdateResult(home, tc.running, appCommandStatus{State: tc.cli}); err != nil {
+				t.Fatal(err)
+			}
+			result, err := readAppUpdateResult(home)
+			if err != nil || result.State != tc.want {
+				t.Fatalf("recovery = %+v, %v; want %s", result, err, tc.want)
+			}
+			if tc.want == "failed" {
+				after, _ := os.ReadFile(filepath.Join(home, appUpdateResultFile))
+				if string(before) != string(after) {
+					t.Fatal("unverified or unrelated failure overwritten")
+				}
+			}
+		})
+	}
+}

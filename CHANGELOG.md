@@ -6,6 +6,21 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Linux AppImage updates preserve host command-search paths when removing the
+  old mount's environment. The replacement can find FUSE tools and reopen;
+  an immediate exit, including exit status zero, is reported as a restart failure.
+- Reopening after a failed restart resumes app and command verification. An
+  independently running daemon still waits for active jobs and must confirm
+  its new version before the update reports completion.
+
+### Upgrading from v0.8.3 or v0.8.4
+
+Those AppImages contain the earlier updater. After installing this update,
+open AgentNet once from your launcher if it closes without reopening. The new
+updater takes effect after that first launch.
+
 ## [0.8.4] — 2026-10-07
 
 ### Fixed

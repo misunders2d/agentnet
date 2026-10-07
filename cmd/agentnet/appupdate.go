@@ -385,6 +385,9 @@ func runAppUpdateHelper(home string, args []string, stdin io.Reader) error {
 			select {
 			case startErr = <-exited:
 				timer.Stop()
+				if startErr == nil {
+					startErr = errors.New("app exited before startup verification")
+				}
 			case <-timer.C:
 			}
 		}
@@ -488,9 +491,26 @@ func appRestartEnv(env []string) []string {
 	out := []string{}
 	mount := os.Getenv("APPDIR")
 	for _, v := range env {
-		key := strings.SplitN(v, "=", 2)[0]
-		if key == "APPIMAGE" || key == "APPDIR" || key == "AGENTNET_APP" || key == "AGENTNET_APP_EXE" || (mount != "" && strings.Contains(v, mount)) {
+		key, value, _ := strings.Cut(v, "=")
+		if key == "APPIMAGE" || key == "APPDIR" || key == "AGENTNET_APP" || key == "AGENTNET_APP_EXE" {
 			continue
+		}
+		if mount != "" && strings.Contains(value, mount) {
+			// AppRun prepends its mount to PATH and other search lists. Keep
+			// the host entries: the AppImage runtime needs PATH for fusermount.
+			if !strings.HasSuffix(key, "PATH") && !strings.HasSuffix(key, "_DIRS") {
+				continue
+			}
+			kept := []string{}
+			for _, entry := range strings.Split(value, ":") {
+				if entry != "" && !strings.Contains(entry, mount) {
+					kept = append(kept, entry)
+				}
+			}
+			if len(kept) == 0 {
+				continue
+			}
+			v = key + "=" + strings.Join(kept, ":")
 		}
 		out = append(out, v)
 	}

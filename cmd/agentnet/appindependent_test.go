@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
@@ -92,5 +93,67 @@ func TestIndependentQualificationRequiresExactSameVersionProof(t *testing.T) {
 	after, _ := os.ReadFile(filepath.Join(home, "update-request.json"))
 	if string(before) != string(after) {
 		t.Fatal("existing request overwritten")
+	}
+}
+
+func TestIndependentAppRestartFailureResumesVerifiedSwitchOnce(t *testing.T) {
+	f := newGlobalUpdateFixture(t)
+	f.runner.command = f.runner.installCommand(false)
+	if status := f.runner.currentCommandStatus(); status.State != "installed" {
+		t.Fatalf("fixture commands not verified: %+v", status)
+	}
+	record := appUpdateResult{Version: protocol.Version, State: "failed", Problem: "App could not restart: exit status 127", Independent: &appIndependentDaemon{Exe: f.terminal, From: "v1.2.2", PID: 42}}
+	if err := saveAppUpdateResult(f.home, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.runner.beginIndependentSwitch(); err != nil {
+		t.Fatal(err)
+	}
+	requestPath := filepath.Join(f.home, "update-request.json")
+	before, err := secfile.Read(requestPath)
+	if err != nil {
+		t.Fatalf("verified restart recovery did not resume its approved switch: %v", err)
+	}
+	var request client.UpdateRequest
+	if err := json.Unmarshal(before, &request); err != nil || request.Exe != f.terminal || request.From != "v1.2.2" || request.To != protocol.Version {
+		t.Fatalf("recovered request = %+v, %v", request, err)
+	}
+	if err := f.runner.beginIndependentSwitch(); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := secfile.Read(requestPath)
+	if string(before) != string(after) {
+		t.Fatal("reopen reissued its acknowledged switch")
+	}
+	if err := reconcileAppUpdateResult(f.home, protocol.Version, f.runner.currentCommandStatus()); err != nil {
+		t.Fatal(err)
+	}
+	result, _ := readAppUpdateResult(f.home)
+	if result.State != "pending" || result.SwitchID != request.ID {
+		t.Fatalf("busy daemon was reported complete: %+v", result)
+	}
+	activation := client.UpdateActivation{ID: request.ID, To: protocol.Version, Result: client.ActivationRunning, Running: "v1.2.2", PID: 42}
+	data, _ := json.Marshal(activation)
+	if err := secfile.Write(filepath.Join(f.home, "update-activation.json"), data); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileAppUpdateResult(f.home, protocol.Version, f.runner.currentCommandStatus()); err != nil {
+		t.Fatal(err)
+	}
+	result, _ = readAppUpdateResult(f.home)
+	if result.State != "partial" {
+		t.Fatalf("old running daemon falsely completed: %+v", result)
+	}
+	activation.Running = protocol.Version
+	data, _ = json.Marshal(activation)
+	if err := secfile.Write(filepath.Join(f.home, "update-activation.json"), data); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileAppUpdateResult(f.home, protocol.Version, f.runner.currentCommandStatus()); err != nil {
+		t.Fatal(err)
+	}
+	result, _ = readAppUpdateResult(f.home)
+	if result.State != "complete" {
+		t.Fatalf("matching daemon activation did not complete recovery: %+v", result)
 	}
 }

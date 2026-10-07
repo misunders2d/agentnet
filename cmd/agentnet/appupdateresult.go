@@ -24,6 +24,12 @@ func validAppUpdateResultState(state string) bool {
 	return state == "pending" || state == "failed" || state == "partial" || state == "complete"
 }
 
+// Older helpers can install the package but fail to launch it. Only that
+// specific failure may resume verification when the requested app is reopened.
+func appUpdateRestartFailure(r appUpdateResult) bool {
+	return r.State == "failed" && strings.HasPrefix(r.Problem, "App could not restart: ")
+}
+
 func writeAppUpdateResult(home, version, state, problem string) error {
 	if !validAppUpdateResultState(state) {
 		return errors.New("invalid app update result state")
@@ -110,7 +116,7 @@ func projectedAppUpdateResult(home, runningVersion string, status appCommandStat
 	if err != nil {
 		return r, err
 	}
-	if r.State == "failed" {
+	if r.State == "failed" && (!appUpdateRestartFailure(r) || r.Version == "" || r.Version != runningVersion || status.State != "installed") {
 		return r, nil
 	}
 	state, problem := "complete", ""

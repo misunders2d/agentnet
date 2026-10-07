@@ -36,7 +36,8 @@ func TestAppUpdateHelperRestartsFromStableDirectory(t *testing.T) {
 		}
 		return
 	}
-	home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\npwd -P > \"$AGENTNET_HOME/restart-cwd\"\nprintf '%s' \"$DBUS_SESSION_BUS_ADDRESS\" > \"$AGENTNET_HOME/restart-session\"\n"))
+	home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\npwd -P > \"$AGENTNET_HOME/restart-cwd\"\nprintf '%s' \"$DBUS_SESSION_BUS_ADDRESS\" > \"$AGENTNET_HOME/restart-session\"\nsleep 3\nprintf done > \"$AGENTNET_HOME/fixture-exited\"\n"))
+	t.Cleanup(func() { waitHelperFixtureExit(t, home) })
 	// macOS's temporary home may name /var while pwd -P names /private/var.
 	physicalHome, err := filepath.EvalSymlinks(home)
 	if err != nil {
@@ -68,13 +69,17 @@ func TestAppUpdateHelperReportsEarlyChildFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix executable fixture")
 	}
-	home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\nexit 23\n"))
-	if err := runAppUpdateHelper(home, []string{plan}, strings.NewReader("")); err == nil {
-		t.Fatal("early child failure ignored")
-	}
-	result, err := readAppUpdateResult(home)
-	if err != nil || result.State != "failed" || !strings.Contains(result.Problem, "restart") {
-		t.Fatalf("early failure result = %+v, %v", result, err)
+	for _, code := range []string{"0", "23"} {
+		t.Run("exit-"+code, func(t *testing.T) {
+			home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\nexit "+code+"\n"))
+			if err := runAppUpdateHelper(home, []string{plan}, strings.NewReader("")); err == nil {
+				t.Fatal("early child failure ignored")
+			}
+			result, err := readAppUpdateResult(home)
+			if err != nil || result.State != "failed" || !strings.Contains(result.Problem, "restart") {
+				t.Fatalf("early failure result = %+v, %v", result, err)
+			}
+		})
 	}
 }
 
@@ -123,7 +128,8 @@ func TestAppUpdateHelperLaunchWaitsForAppVerification(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix executable fixture; failure case runs on every OS")
 	}
-	home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\nprintf '%s' \"$AGENTNET_HOME\" > \"$AGENTNET_HOME/launched\"\n"))
+	home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\nprintf '%s' \"$AGENTNET_HOME\" > \"$AGENTNET_HOME/launched\"\nsleep 3\nprintf done > \"$AGENTNET_HOME/fixture-exited\"\n"))
+	t.Cleanup(func() { waitHelperFixtureExit(t, home) })
 	t.Setenv("AGENTNET_HOME", filepath.Join(t.TempDir(), "wrong-home"))
 	if err := runAppUpdateHelper(home, []string{plan}, strings.NewReader("")); err != nil {
 		t.Fatal(err)
@@ -142,5 +148,43 @@ func TestAppUpdateHelperLaunchWaitsForAppVerification(t *testing.T) {
 	result, err := readAppUpdateResult(home)
 	if err != nil || result.State != "pending" {
 		t.Fatalf("launch was mistaken for verified completion: %+v, %v", result, err)
+	}
+}
+
+func waitHelperFixtureExit(t *testing.T, home string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(home, "fixture-exited")); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("fixture did not finish after observing live startup")
+}
+
+func TestAppUpdateHelperKeepsHostCommandSearchPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable fixture")
+	}
+	home, plan := helperUpdateFixture(t, []byte("#!/bin/sh\nset -e\nfixture-host-command\nprintf '%s' \"$PATH\" > \"$AGENTNET_HOME/restart-path\"\nsleep 3\nprintf done > \"$AGENTNET_HOME/fixture-exited\"\n"))
+	t.Cleanup(func() { waitHelperFixtureExit(t, home) })
+	hostBin := filepath.Join(home, "host-bin")
+	if err := os.Mkdir(hostBin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostBin, "fixture-host-command"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	mount := filepath.Join(home, "old-mount")
+	t.Setenv("APPDIR", mount)
+	want := hostBin + ":/usr/bin:/bin"
+	t.Setenv("PATH", mount+"/usr/bin:"+want)
+	if err := runAppUpdateHelper(home, []string{plan}, strings.NewReader("")); err != nil {
+		t.Fatalf("replacement could not use host command: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, "restart-path"))
+	if err != nil || string(got) != want {
+		t.Fatalf("replacement PATH = %q, %v; want %q", got, err, want)
 	}
 }

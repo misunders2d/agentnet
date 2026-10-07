@@ -159,7 +159,7 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 		release()
 	} else if errors.Is(err, lockfile.ErrLocked) {
 		result, resultErr := readAppUpdateResult(home)
-		canInstall = resultErr == nil && result.Version == protocol.Version && result.Independent != nil && (result.State == "pending" || result.State == "partial")
+		canInstall = resultErr == nil && result.Version == protocol.Version && result.Independent != nil && (result.State == "pending" || result.State == "partial" || appUpdateRestartFailure(result))
 	}
 	if os.Getenv("APPIMAGE") != "" || runtime.GOOS == "darwin" {
 		appStable.on, appStable.home = true, home
