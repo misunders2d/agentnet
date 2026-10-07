@@ -145,9 +145,14 @@ func TestDaemonUIAddressStaysOutOfTheLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	page, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("with token: %d", resp.StatusCode)
+	cookies := resp.Cookies()
+	if err != nil || resp.StatusCode != http.StatusOK || len(cookies) != 1 || cookies[0].Value != token || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
+		t.Fatalf("token handoff: status %d, cookie count %d, body error %v", resp.StatusCode, len(cookies), err)
+	}
+	if resp.Header.Get("Location") != "" || !strings.Contains(string(page), `location.replace("/"+location.hash);`) || strings.Contains(string(page), token) || strings.Contains(log.String(), token) {
+		t.Fatal("token handoff must replace its own document without exposing the token")
 	}
 	stop()
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

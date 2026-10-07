@@ -60,8 +60,23 @@ func askPair(t *testing.T) (*client.Agent, *client.Agent) {
 		x.Logf = t.Logf
 		run, stop := context.WithCancel(context.Background())
 		done := make(chan struct{})
-		go func() { x.Run(run, client.RunOptions{}); close(done) }()
+		ready := make(chan struct{})
+		var runErr error
+		go func() {
+			runErr = x.Run(run, client.RunOptions{Owned: func() (func(), error) {
+				close(ready) // Run holds the daemon lock and has started its local workers.
+				return func() {}, nil
+			}})
+			close(done)
+		}()
 		t.Cleanup(func() { stop(); <-done })
+		select {
+		case <-ready:
+		case <-done:
+			t.Fatalf("fixture daemon stopped before ready: %v", runErr)
+		case <-ctx.Done():
+			t.Fatal("fixture daemon did not become ready")
+		}
 	}
 	return a, peer
 }
