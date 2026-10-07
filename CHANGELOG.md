@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.3] — 2026-10-07
+
 ### Fixed
 
 - Direct agent/device requests already running or stopping no longer count
@@ -25,6 +27,22 @@ This record starts with v0.8.1; earlier releases remain on the
 - Recognize an official standalone CLI's module-version metadata before
   checksum verification, so a desktop upgrade adopts it instead of incorrectly
   labeling it a custom build. Custom or modified binaries remain protected.
+
+### Upgrade and verification
+
+From v0.8.1/v0.8.2, use **Settings → About → Update AgentNet** once; the
+older standalone command retains its older updater until replaced. v0.8.3
+adopts unchanged official commands and routes later updates through the app.
+CLI-only installations and relay deployments keep their separate update paths.
+
+Native Linux/Windows/macOS CI, race tests, browser-storage checks, container
+checks and desktop builds passed at `5aec1196`. Linux package qualification
+replaced an isolated AppImage, restarted the real desktop shell/backend and
+verified all managed command versions and bytes plus the completion record.
+Direct-device OKs regressions passed in Comic, Classic and Zoom on desktop and
+phone fixtures. All 12 release asset digests and 11 package checksums matched.
+Interactive Windows/macOS upgrades and a graphical About-button click remain
+unverified. No existing installation was changed during qualification.
 
 ## [0.8.2] — 2026-10-06
 
@@ -98,7 +116,7 @@ every startup delay is eliminated. Private Projects remain a design discussion.
 An existing official standalone CLI can be misclassified as a custom build and
 left at its older version. In v0.8.2, use **Settings → Your agent → Replace
 command…** once to adopt the app's copy; later app updates refresh that managed
-copy. The automatic recognition correction is recorded under Unreleased.
+copy. The automatic recognition correction shipped in v0.8.3.
 
 ## [0.8.1] — 2026-10-06
 
@@ -177,5 +195,6 @@ guide and test/rollout evidence in the handoff.
 
 </details>
 
+[0.8.3]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.3
 [0.8.2]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.2
 [0.8.1]: https://github.com/misunders2d/agentnet/releases/tag/v0.8.1

@@ -4,81 +4,73 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Next patch — v0.8.3 global updater and direct-device OKs, not released
+## Current published release — October 7 v0.8.3
 
-**October 7 scope addition: publication held for the direct-device OKs fix.**
-The owner found a running agent/device question counted as "1 thing needs you"
-and explicitly required the fix in the next release. v0.8.2 filtered running
-conversation items but missed the separate `review` device list. Native
-overview now marks trusted local running/stopping requests with the existing
-`agent_running` reason; all bundled skins separate them from approval counts
-while preserving request navigation and Stop. This does not change permissions
-or infer job state from message text. Focused native race tests pass (3.231s), including a real signed request
-received over an isolated relay, held/running/stopping/cancelled projection,
-and the exact public Stop action. Real-browser fixtures pass in Comic, Classic
-and Zoom at desktop and phone widths: waiting decisions count, running work
-does not, navigation opens the exact request and Stop keeps its target. These
-fixtures stage worker state; they do not claim an actual model run. Bundled
-skin integrity, page logic and focused vet pass. The rebuilt candidate still
-needs its own native CI and release-package qualification before publication.
+[v0.8.3](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3) was published at 08:39 UTC from
+`5aec119649807befe711135c97805a89f1aa3b90`. The final combined candidate includes
+the global updater and the owner's required direct-device OKs correction.
+The earlier updater-only draft was replaced before publication; it was never
+published. This tag is now a published release and must not be moved.
 
-The earlier updater-only candidate `aeada228` passed full CI `37588166980`
-and release workflow `37588911958`, including an isolated real AppImage
-replacement/restart. All 12 draft assets matched GitHub digests; all 11
-packages matched the manifest, and the Linux CLI reported the exact clean
-tag revision. That release remains an unpublished draft and must be rebuilt
-with the later owner-requested OKs fix. Those earlier results do not qualify
-the added fix. No installed device was updated.
+### Whole-app updates
 
-The owner resumed the October 6 pause on October 7. MEL-551 and MEL-557 remain
-In Progress. Both update entry points now route through the registered desktop
-app; an official standalone CLI registers its own verified path before an
-actual update. Startup discovers the login PATH before refreshing commands.
-Same-version requests repair stale commands. Completion uses pending/failed/
-partial/complete records and requires the restarted app plus exact command
-bytes, including the private connected-tool copy. Legacy helper success text
-is unverified until reconciled. Check/status stay read-only; unavailable or
-unsupported apps never cause a silent standalone-only update. An ambiguous
-POST failure is not retried. The startup deadline never cancels an accepted
-download. Custom and shadow PATH failures name the actual target without
-offering an unrelated canonical Replace action.
+Both About and the v0.8.3 `agentnet update` command use the registered desktop
+app updater. Verified official terminal copies, including an earlier PATH
+entry, and the private connected-tool command update together. A closed app
+opens for an update. An already-current app repairs older official commands.
+Pending/partial/failed results remain explicit until the restarted app and all
+required executable bytes match. Check/status remain read-only. Custom files,
+symlinks, active jobs and independently managed daemons keep their protections.
+From v0.8.1/v0.8.2, use About once: an older standalone command still contains
+its old updater until replaced. CLI-only and relay installations stay separate.
 
-The previous checkpoint CI `37511917588` failed only the macOS fixture
-`TestLiveRefreshAsksAboutEveryHeldCopy`: its raw SQLite connection lacked the
-production busy timeout. `b1dbb8d` applies the production connection settings
-to that fixture; three focused race repetitions passed (12.630s). Command
-target correction `12d0e683`, durable result helper `91f1870`, and public-entry
-regressions `cc4ea2b` are part of this candidate. Focused updater race tests
-passed (1.342s); `go vet ./cmd/agentnet ./internal/ui` passed. The first wider
-command race run found an obsolete assertion expecting the old manual-launch
-error; that assertion now checks the unavailable-app error identity. The wider
-command-package race rerun passed (136.634s). A closed-app regression passed
-(3.545s) and failed against the old startup-context behavior (2.544s), proving
-accepted downloads keep their full update deadline. New native CI is pending.
-No release/tag or device upgrade is
-authorized by these test results alone. Isolated real installed-layout upgrade
-proof and native installer limitations must remain explicit before release.
+### Direct-device OKs
 
-Candidate `de632a60` was pushed for CI `37585437408`. A subsequent real-backend
-journey found a missed transition: the daemon prepends its private bundled
-command to PATH, but later registration compared that copy only with the
-standalone release checksum. `139cb15` lets the internal app installer prove
-an exact current-source copy while external CLI registration still requires
-recorded/published ownership. Startup refreshes the known private command
-before checking inherited PATH copies. Focused races including the startup
-regression passed (5.353s); command-package vet passed.
+v0.8.2 corrected conversation `needs_you` items but missed the separate device
+`review` list. Native overview now projects trusted local running/stopping
+state into the existing `agent_running` reason. All bundled skins omit those
+items from approval counts while keeping a Working entry, exact navigation and
+Stop. No new permissions, DTO fields or message-text state inference.
 
-After that correction, a compiled candidate backend with a temporary enrolled
-device and loopback TLS relay adopted genuine, published-checksum-verified
-v0.8.2 commands. Both About's same-version request and the managed CLI's update
-request restored intentionally old terminal copies: the backend, canonical,
-earlier PATH and private commands all reported v0.8.3 and matched exact bytes.
-Temporary identities were removed. This proves real executable adoption and
-repair, not a Tauri window restart or Windows/macOS installer execution. No
-existing installation was modified. The final correction needs its own CI;
-the earlier candidate's jobs alone do not qualify it.
+### Qualification
 
-## Current published release — October 6 v0.8.2
+[Source CI 37592322850](https://github.com/misunders2d/agentnet/actions/runs/37592322850)
+and [release CI 37592386488](https://github.com/misunders2d/agentnet/actions/runs/37592386488)
+passed: native Linux/Windows/macOS, race shards, browser storage, container and
+desktop builds. All 12 release asset digests and 11 manifest checksums matched.
+The downloaded Linux CLI reports v0.8.3 and the exact clean release revision.
+
+Linux package qualification replaces a disposable published v0.8.2 AppImage
+with the real candidate package, restarts its Tauri shell/backend, and verifies
+matching private/canonical/PATH commands plus a durable complete result.
+Separate temporary enrolled-backend journeys verify About and CLI entry points
+and same-version repair using actual published-checksum-verified old commands.
+These checks found and fixed official-CLI recognition, private-command ordering
+and inherited PATH adoption defects before publication.
+
+Native OKs races pass (3.231s), including real signed ingress over an isolated
+relay and exact public Stop; worker lifecycle states are staged locally.
+Real-browser Comic/Classic/Zoom fixtures pass at desktop and phone widths;
+the wrapper passes under race (9.460s). Waiting decisions still count, running
+requests do not, and their exact request and Stop stay reachable. Root visually
+checked private captures. These tests do not claim a live model execution.
+
+Interactive Windows/macOS upgrades and a graphical About-button click remain
+unverified. Installers remain unsigned. Qualification changed no existing
+installation; the separately authorized relay deployment remains v0.8.2.
+
+### Follow-up ownership
+
+MEL-551 and MEL-557 track the shipped global updater. MEL-539 records the
+shipped direct-device fix; its older broader card-presentation requirements
+remain open. Next authorized work is Classic/Zoom design review and polish
+with other agents (MEL-567), including the earlier Zoom connections graph.
+Projects/Topics stays the existing MEL-527 design discussion, without a new
+entity or protocol implementation. Missing direct-agent @ picker is recorded
+in existing MEL-544; agent-file download/preview is MEL-568. Preserve those
+scopes and check for an existing issue before creating one.
+
+## Previous release — October 6 v0.8.2
 
 ### Relay deployment — October 7
 
@@ -93,7 +85,7 @@ the container is running with zero restarts and no OOM. Backup/rollback paths
 are in the private project handoff. No desktop or phone was updated by this
 deployment.
 
-### Post-release CLI adoption correction — implemented, unreleased
+### Post-v0.8.2 CLI adoption finding — corrected in v0.8.3
 
 The owner updated the Linux AppImage to v0.8.2 through the app. The bundled
 CLI at `~/.config/agentnet/bin/agentnet` became v0.8.2/schema 50, while the

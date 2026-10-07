@@ -1,7 +1,8 @@
-# AgentNet v0.8.3 — candidate, not released
+# AgentNet v0.8.3 — October 7, 2026
 
-A patch for updating AgentNet as a whole and correcting false OKs. The published
-release remains [v0.8.2](https://github.com/misunders2d/agentnet/releases/tag/v0.8.2).
+[Download v0.8.3](https://github.com/misunders2d/agentnet/releases/tag/v0.8.3).
+This patch fixes whole-app updates and running requests incorrectly asking
+for your OK.
 
 ## Changes
 
@@ -25,30 +26,36 @@ Active agent jobs and separately managed daemons retain their existing update
 protection. The patch updates AgentNet's own components; it does not update
 Claude, Codex, Pi, other devices or the relay.
 
-## Upgrading from v0.8.2
+## Upgrading from v0.8.1 or v0.8.2
 
-Use **Settings → About → Update AgentNet** once this patch is published. The
-new app automatically adopts an unchanged official standalone CLI; a separate
-Replace command step is unnecessary. Existing v0.8.2 standalone executables
-still contain their old CLI-only updater until replaced. After installing this
-patch, both supported update entry points use the global updater.
+Use **Settings → About → Update AgentNet** once. The new app automatically
+adopts an unchanged official standalone CLI; a separate Replace command step
+is unnecessary. Older standalone executables still contain their old CLI-only
+updater until replaced. After installing this patch, both supported update
+entry points use the global updater.
 
 Keep the existing identity and data directory. Custom command replacements
 remain an explicit owner choice. No reset or re-enrollment is required.
 
 ## Qualification
 
-Focused update regressions, command-package race tests and vet pass. An
-isolated compiled backend with a temporary enrolled device and actual official
-old CLI files verifies startup adoption and same-version repair through About
-and the managed command. It checks all resulting versions and executable bytes.
-A separate Linux package test exercises real AppImage replacement and restart;
-it passed on the earlier updater-only candidate. Direct-device OKs native
-regressions and rendered Comic/Classic/Zoom desktop and phone checks pass.
-The combined candidate still needs final native CI and package qualification.
-Interactive Windows/macOS upgrades remain unverified; this document is not a
-release announcement.
+[Source CI](https://github.com/misunders2d/agentnet/actions/runs/37592322850)
+and [release package CI](https://github.com/misunders2d/agentnet/actions/runs/37592386488)
+passed at `5aec119649807befe711135c97805a89f1aa3b90`. All 12 asset digests and
+11 package checksums matched; the downloaded Linux binary reports v0.8.3 and
+that exact clean source revision.
 
-See [the handoff](HANDOFF.md) for exact commits, evidence and remaining gates,
-and [the changelog](../CHANGELOG.md) for published release history. Projects and
-other new product features are outside this patch.
+An isolated Linux package test replaces a real AppImage, restarts its desktop
+shell/backend and verifies private, canonical and PATH command versions and
+bytes plus recorded completion. Separate enrolled-backend journeys cover both
+update entry points and same-version repair using genuine older CLI files.
+Direct-device OKs native regressions and real-browser Comic/Classic/Zoom
+fixtures pass on desktop and phone sizes, including exact navigation and Stop.
+
+Interactive Windows/macOS upgrades and a graphical About-button click remain
+unverified. Installers are unsigned. No existing installation was upgraded
+during qualification.
+
+See [the handoff](HANDOFF.md) for evidence and remaining work, and
+[the changelog](../CHANGELOG.md) for release history. Projects and skin redesigns
+remain separate work.
