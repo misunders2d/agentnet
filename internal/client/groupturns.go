@@ -235,6 +235,10 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 	}
 	defer release()
 	var copies []outCopy
+	var notifyFeatures []string
+	if waiting == "" {
+		notifyFeatures, _ = a.relayFeatures(ctx)
+	}
 	stored := false
 	defer func() {
 		if !stored {
@@ -297,7 +301,12 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 				}
 				copy.in.Attachments = append(copy.in.Attachments, att)
 			}
-			copy.env, e = envelope.Seal(copy.in, a.id.Sign, recipient)
+			_, _, notify := a.convSupport(ctx, device.Address, key, notifyFeatures)
+			if notify && !copy.in.Replica && asksAttention(copy.in) && copy.in.TopicEvent == nil {
+				copy.env, e = envelope.SealAttention(copy.in, a.id.Sign, recipient, protocol.NotifyChannel(conv, device.Fingerprint()))
+			} else {
+				copy.env, e = envelope.Seal(copy.in, a.id.Sign, recipient)
+			}
 			if e != nil {
 				return ConvSent{}, e
 			}

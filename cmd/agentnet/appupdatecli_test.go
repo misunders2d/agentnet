@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/lockfile"
 	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/secfile"
@@ -187,4 +188,72 @@ func TestBundledUpdateStartsClosedAppWithoutLimitingAcceptedStaging(t *testing.T
 		t.Fatalf("closed app not launched exactly once: %q %v", launches, err)
 	}
 	f.assertComplete(t)
+}
+
+func TestBundledUpdateAcknowledgesPendingAndPartialWithoutRetry(t *testing.T) {
+	for _, state := range []string{"pending", "partial"} {
+		t.Run(state, func(t *testing.T) {
+			home := t.TempDir()
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				json.NewEncoder(w).Encode(map[string]string{"state": state, "version": "v0.8.4", "message": "Waiting for active jobs."})
+			}))
+			defer server.Close()
+			if err := secfile.Write(filepath.Join(home, appControlsURLFile), []byte(server.URL+"/?t=private")); err != nil {
+				t.Fatal(err)
+			}
+			if err := requestAppUpdateOnce(context.Background(), home, false, "v0.8.4"); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("requests=%d", calls)
+			}
+		})
+	}
+}
+
+func TestIndependentAppStatusProjectsExactActivationWithoutWrites(t *testing.T) {
+	home := t.TempDir()
+	version := "v0.8.4"
+	record := appUpdateResult{Version: version, State: "pending", Independent: &appIndependentDaemon{Exe: "registered", From: "v0.8.3", PID: 12}, SwitchID: "requested"}
+	if err := saveAppUpdateResult(home, record); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("agentnet_ui")
+		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/app/status" || r.Method != "GET" {
+			t.Error("incorrect app proof request")
+		}
+		json.NewEncoder(w).Encode(map[string]string{"version": version, "cli_state": "installed"})
+	}))
+	defer server.Close()
+	if err := secfile.Write(filepath.Join(home, appControlsURLFile), []byte(server.URL+"/?t=private")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, appUpdateResultFile)
+	stamp := time.Unix(1700000000, 0)
+	os.Chtimes(path, stamp, stamp)
+	before, _ := os.ReadFile(path)
+	for _, tc := range []struct{ id, result, running, want string }{{"other", client.ActivationRunning, version, "pending verification"}, {"requested", client.ActivationRunning, "v0.8.3", "incomplete"}, {"requested", client.ActivationRunning, version, "Updated app and CLI"}} {
+		activation := client.UpdateActivation{ID: tc.id, To: version, Result: tc.result, Running: tc.running, PID: 22}
+		b, _ := json.Marshal(activation)
+		if err := secfile.Write(filepath.Join(home, "update-activation.json"), b); err != nil {
+			t.Fatal(err)
+		}
+		text, err := currentAppUpdateResultText(home)
+		if err != nil || !strings.Contains(text, tc.want) {
+			t.Fatalf("projection %q: %v", text, err)
+		}
+	}
+	after, _ := os.ReadFile(path)
+	info, _ := os.Stat(path)
+	if !bytes.Equal(before, after) || !info.ModTime().Equal(stamp) {
+		t.Fatal("status persisted projection")
+	}
+	server.Close()
+	text, err := currentAppUpdateResultText(home)
+	if err != nil || !strings.Contains(text, "pending verification") {
+		t.Fatalf("unavailable app falsely completed: %q %v", text, err)
+	}
 }

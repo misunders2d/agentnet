@@ -3,7 +3,7 @@
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT);
-const assets = path.resolve(__dirname, '../static');
+const assets = path.resolve(process.env.AGENTNET_TOPIC_ASSETS || path.join(__dirname, '../static'));
 const evidence = process.env.AGENTNET_SCREENSHOTS;
 assert(evidence, 'AGENTNET_SCREENSHOTS must be outside the repository');
 fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
@@ -68,7 +68,7 @@ const server = http.createServer((req, res) => {
       page.on('pageerror', e => errors.push(tag + ': ' + e.stack));
       const shot = async name => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(evidence, tag + '-' + name + '.png') }); };
       const changed = () => page.evaluate(() => fixture.requests.filter(r => r.path.startsWith('/api/topic/')));
-      const all = () => page.getByRole('button', { name: /^All (topics|\d)/ }).first();
+      const all = () => page.getByRole('button', { name: /^All(?: topics| \d|$)/ }).first();
       try {
         await page.goto(origin + '/?skin=' + skin + '&kind=' + kind);
         await page.waitForFunction(() => window.ready); await page.evaluate(() => openChat());

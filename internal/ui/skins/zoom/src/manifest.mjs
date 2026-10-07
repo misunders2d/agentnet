@@ -18,6 +18,7 @@ export default {
     "qr.mjs",
     "icon.png",
     "topics.mjs",
+    "person-topics.mjs",
     "optimistic.mjs",
     "pictures.mjs"
   ]

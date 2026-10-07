@@ -62,7 +62,10 @@ func requestAppUpdateOnce(ctx context.Context, home string, check bool, tag stri
 			return errors.New("invalid release (vX.Y.Z)")
 		}
 	}
-	data, err := secfile.Read(filepath.Join(home, uiURLFile))
+	data, err := secfile.Read(filepath.Join(home, appControlsURLFile))
+	if errors.Is(err, os.ErrNotExist) {
+		data, err = secfile.Read(filepath.Join(home, uiURLFile))
+	} // pre-bridge apps
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return errAppUpdateNotReady
@@ -141,6 +144,7 @@ func requestAppUpdateOnce(ctx context.Context, home string, check bool, tag stri
 		var result struct {
 			State   string `json:"state"`
 			Version string `json:"version"`
+			Message string `json:"message"`
 		}
 		if json.Unmarshal(b, &result) != nil {
 			return errors.New("invalid app updater acknowledgement")
@@ -150,6 +154,14 @@ func requestAppUpdateOnce(ctx context.Context, home string, check bool, tag stri
 				return errors.New("app updater did not verify the requested version")
 			}
 			fmt.Printf("App and terminal command verified at %s.\n", result.Version)
+			return nil
+		}
+		if result.State == "pending" || result.State == "partial" {
+			if _, ok := parseRelease(result.Version); !ok || (tag != "" && result.Version != tag) {
+				return errors.New("app updater did not acknowledge the requested version")
+			}
+			fmt.Printf("Whole-app update %s at %s. %s\n", result.State, result.Version, result.Message)
+			fmt.Println("agentnet update --status shows verification; no automatic retry was performed.")
 			return nil
 		}
 		if result.State != "restarting" {
@@ -162,7 +174,7 @@ func requestAppUpdateOnce(ctx context.Context, home string, check bool, tag stri
 
 // The desktop helper's result is distinct from a standalone daemon switch.
 func appUpdateStatus(home string) error {
-	result, err := appUpdateResultText(home)
+	result, err := currentAppUpdateResultText(home)
 	if errors.Is(err, os.ErrNotExist) {
 		fmt.Println("No whole-app update result recorded. About shows the running app version; agentnet update --check checks the updater.")
 		return nil
@@ -172,4 +184,58 @@ func appUpdateStatus(home string) error {
 	}
 	fmt.Printf("Last whole-app update result: %s\n", result)
 	return nil
+}
+
+func currentAppUpdateResultText(home string) (string, error) {
+	record, err := readAppUpdateResult(home)
+	result := formatAppUpdateResult(record)
+	if err == nil && record.Independent != nil {
+		// An available app supplies current app and exact command evidence.
+		// Without it, retain the recorded result rather than infer completion.
+		if proof, proofErr := readCurrentAppControlStatus(home); proofErr == nil {
+			if projected, projectionErr := projectedAppUpdateResult(home, proof.Version, proof.appCommandStatus); projectionErr == nil {
+				result = formatAppUpdateResult(projected)
+			}
+		}
+	}
+	return result, err
+}
+
+// One authenticated GET of the existing control handler; never starts the app
+// or updates files. Unavailable evidence cannot upgrade a persisted result.
+func readCurrentAppControlStatus(home string) (proof struct {
+	appCommandStatus
+	Version string `json:"version"`
+}, err error) {
+	b, err := secfile.Read(filepath.Join(home, appControlsURLFile))
+	if err != nil {
+		return proof, err
+	}
+	u, err := url.Parse(strings.TrimSpace(string(b)))
+	if err != nil || u.Scheme != "http" || u.User != nil || !net.ParseIP(u.Hostname()).IsLoopback() || u.Port() == "" || u.Query().Get("t") == "" {
+		return proof, errors.New("invalid app control endpoint")
+	}
+	token := u.Query().Get("t")
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.Path = "/api/app/status"
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return proof, err
+	}
+	req.AddCookie(&http.Cookie{Name: "agentnet_ui", Value: token})
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
+	c := http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := c.Do(req)
+	if err != nil {
+		return proof, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return proof, errors.New("app controls unavailable")
+	}
+	err = json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&proof)
+	return proof, err
 }

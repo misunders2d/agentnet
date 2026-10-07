@@ -41,11 +41,15 @@ func newRunActivity() *runActivity {
 type activityWriter struct {
 	io.Writer
 	activity *runActivity
+	first    func()
 }
 
 func (w activityWriter) Write(p []byte) (int, error) {
 	n, err := w.Writer.Write(p)
 	if n > 0 {
+		if w.first != nil {
+			w.first()
+		}
 		w.activity.touch(time.Now())
 	}
 	return n, err

@@ -36,13 +36,12 @@ export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadin
   const browser = isBrowser(store.host.platform, o);
   const r = useLoad(() => store.api.responder(), [o?.me.responder, o?.me.responder_dir, browser]);
   const head = <PageHead title="Your agent" titleRef={titleRef} lead="The program on this computer that answers questions and does tasks for you, with your own setup." />;
-  // Connecting coding sessions is its own card below, whatever the agent's state.
-  const setup = <div className="mt-6 space-y-4"><AssistantSetup /><AppControls command /></div>;
-  // The server says "not available here" when this installation runs nothing.
-  if (browser || (r.error && !r.data && /not available here/i.test(r.error))) return <>{head}<Card className="p-4"><p>This {browser ? "browser" : "installation"} runs nothing, so questions and tasks wait for you. Set up your agent on a computer that runs AgentNet.</p></Card>{setup}</>;
-  if (r.error && !r.data) return <>{head}<Failed text={r.error} retry={r.reload} />{setup}</>;
-  if (!r.data) return <>{head}<Skeleton lines={4} />{setup}</>;
-  return <>{head}<AssistantForm view={r.data} saved={r.reload} />{setup}</>;
+  // Named-agent setup is primary; the legacy default routing stays subordinate.
+  const setup = <div className="space-y-4"><AssistantSetup /></div>;
+  if (browser) return <>{head}{setup}<AppControls command /></>;
+  const defaults = r.error && !r.data ? <Failed text={r.error} retry={r.reload} /> : r.data ? <AssistantForm view={r.data} saved={r.reload} /> : <Skeleton lines={4} />;
+  return <>{head}{setup}<div className="mt-6 space-y-4"><Details label="Default answers and permissions">{defaults}</Details><AppControls command /></div></>;
+
 }
 
 function AssistantForm({ view, saved }: { view: T.ResponderView; saved: () => void }) {

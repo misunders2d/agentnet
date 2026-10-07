@@ -833,6 +833,28 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") {
 		t.Fatal("unselected member context leaked")
 	}
+	// A different member can address the already-present agent without a
+	// second invitation. The host's own sender approval still applies.
+	if err = w.bob.Approve(carol.Address); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "other member sees existing agent", func() bool {
+		view, e := carol.Participation(p.PID)
+		return e == nil && view.Claimable()
+	})
+	other, err := carol.AskAgent(tctx(t), p.PID, envelope.KindQuestion, "other member question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []*Agent{w.alice, w.bob, carol} {
+		answer := replyAt(t, a, packet.State.Conv, other.ID)
+		if answer.AgentID != member.ID || answer.PID != p.PID {
+			t.Fatalf("other member request changed agent participation %+v", answer)
+		}
+	}
+	if strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") {
+		t.Fatal("other member request leaked unselected context")
+	}
 	v, err := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, visitor.ID, []string{sent.LID}, nil, "visitor scope")
 	if err != nil {
 		t.Fatal(err)
@@ -869,7 +891,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	if !strings.Contains(stub.last(), "GROUP_SELECTED_BYTES") || !strings.Contains(stub.last(), "GROUP_FUTURE_CONTEXT") || strings.Contains(stub.last(), "GROUP_UNSELECTED_SECRET") || strings.Contains(stub.last(), "member question") {
 		t.Fatalf("visitor grant isolation %s", stub.last())
 	}
-	if stub.runs() != 2 {
+	if stub.runs() != 3 {
 		t.Fatalf("wrong independent execution count %d", stub.runs())
 	}
 	rootRaw, _ := json.Marshal(packet.Root)
@@ -927,7 +949,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, host, task.ID, stateAwaiting)
-	if stub.runs() != 2 {
+	if stub.runs() != 3 {
 		t.Fatal("host participation acceptance executed an unapproved task")
 	}
 	host.noteStatus(task.ID)
@@ -947,7 +969,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 	for _, a := range []*Agent{w.alice, w.bob, carol, host} {
 		replyAt(t, a, packet.State.Conv, task.ID)
 	}
-	if stub.runs() != 3 {
+	if stub.runs() != 4 {
 		t.Fatalf("explicit task count %d", stub.runs())
 	}
 	if err = host.Accept(task.ID); err == nil {
@@ -958,7 +980,7 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	replyAt(t, w.alice, packet.State.Conv, follow.ID)
-	if stub.runs() != 4 {
+	if stub.runs() != 5 {
 		t.Fatal("follow-up reran original")
 	}
 	memberTask, err := w.alice.AskAgent(tctx(t), p.PID, envelope.KindTask, "immutable group task baseline")
@@ -984,14 +1006,14 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 		}
 		return false
 	})
-	if stub.runs() != 4 {
+	if stub.runs() != 5 {
 		t.Fatal("request edit/deletion executed a job")
 	}
 	if err = w.bob.Accept(memberTask.ID); err != nil {
 		t.Fatal(err)
 	}
 	replyAt(t, w.alice, packet.State.Conv, memberTask.ID)
-	if stub.runs() != 5 || !strings.HasSuffix(stub.last(), "immutable group task baseline\n") {
+	if stub.runs() != 6 || !strings.HasSuffix(stub.last(), "immutable group task baseline\n") {
 		t.Fatal("admitted request baseline changed or rerun")
 	}
 	phone, await, _ := linkPhone(t, host, "visitor-phone")

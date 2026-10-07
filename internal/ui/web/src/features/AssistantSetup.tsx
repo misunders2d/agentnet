@@ -17,23 +17,20 @@ import { useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Tag } from "../ui/Tag";
 import {
-  agentsFor, applySetup, browserDevice, canHaveAgent, NAME_MAX, pickFor, pickOf, readSetup, savedLine, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady, watchSetupFocus,
+  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, NAME_MAX, pickFor, pickOf, readSetup, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, tools, notReady, nativeSelectable, watchSetupFocus,
   type AgentPick, type SavedAgent, type SetupCalls, type Stage,
 } from "./AssistantSetup.model";
 import { FolderField } from "./AssistantSetup.folders";
 import { Card, Details, Fact, Hint, input } from "./Settings.parts";
 
-const tone = (state: string) =>
-  state === "connected" ? "ok" as const : state === "detected" || state === "needs_activation" ? "agent" as const : state === "needs_setup" ? "act" as const : state === "error" ? "danger" as const : "muted" as const;
-
-const CARD_TITLE = "Use AgentNet inside your tools";
+const CARD_TITLE = "Set up your agents";
 const them = (n: number) => (n === 1 ? "it" : "them");
 
 const TITLE: Record<Stage, string> = {
   home: CARD_TITLE,
-  choose: "Choose what to connect",
+  choose: "Choose your agents",
   review: "Check the changes",
-  saved: "Connected",
+  saved: "Agent setup saved",
 };
 
 /** AssistantSetup: the whole flow in one card. start: open straight at the
@@ -68,7 +65,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
       if (!ready() || statusRead.current) return;
       statusRead.current = true;
       const generation = statusGeneration.current;
-      void calls.setup().then((v) => { if (ready() && generation === statusGeneration.current) setView(v); }).catch((e) => {
+      void readSetup(calls).then(({ view: v, catalog: c }) => { if (ready() && generation === statusGeneration.current) { setView(v); setCatalog(c); } }).catch((e) => {
         if (ready() && generation === statusGeneration.current) setError("Setup status could not be refreshed: " + errorText(e) + " Check again.");
       }).finally(() => { statusRead.current = false; });
     });
@@ -87,7 +84,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
       if (!alive.current) return;
       setView(v); setBusy("");
       if (!v.local) return;   // this installation sets nothing up: its note is shown instead
-      setCatalog(c); setPicks(new Map()); setChosen(startChosen(v)); setReview(null); setDone(null);
+      setCatalog(c); setPicks(new Map()); setChosen(startChosen(v, c)); setReview(null); setDone(null);
       setStage("choose");
     } catch (e) { fail(e); }
   };
@@ -103,18 +100,20 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
     statusGeneration.current++;
     setBusy("review"); setError("");
     try {
-      const r = await calls.setup({ action: "review", harnesses: picked.map((h) => h.id) });
+      const native = picked.filter(nativeSelectable);
+      const r = native.length ? await calls.setup({ action: "review", harnesses: native.map((h) => h.id) }) : view;
+      if (!r) return;
       if (!alive.current) return;
       setReview(r); setBusy(""); setStage("review");
     } catch (e) { fail(e); }
   };
 
   const apply = async () => {
-    if (busy || !review?.review_id) return;
+    if (busy || !review) return;
     statusGeneration.current++;
     setBusy("apply"); setError("");
     try {
-      const r = await applySetup(calls, picked, review.review_id, catalog, picks);
+      const r = await applySetup(calls, picked, review.review_id || "", catalog, picks);
       if (!alive.current) return;
       setView(r.view); setCatalog(r.catalog); setPicks(r.picks); setDone({ agents: r.agents, shared: r.shared });
       setReview(null); setBusy(""); setStage("saved");
@@ -153,7 +152,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
         <section aria-label={CARD_TITLE} className="space-y-2">
           {head(CARD_TITLE)}
           <p className="text-[15px] text-text-2">
-            {browser ? "A browser can’t look for programs or change them. Connect your Claude Code, Codex or Pi sessions in the AgentNet app on the computer they run on." : view?.note || "This installation can’t look for programs or change them."}
+            {browser ? "A browser can’t look for programs or change them. Set up your Claude Code, Codex, Pi or OMP agents in the AgentNet app on the computer they run on." : view?.note || "This installation can’t look for programs or change them."}
           </p>
         </section>
       </Card>
@@ -166,31 +165,31 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
         {head(TITLE[stage])}
 
         {stage === "home" && <>
-          <p className="text-[15px] text-text-2">When a Claude Code, Codex or Pi session on this computer asks someone through AgentNet, the answer comes back to that same session. Run this again after you install or remove one.</p>
-          {o?.me.responder && <p className="text-[15px] text-text-2">Choose {({ claude: "Claude Code", codex: "Codex", pi: "Pi" } as Record<string, string>)[o.me.responder] || o.me.responder} below to connect the program that answers for you.</p>}
+          <p className="text-[15px] text-text-2">Set up a Claude Code, Codex, Pi or OMP agent for chats, questions and approved tasks. It uses your own settings, skills, plugins and sign-in.</p>
+          {o?.me.responder && <p className="text-[15px] text-text-2">Choose {({ claude: "Claude Code", codex: "Codex", pi: "Pi" } as Record<string, string>)[o.me.responder] || o.me.responder} below to set up the program that answers for you.</p>}
           <Button variant="act" disabled={!!busy} onClick={read}>{busy === "read" ? "Looking…" : "Find them"}</Button>
         </>}
 
         {stage === "choose" && <>
-          <p className="text-[15px] text-text-2">Their own settings, skills, plugins and sign-in stay as they are.</p>
-          <ChooseAll list={list} chosen={chosen} disabled={!!busy} onChange={setChosen} />
+          <p className="text-[15px] text-text-2">Their own settings, skills, plugins and sign-in stay as they are. Ready checks the installed program and folder; it does not test sign-in.</p>
+          <ChooseAll catalog={catalog} list={list} chosen={chosen} disabled={!!busy} onChange={setChosen} />
           <ul className="space-y-2.5">
             {list.map((h) => (
               <li key={h.id} className="rounded-2xl stroke bg-surface">
-                <label className={"flex min-h-14 items-start gap-3 p-3 " + (selectable(h) ? "cursor-pointer" : "cursor-not-allowed opacity-70")}>
-                  <input type="checkbox" checked={chosen.has(h.id)} disabled={!!busy || !selectable(h)} onChange={(e) => toggle(h.id, e.target.checked)}
-                    aria-label={"Connect " + h.label} className="mt-1 size-5 shrink-0 accent-[var(--an-agent-ink)]" />
+                <label className={"flex min-h-14 items-start gap-3 p-3 " + (selectable(h, catalog) ? "cursor-pointer" : "cursor-not-allowed opacity-70")}>
+                  <input type="checkbox" checked={chosen.has(h.id)} disabled={!!busy || !selectable(h, catalog)} onChange={(e) => toggle(h.id, e.target.checked)}
+                    aria-label={"Set up " + h.label} className="mt-1 size-5 shrink-0 accent-[var(--an-agent-ink)]" />
                   <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={tone(h.state)}>{STATE_WORDS[h.state] || "Unknown"}</Tag></span>
-                    <span className="block text-[14px] text-text-2">{STATE_SENTENCE[h.state] || h.note}</span>
+                    <span className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={agentStatus(h, catalog).tone}>{agentStatus(h, catalog).word}</Tag></span>
+                    <span className="block text-[14px] text-text-2">{agentStatus(h, catalog).sentence}</span>
                   </span>
                 </label>
-                <div className="px-3 pb-1"><Details><p>{h.note}</p></Details></div>
+                <div className="px-3 pb-1"><NativeDetails h={h}/></div>
                 {chosen.has(h.id) && <AgentChoice h={h} catalog={catalog} pick={pickFor(picks, h, catalog)} disabled={!!busy} onPick={(p) => setPick(h.id, p)} />}
               </li>
             ))}
           </ul>
-          <Hint className="px-1">{picked.length} chosen. Connecting gives nobody your history or permission to give tasks.</Hint>
+          <Hint className="px-1">{picked.length} chosen. Setup gives nobody your history or permission to give tasks.</Hint>
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant="ghost" disabled={!!busy} onClick={leave}>{onDone ? "Back" : "Cancel"}</Button>
             <Button variant="outline" disabled={!!busy} onClick={read}>{busy === "read" ? "Looking…" : "Check again"}</Button>
@@ -203,10 +202,10 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
             {tools(review).filter((h) => chosen.has(h.id)).map((h) => (
               <li key={h.id} className="space-y-1 rounded-2xl stroke bg-surface p-3">
                 <p className="font-semibold">{h.label}</p>
-                {h.change && <p className="text-[15px] text-text-2">{h.change}</p>}
+
                 <AgentLine h={h} catalog={catalog} pick={pickFor(picks, h, catalog)} />
-                {h.next && <p className="text-[14px]"><span className="font-semibold">Then: </span>{h.next}</p>}
-                {h.target && <Details label="Settings file"><Fact name="File">{h.target}</Fact></Details>}
+                <NativeDetails h={h}/>
+
               </li>
             ))}
           </ul>
@@ -222,22 +221,14 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
           <ul className="space-y-2.5">
             {list.filter((h) => chosen.has(h.id)).map((h) => (
               <li key={h.id} className="space-y-1 rounded-2xl stroke bg-surface p-3">
-                <p className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={tone(h.state)}>{STATE_WORDS[h.state] || "Unknown"}</Tag></p>
-                <p className="text-[15px] text-text-2">{STATE_SENTENCE[h.state] || h.note}</p>
-                {h.next && <p className="text-[14px]"><span className="font-semibold">Then: </span>{h.next}</p>}
-                <Details><p>{h.note}</p></Details>
+                <p className="flex flex-wrap items-center gap-2"><span className="font-semibold">{h.label}</span><Tag tone={agentStatus(h, catalog).tone}>{agentStatus(h, catalog).word}</Tag></p>
+                <p className="text-[15px] text-text-2">{agentStatus(h, catalog).sentence}</p>
+
+                <NativeDetails h={h}/>
               </li>
             ))}
           </ul>
           {done && done.agents.length > 0 && <>
-            <ul className="space-y-1.5">
-              {done.agents.map((a, i) => (
-                <li key={i + ":" + a.label} className="text-[15px]">
-                  {savedLine(a)}
-                  {!a.ready && a.problem && <Details><p>{a.problem}</p></Details>}
-                </li>
-              ))}
-            </ul>
             <p className="text-[15px] text-text-2">Add {them(done.agents.length)} to a conversation to use {them(done.agents.length)} there; your approvals still apply.</p>
           </>}
           {done?.shared === false && (
@@ -259,8 +250,8 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
 }
 
 /** ChooseAll ticks every tool that can be connected (when there are two or more). */
-function ChooseAll({ list, chosen, disabled, onChange }: { list: T.AssistantSetupHarness[]; chosen: Set<string>; disabled: boolean; onChange: (s: Set<string>) => void }) {
-  const ok = list.filter(selectable);
+function ChooseAll({ catalog, list, chosen, disabled, onChange }: { catalog: T.AgentCatalogView | null; list: T.AssistantSetupHarness[]; chosen: Set<string>; disabled: boolean; onChange: (s: Set<string>) => void }) {
+  const ok = list.filter(h=>selectable(h,catalog));
   const box = useRef<HTMLInputElement>(null);
   const all = ok.length > 0 && ok.every((h) => chosen.has(h.id));
   const some = !all && ok.some((h) => chosen.has(h.id));
@@ -281,7 +272,7 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
   h: T.AssistantSetupHarness; catalog: T.AgentCatalogView | null; pick: AgentPick; disabled: boolean; onPick: (p: AgentPick) => void;
 }) {
   if (!canHaveAgent(catalog, h.id)) {
-    return <p className="border-t border-hairline px-3 py-2.5 text-[14px] text-text-2">Its sessions get answers here. It doesn’t run a named agent on this computer, so none is made.</p>;
+    return <p className="border-t border-hairline px-3 py-2.5 text-[14px] text-text-2">An AgentNet agent cannot run with this tool here yet. Existing agents stay as they are.</p>;
   }
   const mine = agentsFor(catalog, h.id);
   const name = "setup-agent-" + h.id;
@@ -316,11 +307,15 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
 
 /** AgentLine: what the review will do with the tool's agent, in words. */
 function AgentLine({ h, catalog, pick }: { h: T.AssistantSetupHarness; catalog: T.AgentCatalogView | null; pick: AgentPick }) {
-  if (!canHaveAgent(catalog, h.id)) return <p className="text-[14px] text-text-2">Sessions only: no named agent is made for it here.</p>;
+  if (!canHaveAgent(catalog, h.id)) return <p className="text-[14px] text-text-2">An AgentNet agent cannot run with this tool here yet.</p>;
   return (
     <>
       <p className="text-[14px]"><span className="font-semibold">{pick.id ? "Keeps its agent: " : "New agent: "}</span>{pick.label.trim()}</p>
       <p className="text-[14px]"><span className="font-semibold">Works in: </span><span className="font-mono text-[13px] [overflow-wrap:anywhere]">{pick.dir}</span></p>
     </>
   );
+}
+
+function NativeDetails({ h }: { h: T.AssistantSetupHarness }) {
+  return <Details label="Native sessions"><p>{STATE_WORDS[h.state] || "Unknown"}: {STATE_SENTENCE[h.state] || h.note}</p><p>{h.note}</p>{h.change && <p>{h.change}</p>}{h.next && <p>{h.next}</p>}{h.target && <Fact name="Settings file">{h.target}</Fact>}</Details>;
 }

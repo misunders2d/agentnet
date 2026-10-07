@@ -269,6 +269,8 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
     ["Message", m.id],
     ["Kind", m.kind],
     ["Stored state", m.state || "—"],
+    ...(isThreadMsg(m) ? [] : [["Delivery", m.state_text || m.delivery || m.state || "—"] as [string, string]]),
+    ...(("delivery" in m ? m.delivery : m.state) === "waiting" && m.detail ? [["Waiting for", m.detail.replace(/^peer_update:\s*/, "")] as [string, string]] : []),
     ["From device", m.from],
     ...(!isThreadMsg(m) && m.via ? [["Sent from", m.via] as [string, string]] : []),
     ...(!isThreadMsg(m) && m.synced_from ? [["Copied here from", m.synced_from] as [string, string]] : []),

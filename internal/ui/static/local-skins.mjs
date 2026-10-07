@@ -8,6 +8,9 @@ const catalogName = 'agentnet-skin-catalog-v1';
 const prefix = 'agentnet-skin-package-v1-';
 const types = {js:'text/javascript; charset=utf-8',mjs:'text/javascript; charset=utf-8',css:'text/css; charset=utf-8',json:'application/json',png:'image/png',webp:'image/webp',svg:'image/svg+xml',woff2:'font/woff2'};
 const enc = new TextEncoder(), decode = new TextDecoder('utf-8',{fatal:true});
+// Capture the app's bounded explicit chooser before any skin runs. Browser
+// imports keep their existing native file-input path.
+const nativeFolder = typeof globalThis.__agentnetNativeSkinFolder === 'function' ? globalThis.__agentnetNativeSkinFolder : null;
 const hex = bytes => [...new Uint8Array(bytes)].map(x=>x.toString(16).padStart(2,'0')).join('');
 const hash = bytes => crypto.subtle.digest('SHA-256',bytes);
 const fail = text => { throw new Error(text); };
@@ -116,7 +119,9 @@ export function manager(root,{changed}) {
   const say=(s)=>{if(live)status.textContent=s;};
   const refresh=async()=>{const items=await catalog();if(!live)return;list.replaceChildren();for(const item of items){const row=text('p','','item');row.append(text('strong',item.name),text('span','Fingerprint '+item.digest.slice(0,12)));const del=text('button','Remove');del.type='button';del.setAttribute('aria-label','Remove '+item.name);del.onclick=async()=>{if(!confirm('Remove '+item.name+' from this browser? A tab using it opens Comic the next time it loads.'))return;try{await remove(item.id);await changed();await refresh();say('Removed from this browser.');}catch(_){say('Could not remove this skin.');}};row.append(del);list.append(row);}};
   const picker=(folder)=>{const label=text('label',folder?'Import a skin folder':'Import skin files'),input=document.createElement('input');input.type='file';input.multiple=true;if(folder)input.webkitdirectory=true;input.setAttribute('aria-label',label.textContent);label.append(input);input.onchange=async()=>{say('Checking the package…');try{const item=await install(input.files);await changed();await refresh();say('Stored '+item.name+'. Choose it under Skin: you review trust before it runs.');}catch(e){say(e.message);}finally{input.value='';}};return label;};
-  pickers.append(picker(false));if('webkitdirectory' in document.createElement('input'))pickers.append(picker(true));
+  pickers.append(picker(false));
+  if(nativeFolder){const folder=text('button','Import a skin folder');folder.type='button';folder.onclick=async()=>{folder.disabled=true;try{const files=await nativeFolder();if(!files)return;say('Checking the package…');const item=await install(files);await changed();await refresh();say('Stored '+item.name+'. Choose it under Skin: you review trust before it runs.');}catch(e){say(e.message);}finally{if(live)folder.disabled=false;}};pickers.append(folder);}
+  else if('webkitdirectory' in document.createElement('input'))pickers.append(picker(true));
   root.append(pickers,status,list);refresh().catch(()=>say('Could not read the skins stored here.'));
   return stop;
 }

@@ -6,41 +6,166 @@ section at release; keep detailed verification and remaining work here.
 
 ## Next patch candidates — October 7, after v0.8.3
 
-The owner prioritized these usability bugs over Classic/Zoom polish. Three
-GPT-6.1-sol helpers implemented isolated candidates; root owns review,
-integration and release qualification. No installed device was changed.
+The owner expanded the proposed v0.8.4 patch to the core chat, agent setup,
+notification and desktop usability fixes below. GPT-6.1-sol helpers own source
+and focused qualification; root owns review, integration and release gates.
+Published v0.8.3 remains immutable. No installed AgentNet client identity, history or
+configuration was changed. Temporary native responder validation used existing
+OMP authentication and settings, without opening or resuming a user session.
 
-- **Reminders (MEL-528):** separate Date and Time fields in Comic, preserving
+- **One person chat and flat Topics (MEL-494):** Comic, Classic and Zoom show
+  Main plus All topics. Other signed conversation roots and all native topics
+  are siblings, including empty/deleted-only flows. Messages, drafts, send and
+  action routes keep their exact source root/topic and audience; guest and agent
+  access is never merged. Main is a validated local preference for one existing
+  signed member root, retained when older history arrives; different devices
+  may initially choose differently when available history differs. No new Hub
+  authority or rewritten history. Production-source Chromium fixtures cover all
+  three skins at desktop/phone widths, reload, late metadata, exact routing,
+  drafts and native bulk actions. Final embedded-bundle integration checks remain
+  a release gate; browser fixtures do not prove a physical phone journey.
+- **Chat notifications (MEL-564/MEL-560):** ordinary admitted chats default
+  unmuted under the device's global opt-in. A person-chat mute derives from
+  existing muted signed member-DM roots, covers Main and Topics, and also covers
+  later synced roots for that verified person. Unmute clears those roots while
+  preserving other chats. Cleared histories retain their mute anchors; a full
+  reset naturally removes preferences. Groups and guest-only roots retain their
+  own scopes. Existing configured quiet DMs migrate conservatively because old
+  data cannot distinguish explicit deny provenance; missing old DM sender grants
+  never blanket-mute groups. Unknown requests/invites gain no ordinary-chat
+  notification eligibility. Native and browser regressions cover group members
+  without a DM, signed attention hints, migration, future-root inheritance and
+  scoped unmute. Final rendered settings checks and physical Windows/macOS/phone
+  notification display remain unverified here.
+- **Unified agent setup (MEL-506/MEL-550/MEL-504):** one setup flow uses the
+  existing harness catalog and named-agent configuration for installed supported
+  Claude, Codex, Pi and OMP. Native hook registration is Details, not the gate
+  for creating a runnable named agent; Windows hook unavailability does not
+  remove a catalog-found agent. Executable/folder readiness does not certify
+  provider sign-in. Codex/Claude readiness checks exact AgentNet hook identities
+  and coverage rather than whole-file JSON formatting; malformed, missing,
+  duplicate, matcher-scoped or stale executable/home handlers remain rejected.
+  A reproduced formatting-only false NEEDS SETUP fails before and passes after
+  the fix. Existing byte snapshots still protect review/apply changes. Unified
+  setup source/browser fixtures and TypeScript passed; final bundles are separate.
+- **OMP responder:** the existing worker/catalog now supports fresh OMP
+  question and accepted-task jobs with normal own settings, skills, extensions
+  and MCP tools. Tasks add no permission bypass. Questions use native
+  `always-ask` plus a temporary, deep-merged overlay denying built-in editing
+  and shell tools; other explicit grants and denies remain authoritative. A
+  setup-only, bounded native capability check rejects unsupported launchers
+  before storing an explicit default/named-agent choice; discovery, refresh,
+  claim and each request add no probe. The selected launcher's own behavior
+  still applies; AgentNet has no install fallback. Installed 18.4.8/18.7.0 help
+  and an actual 18.7.0 isolated effective-config check qualify the contract.
+  Real 18.7.0 fresh jobs returned a question response and the exact benign
+  accepted-task ACK with own existing auth; the synthetic working folder stayed
+  unchanged. Stronger version
+  lookup qualification exposed a missing TypeBox API; the lookup schema was
+  repaired to native Zod and its factory registration verified through
+  metadata-only RPC, with no model prompt. The executable API-shaped regression
+  runs the exact fixed lookup and rejects arbitrary operations. A post-fix live
+  model lookup was not rerun; see [M4](revival/M4.md) for exact flags and limits.
+  Existing selected-native-session adapters are unchanged. Antigravity remains
+  an optional future compatibility candidate, not advertised responder support.
+- **Reminders (MEL-528):** separate Date and Time fields in Comic preserve
   incomplete native edits. Real Chromium tests type hours/minutes, dismiss and
   reopen, create and move reminders, and check exact submitted timestamps in
   New York/Kyiv across DST at desktop and phone widths. A phone-sized native
   fixture does not add reminder support to browser-only devices.
-- **Browser sends/reconnect (MEL-546):** HTTP headers and body now share a
+- **Browser sends/reconnect (MEL-546):** HTTP headers and body share a
   30-second deadline; caller and engine-close cancellation remain effective.
   A reproduced stalled onConnect no longer blocks reconnect indefinitely, and
-  the original durable queued request is retried without creating a new ID.
+  the original durable queued request resumes without creating a new ID.
   The physical phone's observed Sending stall is not yet attributed or proven
   recovered. Read-only relay checks found no crash/restart; phone was offline.
-- **Existing history copying (MEL-558):** outgoing group controls retain their
-  original signed timestamp rather than their later local persistence time.
-  Regression reproduces the exact historical-control admission failure before
-  the fix and passes afterward, including restart/resume and tamper rejection.
-  Signature checks and history cursors are unchanged. Live copying after an
+- **Existing history copying (MEL-558):** outgoing group edits, deletions and
+  reactions retain their signed timestamp instead of later local persistence
+  time. Regression reproduces the exact admission failure before the fix and
+  passes afterward, including restart/resume and tamper rejection. Signature
+  checks and history cursors stay authoritative. Deployed catch-up after an
   upgrade remains unverified.
-- **Updater (MEL-551):** stable replacement cwd and immediate child-failure
-  reporting pass focused regressions. Comic's attached-daemon 404 now explains
-  unavailable update controls. This fallback does not implement automatic
-  updating of an independently managed daemon. The actual old-AppImage About
-  handoff and the owner's original automatic-restart failure remain unverified.
+- **Mixed-reader group sends (MEL-530):** a following participation made
+  ordinary group turns preflight every reader's capabilities, so one older
+  member blocked everyone, even when a person mention named somebody else.
+  Compatibility now holds each original encrypted copy in the existing outbox;
+  current readers receive while the incompatible copy waits for its exact
+  device's signed capability recovery. No mention, audience, consent or signed
+  admission semantics are removed. Native regression reproduced the refusal
+  before the repair and passes with missing group-guest/group-reader support,
+  compatible delivery once, daemon restart, unchanged envelope/context and
+  updated delivery once. Browser source lifecycle tests cover the same cases
+  and retain ended-scope, changed-key and upload handoff fences. Existing
+  detail fields preserve the exact device and missing feature. Production
+  rendered Details passed all six Comic/Classic/Zoom desktop/phone cases, with
+  escaped, readable device/feature text; the owner's physical mixed-version
+  journey remains unverified.
+- **Delivery and agent work (MEL-531/MEL-563/MEL-542/MEL-566):** existing
+  receipt push projection and signed sent-time paths passed original-path tests,
+  including all-audience convergence without refresh or polling. Existing group
+  participation lets another authorized member ask the present agent without
+  reinviting it; the regression preserves selected context and task acceptance.
+  Worker diagnostics now record stored/approval age, process setup/start and
+  first output, with no content/tool arguments logged. Missing-executable tests
+  retain terminal failure and prove no automatic rerun. No new model timeout,
+  telemetry service or background job system. Native Windows CI passed the
+  previous integration head; final combined-head CI remains a release gate.
+  Startup diagnostics do not establish faster answers: the owner's new Pi
+  question taking over 60 seconds remains a measured latency investigation,
+  assigned to the UI helper; no performance repair is claimed here.
+- **Zoom send and incomplete participation display:** Zoom's send dialog
+  referenced undefined `d.id`; it now checks its captured `t.id` against the
+  current route. Send and stale-route regressions passed at both widths,
+  preserving typed drafts when the selected route changes. All-skin source
+  contracts passed. For reopened MEL-566, `PartPending` records without a valid
+  counted invitation no longer inflate Invited or invent Someone's agent/
+  Waiting for OK cards. Comic shows neutral collapsed incomplete context,
+  without fabricated identity, permissions or actions; real invited Cancel
+  stays unchanged. Backend/model race passed (1.085 s); actual embedded
+  desktop/phone rendering and the real-invitation Cancel path passed. UI vet
+  and root's full Go vet passed.
+- **Attachments and skin import (MEL-568/MEL-570):** plain-text previews are
+  escaped and bounded to 256 KiB; HTML/SVG are excluded from preview. Actual
+  isolated Linux Tauri downloads saved exact text/HTML/SVG names and bytes;
+  foreign/unmarked blob navigation was refused and the app page did not execute
+  or navigate to downloaded content. The official folder picker returned an
+  actual selected directory, which the existing package validation/import path
+  accepted. Desktop/phone source-browser preview tests passed. Physical native
+  clipboard behavior remains unverified; existing clipboard guards/unit tests
+  and actionable OKs regressions are retained (MEL-539/MEL-519/MEL-555).
+- **Updater (MEL-551), still qualifying:** stable replacement cwd and immediate
+  child-failure regressions pass. Actual isolated Linux Tauri plus the real Go
+  backend exercised the independently managed daemon control bridge, old-style
+  fetch, and refusal of unrelated actions/CLI operations. A real whole-package
+  handoff from the published v0.8.3 helper/AppImage/CLI passed in isolation,
+  including inherited AppImage paths and a removed old working directory.
+  Independently managed v0.8.3 daemon cutover also passed: a second accepted
+  job completed before replacement; the same daemon PID, page and token survived,
+  both jobs answered exactly once, and canonical/private/PATH CLI bytes matched
+  the candidate package. Preparation uses the existing 30-second bound: a busy
+  old daemon can refuse preparation without changing installed bytes or killing
+  its job; retry after that work completes. The published v0.8.3 UI button/network
+  download journey and the owner's original v0.8.2 cause remain unproven. Final
+  approved UI packages and native-platform CI remain release gates.
 
-Targeted regressions and `go vet ./...` passed locally. Full CI and package
-qualification remain release gates; v0.8.3 remains immutable. Generated local
-screenshots and verification logs are private and must not be published.
+Focused core races and actual source-browser fixtures pass within those scopes.
+Root's `go vet ./...` passed on the integration candidate.
+Two macOS CI failures were repaired as fixture synchronization assumptions:
+count only the exact new group publication rather than independent queued
+history deliveries, and wait for a signed DM root to arrive before inspecting
+its timeline. Security and message assertions were retained. Final combined
+source CI, embedded skins, native packages and checksums remain release gates;
+no v0.8.4 publication or installed-device recovery is claimed. Generated local
+screenshots and verification logs stay private and must not be published.
 
-The owner deferred unified direct-agent history to **MEL-569**, a low-priority
-feature: do not add that sharing model to this bug patch. Appearance's future
-link to the public skin repository is recorded in existing **MEL-526**.
-Projects remains the existing **MEL-527** discussion. Keep these scopes separate.
+The owner deferred unified direct-agent history to **MEL-569**, the Appearance
+skin-repository link to existing **MEL-526**, and Projects to existing
+**MEL-527** discussion. **[MEL-571](https://linear.app/mellanni/issue/MEL-571/future-assign-any-selected-message-to-my-agent)**
+records a future Assign to my agent action for any existing accessible message,
+reusing task/context facilities instead of retyping another person's request.
+It is discussion/backlog only, outside this patch. Preview versus immediate
+assignment, chosen agent/device/default, context/attachments and result audience
+remain owner decisions; no delegation behavior was implemented.
 
 ## Current published release — October 7 v0.8.3
 

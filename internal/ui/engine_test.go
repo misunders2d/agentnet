@@ -959,12 +959,12 @@ func TestBrowserEngineNotify(t *testing.T) {
 		t.Fatalf("the Hub before turning on: %v", p)
 	}
 
-	// Turned on: subscribed, then preferences with no sender yet.
+	// Turned on: existing admitted pinned chat alerts without sender grant.
 	calls() // (the test's own look at the Hub above)
 	w.api("/api/notify/enable", map[string]any{})
 	got := calls()
 	if len(got) != 2 || got[0].Path != "/v1/notify/subscription" || got[0].Method != "PUT" || !got[0].Signed ||
-		got[1].Path != "/v1/notify/prefs" || got[1].Body["enabled"] != true || len(got[1].Body["senders"].([]any)) != 0 {
+		got[1].Path != "/v1/notify/prefs" || got[1].Body["enabled"] != true || len(got[1].Body["senders"].([]any)) != 1 {
 		t.Fatalf("turning on: %+v", got)
 	}
 	if p := prefs(); p["subscribed"] != true || p["prefs"].(map[string]any)["enabled"] != true {

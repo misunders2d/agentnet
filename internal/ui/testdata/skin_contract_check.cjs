@@ -39,13 +39,14 @@ const packages = dirs.map((dir) => {
 
 const harness = `
 const realFetch = window.fetch.bind(window), RealES = window.EventSource;
-const report = (window.__report = { globals: [], direct: [], outside: [], errors: [], listeners: [] });
+const report = (window.__report = { globals: [], direct: [], outside: [], errors: [], listeners: [], api: [] });
 // Private page globals: none exists here; touching one is recorded.
 for (const name of ['agentnet', 'agentnetOpen', 'agentnetEngine', 'agentnetWorkspace', 'agentnetWorkspaces', 'agentnetLens']) {
   Object.defineProperty(window, name, { configurable: false, get() { report.globals.push(name); return undefined; }, set() { report.globals.push(name + '='); } });
 }
 const own = (path, init = {}) => realFetch(path, { ...init, headers: { ...(init.headers || {}), 'X-Contract-Host': '${marker}' } });
 const json = async (path, body) => {
+  report.api.push({path,write:body!==undefined});
   if (!path.startsWith('/api/')) throw new Error('Expected an AgentNet API path');
   const r = await own(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
@@ -81,6 +82,7 @@ window.__openP3 = async () => {
  }
  throw Error('prepared P3 quote fixture not found');
 };
+window.__openOtherThread = async () => {const overview=await json('/api/overview');const t=overview.threads.find(t=>t.peer!=='bob/desk'&&t.count>0&&!t.notice_only);if(!t)throw Error('No alternate fictional thread');const view=await json('/api/thread?id='+t.id),m=view.messages[0];openHandler(m.id,'message',{dir:m.dir});return m.body;};
 window.__openDevice = async () => {
  if (!window.__openKinds.includes('message')) throw new Error('skin did not take message notifications');
  const overview = await json('/api/overview'), thread = overview.threads.find(t => t.peer === 'bob/desk' && t.count > 1 && !t.notice_only);
@@ -286,6 +288,17 @@ const journeys = {
       await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelectorAll('#zoom .zoom-layer').length===1);
       assert.equal(await page.locator('#zoom .rung').nth(level).getAttribute('aria-current'),'step','Zoom Escape level '+level);
     }
+    // A captured direct-thread draft must not send into a later thread.
+    await page.evaluate(()=>window.__openDevice());await page.locator('#zoom .zoom-message').waitFor();await page.keyboard.press('Escape');
+    await page.locator('#zoom').getByRole('button',{name:'Write in this conversation…',exact:true}).click();
+    await page.locator('#write-body').fill('Captured route must stay exact');
+    const before=await page.evaluate(()=>__report.api.filter(r=>r.write&&r.path==='/api/send').length);
+    const nextBody=await page.evaluate(()=>window.__openOtherThread());await page.locator('#zoom .zoom-message').filter({hasText:nextBody}).waitFor();await page.locator('#dialog-ok').click();
+    await page.locator('#dialog-error').getByText('Conversation or workspace changed; reopen this draft there.',{exact:true}).waitFor();
+    assert.equal(await page.locator('#write-body').inputValue(),'Captured route must stay exact','rejected captured draft stays visible');
+    assert.equal(await page.evaluate(()=>__report.api.filter(r=>r.write&&r.path==='/api/send').length),before,'route change sends neither old nor new target');
+    await page.locator('#dialog-cancel').click();
+
   },
   notebook: async (page) => {
     await page.getByRole('heading', { name: 'Notebook', exact: true }).waitFor({ timeout: 20000 });

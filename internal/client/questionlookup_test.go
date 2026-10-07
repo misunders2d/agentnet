@@ -360,3 +360,42 @@ printf '%s\n' "$@" > "$0.args"
 cat > "$0.prompt"
 printf 'looked up\nemotion: calm\n'
 `
+
+func TestQuestionLookupOMPUsesNativeReadTool(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stand-in")
+	}
+	w := newWorld(t, "")
+	exe := lookupProgram(t)
+	bindProgram(t, exe)
+	lookup := w.bob.questionSetup(job{Kind: envelope.KindQuestion}, "omp")
+	if len(lookup.args) != 2 || lookup.args[0] != "--extension" {
+		t.Fatalf("OMP lookup %+v", lookup)
+	}
+	source, err := os.ReadFile(lookup.args[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "parameters: pi.zod.object(") || !strings.Contains(string(source), `approval: "read"`) || strings.Contains(string(source), "@earendil-works") {
+		t.Fatalf("not an OMP native read tool: %s", source)
+	}
+	if !strings.Contains(string(source), strconv.Quote(exe)) {
+		t.Fatal("lookup lost exact program binding")
+	}
+
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	probe := `import * as m from 'file://` + lookup.args[1] + `';
+ const schema={}; const tools=[];
+ m.default({typebox:{},zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema})},registerTool:t=>tools.push(t)});
+ if(tools.length!==1||tools[0].name!=='agentnet_lookup'||tools[0].approval!=='read')throw Error('OMP tool registration failed');
+ const result=await tools[0].execute('lookup',{lookup:'version'});
+ if(result.content[0].text.trim()!=='ran: version')throw Error('fixed lookup did not execute');
+ let blocked=false;try{await tools[0].execute('lookup',{lookup:'arbitrary'});}catch{blocked=true;}if(!blocked)throw Error('arbitrary operation allowed');`
+	cmd := exec.Command(node, "--input-type=module", "-e", probe)
+	if out, e := cmd.CombinedOutput(); e != nil {
+		t.Fatalf("OMP API/read-lookup regression: %v %s", e, out)
+	}
+}

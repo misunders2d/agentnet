@@ -41,6 +41,9 @@ func (a *Agent) groupGuestDeliveryGate(env envelope.Envelope) (bool, bool, error
 		guest = p.Role == protocol.RoleHuman
 	}
 	if human != "" {
+		// All human-audience group turns previously required these readers
+		// at send time. Keep that contract at each durable-copy handoff.
+		guest = true
 		var h envelope.HumanTurn
 		if err = json.Unmarshal([]byte(human), &h); err != nil {
 			return true, false, err
@@ -62,11 +65,13 @@ func (a *Agent) groupGuestDeliveryGate(env envelope.Envelope) (bool, bool, error
 	if !ok || pending != nil || fp == "" || key.Fingerprint() != fp {
 		return true, false, nil
 	}
-	if err = a.requireParticipationCaps(context.Background(), key, protocol.CapGroupHumanParticipation); err != nil {
-		if errors.Is(err, errAgentIdentityUnsupported) {
-			return true, false, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
+	for _, required := range []string{protocol.CapGroupHumanParticipation, protocol.CapGroup} {
+		if err = a.requireParticipationCaps(context.Background(), key, required); err != nil {
+			if errors.Is(err, errAgentIdentityUnsupported) {
+				return true, false, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
+			}
+			return true, false, err
 		}
-		return true, false, err
 	}
 	return false, false, nil // existing authority and admission checks still decide
 }

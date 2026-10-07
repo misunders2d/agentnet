@@ -33,6 +33,16 @@ export function folderWayOut(failed, last) {
  for (const r of last?.roots || []) if (r !== failed && r !== up) out.push({ kind: 'root', label: r, path: r });
  return out;
 }
+// Named-agent readiness is independent of native-session hook registration.
+export function agentStatus(h,catalog) {
+ const agents=(catalog?.agents||[]).filter(a=>a.enabled&&a.responder?.harness===h.id),ready=agents.filter(a=>a.responder?.ready);
+ if(ready.length)return{word:'Ready',sentence:ready.map(a=>a.record.label).join(', ')+' is set up for chats, questions and approved tasks.'};
+ if(agents.length)return{word:'Needs attention',sentence:agents.map(a=>a.record.label+': '+(a.responder?.problem||'It cannot start on this computer.')).join(' ')};
+ if((catalog?.harnesses||[]).some(x=>x.name===h.id&&x.found))return{word:'Needs setup',sentence:'Choose a name and working folder for its agent.'};
+ if(!h.detected)return{word:'Not found',sentence:'Not installed on this computer.'};
+ if(!h.supported||!(catalog?.harnesses||[]).some(x=>x.name===h.id&&x.found))return{word:'Unavailable',sentence:'An AgentNet agent cannot run with this tool here yet.'};
+ return{word:'Needs setup',sentence:'Choose a name and working folder for its agent.'};
+}
 const focusStops = new WeakMap();
 export async function mountAssistantSetup({ root, api, isCurrent = () => true, isBrowser = false, suggestedHarness = '', onChanged = () => {} }) {
  if (!root || !isCurrent()) return;
@@ -49,6 +59,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
   return configs.get(h.id);
  }
  const agentAPI = async body => { if (!current()) throw Error('Workspace changed. Reopen setup there.'); const value = await api('/api/agents', body); if (!current()) throw Error('Workspace changed. Assistant changes remain bound to the original workspace.'); return value; };
+ const nativeDetails=h=>{const detail=node('details');detail.append(node('summary','Native sessions'));const states={connected:'Registered context',detected:'Detected',needs_setup:'Needs setup',needs_activation:'Needs activation',not_detected:'Not detected',unsupported:'Unsupported',error:'Needs attention'};detail.append(node('p',(states[h.state]||'Unknown')+': '+h.note));if(h.state==='needs_setup')detail.append(node('p','Its connection is out of date or still points to your previous AgentNet. Review setup to repair its native sessions.'));if(h.change)detail.append(node('p',h.change));if(h.next)detail.append(node('p',h.next));if(h.target)detail.append(node('p',h.target,'setup-path'));return detail;};
  const error = node('p', '', 'setup-error'); error.setAttribute('role', 'alert');
  const current = () => isCurrent() && root.isConnected;
  const fail = e => { if (current()) { busy = false; error.textContent = e.message || 'Setup could not be completed. Read the current tool list before retrying.'; draw(); } };
@@ -57,21 +68,21 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  const choose = async () => {
   if (busy) return; statusGeneration++; busy = true; error.textContent = ''; draw();
   // The tool list first; the agent list only where setup can run (a server that can't says so in its note).
-  try { view = await call(); if (view.local === false) { busy = false; draw(); return; } catalog = await agentAPI(); configs.clear(); folders = null; folderGen++; chosen = new Set((view.harnesses || []).filter(h => h.detected && h.supported && h.configured).map(h => h.id)); busy = false; stage = 'choose'; draw(true); } catch (e) { fail(e); }
+  try { view = await call(); if (view.local === false) { busy = false; draw(); return; } catalog = await agentAPI(); configs.clear(); folders = null; folderGen++; chosen = new Set((view.harnesses || []).filter(h => (h.detected && h.supported || managed(h.id)) && (h.configured || records(h.id).length)).map(h => h.id)); busy = false; stage = 'choose'; draw(true); } catch (e) { fail(e); }
  };
  const checkAll = () => {
-  const eligible = (view.harnesses || []).filter(h => h.detected && h.supported);
+  const eligible = (view.harnesses || []).filter(h => h.detected && h.supported || managed(h.id));
   return { eligible, all: eligible.length > 0 && eligible.every(h => chosen.has(h.id)) };
  };
  const reviewSelection = async () => {
   if (busy || !selected().length) return; statusGeneration++; busy = true; error.textContent = ''; draw();
-  try { for (const h of selected().filter(h => managed(h.id))) { const c = configFor(h); if (c.requireChoice || !c.label.trim() || !c.dir.trim()) throw Error('Choose an assistant name and working folder for ' + h.label + ' before reviewing.'); } review = await call({ action: 'review', harnesses: selected().map(h => h.id) }); stage = 'review'; busy = false; draw(true); } catch (e) { fail(e); }
+  try { for (const h of selected().filter(h => managed(h.id))) { const c = configFor(h); if (c.requireChoice || !c.label.trim() || !c.dir.trim()) throw Error('Choose an assistant name and working folder for ' + h.label + ' before reviewing.'); } const native=selected().filter(h=>h.detected&&h.supported);review=native.length?await call({action:'review',harnesses:native.map(h=>h.id)}):view; stage = 'review'; busy = false; draw(true); } catch (e) { fail(e); }
  };
  const apply = async () => {
-  if (busy || !review?.review_id) return; statusGeneration++; busy = true; error.textContent = ''; draw();
+  if (busy || !review) return; statusGeneration++; busy = true; error.textContent = ''; draw();
   try {
    const requested = selected().map(h => ({ harness: h.id, config: { ...configFor(h) }, managed: managed(h.id) }));
-   view = await call({ action: 'apply', harnesses: selected().map(h => h.id), review_id: review.review_id }); outcomes = [];
+   const native=selected().filter(h=>h.detected&&h.supported);view=native.length?await call({action:'apply',harnesses:native.map(h=>h.id),review_id:review.review_id}):await call();outcomes=[];
    // Refresh before creation after any uncertain attempt; reuse the saved exact
    // identity rather than duplicating a record on a rerun/network-error retry.
    catalog = await agentAPI();
@@ -90,7 +101,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
    let publication;
    if (outcomes.length) publication = await agentAPI({ action: 'publish' });
    if (outcomes.length && !publication?.published) view.note = 'Assistant settings saved locally. Publishing their catalog was not confirmed. Run setup again to retry publication; existing assistants will be reused.';
-   else if (outcomes.length) view.note = 'Conversation assistants saved and public catalog publication confirmed. Add them to a conversation; invitation and task permissions still apply. Native hook trust/activation is separate.';
+   else if (outcomes.length) view.note = 'Conversation assistants saved and public catalog publication confirmed. Add them to a conversation; invitation and task permissions still apply. Native session details are shown below.';
    stage = 'saved'; busy = false; review = null; draw(true); onChanged();
   } catch (e) { review = null; stage = 'choose'; fail(new Error('Setup did not finish: ' + e.message + ' Earlier reviewed changes may be saved. Reload the tool list before retrying.')); }
  };
@@ -140,34 +151,34 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
  }
  function draw(focus = false) {
   if (!current()) return;
-  const card = node('section', '', 'assistant-setup-card'); card.setAttribute('aria-label', 'Use AgentNet inside your tools');
-  const heading = node('h3', stage === 'choose' ? 'Choose your tools' : stage === 'review' ? 'Review setup changes' : stage === 'saved' ? 'Setup result' : 'Use AgentNet inside your tools'); heading.tabIndex = -1; card.append(heading);
+  const card = node('section', '', 'assistant-setup-card'); card.setAttribute('aria-label', 'Set up your agents');
+  const heading = node('h3', stage === 'choose' ? 'Choose your tools' : stage === 'review' ? 'Review setup changes' : stage === 'saved' ? 'Setup result' : 'Set up your agents'); heading.tabIndex = -1; card.append(heading);
   if (isBrowser || view?.local === false) {
-   card.append(node('p', !isBrowser && view?.note || 'This browser cannot inspect or install software. Open Settings → Assistants → Use AgentNet inside your tools on your native AgentNet computer.', 'setup-description')); root.replaceChildren(card); return;
+   card.append(node('p', !isBrowser && view?.note || 'This browser cannot inspect or install software. Open Settings → Assistants → Set up your agents on your native AgentNet computer.', 'setup-description')); root.replaceChildren(card); return;
   }
   if (stage === 'home') {
-   card.append(node('p', 'Set up AgentNet integration for Codex, Claude, Pi or OMP. Run this again when tools are installed or removed. Your default responder stays separate.', 'setup-description'));
+   card.append(node('p', 'Set up a Codex, Claude, Pi or OMP agent for chats, questions and approved tasks, with your own skills, plugins and permissions.', 'setup-description'));
    const program = {codex:'Codex',claude:'Claude',pi:'Pi',omp:'OMP'}[suggestedHarness];
-   if (program) card.append(node('p', 'Your answers use ' + program + '. Choose it here to use AgentNet inside that program too.', 'setup-note'));
-   const start = button(busy ? 'Checking tools…' : 'Use AgentNet inside your tools', choose, true); start.disabled = busy; card.append(start);
+   if (program) card.append(node('p', 'Your answers use ' + program + '. Choose it here to set up its agent.', 'setup-note'));
+   const start = button(busy ? 'Checking tools…' : 'Set up your agents', choose, true); start.disabled = busy; card.append(start);
   } else if (stage === 'choose') {
-   card.append(node('p', 'Choose installed tools to configure. Existing skills, plugins, permissions and model sign-in stay untouched.', 'setup-description'));
+   card.append(node('p', 'Choose installed tools to set up. Ready checks the program and folder; it does not test sign-in.', 'setup-description'));
    const { eligible, all } = checkAll();
    const allLabel = node('label', '', 'setup-all'); const allBox = doc.createElement('input'); allBox.type = 'checkbox'; allBox.checked = all; allBox.indeterminate = !all && eligible.some(h => chosen.has(h.id)); allBox.disabled = busy || !eligible.length;
    allBox.setAttribute('aria-label', 'Select all detected tools'); allBox.onchange = () => { chosen = new Set(allBox.checked ? eligible.map(h => h.id) : []); draw(); root.querySelector('.setup-all input')?.focus(); };
    allLabel.append(allBox, doc.createTextNode(' Select all detected tools')); card.append(allLabel);
    const list = node('div', '', 'setup-tools');
    for (const h of view.harnesses || []) {
-    const row = node('label', '', 'setup-tool-row'); const input = doc.createElement('input'); input.type = 'checkbox'; input.checked = chosen.has(h.id); input.disabled = busy || !h.detected || !h.supported; input.setAttribute('aria-label', 'Connect ' + h.label);
+    const row = node('label', '', 'setup-tool-row'); const input = doc.createElement('input'); input.type = 'checkbox'; input.checked = chosen.has(h.id); input.disabled = busy || !(h.detected && h.supported || managed(h.id)); input.setAttribute('aria-label', 'Set up ' + h.label);
     input.id = 'setup-tool-' + h.id;
     input.onchange = () => { if (input.checked) chosen.add(h.id); else chosen.delete(h.id); draw(); root.querySelector('#setup-tool-' + h.id)?.focus(); };
     const body = node('div', '', 'setup-tool-body'); const title = node('div', '', 'setup-row-title'); title.append(node('strong', h.label));
-    const statuses = { connected: 'Registered context', detected: 'Detected', needs_setup: 'Needs setup', needs_activation: 'Needs activation', not_detected: 'Not detected', unsupported: 'Unsupported', error: 'Needs attention' };
-    title.append(node('span', statuses[h.state] || 'Unknown', 'setup-status ' + (h.state === 'connected' ? 'connected' : h.state === 'detected' ? '' : 'attention')));
-    body.append(title, node('p', h.state === 'needs_setup' ? 'Its connection is out of date or still points to your previous AgentNet. Choose this program and reconnect it here.' : h.note)); row.append(input, body); list.append(row);
+    const status=agentStatus(h,catalog);
+    title.append(node('span',status.word,'setup-status '+(status.word==='Ready'?'connected':'attention')));
+    body.append(title,node('p',status.sentence));row.append(input,body);list.append(row,nativeDetails(h));
     if (chosen.has(h.id)) {
      const config = node('div', '', 'setup-assistant-config');
-     if (!managed(h.id)) config.append(node('p', h.id === 'omp' ? 'OMP supports native hooks and CLI replies only here. Managed conversation assistants are unavailable; setup will not create one.' : 'No managed responder is available for this tool. Existing assistant settings are unchanged.', 'setup-note'));
+     if (!managed(h.id)) config.append(node('p', 'An AgentNet agent cannot run with this tool here yet. Existing agents stay as they are.', 'setup-note'));
      else {
       const c = configFor(h), matches = records(h.id);
       if (matches.length) { const label = node('label', 'Conversation assistant'); const select = doc.createElement('select'); select.setAttribute('aria-label', h.label + ' conversation assistant'); const placeholder = node('option', 'Choose an existing assistant'); placeholder.value = ''; placeholder.disabled = true; select.append(placeholder);
@@ -180,17 +191,16 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
     }
    }
    card.append(list, node('p', selected().length + ' selected', 'setup-count'));
-   card.append(node('p', 'Review both native integration and named conversation-assistant configuration. Setup grants no conversation history or task permissions; native sessions are not conversation executors.', 'setup-note'));
+   card.append(node('p', 'Review your agent setup. It grants no history or task permissions.', 'setup-note'));
    const actions = node('div', '', 'setup-actions'); const cancel = button('Back to settings', close); cancel.disabled = busy; const next = button(busy ? 'Reading changes…' : 'Review changes', reviewSelection, true); next.disabled = busy || !selected().length; actions.append(cancel, next); card.append(actions);
   } else if (stage === 'review' || stage === 'saved') {
    const rows = stage === 'review' ? review.harnesses.filter(h => chosen.has(h.id)) : view.harnesses.filter(h => chosen.has(h.id));
    const list = node('ul', '', 'setup-review');
    for (const h of rows) {
-    const row = node('li'); row.append(node('strong', h.label), node('p', stage === 'review' ? h.change : h.note));
-    if (h.target && stage === 'review') { const detail = node('details'); detail.append(node('summary', 'Configuration file'), node('p', h.target, 'setup-path')); row.append(detail); }
+    const row = node('li'); row.append(node('strong', h.label));if(stage==='saved'){const status=agentStatus(h,catalog);row.append(node('span',status.word,'setup-status '+(status.word==='Ready'?'connected':'attention')),node('p',status.sentence));}row.append(nativeDetails(h));
     if (managed(h.id)) { const c = configFor(h); row.append(node('p', (c.id ? 'Reuse assistant: ' : 'Create assistant: ') + c.label, 'setup-next'), node('p', 'Working folder: ' + c.dir, 'setup-path')); }
-    else if (h.id === 'omp') row.append(node('p', 'Native hooks/CLI only. Managed conversations unavailable.', 'setup-next'));
-    if (h.next) row.append(node('p', h.next, 'setup-next')); list.append(row);
+    else row.append(node('p','An AgentNet agent cannot run with this tool here yet.','setup-next'));
+    list.append(row);
    }
    card.append(list, node('p', (stage === 'review' ? review : view).note, 'setup-note'));
    const actions = node('div', '', 'setup-actions');
@@ -209,7 +219,7 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
   if (doc.visibilityState === 'hidden' || !ready() || statusRead) return;
   statusRead = true;
   const generation = statusGeneration;
-  try { const next = await call(); if (ready() && generation === statusGeneration) { view = next; draw(); } }
+  try { const next = await call(); const nextCatalog=next.local===false?null:await agentAPI(); if (ready() && generation === statusGeneration) { view = next; catalog=nextCatalog; draw(); } }
   catch (e) { if (ready() && generation === statusGeneration) { error.textContent = 'Setup status could not be refreshed: ' + e.message + ' Check again.'; draw(); } }
   finally { statusRead = false; }
  };

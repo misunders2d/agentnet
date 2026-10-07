@@ -245,13 +245,20 @@ func TestGroupCarrierLinkedKeyRemovalAndNoOldKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Own-history delivery may still be queued independently of this publication.
+	previous := map[string]bool{}
+	for _, env := range groupQueuedCarriers(t, w.alice) {
+		previous[env.ID] = true
+	}
 	if _, err = w.alice.PublishGroup(tctx(t), commit, next); err != nil {
 		t.Fatal(err)
 	}
 	var phoneCopies []envelope.Envelope
 	for _, env := range groupQueuedCarriers(t, w.alice) {
 		if env.To == phone.Address {
-			phoneCopies = append(phoneCopies, env)
+			if !previous[env.ID] {
+				phoneCopies = append(phoneCopies, env)
+			}
 			if _, err = w.alice.deliver(tctx(t), env, nil); err != nil {
 				t.Fatal(err)
 			}

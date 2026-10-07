@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -78,12 +79,12 @@ func TestDesktopAlertOnceAfterGrace(t *testing.T) {
 	if n.count() != 0 || pendingAlerts(t, w.bob) != 0 {
 		t.Fatal("alerted while alerts are off")
 	}
-	if err := w.bob.SetAlertPrefs(AlertPrefs{Enabled: true, Senders: []protocol.NotifySender{{Address: w.alice.Address, Fingerprint: "0000beef-0000beef-0000beef-0000beef"}}}); err != nil {
+	if err := w.bob.SetAlertPrefs(AlertPrefs{Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "another key allowed"})
-	if pendingAlerts(t, w.bob) != 0 {
-		t.Fatal("alert for a sender allowed under another key")
+	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "chat alerts without sender grant"})
+	if pendingAlerts(t, w.bob) != 1 {
+		t.Fatal("default-unmuted chat needs no sender grant")
 	}
 	allowAliceAt(t, w)
 	queued := time.Now()
@@ -244,5 +245,63 @@ func TestAlertPrefsValidated(t *testing.T) {
 	}
 	if p, err := w.bob.AlertPrefs(); err != nil || p.Enabled || len(p.Senders) != 0 {
 		t.Fatalf("default prefs: %+v %v", p, err)
+	}
+}
+
+func TestDesktopGroupAlertWithoutDM(t *testing.T) {
+	w, _, packet, _ := groupTurnsFixture(t)
+	if err := w.bob.SetAlertPrefs(AlertPrefs{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := w.alice.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "group member activity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "group activity queued without DM or sender grant", func() bool { return pendingAlerts(t, w.bob) == 1 })
+	var raw string
+	if err = w.alice.store.db.QueryRow(`SELECT envelope FROM outbox WHERE lid=? AND recipient=?`, sent.LID, w.bob.Address).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var env envelope.Envelope
+	if err = json.Unmarshal([]byte(raw), &env); err != nil || !env.Attn || env.Chan != protocol.NotifyChannel(packet.State.Conv, w.bob.Self().Fingerprint()) {
+		t.Fatalf("group push hint missing: %v", err)
+	}
+	if err = w.bob.SetAlertPrefs(AlertPrefs{Enabled: true, Mutes: []string{packet.State.Conv}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = w.bob.AlertPresented(packet.State.Conv, []string{env.ID}); err != nil {
+		t.Fatal(err)
+	}
+	sendAt(t, w.alice, w.bob, packet.State.Conv, ConvOutgoing{Body: "muted group activity"})
+	if pendingAlerts(t, w.bob) != 0 {
+		t.Fatal("explicit group mute ignored")
+	}
+}
+
+func TestChatAlertQuietMigration(t *testing.T) {
+	w, conv, _, _ := alertWorld(t, time.Hour)
+	sendAt(t, w.alice, w.bob, conv, ConvOutgoing{Body: "old quiet chat"})
+	if err := w.bob.SetAlertPrefs(AlertPrefs{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.bob.store.db.Exec(chatAlertDefaultsSchema); err != nil {
+		t.Fatal(err)
+	}
+	p, err := w.bob.AlertPrefs()
+	if err != nil || !slices.Contains(p.Mutes, conv) {
+		t.Fatalf("old quiet chat not preserved: %+v %v", p, err)
+	}
+	next := newDM(t, w.alice, w.bob)
+	sendAt(t, w.alice, w.bob, next, ConvOutgoing{Body: "same person, later root"})
+	p, err = w.bob.AlertPrefs()
+	if err != nil || !slices.Contains(p.Mutes, next) {
+		t.Fatalf("same person chat lost quiet preference: %+v %v", p, err)
+	}
+	if err := w.bob.SetAlertPrefs(AlertPrefs{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	p, err = w.bob.AlertPrefs()
+	if err != nil || len(p.Mutes) != 0 {
+		t.Fatalf("unmute left quiet anchors: %+v %v", p, err)
 	}
 }

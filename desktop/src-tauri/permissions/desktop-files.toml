@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-agentnet-desktop-files"
+description = "Choose one bounded skin folder or download an explicit same-origin blob from the current main app page."
+commands.allow = ["agentnet_skin_folder", "agentnet_download_blob"]
+
+[[permission]]
+identifier = "allow-agentnet-app-controls"
+description = "Use the bundled backend's existing bounded app status, update and explicit command replacement actions from its current main page."
+commands.allow = ["agentnet_app_controls"]

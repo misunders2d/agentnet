@@ -104,14 +104,29 @@ func (l *Live) NotifyMute(conv string, muted bool) (string, error) {
 	if !slices.ContainsFunc(convs, func(c client.ConversationInfo) bool { return c.ID == conv }) {
 		return "", NotFound("no conversation with that id")
 	}
-	note := "This DM notifies you again."
+	ids := []string{conv}
+	for _, selected := range convs {
+		if selected.ID != conv || selected.Kind != "dm" || selected.Role != "member" || selected.Peer.State != PersonPinned {
+			continue
+		}
+		for _, c := range convs {
+			if c.Kind == "dm" && c.Role == "member" && c.Peer.Person == selected.Peer.Person {
+				ids = append(ids, c.ID)
+			}
+		}
+	}
+	note := "This chat notifies you again."
 	if muted {
-		note = "This DM is muted."
+		note = "This chat is muted."
 	}
 	return note, l.setAlerts(func(p *client.AlertPrefs) error {
-		p.Mutes = slices.DeleteFunc(p.Mutes, func(c string) bool { return c == conv })
+		p.Mutes = slices.DeleteFunc(p.Mutes, func(c string) bool { return slices.Contains(ids, c) })
 		if muted {
-			p.Mutes = append(p.Mutes, conv)
+			for _, id := range ids {
+				if !slices.Contains(p.Mutes, id) {
+					p.Mutes = append(p.Mutes, id)
+				}
+			}
 		}
 		return nil
 	})
@@ -140,6 +155,17 @@ func (l *Live) NotifyAllow(person string, allowed bool) (string, error) {
 		})
 		if allowed {
 			p.Senders = append(p.Senders, keys...)
+		}
+		if !allowed {
+			convs, err := l.a.Conversations()
+			if err != nil {
+				return err
+			}
+			for _, c := range convs {
+				if c.Kind != protocol.ConvKindGroup && c.Peer.Person == person && !slices.Contains(p.Mutes, c.ID) {
+					p.Mutes = append(p.Mutes, c.ID)
+				}
+			}
 		}
 		return nil
 	})

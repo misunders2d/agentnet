@@ -217,7 +217,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
 }
 
 /** TopicMenu: the open topic's menu (its chip): rename, mark done or reopen, all topics. */
-function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: ReactNode; onAll: () => void }) {
+export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: ReactNode; onAll: () => void }) {
   const store = useApp();
   const portal = usePortal();
   const [rename, setRename] = useState(false);

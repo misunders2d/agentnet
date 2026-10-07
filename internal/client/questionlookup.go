@@ -90,7 +90,7 @@ const lookupsUnavailable = "No lookups of this AgentNet device's own state are a
 // program that cannot be resolved, a Claude rule that would need quoting,
 // or a Pi extension that could not be written.
 func (a *Agent) questionSetup(j job, h string) questionLookup {
-	if j.Kind != envelope.KindQuestion || h != "claude" && h != "codex" && h != "pi" {
+	if j.Kind != envelope.KindQuestion || h != "claude" && h != "codex" && h != "pi" && h != "omp" {
 		return questionLookup{}
 	}
 	none := questionLookup{text: lookupsUnavailable}
@@ -123,10 +123,10 @@ func (a *Agent) questionSetup(j job, h string) questionLookup {
 		}
 		return questionLookup{text: "To look up this AgentNet device's own state you may run the program " + strconv.Quote(exe) + ", quoted as your shell needs, in your read-only sandbox with exactly one of these argument lists: " +
 			strings.Join(lists, ", ") + ", or `status ID` for a message this device sent (without network it shows the local record, marked as such)." + direct}
-	default: // pi
-		path, err := a.writePiLookup(exe)
+	default: // pi/omp
+		path, err := a.writeQuestionLookup(exe, h)
 		if err != nil {
-			a.Logf("question lookups unavailable for pi: %v", err)
+			a.Logf("question lookups unavailable for %s: %v", h, err)
 			return none
 		}
 		return questionLookup{args: []string{"--extension", path},
@@ -201,6 +201,10 @@ export default function (pi) {
 // writePiLookup writes the Pi extension bound to exe into this home,
 // owner-only, and returns its path.
 func (a *Agent) writePiLookup(exe string) (string, error) {
+	return a.writeQuestionLookup(exe, "pi")
+}
+
+func (a *Agent) writeQuestionLookup(exe, harness string) (string, error) {
 	program, err := json.Marshal(exe)
 	if err != nil {
 		return "", err
@@ -209,11 +213,27 @@ func (a *Agent) writePiLookup(exe string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	path, err := filepath.Abs(filepath.Join(dir, "agentnet-question.mjs"))
+	name := "agentnet-question.mjs"
+	if harness == "omp" {
+		name = "agentnet-omp-question.mjs"
+	}
+	path, err := filepath.Abs(filepath.Join(dir, name))
 	if err != nil {
 		return "", err
 	}
 	content := []byte(strings.Replace(piLookupSource, "%s", string(program), 1))
+	if harness == "omp" {
+		content = bytes.Replace(content, []byte(`import { Type } from "@earendil-works/pi-ai";`), nil, 1)
+		content = bytes.Replace(content, []byte(`parameters: Type.Object({
+			lookup: Type.Union([Type.Literal("version"), Type.Literal("whoami"), Type.Literal("inbox"), Type.Literal("approvals"), Type.Literal("status")]),
+			id: Type.Optional(Type.String({ description: "status only: the message id" })),
+		}),`), []byte(`parameters: pi.zod.object({
+			lookup: pi.zod.enum(["version", "whoami", "inbox", "approvals", "status"]),
+			id: pi.zod.string().optional(),
+		}),`), 1)
+		content = bytes.Replace(content, []byte(`name: "agentnet_lookup",`), []byte(`name: "agentnet_lookup",
+ approval: "read",`), 1)
+	}
 	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, content) {
 		return path, nil
 	}

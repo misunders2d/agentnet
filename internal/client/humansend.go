@@ -244,12 +244,8 @@ func (a *Agent) sendHumanTurn(ctx context.Context, root protocol.ConvRoot, raw [
 		copyIn := in
 		copyIn.ID, copyIn.To = protocol.NewID(), device.Address
 		if root.Kind == protocol.ConvKindGroup {
-			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation); err != nil && !hubUnreachable(err) {
-				return ConvSent{}, err
-			}
-			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil && !hubUnreachable(err) {
-				return ConvSent{}, err
-			}
+			// Capability changes hold each sealed recipient copy at handoff;
+			// one older reader must not prevent the current audience's send.
 			me, ok, e := a.store.selfPerson(a.Address)
 			if e != nil || !ok {
 				return ConvSent{}, errors.New("group sender person missing")

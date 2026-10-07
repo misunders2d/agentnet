@@ -15,6 +15,7 @@ import { Button } from "../ui/Button";
 import { openPictureEditor } from "../pictures.mjs";
 import { isThreadMsg, type AnyMsg } from "./Message.model";
 import { SaveToDrive } from "./Drive";
+import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.files.text";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string }
 
@@ -67,7 +68,7 @@ function useFileBytes() {
     const type = sniff(b);
     const url = URL.createObjectURL(new Blob([b as BlobPart], { type: type || "application/octet-stream" }));
     urls.current.push(url);
-    return { url, picture: !!type };
+    return { url, picture: !!type, bytes: b };
   };
 }
 
@@ -197,6 +198,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
   const load = useFileBytes();
   const [busy, setBusy] = useState(false);
   const [pictureURL, setPictureURL] = useState("");
+  const [preview, setPreview] = useState<{ text: string; url: string } | null>(null);
   const st = standing(m, f);
   const from = !isThreadMsg(m) && m.synced_from ? "your " + niceDevice(m.synced_from) : "the device it came from";
   const Icon = /\.(zip|tar|gz|tgz|7z|rar)$/i.test(f.name) ? IconFileZip : /\.(txt|md|csv|json|log|pdf|docx?)$/i.test(f.name) ? IconFileText : IconFile;
@@ -211,6 +213,15 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
     setBusy(true);
     await store.run((a) => a.requestFile(m.id, f.index), "Asked " + from + " for it. It opens here once that device sends it.");
     setBusy(false);
+  };
+  const showText = async () => {
+    setBusy(true);
+    try {
+      const opened = await load(m, f);
+      const text = previewText(f.name, opened.bytes);
+      if (store.isActive()) setPreview({ text, url: opened.url });
+    } catch (e) { if (store.isActive()) store.toast("Couldn’t preview " + f.name + ": " + errorText(e), "error"); }
+    finally { if (store.isActive()) setBusy(false); }
   };
 
   return (
@@ -227,9 +238,16 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
         </span>
       </span>
       {st === "open" && (
+        <>
+        {textPreviewName(f.name) && f.size <= TEXT_PREVIEW_LIMIT && <Button disabled={busy} aria-label={"Preview " + f.name} onClick={() => void showText()}>Preview</Button>}
         <button type="button" onClick={open} disabled={busy} aria-label={"Download " + f.name}
           className="grid size-11 shrink-0 place-items-center rounded-full hover:bg-sunken disabled:opacity-50"><IconDownload size={20} /></button>
+        </>
       )}
+      <Sheet open={preview !== null} onOpenChange={(open) => { if (!open) setPreview(null); }} title={f.name} description={bytes(f.size)} wide
+        footer={<Button variant="act" disabled={!preview} onClick={() => preview && save(preview.url, f.name, portal)}>Download</Button>}>
+        <pre className="whitespace-pre-wrap break-words text-[14px] [overflow-wrap:anywhere]">{preview?.text}</pre>
+      </Sheet>
       {hasPerson && pictureURL && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: pictureURL, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}
       {st === "request" && (
         <button type="button" onClick={ask} disabled={busy} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-semibold hover:bg-sunken disabled:opacity-50">

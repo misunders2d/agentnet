@@ -203,6 +203,11 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
         <div className="flex flex-col gap-2">{r.invited.map((g) => <PendingCard key={g.key} g={g} t={t} busy={busy === g.key} onAct={act} />)}</div>
       </>}
 
+      {r.incomplete.length > 0 && <details className="mt-4 rounded-xl bg-sunken px-3.5 py-2 text-[13px] text-text-2">
+        <summary className="cursor-pointer font-semibold">Incomplete context</summary>
+        <ul className="mt-2 space-y-2">{r.incomplete.map(g => <li key={g.pid} className="whitespace-pre-wrap [overflow-wrap:anywhere]">{g.stateText || "Participation records are incomplete; no invitation has been verified."}</li>)}</ul>
+      </details>}
+
       {r.waiting.length > 0 && <>
         <Label n={r.waiting.length}>Waiting on an OK</Label>
         <div className="flex flex-col gap-2">{r.waiting.map((w) => <WaitingRow key={w.id} w={w} onShow={() => { void store.open({ kind: "dm", id: t.id, focus: w.id }); if (!wide) store.setPanel(false); }} />)}</div>

@@ -112,13 +112,13 @@ export interface Room {
   members: Member[];
   guests: Guest[];             // in the room now
   groupInvites: GroupInvite[]; // outbound member proposals, separate from guests
-  invited: Guest[];            // not in yet
+  invited: Guest[];            // verified invitation, not in yet
+  incomplete: { pid: string; stateText: string }[]; // held records without a verified invitation
   waiting: Waiting[];          // requests here that wait for an owner's OK
   past: Guest[];               // dismissed, left or declined
 }
 
 const LIVE = new Set(["active", "conflict"]);
-const PENDING = new Set(["invited", "pending"]);
 const ENDED = new Set(["dismissed", "declined"]);
 
 export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, string>): Room {
@@ -194,7 +194,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
     const state = m.exec?.state || m.state;
     if (state !== "awaiting" && state !== "held") continue;
     const a = (t.agents || []).find((x) => x.pid === m.pid);
-    if (!a) continue;
+    if (!a || a.state === "pending") continue;
     waiting.push({
       id: m.id, text: lineOf(m), asker: speaker(m, t, o, names).name, agent: agentName(a.agent_id, names, a.host, me),
       decider: a.host_here ? "you" : personName(a.host), mine: a.host_here,
@@ -205,7 +205,8 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
     members,
     guests: all.filter((g) => LIVE.has(g.state)),
     groupInvites: pendingGroupInvites(t, o),
-    invited: all.filter((g) => PENDING.has(g.state)),
+    invited: all.filter((g) => g.state === "invited"),
+    incomplete: [...(t.agents || []), ...(t.guests || [])].filter(g => g.state === "pending").map(g => ({ pid: g.pid, stateText: g.state_text })),
     waiting,
     // One row per person or agent: their latest visit.
     past: all.filter((g) => ENDED.has(g.state)).sort(byTime).filter((g, i, list) => list.findIndex((x) => x.who === g.who) === i),

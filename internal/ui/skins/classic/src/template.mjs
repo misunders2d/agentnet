@@ -185,10 +185,10 @@ export const markup = `
   <section id="settings-device" role="tabpanel" aria-labelledby="settings-tab-device" class="settings-panel" hidden>
     <div id="app-command"></div>
     <div id="assistant-setup"></div>
-    <h3>Your agent on this computer</h3>
-    <p class="hint">Who answers approved questions and runs accepted tasks here. Installed means found on this computer, not logged in or working.</p>
-    <div id="responder"></div>
-    <div id="named-agents"></div>
+    <details class="machine-more"><summary>Default answers and permissions</summary>
+    <p class="hint">Choose who handles direct questions and accepted tasks by default. This does not change your named agents.</p>
+    <div id="responder"></div></details>
+    <details class="machine-more"><summary>Advanced agent settings</summary><div id="named-agents"></div></details>
     <details class="machine-more"><summary>Technical details</summary><div id="me" class="mono"></div></details>
     <footer class="side-foot">
       <details id="quarantine" class="held-back" hidden>

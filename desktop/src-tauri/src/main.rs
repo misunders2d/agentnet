@@ -8,6 +8,9 @@
 
 mod deeplink;
 mod clipboard;
+mod skinfolder;
+mod download;
+mod appcontrols;
 #[cfg(target_os = "linux")]
 mod linux;
 mod navigation;
@@ -31,6 +34,7 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_dialog::DialogExt;
 
 const AUTOSTART_ARG: &str = "--autostart";
 const AUTOSTART_CHOSEN: &str = "autostart-chosen"; // in the app's config dir: the person's choice stands
@@ -45,6 +49,9 @@ enum Signal {
 /// The shell's state, shared by the window, the tray and the supervisor.
 #[derive(Default)]
 struct Shell {
+    app_calls: Mutex<std::collections::HashMap<u64, Sender<(u16, String)>>>,
+    app_call_id: std::sync::atomic::AtomicU64,
+    downloads: Mutex<std::collections::HashMap<String, OsString>>,
     page: Mutex<Option<Url>>,       // the page the program announced last (with its token)
     splash: Mutex<Option<Url>>,     // the window's own starting page
     pending: Mutex<Option<String>>, // a link's fragment that came before the page
@@ -63,12 +70,14 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![AUTOSTART_ARG])))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image, skinfolder::agentnet_skin_folder, download::agentnet_download_blob, appcontrols::agentnet_app_controls])
         .manage(Shell::default())
         .setup(move |app| {
             let handle = app.handle().clone();
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .initialization_script(include_str!("clipboard.js"))
+                .initialization_script(if cfg!(target_os = "linux") { include_str!("download.js") } else { "" })
                 .title("AgentNet")
                 .inner_size(1200.0, 800.0)
                 .min_inner_size(380.0, 600.0)
@@ -95,11 +104,16 @@ fn main() {
                 .on_download({
                     let h = handle.clone();
                     move |_, event| {
-                        if let DownloadEvent::Requested { destination, .. } = event {
+                        if let DownloadEvent::Requested { url, destination } = event {
+                            let requested_name = h.state::<Shell>().downloads.lock().unwrap().remove(url.as_str());
                             if let Ok(dir) = h.path().download_dir() {
-                                let name = destination.file_name().map(|n| n.to_owned()).unwrap_or_else(|| OsString::from("download"));
+                                let name = requested_name
+                                    .or_else(|| destination.file_name().map(|n| n.to_owned())).unwrap_or_else(|| OsString::from("download"));
                                 *destination = unique(dir.join(name));
                             }
+                        } else if let DownloadEvent::Finished { url, success, .. } = event {
+                            h.state::<Shell>().downloads.lock().unwrap().remove(url.as_str());
+                            if !success { h.dialog().message("AgentNet could not save this download. Try Download again.").title("Download failed").show(|_| {}); }
                         }
                         true
                     }
@@ -282,6 +296,9 @@ fn on_line(app: &AppHandle, line: String) {
             let h = app.clone();
             std::thread::spawn(move || apply_update(&h, &helper, &plan, &home));
         }
+        Some(sidecar::Event::Appreply { call_id, status, body }) => {
+            if let Some(reply) = app.state::<Shell>().app_calls.lock().unwrap().remove(&call_id) { let _ = reply.send((status, body)); }
+        }
         None => {}
     }
 }
@@ -330,7 +347,7 @@ fn supervise(app: AppHandle) {
                 *shell.running.lock().unwrap() = Some(r);
                 loop {
                     match rx.recv() {
-                        Ok(Signal::Exited) => break,
+                        Ok(Signal::Exited) => { shell.app_calls.lock().unwrap().clear(); break; },
                         Ok(Signal::Retry) => {
                             // Try again while it runs (it showed an error): start it afresh.
                             let running = shell.running.lock().unwrap().take();

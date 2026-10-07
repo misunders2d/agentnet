@@ -3,6 +3,15 @@
 
 use url::Url;
 
+/// Blob downloads are created by the current AgentNet page after its host
+/// checked and decrypted an attachment. Keep the embedded origin exact.
+pub fn page_blob(page: &Url, url: &Url) -> bool {
+    if url.scheme() != "blob" { return false; }
+    let Ok(inner) = Url::parse(url.path()) else { return false };
+    inner.username().is_empty() && inner.password().is_none()
+        && crate::same_origin(page, &inner)
+}
+
 pub fn app_origin(url: &Url) -> bool {
     url.username().is_empty()
         && url.password().is_none()
@@ -16,6 +25,17 @@ pub fn app_origin(url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blobs_belong_only_to_the_current_page_origin() {
+        let page = Url::parse("http://127.0.0.1:17443/?t=private").unwrap();
+        for value in ["blob:http://127.0.0.1:17443/attachment"] {
+            assert!(page_blob(&page, &Url::parse(value).unwrap()), "{value}");
+        }
+        for value in ["blob:null/attachment", "blob:http://127.0.0.1:17444/attachment", "blob:http://localhost:17443/attachment", "blob:https://127.0.0.1:17443/attachment", "blob:http://user@127.0.0.1:17443/attachment", "blob:https://evil.example/attachment"] {
+            assert!(!page_blob(&page, &Url::parse(value).unwrap()), "{value}");
+        }
+    }
 
     #[test]
     fn bundled_pages_stay_inside_on_every_platform() {

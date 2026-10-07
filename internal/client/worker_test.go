@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -569,7 +571,7 @@ func TestResponderSeesConfiguredDirectory(t *testing.T) {
 // switches skills or tools off wholesale or swaps in an empty configuration.
 func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
 	blanket := []string{"--tools", "--strict-mcp-config", "--mcp-config", "--no-tools", "--no-skills", "--ignore-user-config", "--disable", "--no-builtin-tools"}
-	for name, h := range map[string]harness{"claude": Harnesses["claude"], "codex": Harnesses["codex"], "pi": Harnesses["pi"]} {
+	for name, h := range map[string]harness{"claude": Harnesses["claude"], "codex": Harnesses["codex"], "pi": Harnesses["pi"], "omp": Harnesses["omp"]} {
 		for _, flag := range blanket {
 			if slices.Contains(h.question, flag) {
 				t.Errorf("%s question mode uses %s", name, flag)
@@ -675,4 +677,197 @@ func TestQuestionPromptOffersAskingBack(t *testing.T) {
 			t.Fatal("missing local permission stop")
 		}
 	}
+}
+
+func TestWorkerStartupTimingAndLaunchFailure(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing-%t", missing), func(t *testing.T) {
+			st := installStub(t, "answer")
+			w := newWorld(t, "")
+			setResponder(t, w.bob, "stub", st.dir, time.Minute)
+			if missing {
+				if err := os.Remove(Harnesses["stub"].bin); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.bob.Approve(w.alice.Address); err != nil {
+				t.Fatal(err)
+			}
+			var mu sync.Mutex
+			var logs []string
+			w.bob.Logf = func(f string, args ...any) { mu.Lock(); logs = append(logs, fmt.Sprintf(f, args...)); mu.Unlock() }
+			ctx, cancel := context.WithCancel(tctx(t))
+			done := make(chan error, 1)
+			go func() { done <- w.bob.Run(ctx, RunOptions{}) }()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Error("worker did not stop")
+				}
+			})
+			runAgent(t, w.alice)
+			q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "PRIVATE_STARTUP_CONTENT"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var answer Message
+			eventually(t, "terminal launch result", func() bool { var ok bool; answer, ok = findReply(w.alice, q.ID); return ok })
+			wantStatus, wantState := envelope.StatusDone, stateAnswered
+			if missing {
+				wantStatus, wantState = envelope.StatusFailed, stateJobFailed
+			}
+			if answer.Status != wantStatus {
+				t.Fatalf("result %s, want %s", answer.Status, wantStatus)
+			}
+			waitState(t, w.bob, q.ID, wantState)
+			mu.Lock()
+			joined := strings.Join(logs, "\n")
+			mu.Unlock()
+			if !strings.Contains(joined, "stored_age_ms=") || strings.Contains(joined, "PRIVATE_STARTUP_CONTENT") {
+				t.Fatalf("startup diagnostics missing or disclosed content: %s", joined)
+			}
+			if missing {
+				if !strings.Contains(joined, "launch failed: setup_ms=") || strings.Contains(joined, "first output:") || st.count() != 0 {
+					t.Fatalf("failed launch falsely ran: %s", joined)
+				}
+				if w.bob.runNext(tctx(t), nil) {
+					t.Fatal("failed launch reran without explicit acceptance")
+				}
+			} else if !strings.Contains(joined, "process started: setup_ms=") || strings.Count(joined, "first output:") != 1 || st.count() != 1 {
+				t.Fatalf("startup milestones incorrect: %s", joined)
+			}
+		})
+	}
+}
+
+func TestOMPResponderQuestionAndAcceptedTask(t *testing.T) {
+	st := installStub(t, "answer")
+	original := Harnesses["omp"]
+	h := original
+	h.bin = Harnesses["stub"].bin
+	Harnesses["omp"] = h
+	t.Cleanup(func() { Harnesses["omp"] = original })
+	script := `#!/bin/sh
+ if [ "$1" = "--help" ]; then echo "--print --no-session --config --approval-mode --extension"; exit 0; fi
+ echo "run cwd=$(pwd) args=$*" >> "$STUB_LOG"
+ for arg do
+  if [ "$previous" = "--config" ]; then
+   test -f "$arg" || exit 41
+   cp "$arg" "$STUB_LOG.policy"
+   echo "$arg" > "$STUB_LOG.path"
+  fi
+  previous="$arg"
+ done
+ cat > "$STUB_LOG.stdin"
+ echo "omp stub answer"
+`
+	if err := os.WriteFile(h.bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	w := newWorld(t, "")
+	setResponder(t, w.bob, "omp", st.dir, 0)
+	w.bob.Approve(w.alice.Address)
+	runAgent(t, w.bob)
+	runAgent(t, w.alice)
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "question only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, q.ID, stateAnswered)
+	policy, err := os.ReadFile(st.log + ".policy")
+	if err != nil || string(policy) != ompQuestionPolicy {
+		t.Fatalf("question policy %q %v", policy, err)
+	}
+	path, _ := os.ReadFile(st.log + ".path")
+	eventually(t, "OMP overlay removed after worker cleanup", func() bool { _, e := os.Stat(strings.TrimSpace(string(path))); return os.IsNotExist(e) })
+	log, _ := os.ReadFile(st.log)
+	if !strings.Contains(string(log), "--approval-mode always-ask") || !strings.Contains(string(log), "--extension") || strings.Contains(string(log), "--exclude-tools") || strings.Contains(string(log), "--resume") {
+		t.Fatalf("OMP question args %s", log)
+	}
+	task, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindTask, Body: "accepted work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, task.ID, stateAwaiting)
+	if st.count() != 1 {
+		t.Fatal("task executed before acceptance")
+	}
+	if err := w.bob.Accept(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, task.ID, stateAnswered)
+	log, _ = os.ReadFile(st.log)
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if len(lines) != 2 || strings.Contains(lines[1], "--config") || strings.Contains(lines[1], "--approval-mode") || strings.Contains(lines[1], "--resume") {
+		t.Fatalf("task changed own permissions/session: %s", log)
+	}
+}
+
+// Opt-in actual OMP: fresh background jobs, synthetic homes/requests only.
+func TestLiveOMP(t *testing.T) {
+	if os.Getenv("AGENTNET_LIVE") != "omp" {
+		t.Skip("set AGENTNET_LIVE=omp for a real native responder smoke")
+	}
+	old := Harnesses["omp"]
+	h := old
+	if native := os.Getenv("AGENTNET_OMP_BINARY"); native != "" {
+		h.bin = native
+	}
+	Harnesses["omp"] = h
+	t.Cleanup(func() { Harnesses["omp"] = old })
+	program := os.Getenv("AGENTNET_LOOKUP_BINARY")
+	if program == "" {
+		t.Fatal("bind the exact installed AgentNet binary for version lookup")
+	}
+	expected, err := exec.Command(program, "version").Output()
+	if err != nil {
+		t.Fatal("installed version lookup unavailable")
+	}
+	bindProgram(t, program)
+	w := newWorld(t, "")
+	dir := t.TempDir()
+	setResponder(t, w.bob, "omp", dir, 0)
+	w.bob.Approve(w.alice.Address)
+	runAgent(t, w.bob)
+	runAgent(t, w.alice)
+	waitResult := func(id string) Message {
+		t.Helper()
+		for deadline := time.Now().Add(75 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+			if m, ok := findReply(w.alice, id); ok {
+				return m
+			}
+		}
+		t.Fatal("real OMP result not received within bounded smoke window")
+		return Message{}
+	}
+	q, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindQuestion, Body: "Use only the fixed agentnet_lookup version operation to read the installed AgentNet version. Reply with both exact lines: version/protocol AND build revision. Include the complete build revision hash. Do not use other tools, edit files, contact people or run any external actions."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := waitResult(q.ID)
+	if answer.Status != envelope.StatusDone || !strings.Contains(answer.Body, strings.Split(strings.TrimSpace(string(expected)), "\n")[0]) {
+		t.Fatalf("real OMP version question failed (status=%s, authentication_error=%t)", answer.Status, strings.Contains(strings.ToLower(answer.Body), "auth"))
+	}
+	t.Log("real OMP question returned installed AgentNet version")
+	if os.Getenv("AGENTNET_OMP_QUESTION_ONLY") == "1" {
+		return
+	}
+	task, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindTask, Body: "Without any tools or external actions, return exactly OMP-BENIGN-ACK."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, task.ID, stateAwaiting)
+	if err := w.bob.Accept(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := waitResult(task.ID)
+	if result.Status != envelope.StatusDone || !strings.Contains(result.Body, "OMP-BENIGN-ACK") {
+		t.Fatalf("real OMP benign accepted task failed (status=%s)", result.Status)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("real OMP altered synthetic working folder (%d entries)", len(entries))
+	}
+	t.Log("real OMP accepted benign task returned exact ACK; working folder unchanged")
 }

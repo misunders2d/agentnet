@@ -1,4 +1,4 @@
-// Classic's and Zoom's "Use AgentNet inside your tools" (skins/*/src/assistant-setup.mjs)
+// Classic's and Zoom's "Set up your agents" (skins/*/src/assistant-setup.mjs)
 // on a tiny stand-in DOM: the working folder is chosen by browsing
 // /api/folders, never typed; a folder that can't be read still leads
 // somewhere (Up, Home); review comes before apply; the reviewed change is
@@ -55,11 +55,11 @@ const click = async (root, name) => { const b = buttonNamed(root, name); assert.
 function tool(id, over = {}) {
   return { id, label: { claude: 'Claude', codex: 'Codex', omp: 'OMP' }[id], detected: true, configured: false, registered: false, supported: true, state: 'detected', note: 'Installed.', ...over };
 }
-function server({ folderDelay, agents: start = [], local = true } = {}) {
+function server({ folderDelay, agents: start = [], local = true, unsupportedHooks=false } = {}) {
   const calls = [];
   let agents = start;
   let status = 'needs_setup';
-  const view = () => ({ local: true, harnesses: [tool('claude', {state:status, configured:status !== 'needs_setup', registered:status === 'connected'}), tool('codex'), tool('omp', { detected: false, state: 'not_detected' })] });
+  const view = () => ({ local: true, harnesses: [tool('claude', unsupportedHooks?{state:'unsupported',detected:false,supported:false}: {state:status, configured:status !== 'needs_setup', registered:status === 'connected'}), tool('codex'), tool('omp', { detected: false, state: 'not_detected' })] });
   const home = { path: '/home/me', parent: '/home', home: '/home/me', dirs: ['work', 'notes', 'locked'], truncated: true };
   const folders = {
     '/api/folders': home,
@@ -91,7 +91,8 @@ function server({ folderDelay, agents: start = [], local = true } = {}) {
 }
 
 for (const skin of ['classic', 'zoom']) {
-  const { mountAssistantSetup, folderEntries } = await import('../skins/' + skin + '/src/assistant-setup.mjs');
+  const { mountAssistantSetup, folderEntries, agentStatus } = await import('../skins/' + skin + '/src/assistant-setup.mjs');
+  for(const state of ['needs_setup','needs_activation','connected','error'])assert.equal(agentStatus(tool('claude',{state}),{agents:[{record:{label:'Casey'},enabled:true,responder:{harness:'claude',ready:true}}]}).word,'Ready',skin+' hook state cannot downgrade named agent');
   assert.deepEqual(folderEntries({ path: 'C:\\Users', dirs: ['me'] }), [{ name: 'me', path: 'C:\\Users\\me' }], skin);
   assert.deepEqual(folderEntries({ path: '/', dirs: ['home', { name: 'x', path: '/x' }] }), [{ name: 'home', path: '/home' }, { name: 'x', path: '/x' }], skin);
 
@@ -101,14 +102,14 @@ for (const skin of ['classic', 'zoom']) {
     const doc = makeDocument(), root = doc.createElement('div'), s = server();
     doc.documentElement.append(root);
     const controller = await mountAssistantSetup({ root, api: s.api });
-    await click(root, 'Use AgentNet inside your tools');
+    await click(root, 'Set up your agents');
     root.querySelector('#setup-tool-codex').checked = true;
     root.querySelector('#setup-tool-codex').onchange();
     s.status('needs_activation');
     const before = s.calls.length;
     doc.defaultView.dispatchEvent(new Event('focus')); await flush(); await flush();
-    assert.deepEqual(s.calls.slice(before), [['GET', '/api/assistant-setup']], skin);
-    assert.doesNotMatch(root.textContent, /Needs setup/, skin);
+    assert.deepEqual(s.calls.slice(before), [['GET', '/api/assistant-setup'],['GET','/api/agents']], skin);
+    assert.match(root.textContent, /Choose a name and working folder/, skin);
     assert.match(root.textContent, /Needs activation/, skin);
     assert.equal(root.querySelector('#setup-tool-codex').checked, true, skin);
     doc.visibilityState = 'hidden'; s.status('connected');
@@ -121,6 +122,18 @@ for (const skin of ['classic', 'zoom']) {
     controller.dispose(); const ended = s.calls.length;
     doc.defaultView.dispatchEvent(new Event('focus')); await flush();
     assert.equal(s.calls.length, ended, skin);
+  }
+
+  // Hook installation is unsupported, but the existing named agent remains configurable.
+  {
+   const doc=makeDocument(),root=doc.createElement('div'),s=server({unsupportedHooks:true,agents:[{record:{id:'existing',label:'Casey'},enabled:true,responder:{harness:'claude',dir:'/home/me/work',ready:true}}]});doc.documentElement.append(root);
+   await mountAssistantSetup({root,api:s.api});await click(root,'Set up your agents');
+   assert.equal(root.querySelector('#setup-tool-claude').disabled,false,skin);
+   assert.match(root.textContent,/Ready.*Casey is set up/);
+   await click(root,'Review changes');await click(root,'Confirm setup');
+   assert.match(root.textContent,/Ready.*Casey is set up/);
+   assert(s.calls.filter(c=>c[1]==='/api/assistant-setup').every(c=>c[0]==='GET'),'no unsupported native review/install');
+   assert(s.calls.some(c=>c[1]==='/api/agents'&&c[2]?.action==='publish'),'existing named agent flow remains usable');
   }
 
   // A browser asks the server nothing and says where setup happens.
@@ -136,7 +149,7 @@ for (const skin of ['classic', 'zoom']) {
   doc.documentElement.append(root);
   await mountAssistantSetup({ root, api: s.api, suggestedHarness: 'claude' });
   assert.match(root.textContent, /Your answers use Claude/, skin);
-  await click(root, 'Use AgentNet inside your tools');
+  await click(root, 'Set up your agents');
   assert.match(root.textContent, /connection is out of date or still points to your previous AgentNet/, skin);
   // No typed folder anywhere: the only text field is a new agent's name.
   const claude = root.querySelector('#setup-tool-claude');
@@ -184,7 +197,7 @@ for (const skin of ['classic', 'zoom']) {
     const doc2 = makeDocument(), root2 = doc2.createElement('div'), s2 = server({ folderDelay: gate });
     doc2.documentElement.append(root2);
     await mountAssistantSetup({ root: root2, api: s2.api });
-    await click(root2, 'Use AgentNet inside your tools');
+    await click(root2, 'Set up your agents');
     const c2 = root2.querySelector('#setup-tool-claude');
     c2.checked = true; c2.onchange(); await flush();
     const opening = buttonNamed(root2, 'Choose working folder for Claude').onclick();
@@ -203,7 +216,7 @@ for (const skin of ['classic', 'zoom']) {
     const doc3 = makeDocument(), root3 = doc3.createElement('div'), s3 = server({ agents: [gone] });
     doc3.documentElement.append(root3);
     await mountAssistantSetup({ root: root3, api: s3.api });
-    await click(root3, 'Use AgentNet inside your tools');
+    await click(root3, 'Set up your agents');
     const c3 = root3.querySelector('#setup-tool-claude');
     c3.checked = true; c3.onchange(); await flush();
     await click(root3, 'Change working folder for Claude');
@@ -231,7 +244,7 @@ for (const skin of ['classic', 'zoom']) {
     const doc4 = makeDocument(), root4 = doc4.createElement('div'), s4 = server({ local: false });
     doc4.documentElement.append(root4);
     await mountAssistantSetup({ root: root4, api: s4.api });
-    await click(root4, 'Use AgentNet inside your tools');
+    await click(root4, 'Set up your agents');
     assert.match(root4.textContent, /Open Settings on your AgentNet computer/, skin);
     assert.doesNotMatch(root4.textContent, /Agent catalog unavailable/, skin);
     assert.deepEqual(s4.calls, [['GET', '/api/assistant-setup']], skin);

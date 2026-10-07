@@ -144,7 +144,7 @@ export function ChatList() {
                 <li key={i.key} onPointerDown={(e) => ahead(i.open, e)} onPointerEnter={(e) => ahead(i.open, e)} onPointerLeave={() => clearTimeout(hover.current)} className={wide ? "" : "relative [&+&]:before:absolute [&+&]:before:top-0 [&+&]:before:right-4 [&+&]:before:left-[76px] [&+&]:before:border-t [&+&]:before:border-hairline"}>
                   <ChatRow item={i} summary={summaries.get(i.open.id)} overview={overview} wide={wide}
                     selected={!!lit && (lit.id === i.open.id || !!i.conversations?.some((c) => c.id === lit.id))}
-                    onOpen={() => void store.open(open?.kind === "dm" && i.conversations?.some((c) => c.id === open.id) ? open : i.open)} />
+                    onOpen={() => void store.openChat(i.open)} />
                 </li>
               ))}
             </ul>

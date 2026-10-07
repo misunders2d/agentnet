@@ -9,6 +9,7 @@ import { pendingSends } from "./optimistic.mjs";
 import { useSyncExternalStore } from "react";
 import { api, errorText, type Api, type T } from "./api";
 import type { Host, HostEvent, OpenContext } from "./host";
+import { mainPreferences, personRoots } from "./person-topics.mjs";
 
 export type Conn = "loading" | "live" | "lost" | "updating" | "gone";
 // A thread names its agent's device (peer) whenever that is known: an
@@ -84,8 +85,10 @@ export class Store {
   private focusSeq = 0;
   private topicFocusSeq = 0;
   private alive = true;
+  private chooseMain: ReturnType<typeof mainPreferences>;
 
   constructor(readonly host: Host) {
+    this.chooseMain = mainPreferences(host.workspace.id, () => localStorage);
     this.api = api(host);
     this.sends = pendingSends(host, () => {
       const o = this.state?.open;
@@ -184,6 +187,24 @@ export class Store {
   retryNow() { void this.recover([0]); }
 
   // ---- the open conversation
+  // A UI preference selects an existing signed Main root, never a new scope.
+  // Reloads and late history cannot silently change its audience or draft.
+  personMain(dm: T.DMThread | T.DMSummary): string {
+    const person = dm.peer?.person;
+    if (!person || dm.kind === "group" || dm.role && dm.role !== "member") return "";
+    const roots = personRoots(this.state.overview, dm as T.DMThread);
+    return this.chooseMain(roots, person);
+  }
+
+  async openChat(o: Open) {
+    if (o?.kind !== "dm") return this.open(o);
+    const dm = this.state.overview?.dms?.find(d => d.id === o.id);
+    const main = dm && this.personMain(dm);
+    if (!main) return this.open(o);
+    this.setDraft(main, { ...this.draft(main), topic: undefined, newTopic: false, replyTo: undefined });
+    return this.open({ kind: "dm", id: main });
+  }
+
   // open shows a conversation without a blank in between: one loaded
   // before shows at once (and is loaded again behind it); otherwise what is
   // on screen stays until the new one's messages are here, and only a slow

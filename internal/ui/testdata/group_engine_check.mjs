@@ -99,6 +99,41 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const remove=(await w.st.all('inbox')).map(r=>({s:'inbox',k:r.id}));if(remove.length)await w.st.write(remove);
   }
   await w.close();
+  // Chat alerts use verified current members, not a separate DM/grant.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);
+  {
+   const quiet='f'.repeat(64),next='e'.repeat(64);
+   await w.st.write([{s:'convs',k:quiet,v:{id:quiet,kind:'dm',peer:'a'.repeat(32),creator:'other/device'}},{s:'kv',k:'notify',v:{enabled:true,allowed:[],mutes:[conv],rev:1,synced:0}}]);
+   const migrated=await w.e.notifyState();
+   check(migrated.mutes.includes(quiet)&&migrated.mutes.includes(conv),'legacy quiet DM and explicit group mute preserved');
+   check((await w.e.notifyState()).rev===migrated.rev,'quiet migration happens once');
+   await w.st.write([{s:'convs',k:quiet},{s:'convs',k:next,v:{id:next,kind:'dm',peer:'a'.repeat(32),creator:'other/device'}}]);
+   check(!(await w.e.notifyState()).mutes.includes(next),'future chat defaults unmuted');
+   await w.st.write([{s:'convs',k:next}]);
+   const peer=await w.st.get('persons',states[0].members.find(m=>m.person!==w.e.me.person).person);
+   const makeChat=async()=>{const r=await wire.newRoot(keys,{person:w.e.me.person,roster:w.e.me.hash,address,fingerprint:w.e.fp},{person:peer.person,roster:peer.hash}),id=await wire.rootID(r);await w.st.write([{s:'convs',k:id,v:{id,kind:'dm',peer:peer.person,root:wire.rootJSON(r),creator:address}}]);return id;};
+   const firstChat=await makeChat();
+   await w.e.muteDM(firstChat,true);
+   const secondChat=await makeChat();
+   check((await w.e.effectiveNotifyMutes(await w.e.notifyState())).includes(secondChat),'future member root inherits person-chat mute');
+   await w.e.muteDM(secondChat,false);
+   const cleared=await w.e.effectiveNotifyMutes(await w.e.notifyState());
+   check(!cleared.includes(firstChat)&&!cleared.includes(secondChat)&&cleared.includes(conv),'unmute clears all person roots but preserves group mute');
+   await w.st.write([{s:'convs',k:firstChat},{s:'convs',k:secondChat}]);
+   const senders=await w.e.notifySenders(await w.e.notifyState());
+   check(senders.some(x=>x.address===alicePub.address)&&senders.some(x=>x.address===bobPub.address),'group members notify with no DM or sender grant');
+   await w.e.muteDM(conv,false);check(!(await w.e.notifyState()).mutes.includes(conv),'group mute can be cleared');
+   await w.e.muteDM(conv,true);check((await w.e.notifyState()).mutes.includes(conv),'group mute persists');
+   check(await w.e.resolveChannel(await wire.notifyChannel(conv,w.e.fp))===conv,'group push opens exact group');
+   const call=w.e.call,info=w.e.notifyInfo,seen=[];
+   w.e.notifyInfo=async()=>({});w.e.call=async(method,path,body)=>{seen.push({method,path,body});return {};};
+   await w.e.notifySeen(conv,[wire.newID()]);check(seen.length===1&&seen[0].path==='/v1/notify/seen'&&seen[0].body.channel===await wire.notifyChannel(conv,w.e.fp),'visible group suppresses matching push');
+   w.e.call=call;w.e.notifyInfo=info;
+   w.e.groupSupport=async()=>true;w.e.post=async()=>{};
+   const sent=await w.e.sendDM({conv,body:'GROUP_ALERT_NATIVE_CHANNEL'}),copies=(await w.st.all('outbox')).filter(x=>x.lid===sent.lid);
+   check(copies.length>0&&copies.every(x=>wire.parseEnvelope(x.envelope).attn&&wire.parseEnvelope(x.envelope).chan),'group ordinary sends retain signed push hints');
+  }
+  await w.close();
   // Receiving a delayed turn cannot turn the current roster into proof
   // that the newly admitted person held that old sealed copy.
   w=await world();await w.receive(c.proof);await w.receive(c.context);

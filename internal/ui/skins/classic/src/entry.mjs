@@ -1,6 +1,7 @@
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
 import { avatarPicture, openPictureEditor, pastePictures } from "./pictures.mjs";
 import { topicControls } from './topics.mjs';
+import {personRoots,personTopicEntries,mainPreferences} from './person-topics.mjs';
 import { pendingSends, sendID } from "./optimistic.mjs";
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
@@ -79,6 +80,19 @@ const setTimeout = (fn, ms) => { const timer = globalThis.setTimeout(() => { tim
 
 const $ = (id) => root.querySelector("#" + CSS.escape(id));
 const topicSelections={},topicFresh={};
+const choosePersonMain=mainPreferences(currentHost.workspace.id,()=>root.ownerDocument.defaultView.localStorage);
+function flatTopicScope(t) {
+ const roots=personRoots(state.overview,t),main=choosePersonMain(roots,t?.peer?.person);
+ return main?{roots,main,view:t}:null;
+}
+async function choosePersonTopic(conv,topic) {
+ topicSelections[conv]=topic||'';topicFresh[conv]=false;
+ if(conv===state.dm){setDMReply(null);renderDMBody(false);}else await openDM(conv);
+}
+function openPersonMain(p,dms) {
+ const main=choosePersonMain(dms,p.person);
+ if(main){void choosePersonTopic(main,'');return true;}return false;
+}
 const sends = pendingSends(host, () => { if (alive) renderBody(false); });
 const state = { thread: null, data: null, seq: -1, answering: null, lastSeen: {}, presence: {},
   drafts: {}, draftKey: null, replyReceiver: null, replyReceiverHost: null, receiverCatalog: null, receiverCatalogSeq: 0, receiverBindings: [], sending: false, hub: null, hubUp: null, query: "", singlesOpen: {}, directoryOpen: false,
@@ -135,7 +149,7 @@ function el(tag, attrs, ...kids) {
 
 // Every operation keeps the host it started with.
 async function api(path, body, host = currentHost) { return host.api(path, body); }
-const topicUI=topicControls(root,{api,announce:text=>announce(text),choose:id=>{if(state.dm){topicSelections[state.dm]=id;topicFresh[state.dm]=false;setDMReply(null);renderDMBody(false);}else if(id!==state.thread)void openThread(id);},fresh:()=>{const id=state.dm||state.thread;topicFresh[id]=true;if(state.dm){topicSelections[id]='';renderDMBody(false);}announce('New topic: your next message starts a separate flow.');$('body').focus();},changed:async()=>{await loadOverview();state.dm?await loadDM(false):await loadThread(false);}});
+const topicUI=topicControls(root,{api,chooseRoot:choosePersonTopic,announce:text=>announce(text),choose:id=>{if(state.dm){topicSelections[state.dm]=id;topicFresh[state.dm]=false;setDMReply(null);renderDMBody(false);}else if(id!==state.thread)void openThread(id);},fresh:()=>{const id=state.dm||state.thread;topicFresh[id]=true;if(state.dm){topicSelections[id]='';renderDMBody(false);}announce('New topic: your next message starts a separate flow.');$('body').focus();},changed:async()=>{await loadOverview();state.dm?await loadDM(false):await loadThread(false);}});
 cleanups.push(()=>topicUI.stop());
 
 // A time is an RFC 3339 string, or unix seconds (a host's report and its
@@ -621,11 +635,11 @@ function notifyDialog() {
   if (native) return alertsDialog();
   dialog({
     title: "Get notifications?",
-    body: [el("p", {}, "When someone you started a DM with writes to you, or an agent you invited answers, this device shows \u201cAgentNet: New activity\u201d. It never shows what was written."),
-      el("p", {}, "You can mute any DM, and turn this off again here."),
+    body: [el("p", {}, "When someone in a chat writes to you, or an agent you invited answers, this device shows \u201cAgentNet: New activity\u201d. It never shows what was written."),
+      el("p", {}, "You can mute any chat, and turn this off again here."),
       el("details", { class: "tech" }, el("summary", {}, "Details"),
         el("p", {}, "Your server keeps your notification settings and learns which of your messages belong to the same conversation (not which one), and when you read one here. Your browser's push service learns when a notification is sent to this device, not what it is about."),
-        el("p", {}, "Your system may delay or hide notifications (Focus, battery saving, a closed browser on some systems). People who start a DM with you alert only after you allow them.")),
+        el("p", {}, "Your system may delay or hide notifications (Focus, battery saving, a closed browser on some systems). Chats notify you unless muted.")),
       el("p", { class: "hint" }, "Your browser asks next whether AgentNet may show notifications.")],
     ok: "Turn on",
     run: async () => {
@@ -643,10 +657,10 @@ function notifyDialog() {
 function alertsDialog() {
   dialog({
     title: "Get alerts on this computer?",
-    body: [el("p", {}, "When someone you started a DM with writes to you, or an agent you invited answers, this computer shows \u201cAgentNet: New activity\u201d while AgentNet runs here, even with this page closed. It never shows what was written."),
-      el("p", {}, "You can mute any DM, and turn this off again here."),
+    body: [el("p", {}, "When someone in a chat writes to you, or an agent you invited answers, this computer shows \u201cAgentNet: New activity\u201d while AgentNet runs here, even with this page closed. It never shows what was written."),
+      el("p", {}, "You can mute any chat, and turn this off again here."),
       el("details", { class: "tech" }, el("summary", {}, "Details"),
-        el("p", {}, "Nothing leaves this computer for this: AgentNet decides from the messages it already holds. Your system may delay or hide alerts (do not disturb, focus modes). Clicking an alert opens its DM on Linux; on macOS and Windows it only shows. People who start a DM with you alert only after you allow them.")),
+        el("p", {}, "Nothing leaves this computer for this: AgentNet decides from the messages it already holds. Your system may delay or hide alerts (do not disturb, focus modes). Clicking an alert opens its DM on Linux; on macOS and Windows it only shows. Chats notify you unless muted.")),
     ],
     ok: "Turn on",
     run: async () => {
@@ -660,13 +674,10 @@ function alertsDialog() {
 // dmNotifyChips are a DM's mute, and whether its person may alert you.
 function dmNotifyChips(t) {
   const n = state.overview && state.overview.notify;
-  if (!n || !n.enabled || !t.peer.person) return [];
-  const muted = n.mutes.includes(t.id);
-  const allowed = n.allowed.includes(t.peer.address);
+  if (!n || !n.available || !t.id) return [];
+  const muted = (n.mutes || []).includes(t.id);
   return [el("button", { type: "button", class: "peer-chip" + (muted ? "" : " on"), onclick: () => notifyAct("/api/notify/mute", { conv: t.id, muted: !muted }),
-    title: muted ? "This DM does not notify you" : "New activity in this DM notifies you" }, muted ? "Muted" : "Notifies you"),
-  !allowed && el("button", { type: "button", class: "peer-chip", onclick: () => notifyAct("/api/notify/allow", { person: t.peer.person, allowed: true }),
-    title: "You did not start a DM with " + t.peer.label + ", so their messages do not notify you" }, "Alerts from " + t.peer.label + " off · Allow")].filter(Boolean);
+    title: muted ? "This chat is muted" : "New activity in this chat notifies you when device alerts are on" }, muted ? "Unmute chat" : "Mute chat")];
 }
 
 // reportSeen tells the relay which messages of the open DM the person has
@@ -1466,7 +1477,7 @@ function personRow(p, dms) {
   const held = dms.reduce((n, d) => n + d.held, 0);
   const last = dms[0];
   const head = el("button", { type: "button", class: "conv-item contact", "aria-current": String(current),
-    onclick: () => (dms.length === 1 ? openDM(dms[0].id) : openHub({ kind: "person", key })) },
+    onclick: () => {if(!openPersonMain(p,dms))openHub({kind:"person",key});} },
     avatar(p.label || p.address),
     el("span", { class: "conv-main" },
       el("span", { class: "conv-top" }, el("span", { class: "conv-name person-name" }, p.label),
@@ -1478,7 +1489,7 @@ function personRow(p, dms) {
         p.state === "conflict" && el("span", { class: "conv-flag danger" }, "Frozen"),
         held > 0 && el("span", { class: "conv-flag calm" }, held + " held"),
         unread > 0 && el("span", { class: "conv-flag unread" }, unread + " new")),
-      el("span", { class: "conv-sub" }, plural(dms.length, "chat", "chats") + " · " + plural(devicesOf(p).length, "device", "devices")),
+      el("span", { class: "conv-sub" }, plural(devicesOf(p).length, "device", "devices")),
       (p.agents || []).map((a) => el("span", { class: "conv-sub agent-link" }, agentLinkText(a, p)))));
   return el("li", { class: "contact-item" + (current ? " open" : "") }, head);
 }
@@ -1557,6 +1568,11 @@ function commitConversation() {
   root.classList.add("show-conv");
 }
 function openHub(h) {
+  if(h.kind==='person') {
+   const p=(state.overview?.people||[]).find(p=>personKey(p)===h.key);
+   const dms=(state.overview?.dms||[]).filter(d=>d.peer?.person===p?.person);
+   if(p&&openPersonMain(p,dms))return;
+  }
   rememberEntry();
   if (state.dm) beginDM(null);
   else if (state.data || state.thread) beginThread(null);
@@ -1650,7 +1666,7 @@ async function backOneLevel() {
 function setHubBack() {
   state.hub = state.hubUp = ownerOf();
   const x = hubOf(state.hub);
-  $("hub-back").hidden = !x;
+  $("hub-back").hidden = !x || !!(state.dmData && flatTopicScope(state.dmData));
   if (x) $("hub-back").textContent = "‹ " + x.label + (x.count > 1 ? " · " + plural(x.count, x.person ? "DM" : "conversation", x.person ? "DMs" : "conversations") : "");
 }
 
@@ -2088,7 +2104,7 @@ async function loadDM(scrollToEnd) {
   loadDMNames(t);
   renderDrive(t);
   if(topicSelections[t.id]&&!(t.topics||[]).some(x=>x.id===topicSelections[t.id])&&!sends.merge("dm:"+t.id,t.messages).some(m=>m._local&&m.topic===topicSelections[t.id]))topicSelections[t.id]="";
-  topicUI.update({conv:t.id},t.topics,topicSelections[t.id]);
+  topicUI.update({conv:t.id},t.topics,topicSelections[t.id],flatTopicScope(t));
   renderDMBody(scrollToEnd);
   const key = "dm:" + id;
   if (state.draftKey === null) restoreDraft(key, t); // just switched here (beginDM)
@@ -2111,7 +2127,7 @@ function renderDMBody(scrollToEnd) {
   const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 60;
   const shown=t.messages.filter(m=>(m.topic||'')===(topicSelections[t.id]||''));
   if(topicSelections[t.id]&&!(t.topics||[]).some(x=>x.id===topicSelections[t.id])&&!sends.merge("dm:"+t.id,t.messages).some(m=>m._local&&m.topic===topicSelections[t.id]))topicSelections[t.id]="";
-  topicUI.update({conv:t.id},t.topics,topicSelections[t.id]);
+  topicUI.update({conv:t.id},t.topics,topicSelections[t.id],flatTopicScope(t));
   fill(tl, shown.length ? shown.map((m, i) => dmMsg(m, t, shown[i - 1]))
     : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + (humanGroup(t) ? "the current members of " + t.title : t.peer.label) + " only."));
   if (scrollToEnd || atEnd) tl.scrollTop = tl.scrollHeight;
@@ -2233,6 +2249,7 @@ function dmDetails(m) {
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
+      m.delivery === "waiting" && m.detail && [el("dt", {}, "Waiting for"), el("dd", { class: "mono" }, m.detail.replace(/^peer_update:\s*/, ""))],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
@@ -3602,6 +3619,7 @@ function details(m) {
       el("dt", {}, "Message id"), el("dd", { class: "mono" }, m.id),
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
+      m.delivery === "waiting" && m.detail && [el("dt", {}, "Waiting for"), el("dd", { class: "mono" }, m.detail.replace(/^peer_update:\s*/, ""))],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],

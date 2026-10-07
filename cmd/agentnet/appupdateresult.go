@@ -8,13 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/misunders2d/agentnet/internal/client"
 	"github.com/misunders2d/agentnet/internal/secfile"
 )
 
 type appUpdateResult struct {
-	Version string `json:"version"`
-	State   string `json:"state"`
-	Problem string `json:"problem,omitempty"`
+	Version     string                `json:"version"`
+	State       string                `json:"state"`
+	Problem     string                `json:"problem,omitempty"`
+	Independent *appIndependentDaemon `json:"independent,omitempty"`
+	SwitchID    string                `json:"switch_id,omitempty"`
 }
 
 func validAppUpdateResultState(state string) bool {
@@ -25,7 +28,16 @@ func writeAppUpdateResult(home, version, state, problem string) error {
 	if !validAppUpdateResultState(state) {
 		return errors.New("invalid app update result state")
 	}
-	b, err := json.Marshal(appUpdateResult{version, state, problem})
+	r, err := readAppUpdateResult(home)
+	if err != nil || r.Version != version {
+		r = appUpdateResult{Version: version}
+	}
+	r.State, r.Problem = state, problem
+	return saveAppUpdateResult(home, r)
+}
+
+func saveAppUpdateResult(home string, r appUpdateResult) error {
+	b, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
@@ -56,6 +68,10 @@ func appUpdateResultText(home string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return formatAppUpdateResult(r), nil
+}
+
+func formatAppUpdateResult(r appUpdateResult) string {
 	var text string
 	switch r.State {
 	case "pending":
@@ -70,12 +86,12 @@ func appUpdateResultText(home string) (string, error) {
 	if r.Problem != "" {
 		text += " " + r.Problem
 	}
-	return text, nil
+	return text
 }
 
 // Called only once the app is ready, with a fresh exact-copy command check.
 func reconcileAppUpdateResult(home, runningVersion string, status appCommandStatus) error {
-	r, err := readAppUpdateResult(home)
+	r, err := projectedAppUpdateResult(home, runningVersion, status)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -85,6 +101,18 @@ func reconcileAppUpdateResult(home, runningVersion string, status appCommandStat
 	if r.State == "failed" {
 		return nil
 	}
+	return saveAppUpdateResult(home, r)
+}
+
+// Projection reads activation proof without changing any update or command file.
+func projectedAppUpdateResult(home, runningVersion string, status appCommandStatus) (appUpdateResult, error) {
+	r, err := readAppUpdateResult(home)
+	if err != nil {
+		return r, err
+	}
+	if r.State == "failed" {
+		return r, nil
+	}
 	state, problem := "complete", ""
 	if r.Version == "" || r.Version != runningVersion {
 		state, problem = "partial", fmt.Sprintf("Running app version %s does not match requested version %s.", runningVersion, r.Version)
@@ -93,6 +121,16 @@ func reconcileAppUpdateResult(home, runningVersion string, status appCommandStat
 		if status.Problem != "" {
 			problem += " " + status.Problem
 		}
+	} else if r.Independent != nil {
+		act, found, err := client.ReadUpdateActivation(home)
+		if r.State == "partial" && r.SwitchID == "" && r.Problem != "" {
+			state, problem = r.State, r.Problem
+		} else if err != nil || !found || r.SwitchID == "" || act.ID != r.SwitchID {
+			state, problem = "pending", "Waiting for the independently managed daemon to finish its active jobs and switch."
+		} else if act.Result != client.ActivationRunning || act.To != r.Version || act.Running != r.Version || act.PID <= 0 {
+			state, problem = "partial", "The independently managed daemon did not confirm the requested version. "+act.Detail
+		}
 	}
-	return writeAppUpdateResult(home, r.Version, state, problem)
+	r.State, r.Problem = state, problem
+	return r, nil
 }

@@ -59,7 +59,7 @@ func TestBundledDirectRunningReviewRendered(t *testing.T) {
 	t.Logf("%s", out)
 }
 
-func TestComicNotificationPersonRendered(t *testing.T) {
+func TestComicNotificationChatMuteRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright")
 	}

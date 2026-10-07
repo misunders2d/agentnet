@@ -1,13 +1,10 @@
 // Notifications: off until the person turns them on here. An alert says
 // only "AgentNet: New activity", never what was written. Each chat can be
-// muted, and a person who started a chat with you alerts you only once
-// you allow them.
+// muted from its own menu; chats notify by default once alerts are on.
 import { useEffect, useRef, useState } from "react";
 import type { T } from "../api";
 import { useApp } from "../context";
-import { personName } from "../model";
 import { useStore } from "../store";
-import { PersonAvatar } from "../ui/Avatar";
 import { Card, GroupLabel, Hint, PageHead, Skeleton, Toggle } from "./Settings.parts";
 
 const permission = () => (typeof Notification === "undefined" ? "unsupported" : Notification.permission);
@@ -24,7 +21,7 @@ export function NotificationsSection({ titleRef }: { titleRef?: React.Ref<HTMLHe
   if (!o) return <>{head}<Skeleton /></>;
   const n = o.notify;
   if (!n) return <>{head}<Card className="p-4"><p>Notifications aren’t available in this AgentNet.</p></Card><Typing /></>;
-  return <>{head}<NotifyBody n={n} dms={(o.dms || []).filter((d) => d.kind !== "group" && !!d.peer.person)} /><Typing /></>;
+  return <>{head}<NotifyBody n={n} /><Typing /></>;
 }
 
 // Typing (MEL-528): whether this device tells people when you're typing,
@@ -79,7 +76,7 @@ function Typing() {
   );
 }
 
-function NotifyBody({ n, dms }: { n: T.NotifyView; dms: T.DMSummary[] }) {
+function NotifyBody({ n }: { n: T.NotifyView }) {
   const store = useApp();
   const [busy, setBusy] = useState(false);
   const iphone = !n.native && /iPhone|iPad/.test(navigator.userAgent) && !matchMedia("(display-mode: standalone)").matches;
@@ -112,64 +109,7 @@ function NotifyBody({ n, dms }: { n: T.NotifyView; dms: T.DMSummary[] }) {
         {blocked && <Hint className="mt-3">Notifications are blocked in this browser’s settings. Everything else works without them.</Hint>}
         {n.pending && <Hint className="mt-3">Your server is told about this change when this page reconnects.</Hint>}
       </Card>
-      {n.enabled && <Chats n={n} dms={dms} />}
+      <Hint className="px-1">Chats notify you unless muted. Use Mute in the chat’s menu to keep it quiet.</Hint>
     </div>
-  );
-}
-
-// Person permission and per-conversation mutes are separate choices. Opening
-// this page preserves both; changing a person grant never clears a mute.
-export function notificationPeople(dms: T.DMSummary[], allowed: string[]) {
-  const people = new Map<string, { peer: T.PersonView; conversations: T.DMSummary[]; allowed: boolean }>();
-  for (const d of dms) {
-    if (d.kind === "group" || !d.peer.person) continue;
-    let p = people.get(d.peer.person);
-    if (!p) { p = { peer: d.peer, conversations: [], allowed: false }; people.set(d.peer.person, p); }
-    p.conversations.push(d);
-    p.allowed ||= [d.peer.address, ...(d.peer.devices || []).map(x => x.address)].some(a => allowed.includes(a));
-  }
-  return [...people.values()];
-}
-
-function Chats({ n, dms }: { n: T.NotifyView; dms: T.DMSummary[] }) {
-  const store = useApp();
-  const [busy, setBusy] = useState("");
-  const mutes = n.mutes || [];
-  const people = notificationPeople(dms, n.allowed || []);
-  const change = async (key: string, body: { person: string; allowed: boolean } | { conv: string; muted: boolean }) => {
-    setBusy(key);
-    await store.run(a => a.notify("person" in body ? "allow" : "mute", body));
-    setBusy("");
-  };
-  if (!people.length) return <Hint className="px-1">People you chat with will appear here.</Hint>;
-  return (
-    <section aria-labelledby="notify-chats">
-      <GroupLabel id="notify-chats">People who can alert you</GroupLabel>
-      <Card className="divide-y divide-hairline">
-        {people.map(p => {
-          const name = personName(p.peer), id = p.peer.person!;
-          const mutedCount = p.conversations.filter(d => mutes.includes(d.id)).length;
-          return <div key={id} className="px-4 py-3">
-            <div className="flex min-h-12 items-center gap-3">
-              <PersonAvatar name={name} seed={id} size={40} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-semibold">{name}</p>
-                <p className="text-[13px] text-muted">{p.allowed ? "Allowed to alert you" : "Alerts from this person are off"}{mutedCount ? ` · ${mutedCount} muted` : ""}</p>
-              </div>
-              <Toggle label={"Allow alerts from " + name} checked={p.allowed} disabled={!!busy || p.peer.state !== "pinned"} onChange={allowed => void change(id, { person: id, allowed })} />
-            </div>
-            <details className="mt-2">
-              <summary className="cursor-pointer py-2 text-sm font-semibold text-text-2">Conversation overrides ({p.conversations.length})</summary>
-              <p className="pb-2 text-sm text-muted">A muted conversation stays quiet even when this person is allowed.</p>
-              {p.conversations.map(d => <div key={d.id} className="flex min-h-12 items-center gap-3 border-t border-hairline py-2">
-                <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{d.title || "Main conversation"}</p><p className="text-xs text-muted">Started {new Date(d.created).toLocaleString()}</p></div>
-                <Toggle label={"Mute conversation " + (d.title || "started " + d.created)} checked={mutes.includes(d.id)} disabled={!!busy} onChange={muted => void change(d.id, { conv: d.id, muted })} />
-              </div>)}
-            </details>
-          </div>;
-        })}
-      </Card>
-      <Hint className="mt-2 px-1">These choices apply on this device. Turning a person on or off preserves your conversation overrides.</Hint>
-    </section>
   );
 }

@@ -335,7 +335,7 @@ daemon exit.
   --limit N   at most N messages (default 50; 0: all); the header says which
   --offset N  skip the first N`,
 
-	"hooks": `Usage: agentnet hooks show|install|remove claude|codex|pi [--file PATH]
+	"hooks": `Usage: agentnet hooks show|install|remove claude|codex|pi|omp [--file PATH]
 
 Hooks let a running Claude Code or Codex session learn what arrived for
 AgentNet at its own natural points: when it starts, when you send a prompt,
@@ -370,7 +370,7 @@ A notice counts as seen once it is in the Pi session.
 Antigravity hooks, and hooks on Windows, are not supported; use agentnet
 inbox and agentnet conversation there.`,
 
-	"hook": `Usage: agentnet hook claude|codex|pi
+	"hook": `Usage: agentnet hook claude|codex|pi|omp
 
 Run by the hooks that agentnet hooks install configures: reads the hook
 event (JSON) on stdin and prints what to tell the session. It only reads

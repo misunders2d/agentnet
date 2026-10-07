@@ -3,30 +3,31 @@
 // suites. AGENTNET_SCREENSHOTS optionally receives each major screen.
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT);
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
+const fs = require('node:fs'), path=require('node:path');
 const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
 
 (async () => {
   if (shots) fs.mkdirSync(shots, { recursive: true });
   const browser = await chromium.launch({ headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium' });
   try {
-    for (const platform of ['daemon', 'browser']) for (const [width, height, colorScheme] of [[1440, 900, 'light'], [390, 844, 'dark']]) {
-      const name = `${platform}-${width}-${colorScheme}`;
+    for(const skin of (process.env.AGENTNET_SETUP_SKINS||'comic').split(',')) for (const platform of ['daemon', 'browser']) for (const [width, height, colorScheme] of [[1440, 900, 'light'], [390, 844, 'dark']]) {
+      const name = `${skin==='comic'?'':skin+'-'}${platform}-${width}-${colorScheme}`;
       const context = await browser.newContext({ viewport: { width, height }, colorScheme, ...(width < 1024 ? { isMobile: true, hasTouch: true } : {}) });
       const p = await context.newPage(), errors = [];
       p.on('pageerror', e => errors.push(String(e)));
+      if(process.env.AGENTNET_TOPIC_ASSETS)await p.route('**/assets/**',r=>{const rel=new URL(r.request().url()).pathname.slice('/assets/'.length),base=path.resolve(process.env.AGENTNET_TOPIC_ASSETS),file=path.resolve(base,rel);if(!file.startsWith(base+path.sep)||!fs.existsSync(file))return r.abort();return r.fulfill({contentType:file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':'application/octet-stream',body:fs.readFileSync(file)});});
       await p.goto(process.env.PARITY_URL); // establish the demo's local cookie
-      await p.route('**/p24-root', r => r.fulfill({ contentType: 'text/html', body: '<html><head></head><body></body></html>' }));
+      await p.route('**/p24-root', r => r.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body></body></html>' }));
       await p.goto(new URL('/p24-root', process.env.PARITY_URL).href);
-      await p.evaluate(async ({ platform }) => {
-        const pack = '/assets/skins/comic/', realFetch = window.fetch.bind(window);
+      await p.evaluate(async ({ platform, skin }) => {
+        const pack = '/assets/skins/'+skin+'/', realFetch = window.fetch.bind(window);
         const json = async path => { const r = await realFetch(path); if (!r.ok) throw Error(await r.text()); return r.json(); };
         const original = await json('/api/overview');
         const id = c => c.repeat(64), own = { person: id('a'), label: 'Alice', address: 'alice/laptop', state: 'self', devices: [{ address: 'alice/laptop', name: 'laptop', this: true, fingerprint: '11111111-22222222-33333333-44444444' }] };
         const bob = { person: id('b'), label: 'Bob', address: 'bob/desk', state: 'pinned' }, carol = { person: id('c'), label: 'Carol', address: 'carol/desk', state: 'pinned' };
         const overview = { ...original, role: 'unset', person: null, persons: true, groups: true, agents: false, people: [bob, carol], threads: [], topics: [], dms: [], reminders: [], links: [], link: null, quarantine: [] };
         let team = { realm_id: 'realm', id: id('d'), name: 'Dock crew', seq: 1, hash: id('e'), members: [own.person, bob.person, carol.person], managers: [own.person], archived: false, member: true, manager: true, conflict: false, listed: true };
-        let newGroups = 0, refuseCarol = true, refuseRename = false, failTeams = false, nativeSetupState = 'needs_setup';
+        let nativeHookSupported=true;let catalogPhase=true;let newGroups = 0, refuseCarol = true, refuseRename = false, failTeams = false, nativeSetupState = 'needs_setup';
         const invites = [], calls = [], listeners = new Set();
         const at = new Date().toISOString();
         const dm = { id: id('1'), peer: bob, created: at, mine: true, agents: [], guests: [], messages: [{ id: id('2'), lid: id('3'), dir: 'in', from: bob.address, kind: 'message', body: 'Order notes', state: 'delivered', state_text: 'Delivered', at, verified_agent: false, attachments: [{ index: 0, name: 'notes.txt', size: 4, openable: true }] }] };
@@ -40,8 +41,9 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
           const route = path.split('?')[0];
           if (route === '/api/overview') return structuredClone(overview);
           if (route === '/api/device/service') { overview.role = 'service'; return { note: 'Service role recorded' }; }
-          if (route === '/api/agents') return { local: true, host: 'alice/laptop', agents: [] };
-          if (route === '/api/assistant-setup' && body === undefined) return { local: true, harnesses: [{ id: 'codex', label: 'Codex', detected: true, supported: true, configured: nativeSetupState !== 'needs_setup', registered: nativeSetupState === 'connected', state: nativeSetupState, note: 'Synthetic native setup status.' }] };
+          if(route==='/api/agents'&&body?.action==='publish')return{saved:true,published:true};
+          if (route === '/api/agents') return !catalogPhase?{local:true,host:'alice/laptop',agents:[]}:{ local:true,host:'alice/laptop',harnesses:[{name:'codex',found:true}],agents:[{record:{id:id('9'),label:'Fictional helper'},enabled:true,responder:{harness:'codex',dir:'/fictional/work',ready:true}}] };
+          if (route === '/api/assistant-setup' && body === undefined) return { local: true, harnesses: [{ id: 'codex', label: 'Codex', detected: nativeHookSupported, supported: nativeHookSupported, configured: nativeHookSupported && nativeSetupState !== 'needs_setup', registered: nativeHookSupported && nativeSetupState === 'connected', state: nativeSetupState, note: 'Synthetic native setup status.' }] };
           if (route === '/api/teams') { if (failTeams) throw Error('Server unavailable'); return { status: 'available', current: true, at, truncated: false, teams: [structuredClone(team)] }; }
           if (route === '/api/team') {
             if (body.op === 'leave' && team.managers.length === 1) throw Error('The last manager cannot leave.');
@@ -82,7 +84,9 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         const outer = document.createElement('div'); outer.style.height = '100dvh'; document.body.append(outer);
         document.body.style.cssText = 'margin:0;height:100dvh;overflow:hidden';
         const shadow = outer.attachShadow({ mode: 'open' }), root = document.createElement('div'); root.style.height = '100%';
-        const style = new CSSStyleSheet(); style.replaceSync(await (await realFetch(pack + 'style.css')).text()); shadow.adoptedStyleSheets = [style]; shadow.append(root);
+        let styleSource=await(await realFetch(pack+'style.css')).text();
+        for(const match of [...styleSource.matchAll(/@import url\("(.+?)"\);/g)])styleSource=styleSource.replace(match[0],await(await realFetch(pack+match[1].replace(/^\.\//,''))).text());
+        const style = new CSSStyleSheet(); style.replaceSync(styleSource); shadow.adoptedStyleSheets = [style]; shadow.append(root);
         const manifest = await json(pack + 'skin.json');
         if (manifest.document) {
           const parsed = new CSSStyleSheet(), kept = new CSSStyleSheet(); parsed.replaceSync(await (await realFetch(pack + manifest.document)).text());
@@ -95,7 +99,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         let onOpen;
         const host = { version: 1, platform, api, drive: provider, workspace: { id: 'p24-' + platform, name: 'Parity fixture', address: 'alice/laptop', endpoint: location.origin, realm: 'realm', state: 'enrolled' }, workspaces: null,
           listen(f) { listeners.add(f); return () => listeners.delete(f); }, onOpen(f) { onOpen = f; }, file: async () => ({ bytes: new Uint8Array([1, 2, 3, 4]) }), stage: async () => 'stage', skins: [{ id: 'comic', name: 'Comic', api: 1, builtin: true }], onSkinsChange: () => () => {}, selectSkin() {} };
-        const skin = await import(pack + 'entry.mjs'); await skin.mount(root, host);
+        const renderer = await import(pack + 'entry.mjs'); await renderer.mount(root, host);
         window.__p24 = { calls, invites, get newGroups() { return newGroups; }, root, listeners,
           person() { overview.role = 'person'; overview.person = own; overview.link = null; summaries(); emit(); },
           link(state) { overview.link = { state }; emit(); },
@@ -105,10 +109,27 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
           clearInvitations() { invites.length = 0; emit(); },
           failTeams(value) { failTeams = value; emit(); },
           nativeSetup(state) { nativeSetupState = state; },
-          async unmount() { await skin.unmount(root); },
+          nativeUnsupported() { nativeHookSupported=false; nativeSetupState='unsupported'; },
+          clearCatalog() { catalogPhase=false; },
+          async unmount() { await renderer.unmount(root); },
         };
-      }, { platform });
+      }, { platform, skin });
       const snap = async label => { if (shots) { await p.waitForTimeout(300); await p.screenshot({ path: `${shots}/p24-${name}-${label}.png` }); } };
+      if(skin!=='comic') {
+        await p.locator('#profile-btn').click();await p.locator('#settings-tab-device').click();
+        const setup=p.locator('#assistant-setup');
+        if(platform==='browser') {await setup.getByText(/This browser cannot inspect or install software/).waitFor(T);assert.equal(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').length),0);await snap('browser-agent-setup');}
+        else {
+          await setup.getByRole('button',{name:'Set up your agents',exact:true}).click();await setup.getByText('Ready',{exact:true}).waitFor(T);
+          await p.evaluate(()=>{__p24.nativeUnsupported();window.dispatchEvent(new Event('focus'));});
+          await setup.getByText(/Unsupported: Synthetic/).waitFor({state:'attached',...T});
+          assert.equal(await setup.getByRole('checkbox',{name:'Set up Codex',exact:true}).isEnabled(),true);
+          await setup.getByRole('button',{name:'Review changes',exact:true}).click();await setup.getByRole('button',{name:'Confirm setup',exact:true}).click();await setup.getByText('Ready',{exact:true}).waitFor(T);
+          assert.ok(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').every(c=>c.body===undefined)));
+          assert.equal(await p.locator('#responder').isVisible(),false,'default answers remain subordinate');await snap('hook-unsupported-ready-agent');
+        }
+        assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);await context.close();console.log('unified agent setup',name,'PASS');continue;
+      }
       const noSideways = async scope => {
         const overflowing = await scope.evaluate(el => [el, ...el.querySelectorAll('*')].filter(x => x.clientWidth > 0 && x.scrollWidth > x.clientWidth + 2 && /auto|scroll/.test(getComputedStyle(x).overflowX)).map(x => x.tagName + '.' + x.className));
         assert.deepEqual(overflowing, [], `${name}: horizontal scroll`);
@@ -140,17 +161,36 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       if (platform === 'daemon') {
         await p.getByRole('button', { name: /^Your agent/ }).click();
         await p.getByRole('button', { name: 'Find them', exact: true }).click();
-        await p.getByText('Needs setup', { exact: true }).waitFor(T);
+        await p.getByText('Ready', { exact: true }).waitFor(T);
+        await p.getByText('Fictional helper is set up for chats, questions and approved tasks.',{exact:true}).waitFor(T);
+        assert.equal(await p.getByRole('radio',{name:/Codex/}).isVisible(),false,'default responder is subordinate');
+        await p.getByText('Native sessions',{exact:true}).click();
         const reads = await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').length);
         await p.evaluate(() => { __p24.nativeSetup('needs_activation'); window.dispatchEvent(new Event('focus')); });
-        await p.getByText('Start a new session', { exact: true }).waitFor(T);
-        assert.equal(await p.getByRole('checkbox', { name: 'Connect Codex', exact: true }).isChecked(), false, 'refresh preserves chosen tools');
+        await p.getByText(/Start a new session: Set up/).waitFor(T);
+        await p.getByText('Ready',{exact:true}).waitFor(T);
+        assert.equal(await p.getByRole('checkbox', { name: 'Set up Codex', exact: true }).isChecked(), true, 'refresh preserves existing named agent selection');
         await p.evaluate(() => { __p24.nativeSetup('connected'); window.dispatchEvent(new Event('focus')); });
-        await p.getByText('Connected', { exact: true }).waitFor(T);
+        await p.getByText(/Connected: Set up/).waitFor(T);
+        await p.getByText('Ready',{exact:true}).waitFor(T);
         assert.equal(await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').length), reads + 2, 'one status read per focus');
         assert.ok(await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').every(c => c.body === undefined)), 'focus never configures tools');
         await snap('native-setup-refreshed');
+        await p.evaluate(()=>{__p24.nativeUnsupported();window.dispatchEvent(new Event('focus'));});
+        await p.getByText(/Can’t be connected on this computer yet/).waitFor(T);
+        assert.equal(await p.getByRole('checkbox',{name:'Set up Codex',exact:true}).isEnabled(),true,'runnable named agent remains configurable without native hooks');
+        await p.getByRole('button',{name:'Review changes',exact:true}).click();
+        await p.getByRole('button',{name:'Apply changes',exact:true}).click();
+        await p.getByRole('heading',{name:'Agent setup saved',exact:true}).waitFor(T);
+        await p.getByText('Ready',{exact:true}).waitFor(T);
+        assert.ok(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').every(c=>c.body===undefined)),'hook-unsupported configure makes no native changes');
+        await snap('hook-unsupported-ready-agent');
         if (width < 1024) await p.locator('.an-tab-in > .sticky').getByRole('button', { name: 'You', exact: true }).click();
+      }
+      await p.evaluate(()=>__p24.clearCatalog());
+      if(process.env.AGENTNET_SETUP_ONLY){
+        if(platform==='browser'){await p.getByRole('button',{name:/^Your agent/}).click();await p.getByText(/A browser can’t look for programs/).waitFor(T);await snap('browser-agent-setup');assert.equal(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').length),0,'browser does not inspect native tools');}
+        assert.deepEqual(errors,[],name+': page errors');await context.close();console.log('unified agent setup',name,'PASS');continue;
       }
       await p.getByRole('button', { name: /^People lists/ }).click();
       await p.getByRole('heading', { name: 'People lists', exact: true }).waitFor(T);
@@ -202,12 +242,14 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       }
       // New group opens Bring in. The team selection is also present there.
       const bring = p.getByRole('dialog', { name: 'Bring someone in', exact: true });
+      await bring.getByRole('radio',{name:/Add as a permanent member/}).check();
       await bring.getByText('Add people from a list', { exact: true }).waitFor(T);
       await bring.getByRole('button', { name: 'Close', exact: true }).click();
       // Existing group: reviewed people can receive reviewed history too.
       await p.evaluate(() => { __p24.clearInvitations(); __p24.openGroup(); });
       await p.getByRole('button', { name: width < 1024 ? 'Bring someone in' : 'Bring in', exact: true }).click();
       const existing = p.getByRole('dialog', { name: 'Bring someone in', exact: true });
+      await existing.getByRole('radio',{name:/Add as a permanent member/}).check();
       const bulk = existing.getByRole('region', { name: 'Invite team people' });
       await bulk.getByRole('combobox', { name: 'People list', exact: true }).selectOption('d'.repeat(64));
       await bulk.getByRole('button', { name: 'Add list’s people', exact: true }).click();

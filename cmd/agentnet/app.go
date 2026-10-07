@@ -83,6 +83,9 @@ type appEvent struct {
 	Helper string `json:"helper,omitempty"`
 	Plan   string `json:"plan,omitempty"`
 	Home   string `json:"home,omitempty"`
+	CallID uint64 `json:"call_id,omitempty"`
+	Status int    `json:"status,omitempty"`
+	Body   string `json:"body,omitempty"`
 }
 
 type appRunner struct {
@@ -90,13 +93,16 @@ type appRunner struct {
 	exe  string // the installed app (AGENTNET_APP_EXE), "" when unknown
 	logf func(string, ...any)
 
-	commandMu     sync.Mutex
-	command       appCommandStatus
-	activeAgent   atomic.Pointer[client.Agent]
-	updating      atomic.Bool
-	updateReplies chan bool
-	outMu         sync.Mutex
-	out           io.Writer
+	commandMu           sync.Mutex
+	independentSwitchMu sync.Mutex
+	command             appCommandStatus
+	activeAgent         atomic.Pointer[client.Agent]
+	updating            atomic.Bool
+	controlsReady       atomic.Bool
+	independent         *appIndependentDaemon // only the serialized update action writes/reads it
+	updateReplies       chan bool
+	outMu               sync.Mutex
+	out                 io.Writer
 
 	ln      net.Listener
 	addr    string
@@ -138,13 +144,26 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 				default:
 				}
 			}
+			if strings.HasPrefix(line, "{") {
+				go r.appCall(ctx, line)
+			}
 		}
 		cancel()
 	}()
 	addLoginShellPath(r.logf)
+	// Do not overwrite an independently managed daemon's executable before
+	// an explicit update has qualified it. A persisted app update already
+	// carries that proof and may continue its registered command cutover.
+	canInstall := true
+	if release, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")); err == nil {
+		release()
+	} else if errors.Is(err, lockfile.ErrLocked) {
+		result, resultErr := readAppUpdateResult(home)
+		canInstall = resultErr == nil && result.Version == protocol.Version && result.Independent != nil && (result.State == "pending" || result.State == "partial")
+	}
 	if os.Getenv("APPIMAGE") != "" || runtime.GOOS == "darwin" {
 		appStable.on, appStable.home = true, home
-		if bundledWith == "app" && exe != "" {
+		if canInstall && bundledWith == "app" && exe != "" {
 			if _, err := selfExe(); err != nil {
 				r.logf("the app's command for connected tools could not be refreshed: %v", err)
 			}
@@ -152,7 +171,7 @@ func runApp(ctx context.Context, home string, args []string, stdin io.Reader, st
 	}
 	// The daemon puts this private copy first on PATH. Refresh it before
 	// reconciling terminal commands, including a PATH inherited from an old app.
-	if bundledWith == "app" && exe != "" {
+	if canInstall && bundledWith == "app" && exe != "" {
 		r.command = r.installCommand(false)
 	}
 	if exe != "" {
@@ -270,6 +289,13 @@ func endedState(err error) string {
 // program in its place) keeps the home: its page is shown again. Otherwise
 // it returns, and this program takes the home over on its next look.
 func (r *appRunner) attached(ctx context.Context, lock string) error {
+	// Serve the existing app control handler without opening the other
+	// daemon's database or proxying its page. The native shell bridges only
+	// these bounded controls while it displays that daemon's own UI.
+	if err := r.listen(); err != nil {
+		return err
+	}
+	r.confirmAppUpdate()
 	for {
 		r.showAttached()
 		got := make(chan func(), 1)
@@ -343,6 +369,11 @@ func (r *appRunner) listen() error {
 	if r.ln == nil {
 		return err
 	}
+	if err := secfile.Write(filepath.Join(r.home, appControlsURLFile), []byte(r.pageURL()+"\n")); err != nil {
+		r.ln.Close()
+		r.ln = nil
+		return err
+	}
 	if prev, _ := secfile.Read(path); strings.TrimSpace(string(prev)) != r.addr {
 		if err := secfile.Write(path, []byte(r.addr+"\n")); err != nil {
 			r.logf("the page's address could not be kept for the next start: %v", err)
@@ -362,6 +393,7 @@ func (r *appRunner) listen() error {
 			r.logf("the page stopped: %v", err)
 		}
 	}()
+	r.controlsReady.Store(true)
 	return nil
 }
 
@@ -369,6 +401,10 @@ func (r *appRunner) serve(h http.Handler) { r.handler.Store(&h) }
 
 // close stops serving the page and lets its address go.
 func (r *appRunner) close() {
+	r.controlsReady.Store(false)
+	if data, err := secfile.Read(filepath.Join(r.home, appControlsURLFile)); err == nil && strings.TrimSpace(string(data)) == r.pageURL() {
+		os.Remove(filepath.Join(r.home, appControlsURLFile))
+	}
 	if r.srv != nil {
 		r.srv.Close()
 	}
@@ -585,7 +621,7 @@ func appSetAside(home string, now time.Time) (string, error) {
 // files.
 func appKeepsOnStartAgain(name string) bool {
 	switch name {
-	case appUIAddrFile, appExeFile, appStableExeDir, "skins", "hooks", "update-request.json", "app-command.json", appUpdateResultFile:
+	case appUIAddrFile, appControlsURLFile, appExeFile, appStableExeDir, "skins", "hooks", "update-request.json", "app-command.json", appUpdateResultFile:
 		return true
 	}
 	return strings.HasSuffix(name, ".lock") || strings.HasPrefix(name, "update-helper-") || strings.HasPrefix(name, "app-update-") || strings.HasPrefix(name, appAsidePrefix)

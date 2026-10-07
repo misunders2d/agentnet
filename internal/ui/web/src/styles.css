@@ -1,4 +1,5 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+@source "./"; /* Keep utility scanning inside this skin’s source. */
 
 /* Existing Drive widgets inherit Comic's theme and fit narrow sheets. */
 .drive-space .drive-error { color: var(--an-danger); }

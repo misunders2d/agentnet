@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -86,6 +88,15 @@ var Harnesses = map[string]harness{
 			"that folder is the only change to your sandbox: AgentNet never passes --sandbox or a bypass to a task; " +
 			"a resumed session, where codex cannot add a folder, gets no outbox and is not told of one",
 	},
+	"omp": {
+		bin: "omp",
+		// OMP 18.7 refuses noninteractive approval prompts. The worker adds
+		// only built-in editing/shell denies as a one-run native overlay.
+		question: []string{"-p", "--no-session", "--approval-mode", "always-ask"},
+		task:     []string{"-p", "--no-session"},
+		stdin:    true,
+		limits:   "omp questions use your OMP settings, skills, extensions and MCP servers; read tools and tools your settings explicitly allow run, while new approvals are refused. Built-in edit, write, notebook, bash, python and eval are denied for this run only; other tools your setup allows keep their effects. A fixed read-only AgentNet lookup tool respects your own tool policies. Tasks use your normal OMP permissions. Background jobs start fresh sessions; your open sessions are unchanged.",
+	},
 	"pi": {
 		bin: "pi",
 		// The user's own Pi setup: settings (defaultTools), skills and
@@ -158,6 +169,9 @@ func (a *Agent) SetResponder(r *Responder) error {
 		return nil
 	}
 	if err := validateResponder(r); err != nil {
+		return err
+	}
+	if err := checkOMPResponderSetup(r); err != nil {
 		return err
 	}
 	data, _ := json.Marshal(r)
@@ -263,6 +277,36 @@ func validateResponder(r *Responder) error {
 	// unless the person set a limit of their own (Timeout > 0).
 	if r.Timeout < 0 {
 		r.Timeout = 0
+	}
+	return nil
+}
+
+// This capability check runs only for an explicit local activation/change,
+// never on discovery, status, claim or each question. It invokes the chosen
+// launcher without a prompt; the launcher's own behavior remains its owner's.
+func checkOMPResponderSetup(r *Responder) error {
+	if r.Harness != "omp" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, Harnesses["omp"].bin, "--help")
+	cmd.Dir = r.Dir
+	var out, stderr limitedBuffer
+	out.max, stderr.max = maxOutput, 4<<10
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	ownProcessGroup(cmd)
+	defer stopGroup(cmd)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("OMP setup unavailable: chosen launcher --help failed; native --config and --approval-mode support is required (%w)", err)
+	}
+	if out.truncated {
+		return errors.New("OMP setup unavailable: native capability output exceeded the inspection limit")
+	}
+	for _, flag := range []string{"--print", "--no-session", "--config", "--approval-mode", "--extension"} {
+		if !strings.Contains(out.String(), flag) {
+			return fmt.Errorf("OMP setup unsupported: chosen launcher does not advertise %s; native OMP 18.4.8/18.7.0 contract is required", flag)
+		}
 	}
 	return nil
 }

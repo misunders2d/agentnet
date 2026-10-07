@@ -63,20 +63,31 @@ export function watchSetupFocus(doc: Document, refresh: () => void): () => void 
 }
 
 /** A tool can be chosen when the server found it and can set it up safely. */
-export const selectable = (h: T.AssistantSetupHarness) => h.detected && h.supported;
+export const nativeSelectable = (h: T.AssistantSetupHarness) => h.detected && h.supported;
+export const selectable = (h: T.AssistantSetupHarness, c?: T.AgentCatalogView | null) => nativeSelectable(h) || canHaveAgent(c,h.id);
 
 /** The tools ticked when the list opens: the ones already set up, so running
  *  setup again repairs them. */
-export const startChosen = (v: T.AssistantSetupView) => new Set(tools(v).filter((h) => selectable(h) && h.configured).map((h) => h.id));
+export const startChosen = (v: T.AssistantSetupView, c?: T.AgentCatalogView | null) => new Set(tools(v).filter((h) => selectable(h,c) && (h.configured || agentsFor(c, h.id).length > 0)).map((h) => h.id));
 
 /** The person's named agents that run this tool. */
 export const agentsFor = (c: T.AgentCatalogView | null | undefined, harness: string) =>
   (c?.agents || []).filter((a) => a.enabled && a.responder?.harness === harness);
 
-/** A tool gets a named agent only when this computer can run one with it
- *  (OMP, for example, is connected but never runs one here). */
+/** A tool gets a named agent when the existing responder registry can run it. */
 export const canHaveAgent = (c: T.AgentCatalogView | null | undefined, harness: string) =>
   (c?.harnesses || []).some((h) => h.name === harness && h.found);
+
+/** Chat readiness comes from the named-agent catalog, never hook registration. */
+export function agentStatus(h: T.AssistantSetupHarness, c: T.AgentCatalogView | null | undefined) {
+  const agents = agentsFor(c, h.id), ready = agents.filter(a => a.responder?.ready);
+  if (ready.length) return { word: "Ready", tone: "ok" as const, sentence: ready.map(a => a.record.label).join(", ") + " is set up for chats, questions and approved tasks." };
+  if (agents.length) return { word: "Needs attention", tone: "danger" as const, sentence: agents.map(a => a.record.label + ": " + (a.responder?.problem || "It cannot start on this computer.")).join(" ") };
+  if (canHaveAgent(c,h.id)) return { word: "Needs setup", tone: "act" as const, sentence: "Choose a name and working folder for its agent." };
+  if (!h.detected) return { word: "Not found", tone: "muted" as const, sentence: "Not installed on this computer." };
+  if (!h.supported || !canHaveAgent(c, h.id)) return { word: "Unavailable", tone: "muted" as const, sentence: "An AgentNet agent cannot run with this tool here yet." };
+  return { word: "Needs setup", tone: "act" as const, sentence: "Choose a name and working folder for its agent." };
+}
 
 /** firstPick: the only existing agent for the tool, or a new one named after it. */
 export function firstPick(h: T.AssistantSetupHarness, c: T.AgentCatalogView | null | undefined): AgentPick {
@@ -144,7 +155,8 @@ export async function readSetup(calls: SetupCalls): Promise<{ view: T.AssistantS
  *  was read stops the run: nothing is guessed. */
 export async function applySetup(calls: SetupCalls, chosen: T.AssistantSetupHarness[], reviewID: string, catalog: T.AgentCatalogView | null | undefined, picks: ReadonlyMap<string, AgentPick>): Promise<Applied> {
   const wanted = chosen.map((h) => ({ harness: h.id, pick: { ...pickFor(picks, h, catalog) }, agent: canHaveAgent(catalog, h.id) }));
-  const view = await calls.setup({ action: "apply", harnesses: chosen.map((h) => h.id), review_id: reviewID });
+  const native = chosen.filter(nativeSelectable);
+  const view = native.length ? await calls.setup({ action: "apply", harnesses: native.map((h) => h.id), review_id: reviewID }) : await calls.setup();
   let now = await calls.agents();
   const saved = new Map(picks), names: SavedAgent[] = [];
   for (const w of wanted.filter((x) => x.agent)) {

@@ -1,9 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "One clipboard image read command for the main loopback page; Rust additionally checks the app's exact current origin. No general plugin or shell commands.",
+  "description": "Bounded clipboard, explicit skin-folder selection and blob-download commands for the main loopback page; Rust additionally checks the app's exact current origin. No general plugin or filesystem commands.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"] },
   "local": false,
-  "permissions": ["allow-agentnet-clipboard-image"]
+  "permissions": ["allow-agentnet-clipboard-image", "allow-agentnet-desktop-files", "allow-agentnet-app-controls"]
 }

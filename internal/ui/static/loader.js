@@ -62,8 +62,14 @@
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
     return r.json();
   };
+  const nativeAppJSON = typeof window.__agentnetNativeAppJSON === "function" ? window.__agentnetNativeAppJSON : null;
   const appJSON = async (path, body) => {
     if (browser) throw new Error("Open the AgentNet app for this computer's settings.");
+    if (nativeAppJSON) {
+      const action = { "/api/app/status": "status", "/api/app/update": "update", "/api/app/cli": "cli" }[path];
+      if (!action) throw new Error("Unknown app action.");
+      return nativeAppJSON(action, body);
+    }
     const response = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error((await response.text()).trim() || response.statusText);
     return response.json();

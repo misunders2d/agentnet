@@ -29,12 +29,13 @@ const appUpdateHelperCmd = "app-update-helper"
 const appUpdateResultFile = "app-update-result"
 
 type appUpdatePlan struct {
-	App     string `json:"app"`
-	Asset   string `json:"asset"`
-	Kind    string `json:"kind"`
-	Sum     string `json:"sum"`
-	Version string `json:"version"`
-	Backup  string `json:"backup,omitempty"`
+	App         string                `json:"app"`
+	Asset       string                `json:"asset"`
+	Kind        string                `json:"kind"`
+	Sum         string                `json:"sum"`
+	Version     string                `json:"version"`
+	Backup      string                `json:"backup,omitempty"`
+	Independent *appIndependentDaemon `json:"independent,omitempty"`
 }
 
 func releaseChecksums(ctx context.Context, tag string) (map[string]string, error) {
@@ -175,7 +176,7 @@ func (r *appRunner) stageAppUpdateTo(ctx context.Context, tag string) (string, s
 	if err != nil {
 		return "", "", err
 	}
-	plan := appUpdatePlan{App: r.exe, Asset: asset, Kind: kind, Sum: want, Version: tag}
+	plan := appUpdatePlan{App: r.exe, Asset: asset, Kind: kind, Sum: want, Version: tag, Independent: r.independent}
 	if kind == "nsis" {
 		plan.Backup = filepath.Join(dir, "previous-app")
 		if err = copyAppTree(filepath.Dir(r.exe), plan.Backup); err != nil {
@@ -223,7 +224,10 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 		if updateErr != nil {
 			problem = updateErr.Error()
 		}
-		result, _ := appUpdateResultText(r.home)
+		result := ""
+		if projected, err := projectedAppUpdateResult(r.home, protocol.Version, status); err == nil {
+			result = formatAppUpdateResult(projected)
+		}
 		reply(struct {
 			appCommandStatus
 			Version   string `json:"version"`
@@ -268,7 +272,7 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 			http.Error(w, "An update is already being prepared.", 409)
 			return true
 		}
-		resume, err := r.pauseForAppUpdate()
+		resume, err := r.pauseForAppUpdate(req.Context())
 		if err != nil {
 			r.updating.Store(false)
 			http.Error(w, err.Error(), 409)
@@ -293,7 +297,12 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 				http.Error(w, err.Error(), 409)
 				return true
 			}
-			reply(map[string]string{"state": "complete", "version": choice.Version, "message": "App and command are up to date: " + choice.Version})
+			state, message := "complete", "App and command are up to date: "+choice.Version
+			if result, e := readAppUpdateResult(r.home); e == nil && result.State != "complete" {
+				state = result.State
+				message, _ = appUpdateResultText(r.home)
+			}
+			reply(map[string]string{"state": state, "version": choice.Version, "message": message})
 			return true
 		}
 		helper, plan, err := r.stageAppUpdateTo(req.Context(), choice.Version)
@@ -337,6 +346,11 @@ func runAppUpdateHelper(home string, args []string, stdin io.Reader) error {
 	}
 	if err = writeAppUpdateResult(home, p.Version, "pending", "Waiting for the app to restart and verify its commands."); err != nil {
 		return err
+	}
+	if p.Independent != nil {
+		if err = saveAppUpdateResult(home, appUpdateResult{Version: p.Version, State: "pending", Problem: "Waiting for the app and independently managed daemon to restart.", Independent: p.Independent}); err != nil {
+			return err
+		}
 	}
 	_, err = io.Copy(io.Discard, stdin)
 	if err != nil {
@@ -420,6 +434,9 @@ func (r *appRunner) currentCommandStatus() appCommandStatus {
 
 // The app calls this after it serves its own page, never from the old helper.
 func (r *appRunner) confirmAppUpdate() {
+	if err := r.beginIndependentSwitch(); err != nil && r.logf != nil {
+		r.logf("the independent daemon update is incomplete: %v", err)
+	}
 	if err := reconcileAppUpdateResult(r.home, protocol.Version, r.currentCommandStatus()); err != nil && r.logf != nil {
 		r.logf("could not record app update verification: %v", err)
 	}
@@ -431,6 +448,11 @@ func (r *appRunner) repairCurrentAppCommand(version string) error {
 	}
 	if err := writeAppUpdateResult(r.home, version, "pending", "Checking the app's commands."); err != nil {
 		return err
+	}
+	if r.independent != nil {
+		if err := saveAppUpdateResult(r.home, appUpdateResult{Version: version, State: "pending", Independent: r.independent}); err != nil {
+			return err
+		}
 	}
 	r.commandMu.Lock()
 	r.command = r.installCommand(false)
@@ -447,6 +469,11 @@ func (r *appRunner) repairCurrentAppCommand(version string) error {
 	}
 	if installed.State == "installed" {
 		installed = r.currentCommandStatus()
+	}
+	if installed.State == "installed" {
+		if err := r.beginIndependentSwitch(); err != nil {
+			return err
+		}
 	}
 	if err := reconcileAppUpdateResult(r.home, version, installed); err != nil {
 		return err
@@ -637,11 +664,23 @@ func (r *appRunner) handoffAppUpdate(ctx context.Context, helper, plan string) e
 	}
 }
 
-func (r *appRunner) pauseForAppUpdate() (func(), error) {
+func (r *appRunner) pauseForAppUpdate(ctx context.Context) (func(), error) {
+	r.independent = nil
 	if a := r.activeAgent.Load(); a != nil {
 		return a.PauseForAppUpdate()
 	}
 	release, err := lockfile.Acquire(filepath.Join(r.home, "daemon.lock"))
+	if errors.Is(err, lockfile.ErrLocked) {
+		qualified, qualificationErr := qualifyIndependentDaemon(ctx, r.home)
+		if qualificationErr != nil {
+			return nil, qualificationErr
+		}
+		r.independent = qualified
+		// The independent daemon keeps its manager, lock and active jobs.
+		// Its existing switch protocol fences new work after the app has
+		// replaced the verified command, and waits for jobs before exec.
+		return func() {}, nil
+	}
 	if err != nil {
 		return nil, errors.New("Another daemon owns this home. Stop it when idle, then update from the app.")
 	}

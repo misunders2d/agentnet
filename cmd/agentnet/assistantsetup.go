@@ -81,6 +81,42 @@ func setupTarget(harness string) (string, error) {
 		return hookConfigPath(harness)
 	}
 }
+
+// Judge only AgentNet's executable/home-bound handlers, not JSON formatting
+// or unrelated native settings. A matcher or duplicate is not our installed setup.
+func configuredAssistantHooks(config map[string]any, harness, command string) bool {
+	hooks, _ := config["hooks"].(map[string]any)
+	seen := map[string]int{}
+	for event, raw := range hooks {
+		groups, _ := raw.([]any)
+		for _, rawGroup := range groups {
+			group, _ := rawGroup.(map[string]any)
+			handlers, _ := group["hooks"].([]any)
+			for _, rawHandler := range handlers {
+				handler, _ := rawHandler.(map[string]any)
+				cmd, _ := handler["command"].(string)
+				m := ownHookCommand.FindStringSubmatch(cmd)
+				if m == nil || m[2] != harness || !(isAgentNetHook(rawHandler, harness) || filepath.Base(m[1]) == "agentnet" || filepath.Base(m[1]) == "agentnet.exe") {
+					continue
+				}
+				if cmd != command || !isAgentNetHook(rawHandler, harness) || len(group) != 1 || len(handlers) != 1 {
+					return false
+				}
+				seen[event]++
+			}
+		}
+	}
+	if len(seen) != len(harnessHookEvents(harness)) {
+		return false
+	}
+	for _, event := range harnessHookEvents(harness) {
+		if seen[event] != 1 {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *assistantSetupController) inspect(harness string, sessions []client.ReplySessionView) setupPlan {
 	labels := map[string]string{"codex": "Codex", "claude": "Claude", "pi": "Pi", "omp": "OMP"}
 	row := ui.AssistantSetupHarness{ID: harness, Label: labels[harness], Supported: runtime.GOOS != "windows", State: "not_detected", Note: "Not found on this computer's AgentNet PATH."}
@@ -149,6 +185,7 @@ func (c *assistantSetupController) inspect(harness string, sessions []client.Rep
 			var command string
 			command, err = hookCommand(c.home, harness)
 			if err == nil {
+				plan.row.Configured = configuredAssistantHooks(config, harness, command)
 				config, err = mergeHooks(config, harness, command)
 			}
 			if err == nil {
@@ -163,7 +200,9 @@ func (c *assistantSetupController) inspect(harness string, sessions []client.Rep
 		plan.row.Supported = false
 		return plan
 	}
-	plan.row.Configured = bytes.Equal(plan.before, plan.after)
+	if harness == "pi" || harness == "omp" {
+		plan.row.Configured = bytes.Equal(plan.before, plan.after)
+	}
 	for _, s := range sessions {
 		if s.Harness == harness && s.Active {
 			plan.row.Registered = true

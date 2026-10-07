@@ -67,6 +67,9 @@ func (a *Agent) CreateLocalAgent(label string, r Responder) (protocol.AgentRecor
 	if err := validateResponder(&r); err != nil {
 		return protocol.AgentRecord{}, err
 	}
+	if err := checkOMPResponderSetup(&r); err != nil {
+		return protocol.AgentRecord{}, err
+	}
 	record := protocol.AgentRecord{V: 1, ID: protocol.NewID(), Host: a.Address, HostKey: a.Self().Fingerprint(), Label: label, TS: time.Now().Unix()}
 	record.Sign(a.id.Sign)
 	if err := record.Verify(a.Self()); err != nil {
@@ -101,6 +104,9 @@ func (a *Agent) SetLocalAgentResponder(id string, r *Responder) error {
 	if r != nil {
 		value := copyResponder(*r)
 		if err := validateResponder(&value); err != nil {
+			return err
+		}
+		if err := checkOMPResponderSetup(&value); err != nil {
 			return err
 		}
 		normalized = &value

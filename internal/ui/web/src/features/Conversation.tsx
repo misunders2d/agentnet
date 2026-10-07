@@ -15,7 +15,7 @@ import { InviteSheet } from "./InviteSheet";
 import { RoomSheet } from "./RoomPanel";
 import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
 import { TopicBar, TopicEnd } from "./Conversation.topics";
-import { PersonConversations } from "./Conversation.person";
+import { PersonTopics } from "./PersonTopics";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
 import { chatList, deviceKind } from "../model";
@@ -65,6 +65,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   const hs = useMemo(() => helpers(ctx, (fn) => store.run(fn)), [ctx]);
   const canInvite = !!t && !t.frozen && (!t.role || t.role === "member");
   const draft=useStore(store,s=>s.drafts[open.id]);
+  const personMain=t&&store.personMain(t);
   const messages: AnyMsg[] = (t ? (t.messages||[]).filter(m=>draft?.newTopic ? !m.topic : (m.topic||"")===(draft?.topic||"")) : th ? th.messages : null) || [];
 
   useEffect(() => {
@@ -85,8 +86,10 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
     <section aria-label={title} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
       {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
-      <PersonConversations dm={t} />
-      <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />
+      {t&&personMain ? <PersonTopics dm={t} main={personMain} onMain={()=>{
+        store.setDraft(personMain,{...store.draft(personMain),topic:undefined,newTopic:false,replyTo:undefined});
+        void store.open({kind:"dm",id:personMain});
+      }}/> : <TopicBar thread={ctx.thread||undefined} dm={ctx.dm||undefined} />}
       {/* Another topic swaps only the messages: header, topic bar and composer stay. */}
       <Swap id={open.id} className="flex min-h-0 flex-1 flex-col" side="flex min-h-0 flex-1 flex-col" enter="an-topic-in" leave="an-topic-out" ms={MOTION.topic} label="timeline">
       <Timeline ctx={ctx} messages={messages} focus={open.focus} focusSeq={open.focusSeq} selected={selected} onSelect={toggle} end={<TopicEnd ctx={ctx} />}

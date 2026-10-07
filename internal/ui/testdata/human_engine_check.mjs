@@ -436,6 +436,24 @@ for (const ending of ['original', 'self']) {
  check(view.role==='human_guest'&&!view.members.some(m=>m.person===g.me.person),'guest has no membership');
 
  check(view.messages.some(m=>m.body==='chosen old group context')&&!view.messages.some(m=>m.body==='unshared old group context'),'only selected history disclosed');
+ // Mixed active member readers must hold only their sealed copy, never the composer.
+ for(const missing of [wire.CapGroupHumanParticipation,wire.CapGroup]) {
+  const current=[...names,wire.CapGroupHumanParticipation];
+  await w.caps(a,current.filter(cap=>cap!==missing && !(missing===wire.CapGroup && cap===wire.CapRoom)));
+  const body=`[@Alice](agentnet:person/${a.me.person}) mixed ${missing}`;
+  const sent=await b.sendDM({conv,body});
+  const copy=(await b.store.all('outbox')).find(r=>r.lid===sent.lid&&r.to===a.address);
+  const sealed=copy.envelope,scope=wire.humanJSON(copy.human);
+  await b.post(copy);const held=await b.store.get('outbox',copy.id);
+  check(held.state==='waiting'&&held.detail.includes(a.address),'mixed member copy waits with exact device detail '+missing);
+  check(!w.posts.some(raw=>wire.parseEnvelope(raw).id===copy.id),'unsupported member ciphertext not handed off '+missing);
+  await w.drain(g);check((await g.groupThread(conv)).messages.filter(m=>m.lid===sent.lid&&m.body===body).length===1,'compatible guest receives mention once '+missing);
+  await w.caps(a,current);await w.drain(a);await w.drain(a);
+  const restored=await b.store.get('outbox',copy.id);
+  check(restored.envelope===sealed&&wire.humanJSON(restored.human)===scope,'recovery retains exact sealed context '+missing);
+  check((await a.groupThread(conv)).messages.filter(m=>m.lid===sent.lid&&m.body===body).length===1,'updated member receives same logical message once '+missing);
+ }
+
  await b.sendDM({conv,body:'new group member turn'});await w.drain(g);
 
  check((await g.groupThread(conv)).messages.some(m=>m.body==='new group member turn'),'guest reads captured new turn');

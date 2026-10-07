@@ -76,3 +76,38 @@ func TestP6GroupAgentsRendered(t *testing.T) {
 	}
 	t.Log(string(out))
 }
+
+func TestPendingRecordsPreserveBackendAuthority(t *testing.T) {
+	pending := agentView(client.ParticipationInfo{PID: "held-only", State: client.PartPending, Held: 2}, dmPeople{group: true, role: "member"}, nil, true)
+	if pending.CanAsk || pending.CanDecide || pending.CanDismiss || pending.Host.Person != "" || pending.AgentID != "" {
+		t.Fatalf("pending records invented authority or identity: %+v", pending)
+	}
+	invited := agentView(client.ParticipationInfo{PID: "real-invite", State: client.PartInvited, Host: client.PersonInfo{Person: "host", Label: "Nora", Address: "nora/desk"}}, dmPeople{group: true, role: "member"}, nil, true)
+	if !invited.CanDismiss || invited.CanAsk {
+		t.Fatalf("real invitation cancellation changed: %+v", invited)
+	}
+}
+
+func TestPendingRecordsRoomModel(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	out, err := exec.CommandContext(t.Context(), node, "testdata/pending_records_check.mjs").CombinedOutput()
+	if err != nil {
+		t.Fatalf("room model: %v\n%s", err, out)
+	}
+}
+
+func TestPendingRecordsRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in installed Playwright")
+	}
+	cmd := exec.CommandContext(t.Context(), "node", "testdata/group_agents_p6_rendered.cjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_SCREENSHOTS="+t.TempDir(), "AGENTNET_PENDING_RECORDS_ONLY=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"ok":true`) {
+		t.Fatalf("pending records rendered: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}

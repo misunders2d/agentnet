@@ -263,7 +263,7 @@ func TestLiveTimelineNamesKnownOutsideHost(t *testing.T) {
 	eventually("bob's timeline shows the acceptance", func() bool {
 		d, err := live.DM(conv)
 		if err != nil {
-			t.Fatal(err)
+			return false // the signed root may still be arriving
 		}
 		lines = eventLines(d.Messages)
 		return strings.Contains(lines, "accepted")

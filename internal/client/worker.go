@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -151,6 +152,12 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 }
 
 func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan struct{}) {
+	selectedAt := time.Now()
+	var storedAt int64
+	if err := a.store.db.QueryRow(`SELECT coalesce(nullif(received_ms,0),received_at*1000) FROM inbox WHERE id=?`, j.ID).Scan(&storedAt); err == nil {
+		// Stored age includes approval waits; it is not model startup latency.
+		a.Logf("%s %s: worker selected: stored_age_ms=%d", j.Kind, j.ID, max(0, selectedAt.UnixMilli()-storedAt))
+	}
 	var prompt string
 	var err error
 	var lookup questionLookup // a receiver continuation keeps its delegation; no lookups
@@ -165,6 +172,35 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				a.Logf("%s %s: run folder not removed: %v", j.Kind, j.ID, err)
 			}
 		}()
+	}
+	if r.Harness == "omp" && j.Kind != envelope.KindTask {
+		policyDir := a.home
+		if j.run != nil {
+			if e := j.run.make(); e != nil {
+				a.endJob(j.ID, stateJobFailed, "OMP question policy unavailable: "+e.Error())
+				return
+			}
+			policyDir = j.run.path // existing run cleanup also handles a crash
+		}
+		policy, e := os.CreateTemp(policyDir, "omp-question-*.yml")
+		if e != nil {
+			a.endJob(j.ID, stateJobFailed, "OMP question policy unavailable: "+e.Error())
+			return
+		}
+		policyPath, e := filepath.Abs(policy.Name())
+		defer os.Remove(policy.Name())
+		if e == nil {
+			_, e = policy.WriteString(ompQuestionPolicy)
+		}
+		closeErr := policy.Close()
+		if e == nil {
+			e = closeErr
+		}
+		if e != nil {
+			a.endJob(j.ID, stateJobFailed, "OMP question policy unavailable: "+e.Error())
+			return
+		}
+		plan.args = append(plan.args, "--config", policyPath)
 	}
 	if j.Receiver != nil {
 		defer a.clearAgentFiles(j.ID)
@@ -356,19 +392,30 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	// A codex session run reports on stdout as JSON events; the answer is
 	// taken from them (codexstream.go).
+	var firstOutput sync.Once
+	first := func() {
+		firstOutput.Do(func() {
+			a.Logf("%s %s: first output: worker_elapsed_ms=%d", j.Kind, j.ID, time.Since(selectedAt).Milliseconds())
+		})
+	}
 	var events *codexStream
 	if plan.ref != nil && h.sessions == codexSessions {
 		events = &codexStream{}
-		cmd.Stdout = activityWriter{Writer: events, activity: activity}
+		cmd.Stdout = activityWriter{Writer: events, activity: activity, first: first}
 	} else {
-		cmd.Stdout = activityWriter{Writer: &stdout, activity: activity}
+		cmd.Stdout = activityWriter{Writer: &stdout, activity: activity, first: first}
 	}
-	cmd.Stderr = activityWriter{Writer: &stderr, activity: activity}
+	cmd.Stderr = activityWriter{Writer: &stderr, activity: activity, first: first}
 	cmd.WaitDelay = 5 * time.Second
 	ownProcessGroup(cmd)
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
+	setupMS := time.Since(selectedAt).Milliseconds()
+	launchAt := time.Now()
 	runErr := cmd.Start()
-	if runErr == nil {
+	if runErr != nil {
+		a.Logf("%s %s: launch failed: setup_ms=%d start_ms=%d (%v)", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds(), runErr)
+	} else {
+		a.Logf("%s %s: process started: setup_ms=%d start_ms=%d", j.Kind, j.ID, setupMS, time.Since(launchAt).Milliseconds())
 		// Its process group, for a later daemon to stop if this one dies
 		// while it runs (stopSurvivors).
 		if pgid := runGroup(cmd); pgid > 0 {
@@ -858,3 +905,15 @@ func (a *Agent) PauseForAppUpdate() (func(), error) {
 	}
 	return func() { a.appUpdateMu.Unlock(); a.wakeWorker() }, nil
 }
+
+// A native process overlay deep-merges only built-in restrictions;
+// global/project settings, skills, extensions and other grants remain.
+const ompQuestionPolicy = `tools:
+  approval:
+    edit: deny
+    write: deny
+    notebook: deny
+    bash: deny
+    python: deny
+    eval: deny
+`

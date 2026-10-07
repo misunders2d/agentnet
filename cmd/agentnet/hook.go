@@ -329,7 +329,7 @@ func mergeHooks(config map[string]any, harness, command string) (map[string]any,
 // runHooks shows, installs or removes AgentNet's hooks in a harness's
 // user-level hook configuration.
 func runHooks(home string, args []string) error {
-	usage := errors.New("usage: hooks show|install|remove claude|codex|pi [--file PATH] [--channel (Claude only)]")
+	usage := errors.New("usage: hooks show|install|remove claude|codex|pi|omp [--file PATH] [--channel (Claude only)]")
 	if len(args) < 2 {
 		return usage
 	}

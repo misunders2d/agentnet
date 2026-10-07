@@ -3,7 +3,7 @@
 // Run by TestComicAssistantSetupModel.
 import assert from 'node:assert/strict';
 import {
-  agentsFor, applySetup, browserDevice, canHaveAgent, firstPick, folderEntries, folderName, folderWayOut, notReady, parentFolder, pickFor, readSetup, savedLine, startChosen, STATE_SENTENCE, STATE_WORDS, watchSetupFocus,
+  agentStatus, agentsFor, applySetup, browserDevice, canHaveAgent, firstPick, folderEntries, folderName, folderWayOut, notReady, parentFolder, pickFor, readSetup, savedLine, selectable, startChosen, STATE_SENTENCE, STATE_WORDS, watchSetupFocus,
 } from '../web/src/features/AssistantSetup.model.ts';
 
 const tool = (id, over = {}) => ({ id, label: { claude: 'Claude', codex: 'Codex', pi: 'Pi', omp: 'OMP' }[id], detected: true, configured: false, registered: false, supported: true, state: 'detected', note: 'server note', ...over });
@@ -224,3 +224,35 @@ assert.equal(folderName('C:\\Users\\me'), 'me');
 assert.equal(folderName('/'), '/');
 
 console.log('assistant setup model ok');
+
+// The same named agent stays ready across absent/stale native hooks; exact
+// catalog start problems win over successful native-session registration.
+{
+ const ready = catalogOf([agent('ready', 'Casey', 'claude', '/work')]);
+ for(const state of ['needs_setup','needs_activation','connected','error']) {
+  const h = tool('claude',{state,configured:false,registered:false});
+  assert.equal(agentStatus(h,ready).word,'Ready');
+  assert.match(agentStatus(h,ready).sentence,/Casey.*chats, questions and approved tasks/);
+  assert.deepEqual([...startChosen({harnesses:[h]},ready)],['claude']);
+ }
+ const unavailable = catalogOf([agent('broken','Casey','claude','/missing',true,false)]);
+ assert.equal(agentStatus(tool('claude',{state:'connected',configured:true,registered:true}),unavailable).word,'Needs attention');
+ assert.match(agentStatus(tool('claude'),unavailable).sentence,/\/missing.*does not exist/);
+ assert.equal(agentStatus(tool('omp'),catalogOf([],['omp'])).word,'Unavailable');
+ assert.equal(agentStatus(tool('claude'),catalogOf([])).word,'Needs setup');
+ assert.equal(agentStatus(tool('antigravity',{supported:false}),catalogOf([])).word,'Unavailable');
+}
+console.log('unified agent readiness PASS: hooks cannot downgrade named agents; exact problems; unsupported stays unavailable');
+
+// Windows can configure a runnable named agent without unsupported hooks.
+{
+ const h=tool('claude',{detected:false,supported:false,state:'unsupported'}),c=catalogOf([agent('a1','Casey','claude','/w/old')]);
+ assert.equal(selectable(h,c),true);
+ assert.equal(agentStatus(h,c).word,'Ready');
+ const calls=host({catalog:c});
+ await applySetup(calls,[h],'',c,new Map([['claude',{id:'a1',label:'Casey',dir:'/w/new',mustChoose:false}]]));
+ assert(calls.calls.filter(([kind])=>kind==='setup').every(([,body])=>body===undefined),'unsupported hooks never reviewed or applied');
+ assert(calls.calls.some(([kind,body])=>kind==='change'&&body.action==='update'&&body.id==='a1'&&body.dir==='/w/new'));
+ assert.equal(selectable(h,catalogOf([])),true,'installed registry permits new agent setup');
+}
+console.log('hook-unsupported agent configuration PASS: reviewed existing named update, no native install');

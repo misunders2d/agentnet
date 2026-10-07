@@ -12,10 +12,10 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// Optional DM alerts on this desktop (docs/revival/NOTIFY.md §8). The daemon
-// holds the stream and decrypts, so it decides locally: a DM turn meant for
-// a person (asksAttention, from the decrypted message), from a sender key the
-// person allowed, in a conversation not muted, with alerts on, queues an
+// Optional chat alerts on this desktop (docs/revival/NOTIFY.md §8). The daemon
+// holds the stream and decrypts, so it decides locally: a verified chat turn
+// meant for a person (asksAttention), in a chat not muted, with alerts on,
+// queues an
 // alert in the message's own admission transaction. A later message of that
 // conversation adds to it without moving its deadline. The local page
 // reporting that it presented the newest message cancels it. At the
@@ -61,7 +61,7 @@ func (a *Agent) AlertPrefs() (AlertPrefs, error) {
 		p.Senders = append(p.Senders, s)
 	}
 	rows.Close()
-	rows, err = a.store.db.Query(`SELECT conv FROM alert_mutes ORDER BY conv`)
+	rows, err = a.store.db.Query(mutedChatConvs + ` ORDER BY conv`)
 	if err != nil {
 		return p, err
 	}
@@ -160,17 +160,16 @@ func (a *Agent) AlertPresented(conv string, ids []string) error {
 	return err
 }
 
-// allowedSenderDevice is the SQL condition that the device ?address with key
-// ?fingerprint is a current device of a pinned person (?state) for whom alerts
-// are allowed: the exact key of one of that person's current devices is an
-// allowed sender. Alerts are allowed per person, so a device that person adds
-// later alerts too; a key the person does not hold never does.
-const allowedSenderDevice = `EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person
-		JOIN person_devices o ON o.person = d.person
-		JOIN alert_senders s ON s.address = o.address AND s.fingerprint = o.fingerprint
-		WHERE d.address = ? AND d.fingerprint = ? AND p.state = ?)`
+// mutedChatConvs derives person-chat mutes from existing signed member roots.
+// Cleared histories retain their roots and quiet anchors; guest/group roots stay exact.
+const mutedChatConvs = `SELECT conv FROM alert_mutes
+UNION SELECT c.id FROM conversations c JOIN conversations anchor ON anchor.peer=c.peer
+JOIN alert_mutes m ON m.conv=anchor.id JOIN persons p ON p.person=c.peer AND p.state='pinned'
+WHERE c.kind='dm' AND anchor.kind='dm'
+AND EXISTS (SELECT 1 FROM json_each(c.root,'$.members') j JOIN persons own ON own.person=json_extract(j.value,'$.person') AND own.state='self')
+AND EXISTS (SELECT 1 FROM json_each(anchor.root,'$.members') j JOIN persons own ON own.person=json_extract(j.value,'$.person') AND own.state='self')`
 
-// queueAlert queues (or adds to) the alert for in, a DM message just
+// queueAlert queues (or adds to) the alert for in, a chat message just
 // admitted within tx, verified by the key with fingerprint verifiedBy, if
 // it asks for attention and the person's preferences allow it.
 func queueAlert(tx *sql.Tx, in envelope.Inner, verifiedBy string, now time.Time) error {
@@ -180,8 +179,8 @@ func queueAlert(tx *sql.Tx, in envelope.Inner, verifiedBy string, now time.Time)
 	var ok bool
 	if err := tx.QueryRow(`SELECT
 		EXISTS (SELECT 1 FROM config WHERE k = 'alerts' AND v = 'on')
-		AND `+allowedSenderDevice+`
-		AND NOT EXISTS (SELECT 1 FROM alert_mutes WHERE conv = ?)`, in.From, verifiedBy, personPinned, in.Conv).Scan(&ok); err != nil || !ok {
+		AND (EXISTS (SELECT 1 FROM group_context WHERE conv=?) OR EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person=d.person WHERE d.address=? AND d.fingerprint=? AND p.state=?))
+		AND ? NOT IN (`+mutedChatConvs+`)`, in.Conv, in.From, verifiedBy, personPinned, in.Conv).Scan(&ok); err != nil || !ok {
 		return err
 	}
 	_, err := tx.Exec(`INSERT INTO alerts(conv, sender, last_id, count, due_ms) VALUES(?, ?, ?, 1, ?)
@@ -228,7 +227,7 @@ func (a *Agent) alertLoop(ctx context.Context, wake <-chan struct{}) {
 }
 
 // showDueAlerts shows one notification for the alerts due at now, still
-// allowed, and returns the next deadline (zero: none). The alerts are
+// eligible, and returns the next deadline (zero: none). The alerts are
 // removed before the notification is asked for.
 func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 	tx, err := a.store.db.Begin()
@@ -238,11 +237,8 @@ func (a *Agent) showDueAlerts(now time.Time) (time.Time, error) {
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT l.conv,
 		EXISTS (SELECT 1 FROM config WHERE k = 'alerts' AND v = 'on')
-		AND NOT EXISTS (SELECT 1 FROM alert_mutes m WHERE m.conv = l.conv)
-		AND EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person
-		            JOIN person_devices o ON o.person = d.person
-		            JOIN alert_senders s ON s.address = o.address AND s.fingerprint = o.fingerprint
-		            WHERE d.address = l.sender AND p.state = ?)
+		AND l.conv NOT IN (`+mutedChatConvs+`)
+		AND (EXISTS (SELECT 1 FROM group_context WHERE conv=l.conv) OR EXISTS (SELECT 1 FROM person_devices d JOIN persons p ON p.person = d.person WHERE d.address = l.sender AND p.state = ?))
 		FROM alerts l WHERE l.due_ms <= ?`, personPinned, now.UnixMilli())
 	if err != nil {
 		return time.Time{}, err
@@ -313,3 +309,12 @@ func (a *Agent) convClick(conv string) (argv []string, onClick func()) {
 		}
 	}
 }
+
+// Older preferences did not distinguish never allowed from explicitly denied.
+// Preserve quiet configured DM chats once; new chats and groups default unmuted.
+const chatAlertDefaultsSchema = `
+INSERT OR IGNORE INTO alert_mutes(conv)
+SELECT c.id FROM conversations c
+WHERE c.kind='dm' AND EXISTS (SELECT 1 FROM config WHERE k='alerts')
+AND NOT EXISTS (SELECT 1 FROM person_devices d JOIN alert_senders s ON s.address=d.address AND s.fingerprint=d.fingerprint WHERE d.person=c.peer);
+`

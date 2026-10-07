@@ -1,6 +1,9 @@
 package client
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -104,5 +107,32 @@ func TestStoredOldDefaultLimitCleared(t *testing.T) {
 	}
 	if def, _ := limits(a); def != oldDefaultLimit {
 		t.Fatalf("a limit set after the clearing was cleared: %v", def)
+	}
+}
+
+func TestOMPSetupRejectsMissingNativeContract(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	w := newWorld(t, "")
+	old := Harnesses["omp"]
+	h := old
+	h.bin = filepath.Join(t.TempDir(), "omp")
+	Harnesses["omp"] = h
+	t.Cleanup(func() { Harnesses["omp"] = old })
+	os.WriteFile(h.bin, []byte("#!/bin/sh\necho '--print --no-session --extension'\n"), 0700)
+	r := Responder{Harness: "omp", Dir: t.TempDir()}
+	if err := w.bob.SetResponder(&r); err == nil || !strings.Contains(err.Error(), "--config") {
+		t.Fatalf("unsupported default accepted: %v", err)
+	}
+	if got, _ := w.bob.Responder(); got != nil {
+		t.Fatal("unsupported default persisted")
+	}
+	if _, err := w.bob.CreateLocalAgent("unsupported", r); err == nil {
+		t.Fatal("unsupported named agent created")
+	}
+	agents, _ := w.bob.LocalAgents()
+	if len(agents) != 0 {
+		t.Fatal("failed setup persisted catalog")
 	}
 }

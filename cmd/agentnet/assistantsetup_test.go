@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -160,5 +161,60 @@ func TestAssistantSetupRefusesUnownedExtensionsAndCollision(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
 	if _, err := c.run(context.Background(), ui.AssistantSetupRequest{Action: "review", Harnesses: []string{"pi", "omp"}}); err == nil {
 		t.Fatal("shared extension destination accepted")
+	}
+}
+
+func TestAssistantSetupJSONFormattingDoesNotLoseConfiguredHooks(t *testing.T) {
+	c := isolatedSetup(t)
+	for _, harness := range []string{"codex", "claude"} {
+		t.Run(harness, func(t *testing.T) {
+			file, _ := setupTarget(harness)
+			os.MkdirAll(filepath.Dir(file), 0700)
+			command, err := hookCommand(c.home, harness)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := mergeHooks(map[string]any{"unrelated": map[string]any{"preserve": true}}, harness, command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			compact, _ := json.Marshal(cfg)
+			if err = os.WriteFile(file, compact, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if row := c.inspect(harness, nil).row; !row.Configured || row.State != "needs_activation" {
+				t.Fatalf("valid compact config lost setup: %+v", row)
+			}
+			data, _ := os.ReadFile(file)
+			if !bytes.Equal(data, compact) {
+				t.Fatal("inspection rewrote live configuration")
+			}
+			for _, mutation := range []string{"home", "executable", "missing", "duplicate", "matcher"} {
+				var changed map[string]any
+				json.Unmarshal(compact, &changed)
+				hooks := changed["hooks"].(map[string]any)
+				event := harnessHookEvents(harness)[0]
+				groups := hooks[event].([]any)
+				g := groups[0].(map[string]any)
+				h := g["hooks"].([]any)[0].(map[string]any)
+				switch mutation {
+				case "home":
+					h["command"] = strings.Replace(command, c.home, c.home+"-old", 1)
+				case "executable":
+					h["command"] = "'/previous/agentnet' --home '" + c.home + "' hook " + harness
+				case "missing":
+					delete(hooks, event)
+				case "duplicate":
+					hooks[event] = append(groups, g)
+				case "matcher":
+					g["matcher"] = "only-a-subset"
+				}
+				raw, _ := json.Marshal(changed)
+				os.WriteFile(file, raw, 0600)
+				if c.inspect(harness, nil).row.Configured {
+					t.Fatalf("%s wrongly configured", mutation)
+				}
+			}
+		})
 	}
 }

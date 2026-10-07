@@ -33,6 +33,7 @@ pub enum Event {
     Page { mode: String, url: String },
     Error { text: String },
     Update { helper: String, plan: String, home: String },
+    Appreply { call_id: u64, status: u16, body: String },
 }
 
 /// parse reads one stdout line; anything else is ignored.

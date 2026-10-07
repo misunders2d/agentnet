@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -444,6 +445,28 @@ func TestLiveAlerts(t *testing.T) {
 	}
 	if o, _ = pb.Overview(); !o.Notify.Enabled || len(o.Notify.Allowed) != 2 || len(o.Notify.Mutes) != 1 {
 		t.Fatalf("overview when on: %+v", o.Notify)
+	}
+	// A later signed root belongs to the same person chat, including its mute.
+	later, err := bob.CreateDM(ctx, alice.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if later == mine {
+		t.Fatal("fixture reused the original root")
+	}
+	p, _ = bob.AlertPrefs()
+	if !slices.Contains(p.Mutes, later) {
+		t.Fatalf("later root lost mute: %+v", p)
+	}
+	if _, err := pb.NotifyMute(theirs, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pb.NotifyMute(later, false); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = bob.AlertPrefs()
+	if slices.Contains(p.Mutes, mine) || slices.Contains(p.Mutes, later) || !slices.Contains(p.Mutes, theirs) {
+		t.Fatalf("person-chat unmute changed wrong scope: %+v", p)
 	}
 	if _, err := pb.NotifyDisable(); err != nil {
 		t.Fatal(err)

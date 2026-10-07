@@ -2029,7 +2029,7 @@ export class Engine {
       }
       if (rec.required_cap === wire.CapHumanParticipation) {
         const c = await this.store.get("convs", rec.conv) || await this.groupRecord(rec.conv), gate = await this.gate(c, rec);
-        if (gate.why) throw new Error(gate.why); // before uploading any file bytes
+        if (gate.why) throw Object.assign(new Error(gate.why), { code: gate.code }); // before uploading any file bytes
         await this.requireHumanSupport(rec.to, gate.pin);
         if(c?.kind==="group")await this.requireGroupHumanSupport(rec.to,gate.pin);
       }
@@ -2073,7 +2073,7 @@ export class Engine {
       if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
-      if (e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
+      if (e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
         rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
       } else if (retryable(e)) {
         rec.detail = e.message;
@@ -2114,7 +2114,7 @@ export class Engine {
   async groupHumanReaderGate(c, rec) {
     if (!rec || c?.kind !== "group") return;
     const item = rec.sub === "history" ? wire.parseHistory(rec.body) : rec;
-    let human = item.human?.proof.some(e => e.role === "human");
+    let human = !!item.human;
     const pid = item.pid || rec.pid;
     if (pid && !human) {
       const events = await this.convEvents(c.id);
@@ -2123,12 +2123,13 @@ export class Engine {
     if (!human) return;
     const pin = await this.pinned(rec.to);
     if (pin.pending || pin.fingerprint !== rec.recipient_fp) throw Error("Group human recipient key changed.");
+    await this.groupSupport(rec.to, pin);
     await this.requireGroupHumanSupport(rec.to, pin);
   }
 
   async gate(c, rec) {
     try { await this.groupHumanReaderGate(c, rec); }
-    catch (e) { return { why: e.message }; }
+    catch (e) { return { why: e.message, code: e.code }; }
     if(rec?.sub===wire.SubReadSync)return this.readSyncGate(rec);
     if(rec?.sub===wire.SubRootSync)return this.rootSyncGate(rec);
     if (rec?.sub === wire.SubClear) return this.clearGate(rec);
@@ -2866,10 +2867,11 @@ export class Engine {
   }
 
   async groupSupport(address, pin) {
-    const [ok, why] = await this.supports(address,pin);
-    if (!ok) throw Error(why);
+    const [ok, why, notify] = await this.supports(address,pin);
+    if (!ok) throw Object.assign(Error(why), { code: "group_unsupported", address });
     const profile = await this.profile(address), key = await this.pubOf(pin);
-    if (!(await wire.profileSupports(profile || {},address,key.sign_key,wire.CapGroup))) throw Error(address + " cannot read groups with this version.");
+    if (!(await wire.profileSupports(profile || {},address,key.sign_key,wire.CapGroup))) throw Object.assign(Error(address + " cannot read groups with this version."), { code: "group_unsupported", address });
+    return notify;
   }
 
   async groupCarrierCopy(root, sub, descriptor, value, device, extra = {}, knownKeysOnly = false) {
@@ -3205,6 +3207,7 @@ export class Engine {
     const ops=[{s:"kv",k:key,v:g},{s:"kv",k:pendingKey,v:undefined},...copies.map(v=>({s:"outbox",k:v.id,v}))];
     if(invitation) {const k="group-invitation/out/"+invitation,row=await this.groupRead(finalChecks,"kv",k);if(!row || row.status!=="accepted") throw Error("Exact accepted invitation missing.");ops.push({s:"kv",k,v:{...row,status:"published"}});}
     await this.store.write(ops,finalChecks);this.changed();
+    if (this.connected) this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
     for(const rec of copies) await this.post(rec);
     return packet;
   }
@@ -3280,11 +3283,12 @@ export class Engine {
       if(device.address===this.address)continue;
       const pin=await this.pinned(device.address);await this.groupRead(checks,"pins",device.address);
       if(pin.pending||pin.fingerprint!==device.fingerprint)throw Error("Exact group recipient key changed.");
-      await this.groupSupport(device.address,pin);
+      const notify = await this.groupSupport(device.address,pin);
       if(prepared)await this.receiverSupport(device.address,pin);
       const publicKey=await this.pubOf(pin), sealed=[];for(const f of plain)sealed.push({...await wire.encryptFile(f.bytes,f.name,publicKey),uploaded:false});
       const id=copies.length?wire.newID():firstID, fan=[{person:me.person,roster:me.hash},...(member.person===me.person?[]:[{person:member.person,roster:(await this.store.get("persons",member.person)).hash}])], replica=member.person===me.person;
-      const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",replica,fan,attachments:sealed.map(f=>f.attachment),receiver_route:prepared?.route},this.keys,publicKey);
+      const chan = notify && !replica && !topic_event ? await wire.notifyChannel(c.id, device.fingerprint) : "";
+      const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:device.address,ts:Math.floor(at/1000),kind:"message",body,topic,topic_event,quote,reply_to:reply,conv:c.id,lid,root:wire.rootJSON(packet.root),origin:"ui",chan,replica,fan,attachments:sealed.map(f=>f.attachment),receiver_route:prepared?.route},this.keys,publicKey);
       copies.push({id,lid,conv:c.id,kind:"message",body,topic,topic_event,quote,reply_to:reply,origin:"ui",from:this.address,to:device.address,person:member.person,own:replica,replica,at,envelope,attachments:sealed.map(f=>f.attachment),files:sealed.length?sealed:undefined,state:"queued",required_cap:wire.CapGroup,recipient_fp:device.fingerprint,group_admission:stamp,...(prepared?{receiver_route:prepared.route}:{})});
     }
     if(!copies.length)throw Error("Group has no other current device to receive a copy.");
@@ -4024,6 +4028,9 @@ export class Engine {
       if (ops.some(o => o.s === "inbox" && o.v?.sub === "event")) { this.recoverHumanExcerpts().catch(() => {}); this.discloseHumanAudience(); this.retryHeld().catch(() => {}); }
       if (ops.groupCarrier) this.retryHeld().catch(() => {});
       if (ops.groupCarrier) this.recoverGroupIntents().catch(() => {});
+      if (this.connected && ops.some(o => o.s === "convs" || o.s === "kv" && o.k.startsWith("group/") && o.v?.context || o.s === "inbox" && o.v?.sub === "event")) {
+        this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
+      }
       if(ops.readSync)this.syncReadMarks().catch(()=>{});
       if(ops.rootSync){this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});}
       if (this.connected && ops.some((o) => o.s === "outbox")) this.flushOutbox().catch(() => {}); // history forwarded to your other devices
@@ -6853,8 +6860,8 @@ export class Engine {
       if (!pin || pin.pending || pin.fingerprint !== d.fingerprint) throw new Error("Human audience device key changed.");
       const isHost = request && d.address === x.host.address && d.fingerprint === x.host.fingerprint;
       this.humanTurnAuthorization({ ...turn, human: h }, evidence, x, this.address, this.fp, d.address, d.fingerprint);
-      await this.requireHumanSupport(d.address, pin);
-      if(c.kind==="group") {await this.groupSupport(d.address,pin);await this.requireGroupHumanSupport(d.address,pin);}
+      if(c.kind!=="group") await this.requireHumanSupport(d.address, pin);
+      // Group reader compatibility is checked per durable copy at handoff.
       if (isHost && (x.external || x.agent_id)) await this.requireAgentIdentity(d.address, pin, x.external ? wire.CapExternalParticipation : wire.CapAgentIdentity);
       if (prepared) await this.receiverSupport(d.address, pin);
       const pub = await this.pubOf(pin), sealed = [];
@@ -7958,7 +7965,22 @@ export class Engine {
   // the relay could not be told (turning off offline, too) stays pending and
   // is sent when the page reconnects. A device never turned on writes nothing.
   async notifyState() {
-    return { enabled: false, allowed: [], mutes: [], rev: 0, synced: 0, ...((await this.store.get("kv", "notify")) || {}) };
+    const saved = await this.store.get("kv", "notify");
+    const st = { enabled: false, allowed: [], mutes: [], rev: 0, synced: 0, chat_mutes: 1, ...(saved || {}) };
+    if (saved && !saved.chat_mutes) {
+      // Legacy state cannot tell a deny from a never-allowed person.
+      // Preserve quiet known DMs; groups and future chats default unmuted.
+      const convs = await this.store.all("convs");
+      for (const c of convs) {
+        if (c.kind === "group") continue;
+        const p = await this.store.get("persons", c.peer);
+        const allowed = p && p.state !== "conflict" && (st.allowed.includes(p.person) || convs.some(x => x.peer === p.person && x.creator === this.address));
+        if (!allowed && !st.mutes.includes(c.id)) st.mutes.push(c.id);
+      }
+      st.chat_mutes = 1; st.rev++;
+      await put(this.store, "kv", "notify", st);
+    }
+    return st;
   }
 
   // changeNotify stores a change as pending, then tries to tell the relay;
@@ -7984,21 +8006,42 @@ export class Engine {
     return this.notifyOffer.push_key ? this.notifyOffer : null;
   }
 
-  // notifySenders are the exact keys this device's person decided on: the
-  // people they started a DM with, and those they allowed by hand. A key
-  // that changed since is not included; receiving a message adds nobody.
+  // Current verified chat members and active participant hosts may alert.
+  // Unknown requests and pending invitations add no sender; mutes stay per chat.
   async notifySenders(st) {
-    const convs = await this.store.all("convs");
-    const out = [];
+    const eligible = new Set(), exact = new Map(), chats = [];
+    for (const c of await this.store.all("convs")) {
+      if (c.kind === "group") continue;
+      const root = wire.parseRoot(c.root);
+      if (!root.members.some(m => m.person === this.me?.person)) continue;
+      const p = await this.store.get("persons", c.peer);
+      if (p?.state === "pinned") { eligible.add(p.person); chats.push(c); }
+    }
+    for (const g of await this.store.all("kv")) if (g?.root && g.context && Array.isArray(g.records)) {
+      try {
+        const conv = wire.parseGroupContext(g.context).state.conv, packet = await this.groupCurrentState(conv);
+        if (!wire.groupMember(packet.state, this.me?.person)) continue;
+        for (const p of await this.groupPeople(packet)) if (p.person !== this.me.person) eligible.add(p.person);
+        chats.push({id:conv,kind:"group",root:g.root});
+      } catch (_) { /* unavailable/current membership is not a notification grant */ }
+    }
     for (const p of await this.store.all("persons")) {
-      const decided = st.allowed.includes(p.person) || convs.some((c) => c.peer === p.person && c.creator === this.address);
-      if (!decided || p.state === "conflict") continue;
-      for (const d of p.devices) { // each of their devices, by its unchanged key
+      if (!eligible.has(p.person) || p.state === "conflict") continue;
+      for (const d of p.devices) {
         const pin = await this.store.get("pins", d.address);
-        if (pin && !pin.pending && pin.fingerprint === d.fingerprint) out.push({ address: d.address, fingerprint: d.fingerprint });
+        if (pin && !pin.pending && pin.fingerprint === d.fingerprint) exact.set(d.address, {address:d.address,fingerprint:d.fingerprint});
       }
     }
-    return out;
+    for (const c of chats) {
+      try {
+        for (const info of await this.participationsOf(c)) {
+          if (info.state !== "active" || info.held || !info.host?.address || info.host.address === this.address) continue;
+          const pin = await this.store.get("pins", info.host.address);
+          if (pin && !pin.pending && pin.fingerprint === info.host.fingerprint) exact.set(info.host.address, {address:info.host.address,fingerprint:pin.fingerprint});
+        }
+      } catch (_) { /* unavailable participation supplies no alert sender */ }
+    }
+    return [...exact.values()];
   }
 
   // syncNotify sends this device's preferences to the relay; what it sent
@@ -8007,7 +8050,7 @@ export class Engine {
     const st = await this.notifyState();
     if (!(await this.notifyInfo())) return;
     const mutes = [];
-    for (const conv of st.mutes) mutes.push(await wire.notifyChannel(conv, this.fp));
+    for (const conv of await this.effectiveNotifyMutes(st)) mutes.push(await wire.notifyChannel(conv, this.fp));
     await this.call("PUT", "/v1/notify/prefs", { enabled: st.enabled, senders: await this.notifySenders(st), mutes });
     const now = await this.notifyState();
     if (now.synced < st.rev) {
@@ -8048,15 +8091,35 @@ export class Engine {
     if (st.enabled || st.synced < st.rev) await this.syncNotify();
   }
 
+  async memberNotifyChats() {
+    const chats = [];
+    for (const c of await this.store.all("convs")) {
+      if (c.kind === "group" || !c.root || !wire.parseRoot(c.root).members.some(m => m.person === this.me?.person)) continue;
+      if ((await this.store.get("persons", c.peer))?.state === "pinned") chats.push(c);
+    }
+    return chats;
+  }
+
+  async effectiveNotifyMutes(st) {
+    const chats = await this.memberNotifyChats(), quiet = new Set(chats.filter(c => st.mutes.includes(c.id)).map(c => c.peer));
+    return [...new Set([...st.mutes, ...chats.filter(c => quiet.has(c.peer)).map(c => c.id)])];
+  }
+
   async muteDM(conv, muted) {
-    if (!(await this.store.get("convs", conv))) throw new Error("No conversation " + conv + " here.");
-    await this.changeNotify((st) => { st.mutes = st.mutes.filter((c) => c !== conv).concat(muted ? [conv] : []); });
-    return { note: muted ? "This DM is muted." : "This DM notifies you again." };
+    if (!(await this.store.get("convs", conv)) && !(await this.groupRecord(conv))) throw new Error("No chat " + conv + " here.");
+    const chats = await this.memberNotifyChats(), selected = chats.find(c => c.id === conv);
+    const ids = selected ? chats.filter(c => c.peer === selected.peer).map(c => c.id) : [conv];
+    await this.changeNotify((st) => { st.mutes = st.mutes.filter(c => !ids.includes(c)).concat(muted ? ids : []); });
+    return { note: muted ? "This chat is muted." : "This chat notifies you again." };
   }
 
   async allowSender(person, allowed) {
     if (!(await this.store.get("persons", person))) throw new Error("That person is not known here.");
-    await this.changeNotify((st) => { st.allowed = st.allowed.filter((p) => p !== person).concat(allowed ? [person] : []); });
+    const convs = await this.store.all("convs");
+    await this.changeNotify((st) => {
+      st.allowed = st.allowed.filter(p => p !== person).concat(allowed ? [person] : []);
+      if (!allowed) for (const c of convs) if (c.kind !== "group" && c.peer === person && !st.mutes.includes(c.id)) st.mutes.push(c.id);
+    });
     return { note: allowed ? "Alerts from them are on." : "Alerts from them are off." };
   }
 
@@ -8065,7 +8128,7 @@ export class Engine {
   // is not a read receipt; nobody else learns it.
   async notifySeen(conv, ids) {
     const st = await this.notifyState();
-    if (!st.enabled || !(await this.notifyInfo()) || !(await this.store.get("convs", conv))) return {};
+    if (!st.enabled || !(await this.notifyInfo()) || !(await this.store.get("convs", conv)) && !(await this.groupRecord(conv))) return {};
     const shown = (ids || []).filter((id) => wire.validID(id)).slice(-32);
     if (!shown.length) return {};
     await this.call("POST", "/v1/notify/seen", { channel: await wire.notifyChannel(conv, this.fp), ids: shown });
@@ -8077,6 +8140,10 @@ export class Engine {
   async resolveChannel(chan) {
     if (!wire.validChannel(chan)) return "";
     for (const c of await this.store.all("convs")) if ((await wire.notifyChannel(c.id, this.fp)) === chan) return c.id;
+    for (const g of await this.store.all("kv")) if (g?.root && g.context && Array.isArray(g.records)) {
+      const conv = wire.parseGroupContext(g.context).state.conv;
+      if ((await wire.notifyChannel(conv, this.fp)) === chan) return conv;
+    }
     return "";
   }
 
@@ -8088,7 +8155,7 @@ export class Engine {
     const supported = !!(this.push && this.push.supported());
     return { available: !!info && supported, enabled: st.enabled, pending: st.synced < st.rev,
       reason: !info ? "Your server does not send notifications." : !supported ? "This browser cannot show notifications for AgentNet here." : "",
-      mutes: st.mutes, allowed: (await this.notifySenders(st)).map((s) => s.address) };
+      mutes: await this.effectiveNotifyMutes(st), allowed: (await this.notifySenders(st)).map((s) => s.address) };
   }
 
   // openFile fetches a received file's ciphertext, and returns it decrypted

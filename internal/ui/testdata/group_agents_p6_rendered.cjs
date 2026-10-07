@@ -14,11 +14,18 @@ const overview={version:'fixture',seq:1,me:{address:me.address,fingerprint:me.fi
 const boot=`
 const seed=${JSON.stringify({overview,thread})};window.fixture={...seed,requests:[]};
 const variant=new URL(location.href).searchParams.get('case');
-if(variant){fixture.thread.kind='dm';fixture.thread.peer=fixture.overview.people[0];fixture.thread.members=[];fixture.thread.agents=[{...fixture.thread.agents[0],member:false,state:variant==='dm-conflict'?'conflict':'active',state_text:variant==='dm-conflict'?'Its signed records disagree.':'Active in this DM; its owner decides what runs.'}];fixture.thread.messages=[];seed.thread=fixture.thread;}
+if(variant?.startsWith('dm-')){fixture.thread.kind='dm';fixture.thread.peer=fixture.overview.people[0];fixture.thread.members=[];fixture.thread.agents=[{...fixture.thread.agents[0],member:false,state:variant==='dm-conflict'?'conflict':'active',state_text:variant==='dm-conflict'?'Its signed records disagree.':'Active in this DM; its owner decides what runs.'}];fixture.thread.messages=[];seed.thread=fixture.thread;}
+if(variant==='pending-records'){
+ fixture.thread.agents=[{pid:'held-only',state:'pending',state_text:'Its invitation is not here yet: nothing counts until it is. Some of its records do not count here yet.',host:{},inviter:{},member:true,shared:[],missing:0,can_ask:false,can_decide:false,can_dismiss:false},{...fixture.thread.agents[1],pid:'real-invite',state:'invited',can_ask:false,can_decide:false,can_dismiss:true}];
+ fixture.thread.messages=[{id:'held-task',pid:'held-only',kind:'task',state:'held',body:'Held record has no proven agent or decider',from:seed.overview.me.address,dir:'out',at:'2026-10-07T10:00:00Z'}];seed.thread=fixture.thread;
+}
 let open,changed;
 const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async()=>{throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);if(p.startsWith('/api/dm?'))return structuredClone(fixture.thread);
 if(p.startsWith('/api/agents'))return {host:body?.host||new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address,local:!p.includes('host='),agents:fixture.thread.agents.filter(a=>a.agent_id&&a.host.address===(new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address)).map(a=>({record:{id:a.agent_id,label:a.host.address===seed.overview.me.address?'Prospect':'Analyst',host:a.host.address},enabled:true})),sessions:[]};
+if(p==='/api/dm/agent/dismiss'){
+ const agent=fixture.thread.agents.find(a=>a.pid===body.pid);if(!agent||agent.state!=='invited')throw Error('fixture refuses incomplete records');agent.state='dismissed';agent.can_dismiss=false;changed?.({type:'change',seq:++fixture.overview.seq});return structuredClone(agent);
+}
 if(p==='/api/dm/agent/invite'){fixture.thread.agents[0].shared=body.share;changed?.({type:'change',seq:++fixture.overview.seq});return structuredClone(fixture.thread.agents[0]);}
 if(p.includes('/groups/invitations'))return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.includes('/topics'))return {topics:[],placements:[]};return {};
 }};
@@ -31,6 +38,29 @@ window.openGroup=()=>open(seed.thread.id,'conversation');window.ready=true;
 `;
 const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0.0.1');if(u.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>');return;}if(u.pathname==='/boot.mjs'){res.setHeader('Content-Type','text/javascript');res.end(boot);return;}if(u.pathname.startsWith('/assets/')){const file=path.resolve(root,'.'+u.pathname.slice(7));if(file.startsWith(root+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.woff2')?'font/woff2':'application/octet-stream');res.end(fs.readFileSync(file));return;}}res.statusCode=404;res.end('fixture route missing');});
 (async()=>{let browser;const errors=[],shots=[];try{await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium'});
+if(process.env.AGENTNET_PENDING_RECORDS_ONLY==='1'){
+ for(const width of [1280,390]){
+  const context=await browser.newContext({viewport:{width,height:900}});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
+  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.stack));page.setDefaultTimeout(10000);
+  await page.goto(origin+'/?skin=comic&case=pending-records');await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());
+  const invite=page.getByRole('article',{name:'Analyst, invited'});
+  if(!await invite.isVisible()){const button=page.getByRole('button',{name:'In this chat',exact:true});if(await button.isVisible())await button.click();else await page.getByRole('button',{name:/Who’s in this chat/}).click();}
+  await invite.waitFor();const details=page.locator('details').filter({has:page.locator('summary').filter({hasText:'Incomplete context'})});await details.waitFor();
+  assert.equal(await details.getAttribute('open'),null,'incomplete context starts collapsed');
+  const heading=page.getByRole('heading',{name:/^Invited\s+1$/i});await heading.waitFor();
+  assert.equal(await page.getByText('Someone’s agent',{exact:true}).count(),0,'no guessed identity');
+  assert.equal(await page.getByText('Waiting for Someone’s OK',{exact:true}).count(),0,'no invented approval');
+  assert.equal(await page.getByRole('heading',{name:/Waiting on an OK/}).count(),0,'held task does not fabricate approval row');
+  await details.locator('summary').click();assert.match(await details.innerText(),/nothing counts until it is/);assert.equal(await details.locator('button').count(),0,'no pending grant or dismissal action');
+  await settle(page);const shot=path.join(evidence,'comic-incomplete-context-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  await invite.getByRole('button',{name:'Cancel invite',exact:true}).click();await invite.waitFor({state:'hidden'});
+  assert.equal(await page.getByRole('heading',{name:/^Invited\s+\d+$/i}).count(),0,'cancelled real invite no longer counted');
+  const actions=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/dismiss'));
+  assert.deepEqual(actions.map(r=>r.body.pid),['real-invite'],'only proven invitation cancelled');
+  await context.close();
+ }
+ assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:'pending records not invited or approved; neutral context; real cancellation retained; desktop/phone',shots}));return;
+}
 for(const skin of ['comic','classic','zoom'])for(const width of [1280,390]){const context=await browser.newContext({viewport:{width,height:900}});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.on('pageerror',e=>errors.push(skin+': '+e.stack));page.setDefaultTimeout(10000);await page.goto(origin+'/?skin='+skin);await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());
 if(skin==='comic'){await page.getByText('Verified group answer',{exact:false}).waitFor().catch(async e=>{await page.screenshot({path:path.join(evidence,'debug-comic.png')});console.error(JSON.stringify({errors,text:await page.locator('body').innerText(),requests:await page.evaluate(()=>fixture.requests)}));throw e;});const panel=page.getByRole('button',{name:'In this chat',exact:true});if(!await page.getByRole('article',{name:'Prospect, member'}).isVisible()){if(await panel.isVisible())await panel.click();else await page.getByRole('button',{name:'amazon_team. Who’s in this chat',exact:true}).click();}await page.getByRole('article',{name:'Prospect, member'}).waitFor();}
 else {if(skin==='zoom'){const disclosure=page.locator('.zoom-agents');await disclosure.waitFor();assert.equal(await disclosure.getAttribute('open'),null,'Zoom agents collapsed');await page.locator('.mc-who').filter({hasText:/Question.*to Analyst/i}).waitFor();assert(await page.getByText('Verified request to the other group agent',{exact:true}).isVisible(),'phone chat visible before cards');await settle(page);await page.screenshot({path:path.join(evidence,'zoom-chat-collapsed-'+width+'.png')});await disclosure.locator(':scope > summary').click();}if(skin==='classic'){await page.keyboard.press('Escape');await page.locator('#agents .assistant-participant').filter({hasText:'Prospect'}).click();}await page.locator('.agent-card').filter({hasText:'Prospect'}).waitFor();}

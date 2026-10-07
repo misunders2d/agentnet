@@ -14,39 +14,18 @@
 @property --tw-translate-x{syntax:"*";inherits:false;initial-value:0}
 @property --tw-translate-y{syntax:"*";inherits:false;initial-value:0}
 @property --tw-translate-z{syntax:"*";inherits:false;initial-value:0}
-@property --tw-scale-x{syntax:"*";inherits:false;initial-value:1}
-@property --tw-scale-y{syntax:"*";inherits:false;initial-value:1}
-@property --tw-scale-z{syntax:"*";inherits:false;initial-value:1}
 @property --tw-rotate-x{syntax:"*";inherits:false}
 @property --tw-rotate-y{syntax:"*";inherits:false}
 @property --tw-rotate-z{syntax:"*";inherits:false}
 @property --tw-skew-x{syntax:"*";inherits:false}
 @property --tw-skew-y{syntax:"*";inherits:false}
-@property --tw-pan-x{syntax:"*";inherits:false}
-@property --tw-pan-y{syntax:"*";inherits:false}
-@property --tw-pinch-zoom{syntax:"*";inherits:false}
-@property --tw-scroll-snap-strictness{syntax:"*";inherits:false;initial-value:proximity}
 @property --tw-space-y-reverse{syntax:"*";inherits:false;initial-value:0}
 @property --tw-space-x-reverse{syntax:"*";inherits:false;initial-value:0}
-@property --tw-divide-x-reverse{syntax:"*";inherits:false;initial-value:0}
-@property --tw-border-style{syntax:"*";inherits:false;initial-value:solid}
 @property --tw-divide-y-reverse{syntax:"*";inherits:false;initial-value:0}
-@property --tw-mask-linear{syntax:"*";inherits:false;initial-value:linear-gradient(#fff, #fff)}
-@property --tw-mask-radial{syntax:"*";inherits:false;initial-value:linear-gradient(#fff, #fff)}
-@property --tw-mask-conic{syntax:"*";inherits:false;initial-value:linear-gradient(#fff, #fff)}
-@property --tw-mask-linear-position{syntax:"*";inherits:false;initial-value:0deg}
-@property --tw-mask-linear-from-position{syntax:"*";inherits:false;initial-value:0%}
-@property --tw-mask-linear-to-position{syntax:"*";inherits:false;initial-value:100%}
-@property --tw-mask-linear-from-color{syntax:"*";inherits:false;initial-value:black}
-@property --tw-mask-linear-to-color{syntax:"*";inherits:false;initial-value:transparent}
+@property --tw-border-style{syntax:"*";inherits:false;initial-value:solid}
 @property --tw-leading{syntax:"*";inherits:false}
 @property --tw-font-weight{syntax:"*";inherits:false}
 @property --tw-tracking{syntax:"*";inherits:false}
-@property --tw-ordinal{syntax:"*";inherits:false}
-@property --tw-slashed-zero{syntax:"*";inherits:false}
-@property --tw-numeric-figure{syntax:"*";inherits:false}
-@property --tw-numeric-spacing{syntax:"*";inherits:false}
-@property --tw-numeric-fraction{syntax:"*";inherits:false}
 @property --tw-shadow{syntax:"*";inherits:false;initial-value:0 0 #0000}
 @property --tw-shadow-color{syntax:"*";inherits:false}
 @property --tw-shadow-alpha{syntax:"<percentage>";inherits:false;initial-value:100%}
@@ -75,21 +54,9 @@
 @property --tw-drop-shadow-color{syntax:"*";inherits:false}
 @property --tw-drop-shadow-alpha{syntax:"<percentage>";inherits:false;initial-value:100%}
 @property --tw-drop-shadow-size{syntax:"*";inherits:false}
-@property --tw-backdrop-blur{syntax:"*";inherits:false}
-@property --tw-backdrop-brightness{syntax:"*";inherits:false}
-@property --tw-backdrop-contrast{syntax:"*";inherits:false}
-@property --tw-backdrop-grayscale{syntax:"*";inherits:false}
-@property --tw-backdrop-hue-rotate{syntax:"*";inherits:false}
-@property --tw-backdrop-invert{syntax:"*";inherits:false}
-@property --tw-backdrop-opacity{syntax:"*";inherits:false}
-@property --tw-backdrop-saturate{syntax:"*";inherits:false}
-@property --tw-backdrop-sepia{syntax:"*";inherits:false}
 @property --tw-duration{syntax:"*";inherits:false}
 @property --tw-ease{syntax:"*";inherits:false}
-@property --tw-contain-size{syntax:"*";inherits:false}
-@property --tw-contain-layout{syntax:"*";inherits:false}
-@property --tw-contain-paint{syntax:"*";inherits:false}
-@property --tw-contain-style{syntax:"*";inherits:false}
-@property --tw-text-shadow-color{syntax:"*";inherits:false}
-@property --tw-text-shadow-alpha{syntax:"<percentage>";inherits:false;initial-value:100%}
+@property --tw-scale-x{syntax:"*";inherits:false;initial-value:1}
+@property --tw-scale-y{syntax:"*";inherits:false;initial-value:1}
+@property --tw-scale-z{syntax:"*";inherits:false;initial-value:1}
 @property --tw-content{syntax:"*";inherits:false;initial-value:""}

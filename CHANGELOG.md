@@ -12,11 +12,37 @@ This record starts with v0.8.1; earlier releases remain on the
   minute changes persist, including when reopening the reminder editor.
 - Browser requests time out if their headers or response body stall, allowing
   reconnect and queued sends to resume with their original message IDs.
+- Group messages keep an older participant’s encrypted copy waiting for their
+  update while current participants can receive the message.
 - Linked-device group history preserves signed timestamps for edits, deletions
   and reactions even when local storage finishes in a later second.
 - Desktop updates restart from a stable directory and report immediate launch
-  failures. About explains when a separate daemon makes update controls
-  unavailable instead of silently hiding them.
+  failures. About exposes update controls for an independently running daemon;
+  replacement waits for accepted work to finish.
+- Chats with each person open into a stable Main flow. Earlier conversations
+  and their topics appear together in All topics, retaining their messages,
+  drafts and original participants.
+- Chats notify by default, with one Mute/Unmute choice in each chat. A person's
+  mute covers Main and their topics, including later synced conversations.
+  Existing quiet choices are preserved; group alerts do not require a separate DM.
+- Agent setup uses one flow for supported installed Claude, Codex, Pi and OMP.
+  Native hook availability is shown separately from whether an agent can run.
+- Codex and Claude no longer appear to need setup merely because another tool
+  changed their settings file's formatting.
+- OMP can answer questions and run accepted tasks using its own settings,
+  skills, extensions and permissions. Questions restrict editing and new approvals.
+- Agent startup diagnostics distinguish stored waiting time, process launch,
+  first output and launch failure, without exposing message contents.
+- Agent attachments offer an explicit download and a bounded plain-text preview.
+  HTML and SVG downloads stay files instead of opening inside the app.
+- Desktop skin import uses the native folder picker and validates the selected
+  package before importing it.
+- Message Details identify the device and missing reader support when a
+  recipient's copy is waiting for an update.
+- Zoom sends retain the selected chat route and keep typed text when that route
+  changes while the send dialog is open.
+- Incomplete group participation records appear as neutral context, rather than
+  an invented assistant invitation waiting for approval.
 
 ## [0.8.3] — 2026-10-07
 
