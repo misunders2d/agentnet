@@ -32,8 +32,12 @@ func lookupProgram(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("AGENTNET_TEST_LOOKUP_PROGRAM", "1")
-	return path
+	return resolved
 }
 
 // Claude gets exact allow rules bound to the installed program: fixed
