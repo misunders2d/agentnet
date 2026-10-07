@@ -550,7 +550,7 @@ export function agentWhere(host: T.PersonView | null | undefined, address: strin
 // Shared by the chat list's banner and the OKs screen.
 
 /** Why a conversation item waits (client.Review*). */
-export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_human", invite: "agent_invite", heldTurn: "person_turn" } as const;
+export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_human", interrupted: "agent_interrupted", invite: "agent_invite", heldTurn: "person_turn" } as const;
 
 /** Working is stoppable, but never an outstanding approval. */
 export const isWorkingItem = (c: T.ConvItem) => (c.actions || []).includes("cancel");
@@ -576,6 +576,7 @@ export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   switch (c.reason) {
     case Reason.invite: return who + " invited your agent into " + chatName(c.conv, o);
     case Reason.needsHuman: return "Your agent couldn’t finish — it needs your answer";
+    case Reason.interrupted: return "Your agent was interrupted — run it again if needed";
     case Reason.heldTurn: return who + (c.kind === "task" ? " gave you a task" : " asked you something");
     default: return who + (c.kind === "task" ? " gave your agent a task" : " asked your agent something");
   }
@@ -629,6 +630,7 @@ export const holdVerified = (code: string) =>
  *  naming its sender; its content is never shown. browser: this device can't trust keys. */
 export function holdSentence(code: string, name: string, browser = false): string {
   switch (code) {
+    case "invalid": return "This message failed a check and was kept out of the chat. Its contents stay hidden and it cannot start any work.";
     case "key_changed": return name + "’s identity changed. It waits until you check and trust the new one" + (browser ? " in AgentNet on your computer." : ".");
     case "proof_pending": return "It names a chat or a person this device can’t check yet. It waits here; nothing runs it.";
     case "identity_conflict": return "It disagrees with what this device knows about " + name + ". It stays held; nothing runs it.";

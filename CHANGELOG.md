@@ -43,6 +43,10 @@ This record starts with v0.8.1; earlier releases remain on the
   changes while the send dialog is open.
 - Incomplete group participation records appear as neutral context, rather than
   an invented assistant invitation waiting for approval.
+- Stopped or failed requests to your own agent show their execution state and
+  offer an explicit retry, rather than asking for approval again.
+- Held-back messages no longer describe every rejected operation as a failed
+  identity check. Their contents stay hidden and they cannot start work.
 
 ## [0.8.3] — 2026-10-07
 

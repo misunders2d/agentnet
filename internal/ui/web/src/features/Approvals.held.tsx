@@ -58,7 +58,7 @@ function HeldRow({ q, o }: { q: T.QuarantineItem; o: T.Overview }) {
         : <span className="grid size-10 shrink-0 place-items-center rounded-full bg-sunken text-text-2 stroke" aria-hidden="true"><IconShieldQuestion size={20} /></span>}
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-baseline gap-x-2">
-          <b className="font-bold">{verified ? name : "A message that couldn’t be verified"}</b>
+          <b className="font-bold">{verified ? name : q.code === "invalid" ? "A message that couldn’t be accepted" : "A message that couldn’t be verified"}</b>
           <span className="text-[13px] text-muted">{p ? "on " + niceDevice(q.peer) + " · " : ""}<time dateTime={q.at}>{when(q.at)}</time></span>
         </p>
         <p className="mt-0.5 text-[14px] text-text-2">{holdSentence(q.code || "", name, browser)}</p>

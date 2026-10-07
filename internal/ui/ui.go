@@ -1002,6 +1002,7 @@ const (
 	HoldProof      = "proof_pending"         // the conversation or person it names cannot be checked here yet
 	HoldConflict   = "identity_conflict"     // it disagrees with the person record kept here
 	HoldDuplicate  = "conflicting_duplicate" // different content under a message already received
+	HoldInvalid    = "invalid"               // could not be admitted: legacy reason includes verification and operation failures
 	HoldUnverified = "unverified"            // it did not verify: its content is never shown
 )
 
@@ -1009,7 +1010,7 @@ const (
 // named here did not verify.
 func holdCode(reason string) string {
 	switch reason {
-	case HoldKeyChanged, HoldProof, HoldConflict, HoldDuplicate:
+	case HoldKeyChanged, HoldProof, HoldConflict, HoldDuplicate, HoldInvalid:
 		return reason
 	}
 	return HoldUnverified

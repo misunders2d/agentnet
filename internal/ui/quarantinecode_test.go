@@ -24,7 +24,7 @@ func TestQuarantineCode(t *testing.T) {
 		"proof_pending":         HoldProof,
 		"identity_conflict":     HoldConflict,
 		"conflicting_duplicate": HoldDuplicate,
-		"invalid":               HoldUnverified,
+		"invalid":               HoldInvalid,
 		"":                      HoldUnverified,
 		"a_reason_added_later":  HoldUnverified,
 	}
@@ -32,6 +32,9 @@ func TestQuarantineCode(t *testing.T) {
 		if got := holdCode(reason); got != want {
 			t.Errorf("holdCode(%q) = %q, want %q", reason, got, want)
 		}
+	}
+	if text := holdReason("invalid", "bob/desk"); strings.Contains(text, "did not verify") || !strings.Contains(text, "failed a check") || !strings.Contains(text, "contents stay hidden") {
+		t.Fatalf("legacy invalid reasons must not claim failed signatures or reveal content: %q", text)
 	}
 	// The daemon's overview list carries each code (live.go quarantineItems):
 	// a key_changed hold is what lets a page offer "Check and trust…".

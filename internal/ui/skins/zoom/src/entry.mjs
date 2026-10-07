@@ -2806,7 +2806,7 @@ function renderReview(items) {
   const security = items.filter((it) => it.reason === "device_admin");
   const reports = items.filter((it) => it.notice && it.reason !== "device_admin");
   const btn = $("review-btn");
-  const conversations = (state.overview.needs_you || []).filter(c => c.reason === "agent_needs_human");
+  const conversations = (state.overview.needs_you || []).filter(c => ["agent_needs_human", "agent_interrupted"].includes(c.reason));
   const n = decisions.length + conversations.length;
   const total = n + reports.length + security.length + (state.overview.links || []).filter((l) => l.state === "pending").length;
   $("review-count").textContent = total;
@@ -2820,7 +2820,7 @@ function renderReview(items) {
   fill($("review-list"), ...conversations.map(c => {
     const chat = (state.overview.dms || []).find(d => d.id === c.conv);
     return el("li", {}, el("button", {type:"button", onclick:()=>{ toggleReview(false); openMessage({id:c.id,conv:c.conv}); }},
-      el("strong", {}, "Your agent couldn’t finish — it needs your answer"),
+      el("strong", {}, c.reason === "agent_interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"),
       el("span", {class:"review-why"}, "In " + (chat?.title || (chat?.peer ? "your chat with " + (chat.peer.label || "this person") : "a chat")))),
       c.why && el("details", {}, el("summary", {}, "Read the agent’s whole message"), el("p", {class:"agent-detail"}, c.why)),
       c.decide_on && el("p", {class:"hint"}, "Open it on " + deviceWords(c.decide_on)));
@@ -2960,6 +2960,7 @@ function clearSearch() {
 // (QuarantineItem.code) with the sender from who(), never from reason, which
 // names the address. One that didn't verify only claims who sent it.
 const heldWords = {
+  invalid: () => "This message failed a check and was kept out of the chat. Its contents stay hidden and it cannot start any work.",
   key_changed: (p) => [p, "'s key changed. It waits until you check and trust the new one."],
   proof_pending: () => "It names a conversation or person this device can't check yet. It waits here; nothing runs it.",
   identity_conflict: (p) => ["It disagrees with the person record kept here for ", p, ". It stays held; nothing runs it."],
@@ -2974,7 +2975,7 @@ function renderQuarantine(items) {
   fill($("quarantine-list"), ...items.map((q) => {
     const known = Object.hasOwn(heldWords, q.code || "");
     return el("li", {},
-      el("span", {}, known ? who(q.peer) : ["Unverified, says it's from ", who(q.peer)], " · ", when(q.at)),
+      el("span", {}, q.code === "invalid" ? "A message that couldn't be accepted" : known ? who(q.peer) : ["Unverified, says it's from ", who(q.peer)], " · ", when(q.at)),
       el("span", { class: "hint" }, known ? heldWords[q.code](who(q.peer)) : "It couldn't be verified, so it isn't shown."));
   }));
 }
@@ -3432,14 +3433,14 @@ function actionButton(a, m, t, primary) {
   if (a === "resolve") label = isReport(m) ? "Dismiss report…" : "Mark as handled";
   if (a === "approve" && t.permission_person) label="Approve " + t.permission_person.label + "…";
   if (a === "accept" && m.kind === "question") label = "Let your responder answer…";
-  if (a === "accept" && ["needs_human", "interrupted", "failed", "cancelled"].includes(m.state)) label = "Run your responder again…";
-  if (a === "accept" && (m.actions || []).includes("resolve")) label = "Ask again";
+  if (a === "accept" && ["needs_human", "interrupted", "failed", "cancelled"].includes(m.exec?.state || m.state)) label = "Run your responder again…";
+  if (a === "accept" && (m.actions || []).includes("resolve") && !["interrupted", "failed", "cancelled"].includes(m.exec?.state || m.state)) label = "Ask again";
   return el("button", { type: "button", class: "act" + (primary ? " go" : ""), onclick: () => decide(a, m, t) }, label);
 }
 
 function agentNeedsYouTurn(m, t) {
   return el("section", {class:"agent-turn", "aria-label":"Your agent says"},
-    el("strong", {}, "Your agent couldn’t finish — it needs your answer"),
+    el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"),
     el("p", {class:"agent-detail"}, m.job_detail),
     (m.actions || []).length ? el("div", {class:"acts"}, m.actions.map((a,i)=>actionButton(a,m,t,i===0)))
       : m.target && el("p", {class:"hint"}, "Open it on " + deviceWords(m.target.address)));
@@ -5336,6 +5337,9 @@ const Zoom = {
       !m.deleted && fileChips(m, m.attachments),
       reactionsRow(m, d.id), messageMenu(m, d.id, { querySelector: () => null }),
       m.state_text && el("p", { class: "hint" }, m.state_text),
+      ["question", "task"].includes(m.kind) && (m.actions || []).some(a => a !== "do_it") &&
+        !(m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human")) &&
+        el("div", {class:"acts"}, m.actions.filter(a => a !== "do_it").map((a,i) => actionButton(a,m,d,i===0))),
       proposalCard(m.proposal),
       (m.actions || []).includes("do_it") && el("div", {class:"acts"}, actionButton("do_it",m,d,true)),
       det);

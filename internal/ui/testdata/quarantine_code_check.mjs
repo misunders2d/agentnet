@@ -20,6 +20,8 @@ for (const reason of ['toString', 'constructor', '__proto__']) {
 }
 // The overview's held-back item carries the code, as the daemon's does (live.go quarantineItems).
 const at = Date.UTC(2026, 9, 5, 12, 0, 0);
+const legacy = quarantineItem({id:'legacy-invalid',from:'alice/laptop',reason:'invalid',at});
+assert.ok(legacy.reason.includes('failed a check') && legacy.reason.includes('contents stay hidden') && !legacy.reason.includes('did not verify'));
 for (const [reason, code] of Object.entries(reasons)) {
   const item = quarantineItem({ id: 'held-' + reason, from: 'alice/laptop', reason, at });
   assert.deepEqual(Object.keys(item).sort(), ['at', 'code', 'id', 'peer', 'reason'], 'item fields for ' + JSON.stringify(reason));

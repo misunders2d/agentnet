@@ -213,6 +213,7 @@ class Hold extends Error {
 // (ui.Hold*, live.go holdCode): a page words it itself, naming the sender
 // from its own people list; holdText is the fallback sentence.
 const holdWords = {
+  invalid: () => "This message failed a check and was kept out of the chat. Its contents stay hidden and it cannot start any work.",
   key_changed: (p) => "Held until " + p + "'s changed key is trusted in AgentNet on a computer.",
   proof_pending: () => "Held until the conversation or person it names can be checked here. Nothing runs it.",
   identity_conflict: (p) => "Held: it disagrees with the person record kept here for " + p + ". Nothing runs it.",

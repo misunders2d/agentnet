@@ -64,6 +64,7 @@ function RequestRow({ c, o }: Props) {
   const acts = c.decide_on ? [] : c.actions || [];
   const can = (a: string) => acts.includes(a);
   const human = c.reason === Reason.needsHuman;
+  const retry = human || c.reason === Reason.interrupted;
   const working = isWorkingItem(c);
   const title = convTitle(c, o);
   const who = senderOf(c, o);
@@ -71,9 +72,9 @@ function RequestRow({ c, o }: Props) {
   const said = human && c.why ? whyWords(c.why, c.peer, o) : "";
   const actions = c.decide_on ? (working ? <p className="mt-1 text-[14px] text-text-2">Working on {deviceWords(c.decide_on, o)}.</p> : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
     {can("cancel") && <Button variant="danger" size="sm" disabled={!!busy} onClick={() => setSheet("stop")}>Stop</Button>}
-    {can("accept") && <Button variant={human ? "outline" : "act"} size="sm" disabled={!!busy}
-      onClick={() => run("accept", (api) => api.act({ do: "accept", id: c.id }), human ? "Running it again." : "Allowed once.")}>
-      {busy === "accept" ? (human ? "Starting…" : "Allowing…") : human ? "Ask again" : "Allow once"}
+    {can("accept") && <Button variant={retry ? "outline" : "act"} size="sm" disabled={!!busy}
+      onClick={() => run("accept", (api) => api.act({ do: "accept", id: c.id }), retry ? "Running it again." : "Allowed once.")}>
+      {busy === "accept" ? (retry ? "Starting…" : "Allowing…") : human ? "Ask again" : retry ? "Run it again" : "Allow once"}
     </Button>}
     {can("decline") && <Button variant="outline" size="sm" disabled={!!busy} onClick={() => setSheet("decline")}>Decline</Button>}
     {can("resolve") && <Button variant="ghost" size="sm" disabled={!!busy} aria-label="Mark as handled" onClick={() => setSheet("close")}>Mark as handled</Button>}
@@ -84,7 +85,7 @@ function RequestRow({ c, o }: Props) {
         face={human ? <AgentAvatar seed={c.pid || c.peer} size={40} /> : <SenderFace c={c} o={o} />} actions={actions}
         detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
         <Body tag={working ? <Tag tone="agent">Working</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
-          meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : human || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
+          meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : retry || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
           {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}
         </Body>
       </OpenCard>

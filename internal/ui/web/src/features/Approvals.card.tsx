@@ -127,7 +127,8 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
     : (m.kind === "task" ? asker.name + " gives " + agent + " a task" : asker.name + " asks " + agent);
   const part = participationOf(m, dm);
   const files = isThreadMsg(m) ? (m.files || []).length : (m.attachments || []).length;
-  const stoppedWord = m.state === "interrupted" ? "Interrupted" : m.state === "cancelled" ? "Stopped" : "Didn’t finish";
+  const executionState = m.dir === "in" ? m.state : m.exec?.state;
+  const stoppedWord = executionState === "interrupted" ? "Interrupted" : executionState === "cancelled" ? "Stopped" : "Didn’t finish";
 
   return (
     <section className="mx-auto flex w-full max-w-[560px] flex-col items-center gap-2" aria-labelledby={"appr-" + m.id}>
@@ -198,6 +199,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           {phase === "stopped" && <>
             {can("accept") && <Button variant="act" size="lg" icon={<IconRefresh size={20} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Run it again"}</Button>}
             {can("reply") && replyHere && <TextButton onClick={reply} icon={<IconArrowBackUp size={18} />}>Answer it yourself</TextButton>}
+            {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
           </>}
           {phase === "running" && (
             <Button variant="danger" size="lg" className="min-h-12!" icon={<IconPlayerStop size={19} />} disabled={!!busy} onClick={() => setSheet("stop")}>{busy === "cancel" ? "Stopping…" : "Stop"}</Button>

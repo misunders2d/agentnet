@@ -107,8 +107,8 @@ export function phaseOf(m: Req): Phase | null {
   if (acts.includes("cancel")) return "running";
   if (!isRequest(m)) return acts.includes("resolve") ? "closing" : null; // a report, or a follow-up that needs a person
   const state = m.dir === "in" ? m.state || "" : m.exec?.state || "";
-  if (acts.includes("resolve") || state === "needs_human") return "needs_human";
   if (["interrupted", "failed", "cancelled"].includes(state)) return "stopped";
+  if (acts.includes("resolve") || state === "needs_human") return "needs_human";
   return "decide";
 }
 

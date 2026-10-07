@@ -221,6 +221,8 @@ func directoryOf(v client.MemberView, self string) Directory {
 // holdReason says why a received message is held back, for the person.
 func holdReason(reason, sender string) string {
 	switch reason {
+	case "invalid":
+		return "This message failed a check and was kept out of the chat. Its contents stay hidden and it cannot start any work."
 	case "key_changed":
 		return "Held until you trust " + sender + "'s changed key."
 	case "proof_pending":

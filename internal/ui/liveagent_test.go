@@ -357,6 +357,67 @@ func TestLiveAgentTaskWaitsForItsOwner(t *testing.T) {
 	if data, _ := os.ReadFile(log); strings.Count(string(data), "run") != 1 {
 		t.Fatalf("the agent ran %q", data)
 	}
+	// Own requests run automatically, even without grants. A failed run
+	// offers an explicit retry, not another consent decision.
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"question", "task"} {
+		own, err := pa.AskAgent(AgentAsk{PID: inv.PID, Kind: kind, Body: "own failed request"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var failed DMMessage
+		eventually("own "+kind+" automatic failure", func() bool {
+			d, _ := pa.DM(conv)
+			for _, m := range d.Messages {
+				if m.LID == own.LID && m.Dir == "out" {
+					failed = m
+					return strings.Contains(m.StateText, "failed") && len(m.Actions) > 0
+				}
+			}
+			return false
+		})
+		if failed.Exec == nil || failed.Exec.State != "failed" || failed.Exec.Host != alice.Address || failed.State == "failed" || strings.Join(failed.Actions, ",") != "accept" {
+			t.Fatalf("own retry lost local execution or transport state: %+v", failed)
+		}
+	}
+	if data, _ := os.ReadFile(log); strings.Count(string(data), "run") != 3 {
+		t.Fatalf("own requests did not run exactly once without approval: %q", data)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ncat > /dev/null\necho run >> '"+log+"'\nwhile :; do sleep 1; done\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	own, err := pa.AskAgent(AgentAsk{PID: inv.PID, Kind: "question", Body: "own stopped request"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stopped DMMessage
+	findOwn := func(state string) bool {
+		d, _ := pa.DM(conv)
+		for _, m := range d.Messages {
+			if m.LID == own.LID && m.Dir == "out" {
+				stopped = m
+				return m.Exec != nil && m.Exec.State == state
+			}
+		}
+		return false
+	}
+	eventually("own question running", func() bool { return findOwn("running") })
+	eventually("own harness started", func() bool {
+		data, _ := os.ReadFile(log)
+		return strings.Count(string(data), "run") == 4
+	})
+	if _, err := pa.Act(Action{Do: DoCancel, ID: stopped.ID}); err != nil {
+		t.Fatal(err)
+	}
+	eventually("own question stopped", func() bool { return findOwn("cancelled") })
+	if strings.Join(stopped.Actions, ",") != "accept" || stopped.State == "cancelled" {
+		t.Fatalf("stopped request must offer retry while preserving transport: %+v", stopped)
+	}
+	if data, _ := os.ReadFile(log); strings.Count(string(data), "run") != 4 {
+		t.Fatalf("Stop or viewing silently reran the request: %q", data)
+	}
 }
 
 // Desktop alerts from the daemon's page, through the client's alert

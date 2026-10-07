@@ -110,9 +110,27 @@ OMP authentication and settings, without opening or resuming a user session.
   retain terminal failure and prove no automatic rerun. No new model timeout,
   telemetry service or background job system. Native Windows CI passed the
   previous integration head; final combined-head CI remains a release gate.
-  Startup diagnostics do not establish faster answers: the owner's new Pi
-  question taking over 60 seconds remains a measured latency investigation,
-  assigned to the UI helper; no performance repair is claimed here.
+  Startup diagnostics do not establish faster answers. The separate local Pi
+  incident was traced to a custom Google extension leaving its OAuth listener
+  alive after a completed answer. A local extension cleanup was verified with
+  a fresh harmless answer and normal process exit in 7.471 seconds; it is not
+  a shipped AgentNet performance fix or a worker timeout workaround.
+- **Own-agent retry and held-record labels:** outgoing own-agent requests now
+  expose their authoritative local execution state through the existing Exec
+  view, independently of custody/delivery. Cancelled, failed and interrupted
+  jobs offer explicit retry without claiming a new permission decision;
+  interrupted requests retain their resolve action. Stand-in harness tests
+  prove own questions and tasks start automatically without grants, run once,
+  and actual Stop leaves an explicit retry without automatically rerunning.
+  Legacy `invalid` quarantine reasons cover both verification failures and
+  rejected operations, so their labels make no blanket failed-signature or
+  verified-identity claim. Quarantine state, hidden contents and admission
+  checks remain unchanged; no old records were rewritten or replayed.
+  Thirty embedded production-skin cases passed for stopped, failed,
+  interrupted, awaiting and running states across all three skins at desktop
+  and phone widths, including nonempty interrupted details, retained Resolve,
+  neutral held labels and absence of runtime errors. Settled captures were
+  checked for readability; all three generated packages reproduce exactly.
 - **Zoom send and incomplete participation display:** Zoom's send dialog
   referenced undefined `d.id`; it now checks its captured `t.id` against the
   current route. Send and stale-route regressions passed at both widths,
