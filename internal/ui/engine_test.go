@@ -578,7 +578,7 @@ func TestBrowserEngineJourney(t *testing.T) {
 	for _, q := range w.api("/api/overview", nil)["quarantine"].([]any) {
 		reasons[q.(map[string]any)["reason"].(string)]++
 	}
-	for _, want := range []string{"sent different content", "did not verify", "disagrees with the person record", "changed key"} {
+	for _, want := range []string{"sent different content", "failed a check", "disagrees with the person record", "changed key"} {
 		found := false
 		for r := range reasons {
 			found = found || strings.Contains(r, want)

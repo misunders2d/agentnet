@@ -60,18 +60,26 @@ func TestReceiverRemoteReadyRollbackDeclineCatalog(t *testing.T) {
 	if seen != 0 {
 		t.Fatal("decline exposed original")
 	}
-	var before, after int
-	phone.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&before)
+	rollbackID := protocol.NewID()
 	if _, e = phone.store.db.Exec(`CREATE TRIGGER fail_remote_binding BEFORE INSERT ON reply_receivers BEGIN SELECT RAISE(ABORT,'injected remote binding rollback'); END`); e != nil {
 		t.Fatal(e)
 	}
 	r := ReplyReceiver{Kind: "human", Host: &ReplyReceiverHost{Address: w.alice.Address, Fingerprint: w.alice.Self().Fingerprint()}}
-	if _, e = phone.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "ROLLBACK ORIGINAL", ReplyReceiver: &r}); e == nil {
+	if _, e = phone.SendMessage(WithQueuedSend(tctx(t), rollbackID), Outgoing{To: w.bob.Address, Body: "ROLLBACK ORIGINAL", ReplyReceiver: &r}); e == nil {
 		t.Fatal("failed binding committed request")
 	}
-	phone.store.db.QueryRow(`SELECT count(*) FROM outbox`).Scan(&after)
-	if before != after {
+	// Linked-device background sync can add unrelated outbox rows while
+	// this transaction fails. Check the exact original and its delegation.
+	var left int
+	if e = phone.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE id=? OR
+		json_extract(CASE WHEN json_valid(body) THEN body ELSE '{}' END,'$.request.id')=?`, rollbackID, rollbackID).Scan(&left); e != nil {
+		t.Fatal(e)
+	}
+	if left != 0 {
 		t.Fatal("rollback left original or delegation outbox")
+	}
+	if e = phone.store.db.QueryRow(`SELECT count(*) FROM reply_receivers WHERE request_ref=?`, rollbackID).Scan(&left); e != nil || left != 0 {
+		t.Fatalf("rollback left binding: %d %v", left, e)
 	}
 	phone.store.db.Exec(`DROP TRIGGER fail_remote_binding`)
 	owner, call := nativeReceiverFixture(t, w.alice, "pi")
