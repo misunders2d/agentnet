@@ -5,6 +5,14 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      test_packages:
+        description: "Focused native qualification: space-separated Go packages (empty runs the full workflow)"
+        type: string
+        default: ''
+      test_run:
+        description: "Optional Go test -run expression for focused native qualification"
+        type: string
+        default: ''
       windows_task_probe:
         description: "Run only the native Windows Task Scheduler tests (the probe's private task, and the task agentnet for the update switch; both removed afterwards)"
         type: boolean
@@ -33,11 +41,17 @@ jobs:
       - run: go vet ./...
       # Expanded suite needs time on slow CI disks; individual assertions stay bounded.
       - name: test (real binaries and processes on this OS)
-        run: go test -count=1 -timeout 1800s ./...
+        shell: bash
+        env:
+          AGENTNET_TEST_PACKAGES: ${{ inputs.test_packages || './...' }}
+          AGENTNET_TEST_RUN: ${{ inputs.test_run || '.' }}
+        run: |
+          read -r -a packages <<< "$AGENTNET_TEST_PACKAGES"
+          go test -count=1 -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
   # The race suite on Linux, split over parallel runners: internal/client's
   # tests in six shards (scripts/race-shard.sh), every other package in one.
   race:
-    if: ${{ !inputs.windows_task_probe }}
+    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run }}
     strategy:
       fail-fast: false
       matrix:
@@ -63,10 +77,10 @@ jobs:
           go test -race -count=1 -timeout 90s -run '^TestDeviceStoreInChrome$' -v ./internal/ui/static
   # The AgentNet app's installers for the three systems (desktop.yml).
   desktop:
-    if: ${{ !inputs.windows_task_probe }}
+    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run }}
     uses: ./.github/workflows/desktop.yml
   container:
-    if: ${{ !inputs.windows_task_probe }}
+    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

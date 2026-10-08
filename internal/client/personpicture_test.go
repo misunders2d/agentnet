@@ -35,10 +35,19 @@ func TestPersonPictureAllDevicesMembersCacheAndRemoval(t *testing.T) {
 			t.Fatal("fetch", err)
 		}
 	}
-	old := phone.hub.http.Transport
-	phone.hub.http.Transport = personLabelTransport(func(*http.Request) (*http.Response, error) { return nil, errors.New("offline") })
-	got, err := phone.PersonPicture(tctx(t), changed.Picture)
-	phone.hub.http.Transport = old
+	// linked starts a daemon, so its http.Client must stay immutable. Use a
+	// separate reader of the same on-disk cache with its own offline client.
+	offlineHub := *phone.hub
+	requested := false
+	offlineHub.http = &http.Client{Transport: personLabelTransport(func(*http.Request) (*http.Response, error) {
+		requested = true
+		return nil, errors.New("offline")
+	})}
+	cacheReader := &Agent{home: phone.home, hub: &offlineHub}
+	got, err := cacheReader.PersonPicture(tctx(t), changed.Picture)
+	if requested {
+		t.Fatal("cached picture tried to use the offline transport")
+	}
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatal("offline cache", err)
 	}

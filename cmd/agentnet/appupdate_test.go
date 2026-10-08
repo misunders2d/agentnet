@@ -260,16 +260,26 @@ func TestAppUpdateHandoffFailureKeepsAppAndPermitsRetry(t *testing.T) {
 	}
 	plan := filepath.Join(dir, "plan.json")
 	app := filepath.Join(home, "AgentNet.AppImage")
-	os.WriteFile(app, []byte("current app"), 0700)
+	if err = os.WriteFile(app, []byte("current app"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	payload, _ := json.Marshal(appUpdatePlan{App: app})
-	os.WriteFile(plan, payload, 0600)
+	if err = secfile.Write(plan, payload); err != nil {
+		t.Fatal(err)
+	}
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	defer writer.Close()
 	r := &appRunner{home: home, out: writer, updateReplies: make(chan bool, 1)}
 	r.updating.Store(true)
 	done := make(chan error, 1)
-	go func() { done <- r.handoffAppUpdate(context.Background(), "helper", plan) }()
+	go func() {
+		err := r.handoffAppUpdate(t.Context(), "helper", plan)
+		// A failed preflight emits no event. Propagate that error to the
+		// reader instead of leaving the shell fixture waiting forever.
+		writer.CloseWithError(err)
+		done <- err
+	}()
 	line, err := bufio.NewReader(reader).ReadString('\n')
 	if err != nil || !strings.Contains(line, `"event":"update"`) {
 		t.Fatalf("handoff %q %v", line, err)

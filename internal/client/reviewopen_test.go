@@ -46,7 +46,16 @@ func TestReviewClickWithUIFallsBackToExactHome(t *testing.T) {
 	oldOS := clickOS
 	clickOS = "linux"
 	t.Cleanup(func() { clickOS = oldOS })
-	stubTerminal(t)
+	// This test inspects the command without launching it. Use a real native
+	// executable so Windows LookPath can resolve the modeled Linux launcher;
+	// the POSIX shell stub used by launch tests is not executable on Windows.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldLauncher := terminalLauncher
+	terminalLauncher = self
+	t.Cleanup(func() { terminalLauncher = oldLauncher })
 	w := newWorld(t, "")
 	w.bob.openConv = func(string) []string {
 		return []string{"unused-browser", "http://127.0.0.1:43111/#workspace=" + strings.Repeat("b", 32)}
