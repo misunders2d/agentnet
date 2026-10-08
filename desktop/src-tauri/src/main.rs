@@ -62,6 +62,8 @@ struct Shell {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    let installation = install_appimage();
     let hidden = std::env::args().any(|a| a == AUTOSTART_ARG);
     tauri::Builder::default()
         // First: a second start hands its link to this one and shows the window.
@@ -74,6 +76,13 @@ fn main() {
         .invoke_handler(tauri::generate_handler![clipboard::agentnet_clipboard_image, skinfolder::agentnet_skin_folder, download::agentnet_download_blob, appcontrols::agentnet_app_controls])
         .manage(Shell::default())
         .setup(move |app| {
+            #[cfg(target_os = "linux")]
+            if let Err(problem) = &installation {
+                let handle = app.handle().clone();
+                app.dialog().message(format!("AgentNet could not install its app. {problem}\nYour download and app data have been kept."))
+                    .title("AgentNet installation needs attention").show(move |_| handle.exit(1));
+                return Ok(());
+            }
             let handle = app.handle().clone();
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .initialization_script(include_str!("clipboard.js"))
@@ -120,12 +129,19 @@ fn main() {
                 })
                 .build()?;
             *app.state::<Shell>().splash.lock().unwrap() = window.url().ok();
+            #[cfg(target_os = "linux")]
+            if let Ok(Some(previous)) = &installation {
+                if linux::owns_autostart(previous) {
+                    let _ = set_autostart(app.handle(), true);
+                }
+            }
             first_autostart(app.handle());
             tray(app.handle())?;
             #[cfg(target_os = "linux")]
             if let Ok(appimage) = std::env::var("APPIMAGE") {
                 if let Some(data) = linux::data_home() {
-                    let _ = linux::ensure_launcher(&data, &appimage);
+                    let previous = installation.as_ref().ok().and_then(|p| p.as_deref());
+                    let _ = linux::ensure_launcher(&data, &appimage, previous);
                 }
                 let _ = app.deep_link().register_all();
             }
@@ -160,6 +176,40 @@ fn main() {
             RunEvent::Reopen { .. } => show(app),
             _ => {}
         });
+}
+
+// Finish the portable package's installation before any plugin registers a
+// launcher, login entry or link handler. Reopening the verified stable copy
+// also makes the backend's normal app-exe registration and updater agree.
+#[cfg(target_os = "linux")]
+fn install_appimage() -> Result<Option<String>, String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+    const PREVIOUS: &str = "AGENTNET_APPIMAGE_PREVIOUS";
+    let previous = std::env::var(PREVIOUS).ok();
+    std::env::remove_var(PREVIOUS);
+    let Some(source) = std::env::var_os("APPIMAGE").filter(|s| !s.is_empty()) else { return Ok(None) };
+    let data = linux::data_home().ok_or("Cannot locate your application data directory.")?;
+    let program = sidecar::program().map_err(|e| e.to_string())?;
+    let output = Command::new(program).arg("app-install").arg(&source).arg(data)
+        .output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    let installed: String = serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+    if std::path::Path::new(&installed) == std::path::Path::new(&source) {
+        return Ok(previous);
+    }
+    let mut cmd = Command::new(installed);
+    cmd.args(std::env::args_os().skip(1)).env(PREVIOUS, &source);
+    let mount = std::env::var("APPDIR").ok();
+    for (k, v) in sidecar::clean_env(std::env::vars_os(), mount.as_deref()) {
+        match v { Some(v) => { cmd.env(k, v); }, None => { cmd.env_remove(k); } }
+    }
+    cmd.env_remove("APPIMAGE").env_remove("APPDIR");
+    // Extract-and-run can launch from a temporary mount that disappears.
+    cmd.current_dir("/");
+    Err(format!("Could not open the installed app: {}", cmd.exec()))
 }
 
 fn window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -480,6 +530,13 @@ fn set_autostart(_app: &AppHandle, on: bool) -> Result<(), String> {
 /// first_autostart starts AgentNet with the computer from its first run on
 /// (the person's later choice in the tray stands).
 fn first_autostart(app: &AppHandle) {
+    // Linux entries can be customized outside the app. Migration already
+    // refreshed an exact owned entry; do not replace any other existing one.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("APPIMAGE").is_some() && autostart_enabled(app) {
+        chose_autostart(app);
+        return;
+    }
     // Repair an enabled entry from the unquoted dependency. A disabled
     // entry and a saved choice stay disabled.
     #[cfg(windows)]

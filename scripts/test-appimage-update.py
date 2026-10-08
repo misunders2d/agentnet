@@ -240,7 +240,14 @@ def smoke(candidate):
 
                 wait_for("candidate Tauri/sidecar restart and durable verification", complete)
                 require(live_group(helper.pid), "candidate app exited before lifecycle proof")
-                require((home / "app-exe").read_text().strip() == str(installed), "restarted app registered a different package")
+                stable = user / ".local/share/agentnet/AgentNet.AppImage"
+                require((home / "app-exe").read_text().strip() == str(stable), "restarted app did not register its stable installation")
+                require(checksum(stable) == candidate_sum, "stable package differs from checked candidate")
+                require((stable.stat().st_mode & 0o777) == 0o700, "stable package is not owner-only executable")
+                require(str(stable) in (user / ".local/share/applications/agentnet.desktop").read_text(), "launcher still depends on download")
+                require(str(stable) in (user / ".config/autostart/AgentNet.desktop").read_text(), "login startup still depends on download")
+                installed.unlink()
+                require(checksum(stable) == candidate_sum, "removing download affected stable app")
                 for command in (private, canonical, terminal):
                     require(checksum(command) == bundle_sum, "restarted app command bytes differ: " + command.name)
                     require(version(command, env) == candidate_version, "restarted command version differs")

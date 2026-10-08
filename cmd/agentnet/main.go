@@ -75,6 +75,8 @@ func run(args []string) error {
 		return runUpdate(ctx, *home, rest)
 	case appUpdateHelperCmd:
 		return runAppUpdateHelper(*home, rest, os.Stdin)
+	case "app-install": // hidden: first-open installation by the Linux shell
+		return runAppInstall(rest, os.Stdout)
 	case updateHelperCmd: // hidden: see restart_windows.go
 		return runUpdateHelper(*home, rest)
 	case "skill":

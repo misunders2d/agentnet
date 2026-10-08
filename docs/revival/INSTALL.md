@@ -35,7 +35,7 @@ once. Updates started by v0.8.5 include the restart fix.
 
 | Device | Package to choose | How to open it |
 | --- | --- | --- |
-| Linux, AppImage | `AgentNet-linux-x86_64.AppImage` | Keep the file, allow it to run in its file properties, then open it. It adds an AgentNet icon to the app launcher. AppImage needs FUSE 2. |
+| Linux, AppImage | `AgentNet-linux-x86_64.AppImage` | Allow the download to run in its file properties, then open it. From v0.8.9, first opening installs a verified copy in your application data directory and adds an AgentNet launcher icon. AppImage needs FUSE 2. |
 | Linux, Ubuntu or Debian | `AgentNet-linux-amd64.deb` | Open it with your system's package installer, then open the AgentNet icon. |
 | Linux, Fedora | `AgentNet-linux-x86_64.rpm` | Open it with your system's package installer, then open the AgentNet icon. |
 | Windows | `AgentNet-windows-x64-setup.exe` | Run the installer for your own account, then open AgentNet from the Start menu. It adds the bundled `agentnet` command to your user PATH for new terminal/agent sessions. Administrator rights are not required. |
@@ -46,6 +46,16 @@ once. Updates started by v0.8.5 include the restart fix.
 may warn or block opening them. Check that the download comes from this
 project's release before allowing it. Opening permission depends on your
 system; those installer prompts remain unverified on a real Windows PC or Mac.
+
+From v0.8.9, the Linux AppImage keeps its installed copy at
+`~/.local/share/agentnet/AgentNet.AppImage` (or under `$XDG_DATA_HOME` when set).
+The download is preserved; after the installed app opens successfully, you can
+remove the download. The launcher, login startup and normal app/CLI updater use
+the installed copy. Your existing app data and identity stay in their original
+home. Opening the same download again is harmless. A different existing copy
+is preserved: open the installed app and use **Update AgentNet**, or move the
+existing file aside yourself before reinstalling. Custom launcher entries and
+disabled login startup choices are kept.
 
 ### Join your workspace
 
