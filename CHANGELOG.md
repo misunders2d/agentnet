@@ -6,6 +6,17 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.9] — 2026-10-08
+
+### Fixed
+
+- Recover retained linked-device group history that older clients rejected after an assistant ended. Recovery is limited to authenticated inert history from current own-human devices; ordinary rejected work stays blocked and current admission checks still apply.
+- Let an exact causal group request call back through remote agents to its busy local ancestor, retaining executor ordering, cancellation, authority and update fences.
+- Install a Linux AppImage in the user’s application data directory on first opening, then register and update that stable copy. Removing the download no longer removes the installed app; conflicting installations and custom launchers are preserved.
+- Shorten long raw link labels in every bundled skin while retaining full targets, original messages, descriptive labels and code.
+- Remove the redundant selector when setup already has one exact agent selected, retaining its identity and working folder.
+- Describe needs-human outcomes as needing attention and explain when native permissions or environment need repair before a deliberate reply or retry. No native permissions are changed.
+
 ## [0.8.8] — 2026-10-08
 
 ### Fixed

@@ -4,6 +4,47 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Active candidate — v0.8.9
+
+v0.8.8 below remains the published release. The owner reported that mobile
+v0.8.8 still lacks Amazon_team history. The reproduced upgrade gap is retained
+invalid history: older clients rejected otherwise valid group copies after an
+assistant ended; newer admission alone does not revisit those stored copies.
+The candidate adds a one-time, own-human-only recovery through normal admission
+on both browser and native clients. It never executes historical requests,
+changes grants, resets cursors or trusts a new key. Actual phone records have
+not been inspected, so physical Amazon_team catch-up remains a rollout check.
+
+Candidate scope also includes exact cross-device causal callbacks to a busy
+ancestor, first-open stable AppImage installation, compact raw URL labels with
+full native link inspection/copy, the redundant single-agent setup choice, and
+truthful native permission/environment recovery guidance. The latter does not
+claim to fix the unverified Hyprland IPC/native-policy cause.
+
+Focused browser recovery passed the same-store v0.8.6 rejection/upgrade journey,
+610 signed-vector checks in Node and real Chromium IndexedDB, authority races,
+receipt push, queued sends and timeout recovery. Natural agent callbacks fail
+before the change and pass after; focused race coverage includes cancellation,
+ordering, updates and exact authority. Existing stale-Join/reissue/decline
+regressions pass without new lifecycle code. Every skin passed desktop/phone
+long-link and setup rendering; copy retains exact original targets and touch
+links keep the browser menu. Native same-store upgrade race passed (49.552 s); paged recovery, authority, restart and rollback tests passed under race (4.995 s). Independent security and installer reviews found no remaining defect. Full integrated/native/package gates are pending.
+
+All October 8 Linear records were refreshed directly at 20:13 UTC: MEL-573 is
+implemented; MEL-578 shipped in v0.8.8; MEL-579 remains explicit future scope
+(no Drive indexing authorized). MEL-574 cannot advertise automatic questions:
+installed/documented Antigravity flags do not establish the required no-edit
+policy without changing native settings. MEL-575 remains open: no existing
+model-report field can be projected, and strict old decoders need a compatible
+private reporting extension. No configuration parser, guessed model or
+unknown-only placeholder is presented as completion. Both have direct Linear
+scope/evidence comments. No Orca or AgentNet peer coordination is used.
+
+After v0.8.9 rollout, the owner explicitly authorized continuing directly with
+**v0.8.10**, refreshing Linear and selecting more important bugs. Deploy only
+the existing relay. Desktop clients update through the button or CLI; never
+migrate or restart live clients during development. ThinkPad remains offline.
+
 ## Current release — v0.8.8, October 8, 2026
 
 [Download v0.8.8](https://github.com/misunders2d/agentnet/releases/tag/v0.8.8).

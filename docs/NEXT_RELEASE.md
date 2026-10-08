@@ -1,3 +1,29 @@
+# AgentNet v0.8.9 — candidate
+
+- Recover retained linked group-history copies that older clients rejected after an agent left. Current signatures, membership, exact keys and human-device checks remain; historical requests never run.
+- Support exact causal requests that call back through remote agents to an already busy ancestor, preserving ordering, cancellation and update fences.
+- Install Linux AppImages into the per-user application directory on first opening. Updates and launchers use that stable copy, so Downloads can be cleaned up. Conflicting installs and custom launchers stay preserved.
+- Shorten long raw link labels in all skins, keeping full opening/copy targets, descriptive labels, code and native mobile link inspection.
+- Remove the single-agent setup choice when the exact agent is already selected. Needs-human messages explain that native permission/environment problems need repair before retry; replies do not change permissions.
+
+Update laptops through **Settings → About → Update AgentNet** or the CLI once
+published. Reload the mobile app after the relay rollout to load recovery.
+No reset or relinking is required by this fix. Physical Amazon_team catch-up
+remains unverified; the same-store old-client rejection and upgrade recovery
+have passed browser and native regression tests.
+
+MEL-574 Antigravity support and MEL-575 reported model visibility remain open
+with qualification/compatibility limits recorded in Linear. MEL-579 Drive
+embedding search remains explicitly future scope. Installers remain unsigned;
+interactive Windows/macOS and physical notification/clipboard checks remain
+separate from automated qualification. Native permission/Hyprland IPC root
+cause is not claimed fixed by guidance.
+
+Qualification and publication are pending. Existing authorization continues
+with a fresh Linear bug review for v0.8.10 after this release rolls out.
+
+---
+
 # AgentNet v0.8.8 — October 8, 2026
 
 AgentNet v0.8.8 fixes recent request, group and desktop issues:
