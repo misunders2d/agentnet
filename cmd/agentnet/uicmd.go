@@ -34,15 +34,23 @@ var pageOS = runtime.GOOS
 
 // convPageCommand returns the command that opens this daemon's messenger
 // page on a conversation ("" : the page itself), for a click on a DM alert
-// or reminder: the page's address without its token (a command line can be
-// read by other local users), so it opens where the browser still holds the
-// page's session and otherwise asks for `agentnet ui`. Linux: xdg-open.
+// or reminder. Prefer the registered app's existing deep-link opener, which
+// starts it or focuses its running window. Without an app, use the page's
+// address without its token (a command line can be read by other local
+// users). Linux: xdg-open.
 // Windows: the system's URL handler (rundll32 url.dll,FileProtocolHandler
 // from System32, the address as one argument, no shell). nil where the
-// notifier takes no clicks (macOS) or with no page.
+// notifier takes no clicks (macOS) or without either an app or page.
 func convPageCommand(home, conv string) []string {
 	if pageOS != "linux" && pageOS != "windows" {
 		return nil
+	}
+	if exe := installedAppExecutable(home); exe != "" {
+		fragment := ""
+		if protocol.ValidHash(conv) {
+			fragment = "conv=" + conv
+		}
+		return []string{exe, protocol.AppOpenURL(fragment)}
 	}
 	data, err := secfile.Read(filepath.Join(home, uiURLFile))
 	if err != nil {
@@ -230,18 +238,27 @@ func takeUIHandoff(home, listen string) (addr, token string) {
 	return h.Addr, h.Token
 }
 
-// openApp starts the AgentNet app this home recorded (app-exe), detached:
-// the app shows its window, and one already running comes to the front.
-// It reports false, with no error, when this home has no app.
-func openApp(home string) (bool, error) {
+// installedAppExecutable validates the home's owner-only app registration.
+func installedAppExecutable(home string) string {
 	data, err := secfile.Read(filepath.Join(home, appExeFile))
 	if err != nil {
-		return false, nil
+		return ""
 	}
 	exe := strings.TrimSpace(string(data))
 	st, err := os.Stat(exe)
 	if exe == "" || !filepath.IsAbs(exe) || err != nil || st.IsDir() || (runtime.GOOS != "windows" && st.Mode().Perm()&0o111 == 0) {
-		return false, nil // moved or removed: the address below, as without the app
+		return "" // moved or removed: as without the app
+	}
+	return exe
+}
+
+// openApp starts the AgentNet app this home recorded, detached: the app shows
+// its window, and one already running comes to the front. Without an app,
+// it reports false with no error.
+func openApp(home string) (bool, error) {
+	exe := installedAppExecutable(home)
+	if exe == "" {
+		return false, nil
 	}
 	cmd := exec.Command(exe)
 	if abs, err := filepath.Abs(home); err == nil {

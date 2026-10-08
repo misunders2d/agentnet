@@ -503,20 +503,20 @@ func TestCountOnlyReportsStayQuiet(t *testing.T) {
 }
 
 // The click on a decision notification opens the messenger at the exact
-// message when the daemon serves a page; without one, the terminal review.
+// message and workspace in the registered app; without one, terminal review.
 func TestReviewClickOpensMessengerWhenServed(t *testing.T) {
 	if clickOS != "linux" {
 		t.Skip("clicks are handled on Linux only")
 	}
-	log := stubTerminal(t) // records argv; reused as the URL opener
-	old := urlOpener
-	urlOpener = terminalLauncher
-	t.Cleanup(func() { urlOpener = old })
+	log := stubTerminal(t) // records argv; reused as the app executable
 	t.Setenv("INVOCATION_ID", "")
 	w := newWorld(t, "")
 	n := fakeNotify(w.bob)
 	os.WriteFile(filepath.Join(w.bobHome, "ui-url"), []byte("http://127.0.0.1:43111/?token=secret\n"), 0o600)
-	runWith(t, w, w.bob, RunOptions{})
+	workspace := strings.Repeat("b", 32)
+	runWith(t, w, w.bob, RunOptions{OpenConv: func(string) []string {
+		return []string{terminalLauncher, "agentnet://open#workspace=" + workspace}
+	}})
 	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "q", Kind: envelope.KindQuestion})
 	waitState(t, w.bob, q.ID, stateHeld)
 	eventually(t, "notification", func() bool { return n.count() == 1 })
@@ -527,7 +527,7 @@ func TestReviewClickOpensMessengerWhenServed(t *testing.T) {
 	click()
 	eventually(t, "the page opened", func() bool { data, _ := os.ReadFile(log); return strings.Contains(string(data), "#msg=") })
 	data, _ := os.ReadFile(log)
-	if !strings.Contains(string(data), "http://127.0.0.1:43111/#msg="+q.ID+"&dir=in") || strings.Contains(string(data), "secret") {
+	if !strings.Contains(string(data), "agentnet://open#msg="+q.ID+"&dir=in&workspace="+workspace) || strings.Contains(string(data), "secret") {
 		t.Fatalf("opened: %s", data)
 	}
 	n.mu.Lock()
@@ -536,8 +536,48 @@ func TestReviewClickOpensMessengerWhenServed(t *testing.T) {
 	if strings.Contains(strings.Join(args, " "), "secret") {
 		t.Fatal("notification command exposed the UI token")
 	}
+	if len(args) != 2 || args[1] != "agentnet://open#msg="+q.ID+"&dir=in&workspace="+workspace {
+		t.Fatalf("stored notification destination: %v", args)
+	}
 	if s, _ := w.bob.store.jobState(q.ID); s != stateHeld {
 		t.Fatalf("a click changed the request: %s", s)
+	}
+	// A second waiting request opens the review list in the same workspace.
+	task, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "t", Kind: envelope.KindTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, w.bob, task.ID, stateAwaiting)
+	eventually(t, "grouped notification", func() bool { return n.count() == 2 })
+	if !strings.HasSuffix(n.last(), "Click to review them.") {
+		t.Fatalf("notification promises wrong destination: %s", n.last())
+	}
+	os.Remove(log)
+	n.lastClick()()
+	eventually(t, "app review list", func() bool {
+		data, _ := os.ReadFile(log)
+		return strings.Contains(string(data), "agentnet://open#review&workspace="+workspace)
+	})
+	if s, _ := w.bob.store.jobState(task.ID); s != stateAwaiting {
+		t.Fatalf("app click ran or accepted task: %s", s)
+	}
+	// A history click still opens its exact item after resolution. It never
+	// reopens that job or silently switches to another waiting request.
+	if _, err := w.bob.store.db.Exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, q.ID); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(log)
+	click()
+	eventually(t, "resolved item opened", func() bool {
+		data, _ := os.ReadFile(log)
+		return strings.Contains(string(data), "agentnet://open#msg="+q.ID+"&dir=in&workspace="+workspace)
+	})
+	if s, _ := w.bob.store.jobState(q.ID); s != stateAnswered {
+		t.Fatalf("history click reopened resolved request: %s", s)
+	}
+	var grants int
+	if err := w.bob.store.db.QueryRow(`SELECT (SELECT count(*) FROM approvals)+(SELECT count(*) FROM task_grants)`).Scan(&grants); err != nil || grants != 0 {
+		t.Fatalf("app click added grants: %d, %v", grants, err)
 	}
 }
 

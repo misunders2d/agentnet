@@ -713,9 +713,9 @@ func (a *Agent) notifyReview() {
 		target = ids[0]
 	}
 	argv, onClick := a.reviewClick(target)
-	body := "1 request needs your decision. Click to review it with your coding agent."
+	body := "1 request needs your decision. Click to review it."
 	if total != 1 {
-		body = fmt.Sprintf("%d requests need your decision. Click to review them with your coding agent.", total)
+		body = fmt.Sprintf("%d requests need your decision. Click to review them.", total)
 	}
 	for _, id := range ids {
 		var stalled bool

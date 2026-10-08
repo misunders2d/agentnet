@@ -217,3 +217,48 @@ func TestConvPageCommand(t *testing.T) {
 		t.Fatalf("page command: %v", argv)
 	}
 }
+
+// A standalone daemon reuses the registered app even when no app process
+// or messenger page is running. Commands carry destinations, never tokens.
+func TestStandaloneNotificationOpensRegisteredApp(t *testing.T) {
+	home := t.TempDir()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secfile.Write(filepath.Join(home, appExeFile), []byte(exe+"\n")); err != nil {
+		t.Fatal(err)
+	}
+	old := pageOS
+	pageOS = "linux"
+	t.Cleanup(func() { pageOS = old })
+	conv := strings.Repeat("a", 64)
+	for _, hasPage := range []bool{false, true} {
+		if hasPage {
+			if err := secfile.Write(filepath.Join(home, uiURLFile), []byte("http://127.0.0.1:4567/?t=PRIVATE\n")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, workspace := range []string{client.DefaultWorkspace, strings.Repeat("b", 32)} {
+			args := workspacePageCommand(home, conv, workspace)
+			if len(args) != 2 || args[0] != exe || strings.Contains(strings.Join(args, " "), "PRIVATE") {
+				t.Fatalf("app command: %v", args)
+			}
+			u, err := url.Parse(args[1])
+			if err != nil || u.Scheme != "agentnet" || u.Host != "open" || u.RawQuery != "" {
+				t.Fatalf("app destination: %v, %v", u, err)
+			}
+			q, err := url.ParseQuery(u.Fragment)
+			if err != nil || q.Get("workspace") != workspace || q.Get("conv") != conv {
+				t.Fatalf("workspace destination: %v, %v", q, err)
+			}
+		}
+	}
+	// Stale registration cannot be launched as an app.
+	if err := secfile.Write(filepath.Join(home, appExeFile), []byte(filepath.Join(home, "missing-app"))); err != nil {
+		t.Fatal(err)
+	}
+	if args := convPageCommand(home, conv); len(args) != 2 || args[0] != "xdg-open" {
+		t.Fatalf("stale app registration: %v", args)
+	}
+}

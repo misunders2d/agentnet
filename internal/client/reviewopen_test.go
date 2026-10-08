@@ -13,33 +13,10 @@ import (
 	"github.com/misunders2d/agentnet/internal/envelope"
 )
 
-func TestReviewURLDropsCredentialsAndRequiresLoopback(t *testing.T) {
-	a := &Agent{home: t.TempDir()}
-	for _, tc := range []struct{ raw, want string }{
-		{"http://127.0.0.1:43111/?t=private-token#old", "http://127.0.0.1:43111/"},
-		{"http://localhost:43111/private?token=private-token", "http://localhost:43111/"},
-		{"http://[::1]:43111/?t=private-token", "http://[::1]:43111/"},
-		{"http://localhost.attacker.invalid:43111/?t=private-token", ""},
-		{"http://127.0.0.1.attacker.invalid:43111/", ""},
-		{"http://127.0.0.1:43111@attacker.invalid/", ""},
-		{"http://user:password@127.0.0.1:43111/", ""},
-		{"https://127.0.0.1:43111/", ""},
-		{"http://192.0.2.1:43111/", ""},
-		{"http://127.0.0.1:bad/", ""},
-	} {
-		if err := os.WriteFile(filepath.Join(a.home, "ui-url"), []byte(tc.raw+"\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		if got := a.uiURL(); got != tc.want {
-			t.Errorf("URL %q: got %q, want %q", tc.raw, got, tc.want)
-		}
-	}
-}
-
 func TestReviewClickKeepsWorkspaceWithoutToken(t *testing.T) {
 	w := newWorld(t, "")
 	workspace := strings.Repeat("b", 32)
-	original := []string{"fake-page-opener", "http://127.0.0.1:43111/?t=private-token#conv=&workspace=" + workspace}
+	original := []string{"fake-app", "agentnet://open#conv=&workspace=" + workspace}
 	w.bob.openConv = func(string) []string { return original }
 	for _, target := range []string{"", strings.Repeat("a", 32)} {
 		args, click := w.bob.reviewClick(target)
@@ -47,19 +24,46 @@ func TestReviewClickKeepsWorkspaceWithoutToken(t *testing.T) {
 		if target != "" {
 			fragment = "#msg=" + target + "&dir=in"
 		}
-		want := "http://127.0.0.1:43111/" + fragment + "&workspace=" + workspace
+		want := "agentnet://open" + fragment + "&workspace=" + workspace
 		if len(args) != 2 || args[1] != want || click == nil {
 			t.Fatalf("workspace click: %v, want %s", args, want)
 		}
 	}
-	if !strings.Contains(original[1], "private-token") {
+	if original[1] != "agentnet://open#conv=&workspace="+workspace {
 		t.Fatal("modified caller-owned command")
 	}
 	w.bob.openConv = func(string) []string {
-		return []string{"fake-page-opener", "http://127.0.0.1:43111/#workspace=not-a-workspace"}
+		return []string{"fake-app", "agentnet://open#workspace=not-a-workspace"}
 	}
 	if args, click := w.bob.reviewClick(""); args != nil || click != nil {
 		t.Fatal("malformed workspace fell back to another workspace")
+	}
+}
+
+// Token-free browser URLs reach the app-only 401 page. Even with a daemon
+// UI, no installed app means review in the exact home's existing harness.
+func TestReviewClickWithUIFallsBackToExactHome(t *testing.T) {
+	oldOS := clickOS
+	clickOS = "linux"
+	t.Cleanup(func() { clickOS = oldOS })
+	stubTerminal(t)
+	w := newWorld(t, "")
+	w.bob.openConv = func(string) []string {
+		return []string{"unused-browser", "http://127.0.0.1:43111/#workspace=" + strings.Repeat("b", 32)}
+	}
+	if err := os.WriteFile(filepath.Join(w.bob.home, "ui-url"), []byte("http://127.0.0.1:43111/?t=PRIVATE\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("a", 32)
+	for target, last := range map[string]string{id: id, "": "--review"} {
+		argv, click := w.bob.reviewClick(target)
+		want := []string{"--home", w.bob.home, "open", last}
+		if click == nil || len(argv) < len(want) || strings.Join(argv[len(argv)-len(want):], "|") != strings.Join(want, "|") {
+			t.Fatalf("exact-home review: %v", argv)
+		}
+		if strings.Contains(strings.Join(argv, " "), "http://") || strings.Contains(strings.Join(argv, " "), "PRIVATE") {
+			t.Fatalf("browser or token in review command: %v", argv)
+		}
 	}
 }
 
@@ -96,7 +100,7 @@ func TestReviewClickOpensReview(t *testing.T) {
 	q, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "q", Kind: envelope.KindQuestion})
 	waitState(t, w.bob, q.ID, stateHeld)
 	eventually(t, "notification", func() bool { return n.count() == 1 })
-	if !strings.HasSuffix(n.last(), "Click to review it with your coding agent.") {
+	if !strings.HasSuffix(n.last(), "Click to review it.") {
 		t.Fatalf("body: %q", n.last())
 	}
 	click := n.lastClick()
@@ -131,7 +135,7 @@ func TestReviewClickOpensReview(t *testing.T) {
 	t2, _ := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Body: "t", Kind: envelope.KindTask})
 	waitState(t, w.bob, t2.ID, stateAwaiting)
 	eventually(t, "second notification", func() bool { return n.count() == 2 })
-	if !strings.HasSuffix(n.last(), "2 requests need your decision. Click to review them with your coding agent.") {
+	if !strings.HasSuffix(n.last(), "2 requests need your decision. Click to review them.") {
 		t.Fatalf("batch body: %q", n.last())
 	}
 	os.Remove(log)
