@@ -4,134 +4,105 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Next release candidate — v0.8.8 (not published)
+## Current release — v0.8.8, October 8, 2026
 
-The owner requested the next release, including recent urgent bugs, through the
-existing ThinkPad Herdr co-work session. Root owns integration and release.
-ThinkPad supplied prepared notification, executor concurrency and compact approval
-commits. Local helpers own isolated fixes; no installed clients or live requests
-were changed. Only the existing Contabo relay is to be deployed after release.
+[Download v0.8.8](https://github.com/misunders2d/agentnet/releases/tag/v0.8.8).
+Published October 8 at 19:43:30 UTC from immutable release source `8336346d546a11fddba74f06964a3fff6c95ee1c`.
 
-Integrated source, still awaiting combined release qualification:
+- Updates verify the registered app file before shutdown and bind replacement to
+  its checksum. A missing or changed file leaves the app open; later loss gives
+  truthful recovery guidance. If an older registered AppImage is already absent,
+  reinstall the official app once. This fix does not permanently relocate it.
+- Reply on a needs-human request opens an explicit answer dialog, bound to the
+  exact author key, request, host and attempt. Local owner, verified own human
+  devices and existing report-bound operators use the existing decision paths.
+  Stable answer IDs make retries inert. The same original task/question starts
+  fresh context with saved clarification; ordinary quotes never restart work.
+  This is not model-effect checkpointing or a permission change: verify prior
+  completed effects, and native sandbox/IPC failures may still need recovery.
+  Explicit `cont1` requires an updated host; changed keys fail closed.
+- One newly tagged multi-agent send shows repeated human text once while every
+  target keeps its own request/LID, files, status, reply, Stop and retry. Signed
+  exact-author grouping survives linked history/reload; contradictory metadata
+  and older untagged messages remain ungrouped. Explicit `sg1` is optional per
+  copy: older peers receive otherwise compatible requests without it. Already
+  sealed grouped copies wait on capability rollback. Each target's files remain
+  visible. Distinct local executors run concurrently; the same executor remains
+  ordered, with existing exact-parent, cancellation and update-idle fences.
+- Codex group questions can use the official app-server dynamic room tool to ask
+  an exact current group agent and receive its correlated reply. Read-only
+  sandbox, never-approve policy, own inherited configuration and authority remain.
+  Unsupported app-server capability gives needs-human, not widened permissions.
+- Stale No thanks persists offline without membership changes. Existing declined
+  consent queues only to the original unchanged pinned inviter key; missing keys
+  mean honest local dismissal. Joining still requires fresh verified consent.
+  Bring back disappears when the exact agent is already active or awaiting rejoin.
+- Review notifications route to the installed app's exact request/workspace or
+  grouped review list; without the app they reuse the coding-agent opener.
+  Opening does not accept or retry the request. Approved suggested tasks use compact cards with linked
+  proposals and the exact approved text retained in a disclosure in all skins.
 
-- MEL-551: check the registered app file before staging and shutdown, bind the
-  handoff to its checksum, and report truthful recovery if it disappears later.
-  Fresh read-only ThinkPad evidence showed Zenbook's registered Downloads
-  AppImage was absent; neither actor nor cause of its removal is known. The
-  updater previously shut down before discovering that absence. This fix does
-  not install portable AppImages permanently or repair a live installation.
-- MEL-435: native notification routes from `ae1cea5762e2087646a53267408e058ceb795f32`.
-- MEL-521: compact approved-task rendering from `e2c3129a346270c9698ca2408d8435b3907f8595`.
-- MEL-540: distinct-executor concurrency from `f9cb9a9534a368fe845d7fc62b1de55af6f3f140`, plus explicit
-  signed `send_group` metadata. Every child keeps its own request/logical ID,
-  target, files, state, result and retry. Exact-author grouping survives own-linked
-  history/reload; contradictory metadata stays ungrouped. The `sg1` capability
-  is explicit: older/unknown peers receive compatible copies without it, while
-  local grouping is retained. Older ungrouped messages keep their separate entries;
-  no retrospective text-based grouping is invented. Already sealed grouped copies wait on capability
-  rollback. Text/time/name similarity never groups messages. Each target's file
-  controls remain visible, even when its duplicate human text is compacted.
-- MEL-504: Codex group questions use the official app-server dynamic room tool
-  with the existing exact-run ask/reply checks. Read-only sandbox, never-approve
-  policy, inherited configuration and current authority remain. Unsupported
-  capability produces needs-human. No new MCP service or shell socket permission.
-- MEL-578: stale No thanks uses existing declined consent. It persists offline;
-  notification is queued only for the original unchanged pinned inviter key.
-  No usable key means honest local dismissal without a fabricated receipt.
-  Joining retains freshness checks. MEL-566 Join is a distinct issue.
-- MEL-542: stale Bring back is suppressed for current exact agent identity,
-  including pending invitations, and rechecked before acting. Browser projection
-  retains both historical and current PIDs and their separate grants.
+Qualification is composed evidence, **not an all-14-green source CI claim**.
+Production source is unchanged since `486d977`; final qualification commit
+`8336346d546a11fddba74f06964a3fff6c95ee1c` changes three test fixtures and
+adds focused inputs to the existing workflow. Full source run
+[37827641115](https://github.com/misunders2d/agentnet/actions/runs/37827641115)
+at `990f49faf3ae77c528c3cec90693d678dec9dbb7` completed 12/14 required jobs.
+Its two failures were test-fixture issues: mutating a running daemon's HTTP
+transport, and Windows owner-ACL/handshake/pipe/launcher assumptions. The
+completed unrelated coverage remains valid; affected checks were corrected.
 
-MEL-497 is integrated: Reply opens an explicit answer dialog, bound to the
-provider's exact request key, host and attempt. Existing signed decisions carry
-answers from current verified own human devices; operator decisions retain their
-report binding. Ordinary quotes stay inert. A local continuation ledger makes
-button/transport retries idempotent and adds the saved clarification and answer
-to the original task/question. It starts fresh context, never resumes an open
-user session; the prompt requires checking prior completed work before effects.
-This is not arbitrary model-effect checkpointing. `cont1` is explicit and checked
-at enqueue and final handover; unsupported or changed-key hosts fail closed.
-Native advertisements omit rm1-implied grp1/prg1 to keep both new capabilities
-within the existing 16-cap bound. Browsers execute no requests and do not
-advertise cont1.
+Focused native full cmd/agentnet across Linux/macOS/Windows:
+[37832387974](https://github.com/misunders2d/agentnet/actions/runs/37832387974)
+passed all three native jobs. Focused selected-client native coverage:
+[37832385095](https://github.com/misunders2d/agentnet/actions/runs/37832385095)
+passed all three native jobs. Vet passed. Focused updater race passed 1.018 s;
+review-click race five runs passed 17.253 s; picture race ten runs passed
+24.919 s. Earlier focused continuation/grouping/history/decline tests,
+all three locked builds and 1280/390-width embedded rendered checks passed.
+Installed Codex 0.161.0 isolated room smoke passed once, 9.465 s, using a
+synthetic exact signed target/reply and inherited model/configuration.
 
-Focused evidence: native/browser grouping and linked-history regressions,
-stale-decline baseline reproduction and native/browser fixes, rejoin exact
-identity/projection checks, and the integrated native focused batch (client
-27.351 s). All three locked skin builds, generated DTO checks and full Go vet
-passed. The final three rendered regressions passed together (23.449 s) in all
-three skins at 1280/390 widths: explicit continuation, pending/stale No thanks,
-and multi-agent grouping with per-target file controls. Compact approval and
-browser continuation/grouping checks also passed. Rendered fixture corrections
-addressed captured API endpoints and skin-specific selectors; product changes
-were not needed for those corrections.
+Packaging [37832858055](https://github.com/misunders2d/agentnet/actions/runs/37832858055): all five jobs passed; downloaded asset size/digest checks
+all 12 GitHub sizes/digests and all 11 SHA256SUMS entries matched; exact clean downloaded CLI/AppImage revision
+both report the exact clean release revision; Linux replacement/restart passed in release CI.
+Relay upgraded October 8 at 19:47:55 UTC after a verified stopped-state backup. Its running binary reports the exact clean release revision, public HTTPS reports v0.8.8 with the original realm, and the original volume is mounted. Zero restarts/OOM events; the neighboring service retains its prior start time. Retain original data,
+configuration and realm; no installed desktop client or live trust/history state
+was changed by release qualification. Installers remain unsigned.
 
-Independent integration review found no remaining concrete capability, schema,
-authority or file-display defect. Native advertisements retain both new explicit
-capabilities within the 16-cap limit. The real installed Codex 0.161.0 room smoke
-passed once (9.465 s): an ephemeral question used the exact dynamic tool, the
-synthetic target received one signed correlated child, and both its verified
-reply and the original answer completed. Normal model/reasoning/configuration
-were inherited; no live identity, user session or permission was changed. The
-existing stdout activity watchdog remains attached to the bridge.
+The relay recommendation still names v0.8.5: the available enrolled identity
+has member rights and the signed admin update was refused with 403. No admin
+rights were added or database controls bypassed. The Update button checks
+GitHub independently and can install v0.8.8. The rollout script’s Python HTTPS
+probe received 403; normal HTTPS requests from both relay and laptop verified
+v0.8.8 and the original realm. This was a probe failure, not an unverified
+service transition.
 
-Representative settled screenshots were inspected: the answer dialog is readable,
-target statuses and file controls remain separate, and stale decline removes the
-invitation locally. The candidate now enters the integrated full
-race/native/packaging gates. The first source run 37820330914 was cancelled
-when the new MEL-551 evidence arrived; unchanged client race shards continue,
-and full platform CI will qualify the corrected candidate. Source run
-37821438818 was subsequently cancelled after integrated race checks exposed
-stale literal grp1/prg1 assertions; those now check the existing semantic
-CapsRecord.Reads behavior. Local G and A–F shards exceeded the fixed 600-second
-budget under concurrent load and are not passes. The complete race gate is the
-repository's existing six CI shards; no timeout has been raised. The large-context
-visitor fixture now stops the unrelated new member's history import after the
-sender verifies its signed membership, before testing the separate visitor.
-All context-size, decryption, nondisclosure and no-execution assertions remain.
-Focused carrier/large-context race passed (70.800 s); capability/progress
-regressions passed (6.090 s). Baseline and candidate fixture timings under
-different load do not establish a production regression. The missing,
-nonregular and changed-source shutdown regressions plus post-shutdown loss
-failed before the MEL-551 fix. Focused updater tests then passed (11.643 s),
-with package vet and a refusal check proving no shutdown/pause is retained.
-Qualification follow-up: source CI 37822946604 was cancelled while the last
-local shard results were accounted for. H–P and Q–Z also reached the unchanged
-600-second local limit. The reminder fixture had scheduled its one-second
-reminder before stopping its daemon; it now stops first so the test actually
-measures a due time while stopped; overdue/restart and due-once races passed
-(9.013 s). The P6 fixture had marked completed requests
-running without a live worker. Its full-origin test now keeps upstream authority
-live and uses a distinct third executor, verifying the exact returned PID and
-signature. That focused race passed within the same 60-second budget (49.144 s).
-All production authority and executor-ordering fences remain unchanged.
-The completed non-client race pass collected two additional stale UI
-expectations and four updater fixtures; it is not recorded as a passing suite.
-Updater fixtures now provide regular, nonexecutable synthetic launch files.
-Focused bridge/global/app/bundled checks passed (11.621 s), plus the existing
-daemon refusal check. UI fixtures explicitly distinguish signed attempt from
-status counter and verify the new exact continuation action; both races passed
-(8.342 s). Other non-client packages passed, including Hub, static browser and
-separate-process journeys. Final CI will run the corrected integrated suite in
-full; collect all results before considering any further consolidated rerun.
-Cross-device cyclic callbacks to a busy ancestor are not qualified by this
-fixture; retain that limitation for v0.8.9 triage instead of claiming it fixed.
+Physical notification clicks, actual phone catch-up and interactive Windows/macOS
+installation remain unqualified. Cyclic cross-device callbacks to a busy ancestor
+executor remain unqualified; ordinary overlap does not establish cycle recovery.
+MEL-558 stays open for physical regular person/group catch-up; direct-agent
+history MEL-569 remains separate deferred scope. Native clipboard/photo behavior
+requires actual platform interaction before closure.
 
-Physical notification clicks and phone catch-up remain unqualified; retain those
-limits. MEL-558 physical phone catch-up is a post-update check, not proof of a
-new source failure.
+## Next authorized work — v0.8.9
 
-The owner's next task, after v0.8.8 publication and relay rollout, is v0.8.9:
-review all Linear issues/bugs added October 8 plus important older bugs, report
-the chosen scope, implement and release. ThinkPad is offline overnight; continue
-independently. Keep relay-only deployment and the existing security boundaries.
-Include the latest MEL-497 permission/environment failure evidence in triage:
-clarification answers cannot repair unchanged native sandbox or IPC constraints.
-Permanent AppImage installation and the busy-ancestor cycle also need triage;
-MEL-550's cosmetic setup follow-up must not expand v0.8.8.
+Owner asks to review all issues/bugs added October 8 plus important older bugs,
+report chosen scope, implement and release. ThinkPad is offline overnight;
+continue independently, with relay-only deployment and existing security gates.
+Triage exact MEL-497 native permission/environment failure, permanent AppImage
+installation and busy-ancestor cycles. MEL-573 is a bounded raw-link display fix;
+MEL-566 requires evidence-led stale-Join recovery, never weakened consent.
+MEL-545/555/552 begin with verification of shipped paths. MEL-558 persisted-store
+history recovery and MEL-546 backlog/pre-custody evidence need targeted repros.
+MEL-530 mixed-version and MEL-563 latency must distinguish existing fixes from
+physical/runtime evidence. MEL-579 Drive embedding search is explicitly future
+work; indexing is not authorized by ticket creation. Avoid broad UI redesign. Today’s MEL-575 model visibility stays read-only
+and owner-scoped; MEL-574 Antigravity needs native permission-contract proof
+before advertised support. First-open permanent AppImage installation is
+authorized product behavior; development must not migrate live clients.
 
-## Current release — v0.8.7, October 8, 2026
+## Previous release — v0.8.7, October 8, 2026
 
 [Download v0.8.7](https://github.com/misunders2d/agentnet/releases/tag/v0.8.7).
 The released source addresses MEL-558, MEL-539 and the owner's

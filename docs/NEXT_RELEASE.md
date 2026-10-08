@@ -1,4 +1,30 @@
-# AgentNet v0.8.7 — October 8, 2026
+# AgentNet v0.8.8 — October 8, 2026
+
+AgentNet v0.8.8 fixes recent request, group and desktop issues:
+
+- Updates check the app file before shutdown; a missing or changed file keeps the app open with recovery guidance.
+- Reply to an agent waiting for clarification continues the exact request, including from your linked phone. Repeated sends are idempotent; an ordinary quoted message stays ordinary chat.
+- Multi-agent sends show the human message once, with separate per-agent files, status, replies and retries. Different local agents can run concurrently. Older messages without grouping metadata retain their original entries.
+- Codex group questions can ask another exact group agent through the native tool transport while retaining the question sandbox and current permissions.
+- Notification clicks open AgentNet at the request or review list. Without the app, they use the existing coding-agent opener.
+- Approved suggested tasks use compact cards with the exact approved text available.
+- Stale invitations can be declined offline, and old agent cards stop offering Bring back when that agent is already active or awaiting rejoin.
+
+Signatures, end-to-end encryption, membership and local permission checks remain enforced. Unsupported Codex app-server versions return needs-human; answering a clarification does not change sandbox permissions or repair environment restrictions. Older peers still receive compatible ordinary requests; explicit clarification continuation requires an updated host.
+
+If an older installation’s registered AppImage has already been removed, reinstall the official app once. The new preflight applies after this version is installed.
+
+Update with **Settings → About → Update AgentNet** or `agentnet update v0.8.8`, then reload linked browser clients. Installers are unsigned; verify downloads against `SHA256SUMS`.
+
+The unchanged production code was exercised by the full source run, including native Linux/macOS, all race shards, desktop builds and the container journey. Two jobs exposed test-fixture defects; those were corrected and qualified with focused race runs plus native Linux/macOS/Windows CLI and affected-client checks. The original full run remains recorded as 12/14 passed, not an all-green run. Physical notification clicks and linked-phone catch-up remain separate checks. Cyclic callbacks to an already busy ancestor agent are not yet qualified.
+
+Verification and remaining physical-device checks: [handoff](https://github.com/misunders2d/agentnet/blob/main/docs/HANDOFF.md).
+
+Published 19:43:30 UTC from `8336346d546a11fddba74f06964a3fff6c95ee1c`. All five [release jobs](https://github.com/misunders2d/agentnet/actions/runs/37832858055) passed; all 12 asset sizes/digests and 11 checksum entries matched. Downloaded Linux CLI and bundled CLI report the exact clean revision. Existing relay upgraded at 19:47:55 UTC with verified stopped-state backup, original data/realm and healthy post-checks. No installed desktop client was updated. Its recommendation remains v0.8.5 because the available identity has member rights; Update checks GitHub independently.
+
+---
+
+# Historical AgentNet v0.8.7 — October 8, 2026
 
 - Linked-device group history retains accepted inert requests, replies, status
   and selected excerpts after a clean assistant dismissal. Exact original
