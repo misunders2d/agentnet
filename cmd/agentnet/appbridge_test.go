@@ -16,11 +16,17 @@ import (
 
 func TestAppBridgeUsesExistingHandlerAndFences(t *testing.T) {
 	var out bytes.Buffer
-	exe := "fixture.AppImage"
+	exe := filepath.Join(t.TempDir(), "fixture.AppImage")
 	if runtime.GOOS == "darwin" {
-		exe = "/Applications/AgentNet.app/Contents/MacOS/agentnet-app"
+		exe = filepath.Join(t.TempDir(), "AgentNet.app", "Contents", "MacOS", "agentnet-app")
 	} else if runtime.GOOS == "windows" {
-		exe = `C:\Users\fixture\AppData\Local\AgentNet\agentnet-app.exe`
+		exe = filepath.Join(t.TempDir(), "agentnet-app.exe")
+	}
+	if err := os.MkdirAll(filepath.Dir(exe), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("synthetic running app"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	r := &appRunner{home: t.TempDir(), addr: "127.0.0.1:17443", token: "private-app", exe: exe, out: &out}
 	r.controlsReady.Store(true)

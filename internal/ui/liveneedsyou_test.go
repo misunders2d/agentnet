@@ -174,7 +174,8 @@ func TestLiveNeedsYou(t *testing.T) {
 	o = overview()
 	it, _ = needsYouItem(o, client.ReviewNeedsHuman, sent.ID)
 	if _, ok := needsYouItem(o, client.ReviewAwaiting, sent.ID); ok || it.Conv != conv || it.PID != inv.PID ||
-		strings.Join(it.Actions, ",") != DoAccept+","+DoResolve || !strings.Contains(it.Why, "which key do you mean?") {
+		strings.Join(it.Actions, ",") != DoAccept+","+DoResolve+","+DoContinue || !strings.Contains(it.Why, "which key do you mean?") ||
+		it.Continuation == nil || it.Continuation.ID != sent.ID || it.Continuation.Key != bob.Self().Fingerprint() || it.Continuation.Host != "" || it.Continuation.Attempt != 1 {
 		t.Fatalf("needs-human: %+v (all %+v)", it, o.NeedsYou)
 	}
 	open()

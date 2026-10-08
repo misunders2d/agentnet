@@ -106,6 +106,15 @@ running without a live worker. Its full-origin test now keeps upstream authority
 live and uses a distinct third executor, verifying the exact returned PID and
 signature. That focused race passed within the same 60-second budget (49.144 s).
 All production authority and executor-ordering fences remain unchanged.
+The completed non-client race pass collected two additional stale UI
+expectations and four updater fixtures; it is not recorded as a passing suite.
+Updater fixtures now provide regular, nonexecutable synthetic launch files.
+Focused bridge/global/app/bundled checks passed (11.621 s), plus the existing
+daemon refusal check. UI fixtures explicitly distinguish signed attempt from
+status counter and verify the new exact continuation action; both races passed
+(8.342 s). Other non-client packages passed, including Hub, static browser and
+separate-process journeys. Final CI will run the corrected integrated suite in
+full; collect all results before considering any further consolidated rerun.
 Cross-device cyclic callbacks to a busy ancestor are not qualified by this
 fixture; retain that limitation for v0.8.9 triage instead of claiming it fixed.
 

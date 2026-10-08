@@ -100,7 +100,11 @@ func TestAppUpdateRefusesOtherDaemonBeforeStaging(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer release()
-	r := &appRunner{home: home, addr: "127.0.0.1:17443", token: "private", exe: "/tmp/AgentNet.AppImage"}
+	app := filepath.Join(t.TempDir(), "AgentNet.AppImage")
+	if err := os.WriteFile(app, []byte("synthetic running app"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r := &appRunner{home: home, addr: "127.0.0.1:17443", token: "private", exe: app}
 	req := httptest.NewRequest("POST", "http://"+r.addr+"/api/app/update", bytes.NewBufferString("{}"))
 	req.Header.Set("Origin", "http://"+r.addr)
 	req.Header.Set("Content-Type", "application/json")
@@ -127,12 +131,6 @@ func TestBundledUpdateStartsClosedAppWithoutLimitingAcceptedStaging(t *testing.T
 		t.Skip("isolated /bin/sh app-launch fixture")
 	}
 	f := newGlobalUpdateFixture(t)
-	// The real updater now verifies that its running app still exists before
-	// accepting staging; this launcher fixture needs a real source file too.
-	f.runner.exe = filepath.Join(t.TempDir(), "AgentNet.AppImage")
-	if err := os.WriteFile(f.runner.exe, []byte("synthetic running app"), 0755); err != nil {
-		t.Fatal(err)
-	}
 	f.server.Close()
 	if err := os.Remove(filepath.Join(f.home, uiURLFile)); err != nil {
 		t.Fatal(err)

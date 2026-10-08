@@ -86,8 +86,14 @@ func newGlobalUpdateFixture(t *testing.T) *globalUpdateFixture {
 	} else if runtime.GOOS == "windows" {
 		app = filepath.Join(t.TempDir(), "agentnet-app.exe")
 	}
-	// Registration is intentionally nonexistent: even a connection-failure
-	// regression cannot launch a desktop program or shell process.
+	// The running-app source must exist for updater preflight. Keep it
+	// nonexecutable so a connection-failure regression cannot launch it.
+	if err := os.MkdirAll(filepath.Dir(app), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(app, []byte("synthetic running app"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := secfile.Write(filepath.Join(f.home, appExeFile), []byte(app)); err != nil {
 		t.Fatal(err)
 	}

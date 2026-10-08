@@ -310,7 +310,7 @@ async function makeWorld() {
   ]);
   e.members = { listed: "listed", current: true, at: 1, list: [{ address: "peer/desk", presence: "online" }], truncated: false };
   const pin = { fingerprint: PEER }, env = (id, from = "peer/desk") => ({ id, from, to: "me/phone" });
-  const st = (state, n, at, id, fp = SELF) => ({ v: 3, conv: "", lid: "", replica: false, kind: "message", sub: wire.SubStatus, body: JSON.stringify({ state, n, at, detail: state === "needs_human" ? "awaiting approval of a shell command" : "" }), ref: { id, fingerprint: fp } });
+  const st = (state, n, at, id, fp = SELF, attempt = 4) => ({ v: 3, conv: "", lid: "", replica: false, kind: "message", sub: wire.SubStatus, body: JSON.stringify({ state, n, at, attempt, detail: state === "needs_human" ? "awaiting approval of a shell command" : "" }), ref: { id, fingerprint: fp } });
   let held = "";
   try { await e.admitControl(st("running", 1, 1700000000, OTHER), env("s0".padEnd(32, "0")), pin); } catch (err) { held = err.reason; }
   check(held === "proof_pending", "a status from a device that does not execute that request is held: " + held);
@@ -320,13 +320,13 @@ async function makeWorld() {
   await store.write(await e.admitControl(st("running", 2, 1700000100, Q), env("s2".padEnd(32, "0")), pin));
   await store.write(await e.admitControl(st("queued", 1, 1700000000, Q), env("s3".padEnd(32, "0")), pin)); // arrives late
   let m = (await e.thread(Q)).messages.find((x) => x.id === Q);
-  check(m.exec && m.exec.state === "running" && m.exec.attempt === 2 && m.exec.host === "peer/desk" && m.exec.stale === false, "the highest counter wins whatever the order; the executor is named; online host = not stale: " + JSON.stringify(m.exec));
+  check(m.exec && m.exec.state === "running" && m.exec.attempt === 4 && m.exec.host === "peer/desk" && m.exec.stale === false, "the highest counter wins independently of the signed attempt; the executor is named; online host = not stale: " + JSON.stringify(m.exec));
   e.members = { ...e.members, list: [{ address: "peer/desk", presence: "offline" }] };
   m = (await e.thread(Q)).messages.find((x) => x.id === Q);
   check(m.exec.stale === true, "a disconnected host makes the last word stale");
   await store.write(await e.admitControl(st("needs_human", 3, 1700000200, Q), env("s4".padEnd(32, "0")), pin));
   m = (await e.thread(Q)).messages.find((x) => x.id === Q);
-  check(m.exec.state === "needs_human" && m.exec.detail.includes("shell command"), "a needs-human state carries its bounded detail");
+  check(m.exec.state === "needs_human" && m.exec.attempt === 4 && m.exec.detail.includes("shell command"), "a needs-human state carries its bounded detail");
   await store.write([{ s: "inbox", k: "an".padEnd(32, "0"), v: { id: "an".padEnd(32, "0"), v: 1, from: "peer/desk", fp: PEER, kind: "answer", reply_to: Q, body: "four", at: 3 } }]);
   m = (await e.thread(Q)).messages.find((x) => x.id === Q);
   check(!m.exec, "a terminal answer supersedes any status");
