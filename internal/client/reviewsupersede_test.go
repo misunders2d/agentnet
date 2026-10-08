@@ -111,9 +111,35 @@ func TestSettledSnapshotSentWhenDecided(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, w.bob, task.ID, stateAnswered)
+	// Acceptance can briefly settle the card before a running snapshot
+	// reports the same request again. Join the completed run and report pass,
+	// then await that exact final snapshot, not an earlier empty card.
+	var settled string
+	eventually(t, "the host's final settled snapshot", func() bool {
+		if !w.bob.executorsIdle() || !w.bob.reviewMu.TryLock() {
+			return false
+		}
+		defer w.bob.reviewMu.Unlock()
+		var n int
+		if err := w.bob.store.db.QueryRow(`SELECT count(*) FROM reported WHERE recipient = ?`, w.alice.Address).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			return false
+		}
+		var body string
+		if err := w.bob.store.db.QueryRow(`SELECT id, body FROM outbox WHERE recipient = ? AND status = ? ORDER BY rowid DESC LIMIT 1`,
+			w.alice.Address, envelope.StatusReviewNotice).Scan(&settled, &body); err != nil {
+			t.Fatal(err)
+		}
+		return noticeSettled(body)
+	})
+	waitState(t, w.alice, settled, stateResolved)
 	eventually(t, "the card clears", func() bool { return len(mustNotices(t, w.alice)) == 0 })
 	var n int
-	w.bob.store.db.QueryRow(`SELECT count(*) FROM reported WHERE recipient = ?`, w.alice.Address).Scan(&n)
+	if err := w.bob.store.db.QueryRow(`SELECT count(*) FROM reported WHERE recipient = ?`, w.alice.Address).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
 	if n != 0 {
 		t.Fatalf("%d reported marks left", n)
 	}
