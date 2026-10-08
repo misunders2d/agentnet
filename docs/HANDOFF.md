@@ -4,6 +4,28 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Open follow-up after v0.8.7 — MEL-540
+
+The owner's multi-agent send repeats the full human message once per recipient.
+ThinkPad's read-only evidence confirms distinct persisted request/logical IDs;
+both requests later answered. Native and browser source inspection confirms
+that v0.8.7 has no durable shared identity for the originating composer send.
+Keep MEL-540 open: dispatch shipped, but this presentation requirement is unmet.
+
+The next fix must show one human message with independent per-agent states,
+replies and retries, retaining every exact request ID and permission check.
+Grouping must survive reload and linked history; never infer it from matching
+text, timestamps or names, or merge request logical IDs. Any new wire metadata
+must use the existing capability negotiation because older strict readers reject
+unknown fields. Existing quote references are not proof of one composer send;
+an extra ordinary anchor message can also widen an outside agent request's
+audience. No grouping implementation or shipment is claimed yet.
+
+Ordinary worker roots remain serial per device. A queued second agent must not
+be labelled Working; scheduler concurrency is separate from this display fix.
+MEL-435's notification branch below remains separate too. No live request was
+retried, resent, stopped or otherwise changed during this diagnosis.
+
 ## Current release — v0.8.7, October 8, 2026
 
 [Download v0.8.7](https://github.com/misunders2d/agentnet/releases/tag/v0.8.7).
