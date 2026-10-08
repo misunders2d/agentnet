@@ -15,6 +15,10 @@ import (
 )
 
 func TestAppBridgeUsesExistingHandlerAndFences(t *testing.T) {
+	fakeReleaseServer(t, &releaseStub{latest: "v9.9.9"})
+	previous := protocol.Version
+	protocol.Version = "v0.8.9"
+	t.Cleanup(func() { protocol.Version = previous })
 	var out bytes.Buffer
 	exe := filepath.Join(t.TempDir(), "fixture.AppImage")
 	if runtime.GOOS == "darwin" {
@@ -36,6 +40,7 @@ func TestAppBridgeUsesExistingHandlerAndFences(t *testing.T) {
 		contains     string
 	}{
 		{"status", "{}", 200, "app_update_supported"},
+		{"check", "{}", 200, `"latest":"v9.9.9"`},
 		{"cli", `{"replace":false}`, 400, "Choose Replace command first"},
 		{"update", `{}`, 409, "Another daemon owns this home"},
 		{"arbitrary", "{}", 400, "Unknown app action"},

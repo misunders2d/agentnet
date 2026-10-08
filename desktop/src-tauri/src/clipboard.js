@@ -13,11 +13,11 @@
   // that host's existing app-control calls usable, without proxying chats
   // or any other API and without sending an app cookie into its origin.
   const fetchPage = window.fetch.bind(window);
-  const actions = { '/api/app/status': 'status', '/api/app/update': 'update', '/api/app/cli': 'cli' };
+  const actions = { '/api/app/status': 'status', '/api/app/check': 'check', '/api/app/update': 'update', '/api/app/cli': 'cli' };
   window.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), location.href);
     const action = actions[url.pathname], method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-    if (url.origin !== location.origin || url.search || !action || method !== (action === 'status' ? 'GET' : 'POST')) return fetchPage(input, init);
+    if (url.origin !== location.origin || url.search || !action || method !== (action === 'status' || action === 'check' ? 'GET' : 'POST')) return fetchPage(input, init);
     const raw = init?.body ?? (input instanceof Request && method === 'POST' ? await input.clone().text() : undefined);
     if (raw !== undefined && (typeof raw !== 'string' || raw.length > 1024)) throw new Error('Invalid app request.');
     const reply = await appReply(action, raw === undefined ? undefined : JSON.parse(raw));

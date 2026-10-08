@@ -45,6 +45,8 @@ func (r *appRunner) appCall(ctx context.Context, line string) {
 	switch call.Action {
 	case "status":
 		path, method = "/api/app/status", http.MethodGet
+	case "check":
+		path, method = "/api/app/check", http.MethodGet
 	case "update":
 		path = "/api/app/update"
 	case "cli":

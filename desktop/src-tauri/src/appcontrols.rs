@@ -11,7 +11,7 @@ pub struct AppResponse { status: u16, body: String }
 
 #[tauri::command]
 pub async fn agentnet_app_controls(window: WebviewWindow, action: String, body: Option<Value>) -> Result<AppResponse, String> {
-    if !matches!(action.as_str(), "status" | "update" | "cli") { return Err("Unknown app action.".into()); }
+    if !matches!(action.as_str(), "status" | "check" | "update" | "cli") { return Err("Unknown app action.".into()); }
     let actual = window.url().map_err(|_| "App controls are unavailable.")?;
     if window.label() != "main" || window.state::<crate::Shell>().page.lock().unwrap().is_none() {
         return Err("App controls are unavailable on this page.".into());

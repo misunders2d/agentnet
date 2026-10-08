@@ -229,6 +229,40 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 		return true
 	}
 	reply := func(v any) { w.Header().Set("Content-Type", "application/json"); json.NewEncoder(w).Encode(v) }
+	if req.URL.Path == "/api/app/check" {
+		if req.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "Checking for updates requires GET.", http.StatusMethodNotAllowed)
+			return true
+		}
+		current, known := parseRelease(protocol.Version)
+		base, development := devBase(protocol.Version)
+		if development {
+			current, known = base, true
+		}
+		if !known {
+			http.Error(w, "Cannot compare this development app version ("+protocol.Version+") with published releases.", http.StatusConflict)
+			return true
+		}
+		// Discovery is read-only, including while jobs run or this package
+		// cannot install itself. Never enter the updater's pause/staging path.
+		ctx, cancel := context.WithTimeout(req.Context(), 15*time.Second)
+		defer cancel()
+		latest, err := latestRelease(ctx)
+		if err != nil {
+			http.Error(w, "Could not check published releases: "+err.Error(), http.StatusBadGateway)
+			return true
+		}
+		target, _ := parseRelease(latest) // latestRelease already validated it
+		state := "current"
+		if olderRelease(current, target) {
+			state = "available"
+		} else if olderRelease(target, current) || development {
+			state = "ahead"
+		}
+		reply(map[string]string{"version": protocol.Version, "latest": latest, "state": state})
+		return true
+	}
 	if req.Method == http.MethodGet && req.URL.Path == "/api/app/status" {
 		status := r.currentCommandStatus()
 		_, _, updateErr := appUpdateAsset(runtime.GOOS, r.exe)
