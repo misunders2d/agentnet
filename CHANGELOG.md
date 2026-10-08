@@ -10,6 +10,9 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ### Fixed
 
+- Updating checks the current app file before shutdown. A missing or changed
+  executable leaves the running app open; losing it afterward reports an honest
+  recovery path instead of claiming the previous app is still available.
 - Reply on a waiting agent request sends its clarification answer to that exact
   request, locally or from a verified own human device. Retries retain the same
   answer ID; ordinary quoted messages never restart work.

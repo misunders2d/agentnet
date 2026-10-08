@@ -259,7 +259,10 @@ func TestAppUpdateHandoffFailureKeepsAppAndPermitsRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := filepath.Join(dir, "plan.json")
-	os.WriteFile(plan, []byte("plan"), 0600)
+	app := filepath.Join(home, "AgentNet.AppImage")
+	os.WriteFile(app, []byte("current app"), 0700)
+	payload, _ := json.Marshal(appUpdatePlan{App: app})
+	os.WriteFile(plan, payload, 0600)
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	defer writer.Close()

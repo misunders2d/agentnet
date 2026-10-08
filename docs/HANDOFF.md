@@ -14,6 +14,12 @@ were changed. Only the existing Contabo relay is to be deployed after release.
 
 Integrated source, still awaiting combined release qualification:
 
+- MEL-551: check the registered app file before staging and shutdown, bind the
+  handoff to its checksum, and report truthful recovery if it disappears later.
+  Fresh read-only ThinkPad evidence showed Zenbook's registered Downloads
+  AppImage was absent; neither actor nor cause of its removal is known. The
+  updater previously shut down before discovering that absence. This fix does
+  not install portable AppImages permanently or repair a live installation.
 - MEL-435: native notification routes from `ae1cea5762e2087646a53267408e058ceb795f32`.
 - MEL-521: compact approved-task rendering from `e2c3129a346270c9698ca2408d8435b3907f8595`.
 - MEL-540: distinct-executor concurrency from `f9cb9a9534a368fe845d7fc62b1de55af6f3f140`, plus explicit
@@ -72,7 +78,12 @@ existing stdout activity watchdog remains attached to the bridge.
 Representative settled screenshots were inspected: the answer dialog is readable,
 target statuses and file controls remain separate, and stale decline removes the
 invitation locally. The candidate now enters the integrated full
-race/native/packaging gates.
+race/native/packaging gates. The first source run 37820330914 was cancelled
+when the new MEL-551 evidence arrived; unchanged client race shards continue,
+and full platform CI will qualify the corrected candidate. The missing,
+nonregular and changed-source shutdown regressions plus post-shutdown loss
+failed before the MEL-551 fix. Focused updater tests then passed (11.643 s),
+with package vet and a refusal check proving no shutdown/pause is retained.
 Physical notification clicks and phone catch-up remain unqualified; retain those
 limits. MEL-558 physical phone catch-up is a post-update check, not proof of a
 new source failure.

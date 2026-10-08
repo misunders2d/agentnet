@@ -34,6 +34,7 @@ type appUpdatePlan struct {
 	Kind        string                `json:"kind"`
 	Sum         string                `json:"sum"`
 	Version     string                `json:"version"`
+	SourceSum   string                `json:"source_sum,omitempty"`
 	Backup      string                `json:"backup,omitempty"`
 	Independent *appIndependentDaemon `json:"independent,omitempty"`
 }
@@ -100,6 +101,10 @@ func (r *appRunner) stageAppUpdate(ctx context.Context) (string, string, error) 
 
 func (r *appRunner) stageAppUpdateTo(ctx context.Context, tag string) (string, string, error) {
 	name, kind, err := appUpdateAsset(runtime.GOOS, r.exe)
+	if err != nil {
+		return "", "", err
+	}
+	sourceSum, err := appUpdateSourceSum(r.exe, "")
 	if err != nil {
 		return "", "", err
 	}
@@ -176,7 +181,7 @@ func (r *appRunner) stageAppUpdateTo(ctx context.Context, tag string) (string, s
 	if err != nil {
 		return "", "", err
 	}
-	plan := appUpdatePlan{App: r.exe, Asset: asset, Kind: kind, Sum: want, Version: tag, Independent: r.independent}
+	plan := appUpdatePlan{App: r.exe, Asset: asset, Kind: kind, Sum: want, Version: tag, SourceSum: sourceSum, Independent: r.independent}
 	if kind == "nsis" {
 		plan.Backup = filepath.Join(dir, "previous-app")
 		if err = copyAppTree(filepath.Dir(r.exe), plan.Backup); err != nil {
@@ -195,6 +200,13 @@ func (r *appRunner) stageAppUpdateTo(ctx context.Context, tag string) (string, s
 			return "", "", err
 		}
 		plan.Kind = "installed-package"
+		plan.SourceSum, err = appUpdateSourceSum(r.exe, "")
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if _, err = appUpdateSourceSum(plan.App, plan.SourceSum); err != nil {
+		return "", "", err
 	}
 	b, _ := json.Marshal(plan)
 	path := filepath.Join(dir, "plan.json")
@@ -265,6 +277,10 @@ func (r *appRunner) appAPI(w http.ResponseWriter, req *http.Request) bool {
 			return true
 		}
 		if _, _, err := appUpdateAsset(runtime.GOOS, r.exe); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return true
+		}
+		if _, err := appUpdateSourceSum(r.exe, ""); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return true
 		}
@@ -357,9 +373,17 @@ func runAppUpdateHelper(home string, args []string, stdin io.Reader) error {
 		_ = writeAppUpdateResult(home, p.Version, "failed", "App shutdown handoff failed: "+err.Error())
 		return err
 	}
-	err = applyAppUpdate(p)
+	_, err = appUpdateSourceSum(p.App, p.SourceSum)
+	if err == nil {
+		err = applyAppUpdate(p)
+	}
 	if err != nil {
-		_ = writeAppUpdateResult(home, p.Version, "failed", "Your previous app is still available: "+err.Error())
+		problem := "Update failed: " + err.Error()
+		if _, sourceErr := appUpdateSourceSum(p.App, p.SourceSum); sourceErr != nil {
+			_ = writeAppUpdateResult(home, p.Version, "failed", problem+" Reinstall the official AgentNet app and open it again. The checked download is retained for recovery.")
+			return err
+		}
+		_ = writeAppUpdateResult(home, p.Version, "failed", "Update failed; the previous app remains at its verified path: "+err.Error())
 	}
 	// Replacing a package is not proof that its app and CLI started.
 	// Clear AppImage mount variables before opening either version.
@@ -559,6 +583,9 @@ func applyAppUpdate(p appUpdatePlan) error {
 		if err != nil {
 			return err
 		}
+		if _, err = appUpdateSourceSum(p.App, p.SourceSum); err != nil {
+			return err
+		}
 		return replaceExecutable(p.App, tmp.Name())
 	case "nsis":
 		return installWindowsApp(p)
@@ -663,6 +690,17 @@ func stageAppAsset(ctx context.Context, dir, tag, filename, asset string) (strin
 }
 
 func (r *appRunner) handoffAppUpdate(ctx context.Context, helper, plan string) error {
+	b, err := secfile.Read(plan)
+	if err != nil {
+		return err
+	}
+	var staged appUpdatePlan
+	if err = json.Unmarshal(b, &staged); err != nil {
+		return err
+	}
+	if _, err = appUpdateSourceSum(staged.App, staged.SourceSum); err != nil {
+		return err
+	}
 	for len(r.updateReplies) > 0 {
 		<-r.updateReplies
 	}
@@ -705,4 +743,22 @@ func (r *appRunner) pauseForAppUpdate(ctx context.Context) (func(), error) {
 		return nil, errors.New("Another daemon owns this home. Stop it when idle, then update from the app.")
 	}
 	return release, nil
+}
+
+// Validate the launch source before the app is asked to close. The checksum
+// binds subsequent handoff checks to the source observed during staging.
+func appUpdateSourceSum(app, expected string) (string, error) {
+	st, err := os.Lstat(app)
+	if err != nil || !st.Mode().IsRegular() {
+		return "", errors.New("The app file used to launch AgentNet is missing or is not a regular file. Restore or install the official app, then reopen it before updating.")
+	}
+	sum, err := fileSum(app)
+	if err != nil {
+		return "", fmt.Errorf("Cannot read the current app before updating: %w", err)
+	}
+	actual := hex.EncodeToString(sum)
+	if expected != "" && actual != expected {
+		return "", errors.New("The current app file changed while the update was being prepared. Reopen the intended app before updating.")
+	}
+	return actual, nil
 }

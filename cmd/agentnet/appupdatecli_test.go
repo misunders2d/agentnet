@@ -127,6 +127,12 @@ func TestBundledUpdateStartsClosedAppWithoutLimitingAcceptedStaging(t *testing.T
 		t.Skip("isolated /bin/sh app-launch fixture")
 	}
 	f := newGlobalUpdateFixture(t)
+	// The real updater now verifies that its running app still exists before
+	// accepting staging; this launcher fixture needs a real source file too.
+	f.runner.exe = filepath.Join(t.TempDir(), "AgentNet.AppImage")
+	if err := os.WriteFile(f.runner.exe, []byte("synthetic running app"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	f.server.Close()
 	if err := os.Remove(filepath.Join(f.home, uiURLFile)); err != nil {
 		t.Fatal(err)
