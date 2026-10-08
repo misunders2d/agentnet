@@ -74,6 +74,12 @@ program, `agentnet`, that is both the laptop client and the Hub.
 
 ## Working rules
 
+- **Batch verification before expensive runs.** Reproduce and fix known issues
+  with cheap, focused checks first. Collect failures from an existing full run,
+  address them together, and start another full/platform suite only when the
+  integrated candidate is stable. Do not spend a separate 20–30-minute run on
+  each bug. Retain valid evidence for unchanged code and rerun affected checks
+  after a fix; complete the required release gates before publishing.
 - Credit participating coding agents in commit trailers: Codex uses
   `Co-authored-by: Codex <noreply@openai.com>` and Claude uses
   `Co-authored-by: Claude <noreply@anthropic.com>`. Credit actual contributors;

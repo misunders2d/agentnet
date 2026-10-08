@@ -4,12 +4,56 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## v0.8.6 candidate — October 8, locally verified
+## Current release — v0.8.6, October 8, 2026
+
+[Download v0.8.6](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6).
+Published as the latest release at 13:03 UTC from
+`0a0e7aeadef15b315feb694706b6e0cafb6f8ecc`. All 14 required
+[source CI jobs](https://github.com/misunders2d/agentnet/actions/runs/37777205734)
+and all five [release jobs](https://github.com/misunders2d/agentnet/actions/runs/37779934720)
+passed. Source CI ran native tests and desktop builds on Linux, macOS and
+Windows, the race shards and the container journey. The optional Windows
+task probe was skipped. All 12 downloaded asset sizes/digests and all 11
+`SHA256SUMS` entries matched. The downloaded Linux command and the AppImage's
+bundled command report v0.8.6 and that exact clean source revision.
+
+The final AppImage passed the release workflow's extract-and-run
+replacement/restart smoke check. A separate isolated check of the downloaded
+native shell dispatched the exact release link once, without rejected commands,
+and kept the app page usable. That fixture enables synthetic popup clicks;
+it does not certify a physical click or interactive Windows/macOS installation.
+Physical linked phones and live model execution remain unverified for this
+release. Installers are unsigned.
+
+The existing Contabo relay was upgraded at 13:10 UTC after a verified
+stopped-state backup. Its running binary reports the released clean revision;
+public HTTPS reports v0.8.6 and the unchanged realm. The existing data volume
+and configuration were retained. The container is running without restarts or
+OOM events, and the unrelated service remained running. No installed desktop
+or phone client was upgraded by this rollout.
+
+Desktop clients can install v0.8.6 with **Settings → About → Update AgentNet**:
+the button checks GitHub independently of the relay's recommendation. That
+advisory notice still names v0.8.5; the available laptop and server identities
+have member rights, and the signed recommendation update was refused with 403.
+An existing enrolled admin device can update it using the command in
+[the installation guide](revival/INSTALL.md#updating-and-downgrading). This
+does not block the published release or the Update button. No new admin rights
+were granted.
+
+Source CI exposed two test-fixture issues before tagging: unrelated background
+POSTs polluted a global receiver counter, and a raw SQLite test connection
+lacked the neighboring fixtures' busy wait. Both were corrected using existing
+patterns, with focused loaded/race checks; production code did not change after
+the initial implementation commit. The final integrated source passed every
+required CI job without raising test timeouts. Release tags remain immutable.
+
+## v0.8.6 implementation and local qualification — October 8
 
 The owner authorized the urgent/important bug fixes below after direct Linear
-review. This candidate starts from `334bcbf`; v0.8.5 remains the published release.
-No installed identity, permission grant or user session was changed. No release
-or deployment has been made for this candidate.
+review. The implementation starts from `334bcbf`. No installed client identity,
+permission grant or user session was changed. Final publication and deployment
+evidence is recorded above.
 
 - **Queued requests (MEL-546):** browser ciphertext uploads now share the existing
   30-second HTTP deadline. A signed local deletion stops remaining question/task
@@ -79,16 +123,15 @@ flows were exercised separately with Chromium as described above. Twelve client
 tests remain skipped because they need an opted-in native/live harness, a frozen
 synthetic binary, or an installed Pi package. Physical linked phones,
 Windows/macOS interactions and live model execution are not certified by these
-fixtures. The owner has authorized publishing v0.8.6 and upgrading the existing
-Contabo relay. Source CI, release artifacts and the relay rollout are the
-remaining release gates; publication and deployment evidence will be recorded
-here when completed.
+fixtures. Final source CI, release artifacts and the authorized existing-relay
+rollout passed as recorded above. Future fixes should use cheap focused checks
+first, then qualify one stable integrated candidate with the costly suites.
 
 ## Original laptop handoff — October 8, 2026
 
-The v0.8.6 candidate section above supersedes the next-work status here.
-Use that candidate section for current work and the current release below for
-shipped behavior. Older release sections and `DECISIONS.md` contain historical
+The v0.8.6 release and implementation sections above supersede the next-work
+status here. Use those sections for shipped behavior and verification limits.
+Older release sections and `DECISIONS.md` contain historical
 snapshots, not unfinished release steps.
 
 - **Checkout:** inspect the destination working tree, then fast-forward `main`
@@ -129,7 +172,7 @@ snapshots, not unfinished release steps.
   deferred projects/team tags or design polish as part of these bug diagnoses.
   The previous coordinator is paused; work resumes under the owner's new task.
 
-## Current release — v0.8.5, October 7, 2026
+## Historical release — v0.8.5, October 7, 2026
 
 [Download v0.8.5](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5).
 Updater-only hotfix: retain host search paths for AppImage restart, detect

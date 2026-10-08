@@ -12,7 +12,7 @@ It is built for everyday company work: sales, operations, purchasing,
 accounting, customer support—and the people who build the systems behind them.
 You do not need to write code to use it.
 
-[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
+[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
 
 ## Start with a topic
 
@@ -162,8 +162,8 @@ compatibility; they do not make arbitrary skin code safe.
 
 ## Get started
 
-**Current release: [v0.8.5](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5)**,
-published October 7, 2026. AgentNet is actively developing; the expandable
+**Current release: [v0.8.6](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6)**,
+published October 8, 2026. AgentNet is actively developing; the expandable
 release section below names what has been checked and what still needs work.
 
 1. **Install the app on your computer.** Choose your download below. Phones
@@ -180,9 +180,9 @@ release section below names what has been checked and what still needs work.
 
 | Computer | Download and open |
 | --- | --- |
-| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.5/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
-| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.5/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5) are also available. |
-| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.5/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
+| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.6/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
+| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.6/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6) are also available. |
+| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.6/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
 
 Closing the desktop window leaves AgentNet in the tray. **Start when I log in**
 controls whether it starts with your computer; **Quit AgentNet** stops it.
@@ -200,12 +200,12 @@ once. v0.8.3 fixes the case where the app updated but an older official
 unchanged official copies automatically.
 
 **Upgrading a v0.8.3/v0.8.4 AppImage:** its old updater still needs one
-manual reopen after installing v0.8.5. Open AgentNet from its launcher if it
+manual reopen after installing v0.8.6. Open AgentNet from its launcher if it
 closes without returning. If v0.8.4's Update button is unavailable, run
-`agentnet update v0.8.5` for the registered desktop installation, then reopen
+`agentnet update v0.8.6` for the registered desktop installation, then reopen
 once. Updates started by v0.8.5 include the restart fix.
 
-**With v0.8.5 installed**, the button and `agentnet update` update AgentNet
+**With v0.8.5 or later installed**, the button and `agentnet update` update AgentNet
 as a whole: the desktop app, terminal command and AgentNet connections used by
 your tools. An already-current app can repair an older command left behind.
 The command opens the app if needed. Custom or modified commands stay protected;
@@ -350,7 +350,7 @@ These are different operations:
 | v0.8.0 desktop app | Install the current matching desktop package once. Keep the same data home and app location. |
 | v0.8.1+ desktop app | Settings → About → Update AgentNet. v0.8.3/v0.8.4 AppImages need the one-time reopen described above; use the registered-app CLI if the old Update button is unavailable. |
 | v0.8.3+ command with a registered desktop app | `agentnet update` uses the same whole-app updater and includes verified official PATH copies. An active agent job must finish first. |
-| CLI-only installation, without a registered desktop app | `agentnet update` or `agentnet update v0.8.5`; this changes the executing CLI. |
+| CLI-only installation, without a registered desktop app | `agentnet update` or `agentnet update v0.8.6`; this changes the executing CLI. |
 | Relay | Replace the deployed server binary/image separately, after a stopped-state backup, keeping the existing volume and configuration. |
 
 The app refreshes its bundled command, verified official terminal copies and
@@ -367,7 +367,7 @@ A server recommendation is an admin notice. It does not install software,
 and the app's update button checks GitHub independently of that notice.
 The v0.8.0 About page incorrectly directs desktop users to `agentnet update`;
 use a desktop package instead. If its **What's new** link does nothing, open
-[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5) directly.
+[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6) directly.
 
 The [complete update/recovery guide](docs/revival/INSTALL.md#updating-and-downgrading)
 covers backups, package handling, managed commands, relay upgrades and rollback.
@@ -403,7 +403,7 @@ agentnet hub restore --from hub-backup.tgz --data /var/lib/agentnet-restored
 
 # From an enrolled admin device: recommend a client release separately.
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.5 v0.8.5
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.6 v0.8.6
 ```
 
 A server-hosted company agent is an ordinary member with its own separate
@@ -530,7 +530,28 @@ contributors as described in AGENTS.md. Licensed under [Apache 2.0](LICENSE).
 </details>
 
 <details>
-<summary><strong>v0.8.5 release evidence and known limits</strong></summary>
+<summary><strong>v0.8.6 release evidence and known limits</strong></summary>
+
+Published October 8, 2026 at 13:03 UTC from
+`0a0e7aeadef15b315feb694706b6e0cafb6f8ecc`. [Source CI](https://github.com/misunders2d/agentnet/actions/runs/37777205734)
+and [release builds](https://github.com/misunders2d/agentnet/actions/runs/37779934720) passed.
+All 12 asset digests and sizes and all 11 `SHA256SUMS` entries matched.
+The downloaded Linux command reports v0.8.6 and that exact clean revision.
+
+This release fixes queued-request deletion, linked history recovery, full
+approval explanations, browser agent setup and native release links. All three
+skins passed desktop/phone-width fixtures. The final AppImage passed isolated
+package replacement/restart in release CI; its downloaded native shell passed
+external-link dispatch without an ACL rejection. The link fixture permits a
+synthetic popup in its disposable WebKit settings; it does not prove a physical
+click. Physical-phone journeys and interactive Windows/macOS behavior remain
+unverified. Installers are unsigned. Existing installations were unchanged during
+qualification.
+
+</details>
+
+<details>
+<summary><strong>Historical v0.8.5 release evidence and known limits</strong></summary>
 
 Published October 7, 2026 at 19:26 UTC from
 `591690c55fb1c29b206c6774433af9f3c69739d6`. [Source CI](https://github.com/misunders2d/agentnet/actions/runs/37671163931)

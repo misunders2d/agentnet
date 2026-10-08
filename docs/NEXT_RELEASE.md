@@ -23,7 +23,7 @@ Verify downloads against `SHA256SUMS`. Installers are unsigned.
 AppImages upgrading from v0.8.3/v0.8.4 may still need one manual reopen because
 their old updater cannot repair itself before replacement. If the old Update
 button is unavailable, run `agentnet update v0.8.6` for the registered desktop
-installation, then reopen once. Updates started by v0.8.5 include the restart fix.
+installation, then reopen once. Updates started by v0.8.5 or later include the restart fix.
 Identity and history are retained; no reset or relinking is needed.
 
 ## Qualification
@@ -33,6 +33,14 @@ desktop/phone-width browser checks passed. The new history regression fails on
 the original source and passes on this version. All 17 native shell tests pass;
 an isolated Linux native fixture reproduces the old external-link ACL failure
 and verifies the corrected dispatch.
+
+The released source `0a0e7aeadef15b315feb694706b6e0cafb6f8ecc` passed all
+14 required [source CI jobs](https://github.com/misunders2d/agentnet/actions/runs/37777205734)
+and all five [release jobs](https://github.com/misunders2d/agentnet/actions/runs/37779934720).
+All 12 downloaded asset sizes/digests and all 11 checksum entries matched.
+The final AppImage passed CI replacement/restart checks and a separate isolated
+external-link check of the downloaded native shell. The existing relay now
+reports v0.8.6, retaining its data volume and realm after a verified backup.
 
 Optional harness tests require their own prerequisites and opt-in. Physical
 linked phones, live model execution and interactive Windows/macOS installation
