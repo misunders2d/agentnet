@@ -157,12 +157,27 @@ func TestP6AgentQuestionTaskCorrelationAndOrigin(t *testing.T) {
 		t.Fatal(e)
 	}
 	waitState(t, w.alice, nested.LID, stateAgentWaiting)
+	// A distinct third executor checks the full origin chain without asking
+	// Bob's already-running executor to wait cyclically on itself.
+	if e = carol.SetResponder(&Responder{Harness: "agentstub", Dir: stub.dir}); e != nil {
+		t.Fatal(e)
+	}
+	if e = carol.Approve(w.alice.Address); e != nil {
+		t.Fatal(e)
+	}
+	if e = carol.Approve(w.bob.Address); e != nil {
+		t.Fatal(e)
+	}
+	thirdTarget := p6Member(t, w.alice, carol, conv)
 	stops(w.alice, nested.LID)
-	third, e := w.alice.SendRoomAsk(tctx(t), nested.LID, to.PID, envelope.KindQuestion, "third hop")
+	third, e := w.alice.SendRoomAsk(tctx(t), nested.LID, thirdTarget.PID, envelope.KindQuestion, "third hop")
 	if e != nil {
 		t.Fatal(e)
 	}
 	replyAt(t, w.alice, conv, third.LID)
+	if reply, err := w.alice.RoomReply(nested.LID, third.LID); err != nil || reply == nil || reply.PID != thirdTarget.PID || !reply.VerifiedAgent {
+		t.Fatalf("third-hop correlated return %+v %v", reply, err)
+	}
 	// Future context includes the other agent's verified answer, with no forward.
 	context, e := w.alice.agentContext(stateAt(t, w.alice, from.PID), "", defaultContextBytes)
 	if e != nil {

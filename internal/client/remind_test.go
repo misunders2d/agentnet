@@ -311,10 +311,10 @@ func TestReminderOverdueAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "bob to hold it", func() bool { return inboxCount(t, w.bob, `id = ?`, sent.ID) == 1 })
+	stopBob()
 	if _, err := w.bob.SetReminder(sent.ID, time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	stopBob()
 	time.Sleep(1500 * time.Millisecond)
 	if n.count() != 0 {
 		t.Fatal("notified while stopped")

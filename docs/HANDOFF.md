@@ -27,7 +27,8 @@ Integrated source, still awaiting combined release qualification:
   target, files, state, result and retry. Exact-author grouping survives own-linked
   history/reload; contradictory metadata stays ungrouped. The `sg1` capability
   is explicit: older/unknown peers receive compatible copies without it, while
-  local grouping is retained. Already sealed grouped copies wait on capability
+  local grouping is retained. Older ungrouped messages keep their separate entries;
+  no retrospective text-based grouping is invented. Already sealed grouped copies wait on capability
   rollback. Text/time/name similarity never groups messages. Each target's file
   controls remain visible, even when its duplicate human text is compacted.
 - MEL-504: Codex group questions use the official app-server dynamic room tool
@@ -95,9 +96,31 @@ different load do not establish a production regression. The missing,
 nonregular and changed-source shutdown regressions plus post-shutdown loss
 failed before the MEL-551 fix. Focused updater tests then passed (11.643 s),
 with package vet and a refusal check proving no shutdown/pause is retained.
+Qualification follow-up: source CI 37822946604 was cancelled while the last
+local shard results were accounted for. H–P and Q–Z also reached the unchanged
+600-second local limit. The reminder fixture had scheduled its one-second
+reminder before stopping its daemon; it now stops first so the test actually
+measures a due time while stopped; overdue/restart and due-once races passed
+(9.013 s). The P6 fixture had marked completed requests
+running without a live worker. Its full-origin test now keeps upstream authority
+live and uses a distinct third executor, verifying the exact returned PID and
+signature. That focused race passed within the same 60-second budget (49.144 s).
+All production authority and executor-ordering fences remain unchanged.
+Cross-device cyclic callbacks to a busy ancestor are not qualified by this
+fixture; retain that limitation for v0.8.9 triage instead of claiming it fixed.
+
 Physical notification clicks and phone catch-up remain unqualified; retain those
 limits. MEL-558 physical phone catch-up is a post-update check, not proof of a
 new source failure.
+
+The owner's next task, after v0.8.8 publication and relay rollout, is v0.8.9:
+review all Linear issues/bugs added October 8 plus important older bugs, report
+the chosen scope, implement and release. ThinkPad is offline overnight; continue
+independently. Keep relay-only deployment and the existing security boundaries.
+Include the latest MEL-497 permission/environment failure evidence in triage:
+clarification answers cannot repair unchanged native sandbox or IPC constraints.
+Permanent AppImage installation and the busy-ancestor cycle also need triage;
+MEL-550's cosmetic setup follow-up must not expand v0.8.8.
 
 ## Current release — v0.8.7, October 8, 2026
 
