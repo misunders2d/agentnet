@@ -28,7 +28,19 @@ before the change and pass after; focused race coverage includes cancellation,
 ordering, updates and exact authority. Existing stale-Join/reissue/decline
 regressions pass without new lifecycle code. Every skin passed desktop/phone
 long-link and setup rendering; copy retains exact original targets and touch
-links keep the browser menu. Native same-store upgrade race passed (49.552 s); paged recovery, authority, restart and rollback tests passed under race (4.995 s). Independent security and installer reviews found no remaining defect. Full integrated/native/package gates are pending.
+links keep the browser menu. Native same-store upgrade race passed (49.552 s); paged recovery, authority, restart and rollback tests passed under race (4.995 s). Independent security and installer reviews found no remaining defect.
+
+The integrated [source run](https://github.com/misunders2d/agentnet/actions/runs/37839979797)
+passed all three desktop builds, the real Linux AppImage replacement/restart
+journey, the container journey and five client race shards. Windows native is
+still running. Collected failures are confined to test fixtures: Classic/Zoom
+looked for the shared link module under `src`, and the review-settlement test
+mistook an interim empty acceptance snapshot for the final snapshot. Both are
+corrected without production changes. The latter reproduced 8 failures in 20
+race repetitions before correction and passed all 20 afterward (37.190 s).
+Standalone skin races passed (2.327/2.370 s), and the real Chromium storage race
+passed (1.988 s). Retain successful unchanged coverage; focused native checks,
+remaining full-run results and release packaging are pending.
 
 All October 8 Linear records were refreshed directly at 20:13 UTC: MEL-573 is
 implemented; MEL-578 shipped in v0.8.8; MEL-579 remains explicit future scope
