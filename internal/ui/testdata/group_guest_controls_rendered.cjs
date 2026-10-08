@@ -169,8 +169,16 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
 if(process.env.AGENTNET_LONG_LINK_REGRESSION==='1'){
  const {page,context}=await openCase('long-links');
  try {
-  const message=page.locator(skin==='comic'?'[data-mid="long-links"]':'#m-long-links');await message.waitFor();
+  let message=page.locator(skin==='comic'?'[data-mid="long-links"]':'#m-long-links');await message.waitFor();
   const url=await page.evaluate(()=>fixture.url),body=await page.evaluate(()=>fixture.linkBody);
+  if(skin==='zoom'){
+   assert.equal(await message.getByRole('link').count(),0,'Zoom preview stays one message-opening button');
+   assert((await message.innerText()).includes('example.test/…'),'Zoom preview shortens raw URL text');
+   assert(await message.evaluate(e=>e.scrollWidth<=e.clientWidth+1),'Zoom preview stays within viewport');
+   await settle(page);const preview=path.join(evidence,'zoom-long-links-preview-'+width+'.png');await page.screenshot({path:preview});shots.push(preview);
+   await message.locator('.mc-bubble').click();
+   message=page.locator('.zoom-message');await message.waitFor();
+  }
   const links=message.getByRole('link',{name:url,exact:true});assert.equal(await links.count(),2);
   for(const link of await links.all()){
    assert.equal(await link.innerText(),'example.test/…');assert.equal(await link.getAttribute('href'),url);assert.equal(await link.getAttribute('title'),url);

@@ -2395,6 +2395,10 @@ function mentionNodes(text, t = state.dmData) {
 function messageNodes(text) {
   return rawLinkParts(text).flatMap(part => typeof part === "string" ? mentionNodes(part, state.dm ? state.dmData : null) : [el("a", {href:part.href, target:"_blank", rel:"noopener noreferrer", title:part.href, "aria-label":part.href}, part.label)]);
 }
+// Previews are buttons that open the full message, where links become live.
+function messagePreview(text) {
+  return rawLinkParts(text).map(part => typeof part === "string" ? part : part.label).join("");
+}
 // decodeMentions gives text as it is edited (@Name) and its exact mentions.
 function decodeMentions(text) {
   const s = String(text || ""), spans = [];
@@ -5450,7 +5454,7 @@ const Zoom = {
         const bubble = el(compact ? "div" : "button", { ...(compact ? {} : {type:"button"}), class: compact ? "mc-bubble compact-approval-bubble" : "mc-bubble" },
           el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + (to ? " · to " + to : "") + " · " + sentWhen(m)),
           !m.deleted && (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"mc-who", "data-agent-recipient":"", title:m.pid}, "To @" + (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "agent")),
-          compact ? approvalBody(m) : !groupPart && el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : messageNodes(shownText(m)), !m.deleted && m.edited ? " · edited" : ""),
+          compact ? approvalBody(m) : !groupPart && el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : messagePreview(shownText(m)), !m.deleted && m.edited ? " · edited" : ""),
           !m.deleted && (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         if (compact) bubble.append(el("button", {type:"button",class:"text-btn",onclick:()=>this.go(3,{msg:m.id},bubble)}, "Message details"));
@@ -5516,7 +5520,7 @@ const Zoom = {
         const compact = !m.deleted && confirmedTask(m);
         const bubble = el(compact ? "div" : "button", { ...(compact ? {} : {type:"button"}), class: compact ? "mc-bubble compact-approval-bubble" : "mc-bubble" },
           el("span", { class: "mc-who" }, authorName(m) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + sentWhen(m)),
-          compact ? approvalBody(m) : el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : messageNodes(shownText(m)), !m.deleted && m.edited ? " · edited" : ""),
+          compact ? approvalBody(m) : el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : messagePreview(shownText(m)), !m.deleted && m.edited ? " · edited" : ""),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         if (compact) bubble.append(el("button", {type:"button",class:"text-btn",onclick:()=>this.go(3,{msg:m.id},bubble)}, "Message details"));
         else bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
