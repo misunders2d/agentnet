@@ -162,6 +162,7 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
   assert.notEqual(first[0].id,first[1].id,'one id per exact participation');
   assert(first.every(a=>a.kind==='question'&&a.body.includes('Compare warehouse inventory')));
   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/send').length),0,'no ordinary-message fallback');
+  if(skin==='zoom')for(const pid of ['agent-a','agent-b'])await page.locator('.mini-chat [data-agent-recipient][title="'+pid+'"]').getByText('To @Analyst',{exact:true}).waitFor();
   assert.equal(first[0].files.length,1);assert.equal(first[1].files.length,1);
   assert.notDeepEqual(first[0].files[0],first[1].files[0],'each request owns separately staged upload');
   assert.equal(await page.evaluate(()=>fixture.stages.length),2);
@@ -214,7 +215,7 @@ if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
   assert.deepEqual(await page.evaluate(()=>fixture.overview.quarantine.map(q=>q.id).sort()),['legacy-invalid','legacy-unknown','proof-waiting']);
   assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),4,'local notice hide retains blocked envelope metadata');
   assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),1,'other invalid notice remains');
-  const shot=path.join(evidence,skin+'-heldback-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  await settle(page);const shot=path.join(evidence,skin+'-heldback-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
  }catch(e){const shot=path.join(evidence,skin+'-heldback-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,shot,errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}
  finally{await context.close();}
  continue;

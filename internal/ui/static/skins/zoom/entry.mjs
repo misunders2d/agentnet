@@ -5394,7 +5394,7 @@ const Zoom = {
         inviteRights(d).assistants && el("button",{type:"button",class:"text-btn",onclick:()=>inviteDialog(d)},"Add agent or share more…")),
       $("compose-error").textContent && el("p",{class:"error",role:"alert"},$("compose-error").textContent),
       el("ol", { class: "mini-chat" }, messages.map((m) => {
-        if (m._local) return el("li", {class:"mc mine",id:"m-"+m.id}, el("div", {class:"mc-stack"}, el("div",{class:"mc-bubble"},el("span",{class:"mc-text"},[m.body,...(m.attachments || m.files || []).map(f=>f.name)].filter(Boolean).join("\n"))),el("p",{class:"narr",role:"status"},m.state_text), m._failed && el("button",{type:"button",onclick:m._retry},"Retry")));
+        if (m._local) return el("li", {class:"mc mine",id:"m-"+m.id}, el("div", {class:"mc-stack"}, el("div",{class:"mc-bubble"},m.pid && el("span",{class:"mc-who","data-agent-recipient":"",title:m.pid},"To @"+(agentOf(m.pid)?agentName(agentOf(m.pid)):"agent")),el("span",{class:"mc-text"},[m.body,...(m.attachments || m.files || []).map(f=>f.name)].filter(Boolean).join("\n"))),el("p",{class:"narr",role:"status"},m.state_text), m._failed && el("button",{type:"button",onclick:m._retry},"Retry")));
         if (m.event) return el("li", { class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
         const mine = m.dir === "out";
         const to = m.target && m.target.agent_id ? namedAgentLabel(m.target.agent_id, m.target.address, undefined, whoseAgent(m.pid && agentOf(m.pid))) : m.to && agentOf(m.pid) ? agentName(agentOf(m.pid)) : "";
