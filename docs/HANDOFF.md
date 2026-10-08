@@ -35,6 +35,11 @@ are byte-unchanged from v0.8.9; retain their recorded qualification rather than
 rerunning the costly client shards. This is composed evidence, not a new full
 suite claim. Publish and deploy only after the affected gates pass.
 
+Stable source candidate: `7afac5bda699a33f60db38dfb188b1a6d83ef66d`.
+The following documentation-only checkpoint suppresses the automatic full push
+workflow; explicitly dispatch the affected native qualification. The release tag
+must name the code candidate, not this `[skip ci]` documentation checkpoint.
+
 MEL-574 automatic Antigravity questions remains blocked on proof of its native
 no-edit policy; MEL-575 model visibility needs compatible authoritative private
 reporting. MEL-569 unified direct-agent history and MEL-579 Drive embedding
