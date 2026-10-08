@@ -4,60 +4,93 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Active candidate — v0.8.9
+## Active work — v0.8.10
 
-v0.8.8 below remains the published release. The owner reported that mobile
-v0.8.8 still lacks Amazon_team history. The reproduced upgrade gap is retained
-invalid history: older clients rejected otherwise valid group copies after an
-assistant ended; newer admission alone does not revisit those stored copies.
-The candidate adds a one-time, own-human-only recovery through normal admission
-on both browser and native clients. It never executes historical requests,
-changes grants, resets cursors or trusts a new key. Actual phone records have
-not been inspected, so physical Amazon_team catch-up remains a rollout check.
+The owner authorized continuing after v0.8.9 rollout. Fresh direct Linear triage
+covered 107 project issues, including 79 open records. Two bounded fixes are in
+progress: MEL-551/MEL-493, an explicit published-release check in About using
+the existing resolver and authenticated native controls; and MEL-542, the
+remaining phone dismissal footer that offers stale Bring back after an exact
+agent rejoins. Reproduce first, reuse the existing paths, preserve permission
+and identity checks, and qualify the integrated batch once. No new dependency,
+background polling, installed-client changes or broader redesign is planned.
 
-Candidate scope also includes exact cross-device causal callbacks to a busy
-ancestor, first-open stable AppImage installation, compact raw URL labels with
-full native link inspection/copy, the redundant single-agent setup choice, and
-truthful native permission/environment recovery guidance. The latter does not
-claim to fix the unverified Hyprland IPC/native-policy cause.
+MEL-574 automatic Antigravity questions remains blocked on proof of its native
+no-edit policy; MEL-575 model visibility needs compatible authoritative private
+reporting. MEL-569 unified direct-agent history and MEL-579 Drive embedding
+search remain explicitly future scope. Do not duplicate shipped fixes merely
+because their physical-device verification remains open. ThinkPad is offline;
+coordinate through Herdr only if it returns, never AgentNet or Orca.
 
-Focused browser recovery passed the same-store v0.8.6 rejection/upgrade journey,
-610 signed-vector checks in Node and real Chromium IndexedDB, authority races,
-receipt push, queued sends and timeout recovery. Natural agent callbacks fail
-before the change and pass after; focused race coverage includes cancellation,
-ordering, updates and exact authority. Existing stale-Join/reissue/decline
-regressions pass without new lifecycle code. Every skin passed desktop/phone
-long-link and setup rendering; copy retains exact original targets and touch
-links keep the browser menu. Native same-store upgrade race passed (49.552 s); paged recovery, authority, restart and rollback tests passed under race (4.995 s). Independent security and installer reviews found no remaining defect.
+## Current release — v0.8.9, October 8, 2026 (UTC)
 
-The integrated [source run](https://github.com/misunders2d/agentnet/actions/runs/37839979797)
-passed all three desktop builds, the real Linux AppImage replacement/restart
-journey, the container journey and five client race shards. Windows native is
-still running. Collected failures are confined to test fixtures: Classic/Zoom
-looked for the shared link module under `src`, and the review-settlement test
-mistook an interim empty acceptance snapshot for the final snapshot. Both are
-corrected without production changes. The latter reproduced 8 failures in 20
-race repetitions before correction and passed all 20 afterward (37.190 s).
-Standalone skin races passed (2.327/2.370 s), and the real Chromium storage race
-passed (1.988 s). Retain successful unchanged coverage; focused native checks,
-remaining full-run results and release packaging are pending.
+[Download v0.8.9](https://github.com/misunders2d/agentnet/releases/tag/v0.8.9). Published at **21:03:42 UTC**
+from `bd793b64e07e303458604f3dec01067884dbb3d6`. Existing relay upgraded at **21:06:24 UTC**.
+No installed desktop client was changed.
 
-All October 8 Linear records were refreshed directly at 20:13 UTC: MEL-573 is
-implemented; MEL-578 shipped in v0.8.8; MEL-579 remains explicit future scope
-(no Drive indexing authorized). MEL-574 cannot advertise automatic questions:
-installed/documented Antigravity flags do not establish the required no-edit
-policy without changing native settings. MEL-575 remains open: no existing
-model-report field can be projected, and strict old decoders need a compatible
-private reporting extension. No configuration parser, guessed model or
-unknown-only placeholder is presented as completion. Both have direct Linear
-scope/evidence comments. No Orca or AgentNet peer coordination is used.
+- Recover retained linked group-history copies that older clients rejected after
+  a clean assistant dismissal. Browser and native recovery are restricted to
+  authenticated current own-human devices and reuse normal admission. Historical
+  requests never run; signatures, exact keys, grants and cursors stay intact.
+- Exact cross-device causal callbacks can return to a busy local ancestor while
+  retaining ordering, cancellation, authority and update fences.
+- Linux AppImages install a verified stable per-user copy on first user-initiated
+  opening. Launchers and updates use it; custom launchers and conflicts remain
+  protected. Removing the download no longer removes that installed copy.
+- Long raw links have compact labels in all skins, with exact targets, code,
+  descriptive labels and native copy/inspection retained. Setup removes only an
+  already-selected sole-agent choice. Needs-human guidance explains native
+  permission/environment repair without changing permissions or claiming to fix
+  the unverified Hyprland IPC cause.
 
-After v0.8.9 rollout, the owner explicitly authorized continuing directly with
-**v0.8.10**, refreshing Linear and selecting more important bugs. Deploy only
-the existing relay. Desktop clients update through the button or CLI; never
-migrate or restart live clients during development. ThinkPad remains offline.
+History regression evidence includes the actual v0.8.6 browser rejecting a copy,
+v0.8.8 leaving it missing, and recovery in the same store. Signed vectors passed
+610 checks each in Node and Chromium IndexedDB; old-version upgrade passed 611.
+Native same-store upgrade race passed 49.552 s; paged recovery, current authority,
+restart and rollback passed 4.995 s. Natural callback regressions fail before
+and pass after; adjacent race checks retain exact authority, ended-ancestor,
+update/cancel and stale-consent coverage. Every skin passed desktop/phone-width
+long-link and setup rendering. These are synthetic checks: the actual phone's
+Amazon_team catch-up remains unverified and MEL-558 stays open. Source devices
+must be updated and online to supply history missing from the relay/phone.
 
-## Current release — v0.8.8, October 8, 2026
+Qualification is composed evidence, **not an all-green full source run**.
+[Full source CI](https://github.com/misunders2d/agentnet/actions/runs/37839979797)
+at `74018a7c` passed 9/14 required jobs: all desktop builds, the container journey
+and five client race shards. The five failed jobs contained two test-fixture
+defects only: Classic/Zoom used the wrong source path for the new shared link
+module, and a review test mistook an interim empty snapshot for final settlement.
+All other packages in the failed jobs passed. Neither correction changes
+production code. The latter reproduced 8/20 race failures before and passed
+20/20 after (37.190 s); standalone skin races passed 2.327/2.370 s and real
+Chromium storage passed 1.988 s.
+
+[Focused native qualification](https://github.com/misunders2d/agentnet/actions/runs/37842386390)
+passed all three jobs on Linux/macOS/Windows; the existing shell-stub review test
+skips Windows. Its revision `a945711b` differs from the final release source only
+in HANDOFF documentation. All five [release packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/37842995917)
+passed. All 12 downloaded asset sizes/digests and all 11 SHA256SUMS entries match;
+downloaded Linux CLI and bundled CLI report the exact clean release revision.
+The final AppImage passed actual replacement, Tauri/sidecar restart and durable
+completion, including the stable-install path.
+
+Relay rollout used a verified stopped-state backup, retained the original volume
+and realm, and reports v0.8.9 through normal HTTPS from relay and laptop. Zero
+restarts/OOM events; the neighboring service retains its previous start time.
+The server's recommendation still names v0.8.5: the available identity is a member,
+so the signed admin update was refused. No rights or database controls were
+bypassed. Update independently checks GitHub; v0.8.10 addresses discovery before
+installation. Physical notifications/clipboard and interactive Windows/macOS
+installation remain unqualified. Installers are unsigned.
+
+Release efficiency: keep passing unchanged coverage after a fixture correction.
+Do not tag a `[skip ci]` documentation commit: it also suppresses tag packaging.
+The initial unpublished v0.8.9 tag produced no run/assets and was corrected under
+an exact lease to its identically qualified code parent before packaging.
+For relay staging, download the published binary directly on the server and
+verify the already-known checksum; the laptop SCP uplink was very slow.
+
+## Previous release — v0.8.8, October 8, 2026
 
 [Download v0.8.8](https://github.com/misunders2d/agentnet/releases/tag/v0.8.8).
 Published October 8 at 19:43:30 UTC from immutable release source `8336346d546a11fddba74f06964a3fff6c95ee1c`.
@@ -138,7 +171,7 @@ MEL-558 stays open for physical regular person/group catch-up; direct-agent
 history MEL-569 remains separate deferred scope. Native clipboard/photo behavior
 requires actual platform interaction before closure.
 
-## Next authorized work — v0.8.9
+## Historical v0.8.9 triage authorization
 
 Owner asks to review all issues/bugs added October 8 plus important older bugs,
 report chosen scope, implement and release. ThinkPad is offline overnight;

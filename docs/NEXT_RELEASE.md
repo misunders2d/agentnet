@@ -1,4 +1,15 @@
-# AgentNet v0.8.9 — candidate
+# AgentNet v0.8.10 — in progress
+
+Fresh Linear triage selected two bounded follow-ups: explicit published-release
+availability in About (MEL-551/MEL-493), and the remaining phone dismissal footer
+with stale Bring back (MEL-542). Reuse existing release discovery and exact-agent
+rejoin guards. No new dependencies, background polling, permission changes or
+installed-client updates. Focused reproductions first; one integrated release
+qualification after the fixes stabilize. These changes are not yet shipped.
+
+---
+
+# AgentNet v0.8.9 — October 8, 2026 (UTC)
 
 - Recover retained linked group-history copies that older clients rejected after an agent left. Current signatures, membership, exact keys and human-device checks remain; historical requests never run.
 - Support exact causal requests that call back through remote agents to an already busy ancestor, preserving ordering, cancellation and update fences.
@@ -19,8 +30,7 @@ interactive Windows/macOS and physical notification/clipboard checks remain
 separate from automated qualification. Native permission/Hyprland IPC root
 cause is not claimed fixed by guidance.
 
-Qualification and publication are pending. Existing authorization continues
-with a fresh Linear bug review for v0.8.10 after this release rolls out.
+Published at 21:03:42 UTC from `bd793b64e07e303458604f3dec01067884dbb3d6`; existing relay upgraded at 21:06:24 UTC with a verified backup and unchanged realm/volume. Composed source qualification and all five packaging jobs passed; asset checksums/revisions match. See [HANDOFF.md](HANDOFF.md) for exact CI evidence and physical-device limits.
 
 ---
 
