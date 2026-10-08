@@ -4,7 +4,17 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Active work — v0.8.10
+## Current release — v0.8.10, October 8, 2026 (UTC)
+
+[Download v0.8.10](https://github.com/misunders2d/agentnet/releases/tag/v0.8.10).
+Published at **21:54:58 UTC** from
+`7afac5bda699a33f60db38dfb188b1a6d83ef66d`. Existing relay upgraded at
+**21:56:11 UTC** after a verified stopped-state backup. Its running binary and
+normal HTTPS from relay and laptop report v0.8.10 with the original realm and
+volume. Zero restarts/OOM events; the neighboring service is unchanged. No
+installed desktop client was changed. GitHub's latest release resolves to
+v0.8.10; the relay's older recommendation remains unchanged because the available
+identity lacks admin rights. The explicit release check does not need those rights.
 
 The owner authorized continuing after v0.8.9 rollout. Fresh direct Linear triage
 covered 107 project issues, including 79 open records. Two bounded fixes are
@@ -25,20 +35,29 @@ passed all 18 tests. Final integrated Chromium checks passed 27.149 s: every
 skin at 1280/390, 11 explicit checks each and no POSTs or background polling,
 older hosts/browser fences, plus 12 phone rejoin/navigation cases. All three
 locked skin builds and Comic type checking pass; review found no remaining
-blocker. Native and release qualification is pending.
+blocker. Local affected-package race passed: command 241.096 s, UI 533.332 s,
+Classic/Zoom 3.275/3.325 s, static browser code 9.742 s.
 
-Qualification will rerun the affected `cmd/agentnet` and `internal/ui/...`
-packages without a test-name filter on Linux/macOS/Windows, full vet, local
-affected-package race and final three-OS packaging/AppImage replacement-restart.
+[Affected native qualification](https://github.com/misunders2d/agentnet/actions/runs/37847585973)
+passed all three Linux/macOS/Windows jobs: full `cmd/agentnet` and
+`internal/ui/...` tests without a name filter, plus repository-wide vet.
+Its revision `d1173e90` differs from the released source only in HANDOFF text.
 Client, protocol, Hub, browser engine/storage, dependencies, scripts and workflows
 are byte-unchanged from v0.8.9; retain their recorded qualification rather than
 rerunning the costly client shards. This is composed evidence, not a new full
-suite claim. Publish and deploy only after the affected gates pass.
+suite claim.
 
-Stable source candidate: `7afac5bda699a33f60db38dfb188b1a6d83ef66d`.
-The following documentation-only checkpoint suppresses the automatic full push
-workflow; explicitly dispatch the affected native qualification. The release tag
-must name the code candidate, not this `[skip ci]` documentation checkpoint.
+All five [release packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/37848549685)
+passed. All 12 downloaded asset sizes/digests and 11 SHA256SUMS entries match;
+the Linux CLI and bundled CLI report the exact clean released revision. The
+final AppImage passed actual replacement, Tauri/sidecar restart, command parity
+and durable completion. A second identical tag/SHA packaging run was cancelled
+before completion to avoid redundant builds and draft-release races.
+
+Installers remain unsigned. Physical phone history/rejoin, notifications,
+clipboard and interactive Windows/macOS installation are not established by
+these checks. MEL-558 remains open for actual Amazon_team catch-up after the
+v0.8.9 recovery; no further history protocol or replay was added in v0.8.10.
 
 MEL-574 automatic Antigravity questions remains blocked on proof of its native
 no-edit policy; MEL-575 model visibility needs compatible authoritative private
@@ -47,7 +66,7 @@ search remain explicitly future scope. Do not duplicate shipped fixes merely
 because their physical-device verification remains open. ThinkPad is offline;
 coordinate through Herdr only if it returns, never AgentNet or Orca.
 
-## Current release — v0.8.9, October 8, 2026 (UTC)
+## Previous release — v0.8.9, October 8, 2026 (UTC)
 
 [Download v0.8.9](https://github.com/misunders2d/agentnet/releases/tag/v0.8.9). Published at **21:03:42 UTC**
 from `bd793b64e07e303458604f3dec01067884dbb3d6`. Existing relay upgraded at **21:06:24 UTC**.

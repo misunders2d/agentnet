@@ -1,11 +1,23 @@
-# AgentNet v0.8.10 — in progress
+# AgentNet v0.8.10 — October 8, 2026 (UTC)
 
-Fresh Linear triage selected two bounded follow-ups: explicit published-release
-availability in About (MEL-551/MEL-493), and the remaining phone dismissal footer
-with stale Bring back (MEL-542). Reuse existing release discovery and exact-agent
-rejoin guards. No new dependencies, background polling, permission changes or
-installed-client updates. Focused reproductions first; one integrated release
-qualification after the fixes stabilize. These changes are not yet shipped.
+[Published v0.8.10](https://github.com/misunders2d/agentnet/releases/tag/v0.8.10)
+at 21:54:58 UTC from `7afac5bda699a33f60db38dfb188b1a6d83ef66d`.
+
+- **Check for updates** in every desktop skin uses the published stable release independently of the server recommendation. It shows the installed app version and available/current/ahead/error states, with no installation, work pause or background polling.
+- The phone's stale **Bring back** footer now respects exact active/pending agent membership. It rechecks before opening an invitation and discards delayed results after switching chats.
+
+Full affected command/UI packages and repository-wide vet passed on
+Linux/macOS/Windows, alongside local race and all-skin desktop/phone browser
+checks. Unchanged core code retains v0.8.9 qualification. All five packaging jobs
+passed, all asset digests/checksums matched, and the final AppImage passed actual
+replacement and restart. See [HANDOFF.md](HANDOFF.md) for exact evidence.
+
+Update through **Settings → About → Update AgentNet** or
+`agentnet update v0.8.10`, then reload browser clients. Installers are unsigned;
+physical phone catch-up, notifications/clipboard and interactive Windows/macOS
+installation remain separate checks. No installed desktop client was changed.
+The existing relay was upgraded at 21:56:11 UTC after a verified backup, retaining
+its original realm and volume; public HTTPS and post-deployment health passed.
 
 ---
 
