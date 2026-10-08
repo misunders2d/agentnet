@@ -533,7 +533,7 @@ fn first_autostart(app: &AppHandle) {
     // Linux entries can be customized outside the app. Migration already
     // refreshed an exact owned entry; do not replace any other existing one.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("APPIMAGE").is_some() && autostart_enabled(app) {
+    if std::env::var_os("APPIMAGE").is_some() && linux::has_autostart_entry() {
         chose_autostart(app);
         return;
     }

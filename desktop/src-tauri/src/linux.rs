@@ -63,9 +63,22 @@ pub fn ensure_launcher(data: &Path, appimage: &str, previous: Option<&str>) -> s
 /// existing autostart plugin wrote for the prior package. Disabled/custom
 /// entries are preserved. The plugin still writes the new entry itself.
 pub fn owns_autostart(previous: &str) -> bool {
+    autostart_entry().is_some_and(|entry| owns_autostart_at(&entry, previous))
+}
+
+fn autostart_entry() -> Option<PathBuf> {
     // auto-launch 0.6 uses ~/.config even when XDG_CONFIG_HOME is set.
-    let config = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"));
-    config.is_some_and(|config| owns_autostart_at(&config.join("autostart/AgentNet.desktop"), previous))
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/autostart/AgentNet.desktop"))
+}
+
+pub fn has_autostart_entry() -> bool {
+    autostart_entry().is_some_and(|entry| autostart_entry_present(&entry))
+}
+
+fn autostart_entry_present(entry: &Path) -> bool {
+    // The plugin's exists() follows symlinks. A dangling custom link is still
+    // an entry to preserve, even before any saved startup choice exists.
+    fs::symlink_metadata(entry).is_ok()
 }
 
 fn owns_autostart_at(entry: &Path, previous: &str) -> bool {
@@ -123,6 +136,14 @@ mod tests {
         assert!(owns_autostart_at(&login, source));
         fs::write(&login, format!("{owned}\nHidden=true")).unwrap();
         assert!(!owns_autostart_at(&login, source));
+        assert!(autostart_entry_present(&login));
+        fs::remove_file(&login).unwrap();
+        let missing = data.join("custom-login-not-installed.desktop");
+        std::os::unix::fs::symlink(&missing, &login).unwrap();
+        assert!(!login.exists(), "the plugin treats a dangling link as disabled");
+        assert!(autostart_entry_present(&login), "preserve the custom entry without a saved choice marker");
+        assert!(!owns_autostart_at(&login, source));
+        assert!(!missing.exists());
         let _ = fs::remove_dir_all(&data);
     }
 }
