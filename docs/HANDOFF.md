@@ -80,7 +80,18 @@ target statuses and file controls remain separate, and stale decline removes the
 invitation locally. The candidate now enters the integrated full
 race/native/packaging gates. The first source run 37820330914 was cancelled
 when the new MEL-551 evidence arrived; unchanged client race shards continue,
-and full platform CI will qualify the corrected candidate. The missing,
+and full platform CI will qualify the corrected candidate. Source run
+37821438818 was subsequently cancelled after integrated race checks exposed
+stale literal grp1/prg1 assertions; those now check the existing semantic
+CapsRecord.Reads behavior. Local G and A–F shards exceeded the fixed 600-second
+budget under concurrent load and are not passes. The complete race gate is the
+repository's existing six CI shards; no timeout has been raised. The large-context
+visitor fixture now stops the unrelated new member's history import after the
+sender verifies its signed membership, before testing the separate visitor.
+All context-size, decryption, nondisclosure and no-execution assertions remain.
+Focused carrier/large-context race passed (70.800 s); capability/progress
+regressions passed (6.090 s). Baseline and candidate fixture timings under
+different load do not establish a production regression. The missing,
 nonregular and changed-source shutdown regressions plus post-shutdown loss
 failed before the MEL-551 fix. Focused updater tests then passed (11.643 s),
 with package vet and a refusal check proving no shutdown/pause is retained.

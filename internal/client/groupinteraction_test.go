@@ -576,7 +576,7 @@ func TestGroupInteractionVisitorLargeCurrentContext(t *testing.T) {
 		t.Fatalf("large signed selection %d %v", len(refs), err)
 	}
 	joiner := proofReader(t, w, "large-context-member")
-	runAgent(t, joiner)
+	stopJoiner := runAgent(t, joiner)
 	publishGroupFixtureCaps(t, joiner, true)
 	person, _, _ := joiner.store.selfPerson(joiner.Address)
 	inv, err := w.alice.InviteGroup(tctx(t), packet.State.Conv, person.roster.Person, refs)
@@ -601,6 +601,11 @@ func TestGroupInteractionVisitorLargeCurrentContext(t *testing.T) {
 		packet = p
 		return true
 	})
+	// The sender has verified the signed current membership above. This case
+	// qualifies the visitor's bounded current context, not the other joiner's
+	// fifty-message history import. Leave that unrelated history offline like
+	// the original recipients, without changing the invitation's signed refs.
+	stopJoiner()
 	raw, _ := json.Marshal(packet)
 	if len(raw) <= 8<<10 {
 		t.Fatalf("current context fixture too small: %d", len(raw))

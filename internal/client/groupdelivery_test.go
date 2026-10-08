@@ -618,8 +618,8 @@ func TestGroupCarrierLegacyExactReplayAndOversizeBeforeCustody(t *testing.T) {
 }
 
 func TestGroupCarrierOrdinaryRunDelivery(t *testing.T) {
-	if !slices.Contains(ownCaps, protocol.CapGroup) {
-		t.Fatal("grp1 missing after qualified engine parity")
+	if !(protocol.CapsRecord{Caps: ownCaps}).Reads(protocol.CapGroup) {
+		t.Fatal("group reader capability missing after qualified engine parity")
 	}
 	w, p := groupOrdinaryPublication(t)
 	runAgent(t, w.alice)

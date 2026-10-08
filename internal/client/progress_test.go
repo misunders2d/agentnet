@@ -165,7 +165,7 @@ func inboxStatus(a *Agent, id string) (string, bool) {
 // whenever the outbox retries it. An old session never gets an unmarked copy;
 // an ordinary correlated clarification still reaches it.
 func TestProgressRequiresSignedCapabilityQueueAndRetry(t *testing.T) {
-	if !slices.IsSorted(ownCaps) || !slices.Contains(ownCaps, protocol.CapProgress) {
+	if !slices.IsSorted(ownCaps) || len(ownCaps)+1 > protocol.MaxAdvertisedCaps || !(protocol.CapsRecord{Caps: ownCaps}).Reads(protocol.CapProgress) {
 		t.Fatalf("own capabilities %v", ownCaps)
 	}
 	progress := envelope.Inner{Kind: envelope.KindMessage, Status: envelope.StatusProgress, ReplyTo: protocol.NewID(), Body: "working"}
