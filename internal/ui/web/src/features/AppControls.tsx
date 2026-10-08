@@ -1,8 +1,8 @@
 // Desktop-only actions use the shell's host methods, never membership APIs.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../context";
 import { errorText } from "../api";
-import type { AppStatus } from "../host";
+import type { AppStatus, AppUpdateCheck } from "../host";
 import { Button } from "../ui/Button";
 import { Card, Fact, Hint } from "./Settings.parts";
 import { Confirm } from "./Message.actions";
@@ -13,15 +13,30 @@ export function AppControls({ command = false }: { command?: boolean }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   const [replace, setReplace] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
+  const [checked, setChecked] = useState<AppUpdateCheck | null>(null);
+  const [checking, setChecking] = useState(false), [checkError, setCheckError] = useState("");
+  const checkGeneration = useRef(0);
   useEffect(() => {
+    checkGeneration.current++;
+    setChecked(null); setChecking(false); setCheckError("");
+    if (host.platform === "browser") return;
     let alive = true;
     host.appStatus?.().then((v) => { if (alive) setStatus(v); }, (e) => {
       if (!alive) return;
       if (/404|not found/i.test(errorText(e))) setUnavailable(true);
       else setError(errorText(e));
     });
-    return () => { alive = false; };
-  }, [host]);
+    return () => { alive = false; checkGeneration.current++; };
+  }, [host, command]);
+  const check = async () => {
+    if (checking || busy || !host.appCheckUpdate || host.platform === "browser") return;
+    const generation = ++checkGeneration.current;
+    const current = () => generation === checkGeneration.current && store.isActive();
+    setChecking(true); setChecked(null); setCheckError("");
+    try { const result = await host.appCheckUpdate(); if (current()) setChecked(result); }
+    catch (e) { if (current()) setCheckError("Couldn’t check for updates: " + errorText(e)); }
+    finally { if (current()) setChecking(false); }
+  };
   const act = async (command: boolean) => {
     if (busy) return;
     setBusy(true); setError("");
@@ -31,6 +46,7 @@ export function AppControls({ command = false }: { command?: boolean }) {
     } catch (e) { if (store.isActive()) setError(errorText(e)); }
     finally { if (store.isActive()) setBusy(false); }
   };
+  if (host.platform === "browser") return null;
   if (!status) {
     if (unavailable) return <Card className="space-y-2 p-4">
       <h3 className="font-bold">{command ? "AgentNet command for your tools" : "Update this computer"}</h3>
@@ -52,7 +68,15 @@ export function AppControls({ command = false }: { command?: boolean }) {
     </> : <>
       <h3 className="font-bold">Update this computer</h3>
       <p>The app, its AgentNet command and connected tools update together. The app restarts when ready.</p>
-      <Button variant="act" disabled={busy || !status.app_update_supported || !host.appUpdate} onClick={() => void act(false)}>{busy ? "Updating…" : "Update AgentNet"}</Button>
+      <Hint>Installed app: {status.version}.</Hint>
+      <div className="flex flex-wrap gap-3">
+        {host.appCheckUpdate && <Button disabled={checking || busy} onClick={() => void check()}>{checking ? "Checking…" : "Check for updates"}</Button>}
+        <Button variant="act" disabled={busy || checking || !status.app_update_supported || !host.appUpdate || (!!checked && checked.state !== "available")} onClick={() => void act(false)}>{busy ? "Updating…" : "Update AgentNet"}</Button>
+      </div>
+      {checked && <p role="status">{checked.state === "available" ? `Version ${checked.latest} is available.` :
+        checked.state === "current" ? `This app matches the latest stable release (${checked.latest}).` :
+          `This app (${checked.version}) is ahead of the latest stable release (${checked.latest}).`}</p>}
+      {checkError && <p role="alert" className="text-danger">{checkError}</p>}
       {!status.app_update_supported && <Hint>{status.problem || "This installation is updated by its package manager."}</Hint>}
       {(message || status.update_result) && <p role="status">{message || status.update_result}</p>}
     </>}

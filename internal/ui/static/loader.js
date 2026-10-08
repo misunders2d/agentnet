@@ -66,7 +66,7 @@
   const appJSON = async (path, body) => {
     if (browser) throw new Error("Open the AgentNet app for this computer's settings.");
     if (nativeAppJSON) {
-      const action = { "/api/app/status": "status", "/api/app/update": "update", "/api/app/cli": "cli" }[path];
+      const action = { "/api/app/status": "status", "/api/app/check": "check", "/api/app/update": "update", "/api/app/cli": "cli" }[path];
       if (!action) throw new Error("Unknown app action.");
       return nativeAppJSON(action, body);
     }
@@ -123,6 +123,7 @@
     // Computer-wide app actions stay on this loopback origin; switching a
     // workspace never sends an updater request to a remote membership.
     appStatus: () => appJSON("/api/app/status"),
+    appCheckUpdate: () => appJSON("/api/app/check"),
     appUpdate: () => appJSON("/api/app/update", {}),
     appReplaceCommand: () => appJSON("/api/app/cli", { replace: true }),
     onOpen(fn, kinds) {

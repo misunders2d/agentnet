@@ -291,7 +291,6 @@ export function AboutSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
           <div className="min-w-0">
             <p className="font-display text-[28px] font-extrabold leading-tight">AgentNet</p>
             <p className="text-text-2">Version <span className="font-semibold tnum">{o?.version || "…"}</span></p>
-            {o && !o.release && <Hint className="mt-0.5">Your server doesn’t recommend a newer one.</Hint>}
           </div>
         </Card>
         {o?.release ? (

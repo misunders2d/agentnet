@@ -52,6 +52,12 @@ export interface AppStatus extends AppCommandStatus {
   update_result?: string;
 }
 
+export interface AppUpdateCheck {
+  version: string;
+  latest: string;
+  state: "available" | "current" | "ahead";
+}
+
 export interface Host {
   /** Native shell fallback, read only in response to paste; absent in browsers. */
   clipboardImage?(): Promise<File | null>;
@@ -63,6 +69,8 @@ export interface Host {
   stage(file: File): Promise<unknown>;
   /** Desktop shell only; actions on this computer, never membership APIs. */
   appStatus?(): Promise<AppStatus>;
+  /** Explicit read-only published-release lookup; never installs or pauses work. */
+  appCheckUpdate?(): Promise<AppUpdateCheck>;
   appUpdate?(): Promise<{ state: string; message: string }>;
   appReplaceCommand?(): Promise<AppCommandStatus>;
   drive?: DriveProvider;
