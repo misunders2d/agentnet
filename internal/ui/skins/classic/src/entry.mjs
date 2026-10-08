@@ -2199,6 +2199,7 @@ function dmMsg(m, t, prev) {
     !to && !prev.to && new Date(m.at) - new Date(prev.at) < 10 * 60e3;
   const held = m.state === "conv_held";
   const acts = m.actions || []; // a request to your agent: yours to decide on
+  const agentDetail = m.job_detail || (state.overview.needs_you || []).find(c => c.conv === t.id && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
   const meta = !cont && el("div", { class: "meta" }, el("span", { class: "who", ...(m.agent_id ? { title: namedProvenance(m) } : {}) }, author),
     agent && el("span", { class: "tag" }, "Agent"),
     to && el("span", { class: "tag" }, "To " + to.charAt(0).toLowerCase() + to.slice(1)),
@@ -2215,8 +2216,8 @@ function dmMsg(m, t, prev) {
         !m.deleted && fileChips(humanGroup(t) && (m.synced_from || m.via) ? {...m,dir:"in"} : m, m.attachments)),
       reactionsRow(m, t.id),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
-      m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && el("div", {class:"agent-turn", role:"region", tabindex:"-1", "aria-label":"Your agent says"},
-        el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"), el("p", {class:"agent-detail"}, m.job_detail),
+      agentDetail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && el("div", {class:"agent-turn", role:"region", tabindex:"-1", "aria-label":"Your agent says"},
+        el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"), el("p", {class:"agent-detail"}, agentDetail),
         !acts.length && m.target && el("p", {class:"hint"}, "Open it on " + deviceWords(m.target.address))),
       acts.length > 0 && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text),
         proposalCard(m.proposal),
@@ -2251,12 +2252,14 @@ function dmDetails(m) {
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
       m.delivery === "waiting" && m.detail && [el("dt", {}, "Waiting for"), el("dd", { class: "mono" }, m.detail.replace(/^peer_update:\s*/, ""))],
+      m.delivery !== "waiting" && m.detail && [el("dt", {}, "Send detail"), el("dd", { class: "mono" }, m.detail)],
+      m.delivery_uncertain && [el("dt", {}, "Delivery"), el("dd", {}, "Unconfirmed; local retries stopped. Cancellation cannot be confirmed.")],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
       !m.excerpt_pid && m.synced_from && [el("dt", {}, "Copied here"), el("dd", {}, "from your " + myDeviceName(m.synced_from) + " when this device was added. Who wrote it is that device's word, not checked here; nothing runs it.")],
       (m.copies || []).length > 1 && [el("dt", {}, "Copies"), el("dd", {}, el("ul", { class: "copy-list" }, m.copies.map((c) =>
-        el("li", {}, (c.own?"your ":(c.person||"Someone")+"’s ") + (c.to.split("/")[1]||"device") + ": " + (copyWord[c.state] || c.state)))))],
+        el("li", {}, (c.own?"your ":(c.person||"Someone")+"’s ") + (c.to.split("/")[1]||"device") + ": " + (c.delivery_uncertain ? "delivery unconfirmed" : c.send_stopped && ["failed","not_delivered"].includes(c.state) ? "not sent; local sending stopped" : copyWord[c.state] || c.state)))))],
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")],
       controlDetails(m)));
 }
@@ -2269,6 +2272,8 @@ function myDeviceName(address) {
 }
 
 function deliveryText(m) {
+  if (m.delivery_uncertain) return "Delivery unconfirmed; local retries stopped";
+  if (m.send_stopped && ["failed","not_delivered"].includes(m.state)) return "Not sent; local sending stopped";
   return ["waiting","quarantined","expired","failed"].includes(m.delivery) && m.state_text ? m.state_text : copyWord[m.delivery] || m.delivery;
 }
 const copyWord = { delivered: "delivered", custody: "on your server", queued: "Sending…", waiting: "kept here, not sent yet", failed: "not sent", quarantined: "they could not verify it", expired: "not delivered: that session ended first" };
@@ -3167,6 +3172,12 @@ async function openThread(id, focusId) {
 }
 
 function flash(id) {
+  // Activity references identify a message, including one outside the open topic.
+  const message = state.dmData?.messages.find((m) => m.id === id);
+  if (message && (topicSelections[state.dm] || "") !== (message.topic || "")) {
+    topicSelections[state.dm] = message.topic || "";
+    renderDMBody(false);
+  }
   const m = root.querySelector("#" + CSS.escape("m-" + id));
   if (!m) return;
   const target = m.querySelector(".agent-turn") || m;
@@ -3625,6 +3636,8 @@ function details(m) {
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
       m.delivery === "waiting" && m.detail && [el("dt", {}, "Waiting for"), el("dd", { class: "mono" }, m.detail.replace(/^peer_update:\s*/, ""))],
+      m.delivery !== "waiting" && m.detail && [el("dt", {}, "Send detail"), el("dd", { class: "mono" }, m.detail)],
+      m.delivery_uncertain && [el("dt", {}, "Delivery"), el("dd", {}, "Unconfirmed; local retries stopped. Cancellation cannot be confirmed.")],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],
@@ -4736,6 +4749,35 @@ async function renderResponder() {
   await renderNamedAgents("", host, gen);
 }
 
+// The existing installer table and device link keep the installed computer
+// under the same person. A link requests admission; it never approves it.
+async function renderBrowserApp(box, host, currentView) {
+  const section = el("section", {"aria-label":"Connect an agent on your computer"},
+    el("p", {}, "Install AgentNet on the computer where your coding agent runs. Add it to your existing person, then choose your agent and working folder in Settings → Agent."));
+  const error = el("p", {class:"error",role:"alert"});
+  const linked = el("div", {});
+  const make = el("button", {type:"button",class:"btn primary",onclick:async()=>{
+    if (!currentView() || make.disabled) return;
+    make.disabled=true;error.textContent="";
+    try {
+      const link=await api("/api/device/link",{},host);
+      if (!currentView()) return;
+      fill(linked, link.app_url && el("a",{href:link.app_url,class:"btn"},"Open this link in AgentNet"),
+        el("p",{class:"hint"},"Return here to approve the new computer in Settings → Your devices. Your chats stay with the same person. This one-use link expires at "+new Date(link.expires).toLocaleTimeString()+"."),
+        el("details",{},el("summary",{},"App opened without the link?"),el("p",{},"Copy this link and paste it into the installed app:"),el("code",{style:"display:block;overflow-wrap:anywhere;user-select:all"},link.url)));
+      make.textContent="Make a new app link";
+    } catch(e) { if(currentView())error.textContent=e.message; }
+    finally {make.disabled=false;}
+  }},"Link the installed app to me");
+  section.append(make,linked,error);box.append(section);
+  try {
+    const app=await api("/api/get-app",undefined,host);if(!currentView())return;
+    const mine=(app.platforms||[]).find(p=>p.id===app.detected),others=(app.platforms||[]).filter(p=>p!==mine);
+    if(mine)section.insertBefore(el("a",{href:mine.url,class:"btn",rel:"noopener"},"Get AgentNet for "+mine.label),make);
+    if(others.length)section.insertBefore(el("details",{},el("summary",{},mine?"Other systems":"Choose your computer"),el("ul",{},...others.map(p=>el("li",{},el("a",{href:p.url,rel:"noopener"},p.label))))),make);
+  }catch(e){if(currentView())error.textContent=e.message;}
+}
+
 async function renderNamedAgents(note = "", host = currentHost, gen = state.gen, detail = "") {
   const box = $("named-agents"), ws = wsNow();
   const current = () => gen === state.gen && wsNow() === ws;
@@ -4882,6 +4924,11 @@ async function renderAssistantSetup() {
   const root = $("assistant-setup"), host = currentHost, gen = state.gen, ws = wsNow();
   if (!root) return;
   const current = () => gen === state.gen && ws === wsNow() && host === currentHost;
+  if (host?.platform === "browser" || !!state.overview?.device) {
+    fill(root, el("h3", {}, "Connect an agent on your computer"));
+    await renderBrowserApp(root, host, current);
+    return;
+  }
   try {
     const m = await moduleOf("assistant-setup");
     if (!current()) return;

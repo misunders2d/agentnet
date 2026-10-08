@@ -2144,12 +2144,14 @@ function dmDetails(m) {
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
       m.delivery === "waiting" && m.detail && [el("dt", {}, "Waiting for"), el("dd", { class: "mono" }, m.detail.replace(/^peer_update:\s*/, ""))],
+      m.delivery !== "waiting" && m.detail && [el("dt", {}, "Send detail"), el("dd", { class: "mono" }, m.detail)],
+      m.delivery_uncertain && [el("dt", {}, "Delivery"), el("dd", {}, "Unconfirmed; local retries stopped. Cancellation cannot be confirmed.")],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.via && [el("dt", {}, "Sent from"), el("dd", {}, "your " + myDeviceName(m.via) + " (" + m.via + ")")],
       !m.excerpt_pid && m.synced_from && [el("dt", {}, "Copied here"), el("dd", {}, "from your " + myDeviceName(m.synced_from) + " when this device was added. Who wrote it is that device's word, not checked here; nothing runs it.")],
       (m.copies || []).length > 1 && [el("dt", {}, "Copies"), el("dd", {}, el("ul", { class: "copy-list" }, m.copies.map((c) =>
-        el("li", {}, (c.own?"your ":(c.person||"Someone")+"’s ") + (c.to.split("/")[1]||"device") + ": " + (copyWord[c.state] || c.state)))))],
+        el("li", {}, (c.own?"your ":(c.person||"Someone")+"’s ") + (c.to.split("/")[1]||"device") + ": " + (c.delivery_uncertain ? "delivery unconfirmed" : c.send_stopped && ["failed","not_delivered"].includes(c.state) ? "not sent; local sending stopped" : copyWord[c.state] || c.state)))))],
       m.replica && [el("dt", {}, "Copy"), el("dd", {}, "A copy kept for history: nothing runs it")],
       controlDetails(m)));
 }
@@ -2162,6 +2164,8 @@ function myDeviceName(address) {
 }
 
 function deliveryText(m) {
+  if (m.delivery_uncertain) return "Delivery unconfirmed; local retries stopped";
+  if (m.send_stopped && ["failed","not_delivered"].includes(m.state)) return "Not sent; local sending stopped";
   return ["waiting","quarantined","expired","failed"].includes(m.delivery) && m.state_text ? m.state_text : copyWord[m.delivery] || m.delivery;
 }
 const copyWord = { delivered: "delivered", custody: "on your server", queued: "Sending…", waiting: "kept here, not sent yet", failed: "not sent", quarantined: "they could not verify it", expired: "not delivered: that session ended first" };
@@ -3411,6 +3415,8 @@ function details(m) {
       el("dt", {}, "Kind"), el("dd", {}, m.kind),
       m.delivery && [el("dt", {}, "Delivery"),el("dd",{},deliveryText(m))],
       m.delivery === "waiting" && m.detail && [el("dt", {}, "Waiting for"), el("dd", { class: "mono" }, m.detail.replace(/^peer_update:\s*/, ""))],
+      m.delivery !== "waiting" && m.detail && [el("dt", {}, "Send detail"), el("dd", { class: "mono" }, m.detail)],
+      m.delivery_uncertain && [el("dt", {}, "Delivery"), el("dd", {}, "Unconfirmed; local retries stopped. Cancellation cannot be confirmed.")],
       m.sent_at && Date.parse(m.at)-Date.parse(m.sent_at)>=60000 && [el("dt",{},"Arrived here"),el("dd",{},new Date(m.at).toLocaleString())],
       m.state && [el("dt", {}, "Stored state"), el("dd", { class: "mono" }, m.state)],
       m.status && [el("dt", {}, "Outcome"), el("dd", { class: "mono" }, m.status)],
@@ -3441,10 +3447,14 @@ function actionButton(a, m, t, primary) {
   return el("button", { type: "button", class: "act" + (primary ? " go" : ""), onclick: () => decide(a, m, t) }, label);
 }
 
+function agentDetailFor(m, t) {
+  return m.job_detail || (state.overview.needs_you || []).find(c => c.conv === t.id && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
+}
+
 function agentNeedsYouTurn(m, t) {
   return el("section", {class:"agent-turn", "aria-label":"Your agent says"},
     el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"),
-    el("p", {class:"agent-detail"}, m.job_detail),
+    el("p", {class:"agent-detail"}, agentDetailFor(m, t)),
     (m.actions || []).length ? el("div", {class:"acts"}, m.actions.map((a,i)=>actionButton(a,m,t,i===0)))
       : m.target && el("p", {class:"hint"}, "Open it on " + deviceWords(m.target.address)));
 }
@@ -4531,6 +4541,35 @@ async function renderResponder() {
   await renderNamedAgents("", host, gen);
 }
 
+// The existing installer table and device link keep the installed computer
+// under the same person. A link requests admission; it never approves it.
+async function renderBrowserApp(box, host, currentView) {
+  const section = el("section", {"aria-label":"Connect an agent on your computer"},
+    el("p", {}, "Install AgentNet on the computer where your coding agent runs. Add it to your existing person, then choose your agent and working folder in Settings → Agent."));
+  const error = el("p", {class:"error",role:"alert"});
+  const linked = el("div", {});
+  const make = el("button", {type:"button",class:"btn primary",onclick:async()=>{
+    if (!currentView() || make.disabled) return;
+    make.disabled=true;error.textContent="";
+    try {
+      const link=await api("/api/device/link",{},host);
+      if (!currentView()) return;
+      fill(linked, link.app_url && el("a",{href:link.app_url,class:"btn"},"Open this link in AgentNet"),
+        el("p",{class:"hint"},"Return here to approve the new computer in Settings → Your devices. Your chats stay with the same person. This one-use link expires at "+new Date(link.expires).toLocaleTimeString()+"."),
+        el("details",{},el("summary",{},"App opened without the link?"),el("p",{},"Copy this link and paste it into the installed app:"),el("code",{style:"display:block;overflow-wrap:anywhere;user-select:all"},link.url)));
+      make.textContent="Make a new app link";
+    } catch(e) { if(currentView())error.textContent=e.message; }
+    finally {make.disabled=false;}
+  }},"Link the installed app to me");
+  section.append(make,linked,error);box.append(section);
+  try {
+    const app=await api("/api/get-app",undefined,host);if(!currentView())return;
+    const mine=(app.platforms||[]).find(p=>p.id===app.detected),others=(app.platforms||[]).filter(p=>p!==mine);
+    if(mine)section.insertBefore(el("a",{href:mine.url,class:"btn",rel:"noopener"},"Get AgentNet for "+mine.label),make);
+    if(others.length)section.insertBefore(el("details",{},el("summary",{},mine?"Other systems":"Choose your computer"),el("ul",{},...others.map(p=>el("li",{},el("a",{href:p.url,rel:"noopener"},p.label))))),make);
+  }catch(e){if(currentView())error.textContent=e.message;}
+}
+
 async function renderNamedAgents(note = "", host = currentHost, gen = state.gen, detail = "") {
   const box = $("named-agents"), ws = wsNow();
   const current = () => gen === state.gen && wsNow() === ws;
@@ -4677,6 +4716,11 @@ async function renderAssistantSetup() {
   const root = $("assistant-setup"), host = currentHost, gen = state.gen, ws = wsNow();
   if (!root) return;
   const current = () => gen === state.gen && ws === wsNow() && host === currentHost;
+  if (host?.platform === "browser" || !!state.overview?.device) {
+    fill(root, el("h3", {}, "Connect an agent on your computer"));
+    await renderBrowserApp(root, host, current);
+    return;
+  }
   try {
     const m = await moduleOf("assistant-setup");
     if (!current()) return;
@@ -5319,7 +5363,7 @@ const Zoom = {
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, m.verified_agent ? el("span", {class:"avatar sm", "aria-hidden":"true"}, "🤖") : avatar(mine ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,d),bubble),
-          m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
+          agentDetailFor(m, d) && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
           proposalCard(m.proposal),
           (m.actions || []).includes("do_it") && el("div", {class:"acts"}, actionButton("do_it",m,d,true)),
           execution && el("p", {class:"narr", "data-agent-execution":""}, execution),
@@ -5340,14 +5384,14 @@ const Zoom = {
       el("div", { class: "meta" }, avatar(m.dir === "out" ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("span", { class: "who" }, dmAuthor(m, d)),
         kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]), el("time", { datetime: m.sent_at || m.at }, sentWhen(m))),
       messageReference(m,state.dmData?.messages.includes(m)?state.dmData:state.data),
-      m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
+      agentDetailFor(m, d) && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
       bodyOf(m),
       !m.deleted && reminderLine(m),
       !m.deleted && fileChips(m, m.attachments),
       reactionsRow(m, d.id), messageMenu(m, d.id, { querySelector: () => null }),
       m.state_text && el("p", { class: "hint" }, m.state_text),
       ["question", "task"].includes(m.kind) && (m.actions || []).some(a => a !== "do_it") &&
-        !(m.job_detail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human")) &&
+        !(agentDetailFor(m, d) && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human")) &&
         el("div", {class:"acts"}, m.actions.filter(a => a !== "do_it").map((a,i) => actionButton(a,m,d,i===0))),
       proposalCard(m.proposal),
       (m.actions || []).includes("do_it") && el("div", {class:"acts"}, actionButton("do_it",m,d,true)),
@@ -5384,6 +5428,7 @@ const Zoom = {
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") },
           avatar(mine ? state.overview.me.address : m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,t),bubble),
           m.summary && el("p", { class: "narr" }, "Your responder's summary: " + m.summary),
+          execLine(m, t),
           m.state_text && !needsYou(m) && el("p", { class: "narr" + (working(m) ? " running" : "") }, m.state_text),
           proposalCard(m.proposal),
           needsYou(m) && el("div", { class: "decide" }, el("p", { class: "decide-why" }, (m.state_text || "").replace(/^Needs you: /, "Needs you · ")),
@@ -5409,6 +5454,7 @@ const Zoom = {
       !m.deleted && m.files && m.files.length && el("p", { class: "hint" }, "Files: " + m.files.map((f) => f.name + " (" + size(f.size) + ")").join(", ")),
       reactionsRow(m, ""), messageMenu(m, "", { querySelector: () => null }),
       m.summary && el("div", { class: "note" }, el("p", { class: "note-label" }, "Summary written on this computer by your responder"), el("p", { class: "body" }, m.summary)),
+      execLine(m, t),
       m.state_text && el("p", { class: "hint" }, m.state_text),
       (m.actions || []).length > 0 && el("div", { class: "acts" }, m.actions.map((a, i) => actionButton(a, m, t, i === 0))),
       d);

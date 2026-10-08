@@ -164,6 +164,8 @@ export function requestState(m: AnyMsg, all: AnyMsg[]): { text: string; tone: "o
     if (w) return { text: w, tone: tone(m.state || "") };
   }
   if ((m.actions || []).includes("cancel")) return { text: "Working…", tone: "work" };
+  if (m.delivery_uncertain) return { text: "Delivery unconfirmed", tone: "wait" };
+  if (m.send_stopped && ["failed","not_delivered"].includes(m.state || "")) return {text:"Not sent",tone:"muted"};
   const d = deliveryWord(("delivery" in m ? m.delivery : undefined) ?? m.state ?? "");
   return { text: d, tone: ["failed", "expired", "quarantined"].includes(m.state || "") ? "bad" : "muted" };
 }

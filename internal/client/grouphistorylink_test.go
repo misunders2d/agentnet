@@ -258,8 +258,12 @@ func TestGroupHistoryLinkEmptyAndDoneRecovery(t *testing.T) {
 		t.Fatal("recovery duplicated usable batch")
 	}
 	var history, jobs int
-	reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&history)
-	phone.store.db.QueryRow(`SELECT count(*) FROM jobs`).Scan(&jobs)
+	if err = reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&history); err != nil {
+		t.Fatal(err)
+	}
+	if err = phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE kind IN ('question','task') OR coalesce(executor,'')<>''`).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
 	if history != 0 || jobs != 0 {
 		t.Fatalf("empty group leaked history/jobs %d/%d", history, jobs)
 	}

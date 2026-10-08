@@ -97,6 +97,9 @@ func (a *Agent) groupControlSourceAdmission(q dbq, packet GroupContext, item His
 		}
 		current, e := groupControlEpochFence(q, packet, a.Address, a.Self().Fingerprint(), env.To, toFP)
 		if e != nil {
+			if errors.Is(e, errGroupRecipientWithdrawn) || errors.Is(e, errGroupRecipientNotCurrent) {
+				return "", errGroupControlHistoryEpoch
+			}
 			return "", e
 		}
 		if current != fence {
@@ -117,6 +120,46 @@ func (a *Agent) groupControlSourceAdmission(q dbq, packet GroupContext, item His
 		return "", errGroupControlHistoryEpoch
 	}
 	return stamp, nil
+}
+
+// The first encrypted copy of a logical control may have gone to a reader
+// who has since left. Reuse another exact original signed copy rather than
+// letting that obsolete recipient block every linked-device snapshot.
+func (a *Agent) groupControlHistorySource(q dbq, packet GroupContext, item HistoryItem) (HistoryItem, error) {
+	if _, err := a.groupControlSourceAdmission(q, packet, item, nil); !errors.Is(err, errGroupControlHistoryEpoch) {
+		return item, err
+	}
+	if item.From != a.Address || item.FromKey != a.Self().Fingerprint() {
+		return HistoryItem{}, errGroupControlHistoryEpoch
+	}
+	rows, err := q.Query(`SELECT id,json_extract(envelope,'$.ts') FROM outbox WHERE conv=? AND lid=? AND kind=? AND sub=? AND body=? AND ref_id=? AND ref_fp=? AND id<>? ORDER BY rowid`, packet.State.Conv, item.LID, item.Kind, item.Sub, item.Body, item.Ref.ID, item.Ref.Fingerprint, item.ID)
+	if err != nil {
+		return HistoryItem{}, err
+	}
+	var candidates []HistoryItem
+	for rows.Next() {
+		candidate := item
+		if err = rows.Scan(&candidate.ID, &candidate.TS); err != nil {
+			break
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return HistoryItem{}, err
+	}
+	for _, candidate := range candidates {
+		if _, err = a.groupControlSourceAdmission(q, packet, candidate, nil); err == nil {
+			return candidate, nil
+		}
+		if !errors.Is(err, errGroupControlHistoryEpoch) {
+			return HistoryItem{}, err
+		}
+	}
+	return HistoryItem{}, errGroupControlHistoryEpoch
 }
 
 func (a *Agent) groupControlHistoryCheck(q dbq, root protocol.ConvRoot, forwarder identity.Public, item HistoryItem) error {

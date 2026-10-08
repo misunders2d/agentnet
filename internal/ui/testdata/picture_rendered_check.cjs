@@ -72,9 +72,8 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
    await p.getByRole('button',{name:'Remove picture',exact:true}).click();await p.getByRole('button',{name:'Remove picture',exact:true}).waitFor({state:'hidden'});
    if(skin==='comic')await p.getByRole('navigation',{name:'Main'}).getByRole('button',{name:/^Chats/}).click();else await p.locator('#settings').evaluate(d=>d.close());
    if(skin==='zoom') {
-    // Write in the DM first; its message/file controls live one level deeper.
+    // Opening a person now goes directly to Main; file controls remain one level deeper.
     await p.locator('.person-cluster').getByRole('button',{name:/^Bob/}).click();
-    await p.getByRole('button',{name:/^Picture chat/}).click();
    }else await p.getByRole('button',{name:/^Bob/}).first().click();
    if(skin==='zoom')await p.getByRole('button',{name:/Write in this DM/}).click();
    const field=skin==='comic'?p.locator('#skin textarea').last():p.locator(skin==='zoom'?'#write-body':'#body');

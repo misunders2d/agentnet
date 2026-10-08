@@ -156,7 +156,7 @@ func linkWords(err error) string {
 func copyViews(cs []client.ConvCopy) []CopyView {
 	var out []CopyView
 	for _, c := range cs {
-		out = append(out, CopyView{To: c.To, State: c.State, Detail: c.Detail, Own: c.Own, Person: c.Person})
+		out = append(out, CopyView{To: c.To, State: c.State, Detail: c.Detail, Own: c.Own, Person: c.Person, SendStopped: c.SendStopped, DeliveryUncertain: c.DeliveryUncertain})
 	}
 	return out
 }

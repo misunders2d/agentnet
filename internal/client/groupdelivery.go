@@ -20,6 +20,8 @@ import (
 )
 
 var errGroupPublished = errors.New("group: exact publication already completed")
+var errGroupRecipientWithdrawn = errors.New("group: recipient admission withdrawn")
+var errGroupRecipientNotCurrent = errors.New("group: recipient exact key is not a current member device")
 
 // Exact custody of a superseded local attempt completes without publishing an
 // old snapshot again. Only our newer atomically published batch supplies that
@@ -105,11 +107,11 @@ func groupDeliveryRecipient(q dbq, packet GroupContext, address, fp string) erro
 			return err
 		}
 		if withdrawn != 0 || packet.State.Withdrawn(member, packet.Withdrawals) {
-			return errors.New("group: recipient admission withdrawn")
+			return errGroupRecipientWithdrawn
 		}
 		return nil
 	}
-	return errors.New("group: recipient exact key is not a current member device")
+	return errGroupRecipientNotCurrent
 }
 
 type groupDeliveryPayload struct {

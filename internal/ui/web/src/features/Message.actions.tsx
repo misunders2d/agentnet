@@ -269,8 +269,10 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
     ["Message", m.id],
     ["Kind", m.kind],
     ["Stored state", m.state || "—"],
-    ...(isThreadMsg(m) ? [] : [["Delivery", m.state_text || m.delivery || m.state || "—"] as [string, string]]),
+    ...(m.delivery_uncertain ? [["Delivery", "Unconfirmed; stopping local retries does not confirm cancellation"] as [string,string]] : []),
+    ...(isThreadMsg(m) || m.delivery_uncertain ? [] : [["Delivery", m.state_text || m.delivery || m.state || "—"] as [string, string]]),
     ...(("delivery" in m ? m.delivery : m.state) === "waiting" && m.detail ? [["Waiting for", m.detail.replace(/^peer_update:\s*/, "")] as [string, string]] : []),
+    ...(("delivery" in m ? m.delivery : m.state) !== "waiting" && m.detail ? [["Send detail", m.detail] as [string,string]] : []),
     ["From device", m.from],
     ...(!isThreadMsg(m) && m.via ? [["Sent from", m.via] as [string, string]] : []),
     ...(!isThreadMsg(m) && m.synced_from ? [["Copied here from", m.synced_from] as [string, string]] : []),
@@ -293,7 +295,8 @@ export function DetailsSheet({ open, onOpenChange, m, ctx, who }: { open: boolea
                   <span aria-hidden="true">{copyIcon(c.state)}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block font-semibold">{capital(c.own?"your "+deviceName(c.to):(c.person||"Someone")+"’s "+deviceName(c.to))}</span>
-                    <span className="block text-[13px] text-text-2">{copyText(c.state)}</span>
+                    <span className="block text-[13px] text-text-2">{c.delivery_uncertain ? "Delivery unconfirmed" : copyText(c.state)}</span>
+                    {c.detail && <span className="block text-[13px] text-muted [overflow-wrap:anywhere]">{c.detail}</span>}
                   </span>
                 </li>
               ))}

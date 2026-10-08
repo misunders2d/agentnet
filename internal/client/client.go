@@ -616,7 +616,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	defer func() { <-lock.(chan struct{}) }()
 	if state, path, found, e := a.store.outboxState(env.ID); e != nil {
 		return SendResult{}, e
-	} else if found && (state == stateReceiverWaiting || state == protocol.StateCustody || state == protocol.StateDelivered || state == protocol.StateQuarantined || state == protocol.StateExpired) {
+	} else if found && (state == stateNotDelivered || state == stateReceiverWaiting || state == protocol.StateCustody || state == protocol.StateDelivered || state == protocol.StateQuarantined || state == protocol.StateExpired) {
 		return SendResult{ID: env.ID, State: state, Path: path}, nil
 	}
 	if ok, err := a.receiverOriginalMayDeliver(env); err != nil || !ok {
@@ -651,13 +651,35 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
-		if err == nil && required == protocol.CapAgentReaction && capturedFP != "" && key.Fingerprint() != capturedFP {
+		if err == nil && (required == protocol.CapAgentReaction || required == protocol.CapControl) && capturedFP != "" && key.Fingerprint() != capturedFP {
 			// Sealed for the reader key captured at enqueue: never for its replacement.
 			a.store.setOutboxState(env.ID, stateNotDelivered, "not sent: the reader's key changed", "")
 			return SendResult{ID: env.ID, State: stateNotDelivered}, nil
 		}
 		if err == nil {
-			err = a.requireParticipationCaps(ctx, key, required)
+			if required == protocol.CapControl {
+				var features []string
+				features, err = a.relayFeatures(ctx)
+				if err == nil {
+					if ok, why := a.capSupport(ctx, env.To, key, features, required); !ok {
+						return SendResult{ID: env.ID, State: stateConvWaiting, Detail: why}, a.store.setOutboxState(env.ID, stateConvWaiting, why, "")
+					}
+				}
+			} else {
+				err = a.requireParticipationCaps(ctx, key, required)
+			}
+			// Captured human controls retain their participation requirement,
+			// and also need the reader's control capability before handover.
+			if err == nil && env.V == envelope.Version3 && groupControlSub(sub) && required != protocol.CapControl && required != protocol.CapGroup {
+				var features []string
+				features, err = a.relayFeatures(ctx)
+				if err == nil {
+					if ok, why := a.capSupport(ctx, env.To, key, features, protocol.CapControl); !ok {
+						return SendResult{ID: env.ID, State: stateConvWaiting, Detail: why}, a.store.setOutboxState(env.ID, stateConvWaiting, why, "")
+					}
+				}
+			}
+
 			if err == nil && receiverCap && required != protocol.CapReplyReceiver {
 				err = a.requireParticipationCaps(ctx, key, protocol.CapReplyReceiver)
 			}
@@ -776,6 +798,10 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		}
 	}
 	if err == nil {
+		if ok, e := a.beginHandover(env); e != nil || !ok {
+			state, _, _, _ := a.store.outboxState(env.ID)
+			return SendResult{ID: env.ID, State: state}, e
+		}
 		err = a.hub.do(ctx, "POST", "/v1/messages", env, &r)
 	}
 	switch {

@@ -368,7 +368,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		}
 	}
 	feats, err := a.relayFeatures(ctx)
-	if err != nil {
+	if err != nil && (sub != envelope.SubRetraction || !retryable(err)) {
 		return ControlSent{}, err
 	}
 	eref := &envelope.Ref{ID: ref.ID, Fingerprint: ref.Fingerprint}
@@ -381,7 +381,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		if err != nil {
 			return ControlSent{}, err
 		}
-		if ok, why := a.capSupport(ctx, peer, key, feats, cap); !ok {
+		if ok, why := a.capSupport(ctx, peer, key, feats, cap); !ok && sub != envelope.SubRetraction {
 			return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
 		}
 		recipient, err := key.Recipient()
@@ -407,13 +407,14 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			if e != nil {
 				return ControlSent{}, e
 			}
-			if ok, why := a.capSupport(ctx, selected.Address, selectedKey, feats, cap); !ok {
+			if ok, why := a.capSupport(ctx, selected.Address, selectedKey, feats, cap); !ok && sub != envelope.SubRetraction {
 				return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
 			}
 			copy, e := a.receiverReturnCopy(ctx, in, nil, *selected)
 			if e != nil {
 				return ControlSent{}, e
 			}
+			copy.required = cap
 			extra = &copy
 		}
 		if extra != nil {
@@ -427,14 +428,19 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 				}
 				return nil
 			}
-			err = a.store.addConvOutbox([]outCopy{{env: env, in: in, state: stateQueued}, *extra}, envelope.Inner{}, guard, "")
+			err = a.store.addConvOutbox([]outCopy{{env: env, in: in, state: stateQueued, required: cap, recipientFP: key.Fingerprint()}, *extra}, envelope.Inner{}, guard, "")
 		} else {
-			err = a.store.addControlOutbox(env, in)
+			err = a.store.addConvOutbox([]outCopy{{env: env, in: in, state: stateQueued, required: cap, recipientFP: key.Fingerprint()}}, envelope.Inner{}, nil, "")
 		}
 		if err != nil {
 			return ControlSent{}, err
 		}
 		defer notifyDaemon(a.home)
+		if sub == envelope.SubRetraction {
+			if err := a.stopRetractedRequests(ref); err != nil {
+				return ControlSent{}, err
+			}
+		}
 		if extra != nil {
 			if _, e := a.deliver(ctx, extra.env, nil); e != nil && !retryable(e) {
 				return ControlSent{}, e
@@ -467,6 +473,11 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			return ControlSent{}, e
 		}
 		for _, member := range packet.State.Members {
+			// A deletion can be queued against the verified local membership;
+			// its delivery still rechecks the current reader and epoch.
+			if sub == envelope.SubRetraction {
+				continue
+			}
 			if _, e = a.refreshPerson(ctx, member.Person, false); e != nil {
 				return ControlSent{}, e
 			}
@@ -563,11 +574,11 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			sent.Skipped = append(sent.Skipped, dev.Address+": "+err.Error())
 			continue
 		}
-		if ok, why := a.capSupport(ctx, dev.Address, key, feats, cap); !ok {
+		if ok, why := a.capSupport(ctx, dev.Address, key, feats, cap); !ok && sub != envelope.SubRetraction {
 			sent.Skipped = append(sent.Skipped, why)
 			continue
 		}
-		if captured != nil {
+		if captured != nil && sub != envelope.SubRetraction {
 			if e := a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation); e != nil {
 				sent.Skipped = append(sent.Skipped, e.Error())
 				continue
@@ -578,7 +589,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			}
 		}
 		if group != nil {
-			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil {
+			if err := a.requireParticipationCaps(ctx, key, protocol.CapGroup); err != nil && sub != envelope.SubRetraction {
 				sent.Skipped = append(sent.Skipped, dev.Address+": "+err.Error())
 				continue
 			}
@@ -605,7 +616,7 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 		if err != nil {
 			return ControlSent{}, err
 		}
-		copies = append(copies, outCopy{env: env, in: in, state: stateQueued})
+		copies = append(copies, outCopy{env: env, in: in, state: stateQueued, required: cap, recipientFP: key.Fingerprint()})
 		if captured != nil {
 			copy := &copies[len(copies)-1]
 			copy.required = protocol.CapHumanParticipation
@@ -711,6 +722,11 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 	}
 	if err := a.store.addConvOutbox(copies, local, guard, ""); err != nil {
 		return ControlSent{}, err
+	}
+	if sub == envelope.SubRetraction {
+		if err := a.stopRetractedRequests(ref); err != nil {
+			return ControlSent{}, err
+		}
 	}
 	defer notifyDaemon(a.home)
 	sent.ID = copies[0].env.ID
@@ -1197,15 +1213,21 @@ func (a *Agent) redactRetracted(ref ControlRef) {
 // is pinned here: received (inbox) or this device's own (outbox). Only
 // authorized retractions are ever stored (admitControl, admitHistory).
 func retractedRef(q querier, conv, id, key string) bool {
+	retracted, _ := retractedRefChecked(q, conv, id, key)
+	return retracted
+}
+
+func retractedRefChecked(q querier, conv, id, key string) (bool, error) {
 	var n int
+	var err error
 	if conv == "" {
-		q.QueryRow(`SELECT (SELECT count(*) FROM inbox c WHERE c.sub = 'retraction' AND c.conv IS NULL AND c.ref_id = ? AND c.ref_fp = ?)
+		err = q.QueryRow(`SELECT (SELECT count(*) FROM inbox c WHERE c.sub = 'retraction' AND c.conv IS NULL AND c.ref_id = ? AND c.ref_fp = ?)
 			+ (SELECT count(*) FROM outbox c WHERE c.sub = 'retraction' AND c.conv IS NULL AND c.ref_id = ? AND c.ref_fp = ?)`, id, key, id, key).Scan(&n)
 	} else {
-		q.QueryRow(`SELECT (SELECT count(*) FROM inbox c WHERE c.sub = 'retraction' AND c.conv = ? AND c.ref_id = ? AND c.ref_fp = ?)
+		err = q.QueryRow(`SELECT (SELECT count(*) FROM inbox c WHERE c.sub = 'retraction' AND c.conv = ? AND c.ref_id = ? AND c.ref_fp = ?)
 			+ (SELECT count(*) FROM outbox c WHERE c.sub = 'retraction' AND c.conv = ? AND c.ref_id = ? AND c.ref_fp = ?)`, conv, id, key, conv, id, key).Scan(&n)
 	}
-	return n > 0
+	return n > 0, err
 }
 
 // tombstoned returns in with its text removed when a retraction of the
@@ -1495,6 +1517,9 @@ func (a *Agent) applyRetraction(in envelope.Inner) {
 		return
 	}
 	ref := ControlRef{Conv: in.Conv, ID: in.Ref.ID, Fingerprint: in.Ref.Fingerprint}
+	if err := a.stopRetractedRequests(ref); err != nil {
+		a.Logf("cannot stop retracted local handover: %v", err)
+	}
 	a.dropCache(ref)
 	a.redactRetracted(ref)
 }

@@ -64,11 +64,33 @@ func TestReceiverRetractionBeforeApproval(t *testing.T) {
 				if b.State == "canceled" || b.remote.Redacted || b.remote.Request.Body != "EXACT_ORIGINAL_RETAINED_BASELINE" {
 					t.Fatalf("immutable Q/T baseline cleared %+v", b)
 				}
-				eventually(t, "Q/T original still released", func() bool {
+				// The selected host already has custody of the immutable setup,
+				// but the original is still local. Later approval must not
+				// release an execution request the sender deleted meanwhile.
+				eventually(t, "exact ready cannot release deleted local original", func() bool {
 					var n int
-					w.bob.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id=?`, sent.ID).Scan(&n)
+					phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE reply_to=? AND json_extract(receiver_route,'$.op')='ready' AND detail='receiver original batch changed before exact ready'`, setup).Scan(&n)
 					return n == 1
 				})
+				if e := phone.FlushOutbox(tctx(t)); e != nil {
+					t.Fatal(e)
+				}
+				var state string
+				var stopped bool
+				var started int
+				if e := phone.store.db.QueryRow(`SELECT state,send_stopped,handover_started FROM outbox WHERE id=?`, sent.ID).Scan(&state, &stopped, &started); e != nil {
+					t.Fatal(e)
+				}
+				if state != stateNotDelivered || !stopped || started != 0 {
+					t.Fatalf("deleted local Q/T released: %s stopped=%t started=%d", state, stopped, started)
+				}
+				var received int
+				if e := w.bob.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE id=?`, sent.ID).Scan(&received); e != nil {
+					t.Fatal(e)
+				}
+				if received != 0 {
+					t.Fatal("later receiver approval silently delivered a deleted local Q/T")
+				}
 			}
 			if j, claimed, e := w.alice.store.claimJob("default"); e != nil || claimed {
 				t.Fatalf("deleted setup/default %+v %t %v", j, claimed, e)

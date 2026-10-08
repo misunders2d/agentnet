@@ -933,7 +933,15 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 				if prepared.GroupAdmission != member.Admission.Hash() && !member.Admission.AllowsHistory(historyRef(it.conv, prepared)) {
 					continue // a known earlier admission is not a new own-live grant
 				}
-			} else if !groupControlSub(prepared.Sub) && !groupParticipationHistoryItem(prepared) {
+			} else if groupControlSub(prepared.Sub) {
+				prepared, e = a.groupControlHistorySource(a.store.db, packet, prepared)
+				if errors.Is(e, errGroupControlHistoryEpoch) {
+					continue
+				}
+				if e != nil {
+					return false, e
+				}
+			} else if !groupParticipationHistoryItem(prepared) {
 				continue // separately admitted PID traffic has its own history policy
 			}
 		}

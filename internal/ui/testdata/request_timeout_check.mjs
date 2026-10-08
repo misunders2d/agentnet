@@ -22,6 +22,17 @@ for (const phase of ['headers','body','error-body']) {
  await assert.rejects(bounded(e.call('GET','/fixture',undefined,{signed:false})),retryable);
  e.stop();
 }
+// Raw attachment chunks share the same transport deadline. Otherwise an
+// upload holds the durable outbox pass across every stream reconnect.
+for (const phase of ['headers','body','error-body']) {
+ const e = new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async(_, {signal}) => {
+  if (phase === 'headers') return stalled(signal);
+  return {ok:phase === 'body',status:503,text:()=>stalled(signal),json:()=>stalled(signal)};
+ }});
+ e.keys=await wire.newKeys();e.address='alice/phone';
+ await assert.rejects(bounded(e.callBytes('PUT','/fixture',new Uint8Array([1]))),retryable);
+ e.stop();
+}
 // Both caller cancellation and engine shutdown survive the per-request signal.
 for (const closing of [false,true]) {
  const e = new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async(_, {signal})=>stalled(signal)}), caller=new AbortController();

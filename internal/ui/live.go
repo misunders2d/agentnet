@@ -316,7 +316,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 	peer := l.a.PeerWords()(c.Peer) // the sentences name a person and device, never the address
 	for _, m := range c.Messages {
 		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, At: m.At, SentAt: shownSent(m.SentAt, m.At),
-			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, Controls: m.Controls, Exec: m.Exec}
+			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, Controls: m.Controls, Exec: m.Exec}
 		if m.Read != nil && !*m.Read {
 			v.Unread = true
 		}
@@ -340,6 +340,12 @@ func (l *Live) Thread(id string) (Thread, error) {
 			v.Actions = []string{DoIt}
 		}
 		v.StateText = StateText(m.Dir, m.Kind, m.State, peer)
+		if m.SendStopped && m.State == "not_delivered" {
+			v.StateText = "Not sent; local sending stopped."
+			if m.DeliveryUncertain {
+				v.StateText = "Delivery unconfirmed; local retries stopped. Cancellation cannot be confirmed."
+			}
+		}
 		if m.Dir == "in" && m.Kind == KindTask {
 			v.Proposal, _ = l.a.ProposalOf(m.ID)
 		}

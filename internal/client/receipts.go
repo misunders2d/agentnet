@@ -14,7 +14,7 @@ func (s *store) applyReceipt(r protocol.ReceiptEvent) error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`UPDATE outbox SET state=?, error=NULL WHERE id=? AND (state IN ('custody','queued') OR (state='quarantined' AND ?='delivered'))`, r.State, r.ID, r.State)
+	_, err = tx.Exec(`UPDATE outbox SET state=?, error=NULL WHERE id=? AND (state IN ('custody','queued') OR (state='not_delivered' AND send_stopped=1 AND coalesce(handover_started,1)=1) OR (state='quarantined' AND ?='delivered'))`, r.State, r.ID, r.State)
 	if err != nil {
 		return err
 	}

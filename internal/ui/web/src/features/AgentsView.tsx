@@ -148,10 +148,12 @@ function MyAgent({ o, r }: { o: T.Overview; r: Load<T.ResponderView> }) {
 }
 
 function BrowserNote() {
+  const store = useApp();
   return (
     <article className="rounded-2xl bg-surface p-4 stroke">
       <p className="font-bold">This browser doesn’t run agents</p>
       <p className="pt-1 text-[15px] text-text-2">Questions and tasks sent to you here wait for you. An agent runs on a computer with AgentNet installed.</p>
+      <Button variant="act" className="mt-3" onClick={() => store.showTab("settings", "assistant")}>Connect an agent on your computer</Button>
     </article>
   );
 }

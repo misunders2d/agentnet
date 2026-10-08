@@ -1,44 +1,42 @@
-# AgentNet v0.8.5 — October 7, 2026
+# AgentNet v0.8.6 — October 8, 2026
 
-[Download v0.8.5](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5).
+Sending, linked history, setup and approval fixes for AgentNet.
 
-Updater hotfix for the AgentNet desktop app and its installed command.
+- Browser uploads use the existing bounded request timeout so stalled uploads no longer hold queued sends indefinitely.
+- Deleting a queued question or task stops its remaining local copies, including after restart and later receiver approval. Delivery already attempted stays explicitly uncertain; proven delivery and existing agent work are preserved.
+- Linked-device group history continues when an original control recipient has left. Browser history also supplies the existing signed group context, including empty groups and recovery of completed copies missing that context.
+- Every skin retains the full approval explanation. Classic opens the request's actual topic; Zoom displays signed agent progress in direct device threads.
+- Browser agent setup offers the existing computer installer and one-use device-link flow, with approval on the original device before enrollment.
+- Native What's new links use the existing external navigation handler through the supported opener-plugin setting.
 
-- Linux AppImage updates keep the system search path needed to start the replacement. Immediate restart failures are reported.
-- After reopening, AgentNet resumes verification of the app and installed command copies. An independent daemon waits for active work and confirms its new version before completion.
-- The Update button recognizes the app's authenticated session after its URL token is removed.
-- Restarted apps open an authenticated main page without requiring a reload. Conversation and invitation links retain their destination.
+Existing unread/read synchronization, group admission, notification mute,
+profile picture/paste and keyboard behavior have regression coverage. These
+changes reuse existing protocols and setup flows; no new service or production
+dependency was added.
 
-### Upgrading an older AppImage
+## Upgrade
 
-The updater already inside v0.8.3/v0.8.4 cannot repair its own restart before this release is installed. If the app closes during this first upgrade, open AgentNet once from its launcher. Updates started by v0.8.5 include the restart fix.
+Use **Settings → About → Update** in the desktop app, or download the matching
+installer from [v0.8.6](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6).
+Verify downloads against `SHA256SUMS`. Installers are unsigned.
 
-If v0.8.4's Update button is unavailable, run `agentnet update v0.8.5` for the registered desktop installation, then reopen AgentNet once after it closes. This updates the registered app and its managed command copies; it does not reset identity or history.
-
-This release is limited to updating. Mobile sending/history issues remain open separately.
-
-Download the installer for your platform and verify it against `SHA256SUMS`. Installers are unsigned. Native automated CI and package builds do not establish interactive Windows/macOS update behavior.
+AppImages upgrading from v0.8.3/v0.8.4 may still need one manual reopen because
+their old updater cannot repair itself before replacement. If the old Update
+button is unavailable, run `agentnet update v0.8.6` for the registered desktop
+installation, then reopen once. Updates started by v0.8.5 include the restart fix.
+Identity and history are retained; no reset or relinking is needed.
 
 ## Qualification
 
-Published October 7, 2026 at 19:26 UTC from
-`591690c55fb1c29b206c6774433af9f3c69739d6`. [Source CI](https://github.com/misunders2d/agentnet/actions/runs/37671163931)
-and [installer builds](https://github.com/misunders2d/agentnet/actions/runs/37671250480) passed. All 12 asset digests and sizes,
-and all 11 `SHA256SUMS` entries, matched. The downloaded Linux command reports
-v0.8.5 and that exact clean revision. The relay was deployed at 19:27 UTC after
-a verified stopped-state backup, retaining its data volume and realm. Its
-public version and client recommendation both report v0.8.5.
+Local Go vet, all required race shards, all three skin builds and focused
+desktop/phone-width browser checks passed. The new history regression fails on
+the original source and passes on this version. All 17 native shell tests pass;
+an isolated Linux native fixture reproduces the old external-link ACL failure
+and verifies the corrected dispatch.
 
-The final downloaded AppImage passed an isolated native FUSE journey:
-Comic Settings → About → Update, automatic restart into a private next-version
-fixture, a usable About page without reload, and matching app/command copies.
-The private next version is only a test artifact, not a published release.
-Identity stayed unchanged, the session token left the address/history, and a
-controlled link fragment survived. Separate genuine v0.8.3 UI and v0.8.4 CLI
-journeys verified the one-time manual reopen and independent-daemon recovery.
-Busy-daemon behavior has protocol regression coverage; an interactive busy
-update and interactive Windows/macOS updates remain unverified. Installers are
-unsigned. No existing desktop or phone installation was changed during testing.
-Mobile sending/history issues remain open; this release is updater-only.
+Optional harness tests require their own prerequisites and opt-in. Physical
+linked phones, live model execution and interactive Windows/macOS installation
+remain unverified. Source CI, final downloadable artifact checks and rollout
+evidence are recorded in [the handoff](HANDOFF.md).
 
-See [the handoff](HANDOFF.md) for remaining work and [the changelog](../CHANGELOG.md) for earlier releases.
+See [the changelog](../CHANGELOG.md) for earlier releases.

@@ -185,6 +185,8 @@ export interface CopyView {
   to: string;
   state: string;
   detail?: string;
+  send_stopped?: boolean;
+  delivery_uncertain?: boolean;
 }
 
 export interface DMDraft {
@@ -220,6 +222,8 @@ export interface DMMessage {
   state: string;
   state_text: string;
   detail?: string;
+  send_stopped?: boolean;
+  delivery_uncertain?: boolean;
   at: string;
   unread?: boolean;
   replica?: boolean;
@@ -651,6 +655,8 @@ export interface Message {
   responder?: string;
   summary?: string;
   detail?: string;
+  send_stopped?: boolean;
+  delivery_uncertain?: boolean;
   unread?: boolean;
   files?: File[];
   author: Author;

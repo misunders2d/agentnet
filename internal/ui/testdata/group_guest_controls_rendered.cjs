@@ -19,6 +19,9 @@ const boot=`
 const seed=${JSON.stringify({overview,thread})};window.fixture={...seed,requests:[]};
 const variant=new URL(location.href).searchParams.get('case')||'admin';
 if(variant==='member')fixture.thread.members[0].admin=false;
+if(variant==='browser-app'){
+ fixture.overview.device={browser:true};fixture.overview.me.browser=true;
+}
 if(variant==='guest-active'||variant==='guest-invited'){
  fixture.thread.role='human_guest';fixture.overview.person={...fixture.thread.guests[0].host,state:'self'};fixture.overview.me.address=fixture.overview.person.address;
  Object.assign(fixture.thread.guests[0],{host_here:true,can_end:false,can_leave:variant==='guest-active',can_decide:variant==='guest-invited',can_send:variant==='guest-active',state:variant==='guest-active'?'active':'invited'});
@@ -59,12 +62,30 @@ if(variant==='notifications'){
  fixture.overview.notify={available:true,native:true,enabled:true,allowed:['brin/phone'],mutes:['e'.repeat(64)]};fixture.overview.group_invitations=[];
 }
 if(variant==='accepted')fixture.overview.group_invitations[0].status='accepted';
+if(variant.startsWith('delivery-')){
+ fixture.overview.people=[${JSON.stringify(brin)}];fixture.overview.dms=[];fixture.overview.group_invitations=[];fixture.overview.needs_you=[];
+ const scenario=variant.slice('delivery-'.length),id='9'.repeat(32);
+ const uncertain=scenario.startsWith('uncertain'),never=scenario.startsWith('never'),error=scenario==='queued-error';
+ const terminal=scenario.endsWith('native')?'not_delivered':'failed';
+ const state=uncertain||never||error?terminal:scenario==='running'?'delivered':scenario==='answered'?'delivered':scenario;
+ const detail=uncertain?'Delivery unconfirmed; local retries stopped. Cancellation cannot be confirmed.':never?'Deleted before handover; not sent.':error?'Queued request cannot be handed over: synthetic recipient capability missing.':'';
+ const summary={id,peer:'brin/desktop',title:'Synthetic delivery request',last:'Synthetic delivery request',last_at:'2026-10-05T10:00:00Z',count:1,review:0,running:0,unread:0,waiting:false,pending:true,state:'active',quiet_since:'2026-10-05T10:00:00Z'};
+ const message={id,from:fixture.overview.me.address,to:'brin/desktop',dir:'out',kind:'question',body:'Synthetic delivery request',at:'2026-10-05T10:00:00Z',author:{label:'Aster',about:'Signed fictional fixture'},state,delivery:state,actions:[],deleted:!error,detail,state_text:uncertain?detail:never?'Not sent; local sending stopped.':error?detail:state,...(!error?{send_stopped:true}:{}),...(uncertain?{delivery_uncertain:true}:{})};
+ if(scenario==='running')message.exec={state:'running',host:'brin/desktop',at:1};
+ if(scenario==='answered')message.state_text='Answered by their agent';
+ fixture.overview.threads=[summary];fixture.overview.review=[];
+ fixture.deviceThread={id,peer:'brin/desktop',key:{pinned:'brin-key'},approved:false,task_grant:'',messages:[message],topic:summary};
+ if(scenario==='answered')fixture.deviceThread.messages.push({id:'answer-fixture',from:'brin/desktop',dir:'in',kind:'answer',reply_to:id,body:'Synthetic answer already received',at:'2026-10-05T10:01:00Z',author:{label:'Brin',about:'Signed fictional fixture'},state:'received',actions:[]});
+ fixture.deliveryScenario=scenario;fixture.deliveryDetail=detail;
+}
 if(variant==='other-device')Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});
 if(variant==='legacy-flags'){delete fixture.overview.group_invitations[0].can_cancel;delete fixture.overview.group_invitations[0].can_refresh;}
 let open,changed;
 const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async f=>{if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);if(p.startsWith('/api/dm?'))return structuredClone(fixture.thread);
-if(variant==='device-oks'&&p.startsWith('/api/thread?'))return structuredClone(new URL(p,location.origin).searchParams.get('id')==='8'.repeat(32)?fixture.otherDeviceThread:fixture.deviceThread);
+if(p==='/api/get-app')return {version:'v0.8.5',detected:'linux',platforms:[{id:'linux',label:'Linux',url:'https://downloads.example/AgentNet.AppImage'},{id:'windows',label:'Windows',url:'https://downloads.example/AgentNet.exe'}]};
+if(p==='/api/device/link')return {url:'https://workspace.example/#agentnet-link-v2:fixture',app_url:'agentnet://open#agentnet-link-v2:fixture',expires:'2026-10-08T23:59:00Z'};
+if((variant==='device-oks'||variant.startsWith('delivery-'))&&p.startsWith('/api/thread?'))return structuredClone(new URL(p,location.origin).searchParams.get('id')==='8'.repeat(32)?fixture.otherDeviceThread:fixture.deviceThread);
 if(variant==='device-oks'&&p==='/api/act'){if(body.do==='cancel')setDeviceState('cancel_requested');return {note:'Fixture action recorded'};}
 if(p.startsWith('/api/agents'))return {host:body?.host||new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address,local:!p.includes('host='),agents:fixture.thread.agents.filter(a=>a.agent_id&&a.host.address===(new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address)).map(a=>({record:{id:a.agent_id,label:a.host.address===seed.overview.me.address?'Prospect':'Analyst',host:a.host.address},enabled:true})),sessions:[]};
 if(p==='/api/dm/agent/invite'){fixture.thread.agents[0].shared=body.share;changed?.({type:'change',seq:++fixture.overview.seq});return structuredClone(fixture.thread.agents[0]);}
@@ -78,12 +99,13 @@ if(p==='/api/groups/cancel'){fixture.overview.group_invitations[0].status='cance
 if(p==='/api/groups/refresh'){fixture.overview.group_invitations[0]={...fixture.overview.group_invitations[0],id:'fresh-invite',status:'pending'};return fixture.overview.group_invitations[0];}
 if(p.includes('/groups/invitations'))return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.includes('/topics'))return {topics:[],placements:[]};return {};
 }};
+if(variant==='browser-app')host.platform='browser';
 const skin=new URL(location.href).searchParams.get('skin'),base='/assets/skins/'+skin+'/';
 const manifest=await(await fetch(base+'skin.json')).json();
 if(manifest.document){const css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.document)).text());document.adoptedStyleSheets=[css];}
 const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new CSSStyleSheet();css.replaceSync(await(await fetch(base+manifest.style)).text());shadow.adoptedStyleSheets=[css];
 const skinRoot=document.createElement('div');skinRoot.className='skin-root';shadow.append(skinRoot);const module=await import(base+manifest.entry);await module.mount(skinRoot,host);
-window.openGroup=()=>open(seed.thread.id,'conversation');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
+window.openGroup=()=>open(seed.thread.id,'conversation');window.openFixtureMessage=id=>open(id,'message');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
 window.disableInvite=()=>{Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});changed?.({type:'change',seq:++fixture.overview.seq});};window.ready=true;
 `;
 const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0.0.1');if(u.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>');return;}if(u.pathname==='/boot.mjs'){res.setHeader('Content-Type','text/javascript');res.end(boot);return;}const source=u.pathname.match(/^\/assets\/skins\/(classic|zoom)\/entry\.mjs$/);if(source){res.setHeader('Content-Type','text/javascript');res.end(fs.readFileSync(path.resolve(__dirname,'../skins',source[1],'src/entry.mjs')));return;}if(u.pathname.startsWith('/assets/')){const file=path.resolve(root,'.'+u.pathname.slice(7));if(file.startsWith(root+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.woff2')?'font/woff2':'application/octet-stream');res.end(fs.readFileSync(file));return;}}res.statusCode=404;res.end('fixture route missing');});
@@ -93,7 +115,73 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
-   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);await page.waitForFunction(()=>window.ready);if(variant==='device-oks')return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);await page.waitForFunction(()=>window.ready);if(variant==='device-oks'||variant.startsWith('delivery-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+   if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
+    for(const scenario of ['never','never-native','uncertain','uncertain-native','custody','delivered','running','answered','queued-error']){
+     const {page,context}=await openCase('delivery-'+scenario),request='9'.repeat(32);
+     await page.evaluate(id=>openFixtureMessage(id),request);
+     const row=skin==='comic'?page.locator('[data-mid="'+request+'"]'):skin==='zoom'?page.locator('.zoom-message'):page.locator('#m-'+request);
+     try{await row.waitFor();}catch(e){const shot=path.join(evidence,skin+'-'+scenario+'-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,scenario,errors,shot,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}const visible=await row.innerText();
+     assert(!/Cancelled|Canceled/.test(visible),skin+' '+scenario+': local stop never claims recipient cancellation');
+     if(scenario.startsWith('uncertain'))assert.match(visible,/Delivery unconfirmed|delivery unconfirmed/);
+     if(scenario.startsWith('never'))assert.match(visible,/Not sent|not sent/);
+     if(scenario==='running')assert.match(visible,/Working|working|Running|running/);
+     if(scenario==='answered')assert.match(visible,/Answered|answered/);
+     if(scenario==='delivered')assert.match(visible,/Delivered|delivered|on their/);
+     if(scenario==='custody')assert.match(visible,/server|custody|Sent/);
+     if(skin==='comic')await row.getByRole('button',{name:/^Asked /}).click();
+     else {const details=row.locator('details.tech');if(!await details.evaluate(e=>e.open))await details.locator('summary').click();}
+     const detail=await page.evaluate(()=>fixture.deliveryDetail);
+     if(detail)await page.getByText(detail,{exact:true}).filter({visible:true}).first().waitFor();
+     if(scenario.startsWith('uncertain'))assert(await page.getByText(/Cancellation cannot be confirmed/).filter({visible:true}).count()>0);
+     assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/act','/api/send','/api/dm/send'].includes(r.path)).length),0,'Opening status/details never retries work');
+     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'Delivery detail fits viewport');
+     await settle(page);const shot=path.join(evidence,skin+'-'+scenario+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);await context.close();
+    }
+    continue;
+   }
+   if(process.env.AGENTNET_FULL_REASON_REGRESSION==='1'){
+    const {page,context}=await openCase('oks');
+    if(skin==='comic'){
+      if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+      await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();
+    }else {
+      if(width===390){if(skin==='zoom')await page.getByRole('navigation',{name:'Zoom level',exact:true}).getByRole('button',{name:'Everyone',exact:true}).click();else await page.getByRole('button',{name:'Back to conversations',exact:true}).click();}
+      await page.locator('#review-btn').click();
+    }
+    await page.getByText('Read the agent’s whole message',{exact:true}).click();
+    await page.getByText(/FINAL_REASON_MARKER/).filter({visible:true}).first().waitFor();
+    if(skin==='comic')await page.locator('[data-open]').filter({hasText:'Review carrier handoff'}).click();
+    else await page.locator('#review-list button').filter({hasText:'Your agent couldn’t finish'}).click();
+    const region=page.getByRole('region',{name:'Your agent says',exact:true});
+    try{await region.waitFor();}catch(e){const shot=path.join(evidence,skin+'-full-reason-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,errors,shot,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}
+    assert((await region.innerText()).includes(await page.evaluate(()=>fixture.why)),'Chat retains the complete overview explanation when message detail is absent');
+    await settle(page);const shot=path.join(evidence,skin+'-full-reason-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);await context.close();continue;
+   }
+   if(process.env.AGENTNET_BROWSER_APP_REGRESSION==='1'){
+    const {page,context}=await openCase('browser-app');
+    if(skin==='comic'){
+     if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+     await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:'Agents',exact:true}).click();
+     await page.getByRole('button',{name:'Connect an agent on your computer',exact:true}).click();
+    }else{
+     if(width===390){if(skin==='zoom')await page.getByRole('navigation',{name:'Zoom level',exact:true}).getByRole('button',{name:'Everyone',exact:true}).click();else await page.getByRole('button',{name:'Back to conversations',exact:true}).click();}
+     await page.locator('#profile-btn').click();await page.locator('[data-settings="device"]').click();
+    }
+    const setup=page.getByRole('region',{name:'Connect an agent on your computer',exact:true});
+    await setup.getByRole('link',{name:'Get AgentNet for Linux',exact:true}).waitFor();
+    assert.equal(await setup.getByRole('link',{name:'Get AgentNet for Linux',exact:true}).getAttribute('href'),'https://downloads.example/AgentNet.AppImage');
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/device/link').length),0,'Looking does not create a device link');
+    await setup.getByRole('button',{name:'Link the installed app to me',exact:true}).click();
+    const open=setup.getByRole('link',{name:'Open this link in AgentNet',exact:true});await open.waitFor();
+    assert.equal(await open.getAttribute('href'),'agentnet://open#agentnet-link-v2:fixture','Exact existing app link retained');
+    assert.match(await setup.innerText(),/approve the new computer/);
+    await setup.getByText('App opened without the link?',{exact:true}).click();
+    await setup.getByText('https://workspace.example/#agentnet-link-v2:fixture',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/device/link').length),1);
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/assistant-setup','/api/device/decide'].includes(r.path)).length),0,'Browser setup neither changes tools nor approves a new device');
+    await settle(page);const shot=path.join(evidence,skin+'-browser-app-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);await context.close();continue;
+   }
    if(process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'){
     const {page,context}=await openCase('device-oks');const request='7'.repeat(32),body='Check Orchard warehouse inventory';
     const activity=async()=>{if(skin==='comic'){const back=page.getByRole('button',{name:'Back to chats',exact:true});if(width===390&&await back.isVisible())await back.click();await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();}else{const back=page.getByRole('button',{name:'Back to conversations',exact:true});if(width===390&&await back.isVisible())await back.click();if(await page.locator('#review-btn').getAttribute('aria-expanded')!=='true')await page.locator('#review-btn').click();}};

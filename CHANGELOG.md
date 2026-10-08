@@ -6,6 +6,27 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.6] — 2026-10-08
+
+### Fixed
+
+- Browser attachment uploads use the same bounded request timeout as other
+  sends, allowing reconnect and queued requests to recover from stalled uploads.
+- Deleting a queued question or task stops its remaining local copies, including
+  after restart. Delivery already attempted stays explicitly uncertain; confirmed
+  delivery and existing agent work are preserved.
+- Linked-device group history continues when an original control recipient has
+  left. Browser snapshots also supply the existing signed group context, including
+  empty groups and recovery of previously completed copies missing that context.
+- Approval details retain the agent's full explanation in every skin. Classic
+  opens the request's actual topic when it is outside the current conversation view.
+- Browser agent setup offers the existing computer installer and device-link flow,
+  with approval on the original device before the new computer joins the person.
+- Zoom shows signed agent execution progress in direct device threads as well
+  as conversation messages.
+- Native release links use the app's existing external navigation handler instead
+  of being intercepted by an unpermitted plugin command.
+
 ## [0.8.5] — 2026-10-07
 
 ### Fixed

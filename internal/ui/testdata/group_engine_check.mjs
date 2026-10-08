@@ -341,6 +341,44 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   const linkedRoster=await wire.nextRoster(keys,address,roster,[...roster.devices,linkedPub],await wire.joinConsent(linkedKeys,linkedAddress,roster.person,1,await wire.rosterHash(roster)));
   await wire.verifyNext(linkedRoster,roster);w.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
   const linkedPerson=await w.e.personRecord([roster,linkedRoster],'self',null);w.e.me=linkedPerson;await w.st.write([{s:'kv',k:'person',v:linkedPerson}]);await w.e.pinDevices(linkedPerson);
+  // A new own device has no group proof/context yet, even for an empty
+  // group. Snapshot carriers use the existing signed journal and blob path.
+  {
+   const dev=linkedPerson.devices.find(d=>d.address===linkedAddress),job={device:dev.address,fingerprint:dev.fingerprint,state:'running',pos:null};
+   await w.st.write([{s:'kv',k:'history',v:{[dev.address]:job}}]);
+   const support=w.e.groupSupport.bind(w.e);w.e.groupSupport=async()=>{};
+   await w.e.historyStep(dev,job);
+   const carriers=()=>w.st.all('outbox').then(rows=>rows.filter(r=>r.to===dev.address&&[wire.SubGroupProof,wire.SubGroupContext].includes(r.sub)&&!r.pid));
+   const original=await carriers();
+   check(original.some(r=>r.sub===wire.SubGroupProof)&&original.some(r=>r.sub===wire.SubGroupContext),'empty own-linked group snapshot queues original proof and context');
+   const target=await world();
+   target.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
+   target.e.keys=linkedKeys;target.e.address=linkedAddress;target.e.fp=dev.fingerprint;target.e.me=linkedPerson;
+   await target.st.write([{s:'kv',k:'identity',v:{keys:linkedKeys,address:linkedAddress,fingerprint:dev.fingerprint}},{s:'kv',k:'person',v:linkedPerson}]);await target.e.pinDevices(linkedPerson);
+   for(const row of original){const file=row.files[0];target.blobs.set(file.attachment.blob.id,file.ct);await target.receive({envelope:row.envelope});}
+   check((await target.e.groupCurrent(conv)).state.seq===states[0].seq&&!(await target.e.groupThread(conv)).messages.length,'new linked browser admits empty group from original signed carriers');
+   await target.close();
+   const done=(await w.e.historyBook())[dev.address],before=JSON.stringify(done.pos);
+   await w.reload();w.e.groupSupport=async()=>{};
+   await w.e.historyPasses();check((await carriers()).length===original.length,'completed browser snapshot does not duplicate carrier batch after restart');
+   for(const row of original)await w.st.write([{s:'outbox',k:row.id}]);
+   await w.e.historyPasses();const recovered=await carriers();
+   check(recovered.length===original.length&&JSON.stringify((await w.e.historyBook())[dev.address].pos)===before,'legacy done browser snapshot recovers missing group carriers without cursor reset');
+   const context=recovered.find(r=>r.sub===wire.SubGroupContext);await w.st.write([{s:'outbox',k:context.id,v:{...context,state:'expired'}}]);
+   await w.e.historyPasses();const count=(await carriers()).length;
+   check(count===2*original.length,'expired browser group carrier batch retries');
+   await w.e.historyPasses();check((await carriers()).length===count,'usable recovered browser carrier batch deduplicates');
+   for(const row of await carriers())await w.st.write([{s:'outbox',k:row.id}]);
+   let wrongKey=false;try{await w.e.groupHistoryCarriers(await w.e.groupRecord(conv),{...dev,fingerprint:await wire.fingerprint(alicePub)},[]);}catch(e){wrongKey=true;}
+   check(wrongKey&&!(await carriers()).length,'browser snapshot refuses changed exact own recipient key');
+   await w.st.write([{s:'kv',k:'history',v:{[dev.address]:job}}]);
+   const originalWrite=w.st.write.bind(w.st),oldPerson=await w.e.personRecord([roster],'self',null);let raced=false;
+   w.st.write=async(ops,expected)=>{if(!raced&&ops.some(o=>o.s==='outbox'&&o.v?.sub===wire.SubGroupContext)){raced=true;await originalWrite([{s:'kv',k:'person',v:oldPerson}]);}return originalWrite(ops,expected);};
+   let refused=false;try{await w.e.historyStep(dev,job);}catch(e){refused=e.message==='storage changed during verification';}finally{w.st.write=originalWrite;}
+   check(raced&&refused&&!(await carriers()).length&&(await w.e.historyBook())[dev.address].state==='running','competing own device removal prevents browser carrier commit and cursor advance');
+   await w.st.write([{s:'kv',k:'person',v:linkedPerson}]);w.e.me=linkedPerson;
+   await w.st.write([{s:'kv',k:'history',v:{}}]);w.e.groupSupport=support;
+  }
   const historyEnvelope=async body=>wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:linkedAddress,to:address,ts:1700000101,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body},linkedKeys,pub);
   for(const role of ['member','visitor']) {
    for(const suffix of ['invite','accept','question','status','answer','assistant-reaction']) {

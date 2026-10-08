@@ -429,19 +429,21 @@ type ConvSent struct {
 
 // ConvCopy is one device's copy of a sent conversation message.
 type ConvCopy struct {
-	ID     string `json:"id"`
-	To     string `json:"to"`
-	State  string `json:"state"`
-	Detail string `json:"detail,omitempty"`
-	Person string `json:"person,omitempty"`
-	Own    bool   `json:"own,omitempty"` // in a conversation's view: to another device of this person
+	ID                string `json:"id"`
+	To                string `json:"to"`
+	State             string `json:"state"`
+	Detail            string `json:"detail,omitempty"`
+	SendStopped       bool   `json:"send_stopped,omitempty"`
+	DeliveryUncertain bool   `json:"delivery_uncertain,omitempty"`
+	Person            string `json:"person,omitempty"`
+	Own               bool   `json:"own,omitempty"` // in a conversation's view: to another device of this person
 }
 
 // SentCopies lists the copies this device sent of the conversation message
 // with logical id lid, as stored (none: no such message sent here).
 func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 	own := a.ownDevices() // before the rows: the store has one connection
-	rows, err := a.store.db.Query(`SELECT id, recipient, state, coalesce(error, '') FROM outbox WHERE lid = ? AND conv IS NOT NULL ORDER BY rowid`, lid)
+	rows, err := a.store.db.Query(`SELECT id, recipient, state, coalesce(error, ''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1 FROM outbox WHERE lid = ? AND conv IS NOT NULL ORDER BY rowid`, lid)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +451,7 @@ func (a *Agent) SentCopies(lid string) ([]ConvCopy, error) {
 	var out []ConvCopy
 	for rows.Next() {
 		var c ConvCopy
-		if err := rows.Scan(&c.ID, &c.To, &c.State, &c.Detail); err != nil {
+		if err := rows.Scan(&c.ID, &c.To, &c.State, &c.Detail, &c.SendStopped, &c.DeliveryUncertain); err != nil {
 			return nil, err
 		}
 		c.Own = own[c.To]

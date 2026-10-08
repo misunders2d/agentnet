@@ -17,28 +17,30 @@ import (
 // as stored locally. Summary and Detail are local notes about the message,
 // never part of what the peer wrote.
 type ConversationMessage struct {
-	ID          string           `json:"id"`
-	Dir         string           `json:"dir"` // "in" (received) or "out" (sent)
-	From        string           `json:"from"`
-	To          string           `json:"to"`
-	Kind        string           `json:"kind"`
-	Status      string           `json:"status,omitempty"` // outcome carried by an answer or result
-	Body        string           `json:"body"`
-	ReplyTo     string           `json:"reply_to,omitempty"`
-	Quote       string           `json:"quote,omitempty"`
-	At          time.Time        `json:"at"`                // when this installation stored it
-	SentAt      time.Time        `json:"sent_at,omitempty"` // the sender's timestamp, for received messages
-	State       string           `json:"state,omitempty"`   // delivery state (out) or response state (in)
-	Path        string           `json:"path,omitempty"`    // relay or direct, for sent messages
-	Responder   string           `json:"responder,omitempty"`
-	AgentID     string           `json:"agent_id,omitempty"`
-	Target      *envelope.Target `json:"target,omitempty"`
-	Summary     string           `json:"summary,omitempty"` // follow-up summary written by the local responder
-	Detail      string           `json:"detail,omitempty"`  // other local note (failure, needs-human reason)
-	Read        *bool            `json:"read,omitempty"`    // received messages only
-	Attachments []FileInfo       `json:"attachments,omitempty"`
-	Controls                     // reactions, edits and deletion applied to it (controls.go)
-	Exec        *ExecView        `json:"exec,omitempty"` // a sent request: where its executor last said it stands (headless.go)
+	ID                string           `json:"id"`
+	Dir               string           `json:"dir"` // "in" (received) or "out" (sent)
+	From              string           `json:"from"`
+	To                string           `json:"to"`
+	Kind              string           `json:"kind"`
+	Status            string           `json:"status,omitempty"` // outcome carried by an answer or result
+	Body              string           `json:"body"`
+	ReplyTo           string           `json:"reply_to,omitempty"`
+	Quote             string           `json:"quote,omitempty"`
+	At                time.Time        `json:"at"`                // when this installation stored it
+	SentAt            time.Time        `json:"sent_at,omitempty"` // the sender's timestamp, for received messages
+	State             string           `json:"state,omitempty"`   // delivery state (out) or response state (in)
+	Path              string           `json:"path,omitempty"`    // relay or direct, for sent messages
+	Responder         string           `json:"responder,omitempty"`
+	AgentID           string           `json:"agent_id,omitempty"`
+	Target            *envelope.Target `json:"target,omitempty"`
+	Summary           string           `json:"summary,omitempty"` // follow-up summary written by the local responder
+	Detail            string           `json:"detail,omitempty"`  // other local note (failure, needs-human reason)
+	SendStopped       bool             `json:"send_stopped,omitempty"`
+	DeliveryUncertain bool             `json:"delivery_uncertain,omitempty"`
+	Read              *bool            `json:"read,omitempty"` // received messages only
+	Attachments       []FileInfo       `json:"attachments,omitempty"`
+	Controls                           // reactions, edits and deletion applied to it (controls.go)
+	Exec              *ExecView        `json:"exec,omitempty"` // a sent request: where its executor last said it stands (headless.go)
 }
 
 // Conversation is one page of a conversation with one peer.
@@ -281,7 +283,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,'')
+		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1
 			FROM outbox WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -290,7 +292,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			m := ConversationMessage{Dir: "out", To: peer}
 			var data, target string
 			var created int64
-			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target, &m.Quote); err != nil {
+			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target, &m.Quote, &m.SendStopped, &m.DeliveryUncertain); err != nil {
 				rows.Close()
 				return nil, err
 			}

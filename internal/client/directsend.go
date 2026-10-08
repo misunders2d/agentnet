@@ -128,6 +128,9 @@ func (a *Agent) sendDirect(ctx context.Context, env envelope.Envelope, ad protoc
 	if ok, err := a.mayDeliver(env); err != nil || !ok {
 		return r, &directDeliveryStopped{cause: err}
 	}
+	if ok, err := a.beginHandover(env); err != nil || !ok {
+		return r, &directDeliveryStopped{cause: err}
+	}
 	if err := conn.do(ctx, "POST", "/v1/direct/messages", env, &r); err != nil {
 		return r, err
 	}

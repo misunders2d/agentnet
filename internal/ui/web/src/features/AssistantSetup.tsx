@@ -22,6 +22,7 @@ import {
 } from "./AssistantSetup.model";
 import { FolderField } from "./AssistantSetup.folders";
 import { Card, Details, Fact, Hint, input } from "./Settings.parts";
+import { BrowserAppSetup } from "./BrowserAppSetup";
 
 const CARD_TITLE = "Set up your agents";
 const them = (n: number) => (n === 1 ? "it" : "them");
@@ -154,6 +155,7 @@ export function AssistantSetup({ start = false, onDone }: { start?: boolean; onD
           <p className="text-[15px] text-text-2">
             {browser ? "A browser can’t look for programs or change them. Set up your Claude Code, Codex, Pi or OMP agents in the AgentNet app on the computer they run on." : view?.note || "This installation can’t look for programs or change them."}
           </p>
+          {browser && <BrowserAppSetup />}
         </section>
       </Card>
     );

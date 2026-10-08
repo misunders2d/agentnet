@@ -4,10 +4,92 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Resume on another laptop — October 8, 2026
+## v0.8.6 candidate — October 8, locally verified
 
-Start with this section and the current release below. Older release sections
-and `DECISIONS.md` contain historical snapshots, not unfinished release steps.
+The owner authorized the urgent/important bug fixes below after direct Linear
+review. This candidate starts from `334bcbf`; v0.8.5 remains the published release.
+No installed identity, permission grant or user session was changed. No release
+or deployment has been made for this candidate.
+
+- **Queued requests (MEL-546):** browser ciphertext uploads now share the existing
+  30-second HTTP deadline. A signed local deletion stops remaining question/task
+  copies, including private reply-routing wrappers. The final direct/relay
+  handover rechecks the durable deletion. One appended SQLite migration records
+  handover attempts and stopped sends; older rows stay unknown, never assumed
+  unsent. Offline controls retain their recipient keys and required capabilities
+  and recheck them before delivery. Late proven receipts, per-copy delivery and
+  existing execution state remain authoritative.
+- **Linked history (MEL-558):** a withdrawn original control recipient no longer
+  stalls an entire native snapshot. Another exact signed original copy can be
+  used for a current reader; missing/conflicting evidence still fails closed.
+  Browser snapshots reuse the existing signed journal/context carriers and repair
+  missing context for completed jobs without resetting message cursors. Empty
+  groups, changed own-device keys and transaction-time roster changes are covered.
+- **Approval details (MEL-539):** Classic/Zoom use the exact conversation/request
+  explanation from the existing review projection when message-level detail is
+  absent. Classic also selects the request's actual topic before focusing it.
+- **Browser setup (MEL-534/MEL-533):** all three skins use the existing installer
+  table and one-use device link. Merely opening setup creates no link; enrollment
+  still requires the original device's approval. No new protocol or service.
+- **Native release links (MEL-551):** the published Linux shell reproduced an
+  opener-plugin ACL denial after its default JavaScript interceptor prevented
+  navigation. The supported plugin option disables that interceptor, retaining
+  the existing Rust origin/scheme checks and external opener, without granting
+  a general webview opener permission. The rebuilt Linux shell passes the same
+  fixture: exact URL dispatched once, no rejected command, app page retained.
+  Its test-only WebKit setting allows the synthetic popup click; this is not
+  evidence of a physical click or Windows/macOS behavior.
+
+Focused evidence: the new native history regression fails on the original
+source with `recipient admission withdrawn` and passes on the candidate, including
+verified ciphertext, restart/deduplication and no execution. Browser history
+engine/warm-recovery and real IndexedDB/history-file checks pass. Existing native
+guest unread, exact browser read-sync and receipt convergence checks pass
+(MEL-545/MEL-561). All three UI packages build, including Comic's TypeScript check.
+Full approval and browser setup checks pass in all three skins at desktop and
+phone widths. All 54 stopped/uncertain/delivered/working/answered rendering cases
+pass; Zoom now reuses the existing signed execution line for device threads.
+Notification mute, profile picture/crop/paste, keyboard viewport and all 17
+native Rust tests pass.
+
+`go vet ./...` and the repository-required race checks pass with
+`-race -count=1 -timeout 600s`. All non-client packages passed, including the
+complete UI package rerun (377.664 seconds). The four client shards ran quietly
+and sequentially:
+
+| Client shard | Seconds | Passing cases, including subtests |
+| --- | ---: | ---: |
+| `^Test[A-F]` | 405.972 | 316 |
+| `^TestG` | 532.685 | 168 |
+| `^Test[H-P]` | 489.853 | 251 |
+| `^Test[Q-Z]` | 412.507 | 350 |
+
+The initial concurrent A–F run reached its fixed deadline; its quiet rerun
+passed without raising the limit. Full verification also caught a browser
+receipt-cursor regression: Hub restore replay must be allowed to lower its
+cursor. The correction retains terminal delivery protection and passes the full
+UI rerun. An existing receiver-retention test expected a deleted, never-sent
+request to be released after later approval. Its updated assertion preserves the
+immutable setup already received by the selected host, while proving that the
+deleted original never leaves the sender; the focused test and full Q–Z rerun
+pass. No production change was needed for that test correction.
+
+The default race runs skip optional browser/harness journeys; affected browser
+flows were exercised separately with Chromium as described above. Twelve client
+tests remain skipped because they need an opted-in native/live harness, a frozen
+synthetic binary, or an installed Pi package. Physical linked phones,
+Windows/macOS interactions and live model execution are not certified by these
+fixtures. The owner has authorized publishing v0.8.6 and upgrading the existing
+Contabo relay. Source CI, release artifacts and the relay rollout are the
+remaining release gates; publication and deployment evidence will be recorded
+here when completed.
+
+## Original laptop handoff — October 8, 2026
+
+The v0.8.6 candidate section above supersedes the next-work status here.
+Use that candidate section for current work and the current release below for
+shipped behavior. Older release sections and `DECISIONS.md` contain historical
+snapshots, not unfinished release steps.
 
 - **Checkout:** inspect the destination working tree, then fast-forward `main`
   from `misunders2d/agentnet` without discarding local changes. Read `AGENTS.md`

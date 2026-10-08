@@ -194,7 +194,8 @@ function NameLine({ m, who }: { m: AnyMsg; who: Who }) {
 function Meta({ m, who }: { m: AnyMsg; who: Who }) {
   const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
   const tick = !who.mine || who.agent || excerpt(m) ? null
-    : s === "delivered" ? <IconChecks size={15} className="text-ok-ink" />
+    : m.delivery_uncertain ? <IconAlertTriangle size={15} className="text-approval-ink" />
+      : s === "delivered" ? <IconChecks size={15} className="text-ok-ink" />
       : s === "custody" ? <IconCheck size={15} />
         : problem(s) && s !== "waiting" ? <IconAlertTriangle size={15} className="text-danger" />
           : s === "queued" || s === "waiting" ? <IconClock size={14} />
@@ -204,7 +205,7 @@ function Meta({ m, who }: { m: AnyMsg; who: Who }) {
       {m.edited && !m.deleted && <span>edited</span>}
       <time dateTime={m.sent_at || m.at}>{new Date(m.sent_at || m.at).toDateString()!==new Date(m.at).toDateString()?new Date(m.sent_at || m.at).toLocaleDateString([], {month:"short",day:"numeric"})+" · ":""}{timeOf(m.sent_at || m.at)}</time>
       {tick && <span aria-hidden="true" className="-mr-0.5">{tick}</span>}
-      {tick && <span className="sr-only">{deliveryWord(s)}</span>}
+      {tick && <span className="sr-only">{m.delivery_uncertain ? "Delivery unconfirmed" : deliveryWord(s)}</span>}
     </span>
   );
 }
@@ -226,7 +227,7 @@ function ReplyQuote({ parent, ctx, onJump }: { parent?: AnyMsg; ctx: Ctx; onJump
 // latest message, or one with a problem) its delivery in words.
 function Under({ m, ctx, all, who, status, onDetails }: { m: AnyMsg; ctx: Ctx; all: AnyMsg[]; who: Who; status: boolean; onDetails: () => void }) {
   const label = requestLabel(m, ctx);
-  const detail = isThreadMsg(m) ? m.detail : m.job_detail;
+  const detail = isThreadMsg(m) ? m.detail : m.job_detail || m.detail;
   if (label) {
     const st = requestState(m, all);
     const tone = st.tone === "ok" ? "text-ok-ink" : st.tone === "work" ? "text-agent-ink" : st.tone === "wait" ? "text-approval-ink" : st.tone === "bad" ? "text-danger" : "text-muted";
