@@ -6,6 +6,13 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Desktop review notification clicks open the installed AgentNet app at the
+  exact request and workspace, or the review list for grouped and remote notices.
+  Without the app, review uses the existing coding-agent opener instead of an
+  unauthenticated browser page. Opening grants no permission and runs no request.
+
 ## [0.8.7] — 2026-10-08
 
 ### Fixed

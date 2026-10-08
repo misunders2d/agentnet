@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -269,13 +268,10 @@ func TestReviewReportClickOpensActivityReadOnly(t *testing.T) {
 		t.Skip("Linux URL routing")
 	}
 	log := stubTerminal(t)
-	old := urlOpener
-	urlOpener = terminalLauncher
-	t.Cleanup(func() { urlOpener = old })
 	t.Setenv("INVOCATION_ID", "")
 	w := newWorld(t, "")
 	n := fakeNotify(w.bob)
-	os.WriteFile(filepath.Join(w.bob.home, "ui-url"), []byte("http://127.0.0.1:43111/\n"), 0600)
+	w.bob.openConv = func(string) []string { return []string{terminalLauncher, "agentnet://open#workspace=default"} }
 	id := insertReviewAlert(t, w.bob, w.alice.Address, w.alice.Self().Fingerprint(), reviewAlertBody(t, w.alice.Address, reviewAlertItem(w.alice)))
 	w.bob.notifyReview()
 	if n.lastClick() == nil {
@@ -284,7 +280,7 @@ func TestReviewReportClickOpensActivityReadOnly(t *testing.T) {
 	n.lastClick()()
 	eventually(t, "remote Activity opened", func() bool { b, _ := os.ReadFile(log); return strings.Contains(string(b), "#review") })
 	argv, _ := w.bob.reviewClick(id)
-	if len(argv) < 2 || !strings.HasSuffix(argv[1], "#review") {
+	if len(argv) < 2 || argv[1] != "agentnet://open#review&workspace=default" {
 		t.Fatalf("explicit report click dead end %v", argv)
 	}
 	if state, err := w.bob.store.jobState(id); err != nil || state != stateNeedHuman {

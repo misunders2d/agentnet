@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -16,9 +15,10 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
-// Clicking a review notification opens a review, never a decision: a new
-// terminal runs `agentnet open`, which starts the person's chosen coding
-// agent interactively, in a fresh session, with a prompt that shows the
+// Clicking a review notification opens the app on the item or review list,
+// never a decision. Without the app, a new terminal runs `agentnet open`,
+// which starts the person's chosen coding agent interactively, in a fresh
+// session, with a prompt that shows the
 // item or the review list; without a coding agent it prints them. Nothing
 // is accepted, declined, sent or run by the click, and no existing session
 // is touched. The prompt is guidance to that agent, not a fence: the
@@ -32,43 +32,14 @@ var terminalLauncher = "xdg-terminal-exec"
 // clickOS is the platform whose click routes are built (tests change it).
 var clickOS = runtime.GOOS
 
-// urlOpener opens a URL in the person's browser (tests change it).
-var urlOpener = "xdg-open"
-
-// uiURL is the token-free address of the messenger page this daemon serves,
-// or "". Notification commands are observable outside this process; only the
-// browser's existing session may authenticate a click.
-// the daemon writes it to <home>/ui-url (cmd/agentnet uicmd.go) while it
-// serves one.
-func (a *Agent) uiURL() string {
-	data, err := os.ReadFile(filepath.Join(a.home, "ui-url"))
-	if err != nil {
-		return ""
-	}
-	line, _, _ := strings.Cut(strings.TrimSpace(string(data)), "\n")
-	return publicUIURL(line)
-}
-
-func publicUIURL(line string) string {
-	u, err := url.Parse(line)
-	if err != nil || u.Scheme != "http" || u.User != nil || u.Opaque != "" || u.Host == "" {
-		return ""
-	}
-	host := u.Hostname()
-	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return ""
-	}
-	return (&url.URL{Scheme: "http", Host: u.Host, Path: "/"}).String()
-}
-
 // startConsole starts agentnet open in a console of its own (Windows;
 // console_windows.go). Tests replace it.
 var startConsole = startInOwnConsole
 
 // reviewClick returns what clicking a review notification does for target
-// (one item id, or "" for the review list): the argument list that runs
-// `agentnet open` where the person sees it, and the function that runs it.
-// On Linux that is a terminal (the default-terminal launcher); on Windows a
+// (one item id, or "" for the review list): the argument list that opens
+// the registered app or `agentnet open`, and the function that runs it.
+// Without the app, Linux uses the default-terminal launcher; Windows uses a
 // new console of its own. Both are nil where clicks are not handled (macOS)
 // or on Linux without a terminal launcher. The notifier sends argv to
 // desktops that keep it with the notification (Omarchy runs it on a popup
@@ -94,39 +65,32 @@ func (a *Agent) reviewClick(target string) (argv []string, onClick func()) {
 			}
 		}
 	}
-	// Reuse the daemon's workspace-bound page command when provided. Extra
-	// workspace homes share the shell page and have no separate ui-url file.
+	// Standalone daemons reuse the registered app's workspace-bound command.
+	// Extra workspace homes share that app and have no separate ui-url file.
+	// Token-free browser URLs cannot open an app-only page; without an app,
+	// fall through to the exact home's existing terminal/harness review.
 	if a.openConv != nil {
 		argv = append([]string{}, a.openConv("")...)
 	}
-	if len(argv) == 0 && clickOS == "linux" {
-		page := a.uiURL()
-		if opener, err := exec.LookPath(urlOpener); err == nil {
-			if page != "" {
-				argv = []string{opener, page}
-			}
-		}
-	}
 	if len(argv) > 0 {
 		original, err := url.Parse(argv[len(argv)-1])
-		base := publicUIURL(argv[len(argv)-1])
-		if err == nil && base != "" {
+		if err == nil && original.Scheme == "agentnet" && original.Host == "open" && original.User == nil && original.Opaque == "" && original.RawQuery == "" && (original.Path == "" || original.Path == "/") {
 			params, parseErr := url.ParseQuery(original.Fragment)
 			workspace := params.Get("workspace")
 			if parseErr != nil || workspace != "" && !validWorkspaceID(workspace) {
 				return nil, nil
 			}
-			dest := base + "#review"
+			fragment := "review"
 			if protocol.ValidID(target) && !a.isReceivedReviewNotice(target) {
-				dest = base + "#msg=" + target + "&dir=in"
+				fragment = "msg=" + target + "&dir=in"
 			}
 			if workspace != "" {
-				dest += "&workspace=" + url.QueryEscape(workspace)
+				fragment += "&workspace=" + url.QueryEscape(workspace)
 			}
-			argv[len(argv)-1] = dest
+			argv[len(argv)-1] = protocol.AppOpenURL(fragment)
 			return argv, func() {
 				if err := a.launch(argv); err != nil {
-					a.Logf("notification click: %v; review with `agentnet inbox --review`", err)
+					a.Logf("notification click: %v; open the AgentNet app", err)
 				}
 			}
 		}
