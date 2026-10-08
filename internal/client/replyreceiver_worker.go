@@ -121,7 +121,7 @@ func (a *Agent) ReplyBindingHolds(binding, ref string) (bool, error) {
 	return n > 0, err
 }
 
-func (a *Agent) claimReplyReceiverJob() (job, bool, error) {
+func (a *Agent) claimReplyReceiverJob(available ...func(dbq, *ExecutorStamp) (bool, error)) (job, bool, error) {
 	a.drainReceiverSetups()
 	a.drainCodexReplyInputs()
 	tx, err := a.store.db.Begin()
@@ -133,10 +133,12 @@ func (a *Agent) claimReplyReceiverJob() (job, bool, error) {
 	if err != nil {
 		return job{}, false, err
 	}
+	var after int64
 	for {
 		var j job
 		var binding, wireAgent string
-		err = tx.QueryRow(`SELECT i.id,i.sender,i.kind,i.body,coalesce(i.reply_to,''),coalesce(i.status,''),coalesce(i.verified_by,''),coalesce(i.agent_id,''),x.binding FROM reply_receiver_inputs x JOIN reply_receivers b ON b.id=x.binding JOIN inbox i ON i.id=x.inbox_id WHERE x.state='pending' AND b.canceled_at IS NULL AND json_extract(b.receiver,'$.kind')='managed_agent' AND coalesce(json_extract(b.receiver,'$.remote.role'),'')!='origin' AND i.state IN ('','pending','accepted','held','awaiting','conv_held','part_waiting') ORDER BY i.arrival LIMIT 1`).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &j.Key, &wireAgent, &binding)
+		var arrival int64
+		err = tx.QueryRow(`SELECT i.id,i.sender,i.kind,i.body,coalesce(i.reply_to,''),coalesce(i.status,''),coalesce(i.verified_by,''),coalesce(i.agent_id,''),x.binding,i.arrival FROM reply_receiver_inputs x JOIN reply_receivers b ON b.id=x.binding JOIN inbox i ON i.id=x.inbox_id WHERE x.state='pending' AND b.canceled_at IS NULL AND json_extract(b.receiver,'$.kind')='managed_agent' AND coalesce(json_extract(b.receiver,'$.remote.role'),'')!='origin' AND i.state IN ('','pending','accepted','held','awaiting','conv_held','part_waiting') AND i.arrival>? ORDER BY i.arrival LIMIT 1`, after).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &j.Key, &wireAgent, &binding, &arrival)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err = tx.Commit(); err != nil {
 				return job{}, false, err
@@ -149,6 +151,7 @@ func (a *Agent) claimReplyReceiverJob() (job, bool, error) {
 		if err != nil {
 			return job{}, false, err
 		}
+		after = arrival
 		b, e := replyReceiverIn(tx, binding)
 		if e != nil {
 			return job{}, false, e
@@ -174,6 +177,15 @@ func (a *Agent) claimReplyReceiverJob() (job, bool, error) {
 			}
 			wrote = true
 			continue
+		}
+		if len(available) > 0 {
+			ok, err := available[0](tx, b.Executor)
+			if err != nil {
+				return job{}, false, err
+			}
+			if !ok {
+				continue
+			}
 		}
 		j.Receiver = &b
 		j.Executor = b.Executor

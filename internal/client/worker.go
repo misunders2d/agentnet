@@ -18,7 +18,7 @@ import (
 )
 
 // The worker answers approved questions and runs accepted tasks with the
-// recipient's selected responder, one at a time, each in its own headless
+// recipient's selected responder, one per executor, each in its own headless
 // harness session outside any conversation the user has open. It is woken
 // by new inbox rows, by the local kick socket and by Hub pings; it never
 // polls the network.
@@ -79,32 +79,58 @@ func (j job) proposalEligible() bool {
 }
 
 func (a *Agent) worker(ctx context.Context, wake <-chan struct{}) {
+	var runs sync.WaitGroup
+	defer runs.Wait() // stop waits for every harness, exact child and cleanup
+	dispatch := func(run func()) {
+		runs.Add(1)
+		go func() { defer runs.Done(); run() }()
+	}
 	for {
-		for a.reviewAttention(ctx); a.runNext(ctx, wake); a.reviewAttention(ctx) {
+		_, changed := a.Changed() // capture before claiming: no lost local wake
+		for a.reviewAttention(ctx); a.runNextWith(ctx, wake, dispatch); a.reviewAttention(ctx) {
 		}
 		// The last look may have moved a request to review without running
 		// anything (a task for this device's agent that needs the person).
 		a.reviewAttention(ctx)
 		a.notifyRelease()
-		if r := a.updatePending(); r != nil && a.UpdateSwitching() == nil {
+		if r := a.updatePending(); r != nil && a.executorsIdle() && a.UpdateSwitching() == nil {
 			a.switchForUpdate(ctx, *r) // no job runs now: its result is stored
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-wake:
+		case <-changed:
 		}
 	}
 }
 
 // runNext claims and runs one job; it reports whether it did.
 func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
+	return a.runNextWith(ctx, wake, nil)
+}
+
+// The single scheduler dispatches claimed jobs; inline callers keep the
+// existing synchronous behavior. A busy executor never claims another job.
+func (a *Agent) runNextWith(ctx context.Context, wake <-chan struct{}, dispatch func(func())) bool {
 	// Nested local execution may run alongside its waiting parent. Both hold
 	// readers; a whole-app replacement requires exclusive idle ownership.
 	if !a.appUpdateMu.TryRLock() {
 		return false
 	}
-	defer a.appUpdateMu.RUnlock()
+	held := true
+	defer func() {
+		if held {
+			a.appUpdateMu.RUnlock()
+		}
+	}()
+	a.workerLanes.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			a.workerLanes.Unlock()
+		}
+	}()
 	if ctx.Err() != nil {
 		return false
 	}
@@ -119,8 +145,8 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 	if r != nil {
 		name = r.Harness
 	}
-	resolve := func(q dbq, id string) (*ExecutorStamp, error) { return a.ResolveExecutorIn(q, id, r) }
-	j, ok, err := a.claimReplyReceiverJob()
+	resolve := a.availableResolver(r, "")
+	j, ok, err := a.claimReplyReceiverJob(func(q dbq, stamp *ExecutorStamp) (bool, error) { return a.executorAvailable(q, stamp, "") })
 	if err == nil && !ok {
 		j, ok, err = a.store.claimJob(name, resolve)
 	}
@@ -147,7 +173,15 @@ func (a *Agent) runNext(ctx context.Context, wake <-chan struct{}) bool {
 	if j.Receiver == nil {
 		a.noteStatus(j.ID)
 	} // selected local continuation is not a remote task
-	a.runJob(ctx, j, r, wake)
+	a.reserveExecutor(j, "")
+	a.workerLanes.Unlock()
+	locked, held = false, false
+	run := func() { defer a.releaseExecutor(j.ID); a.runJob(ctx, j, r, wake) }
+	if dispatch == nil {
+		run()
+	} else {
+		dispatch(run)
+	}
 	return true
 }
 
@@ -168,7 +202,8 @@ func (a *Agent) runRoomChildren(ctx context.Context, parent job) {
 			if r != nil {
 				name = r.Harness
 			}
-			resolve := func(q dbq, id string) (*ExecutorStamp, error) { return a.ResolveExecutorIn(q, id, r) }
+			a.workerLanes.Lock()
+			resolve := a.availableResolver(r, parent.ID)
 			var child job
 			var found, full bool
 			var next int64
@@ -176,6 +211,10 @@ func (a *Agent) runRoomChildren(ctx context.Context, parent job) {
 			if err == nil {
 				child, found, next, full, told, err = a.store.claimAgentPageForCause(name, a.Address, a.id.Public(a.Address).Fingerprint(), pos, agentPage, parent.Conv, parent.ID, resolve)
 			}
+			if found {
+				a.reserveExecutor(child, parent.ID)
+			}
+			a.workerLanes.Unlock()
 			for _, id := range told {
 				a.noteStatus(id)
 			}
@@ -193,7 +232,11 @@ func (a *Agent) runRoomChildren(ctx context.Context, parent job) {
 					a.runJob(ctx, child, r, nil)
 				}
 			}
-			a.appUpdateMu.RUnlock()
+			if found {
+				a.releaseExecutor(child.ID)
+			} else {
+				a.appUpdateMu.RUnlock()
+			}
 			if err != nil || !found && !full {
 				break
 			}
@@ -333,6 +376,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		stallC := timer.C
 		quiet := false
 		_, changed := a.Changed()
+		_, kicked := a.workerWakeFeed.current()
 		for first := true; ; first = false {
 			if first {
 				a.reviewAttention(ctx)
@@ -341,7 +385,8 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 				select {
 				case <-runCtx.Done():
 					return
-				case <-wake:
+				case <-kicked:
+					_, kicked = a.workerWakeFeed.current()
 					a.noteBusyQueue()
 					a.reviewAttention(ctx) // new items may arrive while a job runs
 					a.notifyRelease()

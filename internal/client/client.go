@@ -67,7 +67,9 @@ type Agent struct {
 	kickMu         sync.Mutex                 // guards kick for kickNow
 	prefetchFailed map[string]bool            // conversation files that could not be kept this run (historyfiles.go; the stream worker only)
 	wakeWorker     func()                     // sends a coalesced local wake; stable for this Agent handle
+	workerLanes    executionLanes             // local selected executors, through run cleanup
 	appUpdateMu    sync.RWMutex               // holds job claim/run against whole-app replacement
+	workerWakeFeed *changeFeed                // broadcast kicks/pings to every active run
 	workerWake     chan struct{}              // pending local job wake survives worker startup
 	changes        *changeFeed                // local state changed (changes.go)
 	listed         listedCache                // rosters the Hub lists for persons not pinned here (persons.go)
@@ -87,6 +89,7 @@ type Agent struct {
 	reviewGen    string                                                        // review_to_gen those attempts were made under
 	reviewMu     sync.Mutex                                                    // one review notice pass at a time (the worker's, or one during a run)
 	reviewAgain  reviewAgain                                                   // operator devices skipped as not reading reports yet, looked at again after a member list event (reviewnotice.go)
+	releaseMu    sync.Mutex                                                    // concurrent runs may notify release
 	releaseTried string                                                        // release a notification was attempted for, this run
 
 	exe       string                       // the daemon's program file as started (RunOptions.Executable)
@@ -242,7 +245,9 @@ func Open(home string) (*Agent, error) {
 		return nil, err
 	}
 	wake := make(chan struct{}, 1)
-	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, wakeWorker: func() {
+	wakeFeed := newChangeFeed()
+	a := &Agent{home: home, id: id, store: st, heartbeat: protocol.HeartbeatInterval, Logf: func(string, ...any) {}, workerWake: wake, workerWakeFeed: wakeFeed, wakeWorker: func() {
+		wakeFeed.bump()
 		select {
 		case wake <- struct{}{}:
 		default:

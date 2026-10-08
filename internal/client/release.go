@@ -64,6 +64,8 @@ func (s *store) updateRecommended() (protocol.Release, bool) {
 // worker, never on the stream reader; it is marked only when shown, and a
 // failed attempt is not repeated until the next daemon start.
 func (a *Agent) notifyRelease() {
+	a.releaseMu.Lock()
+	defer a.releaseMu.Unlock()
 	r, ok := a.store.updateRecommended()
 	if !ok {
 		return

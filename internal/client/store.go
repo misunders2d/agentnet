@@ -1144,19 +1144,21 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 	}
 	defer tx.Rollback()
 	changed := false
+	var afterID string
+	var afterAt int64
 	for {
 		var j job
-		var target string
-		err = tx.QueryRow(`UPDATE inbox SET state = ?, responder = ?, detail = NULL,
-   attempts = attempts + 1, last_attempt_at = unixepoch()
-   WHERE id = (SELECT id FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
+		var target, previousState string
+		var receivedAt int64
+		err = tx.QueryRow(`SELECT id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,''),state,received_at
+   FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
     OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
      OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`)))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
-    ORDER BY received_at, id LIMIT 1)
-   RETURNING id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,'')`,
-			stateRunning, responder, stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
-			envelope.KindQuestion, envelope.KindTask, responder).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key)
+    AND (? = '' OR received_at > ? OR (received_at = ? AND id > ?))
+    ORDER BY received_at, id LIMIT 1`,
+			stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
+			envelope.KindQuestion, envelope.KindTask, responder, afterID, afterAt, afterAt, afterID).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key, &previousState, &receivedAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err = tx.Commit(); err != nil {
 				return job{}, false, err
@@ -1169,7 +1171,7 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 		if err != nil {
 			return job{}, false, err
 		}
-		changed = true
+		afterID, afterAt = j.ID, receivedAt
 		if j.Kind == envelope.KindQuestion || j.Kind == envelope.KindTask {
 			person, e := permissionPersonIn(tx, j.From, j.Key)
 			if e != nil {
@@ -1203,6 +1205,9 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 		} else if j.AgentID != "" {
 			err = ErrUnknownAgent
 		}
+		if errors.Is(err, errExecutorBusy) {
+			continue
+		}
 		if err == nil && j.AgentID != "" && (stamp == nil || stamp.Record == nil || stamp.AgentID != j.AgentID || stamp.Record.Host != j.Target.Address || stamp.Record.HostKey != j.Target.Fingerprint) {
 			err = ErrUnknownAgent
 		}
@@ -1213,11 +1218,16 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 			if err == nil {
 				err = ErrUnknownAgent
 			}
-			if _, err = tx.Exec(`UPDATE inbox SET state=?, detail=? WHERE id=? AND state=?`, stateNotRun, "not run: selected agent unavailable", j.ID, stateRunning); err != nil {
+			if _, err = tx.Exec(`UPDATE inbox SET state=?, responder=?, detail=?, attempts=attempts+1, last_attempt_at=unixepoch() WHERE id=? AND state=?`, stateNotRun, responder, "not run: selected agent unavailable", j.ID, previousState); err != nil {
 				return job{}, false, err
 			}
+			changed = true
 			continue // no fallback; a removed identity cannot starve the next job
 		}
+		if _, err = tx.Exec(`UPDATE inbox SET state=?, responder=?, detail=NULL, attempts=attempts+1, last_attempt_at=unixepoch() WHERE id=? AND state=?`, stateRunning, responder, j.ID, previousState); err != nil {
+			return job{}, false, err
+		}
+		changed = true
 		if stamp != nil {
 			raw, _ := json.Marshal(stamp)
 			if _, err = tx.Exec(`UPDATE inbox SET executor=?,agent_id=?,responder=? WHERE id=? AND state=?`, string(raw), stamp.AgentID, stamp.Responder.Harness, j.ID, stateRunning); err != nil {
