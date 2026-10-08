@@ -4,6 +4,49 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Resume on another laptop — October 8, 2026
+
+Start with this section and the current release below. Older release sections
+and `DECISIONS.md` contain historical snapshots, not unfinished release steps.
+
+- **Checkout:** inspect the destination working tree, then fast-forward `main`
+  from `misunders2d/agentnet` without discarding local changes. Read `AGENTS.md`
+  before implementation. Git transfers source and these documents; this chat,
+  private laptop journal, ignored fixtures and tool credentials do not transfer.
+- **Release finished:** v0.8.5 is published and deployed to the relay. Its exact
+  source, CI and qualification are recorded below. All previous workers and
+  test fixtures are drained; do not resume old worker IDs or rebuild/redeploy
+  v0.8.5 as an unfinished task. Released tags stay immutable.
+- **Owner update confirmed afterward:** the owner reported the app upgraded;
+  read-only checks confirmed the terminal and app-private commands both report
+  v0.8.5 at the released revision, with identical hashes and complete update
+  status. An earlier repeated request returned a busy-job 409; its exact job
+  was not identified. It did not require another update after completion.
+- **Next bug priorities:** use the existing
+  [MEL-546](https://linear.app/mellanni/issue/MEL-546) for mobile agent requests
+  stuck on Sending, including deleted queued requests, and
+  [MEL-558](https://linear.app/mellanni/issue/MEL-558) for missing linked-device
+  group history. Read their latest Linear updates before editing; search for
+  existing issues before creating any. Linear access must be connected on the
+  destination independently; ask the owner if needed.
+- **Diagnosis boundary:** the reported phone question had no relay custody
+  record, while a separate deletion control arrived. The client queue or
+  pre-custody send path remains unresolved; this is not proof of a slow remote
+  agent. Existing history-copy work also remains incomplete on physical devices.
+  Trace existing queue/copy transitions before adding a new sync mechanism. Do
+  not reset/relink identities, replay requests or weaken admission checks to
+  make the symptoms disappear. Message IDs and private evidence stay in Linear
+  and the local journal, not this public repository.
+- **Owner's workflow:** the coordinator supervises GPT-6.1-sol implementation
+  helpers. Prefer existing implementations, minimal fixes and focused evidence;
+  avoid overengineering. Use synthetic identities in previews. Keep native test
+  windows on the laptop display without stealing focus, after verifying that
+  machine's display layout; preserve the owner's open apps and desktop session.
+- **Scope:** v0.8.5 fixed updating only. Mobile sending/history and the reported
+  What's new link remain open. Projects are a v0.9 discussion; do not implement
+  deferred projects/team tags or design polish as part of these bug diagnoses.
+  The previous coordinator is paused; work resumes under the owner's new task.
+
 ## Current release — v0.8.5, October 7, 2026
 
 [Download v0.8.5](https://github.com/misunders2d/agentnet/releases/tag/v0.8.5).
