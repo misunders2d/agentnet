@@ -6,6 +6,13 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.10] — 2026-10-08
+
+### Fixed
+
+- Add an explicit Check for updates button in every desktop skin. It checks the published stable release independently of the server's recommendation, shows the installed app version, and distinguishes an available update, current or newer build, and lookup failures. Checking does not install, pause work or poll in the background.
+- Hide the phone conversation's stale Bring back action when the exact agent has already rejoined or is awaiting rejoin. A fresh check before opening the invitation also discards results after navigating to another conversation.
+
 ## [0.8.9] — 2026-10-08
 
 ### Fixed

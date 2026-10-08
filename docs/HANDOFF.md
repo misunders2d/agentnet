@@ -7,13 +7,33 @@ section at release; keep detailed verification and remaining work here.
 ## Active work — v0.8.10
 
 The owner authorized continuing after v0.8.9 rollout. Fresh direct Linear triage
-covered 107 project issues, including 79 open records. Two bounded fixes are in
-progress: MEL-551/MEL-493, an explicit published-release check in About using
+covered 107 project issues, including 79 open records. Two bounded fixes are
+implemented: MEL-551/MEL-493, an explicit published-release check in About using
 the existing resolver and authenticated native controls; and MEL-542, the
 remaining phone dismissal footer that offers stale Bring back after an exact
-agent rejoins. Reproduce first, reuse the existing paths, preserve permission
-and identity checks, and qualify the integrated batch once. No new dependency,
-background polling, installed-client changes or broader redesign is planned.
+agent rejoins. All three skins use the existing authenticated computer controls
+and fixed HTTPS release resolver. Check is explicit and read-only, including
+unsupported installations; its loading, available/current/ahead and error states
+cannot leak across a closed view or workspace switch. The phone action reuses
+exact agent identity and fresh group state; delayed results cannot open an
+invitation in another conversation. No new dependency, background polling,
+installed-client changes or permission changes.
+
+Focused API/bridge race passed 2.721 s, including authentication, timeout/cancel,
+version comparison, failure and no-mutation checks. Linux native shell tests
+passed all 18 tests. Final integrated Chromium checks passed 27.149 s: every
+skin at 1280/390, 11 explicit checks each and no POSTs or background polling,
+older hosts/browser fences, plus 12 phone rejoin/navigation cases. All three
+locked skin builds and Comic type checking pass; review found no remaining
+blocker. Native and release qualification is pending.
+
+Qualification will rerun the affected `cmd/agentnet` and `internal/ui/...`
+packages without a test-name filter on Linux/macOS/Windows, full vet, local
+affected-package race and final three-OS packaging/AppImage replacement-restart.
+Client, protocol, Hub, browser engine/storage, dependencies, scripts and workflows
+are byte-unchanged from v0.8.9; retain their recorded qualification rather than
+rerunning the costly client shards. This is composed evidence, not a new full
+suite claim. Publish and deploy only after the affected gates pass.
 
 MEL-574 automatic Antigravity questions remains blocked on proof of its native
 no-edit policy; MEL-575 model visibility needs compatible authoritative private

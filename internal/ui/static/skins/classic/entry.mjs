@@ -5020,11 +5020,14 @@ async function renderAssistantSetup() {
     }});
   } catch (e) { if (current()) fill(root, el("p", {class: "hint"}, "Assistant setup unavailable: " + e.message)); }
 }
+let appControlsRender = 0;
 async function renderAppControls() {
-  const host = currentHost, gen = state.gen;
+  const host = currentHost, gen = state.gen, render = ++appControlsRender;
   const command = $("app-command"), update = $("app-update");
-  if (!command || !update || !host.appStatus) return;
-  const current = () => alive && host === currentHost && gen === state.gen;
+  if (!command || !update) return;
+  fill(command); fill(update);
+  if (host.platform === "browser" || !host.appStatus) return;
+  const current = () => alive && host === currentHost && gen === state.gen && render === appControlsRender && $("settings").open;
   let status;
   try { status = await host.appStatus(); }
   catch (e) {
@@ -5032,7 +5035,14 @@ async function renderAppControls() {
     return;
   }
   if (!current()) return;
-  let busy = false, message = "", problem = "";
+  let busy = false, message = "", problem = "", checking = false, checked = null, checkProblem = "";
+  const check = async () => {
+    if (checking || busy || !host.appCheckUpdate || !current()) return;
+    checking = true; checked = null; checkProblem = ""; paint();
+    try { const result = await host.appCheckUpdate(); if (current()) checked = result; }
+    catch (e) { if (current()) checkProblem = "Couldn’t check for updates: " + e.message; }
+    finally { if (current()) { checking = false; paint(); } }
+  };
   const act = async (replace) => {
     if (busy || !current()) return;
     busy = true; problem = ""; paint();
@@ -5055,7 +5065,12 @@ async function renderAppControls() {
         })}, "Replace command…")] : el("p", {class:"error", role:"alert"}, status.cli_problem || "The AgentNet command could not be installed."));
     fill(update, el("h3", {}, "Update this computer"),
       el("p", {}, "The app, its AgentNet command and connected tools update together. The app restarts when ready."),
-      el("button", {type:"button", class:"btn", disabled:busy || !status.app_update_supported || !host.appUpdate, onclick:() => act(false)}, busy ? "Updating…" : "Update AgentNet"),
+      el("p", {class:"hint"}, "Installed app: " + status.version + "."),
+      el("div", {class:"detail-actions"},
+        host.appCheckUpdate && el("button", {type:"button", class:"btn", disabled:busy || checking, onclick:check}, checking ? "Checking…" : "Check for updates"),
+        el("button", {type:"button", class:"btn", disabled:busy || checking || !status.app_update_supported || !host.appUpdate || (!!checked && checked.state !== "available"), onclick:() => act(false)}, busy ? "Updating…" : "Update AgentNet")),
+      checked && el("p", {role:"status"}, checked.state === "available" ? `Version ${checked.latest} is available.` : checked.state === "current" ? `This app matches the latest stable release (${checked.latest}).` : `This app (${checked.version}) is ahead of the latest stable release (${checked.latest}).`),
+      checkProblem && el("p", {class:"error", role:"alert"}, checkProblem),
       !status.app_update_supported && el("p", {class:"hint"}, status.problem || "This installation is updated by its package manager."),
       (message || status.update_result) && el("p", {role:"status"}, message || status.update_result),
       problem && el("p", {class:"error", role:"alert"}, problem));
@@ -5064,6 +5079,7 @@ async function renderAppControls() {
 }
 
 function settingsTab(name) {
+  appControlsRender++;
   if (name === "profile" || name === "device") renderAppControls();
   if (name === "notifications") ensureTyping().then(ui => { if (ui) ui.showSettings(); });
   if (name === "device") { renderResponder(); renderAssistantSetup(); }
@@ -5140,6 +5156,7 @@ function start() {
     settingsTab(tabs[next].dataset.settings); tabs[next].focus();
   });
   $("settings-close").addEventListener("click", () => $("settings").close());
+  $("settings").addEventListener("close", () => { if (!$("settings").open) appControlsRender++; });
   for (const b of root.querySelectorAll("[data-settings]")) b.addEventListener("click", () => settingsTab(b.dataset.settings));
   for (const b of root.querySelectorAll("[data-theme]")) b.addEventListener("click", () => setTheme(b.dataset.theme));
   $("settings-notifications").append($("notify-line"));
