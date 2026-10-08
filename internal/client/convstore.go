@@ -414,9 +414,13 @@ func (s *store) knownMessage(id string) (bool, error) {
 
 // holdAs quarantines env with reason, or changes the reason it is held for.
 func (s *store) holdAs(env envelope.Envelope, reason string) error {
+	return s.holdAsDiagnostic(env, reason, "")
+}
+
+func (s *store) holdAsDiagnostic(env envelope.Envelope, reason, why string) error {
 	raw, _ := json.Marshal(env)
-	_, err := s.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at) VALUES(?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET reason = excluded.reason`, env.ID, env.From, reason, string(raw), time.Now().Unix())
+	_, err := s.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at, detail_code) VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET reason = excluded.reason, detail_code = excluded.detail_code`, env.ID, env.From, reason, string(raw), time.Now().Unix(), heldDiagnosticCode(why))
 	return s.done(err)
 }
 

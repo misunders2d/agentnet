@@ -1047,7 +1047,7 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
 		a.Logf("conversation message %s from %s held (%s): %s", env.ID, env.From, reason, why)
-		return a.store.holdAs(env, reason)
+		return a.store.holdAsDiagnostic(env, reason, why)
 	}
 	// personErr holds the message for a person problem; a failure to ask
 	// the Hub is returned instead, so the message is delivered again.

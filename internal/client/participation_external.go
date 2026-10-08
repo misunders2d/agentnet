@@ -269,6 +269,10 @@ func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender
 // shared by its audience copies. Older copies need the exact physical request
 // here; absence remains retryable proof, never an inferred match by PID.
 func externalOutputRequest(q dbq, in envelope.Inner, info ParticipationInfo, m dmMembers, self, selfFP string) (string, error) {
+	return externalOutputRequestMode(q, in, info, m, self, selfFP, false)
+}
+
+func externalOutputRequestMode(q dbq, in envelope.Inner, info ParticipationInfo, m dmMembers, self, selfFP string, historical bool) (string, error) {
 	progress := isResponderProgress(in)
 	if in.Sub != "" || in.Kind != envelope.KindAnswer && in.Kind != envelope.KindResult && !progress {
 		return "", nil
@@ -330,7 +334,14 @@ func externalOutputRequest(q dbq, in envelope.Inner, info ParticipationInfo, m d
 		if err != nil {
 			return reasonProof, err
 		}
-		if !p.Claimable() || p.Host.Address != au.from || p.Host.Fingerprint != au.fp {
+		authorized := p.Claimable()
+		if !authorized && historical {
+			authorized, err = retainedAssistant(q, p)
+			if err != nil {
+				return reasonProof, err
+			}
+		}
+		if !authorized || p.Host.Address != au.from || p.Host.Fingerprint != au.fp {
 			return reasonInvalid, errors.New("output requester agent no longer has its original authority")
 		}
 	}

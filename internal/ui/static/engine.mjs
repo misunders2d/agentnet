@@ -221,8 +221,40 @@ const holdWords = {
 };
 export const holdCode = (reason) => (Object.hasOwn(holdWords, reason) ? reason : "unverified");
 const holdText = (reason, peer) => (holdCode(reason) !== "unverified" ? holdWords[reason](peer) : "It did not verify, so its content is not shown.");
+// Persist only audited local diagnostic codes, never arbitrary received text.
+export const heldDiagnosticCode = why => {
+  if (/^Group advanced from state [0-9]+ to [0-9]+; inviter must refresh the invitation\. Join the fresh proposal\.$/.test(why)) return "group_invitation_outdated";
+  const codes = {
+  "This invitation is out of date; join the newer invitation or ask the inviter to refresh it.": "group_invitation_outdated",
+  "Latest group head differs from this proposal; inviter must refresh the invitation. Join the fresh proposal.": "group_invitation_outdated",
+  "Invited person changed; obtain fresh consent.": "group_invitation_outdated",
+  "Captured human consent differs from local proof.": "captured_consent_mismatch",
+  "Consent conflicts with recorded decision.": "group_consent_mismatch",
+  "Consent has no recorded local invitation.": "group_consent_mismatch",
+  "Consent is not for this exact invitation and current person.": "group_consent_mismatch",
+  "Withdrawal is not this exact current signer and admission.": "group_withdrawal_mismatch",
+  "group target admission is absent or withdrawn": "group_admission_unavailable",
+  "group pending withdrawal conflicts with admin admission": "group_authority_conflict",
+  "group withdrawal conflicts with promoted admin": "group_authority_conflict",
+  "Group logical lifecycle conflict.": "group_conflicting_copy",
+  "Human history remains with original members' own linked devices.": "history_reader_not_member",
+}; return Object.hasOwn(codes,why) ? codes[why] : ""; };
+export const heldNoticeText = (code, reason) => {
+  const words = {
+    group_invitation_outdated: ["This invitation no longer matches the current group.", "If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice."],
+    group_consent_mismatch: ["This response does not match the invitation and decision recorded on this device.", "Check the group's current invitation. If you still need to join, ask its administrator for a fresh invitation."],
+    group_withdrawal_mismatch: ["This departure record could not be verified against the current group and device identity.", "Check the group's current membership with its administrator. This record has not changed anyone's access."],
+    group_admission_unavailable: ["The group admission named by this operation is withdrawn or unavailable.", "Check the group's membership and pending context. Archiving this notice does not restore access."],
+    group_authority_conflict: ["The signed departure conflicts with the group's current administrator authority.", "Resolve the group authority or context with its administrator. Do not resend work automatically."],
+    group_conflicting_copy: ["This copy conflicts with an existing logical group record.", "Ask the sender to check the original record and its status. Do not automatically resend requests."],
+    history_reader_not_member: ["This history copy is not addressed to an original member's current linked device.", "Check the verified membership and device roster. A history copy cannot grant membership."],
+    captured_consent_mismatch: ["The captured audience does not match the consent proof stored here.", "Check the participation's invitation and acceptance. This notice cannot grant consent."],
+  };
+  const [detail,recovery] = (Object.hasOwn(words,code) ? words[code] : null) || (reason === "invalid" ? ["The original detailed reason was not recorded or is unavailable.", "The retained message stays blocked. You can archive this notice locally; this does not accept, resend, or run it."] : ["", ""]);
+  return {detail,recovery};
+};
 // quarantineItem is one held message as the overview lists it (ui.QuarantineItem, live.go quarantineItems).
-export const quarantineItem = (h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at) });
+export const quarantineItem = (h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at), can_archive:h.reason === "invalid", ...(h.detail_code ? {detail_code:h.detail_code} : {}), ...heldNoticeText(h.detail_code,h.reason) });
 
 // deviceWords is client.DeviceWords: a device address in words, as every
 // screen shows it ("bohdan/windows-laptop" → "Windows laptop", "admin/iphone"
@@ -3616,7 +3648,7 @@ export class Engine {
     if(h.sub===wire.SubStatus) {
       if(h.pid||h.attachments.length||!h.ref)throw new Hold("invalid","Historical group status scope malformed.");
       try{wire.parseControl(h.sub,h.body);}catch(e){throw new Hold("invalid",e.message);}
-      return this.groupStatusScope(conv,h.ref,h.from,h.from_key,checks);
+      return this.groupStatusScope(conv,h.ref,h.from,h.from_key,checks,true);
     }
     if(wire.historyAssistantReaction(h)) { // an assistant's own reaction: bound to its participation, its host need not be a member
       if(h.attachments.length)throw new Hold("invalid","Historical assistant reaction scope malformed.");
@@ -3640,9 +3672,11 @@ export class Engine {
     if(!wire.validID(h.pid)||h.ref||!["","event","excerpt"].includes(h.sub))throw new Hold("invalid","Historical group participation scope malformed.");
     const events=await this.convEvents(conv,checks,h.pid);let candidate=null;
     if(h.sub==="event") {
-      candidate=await this.eventRecord(h.body);const e=candidate.e,p=[...members.values(),...members.hosts.values()].find(p=>p.devices.some(d=>d.address===h.from&&d.fingerprint===h.from_key));
-      if(e.conv!==conv||e.pid!==h.pid||e.author.address!==h.from||e.author.fingerprint!==h.from_key||!p?.hashes.includes(e.author.roster)||e.author.group_admission&&e.author.group_admission!==members.epochs.get(h.from_key))throw new Hold("invalid","Historical group event original author admission differs.");
-      const pin=await this.groupRead(checks,"pins",h.from);if(!pin||pin.pending||pin.fingerprint!==h.from_key)throw new Hold("invalid","Historical event exact source key changed.");
+      candidate=await this.eventRecord(h.body);const e=candidate.e,author=e.author,p=[...members.values(),...members.hosts.values()].find(p=>p.devices.some(d=>d.address===author.address&&d.fingerprint===author.fingerprint));
+      const forwarded=author.address!==h.from||author.fingerprint!==h.from_key;
+      if(forwarded&&(e.type!=="dismiss"||![...members.values()].some(p=>p.devices.some(d=>d.address===h.from&&d.fingerprint===h.from_key))))throw new Hold("invalid","Only current members forward historical participation ends.");
+      if(h.kind!=="message"||e.conv!==conv||e.pid!==h.pid||p?.person!==author.person||!p?.hashes.includes(author.roster)||author.group_admission&&author.group_admission!==members.epochs.get(author.fingerprint))throw new Hold("invalid","Historical group event original author admission differs.");
+      const pin=await this.groupRead(checks,"pins",author.address);if(!pin||pin.pending||pin.fingerprint!==author.fingerprint)throw new Hold("invalid","Historical event exact source key changed.");
       try{await wire.verifyEvent(e,(await this.pubOf(pin)).sign_key);}catch(err){throw new Hold("invalid",err.message);}
       if(e.host){const hp=await this.sendKey(e.host.address);if(hp.fingerprint!==e.host.fingerprint||(await this.personOf(e.host.address,hp)).person!==e.host.person)throw new Hold("invalid","Historical invitation host proof differs.");}
       events.push(candidate);
@@ -3651,10 +3685,13 @@ export class Engine {
     if(!info.invite)throw new Hold("proof_pending","Historical PID original invitation is missing.");
     if(h.human) {
       const evidence=await this.groupHumanEvidence(c,h.human,checks);
-      this.humanTurnAuthorization({...h,conv},evidence,info,h.from,h.from_key,this.address,this.fp);
+      this.humanTurnAuthorization({...h,conv},evidence,info,h.from,h.from_key,this.address,this.fp,true);
     }
-    this.externalRole({...h,conv,replica:h.sub==="excerpt"},info,current,h.from,h.from_key);
-    await this.checkExternalReply({...h,conv},info,current,checks);
+    // Retained own-member history is inert; only its lifecycle gate differs
+    // from live delivery. Exact targets, author keys and requests still bind it.
+    const retained=(h.sub==="excerpt"||!h.sub&&(["question","task","answer","result"].includes(h.kind)||progressOutput(h)))&&this.retainedAssistant(info,events);
+    this.externalRole({...h,conv,replica:h.sub==="excerpt"},retained?{...info,state:"active"}:info,current,h.from,h.from_key);
+    await this.checkExternalReply({...h,conv},info,current,checks,true);
     return info;
   }
 
@@ -4038,7 +4075,8 @@ export class Engine {
       let head = {};
       try { head = JSON.parse(data); } catch (err) { /* nothing to name */ }
       if (typeof head.id === "string" && wire.validID(head.id)) {
-        await this.store.write([{ s: "held", k: head.id, v: { id: head.id, from: String(head.from || ""), reason: "invalid", envelope: data, at: this.now() } },
+        const previous = await this.store.get("held", head.id);
+        await this.store.write([{ s: "held", k: head.id, v: previous || { id: head.id, from: String(head.from || ""), reason: "invalid", envelope: data, at: this.now() } },
           { s: "receipts", k: head.id, v: { id: head.id, state: "quarantined" } }]);
         this.flushReceipts().catch(() => {});
       }
@@ -4054,8 +4092,18 @@ export class Engine {
     this.flushReceipts().catch(() => {}); // sent alongside the next messages, not before them (MEL-546)
   }
 
-  async hold(env, data, reason) {
-    await this.store.write([{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: this.now() } },
+  async archiveHeldNotice(id) {
+    if (!wire.validID(id)) throw Error("Invalid held-message ID.");
+    const record = await this.store.get("held", id);
+    if (!record || record.reason !== "invalid") throw Error("This held notice cannot be archived.");
+    await this.store.write([{s:"held",k:id,v:{...record,notice_archived:true}}],[{s:"held",k:id,v:record}]);
+    this.changed(true);
+    return {note:"Notice archived locally. The retained message has not been accepted or run."};
+  }
+
+  async hold(env, data, reason, why = "") {
+    const previous = await this.store.get("held", env.id);
+    await this.store.write([{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code:heldDiagnosticCode(why), notice_archived:!!previous?.notice_archived } },
       { s: "receipts", k: env.id, v: { id: env.id, state: "quarantined" } }]);
     this.changed(true);
   }
@@ -4091,10 +4139,10 @@ export class Engine {
     } catch (e) {
       if (e instanceof StoreConflict) return this.admit(data, env, fromHeld); // reverify; nothing committed or acknowledged
       if (e instanceof Hold) {
-        if (!fromHeld) await this.hold(env, data, e.reason);
+        if (!fromHeld) await this.hold(env, data, e.reason, e.message);
         else if (e.reason !== "proof_pending") {
           const h = await this.store.get("held", env.id);
-          await put(this.store, "held", env.id, { ...h, reason: e.reason });
+          await put(this.store, "held", env.id, { ...h, reason: e.reason, detail_code:heldDiagnosticCode(e.message) });
           this.changed(true);
         }
         return;
@@ -5407,7 +5455,11 @@ export class Engine {
     return wire.hex(await wire.sha256(new TextEncoder().encode("agentnet-group-control-epochs-v1\n"+a+"\0"+b)));
   }
 
-  async groupStatusScope(conv,ref,host,hostFP,checks=[]) {
+  retainedAssistant(info,events) {
+    return info.role!=="human"&&!!info.invite&&info.state==="dismissed"&&!info.held&&!info.conflict&&events.some(r=>r.hash===info.decision&&r.e.type==="accept");
+  }
+
+  async groupStatusScope(conv,ref,host,hostFP,checks=[],historical=false) {
     const c=await this.groupRecord(conv);if(!c)throw new Hold("proof_pending","Group status context missing.");
     await this.groupTurnEvidence(conv,checks);
     const rows=(await this.authorityRows({conv,lid:ref.id},checks)).filter(r=>!r.control&&!r.aside&&(r.fp||this.fp)===ref.fingerprint);
@@ -5416,8 +5468,8 @@ export class Engine {
     if(rows.some(r=>!r.pid||r.sub||!["question","task"].includes(r.kind)||r.pid!==first.pid||r.kind!==first.kind||JSON.stringify(r.target)!==JSON.stringify(first.target)))throw new Hold("invalid","Group status request is conflicting.");
     const events=await this.convEvents(conv,checks,first.pid),members=await this.dmMembers(c,events,checks),info=this.resolveAgent(first.pid,events,members);
     const target=first.target,fp=first.fp||this.fp;
-    if(info.state!=="active"||info.held||info.host?.address!==host||info.host.fingerprint!==hostFP||target?.address!==host||target.fingerprint!==hostFP||target.agent_id!==info.agent_id||!(first.human && wire.agentAuthor(first.human)) && target.group_admission!==members.epochs.get(fp))throw new Hold("invalid","Group status differs from exact PID/host/requester admission.");
-    await this.checkExternalReply({conv,pid:first.pid,kind:replyKind(first.kind),reply_to:ref.id,agent_id:info.agent_id},info,members,checks);
+    if(info.state!=="active"&&!(historical&&this.retainedAssistant(info,events))||info.held||info.host?.address!==host||info.host.fingerprint!==hostFP||target?.address!==host||target.fingerprint!==hostFP||target.agent_id!==info.agent_id||!(first.human && wire.agentAuthor(first.human)) && target.group_admission!==members.epochs.get(fp))throw new Hold("invalid","Group status differs from exact PID/host/requester admission.");
+    await this.checkExternalReply({conv,pid:first.pid,kind:replyKind(first.kind),reply_to:ref.id,agent_id:info.agent_id},info,members,checks,historical);
     return info;
   }
 
@@ -6519,7 +6571,7 @@ export class Engine {
     for (const d of dms) d.decide = needsYou.filter((x) => x.conv === d.id && x.id && (x.actions || []).length).length;
     for (const p of people) if (links.has(p.person)) p.agents = links.get(p.person);
     const { threads, topics } = await this.topicOverview(listArchived); // ?topics=1: archived topics counted, not listed
-    const held = await this.store.all("held");
+    const held = (await this.store.all("held")).filter(h => !h.notice_archived);
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
     const history = Object.values(await this.historyBook()).map((j) => ({ device: j.device, name: j.device.split("/")[1], done: j.done, total: j.total, state: j.state }));
@@ -6875,17 +6927,18 @@ export class Engine {
   // humanTurnAuthorization is client.humanTurnAuthorization: on a request
   // addressed to assistant participation x its exact host is also a reader,
   // and that host is its output's author. Scope grants no execution.
-  humanTurnAuthorization(n, evidence, x, from, fromFP, to, toFP) {
+  humanTurnAuthorization(n, evidence, x, from, fromFP, to, toFP, historical = false) {
     const h = n.human;
-    if (!n.pid || n.pid === (h.author_pid || "")) return this.humanAuthorization(h, evidence, from, fromFP, to, toFP);
+    if (!n.pid || n.pid === (h.author_pid || "")) return this.humanAuthorization(h, evidence, from, fromFP, to, toFP, false, false, historical);
     if (!x || x.role === "human" || !x.invite || !x.host) throw new Hold("invalid", "Addressed human turn names no assistant participation.");
-    const live = x.state === "active" && !x.held, exact = (a, f) => x.host.address === a && x.host.fingerprint === f;
+    const retained = historical && x.state === "dismissed" && !x.held && !x.conflict && !!x.decision;
+    const live = x.state === "active" && !x.held || retained, exact = (a, f) => x.host.address === a && x.host.fingerprint === f;
     if (n.target) {
       if (n.target.address !== x.host.address || n.target.fingerprint !== x.host.fingerprint || (n.target.agent_id || "") !== (x.agent_id || "") || !live) throw new Hold("invalid", "Request does not name the exact active assistant.");
-      return this.humanAuthorization(h, evidence, from, fromFP, to, toFP, false, exact(to, toFP));
+      return this.humanAuthorization(h, evidence, from, fromFP, to, toFP, false, exact(to, toFP), historical);
     }
     if (h.author_pid || !exact(from, fromFP) || (n.agent_id || "") !== (x.agent_id || "") || !live) throw new Hold("invalid", "Assistant output is not from its exact active host.");
-    return this.humanAuthorization(h, evidence, from, fromFP, to, toFP, true, false);
+    return this.humanAuthorization(h, evidence, from, fromFP, to, toFP, true, false, historical);
   }
   async assistantOf(c, n, checks) {
     if (!n.pid || n.pid === (n.human?.author_pid || "")) return null;
@@ -6893,14 +6946,17 @@ export class Engine {
     return this.resolveAgent(n.pid, events, await this.dmMembers(c, events, checks));
   }
 
-  humanAuthorization(h, evidence, from, fromFP, to, toFP, hostAuthor = false, hostReader = false) {
+  humanAuthorization(h, evidence, from, fromFP, to, toFP, hostAuthor = false, hostReader = false, historical = false) {
     const member = (address, fp) => [...evidence.members.values()].some(p => p.devices.some(d => d.address === address && d.fingerprint === fp));
-    let sender = !h.author_pid && (member(from, fromFP) || hostAuthor), reader = member(to, toFP) || hostReader;
+    const memberReader = member(to, toFP);
+    if (historical && !memberReader) throw new Hold("invalid", "Human history remains with original members' own linked devices.");
+    let sender = !h.author_pid && (member(from, fromFP) || hostAuthor), reader = memberReader || hostReader;
     for (const [pid, p] of evidence.scopes) {
       if (pid === h.author_pid && (p.role === "") !== wire.agentAuthor(h)) throw new Hold("invalid", "The author's role differs from its captured scope.");
       const author = pid === h.author_pid && p.host.address === from && p.host.fingerprint === fromFP;
       const recipient = p.host.address === to && p.host.fingerprint === toFP;
-      if ((author || recipient) && (p.state !== "active" || p.held)) throw new Hold("proof_pending", "Human author or reader participation ended or is held.");
+      const retained = historical && p.state === "dismissed" && !p.held && !p.conflict && (author || memberReader);
+      if ((author || recipient) && (p.state !== "active" || p.held) && !retained) throw new Hold("proof_pending", "Human author or reader participation ended or is held.");
       sender ||= author; reader ||= recipient;
     }
     if (!sender || !reader) throw new Hold("invalid", "Human author or recipient is outside captured authority.");
@@ -7264,7 +7320,7 @@ export class Engine {
 
   // The executable host copy's ID is the shared request LID. Existing wire
   // and IDs suffice to bind replies at every human audience device.
-  async checkExternalReply(n, info, members, checks) {
+  async checkExternalReply(n, info, members, checks, historical = false) {
     if (!["answer", "result"].includes(n.kind) && !progressOutput(n) || n.sub) return;
     if (!info.decision) throw new Hold("proof_pending", "external output has no host acceptance proof yet");
     const decision = (await this.convEvents(n.conv,checks,n.pid)).find((r) => r.hash === info.decision);
@@ -7283,7 +7339,7 @@ export class Engine {
       const agent=!!r.human && wire.agentAuthor(r.human);
       if(agent) {
         const e=await this.convEvents(n.conv,checks,r.human.author_pid),asking=this.resolveAgent(r.human.author_pid,e,await this.dmMembers(await this.groupRecord(n.conv)||await this.store.get("convs",n.conv),e,checks));
-        if(asking.state!=="active" || asking.held || asking.host?.address!==address || asking.host.fingerprint!==fp)throw new Hold("invalid","Asking agent membership ended or changed.");
+        if(asking.state!=="active" && !(historical && this.retainedAssistant(asking,e)) || asking.held || asking.host?.address!==address || asking.host.fingerprint!==fp)throw new Hold("invalid","Asking agent membership ended or changed.");
       }
       if (!agent && !member || r.conv !== n.conv || r.pid !== n.pid || r.sub || r.excerpt_pid || !["question", "task"].includes(r.kind) || !progressOutput(n) && replyKind(r.kind) !== n.kind || !r.lid || original && (original.lid !== r.lid || original.fp !== fp) || r.target?.address !== info.host.address || r.target?.fingerprint !== info.host.fingerprint || r.target?.agent_id !== info.agent_id || (!agent && (members.group ? members.epochs.get(fp)!==r.target?.group_admission : !!r.target?.group_admission))) throw new Hold("invalid", "external answer does not match its exact participation request");
       original = { lid: r.lid, fp };
@@ -8628,6 +8684,7 @@ export class Engine {
     case "/api/device/service": throw new Error("A browser is always a person's device: a service joins from a computer with AgentNet.");
     case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : this.refreshThread(body.id);
     case "/api/act":
+      if (body.do === "archive_held") return this.archiveHeldNotice(body.id);
       if (body.do === "do_it") return this.confirmProposal(body.id);
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
       if (body.do === "reply") return this.replyV1(body.id, body.body, body.send_id);

@@ -52,6 +52,15 @@ function HeldRow({ q, o }: { q: T.QuarantineItem; o: T.Overview }) {
     }
     setBusy(false);
   };
+  const archive = async () => {
+    setBusy(true);
+    try {
+      const result = await store.api.act({ do: "archive_held", id: q.id });
+      store.toast(result.note || "Notice archived on this device.");
+      await store.refetch();
+    } catch (e) { store.toast(errorText(e), "error"); }
+    finally { setBusy(false); }
+  };
   return (
     <li className="flex gap-3 rounded-2xl bg-surface p-3.5 stroke">
       {verified ? <PersonAvatar name={name} seed={p?.person || q.peer} size={40} />
@@ -61,7 +70,9 @@ function HeldRow({ q, o }: { q: T.QuarantineItem; o: T.Overview }) {
           <b className="font-bold">{verified ? name : q.code === "invalid" ? "A message that couldn’t be accepted" : "A message that couldn’t be verified"}</b>
           <span className="text-[13px] text-muted">{p ? "on " + niceDevice(q.peer) + " · " : ""}<time dateTime={q.at}>{when(q.at)}</time></span>
         </p>
-        <p className="mt-0.5 text-[14px] text-text-2">{holdSentence(q.code || "", name, browser)}</p>
+        <p className="mt-0.5 text-[14px] text-text-2">{q.detail || holdSentence(q.code || "", name, browser)}</p>
+        {q.recovery && <p className="mt-1 text-[14px] text-text-2">{q.recovery}</p>}
+        {q.can_archive && <Button size="sm" variant="outline" className="mt-2" disabled={busy} onClick={() => void archive()}>Archive notice</Button>}
         {canTrust && <Button size="sm" variant="act" className="mt-2" disabled={busy} onClick={() => void check()}>Check and trust…</Button>}
       </div>
       {thread && <TrustSheet open={open} onOpenChange={setOpen} thread={thread} />}

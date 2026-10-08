@@ -400,6 +400,81 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     const stored=await w.st.get('inbox',n.id);
     check(!await w.st.get('held',wire.parseEnvelope(env).id)&&stored?.history&&stored.state===''&&wire.humanJSON(stored.human)===wire.humanJSON(wire.parseHumanTurn(n.human)),'captured '+name+' own history keeps signed audience and remains inert');
   }
+// Insert after the existing p6 own-history import loop (~403), before otherStamp.
+{
+ const ended=await world();
+ try {
+  ended.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
+  ended.e.me=linkedPerson;
+  await ended.st.write([{s:'kv',k:'person',v:linkedPerson}]);
+  await ended.e.pinDevices(linkedPerson);
+  await ended.receive(c.proof);await ended.receive(c.context);
+  for(const i of [0,1])for(const type of ['invite','scope','accept'])await ended.receive(pv['p6-'+i+'-'+type]);
+  for(const name of ['p6-root','p6-ask','p6-answer','p6-status'])await ended.receive(pv[name]);
+  for(const name of ['visitor-invite','visitor-accept'])await ended.receive(pv[name]);
+  await ended.receive({envelope:await historyEnvelope(pv['history-visitor-excerpt'])});
+  await ended.receive(pv['visitor-dismiss']);
+  const pid=pv['p6-source'],scope=wire.parseEvent(pv['p6-0-scope'].inner.body),accept=wire.parseEvent(pv['p6-0-accept'].inner.body);
+  const dismissal=await wire.signEvent(aliceKeys,{conv,pid,type:'dismiss',prev:await wire.eventHash(accept),ts:1700000200,author:scope.author});
+  const envelope=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000200,kind:'message',conv,root:wire.rootJSON(root),pid,sub:'event',body:wire.eventJSON(dismissal)},aliceKeys,pub);
+  await ended.receive({envelope});
+  const record=await ended.e.groupRecord(conv),info=(await ended.e.agentConv(pid)).info;
+  check(info.state==='dismissed'&&!info.held&&!!info.decision,'historical member-hosted assistant ends with exact counted acceptance');
+  const source=await ended.st.get('inbox',pv['p6-root'].inner.id),item=ended.e.itemOf(source,false),dev=linkedPerson.devices.find(d=>d.address===linkedAddress);
+  const original=wire.humanJSON(item.human),evidence=await ended.e.groupHumanEvidence(record,item.human,[]);
+  let liveRefused=false;
+  try{ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint);}catch{liveRefused=true;}
+  check(liveRefused,'dismissed assistant remains unavailable to live human delivery');
+  ended.e.groupSupport=async()=>{};
+  const copy=await ended.e.historyCopy(dev,record,item); // BASELINE MUST FAIL HERE
+  check(copy.required_cap===wire.CapGroup&&wire.humanJSON(wire.parseHistory(copy.body).human)===original,'dismissed assistant leaves exact captured own-member history export intact');
+  ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint,true);
+  check(true,'historical original-member reader keeps authority independently of its dismissed assistant');
+  const target=await world();
+  try {
+   target.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
+   target.e.keys=linkedKeys;target.e.address=linkedAddress;target.e.fp=dev.fingerprint;target.e.me=linkedPerson;
+   await target.st.write([{s:'kv',k:'identity',v:{keys:linkedKeys,address:linkedAddress,fingerprint:dev.fingerprint}},{s:'kv',k:'person',v:linkedPerson}]);await target.e.pinDevices(linkedPerson);
+   ended.e.groupSupport=async()=>{};
+   const carriers=await ended.e.groupHistoryCarriers(record,dev,[]);
+   for(const row of carriers){const file=row.files[0];target.blobs.set(file.attachment.blob.id,file.ct);await target.receive({envelope:row.envelope});}
+   await target.receive({envelope:copy.envelope});
+   const imported=await target.st.get('inbox',item.id);
+   check(imported?.history&&imported.read&&imported.state===''&&wire.humanJSON(imported.human)===original&&!await target.st.get('held',copy.id),'own linked browser admits immutable historical request quietly after dismissal');
+   for(const name of ['p6-ask','p6-answer','p6-status']) {
+    const old=await ended.st.get('inbox',pv[name].inner.id),retained=ended.e.itemOf(old,false);
+    const historical=await ended.e.historyCopy(dev,record,retained);
+    await target.receive({envelope:historical.envelope});
+    check(!await target.st.get('held',historical.id)&&!!await target.st.get('inbox',retained.id),'ended asking assistant retains exact '+name+' history without live authority');
+   }
+   for(const name of ['visitor-invite','visitor-accept','visitor-dismiss']) {
+    const eventItem=ended.e.itemOf(await ended.st.get('inbox',pv[name].inner.id),false),eventCopy=await ended.e.historyCopy(dev,record,eventItem);
+    await target.receive({envelope:eventCopy.envelope});
+   }
+   const excerpt=ended.e.itemOf(await ended.st.get('inbox',pv['visitor-excerpt'].inner.id),false),excerptCopy=await ended.e.historyCopy(dev,record,excerpt);
+   await target.receive({envelope:excerptCopy.envelope});await target.receive({envelope:excerptCopy.envelope});
+   const retainedExcerpt=await target.st.get('inbox',excerpt.id);
+   check(retainedExcerpt?.history&&retainedExcerpt.read&&retainedExcerpt.state===''&&retainedExcerpt.body===excerpt.body&&!await target.st.get('held',excerptCopy.id),'clean ended assistant keeps exact selected excerpt in own history without live authority');
+   const visitor=await ended.e.agentConv(pv['visitor-pid']);let liveExcerpt=false;
+   try{ended.e.externalRole({...excerpt,conv,replica:true},visitor.info,visitor.members,excerpt.from,excerpt.from_key);}catch{liveExcerpt=true;}
+   check(liveExcerpt,'ended assistant cannot receive a new live excerpt');
+   const badExcerpt={...excerpt,body:wire.historyJSON({...wire.parseHistory(excerpt.body),lid:wire.newID()})};let grantRefused=false;
+   try{await ended.e.groupParticipationHistoryCheck(conv,badExcerpt,{address:ended.e.address,fingerprint:ended.e.fp},[]);}catch{grantRefused=true;}
+   check(grantRefused,'historical excerpt still requires the exact signed selection');
+   const forwarded={...item,id:wire.newID(),lid:wire.newID(),ts:1700000200,from:address,from_key:ended.e.fp,kind:'message',sub:'event',pid,body:wire.eventJSON(dismissal),human:undefined,target:null,agent_id:'',reply_to:'',status:''};
+   const forward=async h=>wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:address,to:linkedAddress,ts:1700000200,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:wire.historyJSON(h)},keys,linkedPub);
+   const forwardedEnvelope=await forward(forwarded);await target.receive({envelope:forwardedEnvelope});
+   check(!await target.st.get('held',wire.parseEnvelope(forwardedEnvelope).id)&&!!await target.st.get('inbox',forwarded.id),'own history retains a member-forwarded dismissal under the original signed author');
+   const tampered={...forwarded,id:wire.newID(),lid:wire.newID(),body:wire.eventJSON({...dismissal,ts:dismissal.ts+1})},tamperedEnvelope=await forward(tampered);await target.receive({envelope:tamperedEnvelope});
+   check(!!await target.st.get('held',wire.parseEnvelope(tamperedEnvelope).id)&&!await target.st.get('inbox',tampered.id),'forwarded historical dismissal cannot bypass the original signature');
+   for(const bad of [{...info,held:1},{...info,state:'conflict'},{...info,host:{...info.host,fingerprint:'f'.repeat(64)}}]){
+    let refused=false;try{ended.e.humanTurnAuthorization({...item,conv},evidence,bad,item.from,item.from_key,info.host.address,info.host.fingerprint,true);}catch{refused=true;}
+    check(refused,'historical reader never bypasses held/conflict/exact target evidence');
+   }
+  } finally {await target.close();}
+ } finally {await ended.close();}
+}
+
   const otherStamp=JSON.parse(pv['history-member-assistant-reaction']);otherStamp.group_admission='e'.repeat(64);const otherStampEnv=await historyEnvelope(JSON.stringify(otherStamp));await w.receive({envelope:otherStampEnv});
   check((await w.st.get('held',wire.parseEnvelope(otherStampEnv).id))?.reason==='invalid','assistant reaction history refuses a different own admission');
   // This browser's own history copy of an assistant reaction for its linked

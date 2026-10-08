@@ -815,7 +815,7 @@ func addControlInboxIn(tx *sql.Tx, in envelope.Inner, verifiedBy string, fromQua
 func (a *Agent) admitControl(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool) error {
 	hold := func(reason, why string) error {
 		a.Logf("control %s from %s held (%s): %s", env.ID, env.From, reason, why)
-		return a.store.holdAs(env, reason)
+		return a.store.holdAsDiagnostic(env, reason, why)
 	}
 	if envelope.AssistantReaction(in) { // the assistant's, decided as its reply would be
 		return a.admitAssistantReaction(ctx, env, in, sender, fromQuarantine, hold)

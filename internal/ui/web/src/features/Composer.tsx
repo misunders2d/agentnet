@@ -16,7 +16,7 @@ import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
-import { candidates, decode, encode, guestAuthor, matches, shift, trigger, type Candidate, type Span } from "./Composer.mentions";
+import { agentTargets, candidates, decode, encode, guestAuthor, matches, shift, trigger, type Candidate, type Span } from "./Composer.mentions";
 import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, type MenuAction } from "./Composer.parts";
 import { MentionList, optionId } from "./Composer.picker";
 import { useTypingSignal } from "./Composer.typing";
@@ -92,6 +92,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // closed): sending now would ask the device something new instead.
   const handled = !!thread && !!draft.replyTo && !answerable && answering.current.has(draft.replyTo);
 
+  const selectedPIDs = agentTargets(text, spans, draft.agent);
   const target: Target = useMemo(() => {
     if (thread) {
       if (answerable) return { kind: "answer", id: answerable.id, task: answerable.kind === "task" };
@@ -101,14 +102,14 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         : to.kind === "person" ? { kind: "device", name: to.name, seed: thread.peer, ask: false }
         : { kind: "none", note: to.note };
     }
-    if (dm && draft.agent) {
-      const a = (dm.agents || []).find((x) => x.pid === draft.agent);
-      const p = participants(dm, overview, names).find((x) => x.pid === draft.agent);
+    if (dm && selectedPIDs.length) {
+      const a = (dm.agents || []).find((x) => x.pid === selectedPIDs[0]);
+      const p = participants(dm, overview, names).find((x) => x.pid === selectedPIDs[0]);
       const name = p?.name || "This agent";
-      return { kind: "agent", pid: draft.agent, name, seed: p?.seed || draft.agent, canAsk: !!a?.can_ask, why: a ? a.state_text : "It is no longer in this chat." };
+      return { kind: "agent", pid: selectedPIDs[0], name: selectedPIDs.length > 1 ? selectedPIDs.map(pid => participants(dm, overview, names).find(x => x.pid === pid)?.name || "Unavailable agent").join(", ") : name, seed: p?.seed || selectedPIDs[0], canAsk: selectedPIDs.some(pid => dm.agents?.some(x => x.pid === pid && x.can_ask)), why: a ? a.state_text : "It is no longer in this chat." };
     }
     return { kind: "conversation" };
-  }, [dm, thread, draft.agent, answerable?.id, answerable?.kind, overview, names]);
+  }, [dm, thread, draft.agent, draft.text, answerable?.id, answerable?.kind, overview, names]);
   const latest = (): Draft => store.get().drafts[conv] ?? EMPTY;
 
   // Why nothing can be written here now, in words.
@@ -182,8 +183,8 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const { kept, dropped } = shift(was.spans, was.text, cur);
     const next: Draft = { ...d, text: encode(cur, kept) };
     if (dropped.some((s) => s.kind === "agent" && s.id === d.agent)) {
-      next.agent = undefined;
-      announce((target.kind === "agent" ? target.name : "The agent") + " is no longer asked; this goes to everyone here.");
+      next.agent = agentTargets(cur, kept)[0];
+      announce(next.agent ? "That mention was removed; the remaining selected agents will still be asked." : "No agents are selected; this goes to everyone here.");
     }
     const plain = dropped.filter((s) => s.kind !== "agent");
     if (plain.length) announce(plain.map((s) => "@" + s.name).join(", ") + (plain.length > 1 ? " are" : " is") + " no longer a mention; the text stays.");
@@ -196,7 +197,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const token = "@" + c.name + " ";
     const cur = text.slice(0, trig.start) + token + text.slice(caret);
     let { kept } = shift(spans, text, cur);
-    if (c.kind === "agent") kept = kept.filter((s) => s.kind !== "agent"); // one agent at a time
+    // Keep every exact selected agent mention; target extraction deduplicates PIDs.
     const span: Span = { start: trig.start, name: c.name, kind: c.kind, id: c.id };
     write({
       ...d, text: encode(cur, [...kept, span]),
@@ -258,8 +259,28 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   };
 
   // ---- sending
-  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread }) {
+  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean }) {
     if (!retry && (!ready || (!dm && !thread))) return;
+    if (!retry && dm) {
+      const captured = latest(), decoded = decode(captured.text);
+      const pids = agentTargets(decoded.text, decoded.spans, captured.agent);
+      if (pids.length > 1) {
+        const topic = captured.newTopic ? sendID() : captured.topic;
+        clearSent(conv, captured, captured.files || []);
+        if (captured.newTopic) store.setDraft(conv, { ...store.draft(conv), newTopic: false, topic });
+        // Each target owns a stable request ID, preview, staged files and retry.
+        const plans = pids.map((pid, index) => {
+          const a = dm.agents?.find(x => x.pid === pid);
+          const p = participants(dm, overview, names).find(x => x.pid === pid);
+          const to: Target = {kind:"agent",pid,name:p?.name || "Unavailable agent",seed:p?.seed || pid,canAsk:!!a?.can_ask,why:a?.state_text};
+          const d = {...captured, agent:pid, topic, newTopic:false, files:(captured.files || []).map(f => ({...f,staged:index === 0 ? f.staged : undefined,url:undefined}))};
+          return {id:sendID(),c:conv,d,to,here:dm,fanout:true};
+        });
+        await Promise.all(plans.map(plan => send(plan)));
+        releaseFiles(captured.files || []);
+        return;
+      }
+    }
     const { c, d: captured, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
     // Allocate the optional topic before yielding so a second send keeps it.
     const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
@@ -277,7 +298,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
       _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question", body, at: new Date().toISOString(),
       reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
-      () => { store.sends.remove(id); void send({ id, c, d, to, here, device }); });
+      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout }); });
     setNotice(null);
     typing.stop();
     try {
@@ -327,7 +348,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       if (!store.sends.has(id)) return; // a pushed durable turn already proves this save
       if (!store.isActive()) { store.sends.fail(id, errorText(e)); return; }
       const current = store.get().drafts[c] ?? EMPTY;
-      const restored = !current.text && !(current.files || []).length;
+      const restored = !retry?.fanout && !current.text && !(current.files || []).length;
       if (restored) { store.setDraft(c, { ...d, files: sent }); store.sends.remove(id); }
       else store.sends.fail(id, errorText(e));
       const why = errorText(e).replace(/\.?$/, ".");
@@ -453,7 +474,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       <div ref={row} className="flex items-end gap-2">
         <PlusMenu actions={actions} disabled={sending} onOpenChange={setMenuOpen}
           finalFocus={() => !emojiAfterMenu.current} onClosed={() => { emojiAfterMenu.current = false; }} />
-        <Field ref={field} mirror={mirror} wide={wide} text={text} spans={spans} agent={draft.agent} value={text} placeholder={placeholder} aria-label={placeholder}
+        <Field ref={field} mirror={mirror} wide={wide} text={text} spans={spans} value={text} placeholder={placeholder} aria-label={placeholder}
           enterKeyHint={wide ? "send" : "enter"} autoComplete="off" spellCheck
           aria-autocomplete="list" aria-controls={open && offered.length ? listId : undefined}
           aria-activedescendant={open && offered.length ? optionId(listId, Math.min(active, offered.length - 1)) : undefined}

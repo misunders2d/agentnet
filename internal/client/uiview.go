@@ -417,6 +417,7 @@ func firstLine(s string) string {
 type Quarantined struct {
 	ID         string    `json:"id"`
 	Sender     string    `json:"sender"`
+	DetailCode string    `json:"detail_code,omitempty"`
 	Reason     string    `json:"reason"` // "key_changed" (waits for trust) or "invalid"
 	ReceivedAt time.Time `json:"received_at"`
 }
@@ -424,7 +425,7 @@ type Quarantined struct {
 // Quarantine lists held-back envelopes, newest first. Their content is not
 // shown: it did not verify, or the sender's key changed.
 func (a *Agent) Quarantine() ([]Quarantined, error) {
-	rows, err := a.store.db.Query(`SELECT id, sender, reason, received_at FROM quarantine ORDER BY received_at DESC, id`)
+	rows, err := a.store.db.Query(`SELECT id, sender, reason, received_at, detail_code FROM quarantine WHERE notice_archived=0 ORDER BY received_at DESC, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -433,7 +434,7 @@ func (a *Agent) Quarantine() ([]Quarantined, error) {
 	for rows.Next() {
 		var q Quarantined
 		var at int64
-		if err := rows.Scan(&q.ID, &q.Sender, &q.Reason, &at); err != nil {
+		if err := rows.Scan(&q.ID, &q.Sender, &q.Reason, &at, &q.DetailCode); err != nil {
 			return nil, err
 		}
 		q.ReceivedAt = time.Unix(at, 0)

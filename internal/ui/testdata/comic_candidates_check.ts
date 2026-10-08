@@ -1,5 +1,5 @@
 // Synthetic source regressions: no requests, real people, sessions or grants.
-import { candidates } from "../web/src/features/Composer.mentions";
+import { agentTargets, decode, encode, shift, candidates } from "../web/src/features/Composer.mentions";
 import { catalogHosts, pool, routeFor } from "../web/src/features/InviteSheet.candidates";
 import { pendingGroupInvites } from "../web/src/features/RoomPanel.model";
 import type { T } from "../web/src/api";
@@ -40,3 +40,12 @@ const pending = pendingGroupInvites(group, { ...overview, group_invitations: inv
 check(pending.length === 1 && pending[0].id === "fresh" && pending[0].canCancel, "Old stale invitation hides current retract action");
 check(pendingGroupInvites(group, { ...overview, group_invitations: [{ ...invitations[1], status: "cancelled" }] }).length === 0, "Cancelled invitation still shown pending");
 console.log("PASS Comic candidates: verified peer mentions, listed-claim refusal, own remote agents and capability limits");
+
+const addressed = decode("[@Same](agentnet:agent/pidA) and [@Same](agentnet:agent/pidB) then [@Same](agentnet:agent/pidA)");
+check(JSON.stringify(agentTargets(addressed.text,addressed.spans)) === JSON.stringify(["pidA","pidB"]), "Multiple exact targets deduplicate by PID, not name");
+check(agentTargets("@Same",[]).length===0,"Plain labels cannot route");
+check(agentTargets("",[],"legacyPID")[0]==="legacyPID","Legacy single target retained");
+const removed=addressed.text.replace(" and @Same"," and someone"), kept=shift(addressed.spans,addressed.text,removed).kept;
+check(JSON.stringify(agentTargets(removed,kept))===JSON.stringify(["pidA"]),"Removing one exact target preserves the other");
+const reopened=decode(encode(addressed.text,addressed.spans));
+check(JSON.stringify(agentTargets(reopened.text,reopened.spans))===JSON.stringify(["pidA","pidB"]),"Draft reload preserves multiple targets");

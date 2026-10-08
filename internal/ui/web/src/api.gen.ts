@@ -788,6 +788,10 @@ export interface ProposalView {
 }
 
 export interface QuarantineItem {
+  can_archive: boolean;
+  detail_code?: string;
+  detail: string;
+  recovery: string;
   id: string;
   peer: string;
   code: string;

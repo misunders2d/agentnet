@@ -6,6 +6,23 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.7] — 2026-10-08
+
+### Fixed
+
+- Linked-device history retains previously accepted assistant requests, replies,
+  status records and selected context after the assistant leaves. Signed lifecycle
+  records keep their original author. Copies remain inert and current device,
+  membership, consent, signature and encryption checks stay enforced.
+- One human message can select multiple agents. Each exact agent gets its own
+  request and result; retrying a failed request does not resend successful ones.
+  Repeated mentions are deduplicated. Comic, Classic and Zoom support the flow
+  on computers and phones using the existing request and permission paths.
+- Held back notices retain safe, specific failure details for new rejections.
+  Older records explicitly say when details are unavailable. Archive notice hides
+  only that local invalid-message notice; its encrypted copy stays blocked and
+  cannot be accepted or executed by archiving.
+
 ## [0.8.6] — 2026-10-08
 
 ### Fixed

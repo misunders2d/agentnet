@@ -998,11 +998,15 @@ func IsReviewNotice(kind, status, replyTo string, files int) bool {
 // sender's name from its people list; Reason is the provider's own
 // sentence, a fallback that names the sender's address.
 type QuarantineItem struct {
-	ID     string    `json:"id"`
-	Peer   string    `json:"peer"`
-	Code   string    `json:"code"`
-	Reason string    `json:"reason"` // plain text
-	At     time.Time `json:"at"`
+	CanArchive bool      `json:"can_archive"`
+	DetailCode string    `json:"detail_code,omitempty"`
+	Detail     string    `json:"detail"`
+	Recovery   string    `json:"recovery"`
+	ID         string    `json:"id"`
+	Peer       string    `json:"peer"`
+	Code       string    `json:"code"`
+	Reason     string    `json:"reason"` // plain text
+	At         time.Time `json:"at"`
 }
 
 // Why a received message is held back (QuarantineItem.Code). The browser
@@ -1164,6 +1168,7 @@ const (
 	DoUnapprove    = "unapprove" // ID = peer
 	DoTrust        = "trust"     // ID = peer: trust its changed key
 	DoRevokeTasks  = "revoke_tasks"
+	DoArchiveHeld  = "archive_held" // hide only this local notice; retained envelope stays blocked
 	DoRead         = "read"
 )
 

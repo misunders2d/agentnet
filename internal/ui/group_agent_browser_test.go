@@ -216,6 +216,7 @@ func groupParticipationEngineVectors(t *testing.T, root protocol.ConvRoot, state
 			}
 		}
 	}
+	selected := client.HistoryItem{V: 1, ID: protocol.NewID(), LID: protocol.NewID(), From: ap.Address, FromKey: ap.Fingerprint(), TS: 1700000100, Kind: envelope.KindMessage, Body: "retained selected context", Origin: envelope.OriginUI}
 	for _, role := range []string{"member", "visitor"} {
 		host, signer, person := ap, alice, ar
 		if role == "visitor" {
@@ -228,6 +229,8 @@ func groupParticipationEngineVectors(t *testing.T, root protocol.ConvRoot, state
 			TaskKeys: []string{ap.Fingerprint()}, Group: &protocol.ParticipationGroup{Seq: state.Seq, Hash: state.Hash(), HostRole: role, TaskAdmissions: []string{am.Admission.Hash()}}}
 		if role == "member" {
 			ev.Group.HostAdmission = am.Admission.Hash()
+		} else {
+			ev.Grant = []protocol.GrantRef{{LID: selected.LID, Fingerprint: selected.FromKey}}
 		}
 		ev.Sign(alice.Sign)
 		seal(role+"-invite", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: pid, Body: marshal(t, ev)}, alice, ap)
@@ -237,6 +240,9 @@ func groupParticipationEngineVectors(t *testing.T, root protocol.ConvRoot, state
 		}
 		decision.Sign(signer.Sign)
 		seal(role+"-accept", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubEvent, PID: pid, Body: marshal(t, decision)}, signer, host)
+		if role == "visitor" {
+			seal("visitor-excerpt", envelope.Inner{Kind: envelope.KindMessage, Sub: envelope.SubExcerpt, PID: pid, Replica: true, Body: marshal(t, selected)}, alice, ap)
+		}
 		requestLID := protocol.NewID()
 		target := &envelope.Target{Address: host.Address, Fingerprint: host.Fingerprint(), AgentID: agent, GroupAdmission: am.Admission.Hash()}
 		seal(role+"-question", envelope.Inner{Kind: envelope.KindQuestion, PID: pid, LID: requestLID, Body: "Exact " + role + " original question", Origin: "ui", Target: target}, alice, ap)

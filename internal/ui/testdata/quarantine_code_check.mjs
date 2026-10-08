@@ -4,10 +4,17 @@
 // {reasons: {reason: code}} from the Go test on stdin.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { holdCode, quarantineItem } from '../static/engine.mjs';
+import { holdCode, quarantineItem, heldDiagnosticCode, Engine, memoryStore } from '../static/engine.mjs';
 
-const { reasons } = JSON.parse(readFileSync(0, 'utf8'));
+const { reasons, diagnostics } = JSON.parse(readFileSync(0, 'utf8'));
 let checks = 0;
+for(const [code,want] of Object.entries(diagnostics)) {
+ const got=quarantineItem({id:'parity',from:'alice/laptop',reason:'invalid',detail_code:code,at:0});
+ assert.equal(got.detail,want.detail,'native/browser diagnostic detail '+code);
+ assert.equal(got.recovery,want.recovery,'native/browser recovery '+code);
+ checks++;
+}
+
 for (const [reason, code] of Object.entries(reasons)) {
   assert.equal(holdCode(reason), code, 'code for ' + JSON.stringify(reason));
   checks++;
@@ -24,12 +31,42 @@ const legacy = quarantineItem({id:'legacy-invalid',from:'alice/laptop',reason:'i
 assert.ok(legacy.reason.includes('failed a check') && legacy.reason.includes('contents stay hidden') && !legacy.reason.includes('did not verify'));
 for (const [reason, code] of Object.entries(reasons)) {
   const item = quarantineItem({ id: 'held-' + reason, from: 'alice/laptop', reason, at });
-  assert.deepEqual(Object.keys(item).sort(), ['at', 'code', 'id', 'peer', 'reason'], 'item fields for ' + JSON.stringify(reason));
+  assert.deepEqual(Object.keys(item).sort(), ['at', 'can_archive', 'code', 'detail', 'id', 'peer', 'reason', 'recovery'], 'item fields for ' + JSON.stringify(reason));
   assert.equal(item.code, code, 'item code for ' + JSON.stringify(reason));
   assert.equal(item.peer, 'alice/laptop');
   assert.equal(item.at, new Date(at).toISOString());
   checks++;
 }
+assert.equal(legacy.can_archive,true);
+assert.ok(legacy.detail.includes('not recorded') && legacy.recovery.includes('does not accept'));
+for (const why of ['SYNTHETIC_PRIVATE_BODY password=secret','toString','constructor','__proto__']) assert.equal(heldDiagnosticCode(why),'');
+assert.equal(heldDiagnosticCode('Consent conflicts with recorded decision.'),'group_consent_mismatch');
+const store=memoryStore(),engine=new Engine({store,base:'http://127.0.0.1:1',fetch:async()=>{throw Error('archive attempted network');}});
+const id='d'.repeat(32),raw=JSON.stringify({id,from:'alice/laptop',invalid:true});
+await engine.hold({id,from:'alice/laptop'},raw,'invalid','Consent conflicts with recorded decision.');
+const before=await store.get('held',id);
+const note=await engine.apiRequest('/api/act',{do:'archive_held',id});
+assert.ok(note.note.includes('archived locally'));
+await engine.apiRequest('/api/act',{do:'archive_held',id});
+await engine.onMessage(raw); // an invalid duplicate must not revive or admit it
+const after=await store.get('held',id);
+assert.deepEqual(after,{...before,notice_archived:true});
+assert.equal((await store.get('receipts',id)).state,'quarantined');
+assert.equal((await store.all('inbox')).length,0);assert.equal((await store.all('outbox')).length,0);
+assert.equal(after.detail_code,'group_consent_mismatch');
+await assert.rejects(()=>engine.archiveHeldNotice('e'.repeat(32)));
+await assert.rejects(()=>engine.apiRequest('/api/act',{do:'archive_held',id:'e'.repeat(32)}));
+for(const [i,reason] of ['proof_pending','key_changed','identity_conflict','conflicting_duplicate'].entries()) {
+ const heldID=(i+1).toString(16).padStart(32,'0');
+ await engine.hold({id:heldID,from:'alice/laptop'},'SYNTHETIC_'+reason,reason);
+ const beforeReject=await store.get('held',heldID);
+ await assert.rejects(()=>engine.apiRequest('/api/act',{do:'archive_held',id:heldID}));
+ assert.deepEqual(await store.get('held',heldID),beforeReject,'archive refusal changed '+reason);
+ assert.equal((await store.get('receipts',heldID)).state,'quarantined');
+ checks++;
+}
+
+checks+=8;
 const src = readFileSync(new URL('../static/engine.mjs', import.meta.url), 'utf8');
 assert.ok(!/agentnet trust/.test(src), 'the engine still sends people to "agentnet trust"');
 checks++;

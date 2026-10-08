@@ -74,7 +74,8 @@ func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to,
 		return errors.New("human: not a two-person DM or a group with verified context")
 	}
 	sender := h.AuthorPID == "" && (m.device(from, fromFP) || hostAuthor)
-	reader := m.device(to, toFP) || hostReader
+	memberReader := m.device(to, toFP)
+	reader := memberReader || hostReader
 	if historical && !reader {
 		return errors.New("human history remains with original members' own linked devices")
 	}
@@ -91,8 +92,11 @@ func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to,
 		}
 		exactSender := scope.PID == h.AuthorPID && p.Host.Address == from && p.Host.Fingerprint == fromFP
 		exactReader := p.Host.Address == to && p.Host.Fingerprint == toFP
+		// An original member retains its own inert history independently of
+		// an assistant participation hosted on that same device. Captured
+		// authors and nonmember readers still need their exact participation.
 		if exactSender || exactReader {
-			retained := historical && exactSender && p.Held == 0 && p.State == PartDismissed
+			retained := historical && (exactSender || memberReader) && p.Held == 0 && p.State == PartDismissed && p.Conflict == ""
 			if !p.Following() && !retained {
 				return errors.New("human: author or reader participation ended or is held")
 			}

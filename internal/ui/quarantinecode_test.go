@@ -71,7 +71,12 @@ func TestQuarantineCode(t *testing.T) {
 	if err != nil {
 		t.Skip("node unavailable")
 	}
-	input, _ := json.Marshal(map[string]any{"reasons": reasons})
+	diagnostics := map[string]map[string]string{}
+	for _, code := range []string{"group_invitation_outdated", "group_consent_mismatch", "group_withdrawal_mismatch", "group_admission_unavailable", "group_authority_conflict", "group_conflicting_copy", "history_reader_not_member", "captured_consent_mismatch", "", "unknown_future_code"} {
+		detail, recovery := heldNoticeText(code, "invalid")
+		diagnostics[code] = map[string]string{"detail": detail, "recovery": recovery}
+	}
+	input, _ := json.Marshal(map[string]any{"reasons": reasons, "diagnostics": diagnostics})
 	cmd := exec.Command(node, "testdata/quarantine_code_check.mjs")
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer

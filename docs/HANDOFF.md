@@ -4,6 +4,56 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Next hotfix candidate — October 8, 2026
+
+The current unshipped candidate addresses MEL-558, MEL-539 and the owner's
+new next-release requirement on MEL-540. Root integrates and owns release;
+ThinkPad Codex supplied read-only production evidence through Herdr. Coordinate
+with that peer through Herdr only, never AgentNet. No installed client, identity,
+trust grant, history cursor or quarantine content was reset or changed.
+
+- **History (MEL-558):** ThinkPad's actual v0.8.6 sidecar had existing running
+  jobs for the phone and other linked devices at the empty cursor. Its recurring
+  error was `human: author or reader participation ended or is held`. A synthetic
+  original-member/own-assistant dismissal reproduced that exact failure. The
+  existing history path now retains accepted inert requests, replies, status and
+  selected excerpts after a clean assistant dismissal. Forwarded dismissal
+  evidence verifies the original signed author. Held/conflicting proof, wrong
+  keys, visitor history access, changed admission epochs and live sending still
+  fail closed. No new relay protocol or history reset. The relay stores encrypted
+  copies; the source device must authorize and prepare old history with its keys.
+- **Held back (MEL-539):** appended SQLite columns and equivalent browser fields
+  store only allowlisted diagnostic codes, never arbitrary errors or content.
+  Existing records lacking detail say so explicitly. Archive notice hides only
+  a local `invalid` notice while retaining its envelope, reason, receipt and
+  deduplication. Other reasons cannot be archived through this action. There is
+  no acceptance, trust, replay or execution side effect. The five old ThinkPad
+  invalid records do not contain enough persisted detail to assert their cause.
+- **Multiple selected agents (MEL-540):** intact exact mention spans identify
+  distinct participation IDs. Existing single-target request paths create one
+  stable request ID per agent and retain each independent retry/result, including
+  two same-named agents on one host and separately staged files. Failed targets
+  do not resend successful ones. Zoom's visible write dialog reuses its existing
+  picker. Received mention text never initiates fan-out.
+
+Focused native history and adjacent checks passed, including the exact before-
+failed dismissal case, asking-assistant replies, signed forwarded dismissal,
+restart/reorder, excerpts, file bytes, deduplication and no extra execution.
+Browser parity, warm recovery, human lifecycle and history files passed. The
+actual Chromium IndexedDB history journey and final native/archive/package
+checks passed together (client 4.135 s, UI 11.677 s, static 0.956 s).
+All three locked skin builds and Comic TypeScript checking passed. The rendered
+multi-agent and Held back flows passed in all three skins at 1280/390 widths;
+source candidate/mention regressions passed. Final full qualification and
+publication are still pending; v0.8.6 remains the published release below.
+Physical phone catch-up is not yet verified and MEL-558 remains open for it.
+
+**Urgent follow-up:** MEL-435 records the real notification click opening an
+unauthenticated localhost placeholder. The owner permits a later release.
+Trace the actual producer/action and reuse the native app/agent opener; never
+put tokens in notification commands or bypass authentication. No fix or live
+click verification is claimed in this candidate.
+
 ## Current release — v0.8.6, October 8, 2026
 
 [Download v0.8.6](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6).

@@ -13,6 +13,10 @@ import (
 // Status authority remains the exact executor's claim about one immutable
 // addressed request. It grants no human control or ordinary room authority.
 func (a *Agent) groupStatusScope(q dbq, ref ControlRef, host, hostFP string) (ParticipationInfo, error) {
+	return a.groupStatusAuthority(q, ref, host, hostFP, false)
+}
+
+func (a *Agent) groupStatusAuthority(q dbq, ref ControlRef, host, hostFP string, historical bool) (ParticipationInfo, error) {
 	rows, err := q.Query(`SELECT pid,kind,coalesce(target,''),sender,coalesce(verified_by,claimed_fp,''),coalesce(human,'') FROM inbox WHERE conv=? AND lid=? AND ref_id IS NULL
  UNION ALL SELECT pid,kind,coalesce(target,''),?,?,coalesce(human,'') FROM outbox WHERE conv=? AND lid=? AND ref_id IS NULL`, ref.Conv, ref.ID, a.Address, a.Self().Fingerprint(), ref.Conv, ref.ID)
 	if err != nil {
@@ -66,11 +70,18 @@ func (a *Agent) groupStatusScope(q dbq, ref ControlRef, host, hostFP string) (Pa
 		}
 	}
 	agent := captured != nil && captured.AgentAuthor()
-	if !info.Claimable() || info.Host.Address != host || info.Host.Fingerprint != hostFP || target.Address != host || target.Fingerprint != hostFP || target.AgentID != info.AgentID || !agent && !m.requestEpoch(from, fp, &target) {
+	authorized := info.Claimable()
+	if !authorized && historical {
+		authorized, err = retainedAssistant(q, info)
+		if err != nil {
+			return info, err
+		}
+	}
+	if !authorized || info.Host.Address != host || info.Host.Fingerprint != hostFP || target.Address != host || target.Fingerprint != hostFP || target.AgentID != info.AgentID || !agent && !m.requestEpoch(from, fp, &target) {
 		return info, errors.New("group: status does not match current exact request/PID/host/requester epoch")
 	}
 	output := envelope.Inner{Conv: ref.Conv, PID: pid, Kind: replyKind(kind), ReplyTo: ref.ID, AgentID: info.AgentID}
-	_, err = externalOutputRequest(q, output, info, m, a.Address, a.Self().Fingerprint())
+	_, err = externalOutputRequestMode(q, output, info, m, a.Address, a.Self().Fingerprint(), historical)
 	return info, err
 }
 func (a *Agent) admitGroupParticipationStatus(ctx context.Context, env envelope.Envelope, in envelope.Inner, sender identity.Public, fromQuarantine bool, hold func(string, string) error) error {

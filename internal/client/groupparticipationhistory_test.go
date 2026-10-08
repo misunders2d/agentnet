@@ -13,6 +13,14 @@ import (
 )
 
 func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
+	testGroupParticipationHistoryLinkedRestartReorder(t, false)
+}
+
+func TestGroupParticipationHistoryDismissedLinkedRestartReorder(t *testing.T) {
+	testGroupParticipationHistoryLinkedRestartReorder(t, true)
+}
+
+func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed bool) {
 	stub := installAgentStub(t)
 	w, producer, packet, stops := groupTurnsFixture(t)
 	host := proofReader(t, w, "history-visitor")
@@ -56,6 +64,21 @@ func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
 	})
 	if stub.runs() != 1 || !strings.Contains(stub.last(), "PID_HISTORY_SELECTED_FILE") {
 		t.Fatalf("original execution %d", stub.runs())
+	}
+	if dismissed {
+		if _, err = w.alice.DismissParticipation(tctx(t), p.PID); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "producer sees ended assistant", func() bool {
+			return stateAt(t, producer, p.PID).State == PartDismissed
+		})
+		// The inviter also retains its exact selected excerpt after the end.
+		ownPhone, ownAwait, _ := linkPhone(t, w.alice, "inviter-history")
+		ownLink := pendingLink(t, w.alice)
+		if err = w.alice.DecideLink(tctx(t), ownLink.ID, true); err != nil { t.Fatal(err) }
+		if result := <-ownAwait; result.err != nil { t.Fatal(result.err) }
+		if _, err = w.alice.historyPageFor(ownPhone.Self(), historyPos{}); err != nil { t.Fatalf("inviter history after end: %v", err) }
+
 	}
 	phone, await, _ := linkPhone(t, producer, "pid-phone")
 	request := pendingLink(t, producer)
@@ -162,7 +185,7 @@ func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
 	// Replay the complete history batch before retrying held proof dependencies.
 	phone.retryProof(tctx(t))
 	view, err := phone.Participation(p.PID)
-	if err != nil || !view.Claimable() || view.Host.Fingerprint != host.Self().Fingerprint() || view.AgentID != record.ID {
+	if err != nil || !dismissed && !view.Claimable() || dismissed && view.State != PartDismissed || view.Host.Fingerprint != host.Self().Fingerprint() || view.AgentID != record.ID {
 		t.Fatalf("linked PID view %+v %v", view, err)
 	}
 	var n int

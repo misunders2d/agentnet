@@ -20,7 +20,7 @@ export type Open = null | { kind: "dm"; id: string; focus?: string; focusSeq?: n
 export interface Draft {
   text: string;
   replyTo?: string;          // a message id in the open conversation
-  agent?: string;            // the addressed assistant's participation id
+  agent?: string;            // legacy/single-button fallback; exact multi-target PIDs live in text mention references
   topic?: string;
   newTopic?: boolean;        // in an agent's conversation: start a separate one with the next send
   files?: StagedFile[];

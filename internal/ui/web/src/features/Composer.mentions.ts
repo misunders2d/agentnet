@@ -45,6 +45,13 @@ export function encode(text: string, spans: Span[], plainAgents = false): string
   return out;
 }
 
+/** Routing comes only from intact explicit agent references, never visible labels.
+ *  Preserve first mention order and deduplicate exact participation IDs. */
+export function agentTargets(text: string, spans: Span[], legacy?: string): string[] {
+  const pids = [...new Set(spans.filter(s => s.kind === "agent" && intact(text, s)).sort((a, b) => a.start - b.start).map(s => s.id))];
+  return pids.length ? pids : legacy ? [legacy] : [];
+}
+
 /** shift follows one edit from prev to cur: mentions before or after it move
  *  with the text; one the edit touched is dropped (it reads as plain text now). */
 export function shift(spans: Span[], prev: string, cur: string): { kept: Span[]; dropped: Span[] } {

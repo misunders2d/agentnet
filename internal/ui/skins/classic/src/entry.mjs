@@ -164,7 +164,7 @@ const when = (s) => {
 const size = (n) => n < 1024 ? n + " B" : n < 1 << 20 ? (n / 1024).toFixed(1) + " KB" : (n / (1 << 20)).toFixed(1) + " MB";
 // A person mention in text: [@Name](agentnet:person/ID) or agentnet:guest/PID
 // (see mentionWho). mentionPlain reads each as @Name.
-const mentionRef = /\[@([^\[\]\r\n]{1,80})\]\(agentnet:(person|guest)\/([A-Za-z0-9_-]{1,64})\)/g;
+const mentionRef = /\[@([^\[\]\r\n]{1,80})\]\(agentnet:(person|guest|agent)\/([A-Za-z0-9_-]{1,64})\)/g;
 const mentionName = (s) => String(s || "").replace(/[\[\]\r\n]/g, "").trim().slice(0, 80);
 const mentionPlain = (s) => typeof s === "string" ? s.replace(mentionRef, (_, name) => "@" + name) : s;
 const firstLine = (s, n) => {
@@ -2098,7 +2098,7 @@ async function loadDM(scrollToEnd) {
   n.classList.toggle("guest-notice", dmHumanGuest(t));
   n.classList.toggle("audience-notice", !t.frozen && !!t.audience_pending);
   showPane("conv");
-  $("composer").hidden = dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask);
+  $("composer").hidden = dmVisitor(t) && !selectedAgentPIDs().some(pid => agentOf(pid)?.can_ask);
   setHubBack();
   renderAgents(t);
   loadDMNames(t);
@@ -2292,7 +2292,7 @@ const agentOf = (pid) => state.dmData && (state.dmData.agents || []).find((a) =>
 // askGone: the composer asks an agent that cannot be asked now (dismissed,
 // or not active). Its draft keeps that target: nothing meant for the agent
 // goes to the person unless they remove the target themselves.
-const askGone = () => !!state.dmAgent && !(agentOf(state.dmAgent) || {}).can_ask;
+const askGone = () => selectedAgentPIDs().length > 0 && !selectedAgentPIDs().some(pid => agentOf(pid)?.can_ask);
 // agentName names an agent by the person whose installation runs it.
 // Labels come only from records already read for this exact host and ID.
 const catalogRecords = host => state.dm && state.dmNames?.[host] || (state.targetCatalog && state.targetCatalog.host === host ? state.targetCatalog.agents || [] : []);
@@ -2513,14 +2513,19 @@ function decodeMentions(text) {
 }
 const mentionAt = (text, s) => text.slice(s.start, s.start + s.name.length + 1) === "@" + s.name;
 const validMentions = (spans, text) => (Array.isArray(spans) ? spans : []).filter(s => s && Number.isInteger(s.start) && typeof s.name === "string" && /^[^\[\]\r\n]{1,80}$/.test(s.name) &&
-  ["person", "guest"].includes(s.ref?.kind) && /^[A-Za-z0-9_-]{1,64}$/.test(s.ref?.id || "") && mentionAt(text, s));
+  ["person", "guest", "agent"].includes(s.ref?.kind) && /^[A-Za-z0-9_-]{1,64}$/.test(s.ref?.id || "") && mentionAt(text, s));
 // encodeMentions writes each exact mention still intact in text as its reference.
-function encodeMentions(text, spans) {
+function encodeMentions(text, spans, plainAgents = true) {
   let out = text;
-  for (const s of validMentions(spans, text).sort((a, b) => b.start - a.start)) {
+  for (const s of validMentions(spans, text).filter(s => !plainAgents || s.ref.kind !== "agent").sort((a, b) => b.start - a.start)) {
     out = out.slice(0, s.start) + "[@" + s.name + "](agentnet:" + s.ref.kind + "/" + s.ref.id + ")" + out.slice(s.start + s.name.length + 1);
   }
   return out;
+}
+// Only intact selected agent references route; names and incoming text never do.
+function selectedAgentPIDs(text = $("body").value, spans = state.mentions, fallback = state.dmAgent) {
+  const selected = [...new Set(validMentions(spans, text).filter(s => s.ref.kind === "agent").sort((a,b) => a.start-b.start).map(s => s.ref.id))];
+  return selected.length ? selected : fallback ? [fallback] : [];
 }
 // shiftMentions follows one edit from prev to cur: mentions before or after
 // it move with the text; one the edit touched is dropped (it is plain text now).
@@ -2544,6 +2549,7 @@ function trackMentions() {
   if (cur !== prev && (state.mentions || []).length) {
     const { kept, dropped } = shiftMentions(state.mentions, prev, cur);
     state.mentions = kept;
+    if (dropped.some(s => s.ref.kind === "agent" && s.ref.id === state.dmAgent)) state.dmAgent = selectedAgentPIDs(cur, kept, null)[0] || null;
     if (dropped.length) { announce(dropped.map(m => "@" + m.name).join(", ") + (dropped.length > 1 ? " are" : " is") + " no longer an exact mention; the text stays."); renderAgentTarget(); }
   }
   state.mentionText = cur;
@@ -2627,13 +2633,13 @@ function pickMention(i) {
     if (it.kind === "invite-assistant") inviteDialog(t); else inviteHumanDialog(t, it.address || "");
     return;
   }
-  if (v.start !== null || it.kind === "person") {
+  if (v.start !== null || it.kind === "person" || it.kind === "assistant") {
     const input = $("body"), at = v.start ?? v.end, token = "@" + it.name + " ";
     trackMentions(); // earlier edits first, so positions are this text's
     input.value = input.value.slice(0, at) + token + input.value.slice(v.end);
     input.setSelectionRange?.(at + token.length, at + token.length);
     trackMentions();
-    if (it.kind === "person") state.mentions = [...(state.mentions || []), { start: at, name: it.name, ref: it.ref, role: it.role }];
+    if (it.kind === "person" || it.kind === "assistant") state.mentions = [...(state.mentions || []), { start: at, name: it.name, ref: it.kind === "assistant" ? {kind:"agent",id:it.a.pid} : it.ref, role: it.role }];
     grow();
   }
   if (it.kind === "assistant") setDMAgent(agentOf(it.a.pid));
@@ -2825,6 +2831,7 @@ function dismissDialog(a) {
 function setDMAgent(a) {
   const previous = state.dmAgent;
   state.dmAgent = a ? a.pid : null;
+  if (!a) state.mentions = (state.mentions || []).filter(s => s.ref.kind !== "agent");
   if (a) {
     state.dmReply = null;
     $("replying").hidden = false;
@@ -2839,8 +2846,8 @@ function setDMAgent(a) {
 }
 
 
-function startSend(key, text, files, reply, answering, t, kind, retry, id, topic = "", topicRoot = "") {
-  sends.begin(key, { id, ...(state.dm ? { lid: id, origin: "ui", pid: state.dmAgent || "" } : { author: {label: "You", about: ""}, to: t.peer }),
+function startSend(key, text, files, reply, answering, t, kind, retry, id, topic = "", topicRoot = "", addressedPID = state.dmAgent) {
+  sends.begin(key, { id, ...(state.dm ? { lid: id, origin: "ui", pid: addressedPID || "" } : { author: {label: "You", about: ""}, to: t.peer }),
     topic, _topicRoot: topicRoot, dir: "out", from: state.overview?.me?.address || "", body: text, kind, at: new Date().toISOString(), reply_to: reply?.id || answering?.id || "", quote: reply?.id || "",
     attachments: files.map(f => ({name:f.name,size:f.size,openable:false})), files: files.map(f => ({name:f.name,size:f.size,openable:false})) }, retry);
   if (alive && state.draftKey === key) {
@@ -2868,8 +2875,26 @@ function failSend(id, key, ws, text, files, reply, answering, reason, mentions) 
 
 async function sendDM(retry) {
   const t = retry?.t || state.dmData;
-  if (state.sending || !t || t.frozen || (dmHumanGuest(t) && !guestAuthor(t)) || (dmVisitor(t) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask))) return;
-  const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:"question"};
+  if ((!retry && state.sending) || !t || t.frozen || (dmHumanGuest(t) && !guestAuthor(t)) || (!retry && dmVisitor(t) && !selectedAgentPIDs().some(pid => agentOf(pid)?.can_ask))) return;
+  if (!retry) {
+    trackMentions();
+    const text=$("body").value, mentions=(state.mentions || []).slice(), agents=selectedAgentPIDs(text,mentions);
+    if (agents.length > 1) {
+      if (askGone()) { kindHint(); return; }
+      const files=state.files.slice(), elsewhere=boundElsewhere();
+      if (elsewhere || files.length && overLimit(files)) { $("compose-error").textContent=elsewhere || overLimit(files); return; }
+      const key=state.draftKey, topic=topicFresh[t.id]?sendID():topicSelections[t.id] || "", kind=kindValue()==="task"?"task":"question";
+      const receiverSelection=state.replyReceiver && {...state.replyReceiver}, nativeReceiver=!!state.overview?.reply_receivers, nativeSessions=!!state.overview?.reply_sessions, receiverContext=receiverCapture();
+      const plans=agents.map((agent,index)=>({id:sendID(),key,text,reply:null,agent,files:files.map(f=>({...f,staged:index===0?f.staged:"",url:null})),kind,t,topic,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext,fanout:true}));
+      if (topicFresh[t.id]) {topicSelections[t.id]=topic;topicFresh[t.id]=false;}
+      $("body").value="";state.mentions=[];state.mentionText="";state.dmAgent=null;state.typedFor=null;
+      state.files=state.files.filter(f=>!files.includes(f));grow();renderPending();keepDraft();syncComposer();
+      await Promise.all(plans.map(plan=>sendDM(plan)));
+      files.forEach(f=>f.url && URL.revokeObjectURL(f.url));
+      return;
+    }
+  }
+  const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:kindValue()==="task"?"task":"question"};
   const topic = retry ? retry.topic : topicFresh[t.id] ? sendID() : topicSelections[t.id] || "";
   const id = retry?.id || sendID(), mentions = retry?.mentions || (state.mentions || []).slice();
   if (!retry) trackMentions();
@@ -2881,7 +2906,7 @@ async function sendDM(retry) {
   if (typingUI) typingUI.stop();
   const host = currentHost, ws = wsNow(), receiverSelection = retry ? retry.receiverSelection : state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = retry ? retry.nativeReceiver : !!state.overview?.reply_receivers, nativeSessions = retry ? retry.nativeSessions : !!state.overview?.reply_sessions, receiverContext = retry ? retry.receiverContext : receiverCapture(); // captured local delegation
   if (!retry && topicFresh[t.id]) { topicSelections[t.id] = topic; topicFresh[t.id] = false; }
-  startSend(key, text, files, reply, null, t, agent ? kind : "message", () => { sends.remove(id); void sendDM({id,key,text,reply,agent,files,kind,t,topic,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext}); }, id, topic);
+  startSend(key, text, files, reply, null, t, agent ? kind : "message", () => { sends.remove(id); void sendDM({id,key,text,reply,agent,files,kind,t,topic,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext,fanout:retry?.fanout}); }, id, topic, "", agent);
   if (alive) { syncComposer(); $("compose-error").textContent = ""; }
   try {
     await sends.ready(id);
@@ -2899,7 +2924,9 @@ async function sendDM(retry) {
     files.forEach(f => f.url && URL.revokeObjectURL(f.url));
     if (alive && wsNow() === ws) void loadDM();
   } catch (e) {
-    failSend(id, key, ws, text, files, reply, null, e.message, mentions);
+    if (retry?.fanout) {
+      if (sends.fail(id,e.message) && alive) announce("Not sent to " + (agentOf(agent) ? agentName(agentOf(agent)) : "selected assistant") + ": " + e.message + ". Retry only this request above.");
+    } else failSend(id, key, ws, text, files, reply, null, e.message, mentions);
   } finally {
     if (alive && wsNow() === ws) { state.sending = false; kindHint(); syncComposer(); if (state.newVersion) updated(state.newVersion); }
     else { state.sending = false; sentElsewhere(ws); }
@@ -3115,7 +3142,12 @@ function renderQuarantine(items) {
     const known = Object.hasOwn(heldWords, q.code || "");
     return el("li", {},
       el("span", {}, q.code === "invalid" ? "A message that couldn't be accepted" : known ? who(q.peer) : ["Unverified, says it's from ", who(q.peer)], " · ", when(q.at)),
-      el("span", { class: "hint" }, known ? heldWords[q.code](who(q.peer)) : "It couldn't be verified, so it isn't shown."));
+      el("span", { class: "hint" }, q.detail || (known ? heldWords[q.code](who(q.peer)) : "It couldn't be verified, so it isn't shown.")),
+      q.recovery && el("span", { class: "hint" }, q.recovery),
+      q.can_archive && el("button", { type: "button", class: "text-btn", onclick: async e => {
+        const button=e.currentTarget;button.disabled=true;
+        try { const host=currentHost; await act({do:"archive_held",id:q.id},host); if(host===currentHost)await refetch(false); } catch(err) { announce(err.message); } finally { if(button.isConnected)button.disabled=false; }
+      } }, "Archive notice"));
   }));
 }
 
@@ -3892,12 +3924,14 @@ function renderAgentTarget() {
   if (box.hidden) { fill(box); return; }
   if (state.dm) {
     const a = agentOf(state.dmAgent);
-    fill(box, state.dmAgent && el("span", { class: "addressed-assistant", title: (a?.agent_id || state.dmAgent) + " · " + (a?.host.address || "unavailable") + " · participation " + state.dmAgent },
+    fill(box, state.dmAgent && !mentioned.some(s => s.ref.kind === "agent") && el("span", { class: "addressed-assistant", title: (a?.agent_id || state.dmAgent) + " · " + (a?.host.address || "unavailable") + " · participation " + state.dmAgent },
       "@" + (a ? agentName(a) : "Selected assistant unavailable"),
       el("button", { type: "button", class: "text-btn", disabled: state.sending, "aria-label": "Remove addressed assistant", onclick: () => { setDMAgent(null); keepDraft(); } }, "×")),
       mentioned.map(s => el("span", { class: "addressed-assistant mentioned-person", title: "@" + s.name + (s.role ? " · " + s.role : "") },
         "@" + s.name,
-        el("button", { type: "button", class: "text-btn", disabled: state.sending, "aria-label": "Make @" + s.name + " plain text", onclick: () => { state.mentions = (state.mentions || []).filter(x => x !== s); keepDraft(); renderAgentTarget(); } }, "×"))),
+        el("button", { type: "button", class: "text-btn", disabled: state.sending, "aria-label": "Make @" + s.name + " plain text", onclick: () => { state.mentions = (state.mentions || []).filter(x => x !== s);
+          if (s.ref.kind === "agent") state.dmAgent = selectedAgentPIDs($("body").value,state.mentions,null)[0] || null;
+          keepDraft(); renderAgentTarget(); syncComposer(); } }, "×"))),
       el("button", { type: "button", class: "text-btn", disabled: state.sending, onclick: () => { showMentions(true); $("body").focus(); } }, "@ Mention"));
     return;
   }
@@ -4273,7 +4307,7 @@ function syncComposer() {
   if (state.dm) { // a DM: messages only, to the person
     const d = state.dmData;
     const revoked = !!(state.overview && state.overview.device && state.overview.device.revoked);
-    const blocked = !d || !!d.frozen || revoked || (dmHumanGuest(d) && !guestAuthor(d)) || (dmVisitor(d) && !(state.dmAgent && agentOf(state.dmAgent)?.can_ask));
+    const blocked = !d || !!d.frozen || revoked || (dmHumanGuest(d) && !guestAuthor(d)) || (dmVisitor(d) && !selectedAgentPIDs().some(pid => agentOf(pid)?.can_ask));
     $("composer").hidden = dmVisitor(d) && blocked;
     $("body").disabled = blocked;
     $("send").disabled = blocked || state.sending || askGone();

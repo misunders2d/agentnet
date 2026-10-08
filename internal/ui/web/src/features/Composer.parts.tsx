@@ -100,15 +100,15 @@ export function SendButton({ ready, busy, label }: { ready: boolean; busy: boole
  *  Both take their type metrics from one inline style, so no sheet can
  *  pull them apart. */
 export const Field = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & {
-  text: string; spans: Span[]; agent?: string; wide: boolean; mirror: Ref<HTMLDivElement>;
-}>(function Field({ text, spans, agent, wide, mirror, className = "", ...rest }, ref) {
+  text: string; spans: Span[]; wide: boolean; mirror: Ref<HTMLDivElement>;
+}>(function Field({ text, spans, wide, mirror, className = "", ...rest }, ref) {
   const metrics: CSSProperties = { fontFamily: "var(--font-sans)", fontSize: wide ? 15 : 16, lineHeight: "22px", fontWeight: 400, letterSpacing: "normal" };
   const box = "px-4 py-[10.5px] whitespace-pre-wrap break-words lg:py-3";
   const parts: ReactNode[] = [];
   let last = 0;
   for (const s of [...spans].sort((a, b) => a.start - b.start)) {
     parts.push(text.slice(last, s.start));
-    const look = s.kind === "agent" ? (s.id === agent ? "bg-agent text-agent-ink [box-shadow:inset_0_0_0_1px_var(--an-agent-fill)]" : "")
+    const look = s.kind === "agent" ? "bg-agent text-agent-ink [box-shadow:inset_0_0_0_1px_var(--an-agent-fill)]"
       : s.kind === "guest" ? "bg-guest-bg text-guest-ink [box-shadow:inset_0_0_0_1px_var(--an-guest)]"
       : "bg-surface text-ink [box-shadow:inset_0_0_0_1px_var(--an-outline)]";
     parts.push(<span key={s.start} className={"-mx-[3px] rounded-md px-[3px] " + look}>{"@" + s.name}</span>);

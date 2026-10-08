@@ -64,7 +64,7 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		if item.PID != "" || len(item.Attachments) != 0 || envelope.ValidateControl(original) != nil || item.Ref == nil {
 			return nil, errors.New("group: malformed historical status")
 		}
-		_, err = a.groupStatusScope(q, ControlRef{Conv: root.ID(), ID: item.Ref.ID, Fingerprint: item.Ref.Fingerprint}, item.From, item.FromKey)
+		_, err = a.groupStatusAuthority(q, ControlRef{Conv: root.ID(), ID: item.Ref.ID, Fingerprint: item.Ref.Fingerprint}, item.From, item.FromKey, true)
 		return nil, err
 	}
 	if !protocol.ValidID(item.PID) || item.Ref != nil || item.ReplyTo != "" && !protocol.ValidID(item.ReplyTo) {
@@ -80,22 +80,42 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 	}
 	var ev *protocol.ParticipationEvent
 	if item.Sub == envelope.SubEvent {
-		p, found, e := scanPersonIn(q, "person IN (SELECT person FROM person_devices WHERE address=?)", item.From)
+		candidate, e := protocol.ParseParticipationEvent([]byte(original.Body))
+		if e != nil {
+			return nil, e
+		}
+		author := candidate.Author
+		forwarded := author.Address != item.From || author.Fingerprint != item.FromKey
+		if forwarded && (candidate.Type != protocol.EventDismiss || !m.device(item.From, item.FromKey)) {
+			return nil, errors.New("group: only current members forward historical participation ends")
+		}
+		p, found, e := scanPersonIn(q, "person IN (SELECT person FROM person_devices WHERE address=?)", author.Address)
 		if e != nil {
 			return nil, e
 		}
 		if !found {
 			return nil, ErrGroupContextPending
 		}
-		key, found := p.device(item.From)
-		if !found || key.Fingerprint() != item.FromKey {
+		key, found := p.device(author.Address)
+		if !found || key.Fingerprint() != author.Fingerprint || p.info.Person != author.Person || p.info.State != personSelf && p.info.State != personPinned {
 			return nil, errGroupParticipationHistoryEpoch
 		}
-		candidate, e := checkParticipationEvent(original, item.FromKey, key.SignKey)
+		var bound int
+		if e = q.QueryRow(`SELECT count(*) FROM person_chain WHERE person=? AND hash=?`, author.Person, author.Roster).Scan(&bound); e != nil {
+			return nil, e
+		}
+		if bound != 1 {
+			return nil, errGroupParticipationHistoryEpoch
+		}
+		// Like live forwarded ends, retain the transport sender while checking
+		// the embedded record under its original author's exact pinned key.
+		signed := original
+		signed.From = author.Address
+		candidate, e = checkParticipationEvent(signed, author.Fingerprint, key.SignKey)
 		if e != nil {
 			return nil, e
 		}
-		if candidate.Author.GroupAdmission != "" && m.keyEpoch(item.FromKey) != candidate.Author.GroupAdmission {
+		if author.GroupAdmission != "" && m.keyEpoch(author.Fingerprint) != author.GroupAdmission {
 			return nil, errGroupParticipationHistoryEpoch
 		}
 		ev = &candidate
@@ -121,19 +141,46 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 			return nil, err
 		}
 	}
-	if err = externalTurn(original, info, m, item.From, item.FromKey); err != nil {
+	// Ending an accepted assistant does not erase an original member's inert
+	// addressed history. Reuse the live role/target checks with only that
+	// lifecycle gate adapted; unresolved evidence and fresh delivery stay closed.
+	roleInfo := info
+	if item.Sub == envelope.SubExcerpt || item.Sub == "" && (item.Kind == envelope.KindQuestion || item.Kind == envelope.KindTask || item.Kind == envelope.KindAnswer || item.Kind == envelope.KindResult || isResponderProgress(original)) {
+		retained, e := retainedAssistant(q, info)
+		if e != nil {
+			return nil, e
+		}
+		if retained {
+			roleInfo.State = PartActive
+		}
+	}
+	if err = externalTurn(original, roleInfo, m, item.From, item.FromKey); err != nil {
 		if info.State == PartInvited && item.Sub == "" {
 			return nil, ErrGroupContextPending
 		}
 		return nil, err
 	}
-	if reason, e := externalOutputRequest(q, original, info, m, a.Address, a.Self().Fingerprint()); e != nil {
+	if reason, e := externalOutputRequestMode(q, original, info, m, a.Address, a.Self().Fingerprint(), true); e != nil {
 		if reason == reasonProof {
 			return nil, ErrGroupContextPending
 		}
 		return nil, e
 	}
 	return ev, nil
+}
+
+// retainedAssistant authenticates a cleanly ended, previously accepted
+// assistant for inert own-member history only. It confers no live authority.
+func retainedAssistant(q dbq, info ParticipationInfo) (bool, error) {
+	if info.Role == protocol.RoleHuman || info.Invite == "" || info.State != PartDismissed || info.Held != 0 || info.Conflict != "" || info.Decision == "" {
+		return false, nil
+	}
+	var kind string
+	err := q.QueryRow(`SELECT type FROM participation_events WHERE conv=? AND pid=? AND hash=?`, info.Conv, info.PID, info.Decision).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return kind == protocol.EventAccept, err
 }
 
 // OUT PID/status group_admission pins the destination, never the source.

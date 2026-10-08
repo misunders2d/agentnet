@@ -1,4 +1,4 @@
-// Inert captured-host fixture: Classic/Zoom source, built Comic and native DTO-shaped synthetic data.
+// Inert captured-host fixture: bundled skins and native DTO-shaped synthetic data.
 // No static rebuild, Hub, credentials or harness.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT||'playwright-core');
@@ -80,9 +80,26 @@ if(variant.startsWith('delivery-')){
 }
 if(variant==='other-device')Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});
 if(variant==='legacy-flags'){delete fixture.overview.group_invitations[0].can_cancel;delete fixture.overview.group_invitations[0].can_refresh;}
+if(variant==='multi-agent'){
+fixture.thread.guests=[];fixture.overview.group_invitations=[];fixture.stages=[];fixture.failedOnce=false;
+fixture.thread.agents=['agent-a','agent-b'].map((pid,i)=>({pid,host:fixture.thread.members[1],agent_id:String(i+1).repeat(32),state:'active',state_text:'Active',host_here:false,shared:[],can_ask:true,inviter:fixture.overview.person,invited:'2026-10-05T10:00:00Z',tasks_from:[]}));
+}
+if(variant==='heldback'){
+ fixture.overview.group_invitations=[];fixture.overview.review=[];fixture.overview.needs_you=[];
+ fixture.overview.quarantine=[
+ {id:'legacy-invalid',peer:'brin/desktop',code:'invalid',reason:'invalid',detail:'The original detailed reason was not recorded or is unavailable.',recovery:'The retained message stays blocked. You can archive this notice locally; this does not accept, resend, or run it.',at:'2026-10-05T10:00:00Z',can_archive:true},
+ {id:'invalid-ended-invite',peer:'brin/desktop',code:'invalid',reason:'invalid',detail_code:'group_invitation_outdated',detail:'This invitation no longer matches the current group.',recovery:'If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice.',can_archive:true,at:'2026-10-05T10:01:00Z'},
+ {id:'legacy-unknown',peer:'brin/desktop',code:'old_unknown_code',reason:'legacy unknown',at:'2026-10-05T10:02:00Z'},
+ {id:'proof-waiting',peer:'brin/desktop',code:'proof_pending',reason:'proof_pending',can_archive:false,at:'2026-10-05T10:03:00Z'}];
+ fixture.retainedHeld=structuredClone(fixture.overview.quarantine);
+}
 let open,changed;
-const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async f=>{if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
-fixture.requests.push({path:p,body});if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);if(p.startsWith('/api/dm?'))return structuredClone(fixture.thread);
+const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
+fixture.requests.push({path:p,body});if(variant==='heldback'&&p==='/api/act'){
+ if(body.do!=='archive_held'||body.id!=='invalid-ended-invite')throw Error('Unexpected or unauthorized held action');
+ fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>q.id!==body.id);
+ return {note:'Notice archived on this device. Its envelope remains blocked.'};
+}if(variant==='multi-agent'&&p==='/api/dm/agent/ask'){if(body.pid==='agent-b'&&!fixture.failedOnce){fixture.failedOnce=true;throw Error('Synthetic exact participation failure');}return {id:body.id,lid:body.id,state:'custody',state_text:'Stored for delivery'};}if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);if(p.startsWith('/api/dm?'))return structuredClone(fixture.thread);
 if(p==='/api/get-app')return {version:'v0.8.5',detected:'linux',platforms:[{id:'linux',label:'Linux',url:'https://downloads.example/AgentNet.AppImage'},{id:'windows',label:'Windows',url:'https://downloads.example/AgentNet.exe'}]};
 if(p==='/api/device/link')return {url:'https://workspace.example/#agentnet-link-v2:fixture',app_url:'agentnet://open#agentnet-link-v2:fixture',expires:'2026-10-08T23:59:00Z'};
 if((variant==='device-oks'||variant.startsWith('delivery-'))&&p.startsWith('/api/thread?'))return structuredClone(new URL(p,location.origin).searchParams.get('id')==='8'.repeat(32)?fixture.otherDeviceThread:fixture.deviceThread);
@@ -108,7 +125,7 @@ const skinRoot=document.createElement('div');skinRoot.className='skin-root';shad
 window.openGroup=()=>open(seed.thread.id,'conversation');window.openFixtureMessage=id=>open(id,'message');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
 window.disableInvite=()=>{Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});changed?.({type:'change',seq:++fixture.overview.seq});};window.ready=true;
 `;
-const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0.0.1');if(u.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>');return;}if(u.pathname==='/boot.mjs'){res.setHeader('Content-Type','text/javascript');res.end(boot);return;}const source=u.pathname.match(/^\/assets\/skins\/(classic|zoom)\/entry\.mjs$/);if(source){res.setHeader('Content-Type','text/javascript');res.end(fs.readFileSync(path.resolve(__dirname,'../skins',source[1],'src/entry.mjs')));return;}if(u.pathname.startsWith('/assets/')){const file=path.resolve(root,'.'+u.pathname.slice(7));if(file.startsWith(root+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.woff2')?'font/woff2':'application/octet-stream');res.end(fs.readFileSync(file));return;}}res.statusCode=404;res.end('fixture route missing');});
+const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0.0.1');if(u.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>');return;}if(u.pathname==='/boot.mjs'){res.setHeader('Content-Type','text/javascript');res.end(boot);return;}if(u.pathname.startsWith('/assets/')){const file=path.resolve(root,'.'+u.pathname.slice(7));if(file.startsWith(root+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.woff2')?'font/woff2':'application/octet-stream');res.end(fs.readFileSync(file));return;}}res.statusCode=404;res.end('fixture route missing');});
 (async()=>{
  let browser;const errors=[],shots=[];
  try{
@@ -116,7 +133,94 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
    const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);await page.waitForFunction(()=>window.ready);if(variant==='device-oks'||variant.startsWith('delivery-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
-   if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
+// Insert before AGENTNET_DELIVERY_STOP_REGRESSION branch in existing rendered harness.
+if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
+ const {page,context}=await openCase('multi-agent');
+ try{
+  if(skin==='zoom')await page.getByRole('button',{name:'Write in this group…',exact:true}).click();
+  const field=skin==='comic'?page.locator('form[aria-label="Write a message"] textarea'):skin==='zoom'?page.locator('#write-body'):page.locator('#body');
+  await field.waitFor({state:'visible'});
+  const pick=async index=>{
+   await field.press('End');await field.pressSequentially('@');
+   // Two same-label agents on one host, distinct participation IDs, fixed DTO order.
+   const options=skin==='comic'?page.getByRole('option').filter({hasText:'Analyst'}):page.locator('.mention-row').filter({hasText:'Analyst'});
+   assert.equal(await options.count(),2,'both same-label agents must be offered');
+   await options.nth(index).click();
+  };
+  await pick(0);await pick(1);
+  // Edit the first mention away, preserving the second, then select it again.
+  await field.press('Home');for(let i=0;i<'@Analyst '.length;i++)await field.press('Delete');
+  await pick(0);await field.pressSequentially('Compare warehouse inventory');
+  const file=skin==='comic'?page.locator('form[aria-label="Write a message"] input[type=file]'):skin==='zoom'?page.locator('#write-files'):page.locator('#file-input');
+  await file.setInputFiles({name:'inventory.txt',mimeType:'text/plain',buffer:Buffer.from('synthetic inventory')});
+  if(skin==='comic')await page.locator('form[aria-label="Write a message"] button[type=submit]').click();
+  else await page.locator(skin==='zoom'?'#dialog-ok':'#send').click();
+  if(skin==='classic'&&await page.getByText('You started this text for someone else. Check the To line, then send again.',{exact:true}).isVisible())await page.locator('#send').click();
+  await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length===2);
+  const asks=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').map(r=>r.body));
+  const first=await asks();assert.deepEqual(first.map(a=>a.pid).sort(),['agent-a','agent-b']);
+  assert.notEqual(first[0].id,first[1].id,'one id per exact participation');
+  assert(first.every(a=>a.kind==='question'&&a.body.includes('Compare warehouse inventory')));
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/send').length),0,'no ordinary-message fallback');
+  assert.equal(first[0].files.length,1);assert.equal(first[1].files.length,1);
+  assert.notDeepEqual(first[0].files[0],first[1].files[0],'each request owns separately staged upload');
+  assert.equal(await page.evaluate(()=>fixture.stages.length),2);
+  await page.getByRole('button',{name:'Retry',exact:true}).click();
+  await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length===3);
+  const after=await asks(),failed=first.find(a=>a.pid==='agent-b');
+  assert.equal(after[2].pid,'agent-b');assert.equal(after[2].id,failed.id);
+  assert.equal(after[2].files.length,1);assert.notDeepEqual(after[2].files,first.find(a=>a.pid==='agent-a').files,'failed retry never uses successful request upload');
+  assert.equal(after.filter(a=>a.pid==='agent-a').length,1,'successful participation never resent');
+  assert((await page.evaluate(()=>fixture.stages.length))<=3,'at most the failed request file restaged');
+  await page.evaluate(()=>{fixture.thread.messages.push({id:'incoming-ref',lid:'incoming-ref',from:'brin/desktop',dir:'in',kind:'message',body:'[@Analyst](agentnet:agent/agent-a) [@Analyst](agentnet:agent/agent-b) INERT_INCOMING_MARKER',at:'2026-10-05T10:03:00Z'});reloadFixture();});
+  await page.getByText(/INERT_INCOMING_MARKER/).first().waitFor();await settle(page);
+  assert.equal((await asks()).length,3,'incoming text never originates fanout');
+  const shot=path.join(evidence,skin+'-multi-agent-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+ }catch(e){const shot=path.join(evidence,skin+'-multi-agent-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,shot,errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}
+ finally{await context.close();}
+ continue;
+}
+
+   // Insert before delivery regression branch, within existing skin/width loop.
+if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
+ const {page,context}=await openCase('heldback');
+ try{
+  if(skin==='comic'){
+   if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+   await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();
+  }else{
+   if(width===390){if(skin==='zoom')await page.getByRole('navigation',{name:'Zoom level',exact:true}).getByRole('button',{name:'Everyone',exact:true}).click();else await page.getByRole('button',{name:'Back to conversations',exact:true}).click();}
+   await page.locator('#profile-btn').click();await page.locator('[data-settings="device"]').click();
+   await page.locator('#quarantine-summary').click();
+  }
+  const held=skin==='comic'?page.getByRole('region',{name:'Held back',exact:true}):page.locator('#quarantine');
+  await held.waitFor({state:'visible'});
+  assert.equal(await held.locator('li').count(),4);
+  const specific=held.locator('li').filter({hasText:'This invitation no longer matches the current group.'});
+  await specific.getByText('If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice.',{exact:true}).waitFor();
+  assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),2);
+  assert.equal(await held.getByRole('button',{name:/Accept|Approve|Run task|Trust/}).count(),0,'held notices cannot authorize execution or identity');
+  assert(!/SECRET_HELD_BODY|SECRET_HELD_ATTACHMENT/.test(await held.innerText()),'encrypted contents never shown');
+  // Old invalid DTO has no detail/recovery: safe generic fallback remains.
+  await held.getByText('The original detailed reason was not recorded or is unavailable.',{exact:true}).waitFor();
+  const unknown=held.locator('li').filter({hasText:skin==='comic'?"couldn’t be checked":"couldn't be verified"});
+  assert.equal(await unknown.count(),1,'unknown old classification stays unverified');
+  assert.equal(await unknown.getByRole('button',{name:'Archive notice'}).count(),0);
+  await specific.getByRole('button',{name:'Archive notice',exact:true}).click();
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.do==='archive_held'));
+  await page.waitForFunction(()=>fixture.overview.quarantine.length===3);
+  await page.waitForFunction(()=>!document.querySelector('#skin').shadowRoot.textContent.includes('This invitation no longer matches the current group.'));
+  assert.deepEqual(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/act').map(r=>r.body)),[{do:'archive_held',id:'invalid-ended-invite'}]);
+  assert.deepEqual(await page.evaluate(()=>fixture.overview.quarantine.map(q=>q.id).sort()),['legacy-invalid','legacy-unknown','proof-waiting']);
+  assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),4,'local notice hide retains blocked envelope metadata');
+  assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),1,'other invalid notice remains');
+  const shot=path.join(evidence,skin+'-heldback-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+ }catch(e){const shot=path.join(evidence,skin+'-heldback-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,shot,errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}
+ finally{await context.close();}
+ continue;
+}
+
+if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
     for(const scenario of ['never','never-native','uncertain','uncertain-native','custody','delivered','running','answered','queued-error']){
      const {page,context}=await openCase('delivery-'+scenario),request='9'.repeat(32);
      await page.evaluate(id=>openFixtureMessage(id),request);

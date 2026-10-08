@@ -158,7 +158,8 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 func quarantineItems(q []client.Quarantined) []QuarantineItem {
 	out := make([]QuarantineItem, 0, len(q))
 	for _, x := range q {
-		out = append(out, QuarantineItem{ID: x.ID, Peer: x.Sender, Code: holdCode(x.Reason), Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
+		detail, recovery := heldNoticeText(x.DetailCode, x.Reason)
+		out = append(out, QuarantineItem{CanArchive: x.Reason == "invalid", DetailCode: x.DetailCode, Detail: detail, Recovery: recovery, ID: x.ID, Peer: x.Sender, Code: holdCode(x.Reason), Reason: holdReason(x.Reason, x.Sender), At: x.ReceivedAt})
 	}
 	return out
 }
@@ -513,6 +514,9 @@ func (l *Live) Act(x Action) (string, error) {
 	case DoRevokeTasks:
 		_, err = l.a.RevokeTasks(x.ID)
 		note = "Tasks from " + x.ID + " wait for you again."
+	case DoArchiveHeld:
+		err = l.a.ArchiveHeldNotice(x.ID)
+		note = "Notice archived locally. The retained message has not been accepted or run."
 	case DoRead:
 		err = l.a.MarkRead(x.IDs)
 	default:
