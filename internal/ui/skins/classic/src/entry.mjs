@@ -1,3 +1,4 @@
+import { rawLinkParts } from "./link-text.mjs";
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
 import { avatarPicture, openPictureEditor, pastePictures } from "./pictures.mjs";
 import { topicControls } from './topics.mjs';
@@ -2217,7 +2218,7 @@ function dmMsg(m, t, prev, compact = false) {
       reactionsRow(m, t.id),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
       agentDetail && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && el("div", {class:"agent-turn", role:"region", tabindex:"-1", "aria-label":"Your agent says"},
-        el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"), el("p", {class:"agent-detail"}, agentDetail),
+        el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your attention"), el("p", {class:"agent-detail"}, agentDetail),
         !acts.length && m.target && el("p", {class:"hint"}, "Open it on " + deviceWords(m.target.address))),
       acts.length > 0 && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text),
         proposalCard(m.proposal),
@@ -2498,6 +2499,9 @@ function mentionNodes(text, t = state.dmData) {
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
+}
+function messageNodes(text) {
+  return rawLinkParts(text).flatMap(part => typeof part === "string" ? mentionNodes(part, state.dm ? state.dmData : null) : [el("a", {href:part.href, target:"_blank", rel:"noopener noreferrer", title:part.href, "aria-label":part.href}, part.label)]);
 }
 // decodeMentions gives text as it is edited (@Name) and its exact mentions.
 function decodeMentions(text) {
@@ -2965,7 +2969,7 @@ function renderReview(items) {
   fill($("review-list"), ...conversations.map(c => {
     const chat = (state.overview.dms || []).find(d => d.id === c.conv);
     return el("li", {}, el("button", {type:"button", onclick:()=>{ toggleReview(false); openMessage({id:c.id,conv:c.conv}); }},
-      el("strong", {}, c.reason === "agent_interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"),
+      el("strong", {}, c.reason === "agent_interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your attention"),
       el("span", {class:"review-why"}, "In " + (chat?.title || (chat?.peer ? "your chat with " + (chat.peer.label || "this person") : "a chat")))),
       c.why && el("details", {}, el("summary", {}, "Read the agent’s whole message"), el("p", {class:"agent-detail"}, c.why)),
       c.decide_on && el("p", {class:"hint"}, "Open it on " + deviceWords(c.decide_on)));
@@ -3478,7 +3482,7 @@ function bodyOf(m) {
   const target = (m.kind === "question" || m.kind === "task") && m.pid ? agentOf(m.pid) : null;
   const recipient = (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"addressed-agent", "data-agent-recipient":"", title:m.pid}, "To @" + (target ? agentName(target) : "agent") + "\n");
   if (confirmedTask(m)) return approvalBody(m, recipient);
-  return el("p", { class: "body" }, recipient, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+  return el("p", { class: "body" }, recipient, messageNodes(shownText(m)), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
 }
 
 // Only the signed projection's bound confirmation is compact, never matching text.
@@ -3745,7 +3749,7 @@ function decide(a, m, t) {
     };
     dialog({title:"Answer your agent",ok:"Send answer",focus:text,body:[
       el("p",{class:"agent-detail"},m.job_detail || m.detail || ""),
-      el("p",{class:"hint"},"Continues this request with your answer and the agent’s question. Its existing permissions still apply."),
+      el("p",{class:"hint"},"Reply supplies missing information for this request. If the agent reports a permission or environment problem, resolve it in the native agent on its host computer first. Reply and retry keep the same permissions."),
       el("label",{for:"agent-answer",class:"field-label"},"Your answer"),text],run:send});
     $("dialog-ok").disabled = true;
     text.addEventListener("input",()=>{if(!state.dialogBusy)$("dialog-ok").disabled=!text.value.trim();});

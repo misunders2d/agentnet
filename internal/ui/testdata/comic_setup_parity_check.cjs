@@ -118,12 +118,14 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
       if(skin!=='comic') {
         await p.locator('#profile-btn').click();await p.locator('#settings-tab-device').click();
         const setup=p.locator('#assistant-setup');
-        if(platform==='browser') {await setup.getByText(/This browser cannot inspect or install software/).waitFor(T);assert.equal(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').length),0);await snap('browser-agent-setup');}
+        if(platform==='browser') {await setup.getByRole('heading',{name:'Connect an agent on your computer',exact:true}).waitFor(T);assert.equal(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').length),0);await snap('browser-agent-setup');}
         else {
           await setup.getByRole('button',{name:'Set up your agents',exact:true}).click();await setup.getByText('Ready',{exact:true}).waitFor(T);
           await p.evaluate(()=>{__p24.nativeUnsupported();window.dispatchEvent(new Event('focus'));});
           await setup.getByText(/Unsupported: Synthetic/).waitFor({state:'attached',...T});
           assert.equal(await setup.getByRole('checkbox',{name:'Set up Codex',exact:true}).isEnabled(),true);
+          assert.equal(await setup.getByRole('combobox').count(),0,'sole exact agent needs no selector');
+          await setup.getByText('Agent: Fictional helper',{exact:true}).waitFor(T);
           await setup.getByRole('button',{name:'Review changes',exact:true}).click();await setup.getByRole('button',{name:'Confirm setup',exact:true}).click();await setup.getByText('Ready',{exact:true}).waitFor(T);
           assert.ok(await p.evaluate(()=>__p24.calls.filter(c=>c.path==='/api/assistant-setup').every(c=>c.body===undefined)));
           assert.equal(await p.locator('#responder').isVisible(),false,'default answers remain subordinate');await snap('hook-unsupported-ready-agent');
@@ -163,6 +165,7 @@ const T = { timeout: 15000 }, shots = process.env.AGENTNET_SCREENSHOTS || '';
         await p.getByRole('button', { name: 'Find them', exact: true }).click();
         await p.getByText('Ready', { exact: true }).waitFor(T);
         await p.getByText('Fictional helper is set up for chats, questions and approved tasks.',{exact:true}).waitFor(T);
+        await p.getByText('Agent: Fictional helper',{exact:true}).waitFor(T);assert.equal(await p.getByRole('radio',{name:'Fictional helper',exact:true}).count(),0,'sole exact agent needs no selector');
         assert.equal(await p.getByRole('radio',{name:/Codex/}).isVisible(),false,'default responder is subordinate');
         await p.getByText('Native sessions',{exact:true}).click();
         const reads = await p.evaluate(() => __p24.calls.filter(c => c.path === '/api/assistant-setup').length);

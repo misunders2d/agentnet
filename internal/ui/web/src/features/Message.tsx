@@ -173,7 +173,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, readO
         {confirm !== null && <DeleteMessage open={confirm} onOpenChange={setConfirm} m={m} ctx={ctx} />}
         {remind !== null && <RemindSheet open={remind} onOpenChange={setRemind} m={remindable} r={reminder} />}
       </div>
-      {!readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <section data-agent-needs-you tabIndex={-1} aria-label="Your agent says" className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4"><p className="font-bold">Your agent couldn’t finish — it needs your answer</p><p className="pt-1 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{needsHumanDetail}</p><p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p></section>}
+      {!readOnly && !isThreadMsg(m) && needsHumanDetail && m.exec?.state === "needs_human" && !(m.actions || []).length && <section data-agent-needs-you tabIndex={-1} aria-label="Your agent says" className="mx-3 mt-2 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink sm:mx-4"><p className="font-bold">Your agent couldn’t finish — it needs your attention</p><p className="pt-1 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{needsHumanDetail}</p><p className="pt-2 text-[13px]">Open it on {deviceWords(m.target?.address || "", ctx.overview)}.</p></section>}
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
       {!readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
         <div className="mx-auto mt-2.5 w-full max-w-[600px] px-3 empty:hidden sm:px-4">

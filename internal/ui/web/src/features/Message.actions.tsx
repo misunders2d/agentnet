@@ -146,7 +146,7 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
     dx,
     handlers: {
       onPointerDown: (e: PointerEvent) => {
-        if (e.pointerType !== "touch" || !inside(e)) return;
+        if (e.pointerType !== "touch" || !inside(e) || (e.target as Element).closest("a[href]")) return;
         const timer = window.setTimeout(() => {
           if (!g.current || g.current.moved) return;
           g.current = null;
@@ -165,7 +165,11 @@ export function useTouchGestures(onLongPress: () => void, onSwipe: (() => void) 
       },
       onPointerUp: end,
       onPointerCancel: () => { if (g.current) clearTimeout(g.current.timer); g.current = null; setDx(0); },
-      onContextMenu: (e: MouseEvent) => { if ((e.nativeEvent as globalThis.PointerEvent).pointerType === "touch" || g.current) e.preventDefault(); },
+      onContextMenu: (e: MouseEvent) => {
+        // Keep the browser's full-target inspection/copy menu on links.
+        if ((e.target as Element).closest("a[href]")) return;
+        if ((e.nativeEvent as globalThis.PointerEvent).pointerType === "touch" || g.current) e.preventDefault();
+      },
     },
   };
 }

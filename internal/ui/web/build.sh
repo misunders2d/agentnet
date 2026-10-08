@@ -33,6 +33,10 @@ cp "$here/../skins/classic/src/drivespace-setup.mjs" "$work/src/drive-setup.mjs"
 cd "$work"
 npm ci --ignore-scripts --no-audit --no-fund >/dev/null
 ./node_modules/.bin/tsc -p tsconfig.json
+# Reuse the pinned lexer for raw-link labels in the plain-text bundled skins.
+./node_modules/.bin/esbuild src/linkText.ts --bundle --format=esm --platform=browser --target=es2022 \
+  --minify --legal-comments=eof --log-level=warning --outfile="$here/../skins/shared/link-text.mjs"
+{ printf '\n/*!\n'; cat node_modules/marked/LICENSE; printf '\n*/\n'; } >> "$here/../skins/shared/link-text.mjs"
 rm -rf "$out" && mkdir -p "$out"
 ./node_modules/.bin/esbuild src/main.tsx --bundle --format=esm --platform=browser --target=es2022 \
 	--jsx=automatic --minify --legal-comments=eof --define:process.env.NODE_ENV='"production"' \

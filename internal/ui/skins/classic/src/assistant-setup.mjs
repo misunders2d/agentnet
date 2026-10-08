@@ -181,7 +181,8 @@ export async function mountAssistantSetup({ root, api, isCurrent = () => true, i
      if (!managed(h.id)) config.append(node('p', 'An AgentNet agent cannot run with this tool here yet. Existing agents stay as they are.', 'setup-note'));
      else {
       const c = configFor(h), matches = records(h.id);
-      if (matches.length) { const label = node('label', 'Conversation assistant'); const select = doc.createElement('select'); select.setAttribute('aria-label', h.label + ' conversation assistant'); const placeholder = node('option', 'Choose an existing assistant'); placeholder.value = ''; placeholder.disabled = true; select.append(placeholder);
+      if (matches.length === 1 && c.id === matches[0].record.id) config.append(node('p', 'Agent: ' + matches[0].record.label));
+      else if (matches.length > 0) { const label = node('label', 'Agent'); const select = doc.createElement('select'); select.setAttribute('aria-label', h.label + ' conversation assistant'); const placeholder = node('option', 'Choose an existing assistant'); placeholder.value = ''; placeholder.disabled = true; select.append(placeholder);
        for (const a of matches) { const option = node('option', a.record.label); option.value = a.record.id; option.selected = a.record.id === c.id; select.append(option); }
        if (!c.id) select.value = ''; select.disabled = busy; select.onchange = () => { const a = matches.find(x => x.record.id === select.value); if (a) { Object.assign(c, { id: a.record.id, label: a.record.label, dir: a.responder.dir, requireChoice: false }); draw(); } }; label.append(select); config.append(label);
       } else { const label = node('label', 'Assistant name'); const field = doc.createElement('input'); field.type = 'text'; field.value = c.label; field.maxLength = 64; field.setAttribute('aria-label', h.label + ' assistant name'); field.disabled = busy; field.oninput = () => c.label = field.value; label.append(field); config.append(label); }

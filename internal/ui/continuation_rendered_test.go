@@ -29,3 +29,7 @@ func TestNeedsHumanContinuationRendered(t *testing.T) {
 func TestPendingStaleInvitationDeclineRendered(t *testing.T) {
 	continuationRendered(t, "AGENTNET_DECLINE_INVITATION_REGRESSION")
 }
+
+func TestLongLinkLabelsRendered(t *testing.T) {
+	continuationRendered(t, "AGENTNET_LONG_LINK_REGRESSION")
+}

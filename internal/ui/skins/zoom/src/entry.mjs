@@ -1,3 +1,4 @@
+import { rawLinkParts } from "./link-text.mjs";
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
 import { avatarPicture, openPictureEditor, pastePictures } from "./pictures.mjs";
 import { topicControls } from './topics.mjs';
@@ -2391,6 +2392,9 @@ function mentionNodes(text, t = state.dmData) {
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
+function messageNodes(text) {
+  return rawLinkParts(text).flatMap(part => typeof part === "string" ? mentionNodes(part, state.dm ? state.dmData : null) : [el("a", {href:part.href, target:"_blank", rel:"noopener noreferrer", title:part.href, "aria-label":part.href}, part.label)]);
+}
 // decodeMentions gives text as it is edited (@Name) and its exact mentions.
 function decodeMentions(text) {
   const s = String(text || ""), spans = [];
@@ -2863,7 +2867,7 @@ function renderReview(items) {
   fill($("review-list"), ...conversations.map(c => {
     const chat = (state.overview.dms || []).find(d => d.id === c.conv);
     return el("li", {}, el("button", {type:"button", onclick:()=>{ toggleReview(false); openMessage({id:c.id,conv:c.conv}); }},
-      el("strong", {}, c.reason === "agent_interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"),
+      el("strong", {}, c.reason === "agent_interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your attention"),
       el("span", {class:"review-why"}, "In " + (chat?.title || (chat?.peer ? "your chat with " + (chat.peer.label || "this person") : "a chat")))),
       c.why && el("details", {}, el("summary", {}, "Read the agent’s whole message"), el("p", {class:"agent-detail"}, c.why)),
       c.decide_on && el("p", {class:"hint"}, "Open it on " + deviceWords(c.decide_on)));
@@ -3311,7 +3315,7 @@ function bodyOf(m) {
   const target = (m.kind === "question" || m.kind === "task") && m.pid ? agentOf(m.pid) : null;
   const recipient = (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"addressed-agent", "data-agent-recipient":"", title:m.pid}, "To @" + (target ? agentName(target) : "agent") + "\n");
   if (confirmedTask(m)) return approvalBody(m, recipient);
-  return el("p", { class: "body" }, recipient, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+  return el("p", { class: "body" }, recipient, messageNodes(shownText(m)), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
 }
 
 // Only the signed projection's bound confirmation is compact, never matching text.
@@ -3512,7 +3516,7 @@ function agentDetailFor(m, t) {
 
 function agentNeedsYouTurn(m, t) {
   return el("section", {class:"agent-turn", "aria-label":"Your agent says"},
-    el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your answer"),
+    el("strong", {}, (m.exec?.state || m.state) === "interrupted" ? "Your agent was interrupted — run it again if needed" : "Your agent couldn’t finish — it needs your attention"),
     el("p", {class:"agent-detail"}, agentDetailFor(m, t)),
     (m.actions || []).length ? el("div", {class:"acts"}, m.actions.map((a,i)=>actionButton(a,m,t,i===0)))
       : m.target && el("p", {class:"hint"}, "Open it on " + deviceWords(m.target.address)));
@@ -3541,7 +3545,7 @@ function decide(a, m, t) {
     };
     dialog({title:"Answer your agent",ok:"Send answer",focus:text,body:[
       el("p",{class:"agent-detail"},m.job_detail || m.detail || ""),
-      el("p",{class:"hint"},"Continues this request with your answer and the agent’s question. Its existing permissions still apply."),
+      el("p",{class:"hint"},"Reply supplies missing information for this request. If the agent reports a permission or environment problem, resolve it in the native agent on its host computer first. Reply and retry keep the same permissions."),
       el("label",{for:"agent-answer",class:"field-label"},"Your answer"),text],run:send});
     $("dialog-ok").disabled = true;
     text.addEventListener("input",()=>{if(!state.dialogBusy)$("dialog-ok").disabled=!text.value.trim();});
@@ -5446,7 +5450,7 @@ const Zoom = {
         const bubble = el(compact ? "div" : "button", { ...(compact ? {} : {type:"button"}), class: compact ? "mc-bubble compact-approval-bubble" : "mc-bubble" },
           el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + (to ? " · to " + to : "") + " · " + sentWhen(m)),
           !m.deleted && (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"mc-who", "data-agent-recipient":"", title:m.pid}, "To @" + (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "agent")),
-          compact ? approvalBody(m) : !groupPart && el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
+          compact ? approvalBody(m) : !groupPart && el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : messageNodes(shownText(m)), !m.deleted && m.edited ? " · edited" : ""),
           !m.deleted && (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         if (compact) bubble.append(el("button", {type:"button",class:"text-btn",onclick:()=>this.go(3,{msg:m.id},bubble)}, "Message details"));
@@ -5512,7 +5516,7 @@ const Zoom = {
         const compact = !m.deleted && confirmedTask(m);
         const bubble = el(compact ? "div" : "button", { ...(compact ? {} : {type:"button"}), class: compact ? "mc-bubble compact-approval-bubble" : "mc-bubble" },
           el("span", { class: "mc-who" }, authorName(m) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + sentWhen(m)),
-          compact ? approvalBody(m) : el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
+          compact ? approvalBody(m) : el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : messageNodes(shownText(m)), !m.deleted && m.edited ? " · edited" : ""),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
         if (compact) bubble.append(el("button", {type:"button",class:"text-btn",onclick:()=>this.go(3,{msg:m.id},bubble)}, "Message details"));
         else bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));

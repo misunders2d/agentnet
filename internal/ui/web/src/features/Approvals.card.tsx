@@ -161,7 +161,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
         {phase === "needs_human" || (phase === "stopped" && said) ? (
           <div data-agent-needs-you={phase === "needs_human" || undefined} role="region" aria-label="Your agent says" tabIndex={-1} className="mx-4 mt-3 rounded-xl bg-agent px-3.5 py-2.5 text-agent-ink">
-            <p className="text-[13px] font-bold">{phase === "needs_human" ? "Your agent couldn’t finish — it needs your answer" : capital(agent) + " says"}</p>
+            <p className="text-[13px] font-bold">{phase === "needs_human" ? "Your agent couldn’t finish — it needs your attention" : capital(agent) + " says"}</p>
             <p className="pt-0.5 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{said || "It needs a person to decide. It didn't say more."}</p>
           </div>
         ) : null}
@@ -194,6 +194,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
+            <p className="text-[14px] text-text-2">Reply supplies missing information. For a permission or environment problem, review the native agent on its host computer first. Asking again keeps the same permissions.</p>
             {m.continuation && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={() => setAnswer({request: {...m.continuation!}, send: sendID(), question: said})}>Reply</Button>}
             {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
             {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}

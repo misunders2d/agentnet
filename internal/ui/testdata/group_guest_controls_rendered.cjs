@@ -27,6 +27,12 @@ if(variant==='guest-active'||variant==='guest-invited'){
  Object.assign(fixture.thread.guests[0],{host_here:true,can_end:false,can_leave:variant==='guest-active',can_decide:variant==='guest-invited',can_send:variant==='guest-active',state:variant==='guest-active'?'active':'invited'});
  fixture.overview.group_invitations=[];
 }
+if(variant==='long-links'){
+ fixture.url='https://example.test/folder/'+('long-segment/'.repeat(12))+'?q=a%2Fb&value=%E2%9C%93#section-2';
+ fixture.linkBody='Read '+fixture.url+' then <'+fixture.url+'>.\\n[Useful guide]('+fixture.url+')\\n'+String.fromCharCode(96)+fixture.url+String.fromCharCode(96)+'\\n\\n~~~text\\n'+fixture.url+'\\n~~~';
+ fixture.thread.messages.push({id:'long-links',lid:'long-links',from:'brin/desktop',dir:'in',kind:'message',body:fixture.linkBody,at:'2026-10-05T10:02:00Z'});
+ fixture.overview.group_invitations=[];
+}
 if(variant==='oks'){
  fixture.thread.kind='dm';fixture.thread.peer=${JSON.stringify(brin)};fixture.thread.guests=[];fixture.thread.members=[];
  fixture.thread.topics=[{id:'work-topic',title:'Warehouse check',state:'active',count:1,last_at:'2026-10-05T10:00:00Z'},{id:'other-topic',title:'Carrier review',state:'active',count:1,last_at:'2026-10-05T10:00:00Z'}];
@@ -160,6 +166,31 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
    const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
 // Insert before AGENTNET_DELIVERY_STOP_REGRESSION branch in existing rendered harness.
+if(process.env.AGENTNET_LONG_LINK_REGRESSION==='1'){
+ const {page,context}=await openCase('long-links');
+ try {
+  const message=page.locator(skin==='comic'?'[data-mid="long-links"]':'#m-long-links');await message.waitFor();
+  const url=await page.evaluate(()=>fixture.url),body=await page.evaluate(()=>fixture.linkBody);
+  const links=message.getByRole('link',{name:url,exact:true});assert.equal(await links.count(),2);
+  for(const link of await links.all()){
+   assert.equal(await link.innerText(),'example.test/…');assert.equal(await link.getAttribute('href'),url);assert.equal(await link.getAttribute('title'),url);
+   assert.equal(await link.evaluate(e=>e.href),url,'Native open/copy-link uses exact target');
+   if(width===390)assert(await link.evaluate(async e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',pointerId:9}));await new Promise(r=>setTimeout(r,500));const native=e.dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,cancelable:true,pointerType:'touch',pointerId:9}));e.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'touch',pointerId:9}));return native;}),'Long press keeps native full-target/copy-link menu');
+  }
+  assert((await message.innerText()).includes('Useful guide'),'Descriptive label unchanged');
+  assert((await message.innerText()).includes(url),'Code retains full URL');
+  assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id==='long-links').body),body,'Stored/copy/edit source unchanged');
+  if(skin==='comic'){
+   await page.evaluate(()=>{window.copiedText=null;Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedText=text;}}});});
+   if(width===390){const actions=message.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');await page.getByRole('dialog').getByRole('button',{name:'Copy text',exact:true}).click();}
+   else{await message.hover();await message.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Copy text',exact:true}).click();}
+   assert.equal(await page.evaluate(()=>window.copiedText),body,'Copy message retains the entire original URL');
+  }
+  await settle(page);const shot=path.join(evidence,skin+'-long-links-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  assert(await message.evaluate(e=>e.scrollWidth<=e.clientWidth+1),'Message stays within viewport');
+ }finally{await context.close();}
+ continue;
+}
 if(process.env.AGENTNET_CONTINUATION_REGRESSION==='1'){
  for(const mode of ['local','remote','stale']){
   const {page,context}=await openCase('continuation-'+mode);
@@ -178,6 +209,7 @@ if(process.env.AGENTNET_CONTINUATION_REGRESSION==='1'){
     await continuationReply.click();
     const dialog=page.getByRole('dialog',{name:'Answer your agent',exact:true});await dialog.waitFor();
     assert((await dialog.innerText()).includes('EXACT_QUESTION'),'Agent clarification shown in full');
+    assert.match(await dialog.innerText(),/permission or environment problem/);assert.match(await dialog.innerText(),/Reply and retry keep the same permissions/);
     const send=dialog.getByRole('button',{name:'Send answer',exact:true});assert(await send.isDisabled(),'Empty answer cannot be submitted');
     await dialog.locator('#agent-answer').fill('Use the east warehouse');await send.click();
     await page.waitForFunction(()=>fixture.continuationFailed);await send.waitFor();

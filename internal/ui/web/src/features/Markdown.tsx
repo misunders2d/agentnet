@@ -5,6 +5,7 @@
 // the caller, who knows who is in the conversation.
 import { Lexer, type Token, type Tokens } from "marked";
 import { Fragment, useMemo, type ReactNode } from "react";
+import { shortLinkLabel } from "../linkText";
 
 export type MentionKind = "person" | "guest" | "agent";
 export type RenderMention = (kind: MentionKind, id: string, name: string) => ReactNode;
@@ -109,10 +110,12 @@ function span(t: Tokens.Generic, mention?: RenderMention): ReactNode {
       const ref = mentionHref.exec(l.href);
       if (ref && mention && l.text.startsWith("@")) return mention(ref[1] as MentionKind, ref[2], l.text.slice(1));
       if (!safeHref.test(l.href)) return inline(l.tokens, mention);
+      const label = shortLinkLabel(l.text, l.href);
+      const shortened = label !== l.text;
       return (
-        <a href={l.href} target="_blank" rel="noopener noreferrer" title={l.title || undefined}
+        <a href={l.href} target="_blank" rel="noopener noreferrer" title={shortened ? l.href : l.title || undefined} aria-label={shortened ? l.href : undefined}
           className="font-medium underline decoration-current/40 decoration-[1.5px] underline-offset-2 hover:decoration-current">
-          {l.autolink ? l.text : inline(l.tokens, mention)}
+          {shortened ? label : l.autolink ? l.text : inline(l.tokens, mention)}
         </a>
       );
     }

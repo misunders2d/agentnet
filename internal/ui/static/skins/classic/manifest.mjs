@@ -20,7 +20,8 @@ export default {
     "topics.mjs",
     "person-topics.mjs",
     "optimistic.mjs",
-    "pictures.mjs"
+    "pictures.mjs",
+    "link-text.mjs"
   ]
 }
 ;

@@ -56,7 +56,7 @@ export function AnswerSheet({ question, onClose, onSend }: {
   return <Sheet open onOpenChange={(open) => { if (!open) onClose(); }} title="Answer your agent"
     footer={<Button size="lg" disabled={busy || !text.trim()} onClick={() => void send()}>{busy ? "Sending…" : "Send answer"}</Button>}>
     {question && <p className="whitespace-pre-wrap text-text-2 [overflow-wrap:anywhere]">{question}</p>}
-    <p className="mt-3 text-[14px] text-text-2">Continues this request with your answer and the agent’s question. Its existing permissions still apply.</p>
+    <p className="mt-3 text-[14px] text-text-2">Reply supplies missing information for this request. If the agent reports a permission or environment problem, resolve it in the native agent on its host computer first. Reply and retry keep the same permissions.</p>
     <label htmlFor="agent-answer" className="mt-4 block text-[14px] font-bold">Your answer</label>
     <textarea id="agent-answer" rows={4} value={text} onChange={(e) => setText(e.target.value)} maxLength={8000} disabled={busy}
       className="mt-1.5 w-full resize-none rounded-2xl bg-surface stroke px-3.5 py-2.5 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-agent-ink" />

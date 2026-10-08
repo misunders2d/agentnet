@@ -280,9 +280,9 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
   const name = "setup-agent-" + h.id;
   return (
     <div className="space-y-3 border-t border-hairline p-3">
-      {mine.length > 0 ? (
+      {mine.length === 1 && pick.id === mine[0].record.id ? <p className="text-[14px] font-semibold">Agent: {mine[0].record.label}</p> : mine.length > 0 ? (
         <fieldset>
-          <legend className="text-[14px] font-bold">Its agent</legend>
+          <legend className="text-[14px] font-bold">Agent</legend>
           <div className="mt-1.5 flex flex-col gap-2">
             {mine.map((a) => (
               <label key={a.record.id} className="flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl stroke bg-surface px-3.5 has-[:checked]:bg-agent">
@@ -295,7 +295,7 @@ function AgentChoice({ h, catalog, pick, disabled, onPick }: {
         </fieldset>
       ) : (
         <div>
-          <label htmlFor={name} className="mb-1.5 block text-[14px] font-bold">Its agent’s name</label>
+          <label htmlFor={name} className="mb-1.5 block text-[14px] font-bold">Agent name</label>
           <input id={name} className={input} value={pick.label} maxLength={NAME_MAX} disabled={disabled} autoComplete="off"
             onChange={(e) => onPick({ ...pick, label: e.target.value })} />
         </div>

@@ -129,6 +129,8 @@ for (const skin of ['classic', 'zoom']) {
    const doc=makeDocument(),root=doc.createElement('div'),s=server({unsupportedHooks:true,agents:[{record:{id:'existing',label:'Casey'},enabled:true,responder:{harness:'claude',dir:'/home/me/work',ready:true}}]});doc.documentElement.append(root);
    await mountAssistantSetup({root,api:s.api});await click(root,'Set up your agents');
    assert.equal(root.querySelector('#setup-tool-claude').disabled,false,skin);
+   assert.equal(root.querySelector('select'),null,skin+' sole exact agent needs no selector');
+   assert.match(root.textContent,/Agent: Casey/);
    assert.match(root.textContent,/Ready.*Casey is set up/);
    await click(root,'Review changes');await click(root,'Confirm setup');
    assert.match(root.textContent,/Ready.*Casey is set up/);
