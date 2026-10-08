@@ -186,8 +186,9 @@ func (a *Agent) runNextWith(ctx context.Context, wake <-chan struct{}, dispatch 
 	return true
 }
 
-// runRoomChildren serves only exact local asks caused by this still-running
-// job. Ordinary admission and output fences retain the parent chain authority.
+// runRoomChildren serves exact descendants caused by this still-running job,
+// including callbacks through remote hosts. Admission and output fences retain
+// the full parent chain authority; the local run owns context and lane cleanup.
 func (a *Agent) runRoomChildren(ctx context.Context, parent job) {
 	for ctx.Err() == nil {
 		_, changed := a.Changed()

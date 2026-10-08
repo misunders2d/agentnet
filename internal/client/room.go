@@ -298,6 +298,39 @@ func roomCauseFailure(err error) (int, string, error) {
 	return 0, "", err
 }
 
+// roomLocalParent is scheduling only: call after agentVerdict has verified the
+// whole roomChain in this same transaction. Follow admitted causal references,
+// never received labels or conversation membership alone. The nearest local
+// ancestor owns this work even when remote requests separate the two runs.
+// A durable parent with no live worker is deliberately not reassigned to roots.
+func roomLocalParent(q dbq, r agentReq, self, fp string) (string, error) {
+	h, err := storedHuman(q, "in", r.ID)
+	if err != nil || h == nil || !h.AgentAuthor() {
+		return "", err
+	}
+	c, err := roomCauseIn(q, r.Conv, r.ID, self, fp)
+	if err != nil {
+		return "", err
+	}
+	seen := map[string]bool{c.id: true}
+	for c.human != nil && c.human.AgentAuthor() {
+		c, err = roomCauseIn(q, r.Conv, c.reply, self, fp)
+		if err != nil {
+			return "", err
+		}
+		if seen[c.id] {
+			return "", errAmbiguousRoomCause
+		}
+		seen[c.id] = true
+		if c.target != nil && c.target.Address == self && c.target.Fingerprint == fp {
+			var id string
+			err = q.QueryRow(`SELECT id FROM inbox WHERE conv=? AND lid=? AND replica=0 AND state='running'`, r.Conv, c.id).Scan(&id)
+			return id, err
+		}
+	}
+	return "", nil
+}
+
 // SendRoomAsk originates only from an exact currently running group job.
 func (a *Agent) SendRoomAsk(ctx context.Context, cause, pid, kind, body string) (ConvSent, error) {
 	var conv, source, state string

@@ -18,7 +18,7 @@ type executionLane struct{ executor, parent string }
 var errExecutorBusy = errors.New("selected executor is already running")
 
 // executorAvailable is called under the lane mutex and inside the authority claim
-// transaction. Only exact local descendants may borrow their proven active
+// transaction. Only exact causal descendants may borrow their proven active
 // ancestors' lanes; unrelated work, including another participation of that
 // executor, waits. Durable claims also fence a row absent from this process.
 func (a *Agent) executorAvailable(q dbq, stamp *ExecutorStamp, parent string) (bool, error) {

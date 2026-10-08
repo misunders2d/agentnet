@@ -288,11 +288,10 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 	rows, err := tx.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(status, ''),
 		conv, pid, coalesce(target, ''), state, local, arrival
 		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND arrival > ?
-		  AND (? = '' OR (conv = ? AND reply_to = ? AND local = 1 AND json_extract(human,'$.author_pid') IS NOT NULL))
-    AND (? != '' OR NOT EXISTS (SELECT 1 FROM inbox parent WHERE parent.id=inbox.reply_to AND parent.conv=inbox.conv AND parent.state IN ('running','cancel_requested') AND inbox.local=1 AND json_extract(inbox.human,'$.author_pid') IS NOT NULL))
+		  AND (? = '' OR (conv = ? AND json_extract(human,'$.author_pid') IS NOT NULL))
 		  AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
 		  AND EXISTS (SELECT 1 FROM participation_events e WHERE e.conv = inbox.conv AND e.pid = inbox.pid)
-		ORDER BY arrival LIMIT ?`, pos, cause, conv, cause, cause, limit)
+		ORDER BY arrival LIMIT ?`, pos, cause, conv, limit)
 	if err != nil {
 		return j, false, pos, false, nil, err
 	}
@@ -333,6 +332,20 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		var res sql.Result
 		switch v {
 		case verdictRun:
+			// Admission/permission is unchanged. Scheduling follows the nearest
+			// exact local ancestor, including a callback through remote hosts.
+			// The root scheduler must not steal a descendant on a free executor:
+			// its later callbacks still need the full local lane ancestry.
+			parent := ""
+			if views[r.j.Conv+"/"+r.j.PID].m.group != nil {
+				parent, err = roomLocalParent(tx, r.j.agentReq(r.state), self, selfFP)
+				if err != nil {
+					return j, false, pos, false, nil, err
+				}
+			}
+			if parent != cause {
+				continue
+			}
 			id := ""
 			if r.j.Target != nil {
 				id = r.j.Target.AgentID
