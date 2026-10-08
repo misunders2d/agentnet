@@ -123,19 +123,22 @@ for (const [what, rec, want] of [
 ]) check(await alice.roomCopy(rec) === want, what + (want ? ' is' : ' is not') + ' a room copy');
 {
   const R = await participation(alice, bob, { audience: 'room' });
-  const rec = { id: id(), conv, to: bob.address, sub: 'event', pid: R.pid, kind: 'message', body: wire.eventJSON(R.inv), state: 'queued', detail: '', at: now,
-    envelope: await seal(alice, bob, { sub: 'event', pid: R.pid, body: wire.eventJSON(R.inv) }) };
+  const envelope = await seal(alice, bob, { sub: 'event', pid: R.pid, body: wire.eventJSON(R.inv) });
+  const rec = { id: wire.parseEnvelope(envelope).id, conv, to: bob.address, sub: 'event', pid: R.pid, kind: 'message', body: wire.eventJSON(R.inv), state: 'queued', detail: '', at: now, envelope };
+  // Other synthetic copies may drain concurrently. Assert handover of this
+  // exact durable envelope, rather than a global count of unrelated POSTs.
+  const posted = () => posts.filter(raw => raw === envelope).length;
   const bobCaps = async (names) => { const session = id(); profiles.set(bob.address, { person: JSON.parse(wire.rosterJSON(bob.roster)), live: true, sessions: [session], caps: [JSON.parse(wire.capsJSON(await wire.newCaps(bob.keys, bob.address, session, names)))] }); };
   await bobCaps([wire.CapEnv2, wire.CapPerson, wire.CapHumanParticipation]);
-  const before = posts.length;
+  const before = posted();
   await alice.store.write([{s:"outbox",k:rec.id,v:rec}]);
   await alice.post(rec);
   let kept = await alice.store.get('outbox', rec.id);
-  check(kept.state === 'waiting' && /room participation/.test(kept.detail) && posts.length === before, 'a room copy waits at a device without rm1');
+  check(kept.state === 'waiting' && /room participation/.test(kept.detail) && posted() === before, 'a room copy waits at a device without rm1');
   await bobCaps([wire.CapEnv2, wire.CapPerson, wire.CapRoom]);
   await alice.post({ ...kept, state: 'queued', detail: '' });
   kept = await alice.store.get('outbox', rec.id);
-  check(kept.state === 'custody' && posts.length === before + 1, 'and goes once that device reads rm1: ' + JSON.stringify({ state: kept.state, delivery: kept.delivery || '', detail: kept.detail || '', posts_before: before, posts_after: posts.length }));
+  check(kept.state === 'custody' && posted() === before + 1, 'and goes once that device reads rm1: ' + JSON.stringify({ state: kept.state, delivery: kept.delivery || '', detail: kept.detail || '', posts_before: before, posts_after: posted() }));
 }
 
 // ---- a group turn over stubbed group evidence: routing and storage.
