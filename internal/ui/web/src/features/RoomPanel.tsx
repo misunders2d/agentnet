@@ -88,7 +88,7 @@ export function RoomSheet() {
 
 /** bringIn opens "Bring someone in" for t; for "Bring back", with that person
  *  or agent chosen and what was said since they left already selected. */
-async function bringIn(store: Store, t: T.DMThread, wide: boolean, who?: string, since?: string, pid?: string) {
+export async function bringIn(store: Store, t: T.DMThread, wide: boolean, who?: string, since?: string, pid?: string) {
   if (pid) {
     try {
       const latest = await store.api.dm(t.id);

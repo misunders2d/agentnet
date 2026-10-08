@@ -72,6 +72,19 @@ func TestComicGroupGuestControlsRendered(t *testing.T) {
 	t.Logf("%s", out)
 }
 
+func TestComicPhoneRejoinRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright")
+	}
+	cmd := exec.CommandContext(t.Context(), "node", "testdata/group_guest_controls_rendered.cjs")
+	cmd.Env = append(os.Environ(), "AGENTNET_SCREENSHOTS="+t.TempDir(), "AGENTNET_TEST_SKINS=comic", "AGENTNET_PHONE_REJOIN_REGRESSION=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"ok":true`) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
+
 func TestComicOKsNavigationRendered(t *testing.T) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT to installed Playwright")

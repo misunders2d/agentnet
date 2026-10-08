@@ -105,6 +105,18 @@ if(variant==='multi-agent'){
 fixture.thread.guests=[];fixture.overview.group_invitations=[];fixture.stages=[];fixture.failedOnce=false;
 fixture.thread.agents=['agent-a','agent-b'].map((pid,i)=>({pid,host:fixture.thread.members[1],agent_id:String(i+1).repeat(32),state:'active',state_text:'Active',host_here:false,shared:[],can_ask:true,inviter:fixture.overview.person,invited:'2026-10-05T10:00:00Z',tasks_from:[]}));
 }
+if(variant==='phone-rejoin'){
+ fixture.thread.guests=[];fixture.overview.group_invitations=[];
+ fixture.overview.agent_devices=[fixture.thread.members[1].address];
+ fixture.thread.agents=[{pid:'old-agent',host:fixture.thread.members[1],agent_id:'1'.repeat(32),state:'active',state_text:'Active',host_here:false,shared:['old-grant'],can_ask:true,can_dismiss:true,inviter:fixture.overview.person,invited:'2026-10-05T10:00:00Z',tasks_from:[]}];
+ window.rejoinFixture=(state,notify=true,identity='same')=>{
+  const old=fixture.thread.agents[0],host={...old.host};
+  if(identity==='key')host.fingerprint='changed-key';
+  if(identity==='host')host.address='brin/other-device';
+  fixture.thread.agents=[old,{...old,pid:'new-agent',host,agent_id:identity==='name'?'2'.repeat(32):old.agent_id,state,state_text:state==='active'?'Active':'Invited',shared:['new-grant'],can_dismiss:false,can_ask:state==='active'}];
+  if(notify)changed?.({type:'change',seq:++fixture.overview.seq});
+ };
+}
 if(variant==='heldback'){
  fixture.overview.group_invitations=[];fixture.overview.review=[];fixture.overview.needs_you=[];
  fixture.overview.quarantine=[
@@ -123,6 +135,12 @@ fixture.requests.push({path:p,body});if(variant.startsWith('continuation-')&&['/
  const m=fixture.thread.messages.find(m=>m.id===c.id);m.state='running';m.job_state='running';m.actions=['cancel'];delete m.continuation;
  fixture.overview.needs_you=[];changed?.({type:'change',seq:++fixture.overview.seq});return {note:'Answer submitted to the same request.'};
 }
+if(variant==='phone-rejoin'&&p==='/api/dm/agent/dismiss'){
+ if(body.pid!=='old-agent')throw Error('Unexpected dismissal identity');
+ Object.assign(fixture.thread.agents[0],{state:'dismissed',state_text:'Dismissed',can_dismiss:false,can_ask:false});
+ return structuredClone(fixture.thread.agents[0]);
+}
+if(variant==='phone-rejoin'&&p.startsWith('/api/dm?')&&fixture.failDM)throw Error('Synthetic conversation unavailable');
 if(variant.startsWith('decline-invite-')&&p==='/api/groups/decide'){
  if(body.id!=='inbound-exact'||body.accept!==false)throw Error('Unexpected invitation decision');
  fixture.overview.group_invitations=[];changed?.({type:'change',seq:++fixture.overview.seq});return {};
@@ -165,7 +183,48 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
    const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
-// Insert before AGENTNET_DELIVERY_STOP_REGRESSION branch in existing rendered harness.
+if(process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'){
+ assert.equal(skin,'comic');if(width!==390)continue;
+ for(const mode of ['update-active','update-invited','click-active','click-invited','ended','key','name','host','error']){
+  const {page,context}=await openCase('phone-rejoin');
+  try{
+   await page.getByRole('button',{name:'Dismiss',exact:true}).click();
+   const notice=page.getByRole('status').filter({hasText:'left · dismissed by you'});
+   const back=notice.getByRole('button',{name:'Bring back',exact:true});
+   await back.waitFor();await settle(page);
+   assert.deepEqual(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/dismiss').map(r=>r.body)),[{pid:'old-agent'}]);
+   const before=await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/dm?')).length);
+   if(mode.startsWith('update-')){
+    const state=mode.slice(7);await page.evaluate(state=>rejoinFixture(state),state);
+    // Wait for the actual change-driven render, never for the 9-second snackbar expiry.
+    await page.getByText(state==='active'?/^since /:'Waiting for Brin’s OK',{exact:true}).waitFor();
+    await settle(page);assert.equal(await notice.count(),1,'Historical dismissal notice remains');
+    assert.equal(await back.count(),0,'Already active/pending exact agent must not offer Bring back');
+   }else{
+    if(mode.startsWith('click-'))await page.evaluate(state=>rejoinFixture(state,false),mode.slice(6));
+    else if(['key','name','host'].includes(mode))await page.evaluate(identity=>rejoinFixture('active',true,identity),mode);
+    else if(mode==='error')await page.evaluate(()=>{fixture.failDM=true;});
+    await back.click();await settle(page);
+    const dialog=page.getByRole('dialog',{name:'Bring someone in',exact:true});
+    if(mode.startsWith('click-')){
+     assert.equal(await dialog.count(),0,'Stale render must recheck the latest exact agent before opening the invitation');
+     await page.getByText(mode==='click-active'?'Already in this chat':'Rejoin pending',{exact:true}).waitFor();
+    }else if(mode==='error'){
+     assert.equal(await dialog.count(),0,'Failed fresh read cannot open the invitation');
+     await page.getByText('Synthetic conversation unavailable',{exact:true}).waitFor();
+    }else {
+     await dialog.waitFor();
+     if(mode==='ended')await dialog.getByRole('button',{name:'Bring Analyst in',exact:true}).waitFor();
+    }
+    assert(await page.evaluate(()=>fixture.requests.filter(r=>r.path.startsWith('/api/dm?')).length)>before,'Bring back refreshes the exact conversation before acting');
+   }
+   const shot=path.join(evidence,'comic-phone-rejoin-'+mode+'.png');await page.screenshot({path:shot});shots.push(shot);
+   assert.deepEqual(await page.evaluate(()=>fixture.thread.agents.map(a=>[a.pid,a.shared])),mode==='ended'||mode==='error'?[['old-agent',['old-grant']]]:[['old-agent',['old-grant']],['new-agent',['new-grant']]],'Past/current participation and grants stay separate');
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/dm/agent/invite','/api/dm/guest/invite','/api/groups/invite','/api/dm/agent/ask','/api/dm/send'].includes(r.path)).length),0,'Snackbar never sends an invitation or executes work');
+  }finally{await context.close();}
+ }
+ continue;
+}
 if(process.env.AGENTNET_LONG_LINK_REGRESSION==='1'){
  const {page,context}=await openCase('long-links');
  try {
@@ -563,6 +622,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    const {page,context}=await openCase('admin');await page.getByRole('button',{name:'Retract invitation…',exact:true}).filter({visible:true}).first().click();await page.evaluate(()=>disableInvite());await page.waitForTimeout(40);await page.locator('#dialog-ok').click();await page.getByText('This invitation can no longer be changed here. Refresh the conversation and review it again.',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/groups/cancel').length),0,'Stale capability blocks action');await context.close();
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

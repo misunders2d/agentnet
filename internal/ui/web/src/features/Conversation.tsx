@@ -12,7 +12,8 @@ import { MOTION, Swap, useLeaving } from "../ui/Motion";
 import { Button } from "../ui/Button";
 import { Composer } from "./Composer";
 import { InviteSheet } from "./InviteSheet";
-import { RoomSheet } from "./RoomPanel";
+import { bringIn, RoomSheet } from "./RoomPanel";
+import { agentRejoinState } from "./RoomPanel.model";
 import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
 import { TopicBar, TopicEnd } from "./Conversation.topics";
 import { PersonTopics } from "./PersonTopics";
@@ -97,10 +98,10 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
           // The room panel's words; the timeline keeps its last lines clear of it.
           <div role="status" className="pop-in flex items-center gap-3 rounded-2xl stroke bg-ink py-2 pl-4 pr-2 text-canvas shadow-pop">
             <p className="min-w-0 flex-1 text-[14px] font-semibold leading-snug">{left.name} left · dismissed by you</p>
-            <Button size="sm" variant="act" onClick={() => {
+            {t && !agentRejoinState(t, left.pid) && <Button size="sm" variant="act" onClick={() => {
               setLeft(null);
-              store.openInvite(ctx.conv, undefined, left.who ? { who: left.who, label: "Since they left" } : undefined);
-            }}>Bring back</Button>
+              void bringIn(store, t, wide, left.who, undefined, left.pid);
+            }}>Bring back</Button>}
           </div>
         )}
         empty={<EmptyTimeline title={th ? "Nothing here yet" : "Say hello"}
