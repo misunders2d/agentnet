@@ -1015,6 +1015,11 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 // proof, continuing from where the previous page ended, and reports whether
 // more follow. Messages still without proof stay held, in place.
 func (a *Agent) retryProof(ctx context.Context) (more bool) {
+	if err := a.recoverInvalidGroupHistory(); err != nil {
+		a.Logf("recovering held group history: %v", err)
+		a.convWork.due(convRetry)
+		return false
+	}
 	a.convWork.mu.Lock()
 	pos := a.convWork.pos
 	a.convWork.mu.Unlock()
@@ -1031,6 +1036,9 @@ func (a *Agent) retryProof(ctx context.Context) (more bool) {
 	a.convWork.pos = next
 	a.convWork.mu.Unlock()
 	for _, env := range envs {
+		if err := historyRecoveryCheck(a.store.db, env.From, env.ID); err != nil {
+			continue
+		}
 		sender, _, found, err := a.store.peer(env.From)
 		if err != nil || !found {
 			continue

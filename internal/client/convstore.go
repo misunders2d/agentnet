@@ -329,6 +329,9 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 		return "", err
 	}
 	defer tx.Rollback()
+	if err := historyRecoveryCheck(tx, via, carrier); err != nil {
+		return "", err
+	}
 	for _, guard := range guards {
 		if err := guard(tx); err != nil {
 			return "", err
@@ -403,6 +406,9 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 	}
 	if fromQuarantine {
 		if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, carrier); err != nil {
+			return "", err
+		}
+		if _, err := tx.Exec(`DELETE FROM config WHERE k=?`, historyRecoveryCarrier+carrier); err != nil {
 			return "", err
 		}
 	}

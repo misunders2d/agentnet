@@ -1,6 +1,7 @@
 package client
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,14 +14,18 @@ import (
 )
 
 func TestGroupParticipationHistoryLinkedRestartReorder(t *testing.T) {
-	testGroupParticipationHistoryLinkedRestartReorder(t, false)
+	testGroupParticipationHistoryLinkedRestartReorder(t, false, false)
 }
 
 func TestGroupParticipationHistoryDismissedLinkedRestartReorder(t *testing.T) {
-	testGroupParticipationHistoryLinkedRestartReorder(t, true)
+	testGroupParticipationHistoryLinkedRestartReorder(t, true, false)
 }
 
-func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed bool) {
+func TestGroupParticipationHistoryInvalidUpgradeRecovery(t *testing.T) {
+	testGroupParticipationHistoryLinkedRestartReorder(t, true, true)
+}
+
+func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, recoverInvalid bool) {
 	stub := installAgentStub(t)
 	w, producer, packet, stops := groupTurnsFixture(t)
 	host := proofReader(t, w, "history-visitor")
@@ -75,9 +80,15 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed b
 		// The inviter also retains its exact selected excerpt after the end.
 		ownPhone, ownAwait, _ := linkPhone(t, w.alice, "inviter-history")
 		ownLink := pendingLink(t, w.alice)
-		if err = w.alice.DecideLink(tctx(t), ownLink.ID, true); err != nil { t.Fatal(err) }
-		if result := <-ownAwait; result.err != nil { t.Fatal(result.err) }
-		if _, err = w.alice.historyPageFor(ownPhone.Self(), historyPos{}); err != nil { t.Fatalf("inviter history after end: %v", err) }
+		if err = w.alice.DecideLink(tctx(t), ownLink.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		if result := <-ownAwait; result.err != nil {
+			t.Fatal(result.err)
+		}
+		if _, err = w.alice.historyPageFor(ownPhone.Self(), historyPos{}); err != nil {
+			t.Fatalf("inviter history after end: %v", err)
+		}
 
 	}
 	phone, await, _ := linkPhone(t, producer, "pid-phone")
@@ -161,12 +172,35 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed b
 	if output.env.ID == "" {
 		t.Fatal("visible output missing from snapshot")
 	}
-	if err = phone.accept(tctx(t), output.env); err != nil {
-		t.Fatal(err)
-	}
-	var reason string
-	if err = phone.store.db.QueryRow(`SELECT reason FROM quarantine WHERE id=?`, output.env.ID).Scan(&reason); err != nil || reason != reasonProof {
-		t.Fatalf("output-before-proof %q %v", reason, err)
+	if recoverInvalid {
+		// Model v0.8.6 retaining these encrypted copies as invalid when
+		// the accepted assistant ended. Keep that same store across the upgrade;
+		// do not redeliver them through the fixed fresh-ingress path.
+		for _, h := range histories {
+			if h.item.Sub != envelope.SubEvent && groupParticipationHistoryItem(h.item) {
+				if err = phone.store.holdAs(h.env, reasonInvalid); err != nil {
+					t.Fatal(err)
+				}
+			} else if err = phone.accept(tctx(t), h.env); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Force the output to precede its held request, independently of the
+		// random carrier IDs used to order equal receive timestamps.
+		if _, err = phone.store.db.Exec(`UPDATE quarantine SET received_at=1 WHERE id=?`, output.env.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err = phone.store.deleteConfig(historyRecoveryScan); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err = phone.accept(tctx(t), output.env); err != nil {
+			t.Fatal(err)
+		}
+		var reason string
+		if err = phone.store.db.QueryRow(`SELECT reason FROM quarantine WHERE id=?`, output.env.ID).Scan(&reason); err != nil || reason != reasonProof {
+			t.Fatalf("output-before-proof %q %v", reason, err)
+		}
 	}
 	home := phone.home
 	phone.Close()
@@ -176,7 +210,7 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed b
 	}
 	t.Cleanup(func() { phone.Close() })
 	for _, h := range histories {
-		if h.env.ID != output.env.ID {
+		if h.env.ID != output.env.ID && (!recoverInvalid || h.item.Sub == envelope.SubEvent || !groupParticipationHistoryItem(h.item)) {
 			if err = phone.accept(tctx(t), h.env); err != nil {
 				t.Fatal(err)
 			}
@@ -184,13 +218,29 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed b
 	}
 	// Replay the complete history batch before retrying held proof dependencies.
 	phone.retryProof(tctx(t))
+	if recoverInvalid {
+		historyRecoveryReason(t, phone, output.env.ID, reasonProof)
+		// The daemon follows convRetry scheduled by each newly admitted
+		// dependency. Drain only that actual work, bounded by this batch.
+		for pass := 0; pass < len(histories) && phone.convWork.take()&convRetry != 0; pass++ {
+			phone.retryProof(tctx(t))
+		}
+	}
 	view, err := phone.Participation(p.PID)
 	if err != nil || !dismissed && !view.Claimable() || dismissed && view.State != PartDismissed || view.Host.Fingerprint != host.Self().Fingerprint() || view.AgentID != record.ID {
 		t.Fatalf("linked PID view %+v %v", view, err)
 	}
 	var n int
-	if err = phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND pid=? AND kind='answer' AND claimed_fp=? AND agent_id=? AND reply_to=?`, packet.State.Conv, p.PID, host.Self().Fingerprint(), record.ID, question.ID).Scan(&n); err != nil || n != 1 {
+	if err = phone.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE conv=? AND pid=? AND kind='answer' AND claimed_fp=? AND agent_id=? AND reply_to=? AND id=? AND lid=?`, packet.State.Conv, p.PID, host.Self().Fingerprint(), record.ID, question.ID, output.item.ID, output.item.LID).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("linked output attribution %d %v", n, err)
+	}
+	if recoverInvalid {
+		if err = phone.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id=?`, output.env.ID).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("recovered output carrier still held: %d %v", n, err)
+		}
+		if _, err = phone.store.config(historyRecoveryCarrier + output.env.ID); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("recovered output guard not released: %v", err)
+		}
 	}
 	if inboxCount(t, phone, `conv=? AND sub=?`, packet.State.Conv, envelope.SubStatus) == 0 {
 		t.Fatal("linked native status missing")
