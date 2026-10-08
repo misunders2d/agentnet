@@ -9,21 +9,21 @@ People do not need Go, Rust, Docker or a database server on their computer.
 ## People: install and open the app
 
 The current published release is
-[v0.8.6](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6), dated
-October 8, 2026. Download the matching package below and `SHA256SUMS` from
-that release. [Source CI](https://github.com/misunders2d/agentnet/actions/runs/37777205734)
-and [release builds](https://github.com/misunders2d/agentnet/actions/runs/37779934720) passed;
-all 12 asset digests/sizes and 11 manifest checksums matched. The final Linux
-AppImage passed isolated package replacement/restart in release CI, and its
-downloaded native shell dispatched an external release link without an ACL
-rejection. The link fixture allows a synthetic popup only in disposable WebKit
-settings; physical clicks and interactive Windows/macOS upgrades remain
-unverified. No existing installation was changed during qualification.
+[v0.8.7](https://github.com/misunders2d/agentnet/releases/tag/v0.8.7), dated
+October 8, 2026, published at 15:35 UTC from
+`129a38ec5de8fc8f988b9972a0a143e6dc27dbb8`. Download the matching package below and `SHA256SUMS`.
+All 14 [source CI jobs](https://github.com/misunders2d/agentnet/actions/runs/37795624300) and the required local vet/race
+qualification passed. [Release packaging](https://github.com/misunders2d/agentnet/actions/runs/37800186287):
+all five jobs passed; all 12 downloaded asset sizes/digests and all 11 SHA256SUMS entries matched. The Linux CLI and AppImage-bundled CLI report the exact clean release revision. The final AppImage passed the release CI replacement/restart check.
+All three skins passed desktop/phone-width Held back and multi-agent
+composer regressions. Native and browser history recovery checks passed. Physical mobile catch-up and interactive
+Windows/macOS upgrades remain unverified. Installers remain unsigned.
+Historical v0.8.6 artifact evidence is retained in [the handoff](../HANDOFF.md).
 
 **Upgrading a v0.8.3/v0.8.4 AppImage:** its old updater still needs one
-manual reopen after installing v0.8.6. Open AgentNet from its launcher if it
+manual reopen after installing v0.8.7. Open AgentNet from its launcher if it
 closes without returning. If v0.8.4's Update button is unavailable, run
-`agentnet update v0.8.6` for the registered desktop installation, then reopen
+`agentnet update v0.8.7` for the registered desktop installation, then reopen
 once. Updates started by v0.8.5 include the restart fix.
 
 | Device | Package to choose | How to open it |
@@ -386,7 +386,7 @@ be copied the same way: stop the daemon, then copy the home directory.
 **From v0.8.0:** install the matching desktop package once. v0.8.0 has
 no in-app installer; its About notice incorrectly directs desktop users to
 `agentnet update`. If **What's new** does nothing, open the
-[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6)
+[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.7)
 directly.
 
 - **AppImage:** download `AgentNet-linux-x86_64.AppImage`, verify its entry
@@ -403,7 +403,7 @@ directly.
 
 Keep the local AgentNet data directory: it contains identity, history and
 permissions. Do not reset or re-enroll for an ordinary update. Let active jobs
-finish first. Check **Settings → About → v0.8.6**, then inspect
+finish first. Check **Settings → About → v0.8.7**, then inspect
 `agentnet version` in a fresh terminal separately. If an older manually
 managed daemon owns the home, follow [existing installs and recovery](#existing-installs-and-recovery)
 before assuming the new AppImage changed that daemon.
@@ -416,7 +416,7 @@ refresh with it. This does not update Claude, Codex, Pi or unrelated settings.
 Custom/unrecognized CLI copies require the owner's **Replace command…**
 choice. Package-manager authorization may be required for deb/rpm.
 
-**Upgrading from v0.8.1/v0.8.2:** use About once to reach v0.8.6. Those
+**Upgrading from v0.8.1/v0.8.2:** use About once to reach v0.8.7. Those
 older standalone executables retain their older updater until replaced. The
 new app recognizes unchanged official commands by published checksum and
 adopts them automatically; a separate Replace command step is unnecessary.
@@ -475,7 +475,7 @@ admin device:
 
 ```bash
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.6 v0.8.6
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.7 v0.8.7
 ```
 
 That publishes advice only. It installs nothing on the relay or clients.

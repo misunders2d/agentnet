@@ -4,9 +4,10 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Next hotfix candidate — October 8, 2026
+## Current release — v0.8.7, October 8, 2026
 
-The current unshipped candidate addresses MEL-558, MEL-539 and the owner's
+[Download v0.8.7](https://github.com/misunders2d/agentnet/releases/tag/v0.8.7).
+The released source addresses MEL-558, MEL-539 and the owner's
 new next-release requirement on MEL-540. Root integrates and owns release;
 ThinkPad Codex supplied read-only production evidence through Herdr. Coordinate
 with that peer through Herdr only, never AgentNet. No installed client, identity,
@@ -44,17 +45,33 @@ actual Chromium IndexedDB history journey and final native/archive/package
 checks passed together (client 4.135 s, UI 11.677 s, static 0.956 s).
 All three locked skin builds and Comic TypeScript checking passed. The rendered
 multi-agent and Held back flows passed in all three skins at 1280/390 widths;
-source candidate/mention regressions passed. Final full qualification and
-publication are still pending; v0.8.6 remains the published release below.
+source candidate/mention regressions passed. Local Go vet and the full required
+race qualification passed: client A–F 401.343 s, G 600.925 s, H–P 490.582 s,
+Q–Z 414.183 s, and non-client packages up to 445.811 s.
+All 14 final [source CI jobs](https://github.com/misunders2d/agentnet/actions/runs/37795624300) passed. The first Linux fixture
+ordering failure passed on isolated retry. A causal fixture reproduced a
+sender capturing its audience before learning acceptance; the post-release
+test-only follow-up waits for that sender before sending. Its source passed
+three focused runs and is identical to the applied fix. No runtime change or
+longer timeout was needed; this was not a clean first CI attempt. Immutable release source:
+`129a38ec5de8fc8f988b9972a0a143e6dc27dbb8`.
+[Release packaging](https://github.com/misunders2d/agentnet/actions/runs/37800186287):
+all five jobs passed; all 12 downloaded asset sizes/digests and all 11 SHA256SUMS entries matched. The Linux CLI and AppImage-bundled CLI report the exact clean release revision. The final AppImage passed the release CI replacement/restart check.
+Published/latest: 15:35 UTC.
+Relay rollout: upgraded the existing relay at 15:42 UTC after a verified stopped-state backup; its running binary and public HTTPS report v0.8.7, with the original data volume, configuration and realm retained. Post-checks found zero restarts/OOM events and the neighboring service unchanged. Installed desktop clients were not changed.
+Update both laptops with **Settings → About → Update AgentNet** or
+`agentnet update v0.8.7`, then reload the phone app. The existing history jobs
+resume through the usual encrypted path; do not reset or relink devices.
 Physical phone catch-up is not yet verified and MEL-558 remains open for it.
 
-**Urgent follow-up:** MEL-435 records the real notification click opening an
-unauthenticated localhost placeholder. The owner permits a later release.
-Trace the actual producer/action and reuse the native app/agent opener; never
-put tokens in notification commands or bypass authentication. No fix or live
-click verification is claimed in this candidate.
+**Separate later work:** MEL-435 notification click repair is on branch commit
+`ae1cea5762e2087646a53267408e058ceb795f32` on
+`fix/mel-435-notification-open`, peer-reported tested; it is not
+shipped in v0.8.7 and its physical click qualification is not independently
+verified here. Keep tokens out of notification commands and retain normal
+app authentication.
 
-## Current release — v0.8.6, October 8, 2026
+## Previous release — v0.8.6, October 8, 2026
 
 [Download v0.8.6](https://github.com/misunders2d/agentnet/releases/tag/v0.8.6).
 Published as the latest release at 13:03 UTC from

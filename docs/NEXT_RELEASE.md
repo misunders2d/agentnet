@@ -1,4 +1,39 @@
-# AgentNet v0.8.6 — October 8, 2026
+# AgentNet v0.8.7 — October 8, 2026
+
+- Linked-device group history retains accepted inert requests, replies, status
+  and selected excerpts after a clean assistant dismissal. Exact original
+  signatures, keys, membership and admission checks remain; live authority is
+  unchanged. No history reset or new protocol is required.
+- Held back notices show persisted allowlisted explanations and recovery advice.
+  Archive notice hides only a local invalid notice; its envelope remains blocked
+  and nothing is accepted, trusted, replayed or executed. Old records cannot
+  reveal diagnostic detail that was never stored.
+- Explicitly selected agents receive independent requests, results and retries,
+  including same-named agents on one host. Failed targets do not resend successful
+  requests; received mention text never starts work.
+
+Use **Settings → About → Update** or download
+[v0.8.7](https://github.com/misunders2d/agentnet/releases/tag/v0.8.7), verifying
+`SHA256SUMS`, or run `agentnet update v0.8.7`. Update the laptops holding
+the missing history and reload the phone app after the relay update. Identity
+and history are retained; no reset or relinking is needed.
+Older v0.8.3/v0.8.4 AppImages may need one manual reopen after replacement.
+
+Local required vet/race checks and all three locked skin builds passed. All
+three skins passed 1280/390-width multi-agent and Held back regressions;
+focused native/browser history regressions and real IndexedDB recovery passed.
+All 14 [source CI jobs](https://github.com/misunders2d/agentnet/actions/runs/37795624300) passed on immutable source `129a38ec5de8fc8f988b9972a0a143e6dc27dbb8`.
+[Release packaging](https://github.com/misunders2d/agentnet/actions/runs/37800186287):
+all five jobs passed; all 12 downloaded asset sizes/digests and all 11 SHA256SUMS entries matched. The Linux CLI and AppImage-bundled CLI report the exact clean release revision. The final AppImage passed the release CI replacement/restart check.
+Published: 15:35 UTC. Relay: upgraded the existing relay at 15:42 UTC after a verified stopped-state backup; its running binary and public HTTPS report v0.8.7, with the original data volume, configuration and realm retained. Post-checks found zero restarts/OOM events and the neighboring service unchanged. Installed desktop clients were not changed.
+Physical mobile catch-up remains unverified and MEL-558 remains open.
+MEL-435's separate peer-tested notification-click branch is not shipped here.
+Installers are unsigned; interactive Windows/macOS installation remains
+unverified. Full evidence is in [the handoff](HANDOFF.md).
+
+---
+
+# Historical AgentNet v0.8.6 — October 8, 2026
 
 Sending, linked history, setup and approval fixes for AgentNet.
 

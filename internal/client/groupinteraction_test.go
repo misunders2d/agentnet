@@ -873,6 +873,8 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "visitor acceptance", func() bool { return stateAt(t, w.alice, v.PID).Claimable() })
+	// The sender must have the accepted audience before sealing its turn.
+	eventually(t, "sending member sees visitor acceptance", func() bool { return stateAt(t, carol, v.PID).Following() })
 	future, e := carol.SendConv(tctx(t), packet.State.Conv, ConvOutgoing{Body: "GROUP_FUTURE_CONTEXT"})
 	if e != nil {
 		t.Fatal(e)
