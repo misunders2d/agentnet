@@ -90,12 +90,16 @@ export function RoomSheet() {
  *  or agent chosen and what was said since they left already selected. */
 export async function bringIn(store: Store, t: T.DMThread, wide: boolean, who?: string, since?: string, pid?: string) {
   if (pid) {
+    const open = store.get().open, tab = store.get().tab;
+    const current = () => store.isActive() && store.get().open === open && !store.get().pending && store.get().tab === tab;
+    if (!current() || open?.kind !== "dm" || open.id !== t.id) return;
     try {
       const latest = await store.api.dm(t.id);
+      if (!current()) return;
       const state = agentRejoinState(latest, pid);
       if (state) { store.toast(state, "ok"); await store.refetch(); return; }
       t = latest;
-    } catch (e) { store.toast(errorText(e), "error"); return; }
+    } catch (e) { if (current()) store.toast(errorText(e), "error"); return; }
   }
   const later = since ? shareable(t).filter((m) => m.at > since).map((m) => m.id) : [];
   if (!wide) store.setPanel(false);
