@@ -124,6 +124,8 @@ func (s *store) conversations() ([]ConversationInfo, error) {
 // of its per-device copy (envelope id, recipient, time, session, whether it
 // is a replica or forwarded history, the blobs its files travel in): the
 // same sender key and logical id must always carry the same content.
+// SendGroup is optional presentation metadata, intentionally excluded so an
+// older reader's otherwise identical per-device copy stays the same request.
 //
 // The participation id is part of it (a message moved to another
 // participation is not the same message). It is left out when empty, so
@@ -193,9 +195,10 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	// logical id) gives way to the one received directly: the direct copy
 	// is stored in its place, under its own authority (history never did
 	// any), keeping only whether it was read.
-	var histID string
+	var histID, histGroup string
+	var histGroupConflict bool
 	var histRead sql.NullInt64
-	switch err := tx.QueryRow(`SELECT id, read_at FROM inbox WHERE verified_by IS NULL AND claimed_fp = ? AND lid = ?`, verifiedBy, in.LID).Scan(&histID, &histRead); {
+	switch err := tx.QueryRow(`SELECT id, read_at, send_group,send_group_conflict FROM inbox WHERE verified_by IS NULL AND claimed_fp = ? AND lid = ?`, verifiedBy, in.LID).Scan(&histID, &histRead, &histGroup, &histGroupConflict); {
 	case err == nil:
 		if _, err := tx.Exec(`DELETE FROM attachments WHERE message_id = ?`, histID); err != nil {
 			return "", err
@@ -217,6 +220,9 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	}
 	switch {
 	case err == nil && stored == hash:
+		if err := mergeSendGroup(tx, in, verifiedBy); err != nil {
+			return "", err
+		}
 		if fromQuarantine {
 			if _, err := tx.Exec(`DELETE FROM quarantine WHERE id = ?`, in.ID); err != nil {
 				return "", err
@@ -260,6 +266,14 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 		}
 	}
 	if _, err := tx.Exec(`UPDATE inbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=? WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, in.ID); err != nil {
+		return "", err
+	}
+	if histID != "" {
+		if _, err := tx.Exec(`UPDATE inbox SET send_group=?,send_group_conflict=? WHERE id=?`, histGroup, histGroupConflict, in.ID); err != nil {
+			return "", err
+		}
+	}
+	if err := mergeSendGroup(tx, in, verifiedBy); err != nil {
 		return "", err
 	}
 	if in.Human != nil {
@@ -327,6 +341,17 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 	if err := tx.QueryRow(`SELECT count(*) FROM inbox WHERE coalesce(verified_by, claimed_fp) = ? AND lid = ?`, claimedFP, in.LID).Scan(&n); err != nil {
 		return "", err
 	}
+	if n > 0 && in.SendGroup != "" {
+		var stored string
+		if err := tx.QueryRow(`SELECT coalesce(content_hash,'') FROM inbox WHERE coalesce(verified_by,claimed_fp)=? AND lid=?`, claimedFP, in.LID).Scan(&stored); err != nil {
+			return "", err
+		}
+		if stored == contentHash(in) {
+			if err := mergeSendGroup(tx, in, claimedFP); err != nil {
+				return "", err
+			}
+		}
+	}
 	result := admittedAgain
 	if n == 0 {
 		if at <= 0 || at > time.Now().UnixMilli() {
@@ -347,6 +372,9 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
 			result = admitted
+			if err := mergeSendGroup(tx, in, claimedFP); err != nil {
+				return "", err
+			}
 			if in.Human != nil {
 				if _, err := tx.Exec(`UPDATE inbox SET human=? WHERE id=?`, humanJSON(in.Human), in.ID); err != nil {
 					return "", err
@@ -500,6 +528,9 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			in.Kind, in.Origin, in.Emotion, targetJSON(in.Target), now.UnixMilli(), in.PID, in.Sub, refID, refFP, in.AgentID, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`UPDATE outbox SET send_group=?,wire_send_group=? WHERE id=?`, local.SendGroup, in.SendGroup != "", env.ID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`UPDATE outbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=?,recipient_person=(SELECT person FROM person_devices WHERE address=?) WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, env.To, env.ID); err != nil {
 			return err
 		}
@@ -556,6 +587,11 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 			in = copies[0].in
 		}
 		if _, err := tx.Exec(`UPDATE inbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=?,human=nullif(?,'') WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, humanJSON(in.Human), first); err != nil {
+			return err
+		}
+	}
+	if jobKey != "" {
+		if _, err := tx.Exec(`UPDATE inbox SET send_group=? WHERE id=?`, local.SendGroup, first); err != nil {
 			return err
 		}
 	}
@@ -625,6 +661,7 @@ func (s *store) releaseWaiting(id string) error {
 // ConvMessage is one message of a conversation as this installation holds
 // it, sent or received.
 type ConvMessage struct {
+	SendGroup         string               `json:"send_group,omitempty"`
 	Human             *envelope.HumanTurn  `json:"human,omitempty"`
 	ExcerptPID        string               `json:"excerpt_pid,omitempty"` // scope of a claimed snapshot; original PID stays PID
 	ID                string               `json:"id"`                    // this copy's envelope id
@@ -709,13 +746,13 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		       coalesce(emotion, ''), coalesce(target, ''), state, coalesce(detail, ''), received_at, received_ms AS ms, coalesce(pid, ''),
 		       CASE WHEN pid IS NOT NULL AND state != '' THEN state ELSE '' END, CASE WHEN pid IS NOT NULL AND state != '' THEN coalesce(detail, '') ELSE '' END, coalesce(via, ''),
 		       CASE WHEN verified_by IS NULL THEN coalesce(claimed_fp, '') ELSE '' END,
-		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, '', coalesce(topic,''),coalesce(topic_event,''),topic_done,0,0
+		       CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(status, ''), coalesce(quote,''), ts, '', coalesce(topic,''),coalesce(topic_event,''),topic_done,0,0,send_group
 		  FROM inbox i WHERE conv = ? AND local = 0 AND ref_id IS NULL AND coalesce(sub, '') NOT IN `+recordSubs+`
 		   AND NOT `+erasedIn+`
 		UNION ALL
 		SELECT o.id, o.lid, 'out', ?, ?, o.kind, o.body, coalesce(o.reply_to, ''), coalesce(o.sub, ''), 0, coalesce(o.origin, ''),
 		       coalesce(o.emotion, ''), coalesce(o.target, ''), o.state, coalesce(o.error, ''), o.created_at, o.created_ms, coalesce(o.pid, ''),
-		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state='not_delivered' AND coalesce(o.handover_started,1)=1
+		       coalesce(j.state, ''), coalesce(j.detail, ''), o.recipient, '', coalesce(o.agent_id, ''), coalesce(o.status, ''),coalesce(o.quote,''),json_extract(o.envelope,'$.ts'),coalesce(o.recipient_person,''),coalesce(o.topic,''),coalesce(o.topic_event,''),o.topic_done,o.send_stopped,o.send_stopped=1 AND o.state='not_delivered' AND coalesce(o.handover_started,1)=1,o.send_group
 		  FROM outbox o LEFT JOIN inbox j ON j.id = o.id AND j.local = 1 WHERE o.conv = ? AND coalesce(o.sub, '') NOT IN ('read-sync', 'root-sync', 'history', 'file', 'drive-space', 'group-proof', 'group-context','group-invite','group-consent','group-withdrawal') AND o.ref_id IS NULL
 		   AND NOT `+erasedOut+`
 		ORDER BY ms, 1`, conv, self, selfFP, conv, selfFP)
@@ -730,7 +767,7 @@ func (s *store) convMessages(conv, self, selfFP string, own map[string]bool) ([]
 		var target, to, person, topicEvent string
 		var ms int64
 		if err := rows.Scan(&m.ID, &m.LID, &m.Dir, &m.From, &m.Key, &m.Kind, &m.Body, &m.ReplyTo, &m.Sub, &m.Replica, &m.Origin,
-			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain); err != nil {
+			&m.Emotion, &target, &m.State, &m.Detail, &m.At, &ms, &m.PID, &m.Job, &m.JobDetail, &to, &m.Claimed, &m.AgentID, &m.status, &m.Quote, &m.Sent, &person, &m.Topic, &topicEvent, &m.TopicDone, &m.SendStopped, &m.DeliveryUncertain, &m.SendGroup); err != nil {
 			return nil, err
 		}
 		if topicEvent != "" {

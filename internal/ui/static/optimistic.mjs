@@ -4,6 +4,32 @@ const ledgerKey = Symbol.for("agentnet.ui.pendingSends");
 export function sendID() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
 }
+// One composer gesture, with independent request rows and actions. Only explicit
+// signed grouping from the same exact author is eligible. Legacy, changed or
+// inconsistent rows stay fully visible; matching text never creates a group.
+export function groupedSends(messages) {
+  const buckets = new Map(), keys = new Map();
+  for (const m of messages) {
+    if (!/^[a-f0-9]{32}$/.test(m.send_group || '') || !m.send_group_author) continue;
+    const key = JSON.stringify([m.send_group_author, m.send_group, m.topic || '']);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(m); keys.set(m, key);
+  }
+  const eligible = m => ['question','task'].includes(m.kind) && m.origin === 'ui' && m.pid && !m.agent_id && !m.event && !m.excerpt_pid && !m.deleted && !m.edited && !m.proposal;
+  const content = m => JSON.stringify([m.kind, m.body || '', m.quote || '', (m.attachments || m.files || []).map(f => [f.name, f.size])]);
+  for (const [key, rows] of buckets) {
+    if (rows.length < 2 || !rows.every(eligible) || rows.some(m => content(m) !== content(rows[0])) || new Set(rows.map(m => m.pid)).size !== rows.length) buckets.delete(key);
+  }
+  const out = [], emitted = new Set();
+  for (const m of messages) {
+    const key = keys.get(m), rows = buckets.get(key);
+    if (!rows) { out.push({m, compact:false}); continue; }
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    rows.forEach((m, i) => out.push({m, compact:i > 0}));
+  }
+  return out;
+}
 export function pendingSends(host, changed = () => {}) {
   const state = host.workspaces?.state?.(host.workspace.id);
   // Package-local copies share previews through the public membership state.

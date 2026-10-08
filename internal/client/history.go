@@ -70,12 +70,13 @@ type HistoryItem struct {
 	TopicDone      bool                    `json:"topic_done,omitempty"`
 	Topic          string                  `json:"topic,omitempty"`
 	TopicEvent     *envelope.TopicEvent    `json:"topic_event,omitempty"`
+	SendGroup      string                  `json:"send_group,omitempty"`
 }
 
 // inner is the item as the message it records.
 func (h HistoryItem) inner(conv string) envelope.Inner {
 	in := envelope.Inner{V: envelope.Version2, ID: h.ID, From: h.From, TS: h.TS, Kind: h.Kind, Body: h.Body, ReplyTo: h.ReplyTo, Quote: h.Quote, Topic: h.Topic, TopicEvent: h.TopicEvent, TopicDone: h.TopicDone,
-		Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true, AgentID: h.AgentID, ReceiverRoute: h.ReceiverRoute, Human: h.Human}
+		SendGroup: h.SendGroup, Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true, AgentID: h.AgentID, ReceiverRoute: h.ReceiverRoute, Human: h.Human}
 	if envelope.IsControl(h.Sub) { // a control travels as history with its target reference
 		in.V, in.Ref = envelope.Version3, h.Ref
 	}
@@ -86,7 +87,7 @@ func (h HistoryItem) inner(conv string) envelope.Inner {
 }
 
 func itemOf(in envelope.Inner, key string, at int64) HistoryItem {
-	h := HistoryItem{V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, Quote: in.Quote, Topic: in.Topic, TopicEvent: in.TopicEvent, TopicDone: in.TopicDone,
+	h := HistoryItem{SendGroup: in.SendGroup, V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, Quote: in.Quote, Topic: in.Topic, TopicEvent: in.TopicEvent, TopicDone: in.TopicDone,
 		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at, Ref: in.Ref, AgentID: in.AgentID, ReceiverRoute: in.ReceiverRoute, Human: in.Human}
 	for _, a := range in.Attachments {
 		h.Attachments = append(h.Attachments, envelope.Attachment{Name: a.Name, Size: a.Size, SHA256: a.SHA256})
@@ -160,6 +161,9 @@ func (a *Agent) historyCopy(to identity.Public, conv string, raw []byte, item Hi
 			item.GroupAdmission = ""
 		}
 	}
+	if item.SendGroup != "" && !a.sendGroupSupported(context.Background(), to) {
+		item.SendGroup = ""
+	}
 	recipient, err := to.Recipient()
 	if err != nil {
 		return outCopy{}, err
@@ -223,6 +227,14 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			c.env.ID, c.env.To, body, string(data), c.state, now.Unix(), c.in.Conv, c.in.LID, c.in.Kind, now.UnixMilli(), c.in.Sub, copyRequirement(c), c.recipientFP, c.groupAdmission); err != nil {
 			return err
 		}
+		var h HistoryItem
+		if c.in.Sub == envelope.SubHistory {
+			_ = json.Unmarshal([]byte(c.in.Body), &h)
+		}
+		if _, err := tx.Exec(`UPDATE outbox SET wire_send_group=? WHERE id=?`, h.SendGroup != "", c.env.ID); err != nil {
+			return err
+		}
+
 	}
 	return nil
 }
@@ -282,6 +294,9 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	var item HistoryItem
 	if err := decodeStrict([]byte(in.Body), &item); err != nil || item.V != 1 || !protocol.ValidID(item.ID) || !protocol.ValidID(item.LID) {
 		return hold(reasonInvalid, "a malformed history item")
+	}
+	if err := envelope.CheckSendGroup(item.inner(in.Conv)); err != nil {
+		return hold(reasonInvalid, err.Error())
 	}
 	owner := ""
 	external := false
@@ -867,6 +882,10 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 			}
 		}
 		it.in.ReceiverRoute, err = receiverStoredRoute(a.store.db, it.dir, it.in.ID)
+		if err != nil {
+			return false, err
+		}
+		it.in.SendGroup, err = storedSendGroup(a.store.db, it.dir, it.in.ID)
 		if err != nil {
 			return false, err
 		}

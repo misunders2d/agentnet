@@ -5,9 +5,9 @@ import { useEffect, useRef } from "react";
 import { Button } from "../ui/Button";
 import { them } from "./RoomPanel.model";
 
-export interface Snack { name: string; kind: "agent" | "person"; who: string; id: number }
+export interface Snack { name: string; kind: "agent" | "person"; who: string; pid?: string; id: number }
 
-export function BringBackSnack({ snack, onBringBack, onClose }: { snack: Snack; onBringBack: () => void; onClose: () => void }) {
+export function BringBackSnack({ snack, onBringBack, onClose }: { snack: Snack; onBringBack?: () => void; onClose: () => void }) {
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
@@ -20,7 +20,7 @@ export function BringBackSnack({ snack, onBringBack, onClose }: { snack: Snack; 
         <b className="font-bold">{snack.name} left</b> · dismissed by you
         <span className="block text-[13px] opacity-80">What was already shared stays with {them(snack.kind)}.</span>
       </p>
-      <Button size="sm" variant="act" onClick={onBringBack} className="ml-auto">Bring back</Button>
+      {onBringBack && <Button size="sm" variant="act" onClick={onBringBack} className="ml-auto">Bring back</Button>}
     </div>
   );
 }

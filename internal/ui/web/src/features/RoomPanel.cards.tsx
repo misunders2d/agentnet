@@ -123,7 +123,7 @@ export function WaitingRow({ w, onShow }: { w: Waiting; onShow: () => void }) {
   );
 }
 
-export function PastRow({ g, onBringBack }: { g: Guest; onBringBack?: () => void }) {
+export function PastRow({ g, onBringBack, returnState }: { g: Guest; onBringBack?: () => void; returnState?: string }) {
   const what = g.state === "declined" ? ["declined"] : !g.joined ? ["invite cancelled" + (g.endedBy ? " by " + g.endedBy : "")] : [sawWords(g.shared.length + g.missing), endedWords(g)];
   const at = g.endedAt || g.invitedAt;
   return (
@@ -133,6 +133,7 @@ export function PastRow({ g, onBringBack }: { g: Guest; onBringBack?: () => void
         <b className="block truncate text-[14px] font-bold text-text-2">{g.name}</b>
         <span className="block text-[13px] leading-snug text-muted">{[at && when(at), ...what].filter(Boolean).join(" · ")}</span>
       </div>
+      {returnState && <span className="text-[13px] text-muted">{returnState}</span>}
       {onBringBack && <Button size="sm" variant="ghost" icon={<IconArrowBackUp size={18} />} onClick={onBringBack}>{g.joined ? "Bring back" : "Invite again"}</Button>}
     </li>
   );

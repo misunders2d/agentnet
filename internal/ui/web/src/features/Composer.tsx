@@ -259,13 +259,13 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   };
 
   // ---- sending
-  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean }) {
+  async function send(retry?: { id: string; c: string; d: Draft; to: Target; here?: T.DMThread; device?: T.Thread; fanout?: boolean; group?: string }) {
     if (!retry && (!ready || (!dm && !thread))) return;
     if (!retry && dm) {
       const captured = latest(), decoded = decode(captured.text);
       const pids = agentTargets(decoded.text, decoded.spans, captured.agent);
       if (pids.length > 1) {
-        const topic = captured.newTopic ? sendID() : captured.topic;
+        const topic = captured.newTopic ? sendID() : captured.topic, group = sendID();
         clearSent(conv, captured, captured.files || []);
         if (captured.newTopic) store.setDraft(conv, { ...store.draft(conv), newTopic: false, topic });
         // Each target owns a stable request ID, preview, staged files and retry.
@@ -274,7 +274,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           const p = participants(dm, overview, names).find(x => x.pid === pid);
           const to: Target = {kind:"agent",pid,name:p?.name || "Unavailable agent",seed:p?.seed || pid,canAsk:!!a?.can_ask,why:a?.state_text};
           const d = {...captured, agent:pid, topic, newTopic:false, files:(captured.files || []).map(f => ({...f,staged:index === 0 ? f.staged : undefined,url:undefined}))};
-          return {id:sendID(),c:conv,d,to,here:dm,fanout:true};
+          return {id:sendID(),c:conv,d,to,here:dm,fanout:true,group};
         });
         await Promise.all(plans.map(plan => send(plan)));
         releaseFiles(captured.files || []);
@@ -284,7 +284,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
     const { c, d: captured, to, here, device } = retry || { c: conv, d: latest(), to: target, here: dm, device: thread };
     // Allocate the optional topic before yielding so a second send keeps it.
     const d = here && captured.newTopic ? { ...captured, topic: captured.topic && retry ? captured.topic : sendID() } : captured;
-    const id = retry?.id || sendID();
+    const id = retry?.id || sendID(), group = retry?.group;
     const was = decode(d.text);
     const body = encode(was.text, was.spans, true).trim();
     const sent = d.files || [];
@@ -295,10 +295,10 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       clearSent(c, d, sent);
       if (d.newTopic && !retry) store.setDraft(c, { ...store.draft(c), newTopic: false, ...(here ? { topic: d.topic } : {}) });
     }
-    store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
+    store.sends.begin(c, { id, ...(here ? { lid: id, origin: "ui", send_group: group, send_group_author: store.get().overview?.me.fingerprint, pid: to.kind === "agent" ? to.pid : "" } : { author: { label: "You", about: "" }, to: device?.peer }),
       _topic: !!d.newTopic, topic: d.topic, dir: "out", from: store.get().overview?.me.address || "", kind: to.kind === "answer" ? "answer" : here && to.kind !== "agent" || to.kind === "device" && !to.ask ? "message" : "question", body, at: new Date().toISOString(),
       reply_to: d.replyTo, quote: d.replyTo, attachments: sent.map(f => ({ name: f.name, size: f.size, openable: false })), files: sent.map(f => ({ name: f.name, size: f.size, openable: false })) },
-      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout }); });
+      () => { store.sends.remove(id); void send({ id, c, d, to, here, device, fanout:retry?.fanout, group }); });
     setNotice(null);
     typing.stop();
     try {
@@ -321,7 +321,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       let r: T.Sent | undefined;
       try {
         if (to.kind === "answer") announce((await store.api.act({ do: "reply", id: to.id, send_id: id, body })).note || "Answer sent.");
-        else if (to.kind === "agent") r = await store.api.askAgent({ id, pid: to.pid, kind: "question", body, topic:d.topic, files: fileIds });
+        else if (to.kind === "agent") r = await store.api.askAgent({ id, send_group: group, pid: to.pid, kind: "question", body, topic:d.topic, files: fileIds });
         else if (device) {
           const last = (device.messages || []).at(-1);
           // A new topic starts a separate conversation with this agent; otherwise the thread continues.

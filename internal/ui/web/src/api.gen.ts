@@ -2,6 +2,7 @@
 // Regenerate: go test ./internal/ui -run TestTypeScriptViewTypes -update
 
 export interface Action {
+  attempt?: number;
   send_id?: string;
   do: string;
   id?: string;
@@ -12,6 +13,7 @@ export interface Action {
 }
 
 export interface AgentAsk {
+  send_group?: string;
   topic?: string;
   id?: string;
   reply_receiver?: ReplyReceiverSelection;
@@ -155,6 +157,13 @@ export interface CatalogAgent {
   responder?: ResponderView;
 }
 
+export interface ContinuationAction {
+  id: string;
+  key: string;
+  host?: string;
+  attempt: number;
+}
+
 export interface ControlAction {
   conv?: string;
   id: string;
@@ -165,6 +174,7 @@ export interface ControlAction {
 }
 
 export interface ConvItem {
+  continuation?: ContinuationAction;
   reason: string;
   conv: string;
   pid?: string;
@@ -202,6 +212,9 @@ export interface DMDraft {
 }
 
 export interface DMMessage {
+  continuation?: ContinuationAction;
+  send_group?: string;
+  send_group_author?: string;
   status?: string;
   topic?: string;
   topic_event?: TopicEvent;
@@ -297,6 +310,7 @@ export interface Decider {
 }
 
 export interface DecisionAction {
+  send_id?: string;
   host: string;
   id: string;
   key: string;
@@ -639,6 +653,7 @@ export interface Me {
 }
 
 export interface Message {
+  continuation?: ContinuationAction;
   target?: Target;
   agent_id?: string;
   id: string;

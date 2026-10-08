@@ -1965,12 +1965,34 @@ export class Engine {
   // sendConv stores the sealed envelope before it is sent, and sends that
   // exact envelope on every retry: a message, a participation record (sub
   // "event") or a request to another device's agent (pid and target).
-  async sendConv(c, { id: sendID = "", queued = false, kind, body, topic="",topic_event=null,quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", target = null, files = [], receiver = null }) {
+  async sendGroupCopy(address, pin, group) {
+    if (!group) return "";
+    try { return await wire.profileSupports(await this.profile(address), address, (await this.pubOf(pin)).sign_key, wire.CapSendGroup) ? group : ""; }
+    catch (_) { return ""; } // display metadata cannot block an otherwise compatible request
+  }
+
+  async mergeSendGroupOps(ops, n, author) {
+    if (n.sub === "history") n = {...wire.parseHistory(n.body),conv:n.conv};
+    if (!n.conv || !n.lid || n.sub || !n.pid || !n.target || n.origin !== "ui" || !["question","task"].includes(n.kind)) return ops;
+    const checks=ops.checks || [], key="send-group/"+n.conv+"/"+author+"/"+n.lid;
+    // Admission has already verified the exact author or own linked history source.
+    const old=await this.groupRead(checks,"kv",key), incoming=n.send_group || "";
+    const value=old?.conflict ? old : old?.group && incoming && old.group!==incoming ? {group:"",conflict:true} : {group:old?.group || incoming,conflict:false};
+    if (!value.group && !value.conflict) return ops;
+    ops.push({s:"kv",k:key,v:value});
+    const present=ops.find(o=>o.s==="inbox"&&o.v?.lid===n.lid&&o.v.conv===n.conv);
+    let row=present?.v;
+    if(!row){const seen=await this.groupRead(checks,"lids",author+"/"+n.lid);if(seen)row=await this.groupRead(checks,"inbox",seen.id);}
+    if(row){const next={...row,send_group:value.group,send_group_conflict:value.conflict};if(present)present.v=next;else ops.push({s:"inbox",k:row.id,v:next});}
+    ops.checks=checks;return ops;
+  }
+
+  async sendConv(c, { id: sendID = "", queued = false, kind, body, topic="",topic_event=null,quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", send_group = "", target = null, files = [], receiver = null }) {
     if (pid) {
       const ev = sub === "event" ? await this.eventRecord(body) : null;
       const events = [...await this.convEvents(c.id), ...(ev ? [ev] : [])];
       const members = await this.dmMembers(c, events), info = this.resolveAgent(pid, events, members);
-      if (info.external || members.group) return this.sendExternal(c, { id: sendID, queued, kind, body, topic,topic_event,quote,reply_to: replyTo, origin, sub, pid, target, files, receiver }, info);
+      if (info.external || members.group) return this.sendExternal(c, { id: sendID, queued, kind, body, topic,topic_event,quote,reply_to: replyTo, origin, sub, pid, send_group, target, files, receiver }, info);
     }
     const required_cap = wire.agentRequirement({ kind, body, sub, target });
     const { why: stop } = await this.gate(c);
@@ -2019,10 +2041,11 @@ export class Engine {
       const replica = dev.own && !(target && target.address === dev.address && target.fingerprint === dev.fingerprint);
       const chan = notify && !dev.own && attention ? await wire.notifyChannel(c.id, dev.fingerprint) : "";
       const id = prepared && target?.address === dev.address && target.fingerprint === dev.fingerprint ? lid : recs.length ? wire.newID() : firstID;
+      const copyGroup=await this.sendGroupCopy(dev.address,pin,send_group);
       const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind,
-        body, topic,topic_event,quote,reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan, replica, fan, attachments: sealed.map((f) => f.attachment), receiver_route: prepared?.route },
+        body, topic,topic_event,quote,reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan, replica, fan, send_group:copyGroup, attachments: sealed.map((f) => f.attachment), receiver_route: prepared?.route },
       this.keys, recipient);
-      recs.push({ id, conv: c.id, lid, body, topic,topic_event,quote,reply_to: replyTo, kind, origin, sub, pid, target, ...(required_cap ? { required_cap } : {}), ...(prepared ? { receiver_route: prepared.route, recipient_fp: dev.fingerprint } : {}), at, to: dev.address, person:dev.own ? me.person : peer.person,own: dev.own, envelope,
+      recs.push({ id, conv: c.id, lid, body, topic,topic_event,quote,reply_to: replyTo, kind, origin, sub, pid, send_group, send_group_wire:!!copyGroup, target, ...(required_cap ? { required_cap } : {}), ...(prepared ? { receiver_route: prepared.route, recipient_fp: dev.fingerprint } : {}), at, to: dev.address, person:dev.own ? me.person : peer.person,own: dev.own, envelope,
         attachments: sealed.map((f) => f.attachment), files: sealed.length ? sealed : undefined, state: ok ? "queued" : "waiting", detail: why });
     }
     if (turn && !recs.some((r) => !r.own)) throw new Error("Not sent: no device of the other person can get a copy now.");
@@ -2056,6 +2079,7 @@ export class Engine {
     if (rec.state === "receiver_waiting") return;
     try {
       await this.receiverDeliveryGate(rec);
+      if(rec.send_group_wire){const pin=await this.pinned(rec.to);if(!await this.sendGroupCopy(rec.to,pin,"present"))throw Object.assign(Error("Recipient needs sg1 again to read this already sealed request."),{code:"send_group_unsupported"});}
       if (rec.required_cap === wire.CapControl) {
         const pin = await this.pinned(rec.to);
         if (pin.pending || pin.fingerprint !== rec.recipient_fp) throw Error("Control recipient key changed.");
@@ -2075,6 +2099,7 @@ export class Engine {
         await this.requireAgentReaction(rec.to, pin, carried, rec.required_cap);
       }
 
+      if(rec.required_cap===wire.CapContinuation) {const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Continuation recipient key changed.");const [ok,why]=await this.ctlSupport(rec.to,pin,wire.CapContinuation);if(!ok)throw Error(why);}
       if(rec.required_cap===wire.CapGroupInvitationControl) { const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Group recipient key changed.");await this.groupSupport(rec.to,pin);await this.requireGroupInvitationControl(rec.to,pin); }
       if(rec.required_cap===wire.CapGroup) {
         const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Group recipient key changed.");await this.groupSupport(rec.to,pin);
@@ -2851,7 +2876,7 @@ export class Engine {
     const agentCards=new Map();
     for(const i of infos) {
       if(!i.host || i.role==="human")continue;
-      const v=this.agentView(i,messages,null,members,role),key=v.host.address+"#"+v.host.fingerprint+"#"+(v.agent_id||"");
+      const v=this.agentView(i,messages,null,members,role),key=v.host.address+"#"+v.host.fingerprint+"#"+(v.agent_id||"")+(["active","invited"].includes(v.state)?"":"#"+v.pid);
       const prior=agentCards.get(key);
       if(prior && ["active","invited"].includes(prior.state) && ["active","invited"].includes(v.state)) {
         const rank=x=>x.state==="active"?0:1;
@@ -2875,7 +2900,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -3171,15 +3196,17 @@ export class Engine {
     const status=accept?"accepted":"declined";
     if(row.status===status) return {recorded:true};
     if(row.status==="cancelled")throw Error("Inviter cancelled this exact invitation. It cannot be joined.");
-    if(row.status==="stale")throw Error("This invitation is out of date; join the newer invitation or ask the inviter to refresh it.");
-    if(row.status!=="pending") throw Error("Invitation already decided.");
-    await this.verifyGroupProposal(row.proposal,row.owner,row.inviter,row.fp,checks);
+    if(accept&&row.status==="stale")throw Error("This invitation is out of date; join the newer invitation or ask the inviter to refresh it.");
+    if(row.status!=="pending" && (accept || row.status!=="stale")) throw Error("Invitation already decided.");
+    if(accept)await this.verifyGroupProposal(row.proposal,row.owner,row.inviter,row.fp,checks);
     const me=await this.groupRead(checks,"kv","person"), p=row.proposal;
-    if(me.person!==p.target || me.hash!==p.roster || !me.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)) throw Error("Invitation no longer names this exact person and device.");
+    if(me.state==="conflict" || me.person!==p.target || accept&&me.hash!==p.roster || !me.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)) throw Error("Invitation no longer names this exact person and device.");
     const consent={v:1,invitation:id,decision:status};
     if(accept) consent.admission=await wire.signGroupAdmission(this.keys,{conv:p.state.conv,realm:p.root.realm,person:p.target,roster:p.roster,seq:p.seq,prev:p.prev,history:p.history,by:this.fp});
-    const copy=await this.groupCarrierCopy(p.root,wire.SubGroupConsent,{v:1,seq:p.seq,hash:p.prev},wire.groupConsentJSON(consent),{address:row.inviter,fingerprint:row.fp},{group_lifecycle:id,group_direction:"in"});
-    await this.store.write([{s:"kv",k,v:{...row,status,consent}}, {s:"outbox",k:copy.id,v:copy}],checks);this.changed();await this.post(copy);return {recorded:true};
+    const pin=await this.groupRead(checks,"pins",row.inviter);
+    const canNotify=pin&&!pin.pending&&pin.fingerprint===row.fp;
+    const copy=accept||canNotify?await this.groupCarrierCopy(p.root,wire.SubGroupConsent,{v:1,seq:p.seq,hash:p.prev},wire.groupConsentJSON(consent),{address:row.inviter,fingerprint:row.fp},{group_lifecycle:id,group_direction:"in"},!accept):null;
+    await this.store.write([{s:"kv",k,v:{...row,status,consent}}, ...(copy?[{s:"outbox",k:copy.id,v:copy}]:[])],checks);this.changed();if(copy)await this.post(copy);return {recorded:true};
   }
 
   async groupLifecycleGate(rec) {
@@ -3194,6 +3221,11 @@ export class Engine {
         return {why:"",pin};
       }
       if(!row || !(rec.group_direction==="out"?["pending","accepted"].includes(row.status):["accepted","declined"].includes(row.status))) throw Error("Group invitation is no longer eligible.");
+      if(rec.group_direction==="in"&&row.status==="declined"){
+        const me=await this.store.get("kv","person"),pin=await this.store.get("pins",rec.to);
+        if(!me||me.state==="conflict"||me.person!==row.proposal.target||!me.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp)||rec.to!==row.inviter||rec.recipient_fp!==row.fp||!pin||pin.pending||pin.fingerprint!==row.fp)throw Error("Decline signer or exact inviter key changed.");
+        return {why:"",pin};
+      }
       const {target}=await this.verifyGroupProposal(row.proposal,row.owner,row.inviter,row.fp);
       if(rec.group_direction==="out"?!target.devices.some(d=>d.address===rec.to&&d.fingerprint===rec.recipient_fp):rec.to!==row.inviter||rec.recipient_fp!==row.fp) throw Error("Group invitation recipient changed.");
       const pin=await this.store.get("pins",rec.to); if(!pin||pin.pending||pin.fingerprint!==rec.recipient_fp) throw Error("Group recipient key changed.");
@@ -3759,15 +3791,15 @@ export class Engine {
         } else {
         if(!row) throw Error("Consent has no recorded local invitation.");
         const p=row.proposal;
-        if(wire.rootJSON(root)!==wire.rootJSON(p.root) || person.person!==p.target || person.hash!==p.roster || desc.seq!==p.seq || desc.hash!==p.prev) throw Error("Consent is not for this exact invitation and current person.");
-        const {resolve}=await this.verifyGroupProposal(p,row.owner,row.inviter,row.fp,checks);
+        if(wire.rootJSON(root)!==wire.rootJSON(p.root) || person.person!==p.target || consent.decision!=="declined"&&person.hash!==p.roster || desc.seq!==p.seq || desc.hash!==p.prev) throw Error("Consent is not for this exact invitation and current person.");
+        const resolve=consent.decision==="declined"?null:(await this.verifyGroupProposal(p,row.owner,row.inviter,row.fp,checks)).resolve;
         if(consent.admission) {
           const a=consent.admission;
           if(a.by!==pin.fingerprint || a.conv!==p.state.conv || a.realm!==root.realm || a.person!==p.target || a.roster!==p.roster || a.seq!==p.seq || a.prev!==p.prev || JSON.stringify(a.history)!==JSON.stringify(p.history)) throw Error("Consent admission differs from exact proposed transition.");
           await wire.verifyGroupAdmission(a,resolve);
         }
-        if(row.status!=="pending" && row.status!==consent.decision && row.status!=="published") throw Error("Consent conflicts with recorded decision.");
-        if(row.status==="pending") ops.push({s:"kv",k,v:{...row,status:consent.decision,consent}});
+        if(row.status!=="pending" && row.status!==consent.decision && row.status!=="published" && !(consent.decision==="declined"&&row.status==="stale")) throw Error("Consent conflicts with recorded decision.");
+        if(row.status==="pending"||consent.decision==="declined"&&row.status==="stale") ops.push({s:"kv",k,v:{...row,status:consent.decision,consent}});
         }
       } else {
         const w=wire.parseGroupWithdrawal(body), k="group/"+n.conv, g=await this.groupRead(checks,"kv",k);
@@ -4186,7 +4218,7 @@ export class Engine {
     if(n.sub===wire.SubRootSync)return this.admitRootSync(n,env,pin);
     if (n.v === wire.Version2 && (n.sub === wire.SubGroupProof || n.sub === wire.SubGroupContext)) return this.admitGroupCarrier(n, env, pin);
     if (n.v === wire.Version2 && [wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(n.sub)) return this.admitGroupLifecycle(n, env, pin);
-    const base = { id: env.id, from: env.from, kind: n.kind, body: n.body, reply_to: n.reply_to, quote:n.quote||"",topic_done:!!n.topic_done,topic:n.topic||"",topic_event:n.topic_event||null, ts:n.ts, at: this.now(), fp: pin.fingerprint, read: false,
+    const base = { send_group:n.send_group||"", id: env.id, from: env.from, kind: n.kind, body: n.body, reply_to: n.reply_to, quote:n.quote||"",topic_done:!!n.topic_done,topic:n.topic||"",topic_event:n.topic_event||null, ts:n.ts, at: this.now(), fp: pin.fingerprint, read: false,
       ...(n.receiver_route ? { receiver_route: n.receiver_route } : {}),
       status: n.status || "", // a review notice (a report from another machine) is a message with status review_notice
       attachments: n.attachments.length ? n.attachments : undefined };
@@ -4196,8 +4228,8 @@ export class Engine {
       if (isNotice(row)) return this.noticeOps(await this.store.all("inbox"), row); // one card per host (client.supersedeNotices)
       return [{ s: "inbox", k: env.id, v: row }];
     }
-    if (n.v === wire.Version2 && JSON.parse(n.root).kind === "group") return this.admitGroupTurn(n, env, pin, base);
-    return this.admitConv(n, env, pin, base);
+    if (n.v === wire.Version2 && JSON.parse(n.root).kind === "group") return this.mergeSendGroupOps(await this.admitGroupTurn(n, env, pin, base),n,n.sub==="history"?wire.parseHistory(n.body).from_key:pin.fingerprint);
+    return this.mergeSendGroupOps(await this.admitConv(n, env, pin, base),n,n.sub==="history"?wire.parseHistory(n.body).from_key:pin.fingerprint);
   }
 
   async admitConv(n, env, pin, base) {
@@ -4402,7 +4434,7 @@ export class Engine {
   // itemOf is a stored message as a history item (manifests only).
   itemOf(m, sentHere) {
     return { v:1,from: sentHere ? this.address : m.from, from_key: sentHere ? this.fp : m.fp||m.claimed_key, id: m.id, lid: m.lid, ts: m.ts || (m.envelope?wire.parseEnvelope(m.envelope).ts:Math.floor(m.at / 1000)), at: m.at,
-      kind: m.kind, body: m.body || "", reply_to: m.reply_to || "", quote:m.quote||"",topic:m.topic||"",topic_event:m.topic_event||null,topic_done:!!m.topic_done,status: m.status || "", sub: m.sub || "", origin: m.origin || "",
+      kind: m.kind, body: m.body || "", reply_to: m.reply_to || "", quote:m.quote||"",send_group:m.send_group_conflict?"":m.send_group||"",topic:m.topic||"",topic_event:m.topic_event||null,topic_done:!!m.topic_done,status: m.status || "", sub: m.sub || "", origin: m.origin || "",
       emotion: m.emotion || "", target: m.target || null, pid: m.pid || "", ...(m.agent_id ? { agent_id: m.agent_id } : {}), ref: m.ref || null, ...(m.group_admission?{group_admission:m.group_admission}:{}), attachments: (m.attachments || []).map((a) => ({ name: a.name, size: a.size, sha256: a.sha256 })), ...(m.receiver_route ? { receiver_route: m.receiver_route } : {}), ...(m.human ? { human: m.human } : {}) };
   }
 
@@ -4429,14 +4461,17 @@ export class Engine {
       const source=await this.store.get(item.from===this.address&&item.from_key===this.fp?"outbox":"inbox",item.id);
       if(!source||source.conv!==c.id)throw Error("Original group history source is unavailable.");
       const original=this.itemOf(source,!!source.to);
-      if(wire.historyJSON({...original,group_admission:undefined})!==wire.historyJSON({...item,group_admission:undefined}))throw Error("Group history differs from its exact source row.");
-      item={...item,group_admission:source.to?stamp:source.group_admission};
+      if(wire.historyJSON({...original,group_admission:undefined,send_group:undefined})!==wire.historyJSON({...item,group_admission:undefined,send_group:undefined}))throw Error("Group history differs from its exact source row.");
+      item={...item,send_group:original.send_group,group_admission:source.to?stamp:source.group_admission};
       if(item.group_admission!==stamp)throw Error("Historical group source admission changed.");
       if(item.pid||item.ref)await this.groupParticipationHistoryCheck(c.id,item,{address:this.address,fingerprint:this.fp});
-      const rec=await this.groupDataCopy(packet,"history",wire.historyJSON(item),dev);rec.group_history=true;return rec;
+      item={...item,send_group:await this.sendGroupCopy(dev.address,await this.pinned(dev.address),item.send_group)};
+      const rec=await this.groupDataCopy(packet,"history",wire.historyJSON(item),dev);rec.group_history=true;rec.send_group_wire=!!item.send_group;return rec;
     }
     if (!wire.rootMember(wire.parseRoot(c.root), this.me?.person)) throw new Error("An outside host cannot forward room history to sibling devices.");
+    item={...item,send_group:await this.sendGroupCopy(dev.address,await this.pinned(dev.address),item.send_group)};
     const rec = await this.ownCopy(dev, c, "history", wire.historyJSON(item));
+    rec.send_group_wire=!!item.send_group;
     if (item.pid) {
       const events = await this.convEvents(c.id);
       if (item.sub === "event") events.push(await this.eventRecord(item.body));
@@ -5019,7 +5054,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapProgress, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapConvClear, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit crs1 fits the 16-cap advertisement bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapConvClear, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit crs1 fits the 16-cap advertisement bound
       await this.publishPerson().catch(() => {});
       await this.flushReceipts();
       await this.retryHeld();
@@ -5249,7 +5284,7 @@ export class Engine {
     }
     const sent = [...groups.values()].map((g) => {
       const least = copyOrder(g);
-      const copies=g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to)})); return { ...g[0], state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
+      const copies=g.map(r=>({id:r.id,to:r.to,state:r.state,detail:r.detail,...this.cancellationView(r),own:!!r.own||!!this.me?.devices?.some(d=>d.address===r.to),person:r.person||personOf(r.to)})); return { ...g[0], send_group:g.some(r=>r.send_group_conflict)||new Set(g.map(r=>r.send_group).filter(Boolean)).size>1?"":g.find(r=>r.send_group)?.send_group||"", state: least.state, delivery:deliveryOf(copies),detail: least.detail, lagging: least.to, copies, delivery_cancelled:g.some(r=>r.delivery_cancelled)&&!g.some(r=>["custody","delivered"].includes(r.state)), handover_started:g.some(r=>r.delivery_cancelled&&r.state==="failed"&&r.handover_started!==false) ? true : least.handover_started };
     });
     const received = inbox.filter((m) => m.conv === convId && !m.control && m.sub !== wire.SubRootSync && m.sub !== wire.SubDriveSpace && !this.erasedRow(m)).map((m) => {
       if (m.sub !== "excerpt") return m;
@@ -5927,22 +5962,35 @@ export class Engine {
     if (!wire.validID(id) || !wire.validFingerprint(key)) throw new Error("A decision names the request's id and its sender's key, as the host reported them.");
     if (!wire.DecisionActions.includes(action)) throw new Error("No such decision.");
     if (!wire.validStateToken(expect) || attempt < 0) throw new Error("A decision names the state and attempt you saw in the report.");
-    if ((action === "reply" || action === "decline") && !text.trim()) throw new Error(action === "reply" ? "Write the answer first." : "Say why, in a few words.");
+    if ((action === "reply" || action === "decline" || action === "continue") && !text.trim()) throw new Error(action === "reply" ? "Write the answer first." : "Say why, in a few words.");
     if (new TextEncoder().encode(text).length > wire.MaxDecisionText) throw new Error("The text is too long (16 KB at most).");
     if (host === this.address) throw new Error("This browser holds no requests: there is nothing to decide here.");
     const notice = wire.validID(report) ? await this.store.get("inbox", report) : null;
-    if (!notice || notice.v !== 1 || notice.control || notice.kind !== "message" || notice.status !== "review_notice" || notice.from !== host) throw new Error("That report is not one " + host + " sent this device.");
+    if (action!=="continue" && (!notice || notice.v !== 1 || notice.control || notice.kind !== "message" || notice.status !== "review_notice" || notice.from !== host)) throw new Error("That report is not one " + host + " sent this device.");
+    if(action==="continue") {
+      const own=this.me;
+      if(expect!=="needs_human" || attempt<1 || !own || own.state!=="self" || !(own.human_keys||[]).includes(this.fp) || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !own.devices.some(d=>d.address===host))throw Error("Only a current own human device can answer this exact waiting request here.");
+      if(!wire.validID(x.send_id||""))throw Error("Keep the answer's exact send ID when retrying.");
+    }
     for (const r of await this.store.all("outbox")) { // asked again while unanswered: the one sent stands
-      if (!r.control || r.sub !== wire.SubDecision || r.to !== host || !r.ref || r.ref.id !== id || r.ref.fingerprint !== key) continue;
+      if (action === "continue" || !r.control || r.sub !== wire.SubDecision || r.to !== host || !r.ref || r.ref.id !== id || r.ref.fingerprint !== key) continue;
       let d;
       try { d = JSON.parse(r.body); } catch (e) { continue; }
       if (d.action === action && d.expect === expect && d.attempt === attempt && d.report === report && d.text === text && !(await this.answered(r.id))) {
         return { note: "Already sent to " + host + "; its answer shows here once it decides.", sent: r.id };
       }
     }
-    const sent = await this.sendDeviceControl(host, { id, fingerprint: key }, wire.SubDecision, JSON.stringify({ action, expect, attempt, text, report }), wire.CapHeadless);
+    const sent = await this.sendDeviceControl(host, { id, fingerprint: key }, wire.SubDecision, JSON.stringify({ action, expect, attempt, text, report }), action==="continue"?wire.CapContinuation:wire.CapHeadless, action==="continue"?x.send_id:"");
     this.changed();
     return { note: (sent.state === "queued" ? "Queued for " + host + ": it goes when your server is reachable." : "Sent to " + host + ".") + " Its answer shows here once it decides; delivery decides nothing.", sent: sent.id };
+  }
+
+  // Provider-derived exact continuation; this grants nothing on the host.
+  continuationOf(m, key, exec) {
+    if (!exec || exec.state !== "needs_human" || !Number.isSafeInteger(exec.attempt) || exec.attempt < 1 || !["question","task"].includes(m.kind) || !wire.validFingerprint(key)) return null;
+    const own=this.me, host=own?.devices?.find(d=>d.address===exec.host);
+    if(!own || own.state!=="self" || !(own.human_keys||[]).includes(this.fp) || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !host || (m.target && (m.target.address!==exec.host || m.target.fingerprint!==host.fingerprint)))return null;
+    return {id:m.lid||m.id,key,host:exec.host,attempt:exec.attempt};
   }
 
   // execOn resolves a request's host-asserted state from status controls
@@ -5962,7 +6010,7 @@ export class Engine {
     if (!best) return null;
     const m = this.members.current ? this.members.list.find((x) => x.address === host) : null;
     const stale = !m || m.presence !== "online";
-    return { state: best.state, at: iso(best.at * 1000), detail: best.detail, host, stale, attempt: best.n, ...(best.refused ? { refused: best.refused } : {}) };
+    return { state: best.state, at: iso(best.at * 1000), detail: best.detail, host, stale, attempt: best.attempt || 0, ...(best.refused ? { refused: best.refused } : {}) };
   }
 
   // personOfFp is the person a device key belongs to, as pinned here: yours
@@ -6354,13 +6402,13 @@ export class Engine {
   // ctlSupport says whether a control can go to address: the relay carries
   // version 3 and the device's signed capabilities include controls.
   async ctlSupport(address, pin, cap = wire.CapControl) {
-    const what = cap === wire.CapHeadless ? "operator decisions" : cap === wire.CapDrive ? "Drive space records" : cap === wire.CapConvClear ? "conversation deletions" : "reactions, edits or deletions";
+    const what = cap === wire.CapContinuation ? "human clarification continuations" : cap === wire.CapHeadless ? "operator decisions" : cap === wire.CapDrive ? "Drive space records" : cap === wire.CapConvClear ? "conversation deletions" : "reactions, edits or deletions";
     const f = await this.features();
     if (!f.includes("env3") || !f.includes("caps")) return [false, "server_update: your server cannot carry " + what + " (it needs an update)"];
     let prof = null;
     try { prof = await this.profile(address); } catch (e) { if (retryable(e)) throw e; }
     const key = (await this.pubOf(pin)).sign_key;
-    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, "peer_update: " + address + " cannot " + (cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
+    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, "peer_update: " + address + " cannot " + (cap === wire.CapContinuation ? "continue waiting requests (update the AgentNet app on that computer)" : cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
     return [true, ""];
   }
 
@@ -6418,17 +6466,33 @@ export class Engine {
       id: sent.id, state: sent.state, skipped: sent.skipped };
   }
 
-  async sendDeviceControl(peer, ref, sub, body, cap = wire.CapControl) {
+  async sendDeviceControl(peer, ref, sub, body, cap = wire.CapControl, sendID = "") {
     const pin = await this.sendKey(peer);
     let ok, why;
     try { [ok,why] = await this.ctlSupport(peer, pin, cap); }
     catch (e) { if (sub !== wire.SubRetraction || !retryable(e)) throw e; ok=false;why=e.message; }
     if (!ok && sub !== wire.SubRetraction) throw new Error(why);
     const recipient = await this.pubOf(pin);
-    const id = wire.newID(), at = this.now();
+    const id = sendID || wire.newID(), at = this.now();
+    if(sendID){
+      if(!wire.validID(sendID))throw Error("Invalid decision send ID.");
+      const prior=await this.store.get("outbox",sendID);
+      if(prior){
+        if(prior.to!==peer||prior.sub!==sub||prior.body!==body||prior.ref?.id!==ref.id||prior.ref?.fingerprint!==ref.fingerprint||prior.recipient_fp!==pin.fingerprint)throw Error("Send ID already names a different decision or reader key.");
+        if(prior.state==="failed" && cap===wire.CapContinuation){
+          const retry={...prior,state:"queued",detail:""};await this.store.write([{s:"outbox",k:id,v:retry}],[{s:"outbox",k:id,v:prior}]);await this.post(retry);return {id,state:(await this.store.get("outbox",id)).state,skipped:[]};
+        }
+        return {id,state:prior.state,skipped:[]};
+      }
+    }
     const envelope = await wire.seal({ v: wire.Version3, id, from: this.address, to: peer, ts: Math.floor(at / 1000), kind: "message", sub, body, ref }, this.keys, recipient);
     const rec = { v: 3, control: true, id, to: peer, fp: this.fp, recipient_fp:pin.fingerprint, required_cap:cap, kind: "message", sub, body, ref, at, aside: true, state: "queued", detail: "", envelope };
-    await this.commitControls([rec]);
+    try {await this.commitControls([rec],sendID?[{s:"outbox",k:id,v:undefined}]:[]);} catch(e){
+      if(!sendID || !(e instanceof StoreConflict))throw e;
+      const prior=await this.store.get("outbox",id);
+      if(!prior || prior.to!==peer||prior.sub!==sub||prior.body!==body||prior.ref?.id!==ref.id||prior.ref?.fingerprint!==ref.fingerprint)throw Error("Send ID already names a different decision.");
+      return {id,state:prior.state,skipped:[]};
+    }
     await this.post(rec);
     const now = await this.store.get("outbox", id);
     return { id, state: now.state, skipped: [] };
@@ -6615,7 +6679,8 @@ export class Engine {
       if (!m.target || (m.kind !== "question" && m.kind !== "task")) return {};
       const answered = msgs.some((r) => r.fp && shownReply(r.reply_to) === m.id && (r.kind === "answer" || r.kind === "result"));
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === (here ? this.fp : m.fp) && x.from === m.target.address), m.target.address, answered);
-      return e ? { exec: e } : {};
+      const continuation=this.continuationOf(m,here?this.fp:m.fp,e);
+      return e ? { exec: e, ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
     const hostLabels = new Map(rel0(ctls) ? (await this.participationsOf(c)).map((p) => [p.pid, p.host?.label || ""]) : []); // client: the participation host's label
     const ctlView = async (m, here) => {
@@ -6652,7 +6717,7 @@ export class Engine {
         return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
-          origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
+          send_group:m.send_group_conflict?"":m.send_group||"", send_group_author:here?this.fp:m.fp||m.claimed_key||"", origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
           job_detail: this.needsYouText(m, privateReports),
           state, detail: m.detail || "", ...this.cancellationView(m), at: iso(m.at), unread: !out && !m.read, replica: !!m.replica,
           pid: m.pid || "", to: m.target ? m.target.address : "", event, via: m.own && !m.history ? m.from : "", copies: here ? await this.shownCopies(m.copies) : undefined,
@@ -7020,8 +7085,9 @@ export class Engine {
         const reader=[...evidence.members.values()].find(p=>p.devices.some(x=>x.address===d.address&&x.fingerprint===d.fingerprint));
         if(reader&&reader.person!==this.me.person)inner.fan.push({person:reader.person,roster:reader.hash});
       }
+      inner.send_group=await this.sendGroupCopy(d.address,pin,n.send_group);
       const envelope = await wire.seal(inner, this.keys, pub);
-      recs.push({ ...inner, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, ...(groupAdmission?{group_admission:groupAdmission}:{}), recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: "queued", detail: "" });
+      recs.push({ ...inner, send_group:n.send_group||"", send_group_wire:!!inner.send_group, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, ...(groupAdmission?{group_admission:groupAdmission}:{}), recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: "queued", detail: "" });
     }
     if (!recs.length) throw new Error("No authorized human audience device.");
     for (const r of recs) { const gate = await this.humanGate(c, r, checks); if (gate.why) throw new Error(gate.why); }
@@ -7580,8 +7646,9 @@ export class Engine {
       const recipientPerson=[...members.values()].find(p=>p.devices.some(d=>d.address===dev.address));
       const pairFan=members.group?[{person:this.me.person,roster:this.me.hash},...(recipientPerson&&recipientPerson.person!==this.me.person?[{person:recipientPerson.person,roster:recipientPerson.hash}]:[])]:fan;
       const inner = { ...n, v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), conv: c.id, root: c.root, lid, replica, fan:pairFan, attachments: sealed.map((f) => f.attachment),receiver_route:prepared?.route };
+      inner.send_group=await this.sendGroupCopy(dev.address,pin,n.send_group);
       const envelope = await wire.seal(inner, this.keys, recipient);
-      recs.push({ ...n,...(prepared?{receiver_route:prepared.route,recipient_fp:dev.fingerprint}:{}), ...(info.role === "human" ? {recipient_fp:dev.fingerprint} : {}), id, conv: c.id, lid, at, to: dev.address, replica, own: this.me.devices.some((d) => d.address === dev.address), required_cap: members.group?wire.CapGroup:info.role === "human" ? wire.CapHumanParticipation : wire.CapExternalParticipation, ...(members.group?{recipient_fp:dev.fingerprint,group_admission:members.epochs.get(dev.fingerprint)||""}:{}), envelope,
+      recs.push({ ...n,send_group_wire:!!inner.send_group,...(prepared?{receiver_route:prepared.route,recipient_fp:dev.fingerprint}:{}), ...(info.role === "human" ? {recipient_fp:dev.fingerprint} : {}), id, conv: c.id, lid, at, to: dev.address, replica, own: this.me.devices.some((d) => d.address === dev.address), required_cap: members.group?wire.CapGroup:info.role === "human" ? wire.CapHumanParticipation : wire.CapExternalParticipation, ...(members.group?{recipient_fp:dev.fingerprint,group_admission:members.epochs.get(dev.fingerprint)||""}:{}), envelope,
         attachments: inner.attachments, files: sealed.length ? sealed : undefined, state: ok ? "queued" : "waiting", detail });
     }
     if (!recs.length) throw new Error("No participation recipient.");
@@ -7890,7 +7957,7 @@ export class Engine {
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
       if (!e || !["awaiting", "needs_human", "interrupted", "running"].includes(e.state)) continue; // client.PageReview's states
       needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted", running: "agent_running" }[e.state], conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
-        why: (e.state === "needs_human" && this.needsYouText(m, reports)) || (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host });
+        why: (e.state === "needs_human" && this.needsYouText(m, reports)) || (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host, ...(this.continuationOf(m,fp,e)?{continuation:this.continuationOf(m,fp,e),actions:["continue"]}:{}) });
     }
   }
 
@@ -8013,7 +8080,8 @@ export class Engine {
 
   // askAgent sends a question or task to an active participation's agent,
   // on the other person's computer: its one target.
-  async askAgent({ id: sendID = "", pid, kind = "question", body, topic="",files = [], reply_receiver = null }) {
+  async askAgent({ id: sendID = "", pid, kind = "question", body, topic="",send_group="",files = [], reply_receiver = null }) {
+    if(send_group&&!wire.validID(send_group))throw Error("Invalid send group ID.");
     body = String(body || "").trim();
     if (wire.blank(body) && !files.length) throw new Error("Write what to ask or add a file first.");
     checkFiles(files);
@@ -8029,10 +8097,10 @@ export class Engine {
       const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(p => p.role === "human" && p.state === "active" && !p.held && p.host?.address === this.address && p.host.fingerprint === this.fp);
       if (!members.has(this.me?.person) && !guest) throw new Error("Only a current conversation member or accepted guest asks its agent.");
       const human = await this.humanPlan(c, guest?.pid || "");
-      if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind, body, topic,reply_to:replyTo,files, pid, origin: "ui", receiver: reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}) } }, human, info);
+      if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind, body, topic,send_group,reply_to:replyTo,files, pid, origin: "ui", receiver: reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}) } }, human, info);
     }
     if (!members.has(this.me?.person)) throw new Error("Only a current conversation member asks its agent.");
-    return this.sendConv(c, { id: sendID, queued: true, kind, body, topic,reply_to:replyTo,files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
+    return this.sendConv(c, { id: sendID, queued: true, kind, body, topic,send_group,reply_to:replyTo,files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
   }
 
   // Do it confirms only this device's own question, exact answer bytes and
@@ -8425,7 +8493,8 @@ export class Engine {
       if (m.dir !== "out" || (m.kind !== "question" && m.kind !== "task")) return {};
       const answered = g.some((r) => r.dir === "in" && r.reply_to === m.id && (r.kind === "answer" || r.kind === "result"));
       const e = this.execOn(statuses.filter((x) => x.ref && x.ref.id === m.id && x.ref.fingerprint === this.fp), peer, answered);
-      return e ? { exec: e } : {};
+      const continuation=this.continuationOf(m,this.fp,e);
+      return e ? { exec: e, ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
     const ctlView = (m) => {
       const targetFp = m.dir === "in" ? m.fp : this.fp;

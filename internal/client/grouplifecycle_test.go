@@ -828,7 +828,7 @@ func TestGroupLifecycleStaleDeclineNotReissued(t *testing.T) {
 	}
 	eventually(t, "the late decline at alice", func() bool {
 		r, e := groupInvitationIn(w.alice.store.db, carolInv.ID, "out")
-		return e == nil && r.State == "stale"
+		return e == nil && r.State == "declined"
 	})
 	if err = w.alice.RecoverGroupInvitations(tctx(t)); err != nil {
 		t.Fatal(err)

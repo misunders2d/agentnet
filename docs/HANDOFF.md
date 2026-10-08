@@ -4,27 +4,78 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Open follow-up after v0.8.7 — MEL-540
+## Next release candidate — v0.8.8 (not published)
 
-The owner's multi-agent send repeats the full human message once per recipient.
-ThinkPad's read-only evidence confirms distinct persisted request/logical IDs;
-both requests later answered. Native and browser source inspection confirms
-that v0.8.7 has no durable shared identity for the originating composer send.
-Keep MEL-540 open: dispatch shipped, but this presentation requirement is unmet.
+The owner requested the next release, including recent urgent bugs, through the
+existing ThinkPad Herdr co-work session. Root owns integration and release.
+ThinkPad supplied prepared notification, executor concurrency and compact approval
+commits. Local helpers own isolated fixes; no installed clients or live requests
+were changed. Only the existing Contabo relay is to be deployed after release.
 
-The next fix must show one human message with independent per-agent states,
-replies and retries, retaining every exact request ID and permission check.
-Grouping must survive reload and linked history; never infer it from matching
-text, timestamps or names, or merge request logical IDs. Any new wire metadata
-must use the existing capability negotiation because older strict readers reject
-unknown fields. Existing quote references are not proof of one composer send;
-an extra ordinary anchor message can also widen an outside agent request's
-audience. No grouping implementation or shipment is claimed yet.
+Integrated source, still awaiting combined release qualification:
 
-Ordinary worker roots remain serial per device. A queued second agent must not
-be labelled Working; scheduler concurrency is separate from this display fix.
-MEL-435's notification branch below remains separate too. No live request was
-retried, resent, stopped or otherwise changed during this diagnosis.
+- MEL-435: native notification routes from `ae1cea5762e2087646a53267408e058ceb795f32`.
+- MEL-521: compact approved-task rendering from `e2c3129a346270c9698ca2408d8435b3907f8595`.
+- MEL-540: distinct-executor concurrency from `f9cb9a9534a368fe845d7fc62b1de55af6f3f140`, plus explicit
+  signed `send_group` metadata. Every child keeps its own request/logical ID,
+  target, files, state, result and retry. Exact-author grouping survives own-linked
+  history/reload; contradictory metadata stays ungrouped. The `sg1` capability
+  is explicit: older/unknown peers receive compatible copies without it, while
+  local grouping is retained. Already sealed grouped copies wait on capability
+  rollback. Text/time/name similarity never groups messages. Each target's file
+  controls remain visible, even when its duplicate human text is compacted.
+- MEL-504: Codex group questions use the official app-server dynamic room tool
+  with the existing exact-run ask/reply checks. Read-only sandbox, never-approve
+  policy, inherited configuration and current authority remain. Unsupported
+  capability produces needs-human. No new MCP service or shell socket permission.
+- MEL-578: stale No thanks uses existing declined consent. It persists offline;
+  notification is queued only for the original unchanged pinned inviter key.
+  No usable key means honest local dismissal without a fabricated receipt.
+  Joining retains freshness checks. MEL-566 Join is a distinct issue.
+- MEL-542: stale Bring back is suppressed for current exact agent identity,
+  including pending invitations, and rechecked before acting. Browser projection
+  retains both historical and current PIDs and their separate grants.
+
+MEL-497 is integrated: Reply opens an explicit answer dialog, bound to the
+provider's exact request key, host and attempt. Existing signed decisions carry
+answers from current verified own human devices; operator decisions retain their
+report binding. Ordinary quotes stay inert. A local continuation ledger makes
+button/transport retries idempotent and adds the saved clarification and answer
+to the original task/question. It starts fresh context, never resumes an open
+user session; the prompt requires checking prior completed work before effects.
+This is not arbitrary model-effect checkpointing. `cont1` is explicit and checked
+at enqueue and final handover; unsupported or changed-key hosts fail closed.
+Native advertisements omit rm1-implied grp1/prg1 to keep both new capabilities
+within the existing 16-cap bound. Browsers execute no requests and do not
+advertise cont1.
+
+Focused evidence: native/browser grouping and linked-history regressions,
+stale-decline baseline reproduction and native/browser fixes, rejoin exact
+identity/projection checks, and the integrated native focused batch (client
+27.351 s). All three locked skin builds, generated DTO checks and full Go vet
+passed. The final three rendered regressions passed together (23.449 s) in all
+three skins at 1280/390 widths: explicit continuation, pending/stale No thanks,
+and multi-agent grouping with per-target file controls. Compact approval and
+browser continuation/grouping checks also passed. Rendered fixture corrections
+addressed captured API endpoints and skin-specific selectors; product changes
+were not needed for those corrections.
+
+Independent integration review found no remaining concrete capability, schema,
+authority or file-display defect. Native advertisements retain both new explicit
+capabilities within the 16-cap limit. The real installed Codex 0.161.0 room smoke
+passed once (9.465 s): an ephemeral question used the exact dynamic tool, the
+synthetic target received one signed correlated child, and both its verified
+reply and the original answer completed. Normal model/reasoning/configuration
+were inherited; no live identity, user session or permission was changed. The
+existing stdout activity watchdog remains attached to the bridge.
+
+Representative settled screenshots were inspected: the answer dialog is readable,
+target statuses and file controls remain separate, and stale decline removes the
+invitation locally. The candidate now enters the integrated full
+race/native/packaging gates.
+Physical notification clicks and phone catch-up remain unqualified; retain those
+limits. MEL-558 physical phone catch-up is a post-update check, not proof of a
+new source failure.
 
 ## Current release — v0.8.7, October 8, 2026
 

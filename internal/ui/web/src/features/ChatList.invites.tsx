@@ -20,7 +20,7 @@ export function GroupInvitations() {
   const invitations = useStore(store, (s) => s.invitations);
   const overview = useStore(store, (s) => s.overview);
   const rooms = new Set((overview?.dms || []).map((d) => d.id));
-  const pending = invitations.filter((i) => i.direction === "in" && i.status === "pending");
+  const pending = invitations.filter((i) => i.direction === "in" && ["pending", "stale"].includes(i.status));
   const accepted = invitations.filter((i) => i.direction === "in" && i.status === "accepted" && !rooms.has(i.conv)
     && !pending.some((p) => p.conv === i.conv));
   const [all, setAll] = useState(false);
@@ -64,12 +64,12 @@ function InvitationCard({ invitation: i, from }: { invitation: T.GroupInvitation
           <p className="text-[13px] font-semibold text-text-2">{from} invited you to a group</p>
           <h3 className="truncate font-display text-[18px] font-bold leading-tight">{i.title || "Untitled group"}</h3>
           <p className="mt-0.5 text-[13px] text-muted">
-            {shared ? (shared === 1 ? "You’ll see 1 earlier message." : "You’ll see " + shared + " earlier messages.") : "You’ll see what’s said after you join."}
+            {i.status === "stale" ? "Group details changed. Ask for a new invitation to join." : shared ? (shared === 1 ? "You’ll see 1 earlier message." : "You’ll see " + shared + " earlier messages.") : "You’ll see what’s said after you join."}
           </p>
         </div>
       </div>
       <div className="mt-3 flex gap-2">
-        <Button variant="act" size="sm" onClick={() => decide(true)} disabled={busy} className="flex-1">Join</Button>
+        {i.status !== "stale" && <Button variant="act" size="sm" onClick={() => decide(true)} disabled={busy} className="flex-1">Join</Button>}
         <Button variant="ghost" size="sm" onClick={() => decide(false)} disabled={busy} className="flex-1 stroke">No thanks</Button>
       </div>
     </article>

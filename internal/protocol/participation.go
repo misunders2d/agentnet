@@ -65,6 +65,9 @@ const RoleHuman = "human"
 // capability RoomImplies names, so later programs may stop listing those.
 const CapRoom = "rm1"
 
+// CapSendGroup reads optional signed human-send presentation metadata.
+const CapSendGroup = "sg1"
+
 // RoomImplies are the capabilities CapRoom implies (CapsRecord.Reads).
 var RoomImplies = []string{CapExternalParticipation, CapAgentIdentity, CapHumanParticipation, CapAgentReaction, CapProgress, CapGroup, CapReplyReceiver, CapConvClear}
 

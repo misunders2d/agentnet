@@ -423,33 +423,36 @@ type DMThread struct {
 
 // DMMessage is one message of a DM.
 type DMMessage struct {
-	Status            string                    `json:"status,omitempty"`
-	Topic             string                    `json:"topic,omitempty"`
-	TopicEvent        *envelope.TopicEvent      `json:"topic_event,omitempty"`
-	AgentAuthorPID    string                    `json:"agent_author_pid,omitempty"`
-	GroupRef          *protocol.GroupHistoryRef `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
-	ExcerptPID        string                    `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
-	ClaimedKey        string                    `json:"claimed_key,omitempty"` // forwarded authorship, never verified here
-	Target            *envelope.Target          `json:"target,omitempty"`
-	AgentID           string                    `json:"agent_id,omitempty"`
-	ID                string                    `json:"id"`
-	LID               string                    `json:"lid,omitempty"`
-	Dir               string                    `json:"dir"` // in or out
-	From              string                    `json:"from"`
-	Kind              string                    `json:"kind"`
-	Body              string                    `json:"body"`
-	ReplyTo           string                    `json:"reply_to,omitempty"`
-	Origin            string                    `json:"origin,omitempty"` // what the sending device says wrote it, not proof
-	State             string                    `json:"state"`
-	StateText         string                    `json:"state_text"`
-	Detail            string                    `json:"detail,omitempty"`
-	SendStopped       bool                      `json:"send_stopped,omitempty"`
-	DeliveryUncertain bool                      `json:"delivery_uncertain,omitempty"`
-	At                time.Time                 `json:"at"`
-	Unread            bool                      `json:"unread,omitempty"`
-	Replica           bool                      `json:"replica,omitempty"`
-	PID               string                    `json:"pid,omitempty"` // the agent participation it is for, from or about
-	Attachments       []FileView                `json:"attachments,omitempty"`
+	Continuation      *client.ContinuationAction `json:"continuation,omitempty"`
+	SendGroup         string                     `json:"send_group,omitempty"`
+	SendGroupAuthor   string                     `json:"send_group_author,omitempty"`
+	Status            string                     `json:"status,omitempty"`
+	Topic             string                     `json:"topic,omitempty"`
+	TopicEvent        *envelope.TopicEvent       `json:"topic_event,omitempty"`
+	AgentAuthorPID    string                     `json:"agent_author_pid,omitempty"`
+	GroupRef          *protocol.GroupHistoryRef  `json:"group_ref,omitempty"`   // exact selectable frozen content, supplied by group history selection
+	ExcerptPID        string                     `json:"excerpt_pid,omitempty"` // grant scope; PID retains original snapshot PID
+	ClaimedKey        string                     `json:"claimed_key,omitempty"` // forwarded authorship, never verified here
+	Target            *envelope.Target           `json:"target,omitempty"`
+	AgentID           string                     `json:"agent_id,omitempty"`
+	ID                string                     `json:"id"`
+	LID               string                     `json:"lid,omitempty"`
+	Dir               string                     `json:"dir"` // in or out
+	From              string                     `json:"from"`
+	Kind              string                     `json:"kind"`
+	Body              string                     `json:"body"`
+	ReplyTo           string                     `json:"reply_to,omitempty"`
+	Origin            string                     `json:"origin,omitempty"` // what the sending device says wrote it, not proof
+	State             string                     `json:"state"`
+	StateText         string                     `json:"state_text"`
+	Detail            string                     `json:"detail,omitempty"`
+	SendStopped       bool                       `json:"send_stopped,omitempty"`
+	DeliveryUncertain bool                       `json:"delivery_uncertain,omitempty"`
+	At                time.Time                  `json:"at"`
+	Unread            bool                       `json:"unread,omitempty"`
+	Replica           bool                       `json:"replica,omitempty"`
+	PID               string                     `json:"pid,omitempty"` // the agent participation it is for, from or about
+	Attachments       []FileView                 `json:"attachments,omitempty"`
 
 	// VerifiedAgent: an agent's turn as sent, by its participation's exact
 	// host key (client.ConvMessage.VerifiedAgent). UIs should label an
@@ -719,6 +722,7 @@ type AgentInvite struct {
 
 // AgentAsk is a question (or task) for an active participation's agent.
 type AgentAsk struct {
+	SendGroup     string                  `json:"send_group,omitempty"`
 	Topic         string                  `json:"topic,omitempty"`
 	ID            string                  `json:"id,omitempty"` // optional local send correlation (logical id in a conversation)
 	ReplyReceiver *ReplyReceiverSelection `json:"reply_receiver,omitempty"`
@@ -949,18 +953,19 @@ const ReasonDeviceAdmin = "device_admin"
 // conversation. DecideOn names the host device where it is decided when
 // that is not this one (a browser runs no agent): then it is read-only.
 type ConvItem struct {
-	Reason   string    `json:"reason"`
-	Conv     string    `json:"conv"`
-	PID      string    `json:"pid,omitempty"`
-	ID       string    `json:"id,omitempty"`
-	Peer     string    `json:"peer"`
-	Kind     string    `json:"kind,omitempty"`
-	Why      string    `json:"why"`
-	Excerpt  string    `json:"excerpt"`
-	At       time.Time `json:"at"`
-	Unread   bool      `json:"unread,omitempty"`
-	Actions  []string  `json:"actions,omitempty"`
-	DecideOn string    `json:"decide_on,omitempty"`
+	Continuation *client.ContinuationAction `json:"continuation,omitempty"`
+	Reason       string                     `json:"reason"`
+	Conv         string                     `json:"conv"`
+	PID          string                     `json:"pid,omitempty"`
+	ID           string                     `json:"id,omitempty"`
+	Peer         string                     `json:"peer"`
+	Kind         string                     `json:"kind,omitempty"`
+	Why          string                     `json:"why"`
+	Excerpt      string                     `json:"excerpt"`
+	At           time.Time                  `json:"at"`
+	Unread       bool                       `json:"unread,omitempty"`
+	Actions      []string                   `json:"actions,omitempty"`
+	DecideOn     string                     `json:"decide_on,omitempty"`
 }
 
 // OperatorDecisions is implemented by the daemon provider: deciding a
@@ -973,6 +978,7 @@ type OperatorDecisions interface {
 
 // DecisionAction names a reported request exactly and what to do with it.
 type DecisionAction struct {
+	SendID  string `json:"send_id,omitempty"`
 	Host    string `json:"host"`
 	ID      string `json:"id"`  // the request's id on the host (ReportItem.ID)
 	Key     string `json:"key"` // the requester's key (ReportItem.Key)
@@ -1061,31 +1067,32 @@ type Presence struct {
 
 // Message is one row of a thread.
 type Message struct {
-	Target            *envelope.Target `json:"target,omitempty"`
-	AgentID           string           `json:"agent_id,omitempty"`
-	ID                string           `json:"id"`
-	Dir               string           `json:"dir"` // in or out
-	From              string           `json:"from"`
-	To                string           `json:"to"`
-	Kind              string           `json:"kind"`
-	Body              string           `json:"body"`
-	ReplyTo           string           `json:"reply_to,omitempty"`
-	At                time.Time        `json:"at"`
-	State             string           `json:"state,omitempty"`  // stored state, shown under details
-	Status            string           `json:"status,omitempty"` // outcome carried by an answer or result
-	Path              string           `json:"path,omitempty"`   // relay or direct
-	Responder         string           `json:"responder,omitempty"`
-	Summary           string           `json:"summary,omitempty"` // follow-up summary written locally
-	Detail            string           `json:"detail,omitempty"`  // local note: failure or needs-human reason
-	SendStopped       bool             `json:"send_stopped,omitempty"`
-	DeliveryUncertain bool             `json:"delivery_uncertain,omitempty"`
-	Unread            bool             `json:"unread,omitempty"`
-	Files             []File           `json:"files,omitempty"`
-	Author            Author           `json:"author"`
-	StateText         string           `json:"state_text,omitempty"`
-	Next              string           `json:"next,omitempty"`
-	Actions           []string         `json:"actions,omitempty"` // decisions available on this message
-	Controls                           // reactions, edit and deletion applied to it (client.Controls, flattened)
+	Continuation      *client.ContinuationAction `json:"continuation,omitempty"`
+	Target            *envelope.Target           `json:"target,omitempty"`
+	AgentID           string                     `json:"agent_id,omitempty"`
+	ID                string                     `json:"id"`
+	Dir               string                     `json:"dir"` // in or out
+	From              string                     `json:"from"`
+	To                string                     `json:"to"`
+	Kind              string                     `json:"kind"`
+	Body              string                     `json:"body"`
+	ReplyTo           string                     `json:"reply_to,omitempty"`
+	At                time.Time                  `json:"at"`
+	State             string                     `json:"state,omitempty"`  // stored state, shown under details
+	Status            string                     `json:"status,omitempty"` // outcome carried by an answer or result
+	Path              string                     `json:"path,omitempty"`   // relay or direct
+	Responder         string                     `json:"responder,omitempty"`
+	Summary           string                     `json:"summary,omitempty"` // follow-up summary written locally
+	Detail            string                     `json:"detail,omitempty"`  // local note: failure or needs-human reason
+	SendStopped       bool                       `json:"send_stopped,omitempty"`
+	DeliveryUncertain bool                       `json:"delivery_uncertain,omitempty"`
+	Unread            bool                       `json:"unread,omitempty"`
+	Files             []File                     `json:"files,omitempty"`
+	Author            Author                     `json:"author"`
+	StateText         string                     `json:"state_text,omitempty"`
+	Next              string                     `json:"next,omitempty"`
+	Actions           []string                   `json:"actions,omitempty"` // decisions available on this message
+	Controls                                     // reactions, edit and deletion applied to it (client.Controls, flattened)
 	// Exec: a request this device sent, where its executor last said it
 	// stands (client.ExecView): from the executing device only, never from
 	// delivery or presence; absent when it never said. Stale: that device
@@ -1146,18 +1153,20 @@ type Sent struct {
 
 // Action is a local decision.
 type Action struct {
-	SendID string   `json:"send_id,omitempty"`
-	Do     string   `json:"do"`
-	ID     string   `json:"id,omitempty"`     // message id, or peer address for peer actions
-	Body   string   `json:"body,omitempty"`   // reply text
-	Reason string   `json:"reason,omitempty"` // decline reason
-	IDs    []string `json:"ids,omitempty"`    // read: messages to mark read
-	Key    string   `json:"key,omitempty"`    // trust: the fingerprint the person compared
+	Attempt int64    `json:"attempt,omitempty"`
+	SendID  string   `json:"send_id,omitempty"`
+	Do      string   `json:"do"`
+	ID      string   `json:"id,omitempty"`     // message id, or peer address for peer actions
+	Body    string   `json:"body,omitempty"`   // reply text
+	Reason  string   `json:"reason,omitempty"` // decline reason
+	IDs     []string `json:"ids,omitempty"`    // read: messages to mark read
+	Key     string   `json:"key,omitempty"`    // trust: the fingerprint the person compared
 }
 
 // Actions the page can request.
 const (
-	DoIt           = "do_it"         // confirm the stored proposal, with its original target and bytes
+	DoIt           = "do_it" // confirm the stored proposal, with its original target and bytes
+	DoContinue     = "continue"
 	DoReply        = "reply"         // answer a received item by hand (takes it over)
 	DoAccept       = "accept"        // run a task once, let the responder answer a held question, or run again
 	DoAcceptAlways = "accept_always" // run this task and grant its verified person (or exact device key)

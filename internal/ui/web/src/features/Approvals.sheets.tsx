@@ -1,6 +1,6 @@
 // Confirm steps for decisions: one sentence of what it means, the
 // consequential button first and labelled with the action, and a way out.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Collapsible } from "@base-ui/react/collapsible";
 import { IconChevronDown } from "@tabler/icons-react";
 import { Sheet } from "../ui/Sheet";
@@ -39,6 +39,28 @@ export function DeclineSheet({ open, onOpenChange, who, kind, onDecline }: {
         className="mt-1.5 w-full resize-none rounded-2xl bg-surface stroke px-3.5 py-2.5 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-agent-ink" />
     </ConfirmSheet>
   );
+}
+
+export function AnswerSheet({ question, onClose, onSend }: {
+  question: string; onClose: () => void; onSend: (text: string) => Promise<boolean>;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const send = async () => {
+    if (pending.current || !text.trim()) return;
+    pending.current = true; setBusy(true);
+    try { if (await onSend(text.trim())) onClose(); }
+    finally { pending.current = false; setBusy(false); }
+  };
+  return <Sheet open onOpenChange={(open) => { if (!open) onClose(); }} title="Answer your agent"
+    footer={<Button size="lg" disabled={busy || !text.trim()} onClick={() => void send()}>{busy ? "Sending…" : "Send answer"}</Button>}>
+    {question && <p className="whitespace-pre-wrap text-text-2 [overflow-wrap:anywhere]">{question}</p>}
+    <p className="mt-3 text-[14px] text-text-2">Continues this request with your answer and the agent’s question. Its existing permissions still apply.</p>
+    <label htmlFor="agent-answer" className="mt-4 block text-[14px] font-bold">Your answer</label>
+    <textarea id="agent-answer" rows={4} value={text} onChange={(e) => setText(e.target.value)} maxLength={8000} disabled={busy}
+      className="mt-1.5 w-full resize-none rounded-2xl bg-surface stroke px-3.5 py-2.5 text-[16px] outline-none focus-visible:ring-2 focus-visible:ring-agent-ink" />
+  </Sheet>;
 }
 
 /** Details: technical facts, folded away from the normal flow. */

@@ -260,3 +260,13 @@ export function guestUpdatePeople(waiting: string[], candidates: (T.PersonView |
 export function guestUpdateDraft(member: boolean) {
   return (member ? "Could you update AgentNet? Our chat needs it for a guest to join." : "Could you update AgentNet? I'd like to bring you into a chat.") + " Get AgentNet: https://github.com/misunders2d/agentnet/releases";
 }
+
+/** Exact current agent identity, separate from the past PID and its grants. */
+export function agentRejoinState(t: T.DMThread, pid?: string): string {
+  const old = (t.agents || []).find(a => a.pid === pid || a.pids?.includes(pid || ""));
+  if (!old?.host.fingerprint) return "";
+  const current = (t.agents || []).find(a => a.pid !== old.pid &&
+    a.host.address === old.host.address && a.host.fingerprint === old.host.fingerprint &&
+    (a.agent_id || "") === (old.agent_id || "") && ["active", "invited"].includes(a.state));
+  return current ? current.state === "active" ? "Already in this chat" : "Rejoin pending" : "";
+}

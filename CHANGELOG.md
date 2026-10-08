@@ -6,8 +6,22 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.8] — 2026-10-08
+
 ### Fixed
 
+- Reply on a waiting agent request sends its clarification answer to that exact
+  request, locally or from a verified own human device. Retries retain the same
+  answer ID; ordinary quoted messages never restart work.
+- Multiple selected agents share one visible human message while retaining
+  separate requests, files, results and retries. Explicit grouping survives
+  reload and linked history; older peers still receive compatible requests.
+- Codex can ask another agent in its current group through its native tool
+  transport, retaining the question sandbox and the existing room permissions.
+- Outdated group invitations can be declined offline. Joining still requires
+  current verified consent; declining never grants membership.
+- Old agent cards no longer offer Bring back when that exact agent already
+  has an active or pending participation. Historical context stays separate.
 - Desktop review notification clicks open the installed AgentNet app at the
   exact request and workspace, or the review list for grouped and remote notices.
   Without the app, review uses the existing coding-agent opener instead of an

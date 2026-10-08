@@ -1,7 +1,7 @@
 // Synthetic source regressions: no requests, real people, sessions or grants.
 import { agentTargets, decode, encode, shift, candidates } from "../web/src/features/Composer.mentions";
 import { catalogHosts, pool, routeFor } from "../web/src/features/InviteSheet.candidates";
-import { pendingGroupInvites } from "../web/src/features/RoomPanel.model";
+import { agentRejoinState, pendingGroupInvites } from "../web/src/features/RoomPanel.model";
 import type { T } from "../web/src/api";
 
 const check = (ok: boolean, message: string) => { if (!ok) throw new Error(message); };
@@ -49,3 +49,14 @@ const removed=addressed.text.replace(" and @Same"," and someone"), kept=shift(ad
 check(JSON.stringify(agentTargets(removed,kept))===JSON.stringify(["pidA"]),"Removing one exact target preserves the other");
 const reopened=decode(encode(addressed.text,addressed.spans));
 check(JSON.stringify(agentTargets(reopened.text,reopened.spans))===JSON.stringify(["pidA","pidB"]),"Draft reload preserves multiple targets");
+
+const endedAgent = { pid: "past", state: "dismissed", agent_id: "codex", host: { address: "peer/desk", fingerprint: "keyA" } };
+const nextAgent = { ...endedAgent, pid: "new", state: "invited" };
+const rejoinThread = (a: object[]) => ({ ...thread, agents: a }) as unknown as T.DMThread;
+check(agentRejoinState(rejoinThread([endedAgent]), "past") === "", "Ended-only agent cannot return");
+check(agentRejoinState(rejoinThread([endedAgent,nextAgent]), "past") === "Rejoin pending", "Pending rejoin leaves stale action enabled");
+check(agentRejoinState(rejoinThread([nextAgent,endedAgent]), "past") === "Rejoin pending", "Reordered participation changes identity");
+check(agentRejoinState(rejoinThread([endedAgent,{...nextAgent,state:"active"}]), "past") === "Already in this chat", "Active rejoin leaves stale action enabled");
+check(agentRejoinState(rejoinThread([endedAgent,{...nextAgent,agent_id:"claude"}]), "past") === "", "Different named agent incorrectly grouped");
+check(agentRejoinState(rejoinThread([endedAgent,{...nextAgent,host:{...nextAgent.host,fingerprint:"keyB"}}]), "past") === "", "Changed host key incorrectly grouped");
+check(agentRejoinState(rejoinThread([endedAgent,{...nextAgent,state:"dismissed"}]), "past") === "", "Ended rejoin blocks a new invitation");

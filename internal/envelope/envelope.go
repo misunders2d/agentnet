@@ -132,6 +132,7 @@ type Inner struct {
 	TopicDone     bool           `json:"topic_done,omitempty"`
 	Topic         string         `json:"topic,omitempty"`
 	TopicEvent    *TopicEvent    `json:"topic_event,omitempty"`
+	SendGroup     string         `json:"send_group,omitempty"` // signed presentation only; never execution identity
 }
 
 // TopicEvent is a shared human action. Seen names exact logical turns covered
@@ -323,7 +324,7 @@ type Decision struct {
 }
 
 // Decision actions.
-var decisionActions = map[string]bool{"accept": true, "decline": true, "resolve": true, "reply": true, "cancel": true}
+var decisionActions = map[string]bool{"accept": true, "decline": true, "resolve": true, "reply": true, "cancel": true, "continue": true}
 
 // Clear erases its sender person's copy of one conversation on that
 // person's own devices; it is sent to no one else. Ref and Turns are the
@@ -546,7 +547,7 @@ func checkVersion3(in Inner) error {
 		var r Decision
 		if in.Conv != "" || dec.Decode(&r) != nil || !decisionActions[r.Action] || !validStateToken(r.Expect) || r.Attempt < 0 ||
 			len(r.Text) > MaxDecisionText || !utf8.ValidString(r.Text) || (r.Report != "" && !validID(r.Report)) ||
-			((r.Action == "reply" || r.Action == "decline") && strings.TrimSpace(r.Text) == "") {
+			((r.Action == "reply" || r.Action == "decline" || r.Action == "continue") && strings.TrimSpace(r.Text) == "") {
 			return errors.New("malformed decision")
 		}
 	case SubClear:
@@ -637,6 +638,9 @@ func CheckQuote(in Inner) error {
 // checkVersion2 validates the version 2 fields of in (or their absence in
 // version 1).
 func checkVersion2(in Inner) error {
+	if err := CheckSendGroup(in); err != nil {
+		return err
+	}
 	if err := CheckQuote(in); err != nil {
 		return err
 	}

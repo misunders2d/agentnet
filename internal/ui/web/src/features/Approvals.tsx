@@ -27,7 +27,7 @@ import { capital, decidable, inSentence, isSelfConsent, nameOf, peerAgent, whyWo
 
 export { ApprovalCard } from "./Approvals.card";
 
-const groupInvites = (o: T.Overview) => (o.group_invitations || []).filter((i) => i.direction === "in" && i.status === "pending");
+const groupInvites = (o: T.Overview) => (o.group_invitations || []).filter((i) => i.direction === "in" && ["pending", "stale"].includes(i.status));
 const deviceAsks = (o: T.Overview) => (o.links || []).filter((l) => l.state === "pending");
 const reviewAsks = (o: T.Overview) => (o.review || []).filter((r) => !r.notice && !isWorkingReview(r));
 
@@ -227,9 +227,9 @@ function GroupRow({ g, o }: { g: T.GroupInvitationView; o: T.Overview }) {
     <Card>
       <span className="grid size-10 shrink-0 place-items-center rounded-full bg-agent text-agent-ink stroke" aria-hidden="true"><IconUsersGroup size={20} /></span>
       <Body tag={<Tag tone="muted">Group invite</Tag>} title={<>{by} invited you to <span className="font-display">“{g.title || "a group"}”</span></>}
-        meta={shared ? "They share " + (shared === 1 ? "1 earlier message" : shared + " earlier messages") + " with you." : "Nothing earlier is shared with you."}>
+        meta={g.status === "stale" ? "Group details changed. Ask for a new invitation to join." : shared ? "They share " + (shared === 1 ? "1 earlier message" : shared + " earlier messages") + " with you." : "Nothing earlier is shared with you."}>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button variant="act" size="sm" disabled={busy} onClick={() => decide(true)}>Join</Button>
+          {g.status !== "stale" && <Button variant="act" size="sm" disabled={busy} onClick={() => decide(true)}>Join</Button>}
           <Button variant="outline" size="sm" disabled={busy} onClick={() => decide(false)}>No thanks</Button>
         </div>
       </Body>

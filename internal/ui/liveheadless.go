@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"github.com/misunders2d/agentnet/internal/client"
 	"strings"
 )
 
@@ -12,11 +13,14 @@ import (
 // Decide implements OperatorDecisions.
 func (l *Live) Decide(x DecisionAction) (string, error) {
 	x.Action = strings.TrimSpace(x.Action)
-	if (x.Action == "reply" || x.Action == "decline") && strings.TrimSpace(x.Text) == "" {
+	if (x.Action == "reply" || x.Action == "decline" || x.Action == "continue") && strings.TrimSpace(x.Text) == "" {
 		return "", Refuse("Write the text first.")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
+	if x.Action == "continue" {
+		ctx = client.WithQueuedSend(ctx, x.SendID)
+	}
 	sent, err := l.a.Decide(ctx, x.Host, x.ID, x.Key, x.Action, x.Expect, x.Attempt, x.Text, x.Report)
 	if err != nil {
 		return "", Refuse(sentence(err))

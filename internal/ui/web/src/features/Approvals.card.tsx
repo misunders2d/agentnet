@@ -15,7 +15,8 @@ import {
   askerOf, capital, deviceWords, headlineOf, inSentence, isMine, isThreadMsg, kindWord, longer, myAgent, myAgentSeed, nameOf,
   participationOf, phaseOf, placeOf, requestText, waitsElsewhere, type Asker, type Phase, type Req,
 } from "./Approvals.words";
-import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
+import { sendID } from "../optimistic.mjs";
+import { AnswerSheet, ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { focusComposer } from "./Composer.focus";
 import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
@@ -76,6 +77,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
   const { root } = useOwned();
   const [busy, setBusy] = useState("");
   const [sheet, setSheet] = useState<Sheet>(null);
+  const [answer, setAnswer] = useState<{request: NonNullable<Req["continuation"]>; send: string; question: string} | null>(null);
   const acts = m.actions || [];
   const can = (a: string) => acts.includes(a);
   const asker = askerOf(m, o, names, dm);
@@ -192,7 +194,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
             {!can("decline") && <p className="px-1 pt-1 text-[13px] text-muted">If you don’t allow it, nothing runs.</p>}
           </>}
           {phase === "needs_human" && <>
-            {replyHere && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={reply}>Reply</Button>}
+            {m.continuation && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={() => setAnswer({request: {...m.continuation!}, send: sendID(), question: said})}>Reply</Button>}
             {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
             {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
           </>}
@@ -208,11 +210,19 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
 
         {(phase === "decide" || phase === "needs_human") && (
           <p className="flex items-center gap-2 border-t-[1.5px] border-ink/10 px-4 py-2.5 text-[13px] font-medium text-text-2">
-            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />Only you can approve this. Typing in chat can’t approve it.
+            <IconLock size={16} className="shrink-0 text-ink" aria-hidden="true" />{phase === "needs_human" ? "Reply answers this request. Ordinary chat messages don’t restart it." : "Only you can approve this. Typing in chat can’t approve it."}
           </p>
         )}
       </Shell>
 
+      {answer && <AnswerSheet question={answer.question} onClose={() => setAnswer(null)} onSend={async (text) => {
+        const c = answer.request;
+        const result = await store.run(api => c.host
+          ? api.decide({host:c.host,id:c.id,key:c.key,action:"continue",expect:"needs_human",attempt:c.attempt,text,send_id:answer.send,report:""})
+          : api.act({do:"continue",id:c.id,key:c.key,attempt:c.attempt,body:text,send_id:answer.send}));
+        if (result) store.toast(result.note || "Answer submitted.");
+        return !!result;
+      }} />}
       <ConfirmSheet open={sheet === "always"} onOpenChange={(v) => setSheet(v ? "always" : null)}
         title={named ? "Always allow " + asker.name + " → " + agent + "?" : "Always allow tasks from " + asker.name + "?"}
         body={permissionName + (permissionPerson ? " can give tasks from all current and future verified devices. Removing a device ends its access; key changes and person conflicts block it." : " can give tasks from this exact device key without asking you.") + " Your agent's normal permissions still apply. Turn it off in Settings → Permissions."}

@@ -493,6 +493,9 @@ const CapDriveSpace = "drv1"
 // review reports. CapControl alone says nothing about these.
 const CapHeadless = "hdl1"
 
+// CapContinuation reads exact-attempt human clarification decisions.
+const CapContinuation = "cont1"
+
 // CapControl means the device reads version 3 controls (reactions,
 // revisions, retractions of messages).
 const CapControl = "ctl3"

@@ -34,6 +34,7 @@ export interface MessageProps {
   first?: boolean;           // first of a run by one author: name line
   last?: boolean;            // last of the run: avatar and tail corner
   status?: boolean;          // say this message's delivery in words under it
+  compact?: boolean;          // another target of the same explicit human send
   readOnly?: boolean;        // shown for reading only ("What Zen saw")
   onJump?: (id: string) => void;
   selecting?: boolean;
@@ -46,7 +47,7 @@ export const MessageView = memo(function MessageView(p: MessageProps) {
   return <Bubble {...p} />;
 });
 
-function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJump, selecting, selected, onSelect }: MessageProps) {
+function Bubble({ m, ctx, all, first = true, last = true, status, compact, readOnly, onJump, selecting, selected, onSelect }: MessageProps) {
   const store = useApp();
   const wide = useWide();
   const who = whoWrote(m, ctx);
@@ -117,7 +118,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
       {m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
       {!m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{who.mine ? "You approved this task" : "Approved this task"} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
-      {quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
+      {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>
           : approved ? <>
@@ -128,15 +129,15 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
               {m.edited && <><p className="mt-2 text-[13px] text-muted">Edited message</p><Markdown text={shownText(m)} mention={mention} /></>}
             </details>
             <div className="flow-root">{time}</div>
-          </> : text ? <Markdown text={text} mention={mention} tail={time} />
+          </> : !compact && text ? <Markdown text={text} mention={mention} tail={time} />
             : null}
       {!m.deleted && !editing && <MessageFiles m={m} />}
-      {!text && !m.deleted && !editing && <div className="flow-root">{time}</div>}
+      {(!text || compact) && !m.deleted && !editing && <div className="flow-root">{time}</div>}
     </div>
   );
 
   return (
-    <div data-mid={m.id} className={"min-w-0 [overflow-wrap:anywhere] " + (first ? "mt-3.5" : "mt-1")}>
+    <div data-mid={m.id} className={"min-w-0 [overflow-wrap:anywhere] " + (first && !compact ? "mt-3.5" : "mt-1")}>
       <div className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={wide ? () => setHot(true) : undefined}

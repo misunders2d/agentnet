@@ -57,6 +57,9 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		}
 	}
 	original := item.inner(root.ID())
+	if err := envelope.CheckSendGroup(original); err != nil {
+		return nil, err
+	}
 	if err = receiverHistoryRoute(q, original, item.FromKey); err != nil {
 		return nil, err
 	}

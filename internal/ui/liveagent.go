@@ -661,7 +661,7 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	ctx = client.WithQueuedSend(ctx, d.ID)
+	ctx = client.WithHumanSendGroup(client.WithQueuedSend(ctx, d.ID), d.SendGroup)
 	res, err := l.a.AskAgentInTopic(ctx, d.PID, kind, body, d.Topic, receiver, files...)
 	if err != nil {
 		if errors.Is(err, client.ErrNoParticipation) {

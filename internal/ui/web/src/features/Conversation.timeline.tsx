@@ -9,13 +9,14 @@ import { useApp } from "../context";
 import { useStore } from "../store";
 import { agentName, dayLabel, sameDay, timeOf } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
+import { groupedSends } from "../optimistic.mjs";
 import { MessageView } from "./Message";
 import { agentLabel, agentOf, ev, isRequest, isThreadMsg, threadAgentName, whoWrote, working, type AnyMsg, type Ctx } from "./Message.model";
 
 type Item =
   | { type: "day"; key: string; label: string }
   | { type: "new"; key: string }
-  | { type: "msg"; key: string; m: AnyMsg; first: boolean; last: boolean; status: boolean };
+  | { type: "msg"; key: string; m: AnyMsg; first: boolean; last: boolean; status: boolean; compact: boolean };
 
 const RUN = 5 * 60e3;
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -101,7 +102,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
           {items.map((it) =>
             it.type === "day" ? <DayChip key={it.key} label={it.label} />
               : it.type === "new" ? <NewLine key={it.key} />
-                : <MessageView key={it.key} m={it.m} ctx={ctx} all={messages} first={it.first} last={it.last} status={it.status} onJump={jump}
+                : <MessageView key={it.key} m={it.m} ctx={ctx} all={messages} first={it.first} last={it.last} status={it.status} compact={it.compact} onJump={jump}
                     selecting={!!selected} selected={!!selected?.includes(it.m.id)} onSelect={onSelect} />)}
           {items.length > 0 && end}
           <Activity ctx={ctx} messages={messages} />
@@ -120,6 +121,8 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
 
 function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
   const out: Item[] = [];
+  const rows = groupedSends(messages);
+  messages = rows.map(row => row.m);
   const who = messages.map((m) => (ev(m) ? null : whoWrote(m, ctx)));
   const together = (i: number, j: number) => {
     const a = messages[i], b = messages[j], wa = who[i], wb = who[j];
@@ -130,7 +133,7 @@ function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
   messages.forEach((m, i) => {
     if (i === 0 || !sameDay(messages[i - 1].at, m.at)) out.push({ type: "day", key: "d:" + m.at.slice(0, 10) + i, label: dayLabel(m.at) });
     if (m.id === firstUnread) out.push({ type: "new", key: "new" });
-    out.push({ type: "msg", key: m.id, m, first: !(i > 0 && together(i - 1, i)), last: !(i + 1 < messages.length && together(i, i + 1)), status: i === lastMine });
+    out.push({ type: "msg", key: m.id, m, first: !(i > 0 && together(i - 1, i)), last: !(i + 1 < messages.length && together(i, i + 1)), status: i === lastMine, compact: rows[i].compact });
   });
   return out;
 }

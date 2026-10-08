@@ -2,7 +2,7 @@ function niceGoogleDevice(address) { const name = String(address || "").split("/
 import { avatarPicture, openPictureEditor, pastePictures } from "./pictures.mjs";
 import { topicControls } from './topics.mjs';
 import {personRoots,personTopicEntries,mainPreferences} from './person-topics.mjs';
-import { pendingSends, sendID } from "./optimistic.mjs";
+import { pendingSends, sendID, groupedSends } from "./optimistic.mjs";
 import { markup } from './template.mjs';
 import manifest from './manifest.mjs';
 const mounted = new WeakMap();
@@ -1160,7 +1160,7 @@ function groupsSection(open = openDM) {
   const o = state.overview;
   if (!o?.groups) return [];
   return [el("li", { class: "result-head" }, "Groups", el("button", { type: "button", class: "text-btn", onclick: newGroupDialog }, "New group…")),
-    ...(o.group_invitations || []).filter(i => i.direction === "in" && i.status === "pending").map(i => el("li", {},
+    ...(o.group_invitations || []).filter(i => i.direction === "in" && ["pending", "stale"].includes(i.status)).map(i => el("li", {},
       el("button", { type: "button", class: "thread-row", onclick: () => groupInvitationDialog(i) }, "Invitation: " + i.title + " · from " + i.inviter))),
     ...groupInvitationNotices().map(i => el("li", { class: "hint" }, groupInvitationNotice(i), groupInvitationActions(i), i.direction === "out" && el("button", { type: "button", class: "text-btn", onclick: () => reviewFreshGroupInvitation(i, open) }, "Review fresh invitation for " + personLabelOf(i.target) + "…"))),
     ...(o.dms || []).filter(humanGroup).map(d => dmRow(d, open))];
@@ -1233,7 +1233,7 @@ function newGroupDialog(initial) {
 }
 
 function groupInvitationDialog(i) {
-  const host = currentHost, gen = state.gen, ws = wsNow();
+  const host = currentHost, gen = state.gen, ws = wsNow(), stale = i.status === "stale";
   const decide = async accept => {
     if (gen !== state.gen || wsNow() !== ws) throw Error("Workspace changed; review the invitation again.");
     await api("/api/groups/decide", { id: i.id, accept }, host);
@@ -1241,11 +1241,11 @@ function groupInvitationDialog(i) {
     announce(accept ? "Acceptance recorded. Membership waits for the administrator's verified update." : "Invitation declined.");
     await loadOverview();
   };
-  dialog({ title: "Join " + i.title + "?", ok: "Accept invitation",
-    body: [el("p", {}, "Invitation from " + i.inviter + ". Accepting joins this group after the administrator publishes its signed update."),
+  dialog({ title: (stale ? "Invitation to " : "Join ") + i.title + (stale ? "" : "?"), ok: stale ? "No thanks" : "Accept invitation",
+    body: [el("p", {}, stale ? "Group details changed. Ask for a new invitation to join, or dismiss this one." : "Invitation from " + i.inviter + ". Accepting joins this group after the administrator publishes its signed update."),
       el("p", { class: "hint" }, (i.history || []).length ? "Shared earlier context: " + plural(i.history.length, "selected message", "selected messages") + " and only their attached files. Other earlier messages stay private." : "No earlier messages or files are shared."),
-      el("button", { type: "button", class: "text-btn", onclick: async () => { try { await decide(false); $("dialog").close(); } catch(e) { announce(e.message); } } }, "Decline invitation")],
-    run: () => decide(true) });
+      !stale && el("button", { type: "button", class: "text-btn", onclick: async () => { try { await decide(false); $("dialog").close(); } catch(e) { announce(e.message); } } }, "No thanks")],
+    run: () => decide(!stale) });
 }
 
 function inviteGroupDialog(t, initialPerson) {
@@ -2128,7 +2128,7 @@ function renderDMBody(scrollToEnd) {
   const shown=t.messages.filter(m=>(m.topic||'')===(topicSelections[t.id]||''));
   if(topicSelections[t.id]&&!(t.topics||[]).some(x=>x.id===topicSelections[t.id])&&!sends.merge("dm:"+t.id,t.messages).some(m=>m._local&&m.topic===topicSelections[t.id]))topicSelections[t.id]="";
   topicUI.update({conv:t.id},t.topics,topicSelections[t.id],flatTopicScope(t));
-  fill(tl, shown.length ? shown.map((m, i) => dmMsg(m, t, shown[i - 1]))
+  fill(tl, shown.length ? groupedSends(shown).map(({m, compact}, i, rows) => dmMsg(m, t, rows[i - 1]?.m, compact))
     : el("li", { class: "hint empty-list" }, "No messages yet. What you write here goes to " + (humanGroup(t) ? "the current members of " + t.title : t.peer.label) + " only."));
   if (scrollToEnd || atEnd) tl.scrollTop = tl.scrollHeight;
   reportSeen();
@@ -2185,8 +2185,8 @@ async function askGuestUpdate(p) {
 
 // dmMsg is one DM message. Who wrote it is what the sending AgentNet says,
 // shown as that: a person's name is their claim, an agent is marked.
-function dmMsg(m, t, prev) {
-  if (m._local) return el("li", {id:"m-"+m.id,class:"msg out"}, el("div", {class:"col"}, el("div", {class:"bubble"}, el("p", {class:"body"}, [m.body,...(m.attachments || m.files || []).map(f=>f.name)].filter(Boolean).join("\n"))), el("div", {class:"foot",role:"status"}, m.state_text, m._failed && el("button", {type:"button",class:"text-btn",onclick:m._retry}, "Retry"))));
+function dmMsg(m, t, prev, compact = false) {
+  if (m._local) return el("li", {id:"m-"+m.id,class:"msg out"}, el("div", {class:"col"}, el("div", {class:"bubble"}, m.pid && el("p", {"data-agent-recipient":"",title:m.pid}, "To @"+(agentOf(m.pid)?agentName(agentOf(m.pid)):"agent")), !compact && el("p", {class:"body"}, m.body), el("p",{class:"hint"},(m.attachments || m.files || []).map(f=>f.name).join(", "))), el("div", {class:"foot",role:"status"}, m.state_text, m._failed && el("button", {type:"button",class:"text-btn",onclick:m._retry}, "Retry"))));
   if (m.event) {
     return el("li", { id: "m-" + m.id, class: "event-line" }, el("span", {}, m.event), el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
   }
@@ -2202,7 +2202,7 @@ function dmMsg(m, t, prev) {
   const agentDetail = m.job_detail || (state.overview.needs_you || []).find(c => c.conv === t.id && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
   const meta = !cont && el("div", { class: "meta" }, el("span", { class: "who", ...(m.agent_id ? { title: namedProvenance(m) } : {}) }, author),
     agent && el("span", { class: "tag" }, "Agent"),
-    to && el("span", { class: "tag" }, "To " + to.charAt(0).toLowerCase() + to.slice(1)),
+    to && el("span", { class: "tag", "data-agent-recipient":"", title:m.pid }, "To " + to.charAt(0).toLowerCase() + to.slice(1)),
     kindTag[m.kind] && el("span", { class: "tag" }, kindTag[m.kind]),
     m.unread && el("span", { class: "tag unread" }, "New"),
     el("time", { datetime: m.sent_at || m.at }, sentWhen(m)));
@@ -2211,8 +2211,8 @@ function dmMsg(m, t, prev) {
     !mine && (cont ? el("span", { class: "avatar sm", "aria-hidden": "true" }) : avatar(humanGroup(t) || (dmHumanGuest(t) && !m.excerpt_pid) || (t.guests || []).some(g => g.host.address === m.from) ? author : t.peer.label || m.from, "sm")),
     el("div", { class: "col" }, meta,
       fill(bubble,
-        messageReference(m,t),
-        (m.deleted || shownText(m)) && bodyOf(m),
+        !compact && messageReference(m,t),
+        !compact && (m.deleted || shownText(m)) && bodyOf(m),
         !m.deleted && fileChips(humanGroup(t) && (m.synced_from || m.via) ? {...m,dir:"in"} : m, m.attachments)),
       reactionsRow(m, t.id),
       held && el("div", { class: "decide" }, el("p", { class: "decide-why" }, m.state_text)),
@@ -2659,6 +2659,10 @@ function mentionKey(e) {
 }
 
 function agentCard(a, t) {
+  const rejoined = ["dismissed", "declined"].includes(a.state) && a.host.fingerprint &&
+    (t.agents || []).find(b => b.pid !== a.pid && b.host.address === a.host.address &&
+      b.host.fingerprint === a.host.fingerprint && (b.agent_id || "") === (a.agent_id || "") &&
+      ["active", "invited"].includes(b.state));
   const shown = a.shared.length + a.missing;
   const facts = ["invited by " + (a.inviters?.length ? a.inviters : [a.inviter]).map(p => isMe(p) ? "you" : p.label).join(" and "),
     shown ? "shown " + plural(shown, "earlier message", "earlier messages") + (a.missing ? " (" + a.missing + " not here)" : "")
@@ -2669,6 +2673,7 @@ function agentCard(a, t) {
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", { ...(a.agent_id ? { title: a.agent_id + " · " + a.host.address } : {}) }, agentName(a)),
       el("details", {}, el("summary", {}, "Runs on " + (a.host_here ? "your computer" : a.host.label + "’s computer")), el("span", { class: "hint" }, a.state_text))),
     el("p", { class: "agent-state" }, a.state_text),
+    rejoined && el("p", { class: "hint" }, rejoined.state === "active" ? "Already in this chat" : "Rejoin pending"),
     el("p", { class: "hint" }, facts.join(" · ")),
     a.external && a.member && el("p", { class: "hint" }, "Runs outside this group on " + a.host.label + "’s computer; that computer receives every new message and file here until the agent is removed."),
     a.external && !a.member && el("p", { class: "hint" }, "External host · " + a.host.address + ". It is not a room member; it receives only selected context and requests addressed to this agent."),
@@ -2846,8 +2851,8 @@ function setDMAgent(a) {
 }
 
 
-function startSend(key, text, files, reply, answering, t, kind, retry, id, topic = "", topicRoot = "", addressedPID = state.dmAgent) {
-  sends.begin(key, { id, ...(state.dm ? { lid: id, origin: "ui", pid: addressedPID || "" } : { author: {label: "You", about: ""}, to: t.peer }),
+function startSend(key, text, files, reply, answering, t, kind, retry, id, topic = "", topicRoot = "", addressedPID = state.dmAgent, group = "") {
+  sends.begin(key, { id, ...(state.dm ? { lid: id, origin: "ui", send_group: group, send_group_author: state.overview?.me?.fingerprint, pid: addressedPID || "" } : { author: {label: "You", about: ""}, to: t.peer }),
     topic, _topicRoot: topicRoot, dir: "out", from: state.overview?.me?.address || "", body: text, kind, at: new Date().toISOString(), reply_to: reply?.id || answering?.id || "", quote: reply?.id || "",
     attachments: files.map(f => ({name:f.name,size:f.size,openable:false})), files: files.map(f => ({name:f.name,size:f.size,openable:false})) }, retry);
   if (alive && state.draftKey === key) {
@@ -2885,7 +2890,8 @@ async function sendDM(retry) {
       if (elsewhere || files.length && overLimit(files)) { $("compose-error").textContent=elsewhere || overLimit(files); return; }
       const key=state.draftKey, topic=topicFresh[t.id]?sendID():topicSelections[t.id] || "", kind=kindValue()==="task"?"task":"question";
       const receiverSelection=state.replyReceiver && {...state.replyReceiver}, nativeReceiver=!!state.overview?.reply_receivers, nativeSessions=!!state.overview?.reply_sessions, receiverContext=receiverCapture();
-      const plans=agents.map((agent,index)=>({id:sendID(),key,text,reply:null,agent,files:files.map(f=>({...f,staged:index===0?f.staged:"",url:null})),kind,t,topic,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext,fanout:true}));
+      const group=sendID();
+      const plans=agents.map((agent,index)=>({id:sendID(),key,text,reply:null,agent,files:files.map(f=>({...f,staged:index===0?f.staged:"",url:null})),kind,t,topic,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext,fanout:true,group}));
       if (topicFresh[t.id]) {topicSelections[t.id]=topic;topicFresh[t.id]=false;}
       $("body").value="";state.mentions=[];state.mentionText="";state.dmAgent=null;state.typedFor=null;
       state.files=state.files.filter(f=>!files.includes(f));grow();renderPending();keepDraft();syncComposer();
@@ -2896,6 +2902,7 @@ async function sendDM(retry) {
   }
   const {key,text,reply,agent,files,kind} = retry || {key:state.draftKey,text:$("body").value,reply:state.dmReply,agent:state.dmAgent,files:state.files.slice(),kind:kindValue()==="task"?"task":"question"};
   const topic = retry ? retry.topic : topicFresh[t.id] ? sendID() : topicSelections[t.id] || "";
+  const group = retry?.group || "";
   const id = retry?.id || sendID(), mentions = retry?.mentions || (state.mentions || []).slice();
   if (!retry) trackMentions();
   const signed = encodeMentions(text, mentions); // each exact person mention as its reference; the rest as typed
@@ -2906,7 +2913,7 @@ async function sendDM(retry) {
   if (typingUI) typingUI.stop();
   const host = currentHost, ws = wsNow(), receiverSelection = retry ? retry.receiverSelection : state.replyReceiver && { ...state.replyReceiver }, nativeReceiver = retry ? retry.nativeReceiver : !!state.overview?.reply_receivers, nativeSessions = retry ? retry.nativeSessions : !!state.overview?.reply_sessions, receiverContext = retry ? retry.receiverContext : receiverCapture(); // captured local delegation
   if (!retry && topicFresh[t.id]) { topicSelections[t.id] = topic; topicFresh[t.id] = false; }
-  startSend(key, text, files, reply, null, t, agent ? kind : "message", () => { sends.remove(id); void sendDM({id,key,text,reply,agent,files,kind,t,topic,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext,fanout:retry?.fanout}); }, id, topic, "", agent);
+  startSend(key, text, files, reply, null, t, agent ? kind : "message", () => { sends.remove(id); void sendDM({id,key,text,reply,agent,files,kind,t,topic,mentions,receiverSelection,nativeReceiver,nativeSessions,receiverContext,fanout:retry?.fanout,group}); }, id, topic, "", agent, group);
   if (alive) { syncComposer(); $("compose-error").textContent = ""; }
   try {
     await sends.ready(id);
@@ -2915,7 +2922,7 @@ async function sendDM(retry) {
     const receiver = humanAsk ? null : await prepareReplyReceiverSelection(receiverSelection, host, ws, nativeReceiver, nativeSessions, receiverContext);
     const ids = await preparedFiles(files, host); // a failure here keeps what was handed over, for the retry
     try {
-      r = agent ? await api("/api/dm/agent/ask", { id, pid: agent, kind,topic, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
+      r = agent ? await api("/api/dm/agent/ask", { id, send_group: group, pid: agent, kind,topic, body: signed, files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host)
         : await api("/api/dm/send", { id, conv: t.id, topic,...(dmHumanGuest(t) ? { pid: guestAuthor(t).pid } : {}), body: signed, reply_to: reply ? reply.id : "", quote:reply?.id||"", files: ids, ...(receiver ? { reply_receiver: receiver } : {}) }, host);
     } finally { sentStaged(files); }
     announce(r.state === "receiver_waiting" ? r.detail || "Waiting for the selected reply host to accept this exact request." : r.state === "waiting" ? "Kept here, not sent yet: " + (r.detail || "they cannot read conversations now.")
@@ -3696,7 +3703,7 @@ function details(m) {
 }
 
 const actionLabel = {
-  do_it: "Do it",
+  do_it: "Do it", continue: "Reply",
   accept: "Accept and run…", accept_always: "Always accept from this key…", decline: "Decline…",
   approve: "Answer their questions automatically…", resolve: "Close without replying…", reply: "Reply", cancel: "Stop…",
 };
@@ -3724,6 +3731,26 @@ async function act(body, host) {
 }
 
 function decide(a, m, t) {
+  if (a === "continue") {
+    if (!m.continuation) { announce("This request no longer waits for an answer. Refresh it and review its current state."); return; }
+    const c = {...m.continuation}, id = sendID(), host = currentHost;
+    const text = el("textarea", {id:"agent-answer",rows:"4",maxlength:"8000"});
+    const send = async () => {
+      if (host !== currentHost) throw Error("Workspace changed. Open the request again.");
+      if (!text.value.trim()) throw Error("Write your answer first.");
+      const result = c.host
+        ? await api("/api/operator/decide",{host:c.host,id:c.id,key:c.key,action:"continue",expect:"needs_human",attempt:c.attempt,text:text.value.trim(),send_id:id,report:""},host)
+        : await act({do:"continue",id:c.id,key:c.key,attempt:c.attempt,body:text.value.trim(),send_id:id},host);
+      announce(result.note || "Answer submitted."); await refetch(false);
+    };
+    dialog({title:"Answer your agent",ok:"Send answer",focus:text,body:[
+      el("p",{class:"agent-detail"},m.job_detail || m.detail || ""),
+      el("p",{class:"hint"},"Continues this request with your answer and the agent’s question. Its existing permissions still apply."),
+      el("label",{for:"agent-answer",class:"field-label"},"Your answer"),text],run:send});
+    $("dialog-ok").disabled = true;
+    text.addEventListener("input",()=>{if(!state.dialogBusy)$("dialog-ok").disabled=!text.value.trim();});
+    return;
+  }
   if (a === "do_it") return act({ do: a, id: m.id }).then(() => refetch(false)).catch(e => announce(e.message));
   if (a === "reply") {
     setAnswering(m);
@@ -4372,6 +4399,7 @@ async function send(ev, retry) {
   // Everything this send needs is fixed now: switching conversation or a
   // refresh while it is on its way changes none of it.
   let key = retry?.key || state.draftKey, text = retry ? retry.text : $("body").value, answering = retry ? retry.answering : state.answering, files = retry ? retry.files : answering ? [] : state.files.slice();
+  const group = retry?.group || "";
   const id = retry?.id || sendID(), mentions = retry?.mentions || (state.mentions || []).slice();
   const newTopic = retry ? retry.newTopic : !!topicFresh[t.id];
   const last = sends.merge(key, t.messages).at(-1);

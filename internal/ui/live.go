@@ -113,7 +113,15 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 		return o, err
 	}
 	for _, c := range review.Conv {
-		o.NeedsYou = append(o.NeedsYou, convItem(c, words))
+		item := convItem(c, words)
+		item.Continuation, err = l.a.ContinuationFor(c.ID, "", nil)
+		if err != nil {
+			return Overview{}, err
+		}
+		if item.Continuation != nil {
+			item.Actions = append(item.Actions, DoContinue)
+		}
+		o.NeedsYou = append(o.NeedsYou, item)
 	}
 	countDecisions(&o)
 	for _, c := range review.Held {
@@ -318,6 +326,10 @@ func (l *Live) Thread(id string) (Thread, error) {
 	for _, m := range c.Messages {
 		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, At: m.At, SentAt: shownSent(m.SentAt, m.At),
 			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, Controls: m.Controls, Exec: m.Exec}
+		v.Continuation, err = l.a.ContinuationFor(m.ID, "", m.Exec)
+		if err != nil {
+			return t, err
+		}
 		if m.Read != nil && !*m.Read {
 			v.Unread = true
 		}
@@ -361,6 +373,9 @@ func (l *Live) Thread(id string) (Thread, error) {
 		case "":
 		default:
 			v.Next = "Waiting on " + peer
+		}
+		if v.Continuation != nil {
+			v.Actions = append(v.Actions, DoContinue)
 		}
 		t.Messages = append(t.Messages, v)
 	}
@@ -478,6 +493,9 @@ func (l *Live) Act(x Action) (string, error) {
 	case DoIt:
 		_, err = l.a.ConfirmProposal(client.WithQueuedSend(ctx, x.SendID), x.ID)
 		note = "Task saved; sending to the same agent."
+	case DoContinue:
+		err = l.a.ContinueRequest(x.ID, x.SendID, x.Attempt, x.Body, x.Key)
+		note = "Answer saved. Continuing the same request with fresh context."
 	case DoAccept:
 		err = l.a.Accept(x.ID)
 		note = "Accepted. Your responder takes it from here."

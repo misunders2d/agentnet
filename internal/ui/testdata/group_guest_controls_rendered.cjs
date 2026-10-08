@@ -38,6 +38,21 @@ if(variant==='oks'){
  fixture.why='Permission needed for carrier handoff.\\nReview the destination and confirm the warehouse owner has authorized this change. Nothing was sent to the carrier. Full detail remains here: FINAL_REASON_MARKER.';
  fixture.overview.needs_you=[{conv:fixture.thread.id,id:'working-request',reason:'agent_awaiting',peer:'brin/desktop',kind:'task',excerpt:'Check warehouse inventory',why:'Already working',actions:['cancel'],at:'2026-10-05T11:00:00Z'}, {conv:fixture.thread.id,id:'held-question',reason:'agent_awaiting',peer:'brin/desktop',kind:'question',excerpt:'Which carrier should we use?',why:'Not approved',actions:['accept','decline','approve'],at:'2026-10-05T10:00:00Z'}, {conv:fixture.thread.id,id:'needs-person',reason:'agent_needs_human',peer:'brin/desktop',kind:'task',excerpt:'Review carrier handoff',why:fixture.why,actions:['resolve','accept','reply'],at:'2026-10-05T09:00:00Z'}];
 }
+if(variant.startsWith('continuation-')){
+ const mode=variant.slice('continuation-'.length),id='needs-answer-exact';
+ fixture.thread.kind='dm';fixture.thread.peer=${JSON.stringify(brin)};fixture.thread.guests=[];fixture.thread.members=[];
+ fixture.thread.agents=[{pid:'own-agent',host:fixture.overview.person,agent_id:'a'.repeat(32),state:'active',state_text:'Active',host_here:true,shared:[],can_ask:true,inviter:fixture.overview.person,tasks_from:[]}];
+ const descriptor={id,key:'exact-request-key',attempt:7,...(mode==='remote'?{host:'aster/other-laptop'}:{})};
+ const request={id,lid:id,from:'brin/desktop',dir:'in',kind:'task',body:'Review the destination',quote:'ordinary-quote',at:'2026-10-05T10:00:00Z',pid:'own-agent',target:{address:'aster/laptop'},state:'needs_human',job_state:'needs_human',job_detail:'Which warehouse should I use? EXACT_QUESTION',detail:'Which warehouse should I use? EXACT_QUESTION',actions:mode==='stale'?['resolve']:['continue','resolve'],...(mode==='stale'?{}:{continuation:descriptor})};
+ fixture.thread.messages=[fixture.thread.messages[0],request,{id:'ordinary-quote',from:'brin/desktop',dir:'in',kind:'message',body:'Ordinary quoted note',at:'2026-10-05T09:00:00Z'}];
+ fixture.overview.group_invitations=[];fixture.overview.people=[${JSON.stringify(brin)}];
+ fixture.overview.dms=[{id:fixture.thread.id,kind:'dm',peer:fixture.thread.peer,count:3,unread:0,last:'Selected warehouse context'}];
+ fixture.overview.needs_you=[{conv:fixture.thread.id,id,reason:'agent_needs_human',peer:'brin/desktop',kind:'task',excerpt:request.body,why:request.job_detail,actions:request.actions,continuation:request.continuation,at:request.at}];
+}
+if(variant.startsWith('decline-invite-')){
+ fixture.overview.dms=[];fixture.overview.threads=[];
+ fixture.overview.group_invitations=[{id:'inbound-exact',conv:'d'.repeat(64),direction:'in',status:variant.endsWith('stale')?'stale':'pending',title:'Orchard inbound invitation',inviter:${JSON.stringify(brin.address)},target:fixture.overview.person.person,history:[]}];
+}
 if(variant==='device-oks'){
  fixture.overview.people=[${JSON.stringify(brin)}];fixture.overview.dms=[];fixture.overview.group_invitations=[];fixture.overview.needs_you=[];
  const request='7'.repeat(32),other='8'.repeat(32),body='Check Orchard warehouse inventory';
@@ -95,7 +110,18 @@ if(variant==='heldback'){
 }
 let open,changed;
 const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
-fixture.requests.push({path:p,body});if(variant==='heldback'&&p==='/api/act'){
+fixture.requests.push({path:p,body});if(variant.startsWith('continuation-')&&['/api/act','/api/operator/decide'].includes(p)){
+ const c=fixture.thread.messages.find(m=>m.id==='needs-answer-exact').continuation;
+ if(!c||body.id!==c.id||body.key!==c.key||body.attempt!==c.attempt||!body.send_id)throw Error('Unexpected continuation identity');
+ if(!fixture.continuationFailed){fixture.continuationFailed=true;throw Error('Synthetic lost transport response; retry this same answer');}
+ const m=fixture.thread.messages.find(m=>m.id===c.id);m.state='running';m.job_state='running';m.actions=['cancel'];delete m.continuation;
+ fixture.overview.needs_you=[];changed?.({type:'change',seq:++fixture.overview.seq});return {note:'Answer submitted to the same request.'};
+}
+if(variant.startsWith('decline-invite-')&&p==='/api/groups/decide'){
+ if(body.id!=='inbound-exact'||body.accept!==false)throw Error('Unexpected invitation decision');
+ fixture.overview.group_invitations=[];changed?.({type:'change',seq:++fixture.overview.seq});return {};
+}
+if(variant==='heldback'&&p==='/api/act'){
  if(body.do!=='archive_held'||body.id!=='invalid-ended-invite')throw Error('Unexpected or unauthorized held action');
  fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>q.id!==body.id);
  return {note:'Notice archived on this device. Its envelope remains blocked.'};
@@ -114,7 +140,7 @@ if(p==='/api/dm/guest/decide'){Object.assign(fixture.thread.guests[0],{state:bod
 if(p==='/api/dm/guest/end'){Object.assign(fixture.thread.guests[0],{state:'dismissed',can_send:false,can_leave:false,can_end:false});return {};}
 if(p==='/api/groups/cancel'){fixture.overview.group_invitations[0].status='cancelled';return {};}
 if(p==='/api/groups/refresh'){fixture.overview.group_invitations[0]={...fixture.overview.group_invitations[0],id:'fresh-invite',status:'pending'};return fixture.overview.group_invitations[0];}
-if(p.includes('/groups/invitations'))return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.includes('/topics'))return {topics:[],placements:[]};return {};
+if(p.includes('/groups/invitations'))return variant.startsWith('decline-invite-')?structuredClone(fixture.overview.group_invitations):[];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.includes('/topics'))return {topics:[],placements:[]};return {};
 }};
 if(variant==='browser-app')host.platform='browser';
 const skin=new URL(location.href).searchParams.get('skin'),base='/assets/skins/'+skin+'/';
@@ -132,8 +158,72 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
-   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);await page.waitForFunction(()=>window.ready);if(variant==='device-oks'||variant.startsWith('delivery-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
 // Insert before AGENTNET_DELIVERY_STOP_REGRESSION branch in existing rendered harness.
+if(process.env.AGENTNET_CONTINUATION_REGRESSION==='1'){
+ for(const mode of ['local','remote','stale']){
+  const {page,context}=await openCase('continuation-'+mode);
+  try{
+   const request=page.locator(skin==='comic'?'[data-mid="needs-answer-exact"]':'#m-needs-answer-exact');await request.waitFor();
+   const continuationReply=(skin==='comic'?request:request.locator(skin==='classic'?'.decide .acts':'.agent-turn .acts')).getByRole('button',{name:'Reply',exact:true});
+   const note=page.locator(skin==='comic'?'[data-mid="ordinary-quote"]':'#m-ordinary-quote');await note.waitFor();
+   if(skin==='comic'&&width===390){const actions=note.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');await page.getByRole('dialog').getByRole('button',{name:'Reply',exact:true}).click();}else if(skin!=='zoom'){await note.hover();await note.getByRole('button',{name:'Reply',exact:true}).click();}
+   assert.equal(await page.getByRole('dialog',{name:'Answer your agent',exact:true}).count(),0,'Ordinary Reply only quotes a message');
+   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>(r.path==='/api/operator/decide'||r.path==='/api/act'&&r.body?.do!=='read')).length),0,'Ordinary initial quote never submits a continuation');
+   assert(!await page.evaluate(()=>fixture.requests.some(r=>['/api/dm/send','/api/dm/agent/ask','/api/send'].includes(r.path))),'Clarification and quote never create another request/manual answer');
+   if(mode==='stale'){
+    assert.equal(await continuationReply.count(),0,'Unverified/stale host has no continuation Reply');
+    assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide'||r.path==='/api/act'&&r.body?.do!=='read').length),0,'Stale request does not act on load');
+   }else{
+    await continuationReply.click();
+    const dialog=page.getByRole('dialog',{name:'Answer your agent',exact:true});await dialog.waitFor();
+    assert((await dialog.innerText()).includes('EXACT_QUESTION'),'Agent clarification shown in full');
+    const send=dialog.getByRole('button',{name:'Send answer',exact:true});assert(await send.isDisabled(),'Empty answer cannot be submitted');
+    await dialog.locator('#agent-answer').fill('Use the east warehouse');await send.click();
+    await page.waitForFunction(()=>fixture.continuationFailed);await send.waitFor();
+    await settle(page);await dialog.evaluate(async e=>{await Promise.all(e.getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
+    const sheetStyle=await dialog.evaluate(e=>{const c=getComputedStyle(e);return {background:c.backgroundColor,opacity:c.opacity,transform:c.transform,filter:c.filter,backdropFilter:c.backdropFilter,classes:e.className};});
+    const styleFile=path.join(evidence,skin+'-continuation-answer-'+mode+'-'+width+'.json');fs.writeFileSync(styleFile,JSON.stringify(sheetStyle,null,2),{mode:0o600});shots.push(styleFile);
+    const answerShot=path.join(evidence,skin+'-continuation-answer-'+mode+'-'+width+'.png');await page.screenshot({path:answerShot});shots.push(answerShot);
+    await send.click();await page.waitForFunction(()=>fixture.thread.messages.find(m=>m.id==='needs-answer-exact').job_state==='running');
+    await page.evaluate(()=>reloadFixture());await settle(page);
+    const calls=await page.evaluate(()=>fixture.requests.filter(r=>['/api/act','/api/operator/decide'].includes(r.path)));
+    assert.equal(calls.length,2,'One explicit retry after synthetic transport failure');assert.deepEqual(calls[0],calls[1],'Retry preserves exact request, attempt and send identity');
+    const expected={id:'needs-answer-exact',key:'exact-request-key',attempt:7,send_id:calls[0].body.send_id};assert.match(expected.send_id,/^[0-9a-f]{32}$/);
+    if(mode==='local')assert.deepEqual(calls[0],{path:'/api/act',body:{do:'continue',...expected,body:'Use the east warehouse'}});
+    else assert.deepEqual(calls[0],{path:'/api/operator/decide',body:{host:'aster/other-laptop',...expected,action:'continue',expect:'needs_human',text:'Use the east warehouse',report:''}});
+    assert.equal(await continuationReply.count(),0,'Consumed continuation descriptor removed on refresh');
+   }
+   await settle(page);const shot=path.join(evidence,skin+'-continuation-'+mode+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  }finally{await context.close();}
+ }
+ continue;
+}
+if(process.env.AGENTNET_DECLINE_INVITATION_REGRESSION==='1'){
+ for(const status of ['pending','stale']){
+  const {page,context}=await openCase('decline-invite-'+status);
+  try{
+   if(skin==='comic'){
+    await page.getByText('Orchard inbound invitation',{exact:true}).waitFor();
+    if(status==='stale')assert.equal(await page.getByRole('button',{name:'Join',exact:true}).count(),0,'Stale invitation cannot Join');
+    const before=path.join(evidence,skin+'-decline-'+status+'-before-'+width+'.png');await page.screenshot({path:before});shots.push(before);
+    await page.getByRole('button',{name:'No thanks',exact:true}).click();
+   }else{
+    await page.getByRole('button',{name:/Invitation: Orchard inbound invitation/}).click();
+    const dialog=page.getByRole('dialog');await dialog.waitFor();
+    if(status==='stale')assert.equal(await dialog.getByRole('button',{name:'Accept invitation',exact:true}).count(),0,'Stale invitation cannot accept');
+    const before=path.join(evidence,skin+'-decline-'+status+'-before-'+width+'.png');await page.screenshot({path:before});shots.push(before);
+    await dialog.getByRole('button',{name:'No thanks',exact:true}).click();
+   }
+   await page.waitForFunction(()=>fixture.overview.group_invitations.length===0);await page.evaluate(()=>reloadFixture());await settle(page);
+   assert.equal(await page.getByText('Orchard inbound invitation',{exact:true}).count(),0,'Declined card stays absent after refresh');
+   assert.equal(await page.getByRole('button',{name:/Invitation: Orchard inbound invitation/}).count(),0,'Legacy invitation row stays absent after refresh');
+   assert.deepEqual(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/groups/decide').map(r=>r.body)),[{id:'inbound-exact',accept:false}]);
+   const shot=path.join(evidence,skin+'-decline-'+status+'-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  }finally{await context.close();}
+ }
+ continue;
+}
 if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
  const {page,context}=await openCase('multi-agent');
  try{
@@ -160,6 +250,10 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
   const asks=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').map(r=>r.body));
   const first=await asks();assert.deepEqual(first.map(a=>a.pid).sort(),['agent-a','agent-b']);
   assert.notEqual(first[0].id,first[1].id,'one id per exact participation');
+  assert.match(first[0].send_group,/^[a-f0-9]{32}$/);assert.equal(first[0].send_group,first[1].send_group,'one durable composer group');
+  await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.innerHTML.includes('Retry'));
+  const visibleCopies=()=>page.locator('#skin').evaluate(e=>(e.shadowRoot.innerText||e.shadowRoot.textContent).split('Compare warehouse inventory').length-1);
+  assert.equal(await visibleCopies(),1,'one human body with two independently retryable targets');
   assert(first.every(a=>a.kind==='question'&&a.body.includes('Compare warehouse inventory')));
   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/send').length),0,'no ordinary-message fallback');
   if(skin==='zoom')for(const pid of ['agent-a','agent-b'])await page.locator('.mini-chat [data-agent-recipient][title="'+pid+'"]').getByText('To @Analyst',{exact:true}).waitFor();
@@ -170,9 +264,18 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
   await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').length===3);
   const after=await asks(),failed=first.find(a=>a.pid==='agent-b');
   assert.equal(after[2].pid,'agent-b');assert.equal(after[2].id,failed.id);
+  assert.equal(after[2].send_group,failed.send_group,'retry retains the same durable group');
   assert.equal(after[2].files.length,1);assert.notDeepEqual(after[2].files,first.find(a=>a.pid==='agent-a').files,'failed retry never uses successful request upload');
   assert.equal(after.filter(a=>a.pid==='agent-a').length,1,'successful participation never resent');
   assert((await page.evaluate(()=>fixture.stages.length))<=3,'at most the failed request file restaged');
+  await page.evaluate(()=>{
+   const asks=fixture.requests.filter(r=>r.path==='/api/dm/agent/ask').slice(0,2).map(r=>r.body);
+   for(const [i,a] of asks.entries())fixture.thread.messages.push({id:a.id,lid:a.id,from:fixture.overview.me.address,dir:'out',origin:'ui',kind:a.kind,body:a.body,topic:a.topic,pid:a.pid,send_group:a.send_group,send_group_author:fixture.overview.me.fingerprint,at:'2026-10-05T10:02:00Z',target:{address:'brin/desktop',agent_id:String(i+1).repeat(32)},attachments:[{name:'inventory.txt',size:19,openable:false}],delivery:'delivered',exec:{state:i===0?'running':'done',host:'brin/desktop',attempt:1,at:1791194520}});
+   reloadFixture();
+  });
+  await settle(page);assert.equal(await visibleCopies(),1,'durable projection replaces previews without duplicating body');
+  for(const a of first){const child=page.locator(skin==='comic'?'[data-mid="'+a.id+'"]':'#m-'+a.id);assert((await child.innerText()).includes('inventory.txt'),'Each exact recipient retains its own attachment name despite compact human body');}
+  await page.evaluate(()=>reloadFixture());await settle(page);assert.equal(await visibleCopies(),1,'reloading server projection preserves grouping');
   await page.evaluate(()=>{fixture.thread.messages.push({id:'incoming-ref',lid:'incoming-ref',from:'brin/desktop',dir:'in',kind:'message',body:'[@Analyst](agentnet:agent/agent-a) [@Analyst](agentnet:agent/agent-b) INERT_INCOMING_MARKER',at:'2026-10-05T10:03:00Z'});reloadFixture();});
   await page.getByText(/INERT_INCOMING_MARKER/).first().waitFor();await settle(page);
   assert.equal((await asks()).length,3,'incoming text never originates fanout');
@@ -419,6 +522,7 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    }
    const {page,context}=await openCase('admin');await page.getByRole('button',{name:'Retract invitation…',exact:true}).filter({visible:true}).first().click();await page.evaluate(()=>disableInvite());await page.waitForTimeout(40);await page.locator('#dialog-ok').click();await page.getByText('This invitation can no longer be changed here. Refresh the conversation and review it again.',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/groups/cancel').length),0,'Stale capability blocks action');await context.close();
   }
+  if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
   assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

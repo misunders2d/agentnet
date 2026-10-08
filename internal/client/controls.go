@@ -341,6 +341,8 @@ func (a *Agent) capSupport(ctx context.Context, address string, key identity.Pub
 		what := "reactions, edits or deletions"
 		if cap == protocol.CapHeadless {
 			what = "execution status or operator decisions"
+		} else if cap == protocol.CapContinuation {
+			what = "human clarification continuations (update AgentNet on that computer)"
 		}
 		return false, WaitPeerUpdate + address + " cannot read " + what + " yet (an older program, or it has not connected since updating)"
 	}

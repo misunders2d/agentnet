@@ -23,6 +23,7 @@ type groupControlIngressProof struct {
 var errGroupControlHistoryEpoch = errors.New("group: historical control original admission changed")
 
 func sameControlItem(a, b HistoryItem) bool {
+	a.SendGroup, b.SendGroup = "", ""
 	a.GroupAdmission, b.GroupAdmission = "", ""
 	a.At, b.At = 0, 0
 	x, _ := json.Marshal(a)

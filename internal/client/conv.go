@@ -150,7 +150,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapConvClear, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapGroup, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapProgress, protocol.CapReadSync, protocol.CapRoom, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 16-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapConvClear, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 16-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -395,6 +395,7 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 
 // ConvOutgoing is a message to send in a conversation.
 type ConvOutgoing struct {
+	SendGroup     string // explicit human composer gesture; presentation only
 	Kind          string // message (default), question or task
 	Body          string
 	ReplyTo       string
@@ -478,6 +479,12 @@ type outCopy struct {
 // to this person's own devices are replicas (history: never executed),
 // except the one to a request's execution target.
 func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (ConvSent, error) {
+	if m.SendGroup == "" {
+		m.SendGroup, _ = ctx.Value(sendGroupKey{}).(string)
+	}
+	if m.SendGroup != "" && (!protocol.ValidID(m.SendGroup) || m.Target == nil || m.PID == "" || m.Kind != envelope.KindQuestion && m.Kind != envelope.KindTask || m.sub != "" || m.Origin != "" && m.Origin != envelope.OriginUI) {
+		return ConvSent{}, errors.New("invalid human send group")
+	}
 	if _, err := sendID(ctx); err != nil {
 		return ConvSent{}, err
 	}
@@ -751,7 +758,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
-			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
+			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, SendGroup: m.SendGroup, Quote: m.Quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
 			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID}
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid
@@ -776,6 +783,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			}
 		} else {
 			why += ": " + ferr.Error()
+		}
+		if c.in.SendGroup != "" && !a.sendGroupSupported(ctx, key) {
+			c.in.SendGroup = ""
 		}
 		if notify && !own[dev.Address] && asksAttention(c.in) {
 			c.env, err = envelope.SealAttention(c.in, a.id.Sign, recipient, protocol.NotifyChannel(conv, dev.Fingerprint()))
@@ -809,7 +819,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		jobKey = me.info.Fingerprint
 	}
 	local := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
+		Kind: m.Kind, Body: m.Body, SendGroup: m.SendGroup, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
 	if binding != nil && m.Target == nil {
 		binding.person = peerID
 	}

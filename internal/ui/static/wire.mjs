@@ -19,10 +19,12 @@ export const Version3 = 3;               // envelope.Version3: a control (reacti
 export const CapControl = "ctl3";        // protocol.CapControl: this device reads version 3 controls
 export const SubReaction = "reaction", SubRevision = "revision", SubRetraction = "retraction";
 export const SubStatus = "status", SubDecision = "decision"; // headless: a host's per-request state; an operator's decision to a host (hdl1)
+export const CapContinuation = "cont1";
 export const CapHeadless = "hdl1";        // protocol cap: reads status controls and version 2 reports, sends decisions
 export const CapExternalParticipation = "apx1"; // selected DM excerpts and exact outside-host participation
 export const CapGroupHumanParticipation = "hgg1"; // complete group human guest lifecycle; NOT implied by rm1
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
+export const CapSendGroup = "sg1"; // optional signed presentation; never a routing or execution capability
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapReadSync = "rd1", SubReadSync = "read-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
@@ -40,7 +42,7 @@ export const isControl = (sub) => sub === SubReaction || sub === SubRevision || 
 // only (envelope.SubClear, version 3). Never history (protocol.CapConvClear).
 export const SubClear = "clear", CapConvClear = "clr1", MaxClearParts = 1024, MaxClearTurns = 2000;
 export const ExecStates = ["queued", "awaiting", "running", "needs_human", "resolved", "stopped", "not_run", "declined", "failed", "cancelled", "interrupted", "answered"]; // envelope.statusStates
-export const DecisionActions = ["accept", "decline", "resolve", "reply", "cancel"];
+export const DecisionActions = ["accept", "decline", "resolve", "reply", "cancel", "continue"];
 export const MaxDetailBytes = 400;
 export const MaxRevisionBytes = 64 << 10, MaxReasonBytes = 200, MaxEmojiBytes = 64, MaxEmojiRunes = 12;
 export const MaxDecisionText = 16 << 10; // envelope.MaxDecisionText
@@ -457,6 +459,7 @@ function marshalInner(n) {
   if (n.topic_done) s += ',"topic_done":true';
   if (n.topic) s += ',"topic":'+goString(n.topic);
   if (n.topic_event) s += ',"topic_event":'+topicEventJSON(n.topic_event);
+  if (n.send_group) s += ',"send_group":' + goString(n.send_group);
   return s + "}";
 }
 
@@ -567,7 +570,7 @@ export function parseControl(sub, body) {
   if (sub === SubDecision) { // an operator's decision about one request on a host, bound to the state it saw
     const r = strict(v, "decision", { action: "string", expect: "string", attempt: "int", text: "string", report: "string" });
     if (!DecisionActions.includes(r.action) || !validStateToken(r.expect || "") || !(r.attempt >= 0) || utf8.encode(r.text || "").length > MaxDecisionText || !wellFormed(r.text || "") ||
-      (r.report && !validID(r.report)) || ((r.action === "reply" || r.action === "decline") && !(r.text || "").trim())) throw new Error("malformed decision");
+      (r.report && !validID(r.report)) || ((r.action === "reply" || r.action === "decline" || r.action === "continue") && !(r.text || "").trim())) throw new Error("malformed decision");
     return { action: r.action, expect: r.expect, attempt: r.attempt, text: r.text || "", report: r.report || "" };
   }
   if (sub === SubClear) { // envelope.Clear: exact names only (no cut, anchors or other fields)
@@ -627,7 +630,12 @@ export function checkTopic(n) {
  if(n.topic_event){parseTopicEvent(n.topic_event);if(!n.topic||n.kind!=="message"||n.target||agentOrigin(n.origin)||n.status||n.attachments?.length)throw Error("topic event belongs only on a human conversation message");}
  if(n.topic_done&&(![Version,Version2].includes(n.v)||n.status!=="done"||!["answer","result"].includes(n.kind)||n.v===Version2&&(!n.topic||!n.pid||!agentOrigin(n.origin))))throw Error("topic_done belongs only on a completed agent answer or result");
 }
+export function checkSendGroup(n) {
+  if (!n.send_group) return;
+  if (!validID(n.send_group) || n.v !== Version2 || !n.conv || !n.pid || !n.target || n.origin !== "ui" || n.sub || n.status || n.agent_id || n.human && agentAuthor(n.human) || !["question","task"].includes(n.kind)) throw Error("send group belongs only on a human addressed request");
+}
 async function checkV2(n) {
+  checkSendGroup(n);
   if (n.quote && (!validID(n.quote) || n.quote === n.id || n.v === Version3 || n.sub || n.status || agentOrigin(n.origin) || !["message","question","task"].includes(n.kind))) throw new Error("quote belongs only on a person's turn and must name another message");
   checkTopic(n);
   // Progress replies to one request in plain text: in version 1 (a named
@@ -751,7 +759,7 @@ export async function seal(m, keys, recipient) {
     reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status"),
     conv: m.conv || "", lid: m.lid || "", root: m.root || "", sub: m.sub || "", replica: !!m.replica,
     origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "",
-    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null, quote: m.quote || "", topic_done: !!m.topic_done, topic:m.topic||"",topic_event:m.topic_event?parseTopicEvent(m.topic_event):null };
+    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null, quote: m.quote || "", topic_done: !!m.topic_done, topic:m.topic||"",topic_event:m.topic_event?parseTopicEvent(m.topic_event):null, send_group:m.send_group||"" };
   await checkV2(inner);
   if (v === Version2 && agentOrigin(inner.origin) && inner.sub === "" && !inner.emotion) throw new Error("an agent's turn must carry an emotion");
   const e = new Encrypter();
@@ -825,7 +833,7 @@ export async function open(json, keys, selfAddress, sender) {
   const f = strict(v, "inner", { v: "int", id: "string", from: "string", to: "string", ts: "int", kind: "string", body: "string",
     reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string",
     conv: "string", lid: "string", root: "object", sub: "string", replica: "boolean", origin: "string", emotion: "string",
-    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object", quote: "string", topic_done: "boolean", topic:"string",topic_event:"object" });
+    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object", quote: "string", topic_done: "boolean", topic:"string",topic_event:"object",send_group:"string" });
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
   const ref = f.ref ? strict(f.ref, "ref", { id: "string", fingerprint: "string" }) : null;
   const fan = f.fan ? f.fan.map((x) => { const y = strict(x, "fan", { person: "string", roster: "string" }); return { person: y.person || "", roster: y.roster || "" }; }) : null;
@@ -836,7 +844,7 @@ export async function open(json, keys, selfAddress, sender) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.receiver_route ? { receiver_route: parseReceiverRoute(f.receiver_route) } : {}),
-    ...(f.human ? { human: parseHumanTurn(f.human) } : {}), quote: f.quote || "", topic_done: !!f.topic_done,topic:f.topic||"",topic_event:f.topic_event?parseTopicEvent(f.topic_event):null,
+    ...(f.human ? { human: parseHumanTurn(f.human) } : {}), quote: f.quote || "", topic_done: !!f.topic_done,topic:f.topic||"",topic_event:f.topic_event?parseTopicEvent(f.topic_event):null, send_group:f.send_group||"",
     ref: ref ? { id: ref.id || "", fingerprint: ref.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => {
       const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
@@ -1238,15 +1246,16 @@ export function historyJSON(h) {
   }
   s += ',"at":' + goInt(h.at, "time");
   if (h.ref) s += ',"ref":{"id":' + goString(h.ref.id) + ',"fingerprint":' + goString(h.ref.fingerprint) + "}";
-  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + (h.quote ? ',"quote":' + goString(h.quote) : "") + (h.topic_done?',"topic_done":true':"") + (h.topic?',"topic":'+goString(h.topic):"") + (h.topic_event?',"topic_event":'+topicEventJSON(h.topic_event):"") + "}";
+  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + (h.quote ? ',"quote":' + goString(h.quote) : "") + (h.topic_done?',"topic_done":true':"") + (h.topic?',"topic":'+goString(h.topic):"") + (h.topic_event?',"topic_event":'+topicEventJSON(h.topic_event):"") + (h.send_group?',"send_group":'+goString(h.send_group):"") + "}";
 }
 
 // parseHistory reads a history item strictly (as the core's decodeStrict).
 export function parseHistory(json) {
   const f = strict(JSON.parse(json), "history item", { v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
     kind: "string", body: "string", reply_to: "string", status: "string", sub: "string", origin: "string", emotion: "string",
-    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string",topic_done:"boolean",topic:"string",topic_event:"object" });
+    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string",topic_done:"boolean",topic:"string",topic_event:"object",send_group:"string" });
   checkTopic({...f,v:Version2});
+  checkSendGroup({...f,v:Version2,conv:"history"});
   if (f.quote && (!validID(f.quote) || f.quote===f.id || f.sub || f.status || agentOrigin(f.origin) || !["message","question","task"].includes(f.kind))) throw Error("history quote belongs only on a person's turn");
   if (f.group_admission && !validHash(f.group_admission)) throw Error("a malformed group admission stamp");
   if (f.v !== 1 || !validID(f.id) || !validID(f.lid) || !validAddress(f.from || "") || !validFingerprint(f.from_key || "")) throw new Error("a malformed history item");
@@ -1275,7 +1284,7 @@ export function parseHistory(json) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.group_admission ? { group_admission: f.group_admission } : {}),
-    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}), ...(f.quote ? {quote:f.quote} : {}),...(f.topic?{topic:f.topic}:{}),...(f.topic_done?{topic_done:true}:{}),...(f.topic_event?{topic_event:parseTopicEvent(f.topic_event)}:{}),
+    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}), ...(f.quote ? {quote:f.quote} : {}),...(f.topic?{topic:f.topic}:{}),...(f.topic_done?{topic_done:true}:{}),...(f.topic_event?{topic_event:parseTopicEvent(f.topic_event)}:{}),...(f.send_group?{send_group:f.send_group}:{}),
     attachments: (f.attachments || []).map((a) => { const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
       return { name: text(x.name || "", "attachment name"), size: x.size || 0, sha256: x.sha256 || "" }; }) };
 }

@@ -656,7 +656,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
-		if err == nil && (required == protocol.CapAgentReaction || required == protocol.CapControl) && capturedFP != "" && key.Fingerprint() != capturedFP {
+		if err == nil && (required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation) && capturedFP != "" && key.Fingerprint() != capturedFP {
 			// Sealed for the reader key captured at enqueue: never for its replacement.
 			a.store.setOutboxState(env.ID, stateNotDelivered, "not sent: the reader's key changed", "")
 			return SendResult{ID: env.ID, State: stateNotDelivered}, nil
@@ -703,6 +703,13 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 				err = a.requireParticipationCaps(ctx, key, protocol.CapHumanParticipation)
 			}
 			// A room shape needs rm1 besides its primary requirement (ROOM_V1 §2.5).
+			var groupedWire bool
+			if e := a.store.db.QueryRow(`SELECT wire_send_group FROM outbox WHERE id=?`, env.ID).Scan(&groupedWire); e != nil {
+				return SendResult{}, e
+			}
+			if err == nil && groupedWire {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapSendGroup)
+			}
 			if err == nil && room && required != protocol.CapRoom {
 				err = a.requireParticipationCaps(ctx, key, protocol.CapRoom)
 			}

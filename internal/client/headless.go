@@ -496,7 +496,11 @@ func (a *Agent) Decide(ctx context.Context, host, id, key, action, expect string
 	if err != nil {
 		return ControlSent{}, err
 	}
-	if ok, why := a.capSupport(ctx, host, hostKey, feats, protocol.CapHeadless); !ok {
+	cap := protocol.CapHeadless
+	if action == "continue" {
+		cap = protocol.CapContinuation
+	}
+	if ok, why := a.capSupport(ctx, host, hostKey, feats, cap); !ok {
 		return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
 	}
 	recipient, err := hostKey.Recipient()
@@ -504,14 +508,29 @@ func (a *Agent) Decide(ctx context.Context, host, id, key, action, expect string
 		return ControlSent{}, err
 	}
 	body, _ := json.Marshal(envelope.Decision{Action: action, Expect: expect, Attempt: attempt, Text: text, Report: report})
-	in := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: a.Address, To: host, TS: time.Now().Unix(),
+	decisionID, err := sendID(ctx)
+	if err != nil {
+		return ControlSent{}, err
+	}
+	in := envelope.Inner{V: envelope.Version3, ID: decisionID, From: a.Address, To: host, TS: time.Now().Unix(),
 		Kind: envelope.KindMessage, Sub: envelope.SubDecision, Body: string(body), Ref: &envelope.Ref{ID: id, Fingerprint: key}}
 	env, err := envelope.Seal(in, a.id.Sign, recipient)
 	if err != nil {
 		return ControlSent{}, err
 	}
-	if err := a.store.addControlOutbox(env, in); err != nil {
+	if action == "continue" {
+		if err := a.store.addContinuationOutbox(env, in, hostKey.Fingerprint()); err != nil {
+			return ControlSent{}, err
+		}
+		env, err = a.store.outboxEnvelope(env.ID)
+		if err != nil {
+			return ControlSent{}, err
+		}
+	} else if err := a.store.addControlOutbox(env, in); err != nil {
 		return ControlSent{}, err
+	}
+	if queuedSend(ctx) {
+		return a.storedControlSend(env.ID)
 	}
 	defer notifyDaemon(a.home)
 	res, err := a.deliver(ctx, env, nil)
@@ -553,7 +572,11 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	// A replay: the recorded outcome, never a fresh look.
 	var recorded sql.NullString
 	if err := a.store.db.QueryRow(`SELECT detail FROM inbox WHERE id = ?`, in.ID).Scan(&recorded); err == nil {
-		state, _ := a.store.jobState(in.Ref.ID)
+		request := in.Ref.ID
+		if d.Action == "continue" {
+			_ = a.store.db.QueryRow(`SELECT request FROM request_continuations WHERE id=?`, in.ID).Scan(&request)
+		}
+		state, _ := a.store.jobState(request)
 		if tellsNothing(recorded.String) {
 			state = ""
 		}
@@ -586,14 +609,23 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	// device request held here, or a DM or group request to this device's
 	// agent (its participation's, not a replica: conv), which a decision
 	// accepts, declines, resolves or stops but never answers by hand.
+	actualRequest := in.Ref.ID
 	var kind, from string
 	var conv bool
 	decide := func(tx *sql.Tx, change string, changeArgs []any) (string, error) {
+		own := false
+		if d.Action == "continue" {
+			var err error
+			own, err = ownHumanDeviceHolds(tx, env.From, senderFP)
+			if err != nil {
+				return "", err
+			}
+		}
 		ok, err := operatorHolds(tx, env.From, senderFP)
 		if err != nil {
 			return "", err
 		}
-		if !ok {
+		if !ok && !own {
 			return ErrNotOperator.Error(), nil
 		}
 		// The report the operator acted on is one this machine sent that
@@ -608,14 +640,14 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return "", err
 		}
-		if !reportLists(report, in.Ref.ID, in.Ref.Fingerprint, d.Expect, d.Attempt) {
+		if !own && !reportLists(report, in.Ref.ID, in.Ref.Fingerprint, d.Expect, d.Attempt) {
 			return refusedNoReport, nil
 		}
 		var state string
 		var attempts int64
-		err = tx.QueryRow(`SELECT state, kind, sender, attempts, conv IS NOT NULL FROM inbox WHERE id = ? AND verified_by = ? AND local = 0 AND ref_id IS NULL
+		err = tx.QueryRow(`SELECT state, kind, sender, attempts, conv IS NOT NULL FROM inbox WHERE (id = ? OR (?='continue' AND lid=?)) AND verified_by = ? AND (local = 0 OR ?='continue') AND ref_id IS NULL
 			AND (conv IS NULL OR pid IS NOT NULL AND replica = 0 AND json_extract(target, '$.address') = ?)`,
-			in.Ref.ID, in.Ref.Fingerprint, a.Address).Scan(&state, &kind, &from, &attempts, &conv)
+			in.Ref.ID, d.Action, in.Ref.ID, in.Ref.Fingerprint, d.Action, a.Address).Scan(&state, &kind, &from, &attempts, &conv)
 		if errors.Is(err, sql.ErrNoRows) {
 			return refusedNoRequest, nil
 		}
@@ -624,6 +656,20 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		}
 		if state != d.Expect || attempts != d.Attempt {
 			return fmt.Sprintf("the request is no longer as you saw it (now %s, attempt %d)", state, attempts), nil
+		}
+		if d.Action == "continue" {
+			if d.Expect != stateNeedHuman || strings.TrimSpace(d.Text) == "" || d.Attempt < 1 {
+				return "answer the exact waiting request", nil
+			}
+			var actual string
+			if err := tx.QueryRow(`SELECT id FROM inbox WHERE (id=? OR lid=?) AND verified_by=?`, in.Ref.ID, in.Ref.ID, in.Ref.Fingerprint).Scan(&actual); err != nil {
+				return "", err
+			}
+			actualRequest = actual
+			if err := continueRequestIn(tx, a.Address, actual, in.ID, d.Attempt, d.Text); err != nil {
+				return err.Error(), nil
+			}
+			return "", nil
 		}
 		if conv && d.Action == "reply" {
 			return "a request in a conversation is answered there, not from a report", nil
@@ -652,7 +698,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		convDecline = n == 1
 	}
 	switch {
-	case d.Action == "accept", d.Action == "resolve", d.Action == "cancel", convDecline:
+	case d.Action == "continue", d.Action == "accept", d.Action == "resolve", d.Action == "cancel", convDecline:
 		var change string
 		var args []any
 		switch d.Action {
@@ -745,9 +791,9 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	a.Logf("decision %s from %s applied to %s: %s", in.ID, env.From, in.Ref.ID, d.Action)
 	a.wakeWorker()
 	a.NoteChange()
-	now, _ := a.store.jobState(in.Ref.ID)
+	now, _ := a.store.jobState(actualRequest)
 	answer(now, "")
-	a.noteStatus(in.Ref.ID) // the requester learns too
+	a.noteStatus(actualRequest) // the requester learns too
 	return nil
 }
 

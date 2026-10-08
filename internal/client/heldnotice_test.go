@@ -11,7 +11,17 @@ import (
 func TestHeldNoticeMigrationArchivePreservesInvalidDedup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "client.db")
 	// Exercise the shipped schema before the appended step, not a reconstructed table.
-	db, err := sqlitedb.Open(path, schema[:len(schema)-1])
+	step := -1
+	for i, sql := range schema {
+		if sql == heldNoticeSchema {
+			step = i
+			break
+		}
+	}
+	if step < 0 {
+		t.Fatal("held notice schema step missing")
+	}
+	db, err := sqlitedb.Open(path, schema[:step])
 	if err != nil {
 		t.Fatal(err)
 	}

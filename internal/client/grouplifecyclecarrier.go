@@ -235,8 +235,15 @@ func (a *Agent) mayDeliverGroupLifecycle(env envelope.Envelope) (bool, bool, err
 			if err == nil && (env.To != r.Inviter || fp != r.peerFP) {
 				err = ErrGroupInvitationStale
 			}
-			if err == nil {
+			if err == nil && r.State == "accepted" {
 				err = a.verifyGroupInvitation(context.Background(), r.Proposal, r.peerPerson, r.Inviter, r.peerFP)
+			}
+			if err == nil && r.State == "declined" {
+				self, ok, e := a.store.selfPerson(a.Address)
+				err = e
+				if err == nil && (!ok || self.info.State == personConflict || self.roster.Person != r.Proposal.Target || !self.has(a.Address, a.Self().Fingerprint())) {
+					err = ErrGroupInvitationStale
+				}
 			}
 		}
 	}
@@ -315,7 +322,7 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 			proposal = existing.Proposal
 			x, _ := json.Marshal(root)
 			y, _ := json.Marshal(proposal.Root)
-			if !bytes.Equal(x, y) || person.roster.Person != proposal.Target || person.roster.Hash() != proposal.Roster || desc.Seq != proposal.Seq || desc.Hash != proposal.Prev {
+			if !bytes.Equal(x, y) || person.roster.Person != proposal.Target || (consent.Decision != "declined" && person.roster.Hash() != proposal.Roster) || desc.Seq != proposal.Seq || desc.Hash != proposal.Prev {
 				err = errors.New("group: consent is not the exact local invitation and current person")
 			}
 		}
@@ -326,10 +333,10 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 				err = a.verifyGroupConsent(ctx, proposal, *consent.Admission)
 			}
 		}
-		if err == nil && existing.State == "pending" {
+		if err == nil && consent.Decision != "declined" && existing.State == "pending" {
 			err = a.ownRecordedGroupInvitation(ctx, existing)
 		}
-		if err == nil && existing.State != "pending" && existing.State != consent.Decision && existing.State != "published" {
+		if err == nil && existing.State != "pending" && existing.State != consent.Decision && existing.State != "published" && !(consent.Decision == "declined" && existing.State == "stale") {
 			err = errors.New("group: decision conflicts with recorded local intent")
 		}
 	}
@@ -397,15 +404,17 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 			}
 			// First valid consent wins for a person across their linked devices.
 			// Later copies cannot replace its signature or create another join.
-			if old.State == "pending" {
+			if old.State == "pending" || consent.Decision == "declined" && old.State == "stale" {
 				if old.Inviter != a.Address || old.peerFP != a.Self().Fingerprint() {
 					return ErrGroupInvitationStale
 				}
-				if e = groupInvitationHeadIn(tx, proposal, old.peerPerson, old.Inviter, old.peerFP); e != nil {
-					return e
+				if consent.Decision != "declined" {
+					if e = groupInvitationHeadIn(tx, proposal, old.peerPerson, old.Inviter, old.peerFP); e != nil {
+						return e
+					}
 				}
 				raw, _ := json.Marshal(consent)
-				if _, e = tx.Exec(`UPDATE group_invitations SET state=?,consent=? WHERE id=? AND direction='out' AND state='pending'`, consent.Decision, raw, consent.Invitation); e != nil {
+				if _, e = tx.Exec(`UPDATE group_invitations SET state=?,consent=? WHERE id=? AND direction='out' AND state IN ('pending','stale')`, consent.Decision, raw, consent.Invitation); e != nil {
 					return e
 				}
 			}

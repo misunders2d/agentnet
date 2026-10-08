@@ -432,20 +432,22 @@ func (a *Agent) DecideGroupInvitation(ctx context.Context, id string, accept boo
 	if r.State == decision {
 		return nil
 	}
-	if r.State == "stale" {
+	if accept && r.State == "stale" {
 		return errGroupInvitationOutdated
 	}
-	if r.State != "pending" {
+	if r.State != "pending" && (accept || r.State != "stale") {
 		return errors.New("group: invitation already decided")
 	}
-	if err = a.verifyGroupInvitationState(ctx, r.Proposal, r.peerPerson, r.Inviter, r.peerFP, false); err != nil {
-		return err
+	if accept {
+		if err = a.verifyGroupInvitationState(ctx, r.Proposal, r.peerPerson, r.Inviter, r.peerFP, false); err != nil {
+			return err
+		}
 	}
 	self, ok, err := a.store.selfPerson(a.Address)
 	if err != nil {
 		return err
 	}
-	if !ok || self.roster.Person != r.Proposal.Target || self.roster.Hash() != r.Proposal.Roster || !self.has(a.Address, a.Self().Fingerprint()) {
+	if !ok || self.info.State == personConflict || self.roster.Person != r.Proposal.Target || (accept && self.roster.Hash() != r.Proposal.Roster) || !self.has(a.Address, a.Self().Fingerprint()) {
 		return ErrGroupInvitationStale
 	}
 	c := protocol.GroupConsent{V: 1, Invitation: id, Decision: decision}
@@ -461,18 +463,35 @@ func (a *Agent) DecideGroupInvitation(ctx context.Context, id string, accept boo
 		return err
 	}
 	defer release()
-	key, err := a.sendKey(ctx, r.Inviter)
-	if err != nil {
-		return err
+	// Declining needs no live proposal or network. Notify only the exact
+	// locally pinned inviter key; otherwise the honest local dismissal stands.
+	var copies []outCopy
+	if accept {
+		key, e := a.sendKey(ctx, r.Inviter)
+		if e != nil {
+			return e
+		}
+		if key.Fingerprint() != r.peerFP {
+			return ErrGroupInvitationStale
+		}
+		copy, e := a.groupLifecycleCopy(r.Proposal.Root, envelope.SubGroupConsent, protocol.GroupCarrier{V: 1, Seq: r.Proposal.Seq, Hash: r.Proposal.Prev, ToKey: key.Fingerprint()}, c, key)
+		if e != nil {
+			return e
+		}
+		copies = []outCopy{copy}
+	} else {
+		key, pending, found, e := a.store.peer(r.Inviter)
+		if e != nil {
+			return e
+		}
+		if found && pending == nil && key.Fingerprint() == r.peerFP {
+			copy, e := a.groupLifecycleCopy(r.Proposal.Root, envelope.SubGroupConsent, protocol.GroupCarrier{V: 1, Seq: r.Proposal.Seq, Hash: r.Proposal.Prev, ToKey: key.Fingerprint()}, c, key)
+			if e != nil {
+				return e
+			}
+			copies = []outCopy{copy}
+		}
 	}
-	if key.Fingerprint() != r.peerFP {
-		return ErrGroupInvitationStale
-	}
-	copy, err := a.groupLifecycleCopy(r.Proposal.Root, envelope.SubGroupConsent, protocol.GroupCarrier{V: 1, Seq: r.Proposal.Seq, Hash: r.Proposal.Prev, ToKey: key.Fingerprint()}, c, key)
-	if err != nil {
-		return err
-	}
-	copies := []outCopy{copy}
 	stored := false
 	defer func() {
 		if !stored {
@@ -485,14 +504,24 @@ func (a *Agent) DecideGroupInvitation(ctx context.Context, id string, accept boo
 		if e != nil {
 			return e
 		}
-		if old.State != "pending" {
+		if old.State != "pending" && (accept || old.State != "stale") {
 			return errGroupDecisionRecorded
 		}
-		if e = groupInvitationHeadIn(tx, r.Proposal, r.peerPerson, r.Inviter, r.peerFP); e != nil {
-			return e
-		}
-		if e = groupInvitationTarget(tx, r.Proposal); e != nil {
-			return e
+		if accept {
+			if e = groupInvitationHeadIn(tx, r.Proposal, r.peerPerson, r.Inviter, r.peerFP); e != nil {
+				return e
+			}
+			if e = groupInvitationTarget(tx, r.Proposal); e != nil {
+				return e
+			}
+		} else {
+			current, ok, e := personByIDIn(tx, r.Proposal.Target)
+			if e != nil {
+				return e
+			}
+			if !ok || current.info.State != personSelf || !current.has(a.Address, a.Self().Fingerprint()) {
+				return ErrGroupInvitationStale
+			}
 		}
 		if _, e = tx.Exec(`UPDATE group_invitations SET state=?,consent=? WHERE id=? AND direction='in'`, decision, raw, id); e != nil {
 			return e

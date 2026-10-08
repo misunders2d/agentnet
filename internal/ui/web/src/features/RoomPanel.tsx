@@ -12,7 +12,7 @@ import { Button, IconButton } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
 import { GuestCard, PastRow, PendingCard, WaitingRow, type Act } from "./RoomPanel.cards";
-import { callName, canBringIn, room, shareable, type Guest, type GroupInvite } from "./RoomPanel.model";
+import { agentRejoinState, callName, canBringIn, room, shareable, type Guest, type GroupInvite } from "./RoomPanel.model";
 import { BringBackSnack, type Snack } from "./RoomPanel.snack";
 import { GroupFooter, MemberMenu, groupRights, useGroupChange } from "./GroupAdmin";
 
@@ -58,7 +58,7 @@ export function RoomPanel() {
         <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
           <RoomBody t={current} onDismissed={(s) => { store.setPanel(true); setSnack(s); }} />
           {snack && <BringBackSnack key={snack.id} snack={snack} onClose={() => setSnack(null)}
-            onBringBack={() => { setSnack(null); bringIn(store, current, true, snack.who); }} />}
+            onBringBack={agentRejoinState(current, snack.pid) ? undefined : () => { setSnack(null); bringIn(store, current, true, snack.who, undefined, snack.pid); }} />}
         </div>
       </aside>
     </>
@@ -81,14 +81,22 @@ export function RoomSheet() {
     <Sheet open={panel && !!current} onOpenChange={(v) => { if (!v) { store.setPanel(false); setSnack(null); } }} title="In this chat">
       {current && <RoomBody t={current} onDismissed={setSnack} />}
       {snack && current && <BringBackSnack key={snack.id} snack={snack} onClose={() => setSnack(null)}
-        onBringBack={() => { setSnack(null); bringIn(store, current, false, snack.who); }} />}
+        onBringBack={agentRejoinState(current, snack.pid) ? undefined : () => { setSnack(null); bringIn(store, current, false, snack.who, undefined, snack.pid); }} />}
     </Sheet>
   );
 }
 
 /** bringIn opens "Bring someone in" for t; for "Bring back", with that person
  *  or agent chosen and what was said since they left already selected. */
-function bringIn(store: Store, t: T.DMThread, wide: boolean, who?: string, since?: string) {
+async function bringIn(store: Store, t: T.DMThread, wide: boolean, who?: string, since?: string, pid?: string) {
+  if (pid) {
+    try {
+      const latest = await store.api.dm(t.id);
+      const state = agentRejoinState(latest, pid);
+      if (state) { store.toast(state, "ok"); await store.refetch(); return; }
+      t = latest;
+    } catch (e) { store.toast(errorText(e), "error"); return; }
+  }
   const later = since ? shareable(t).filter((m) => m.at > since).map((m) => m.id) : [];
   if (!wide) store.setPanel(false);
   store.openInvite(t.id, later.length ? later : undefined, who ? { who, label: "Since they left" } : undefined);
@@ -157,7 +165,7 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
         : what === "decline" ? "Declined. Nothing was shared." : what === "cancel" ? "Invitation cancelled" : what === "leave" ? "You left. What you saw stays with you." : undefined,
     );
     setBusy("");
-    if (ok && what === "dismiss") onDismissed({ name: g.name, kind: g.kind, who: g.who, id: Date.now() });
+    if (ok && what === "dismiss") onDismissed({ name: g.name, kind: g.kind, who: g.who, pid: g.kind === "agent" ? g.pid : undefined, id: Date.now() });
   };
 
   return (
@@ -215,7 +223,7 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
 
       {r.past.length > 0 && <>
         <Label>Past guests</Label>
-        <ul className="flex flex-col">{r.past.map((g) => <PastRow key={g.key} g={g} onBringBack={invitable && canReturn(g, t, o) ? () => bringIn(store, t, wide, g.who, g.joined ? g.endedAt : undefined) : undefined} />)}</ul>
+        <ul className="flex flex-col">{r.past.map((g) => <PastRow key={g.key} g={g} returnState={g.kind === "agent" ? agentRejoinState(t, g.pid) : ""} onBringBack={invitable && canReturn(g, t, o) ? () => bringIn(store, t, wide, g.who, g.joined ? g.endedAt : undefined, g.kind === "agent" ? g.pid : undefined) : undefined} />)}</ul>
       </>}
 
       <p className="mt-5 flex gap-2 border-t-2 border-dashed border-hairline pt-3 text-[13px] font-semibold leading-snug text-text-2">
@@ -228,7 +236,7 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
 
 /** canReturn: a past guest can be invited again the same way they first came. */
 const canReturn = (g: Guest, t: T.DMThread, o: T.Overview | null) =>
-  g.kind === "agent" ? !!o?.agents : t.kind !== "group" && !g.hostHere;
+  g.kind === "agent" ? !!o?.agents && !agentRejoinState(t, g.pid) : t.kind !== "group" && !g.hostHere;
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 

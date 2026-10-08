@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -451,7 +452,8 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var stdout, stderr limitedBuffer
 	stdout.max, stderr.max = maxOutput, 4<<10
 	outPath := ""
-	if h.out != "" {
+	roomCodex := a.codexRoomEligible(j, r, plan)
+	if h.out != "" && !roomCodex {
 		f, err := os.CreateTemp(a.home, outFilePrefix+"*")
 		if err != nil {
 			a.endJob(j.ID, stateJobFailed, err.Error())
@@ -516,6 +518,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		cmd.Stdout = activityWriter{Writer: &stdout, activity: activity, first: first}
 	}
 	cmd.Stderr = activityWriter{Writer: &stderr, activity: activity, first: first}
+	var roomBridge *codexRoomBridge
+	if roomCodex {
+		roomBridge = newCodexRoomBridge(runCtx, cmd, prompt, cmd.Stdout, func(ctx context.Context, raw json.RawMessage) (string, error) { return a.codexRoomTool(ctx, j.ID, raw) })
+		cmd.Stdout = activityWriter{Writer: roomBridge, activity: activity, first: first}
+		defer roomBridge.close()
+	}
 	cmd.WaitDelay = 5 * time.Second
 	ownProcessGroup(cmd)
 	a.Logf("%s %s from %s: running %s in %s", j.Kind, j.ID, j.From, r.Harness, r.Dir)
@@ -535,6 +543,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			defer a.store.setRunGroup(j.ID, 0, "")
 		}
 		runErr = cmd.Wait()
+	}
+	if roomBridge != nil {
+		roomBridge.finish()
+		if runCtx.Err() == nil {
+			runErr = nil
+		}
 	}
 	if j.run.outPath() != "" {
 		// Nothing the run started may change its outbox, or the copies sent
@@ -900,6 +914,11 @@ func (a *Agent) promptWith(ctx context.Context, j job, r *Responder, lookupText 
 		}
 		b.WriteString(lookupText)
 	}
+	continuation, err := a.continuationPrompt(j.ID)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(continuation)
 	if j.progressEligible() {
 		b.WriteString(reactionPromptText)
 		if j.Conv == "" {

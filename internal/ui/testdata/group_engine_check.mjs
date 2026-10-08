@@ -414,6 +414,9 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   for(const name of ['visitor-invite','visitor-accept'])await ended.receive(pv[name]);
   await ended.receive({envelope:await historyEnvelope(pv['history-visitor-excerpt'])});
   await ended.receive(pv['visitor-dismiss']);
+  const sendGroup='a'.repeat(32),groupedInner={...pv['p6-root'].inner,id:wire.newID(),root:wire.rootJSON(root),send_group:sendGroup};
+  await ended.receive({envelope:await wire.seal(groupedInner,aliceKeys,pub)});
+  check((await ended.st.get('inbox',pv['p6-root'].inner.id)).send_group===sendGroup,'signed optional grouping on duplicate preserves exact child without extra request');
   const pid=pv['p6-source'],scope=wire.parseEvent(pv['p6-0-scope'].inner.body),accept=wire.parseEvent(pv['p6-0-accept'].inner.body);
   const dismissal=await wire.signEvent(aliceKeys,{conv,pid,type:'dismiss',prev:await wire.eventHash(accept),ts:1700000200,author:scope.author});
   const envelope=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000200,kind:'message',conv,root:wire.rootJSON(root),pid,sub:'event',body:wire.eventJSON(dismissal)},aliceKeys,pub);
@@ -425,7 +428,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   let liveRefused=false;
   try{ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint);}catch{liveRefused=true;}
   check(liveRefused,'dismissed assistant remains unavailable to live human delivery');
-  ended.e.groupSupport=async()=>{};
+  ended.e.groupSupport=async()=>{};ended.e.sendGroupCopy=async(_address,_pin,group)=>group || "";
   const copy=await ended.e.historyCopy(dev,record,item); // BASELINE MUST FAIL HERE
   check(copy.required_cap===wire.CapGroup&&wire.humanJSON(wire.parseHistory(copy.body).human)===original,'dismissed assistant leaves exact captured own-member history export intact');
   ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint,true);
@@ -441,6 +444,11 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    await target.receive({envelope:copy.envelope});
    const imported=await target.st.get('inbox',item.id);
    check(imported?.history&&imported.read&&imported.state===''&&wire.humanJSON(imported.human)===original&&!await target.st.get('held',copy.id),'own linked browser admits immutable historical request quietly after dismissal');
+   check(imported.send_group===sendGroup,'grouped human request survives own linked history without changing request LID');
+   const groupedView=(await target.e.groupThread(conv)).messages.find(m=>m.lid===item.lid);
+   check(groupedView?.send_group===sendGroup&&groupedView.send_group_author===item.from_key,'grouped history DTO binds original exact author key');
+   await target.reload();
+   check((await target.st.get('inbox',item.id)).send_group===sendGroup,'grouped linked history remains after browser engine reload');
    for(const name of ['p6-ask','p6-answer','p6-status']) {
     const old=await ended.st.get('inbox',pv[name].inner.id),retained=ended.e.itemOf(old,false);
     const historical=await ended.e.historyCopy(dev,record,retained);
@@ -461,7 +469,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const badExcerpt={...excerpt,body:wire.historyJSON({...wire.parseHistory(excerpt.body),lid:wire.newID()})};let grantRefused=false;
    try{await ended.e.groupParticipationHistoryCheck(conv,badExcerpt,{address:ended.e.address,fingerprint:ended.e.fp},[]);}catch{grantRefused=true;}
    check(grantRefused,'historical excerpt still requires the exact signed selection');
-   const forwarded={...item,id:wire.newID(),lid:wire.newID(),ts:1700000200,from:address,from_key:ended.e.fp,kind:'message',sub:'event',pid,body:wire.eventJSON(dismissal),human:undefined,target:null,agent_id:'',reply_to:'',status:''};
+   const forwarded={...item,send_group:undefined,id:wire.newID(),lid:wire.newID(),ts:1700000200,from:address,from_key:ended.e.fp,kind:'message',sub:'event',pid,body:wire.eventJSON(dismissal),human:undefined,target:null,agent_id:'',reply_to:'',status:''};
    const forward=async h=>wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:address,to:linkedAddress,ts:1700000200,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:wire.historyJSON(h)},keys,linkedPub);
    const forwardedEnvelope=await forward(forwarded);await target.receive({envelope:forwardedEnvelope});
    check(!await target.st.get('held',wire.parseEnvelope(forwardedEnvelope).id)&&!!await target.st.get('inbox',forwarded.id),'own history retains a member-forwarded dismissal under the original signed author');
@@ -701,6 +709,32 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   check(offered.attachment.name==='exact-selected.bin'&&wire.hex(await wire.decryptFile(offered.ct,offered.attachment,keys))===wire.hex(fileBytes),'sent group selected file uses exact self-kept bytes and requested filename');
   await w.st.write([{s:'inbox',k:ownRow.id,v:{...ownRow,to:undefined,conv:'e'.repeat(64)}}]);await w.e.serveGroupFile({conv,device:address,fp:w.e.fp,message:fileMessage});check(wire.hex(await wire.decryptFile(offered.ct,offered.attachment,keys))===wire.hex(fileBytes),'same-ID foreign inbox cannot retarget exact own outbox direction');let collision=false;try{await w.e.groupFileSource(conv,{...fileMessage,author:await wire.fingerprint(alicePub)});}catch(_){collision=true;}check(collision,'same-ID different direction author cannot retarget exact sent group file');
   await w.st.write([{s:'inbox',k:ownRow.id,v:undefined}]);const wrongKept=await wire.encryptFile(new Uint8Array([9,9,9,9]),'wrong.bin',pub);await w.st.write([{s:'files',k:'kept/'+fileMessage.sha256,v:{attachment:wrongKept.attachment,ct:wrongKept.ct}}]);let wrongBytes=false;try{await w.e.serveGroupFile({conv,device:address,fp:w.e.fp,message:fileMessage});}catch(_){wrongBytes=true;}check(wrongBytes,'kept group file must match exact requested size and digest');await w.close();
+  for(const declineMode of ['fresh','stale','roster','missing-key','frozen','removed']) {
+   const declineWorld=await world();
+   try {
+    await declineWorld.receive(c.proof);
+    const incoming=await declineWorld.make(wire.SubGroupInvite,JSON.parse(wire.groupInvitationJSON(invitation)),invitation.state.seq,await wire.groupStateHash(invitation.state));await declineWorld.receive(incoming);
+    const k='group-invitation/in/'+v.invitation_id,row=await declineWorld.st.get('kv',k),originalMe=await declineWorld.st.get('kv','person');
+    if(declineMode==='stale')await declineWorld.st.write([{s:'kv',k,v:{...row,status:'stale'}}]);
+    if(['roster','frozen','removed'].includes(declineMode))await declineWorld.st.write([{s:'kv',k:'person',v:{...originalMe,...(declineMode==='roster'?{hash:'e'.repeat(64)}:declineMode==='frozen'?{state:'conflict'}:{devices:[]})}}]);
+    if(declineMode==='missing-key')await declineWorld.st.write([{s:'pins',k:row.inviter}]);
+    declineWorld.e.post=async()=>{};
+    declineWorld.e.verifyGroupProposal=async()=>{throw Error('stale head or offline: never needed for decline');};
+    let accepted=false;try{await declineWorld.e.decideGroup({id:v.invitation_id,accept:true});accepted=true;}catch{}
+    check(!accepted,'stale acceptance remains refused '+declineMode);
+    if(['frozen','removed'].includes(declineMode)) {
+     let refused=false;try{await declineWorld.e.decideGroup({id:v.invitation_id,accept:false});}catch{refused=true;}
+     check(refused&&(await declineWorld.st.all('outbox')).length===0,'inactive own identity cannot sign decline '+declineMode);
+    } else {
+     await declineWorld.e.decideGroup({id:v.invitation_id,accept:false});await declineWorld.e.decideGroup({id:v.invitation_id,accept:false});
+     const outgoing=await declineWorld.st.all('outbox');
+     check((await declineWorld.st.get('kv',k)).status==='declined'&&outgoing.length===(declineMode==='missing-key'?0:1),'one exact offline decline or honest local-only hide '+declineMode);
+     if(outgoing.length){const gate=await declineWorld.e.groupLifecycleGate(outgoing[0]);check(!gate.why,'decline delivery retains exact signer and inviter key without fresh proposal '+declineMode);}
+     await declineWorld.reload();check((await declineWorld.st.get('kv',k)).status==='declined','decline survives restart '+declineMode);
+    }
+    check(!await declineWorld.e.groupRecord(conv),'decline never creates membership '+declineMode);
+   }finally{await declineWorld.close();}
+  }
   w=await world();await w.receive(c.proof);
   const invite=await w.make(wire.SubGroupInvite,JSON.parse(wire.groupInvitationJSON(invitation)),invitation.state.seq,await wire.groupStateHash(invitation.state));
   await w.receive(invite);
