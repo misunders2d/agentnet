@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -272,5 +273,57 @@ func TestGroupHistoryRecoveryWaitsForOwnReaderAndRollsBackStorageFailure(t *test
 	historyRecoveryReason(t, a, env.ID, reasonProof)
 	if _, err := a.store.config(historyRecoveryScan); err != nil {
 		t.Fatalf("scan did not finish once own reader became ready: %v", err)
+	}
+}
+
+func TestGroupHistoryRecoveryPagesRemainAtomic(t *testing.T) {
+	a, sender, root, item := historyRecoveryFixture(t)
+	const count = proofPage + 7
+	for i := range count {
+		env := craft(t, sender, a, envelope.Inner{ID: fmt.Sprintf("%032x", i+1), Conv: root.ID(), Root: json.RawMessage(mustJSON(root)), LID: protocol.NewID(), Kind: envelope.KindMessage, Sub: envelope.SubHistory, Replica: true, Body: mustJSON(item)})
+		if err := a.store.holdAs(env, reasonInvalid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conflict := historyRecoveryEnvelope(t, sender, a, root, item)
+	if err := a.store.holdAs(conflict, reasonConflict); err != nil {
+		t.Fatal(err)
+	}
+	// Refuse completion after more than one page has been staged. No page
+	// may escape the transaction or consume the one-time scan on failure.
+	if _, err := a.store.db.Exec(`CREATE TRIGGER fail_paged_history_scan BEFORE INSERT ON config WHEN NEW.k='group-history-invalid-recovery-v1' BEGIN SELECT RAISE(ABORT, 'fixture paged storage failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.recoverInvalidGroupHistory(); err == nil {
+		t.Fatal("paged storage failure swallowed")
+	}
+	var n int
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason=?`, reasonInvalid).Scan(&n); err != nil || n != count {
+		t.Fatalf("partial page committed: %d %v", n, err)
+	}
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM config WHERE k LIKE ?`, historyRecoveryCarrier+"%").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("partial page guards committed: %d %v", n, err)
+	}
+	if _, err := a.store.config(historyRecoveryScan); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("paged scan marked complete on failure: %v", err)
+	}
+	if _, err := a.store.db.Exec(`DROP TRIGGER fail_paged_history_scan`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.recoverInvalidGroupHistory(); err != nil {
+		t.Fatal(err)
+	}
+	for i := range count {
+		historyRecoveryReason(t, a, fmt.Sprintf("%032x", i+1), reasonProof)
+	}
+	historyRecoveryReason(t, a, conflict.ID, reasonConflict)
+	if _, err := a.store.config(historyRecoveryCarrier + conflict.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("conflict marked across pages: %v", err)
+	}
+	if err := a.store.db.QueryRow(`SELECT count(*) FROM config WHERE k LIKE ?`, historyRecoveryCarrier+"%").Scan(&n); err != nil || n != count {
+		t.Fatalf("later page guards missing: %d %v", n, err)
+	}
+	if _, err := a.store.config(historyRecoveryScan); err != nil {
+		t.Fatalf("paged scan did not complete: %v", err)
 	}
 }
