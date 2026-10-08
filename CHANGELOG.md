@@ -6,6 +6,12 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Authorized requests for distinct local agents start concurrently. Ordinary
+  requests to the same selected agent stay ordered; cancellation, exact-parent
+  child work and whole-app update checks retain their existing safety gates.
+
 ## [0.8.7] — 2026-10-08
 
 ### Fixed

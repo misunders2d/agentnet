@@ -289,9 +289,10 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		conv, pid, coalesce(target, ''), state, local, arrival
 		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND arrival > ?
 		  AND (? = '' OR (conv = ? AND reply_to = ? AND local = 1 AND json_extract(human,'$.author_pid') IS NOT NULL))
+    AND (? != '' OR NOT EXISTS (SELECT 1 FROM inbox parent WHERE parent.id=inbox.reply_to AND parent.conv=inbox.conv AND parent.state IN ('running','cancel_requested') AND inbox.local=1 AND json_extract(inbox.human,'$.author_pid') IS NOT NULL))
 		  AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
 		  AND EXISTS (SELECT 1 FROM participation_events e WHERE e.conv = inbox.conv AND e.pid = inbox.pid)
-		ORDER BY arrival LIMIT ?`, pos, cause, conv, cause, limit)
+		ORDER BY arrival LIMIT ?`, pos, cause, conv, cause, cause, limit)
 	if err != nil {
 		return j, false, pos, false, nil, err
 	}
@@ -345,6 +346,9 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 				stamp, err = resolve[0](tx, id)
 			} else if id != "" {
 				err = ErrUnknownAgent
+			}
+			if errors.Is(err, errExecutorBusy) {
+				continue
 			}
 			if err != nil && !errors.Is(err, ErrUnknownAgent) {
 				return j, false, pos, false, nil, err
