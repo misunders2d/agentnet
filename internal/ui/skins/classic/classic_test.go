@@ -47,7 +47,7 @@ func TestStandaloneClassicPackage(t *testing.T) {
 			t.Fatal("unsafe asset", name)
 		}
 		sourcePath := filepath.Join("src", name)
-		if name == "topics.mjs" || name == "person-topics.mjs" {
+		if name == "topics.mjs" || name == "person-topics.mjs" || name == "link-text.mjs" {
 			sourcePath = filepath.Join("..", "shared", name)
 		} else if name == "optimistic.mjs" || name == "pictures.mjs" {
 			sourcePath = filepath.Join("..", "..", "static", name)
