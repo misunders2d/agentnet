@@ -264,7 +264,7 @@ func testRoomCallbackAuthority(t *testing.T, a *Agent, conv, callback, root, rem
 		t.Fatal(err)
 	}
 	r := agentReq{ID: callback, Conv: conv, PID: original.pid, Sender: original.from, Key: original.key, Kind: original.kind, Target: original.target, State: stateAgentWaiting}
-	for _, change := range []string{"valid", "wrong_cause", "missing_cause", "wrong_key", "wrong_agent", "ambiguous", "cycle", "stopped_parent", "revoked_grant", "question_to_task"} {
+	for _, change := range []string{"valid", "wrong_cause", "missing_cause", "wrong_key", "wrong_agent", "ambiguous", "cycle", "stopped_parent", "completed_parent", "cancel_requested_parent", "missing_local_run", "missing_parent", "revoked_grant", "question_to_task"} {
 		t.Run(change, func(t *testing.T) {
 			tx, err := a.store.db.Begin()
 			if err != nil {
@@ -278,11 +278,13 @@ func testRoomCallbackAuthority(t *testing.T, a *Agent, conv, callback, root, rem
 				}
 			}
 			request := r
+			want := verdictStop
 			switch change {
 			case "wrong_cause":
 				exec(`UPDATE inbox SET reply_to=? WHERE id=?`, root, callback)
 			case "missing_cause":
 				exec(`UPDATE inbox SET reply_to=? WHERE id=?`, strings.Repeat("f", 32), callback)
+				want = verdictWait
 			case "wrong_key":
 				exec(`UPDATE inbox SET verified_by=? WHERE id=?`, strings.Repeat("f", 32), callback)
 			case "wrong_agent":
@@ -295,8 +297,21 @@ func testRoomCallbackAuthority(t *testing.T, a *Agent, conv, callback, root, rem
 				exec(`UPDATE outbox SET reply_to=? WHERE conv=? AND lid=?`, callback, conv, remote)
 			case "stopped_parent":
 				exec(`UPDATE inbox SET state=? WHERE id=?`, stateCancelled, root)
+			case "completed_parent":
+				exec(`UPDATE inbox SET state=? WHERE id=?`, stateAnswered, root)
+			case "cancel_requested_parent":
+				exec(`UPDATE inbox SET state=? WHERE id=?`, stateCancelReq, root)
+			case "missing_local_run":
+				// Keep the ordinary sent copy but remove the local running cause
+				// from this transaction's proof view. Its outbox state is not a run.
+				exec(`UPDATE inbox SET target=NULL WHERE id=?`, root)
+			case "missing_parent":
+				exec(`UPDATE inbox SET target=NULL WHERE id=?`, root)
+				exec(`UPDATE outbox SET target=NULL WHERE conv=? AND lid=?`, conv, root)
+				want = verdictWait
 			case "revoked_grant":
 				exec(`DELETE FROM approvals WHERE address=?`, original.from)
+				want = verdictAsk
 			case "question_to_task":
 				request.Kind = envelope.KindTask
 			}
@@ -305,8 +320,8 @@ func testRoomCallbackAuthority(t *testing.T, a *Agent, conv, callback, root, rem
 				t.Fatal(err)
 			}
 			if change != "valid" {
-				if v == verdictRun {
-					t.Fatal("invalid callback acquired execution authority")
+				if v != want {
+					t.Fatalf("invalid callback: got verdict %d (%s), want %d", v, why, want)
 				}
 				return
 			}
