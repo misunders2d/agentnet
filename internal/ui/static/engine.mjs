@@ -518,6 +518,7 @@ export class Engine {
       this.revoked = !!id.revoked;
     }
     this.me = (await this.store.get("kv", "person")) || null;
+    this.heldHistoryRecovery = !!id && this.me?.state === "self" && !(await this.store.get("kv", "held-group-history-recovery-v1"));
     // Older DM control copies cached their recipient as the author.
     // These locally signed rows belong to this person; retain their wire bytes.
     if (id && this.me) {
@@ -4143,11 +4144,14 @@ export class Engine {
   // admit verifies and stores one envelope as the Go client does
   // (verifyAndStore, admitConv). Failures to ask the server are thrown, so
   // the message stays unacknowledged and comes again.
-  async admit(data, env, fromHeld = false) {
+  async admit(data, env, fromHeld = false, historyRecovery = false) {
     try {
+      const recoveryChecks = historyRecovery ? await this.heldHistoryChecks(data, env) : [];
+      if (!recoveryChecks) return;
       const ops = await this.admitInner(data, env);
       if (this.erased.size) this.eraseArrivals(ops); // a copy of a turn deleted here stays a skeleton
       const checks = ops.checks || [];
+      checks.push(...recoveryChecks);
       for (const op of ops) if (op.s === "inbox" && op.v?.receiver_route?.op === "request" && !op.v.history) await this.receiverOriginAuthority(op.v, checks);
       await this.applyReadArrivals(ops,checks);
       ops.checks = checks;
@@ -4169,18 +4173,41 @@ export class Engine {
       const atts = ops.flatMap((o) => (o.s === "inbox" && o.v && o.v.conv ? (o.v.attachments || []).filter((a) => a.blob) : []));
       if (atts.length) this.keepFiles(atts).catch(() => {});
     } catch (e) {
-      if (e instanceof StoreConflict) return this.admit(data, env, fromHeld); // reverify; nothing committed or acknowledged
+      if (e instanceof StoreConflict) return this.admit(data, env, fromHeld, historyRecovery); // reverify; nothing committed or acknowledged
       if (e instanceof Hold) {
         if (!fromHeld) await this.hold(env, data, e.reason, e.message);
-        else if (e.reason !== "proof_pending") {
+        else {
           const h = await this.store.get("held", env.id);
-          await put(this.store, "held", env.id, { ...h, reason: e.reason, detail_code:heldDiagnosticCode(e.message) });
-          this.changed(true);
+          if (h && (e.reason !== "proof_pending" || h.reason !== e.reason)) {
+            await this.store.write([{s:"held",k:env.id,v:{ ...h, reason: e.reason, detail_code:heldDiagnosticCode(e.message), ...(historyRecovery && e.reason === "proof_pending" ? {history_recovery:true} : {}) }}],[{s:"held",k:env.id,v:h}]);
+            this.changed(true);
+          }
         }
         return;
       }
       throw e;
     }
+  }
+
+  // Older receivers rejected some already-authorized history after an
+  // assistant ended. Only inert participation/control history from a current own human key
+  // is eligible for the one-time startup recovery; normal admission still
+  // verifies every history/proof constraint. Never replay a live request.
+  async heldHistoryChecks(data, env) {
+    const checks = [], own = await this.groupRead(checks, "kv", "person"), pin = await this.groupRead(checks, "pins", env.from);
+    const held = await this.groupRead(checks, "held", env.id);
+    const human = (address, fingerprint) => own?.devices.some(d => d.address === address && d.fingerprint === fingerprint) && own.human_keys?.includes(fingerprint);
+    if (this.revoked || own?.state !== "self" || env.to !== this.address || env.v !== wire.Version2 || env.kind !== "message" ||
+        !held || !(held.reason === "invalid" || held.reason === "proof_pending" && held.history_recovery) || held.envelope !== data || !pin || pin.pending ||
+        !human(this.address, this.fp) || !human(env.from, pin.fingerprint)) return null;
+    try {
+      const n = await wire.open(data, this.keys, this.address, await this.pubOf(pin));
+      if (n.sub !== "history" || !n.replica || n.attachments.length) return null;
+      wire.parseGroupRoot(n.root);
+      const item = wire.parseHistory(n.body);
+      if (!item.pid && !item.ref) return null;
+    } catch (_) { return null; }
+    return checks;
   }
 
   async admitInner(data, env) {
@@ -4627,20 +4654,36 @@ export class Engine {
   async retryPasses() {
     try {
       this.retryAgain = false;
+      const own = await this.store.get("kv", "person");
+      const recoverHistory = this.heldHistoryRecovery && own?.state === "self" && own.human_keys?.includes(this.fp) && own.devices.some(d => d.address === this.address && d.fingerprint === this.fp);
+      const recovered = new Set(); // each invalid row at most once, even when admitted proof adds a pass
       let pos = "";
       for (;;) {
         const page = await this.store.after("held", pos, heldPage);
         for (const h of page) {
-          if (h.reason !== "proof_pending") continue;
+          // Missing context keeps the recovery guard through later ordinary proof retries.
+          const historyRecovery = h.reason === "proof_pending" && h.history_recovery || recoverHistory && h.reason === "invalid" && !recovered.has(h.id);
+          if (h.reason !== "proof_pending" && !historyRecovery) continue;
+          if (historyRecovery) recovered.add(h.id);
           try {
-            await this.admit(h.envelope, wire.parseEnvelope(h.envelope), true);
+            let env;
+            try { env = wire.parseEnvelope(h.envelope); } catch (e) { if (historyRecovery) continue; throw e; }
+            await this.admit(h.envelope, env, true, historyRecovery);
           } catch (e) {
             return;
           }
         }
         if (page.length === heldPage) pos = page[page.length - 1].id;
         else if (this.retryAgain) [this.retryAgain, pos] = [false, ""];
-        else return;
+        else {
+          if (recoverHistory) {
+            try {
+              await this.store.write([{s:"kv",k:"held-group-history-recovery-v1",v:true}],[{s:"kv",k:"person",v:own}]);
+            } catch (e) { if (e instanceof StoreConflict) return; throw e; }
+            this.heldHistoryRecovery = false;
+          }
+          return;
+        }
       }
     } finally {
       this.retrying = null;

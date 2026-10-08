@@ -338,7 +338,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   // The original participant events stay signed; all replicas remain inert.
   w=await world();await w.receive(c.proof);await w.receive(c.context);
   const linkedKeys=await wire.newKeys(),linkedAddress='browser/phone',linkedPub=await wire.publicEntry(linkedKeys,linkedAddress);
-  const linkedRoster=await wire.nextRoster(keys,address,roster,[...roster.devices,linkedPub],await wire.joinConsent(linkedKeys,linkedAddress,roster.person,1,await wire.rosterHash(roster)));
+  const linkedRoster=await wire.nextRoster(keys,address,roster,[...roster.devices,linkedPub],await wire.joinConsent(linkedKeys,linkedAddress,roster.person,1,await wire.rosterHash(roster)),roster.label,[...await wire.rosterHumans(roster),await wire.fingerprint(linkedPub)]);
   await wire.verifyNext(linkedRoster,roster);w.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
   const linkedPerson=await w.e.personRecord([roster,linkedRoster],'self',null);w.e.me=linkedPerson;await w.st.write([{s:'kv',k:'person',v:linkedPerson}]);await w.e.pinDevices(linkedPerson);
   // A new own device has no group proof/context yet, even for an empty
@@ -400,7 +400,6 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     const stored=await w.st.get('inbox',n.id);
     check(!await w.st.get('held',wire.parseEnvelope(env).id)&&stored?.history&&stored.state===''&&wire.humanJSON(stored.human)===wire.humanJSON(wire.parseHumanTurn(n.human)),'captured '+name+' own history keeps signed audience and remains inert');
   }
-// Insert after the existing p6 own-history import loop (~403), before otherStamp.
 {
  const ended=await world();
  try {
@@ -429,26 +428,46 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   try{ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint);}catch{liveRefused=true;}
   check(liveRefused,'dismissed assistant remains unavailable to live human delivery');
   ended.e.groupSupport=async()=>{};ended.e.sendGroupCopy=async(_address,_pin,group)=>group || "";
-  const copy=await ended.e.historyCopy(dev,record,item); // BASELINE MUST FAIL HERE
+  const copy=await ended.e.historyCopy(dev,record,item);
   check(copy.required_cap===wire.CapGroup&&wire.humanJSON(wire.parseHistory(copy.body).human)===original,'dismissed assistant leaves exact captured own-member history export intact');
   ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint,true);
   check(true,'historical original-member reader keeps authority independently of its dismissed assistant');
-  const target=await world();
-  try {
+  const carriers=await ended.e.groupHistoryCarriers(record,dev,[]);
+  const linkedWorld=async(withContext=true)=>{
+   const target=await world();
    target.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
    target.e.keys=linkedKeys;target.e.address=linkedAddress;target.e.fp=dev.fingerprint;target.e.me=linkedPerson;
    await target.st.write([{s:'kv',k:'identity',v:{keys:linkedKeys,address:linkedAddress,fingerprint:dev.fingerprint}},{s:'kv',k:'person',v:linkedPerson}]);await target.e.pinDevices(linkedPerson);
-   ended.e.groupSupport=async()=>{};
-   const carriers=await ended.e.groupHistoryCarriers(record,dev,[]);
-   for(const row of carriers){const file=row.files[0];target.blobs.set(file.attachment.blob.id,file.ct);await target.receive({envelope:row.envelope});}
+   for(const row of carriers){const file=row.files[0];target.blobs.set(file.attachment.blob.id,file.ct);if(withContext)await target.receive({envelope:row.envelope});}
+   return target;
+  };
+  const legacyHeld=async(target,envelope)=>{
+   const env=wire.parseEnvelope(envelope),held={id:env.id,from:env.from,reason:'invalid',envelope,at:1700000300000};
+   await target.st.write([{s:'held',k:env.id,v:held}]);return held;
+  };
+  const target=await linkedWorld();
+  try {
+   // v0.8.6 rejected these signed bytes as "Request does not name the
+   // exact active assistant." Its held row retained ciphertext/reason only.
+   const oldHeld=await legacyHeld(target,copy.envelope);
+   await target.reload();await target.e.retryHeld();
    await target.receive({envelope:copy.envelope});
    const imported=await target.st.get('inbox',item.id);
    check(imported?.history&&imported.read&&imported.state===''&&wire.humanJSON(imported.human)===original&&!await target.st.get('held',copy.id),'own linked browser admits immutable historical request quietly after dismissal');
+   check(await target.st.get('kv','held-group-history-recovery-v1')===true,'legacy history startup recovery completes durably');
+   const reissued=await ended.e.historyCopy(dev,record,item);await target.receive({envelope:reissued.envelope});
+   check((await target.st.all('inbox')).filter(r=>r.lid===item.lid&&r.claimed_key===item.from_key).length===1&&await target.st.get('kv','group-carrier/'+oldHeld.id)&&!(await target.st.all('outbox')).some(r=>!r.sub&&['question','task'].includes(r.kind)),'recovered old history and fresh signed reissue deduplicate without execution requests');
    check(imported.send_group===sendGroup,'grouped human request survives own linked history without changing request LID');
    const groupedView=(await target.e.groupThread(conv)).messages.find(m=>m.lid===item.lid);
    check(groupedView?.send_group===sendGroup&&groupedView.send_group_author===item.from_key,'grouped history DTO binds original exact author key');
    await target.reload();
    check((await target.st.get('inbox',item.id)).send_group===sendGroup,'grouped linked history remains after browser engine reload');
+   const later=await ended.e.historyCopy(dev,record,item),laterHeld=await legacyHeld(target,later.envelope);
+   await target.reload();let recoveryCalls=0;const recovery=target.e.heldHistoryChecks.bind(target.e);
+   target.e.heldHistoryChecks=(...args)=>{recoveryCalls++;return recovery(...args);};
+   await target.e.retryHeld();await target.e.retryHeld();
+   check(recoveryCalls===0&&JSON.stringify(await target.st.get('held',later.id))===JSON.stringify(laterHeld),'completed upgrade never sweeps later invalid records on wake or reload');
+   target.e.heldHistoryChecks=recovery;
    for(const name of ['p6-ask','p6-answer','p6-status']) {
     const old=await ended.st.get('inbox',pv[name].inner.id),retained=ended.e.itemOf(old,false);
     const historical=await ended.e.historyCopy(dev,record,retained);
@@ -480,6 +499,66 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     check(refused,'historical reader never bypasses held/conflict/exact target evidence');
    }
   } finally {await target.close();}
+  // Arrival order after an upgrade cannot consume the one-time recovery
+  // while history still needs its current signed group context.
+  const pending=await linkedWorld(false);
+  try {
+   await legacyHeld(pending,copy.envelope);await pending.reload();await pending.e.retryHeld();
+   check((await pending.st.get('held',copy.id))?.reason==='proof_pending'&&!await pending.st.get('inbox',item.id),'legacy history without current context joins existing proof retry');
+   for(const row of carriers)await pending.receive({envelope:row.envelope});
+   check((await pending.st.get('inbox',item.id))?.history&&!await pending.st.get('held',copy.id),'fresh signed carriers recover same persisted historical request');
+  } finally {await pending.close();}
+  const changedWhilePending=await linkedWorld(false);
+  try {
+   await legacyHeld(changedWhilePending,copy.envelope);await changedWhilePending.reload();await changedWhilePending.e.retryHeld();
+   check((await changedWhilePending.st.get('held',copy.id))?.history_recovery,'missing-proof recovery retains its current-human restriction');
+   const changed={...linkedPerson,human_keys:linkedPerson.human_keys.filter(fp=>fp!==ended.e.fp)};
+   await changedWhilePending.st.write([{s:'kv',k:'person',v:changed}]);await changedWhilePending.reload();
+   for(const row of carriers)await changedWhilePending.receive({envelope:row.envelope});
+   check(!await changedWhilePending.st.get('inbox',item.id)&&!!await changedWhilePending.st.get('held',copy.id),'later proof cannot recover history after source human authority changes');
+  } finally {await changedWhilePending.close();}
+  for(const mode of ['changed-key','foreign','agent-host','reader-agent','frozen','live-request','bad-signature','conflicting-content','wrong-admission','held-proof','conflicting-proof','sender-race']) {
+   const refused=await linkedWorld();
+   try {
+    let envelope=copy.envelope;
+    if(mode==='foreign')envelope=await wire.seal({...await wire.open(copy.envelope,linkedKeys,linkedAddress,pub),id:wire.newID(),from:alicePub.address},aliceKeys,linkedPub);
+    if(mode==='live-request')envelope=await wire.seal({...pv['p6-root'].inner,id:wire.newID(),lid:wire.newID(),root:wire.rootJSON(root),from:address,to:linkedAddress},keys,linkedPub);
+    if(mode==='bad-signature'){const env=JSON.parse(envelope);env.sig=wire.b64(new Uint8Array(64));envelope=JSON.stringify(env);}
+    if(mode==='conflicting-content'||mode==='wrong-admission'){
+     if(mode==='conflicting-content')await refused.receive({envelope:copy.envelope});
+     const h={...wire.parseHistory(copy.body),...(mode==='conflicting-content'?{body:'different historical body'}:{group_admission:'e'.repeat(64)})};
+     envelope=await wire.seal({...await wire.open(copy.envelope,linkedKeys,linkedAddress,pub),id:wire.newID(),lid:wire.newID(),body:wire.historyJSON(h)},keys,linkedPub);
+    }
+    if(mode==='changed-key'){const pin=await refused.st.get('pins',address);await refused.st.write([{s:'pins',k:address,v:{...pin,pending:{fingerprint:'f'.repeat(64)}}}]);}
+    if(['agent-host','reader-agent','frozen'].includes(mode)){
+     const own={...linkedPerson,...(mode==='frozen'?{state:'conflict'}:{human_keys:linkedPerson.human_keys.filter(fp=>fp!==(mode==='agent-host'?ended.e.fp:dev.fingerprint))})};
+     await refused.st.write([{s:'kv',k:'person',v:own}]);
+    }
+    if(mode==='held-proof'){
+     const person=await refused.st.get('persons',scope.author.person);await refused.st.write([{s:'persons',k:person.person,v:{...person,state:'conflict'}}]);
+    }
+    if(mode==='conflicting-proof'){
+     const conflict=await wire.signEvent(aliceKeys,{...accept,type:'decline',ts:accept.ts+1});
+     await refused.receive({envelope:await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:linkedAddress,ts:conflict.ts,kind:'message',conv,root:wire.rootJSON(root),pid,sub:'event',body:wire.eventJSON(conflict)},aliceKeys,linkedPub)});
+     check(!!(await refused.e.agentConv(pid)).info.conflict,'signed conflicting proof is present before legacy recovery');
+    }
+    const held=await legacyHeld(refused,envelope);await refused.reload();
+    const write=refused.st.write.bind(refused.st);let raced=false;
+    if(mode==='sender-race')refused.st.write=async(ops,checks)=>{
+     if(!raced&&ops.some(o=>o.s==='inbox'&&o.k===item.id)){
+      raced=true;const other=realIDB?await openIDB(refused.name):refused.st;
+      await(other===refused.st?write:other.write.bind(other))([{s:'kv',k:'person',v:{...linkedPerson,human_keys:linkedPerson.human_keys.filter(fp=>fp!==ended.e.fp)}}]);if(other!==refused.st)other.close();
+     }return write(ops,checks);
+    };
+    await refused.e.retryHeld();refused.st.write=write;
+    if(mode==='sender-race')check(raced&&!await refused.st.get('kv','held-group-history-recovery-v1'),'concurrent human role removal prevents history storage and premature migration completion');
+    const kept=await refused.st.get('held',held.id),rows=(await refused.st.all('inbox')).filter(r=>r.lid===item.lid);
+    check(kept?.envelope===held.envelope&&!await refused.st.get('kv','group-carrier/'+held.id)&&!await refused.st.get('receipts',held.id),'upgrade history '+mode+' stays held without success receipt');
+    check(rows.length===(mode==='conflicting-content'?1:0)&&rows.every(r=>r.body===item.body),'upgrade history '+mode+' cannot replace accepted content or execute');
+    const before=JSON.stringify(kept);await refused.e.retryHeld();await refused.reload();await refused.e.retryHeld();
+    check(JSON.stringify(await refused.st.get('held',held.id))===before,'upgrade history '+mode+' recovery is bounded across wake and reload');
+   } finally {await refused.close();}
+  }
  } finally {await ended.close();}
 }
 
