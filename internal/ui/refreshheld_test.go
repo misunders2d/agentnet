@@ -63,7 +63,9 @@ func TestLiveRefreshAsksAboutHeldCopiesBehindOthers(t *testing.T) {
 	wait("bob to store it", func() bool { msgs, e := bob.ConversationMessages(conv); return e == nil && len(msgs) == 1 })
 	// A second copy that failed (as one to a device the Hub refused): the
 	// message is shown by it, not by bob's copy, still recorded as held.
-	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
+	// This fixture shares the active daemon database, so use its standard
+	// busy handling while inserting the simulated extra copy.
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(home, "agent.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
