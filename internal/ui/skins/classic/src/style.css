@@ -779,3 +779,10 @@ button.reaction { cursor: pointer; }
 .avatar.profile-picture { position: relative; overflow: hidden; }
 .avatar.profile-picture > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .profile-picture-image { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+
+/* Bound task confirmations keep the exact instruction behind a keyboard disclosure. */
+.compact-approval { white-space: normal; overflow-wrap: anywhere; }
+.compact-approval p { margin: 0; white-space: pre-wrap; }
+.compact-approval summary, .compact-approval > .text-btn { cursor: pointer; min-height: 44px; padding-block: 10px; }
+.compact-approval summary { text-decoration: underline; }
+.compact-approval > .text-btn { color: inherit; text-decoration: underline; }

@@ -95,6 +95,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
   const request=referenceParent(all,m.reply_to);
   const output=isReply(m)||(isThreadMsg(m)&&m.status==="progress")||(!isThreadMsg(m)&&m.verified_agent&&m.kind==="message");
   const link=output&&request&&!adjacent(all,request,m);
+  const approved = m.kind === "task" && !!m.proposal?.proposal_id;
+  const proposal = approved ? referenceParent(all, m.proposal!.proposal_id) : undefined;
 
   const shape = who.agent ? "rounded-xl bg-agent text-ink"
     : who.mine ? "rounded-[20px] bg-mine text-mine-ink" + (last ? " rounded-br-md" : "")
@@ -114,11 +116,19 @@ function Bubble({ m, ctx, all, first = true, last = true, status, readOnly, onJu
       {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
       {m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
       {!m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
-      {!m.deleted && !isThreadMsg(m) && m.proposal && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{who.mine ? "You approved" : "Approved"} {agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) + "’s" : "the agent’s"} suggested task</p>}
+      {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{who.mine ? "You approved this task" : "Approved this task"} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>
-          : text ? <Markdown text={text} mention={mention} tail={time} />
+          : approved ? <>
+            {proposal && !proposal.deleted && onJump && <button type="button" className="block min-h-11 text-left text-[13px] underline" onClick={() => onJump(proposal.id)}>View proposal</button>}
+            <details data-approved-task-text>
+              <summary className="min-h-11 cursor-pointer py-2.5 text-[13px] underline">Approved task text</summary>
+              <Markdown text={m.body} mention={mention} />
+              {m.edited && <><p className="mt-2 text-[13px] text-muted">Edited message</p><Markdown text={shownText(m)} mention={mention} /></>}
+            </details>
+            <div className="flow-root">{time}</div>
+          </> : text ? <Markdown text={text} mention={mention} tail={time} />
             : null}
       {!m.deleted && !editing && <MessageFiles m={m} />}
       {!text && !m.deleted && !editing && <div className="flow-root">{time}</div>}

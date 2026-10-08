@@ -3470,8 +3470,23 @@ function bodyOf(m) {
   if (isReport(m)) return el("p", { class: "body report-body" }, reportText(m)); // a report from another machine: what it says, never its raw record
   const target = (m.kind === "question" || m.kind === "task") && m.pid ? agentOf(m.pid) : null;
   const recipient = (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"addressed-agent", "data-agent-recipient":"", title:m.pid}, "To @" + (target ? agentName(target) : "agent") + "\n");
-  const provenance = m.proposal && el("span", {class:"proposal-provenance", "data-proposal-provenance":""}, (m.dir === "out" ? "You approved " : "Approved ") + (target ? agentName(target) + "’s" : "the agent’s") + " suggested task\n");
-  return el("p", { class: "body" }, recipient, provenance, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+  if (confirmedTask(m)) return approvalBody(m, recipient);
+  return el("p", { class: "body" }, recipient, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+}
+
+// Only the signed projection's bound confirmation is compact, never matching text.
+function confirmedTask(m) { return m.kind === "task" && !!m.proposal?.proposal_id; }
+function approvalBody(m, recipient = null) {
+  const target = m.pid && agentOf(m.pid);
+  const messages = (state.dm ? state.dmData : state.data)?.messages || [];
+  const matches = messages.filter(x => x.id === m.proposal.proposal_id || x.lid === m.proposal.proposal_id);
+  const original = matches.length === 1 && !matches[0].deleted ? matches[0] : null;
+  return el("div", {class:"body compact-approval"}, recipient,
+    el("p", {"data-proposal-provenance":""}, (m.dir === "out" ? "You approved this task" : "Approved this task") + " · suggested by " + (target ? agentName(target) : "the agent")),
+    original && el("button", {type:"button",class:"text-btn",onclick:()=>flash(original.id)}, "View proposal"),
+    el("details", {"data-approved-task-text":""}, el("summary", {}, "Approved task text"),
+      el("p", {}, mentionNodes(m.body, state.dm ? state.dmData : null)),
+      m.edited && el("p", {}, "Edited message: ", mentionNodes(shownText(m), state.dm ? state.dmData : null))));
 }
 
 // controlDetails are the rows Details adds: the original text of an edited
