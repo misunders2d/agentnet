@@ -6,6 +6,12 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Confirmed suggested tasks show compact approval, target and current status in
+  Comic, Classic and Zoom. The proposal stays linked and exact approved text
+  remains available in a disclosure, including when the original is unavailable.
+
 ## [0.8.7] — 2026-10-08
 
 ### Fixed

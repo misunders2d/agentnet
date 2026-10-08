@@ -18,7 +18,9 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
     if(shots){fs.mkdirSync(shots,{recursive:true,mode:0o700});await page.screenshot({path:path.join(shots,'p23-'+mode+'-'+skin+'-'+width+'-error.png')});}
     console.error((await page.evaluate(()=>document.querySelector('#skin').shadowRoot.textContent)).slice(-10000));throw e;
    }
-   if(skin==='zoom' && !await doit.isVisible().catch(()=>false)) await root.locator('.thread-list button').first().click();
+   // A person's Zoom card opens Main directly; wait for that transition.
+   // Device contacts still need their exact thread selected at level 1.
+   if(skin==='zoom' && mode!=='conversation' && !await doit.isVisible().catch(()=>false)) await root.locator('.thread-list button').first().click();
   }
   await doit.waitFor({state:'visible',timeout:15000});
   const composer=skin==='comic'?root.locator('form[aria-label="Write a message"]'):root.locator('#composer');

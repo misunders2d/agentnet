@@ -3303,8 +3303,23 @@ function bodyOf(m) {
   if (isReport(m)) return el("p", { class: "body report-body" }, reportText(m)); // a report from another machine: what it says, never its raw record
   const target = (m.kind === "question" || m.kind === "task") && m.pid ? agentOf(m.pid) : null;
   const recipient = (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"addressed-agent", "data-agent-recipient":"", title:m.pid}, "To @" + (target ? agentName(target) : "agent") + "\n");
-  const provenance = m.proposal && el("span", {class:"proposal-provenance", "data-proposal-provenance":""}, (m.dir === "out" ? "You approved " : "Approved ") + (target ? agentName(target) + "’s" : "the agent’s") + " suggested task\n");
-  return el("p", { class: "body" }, recipient, provenance, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+  if (confirmedTask(m)) return approvalBody(m, recipient);
+  return el("p", { class: "body" }, recipient, mentionNodes(shownText(m), state.dm ? state.dmData : null), m.edited && el("span", { class: "edited", title: "Revision " + (m.revision || "") }, " · edited"));
+}
+
+// Only the signed projection's bound confirmation is compact, never matching text.
+function confirmedTask(m) { return m.kind === "task" && !!m.proposal?.proposal_id; }
+function approvalBody(m, recipient = null) {
+  const target = m.pid && agentOf(m.pid);
+  const messages = (state.dm ? state.dmData : state.data)?.messages || [];
+  const matches = messages.filter(x => x.id === m.proposal.proposal_id || x.lid === m.proposal.proposal_id);
+  const original = matches.length === 1 && !matches[0].deleted ? matches[0] : null;
+  return el("div", {class:"body compact-approval"}, recipient,
+    el("p", {"data-proposal-provenance":""}, (m.dir === "out" ? "You approved this task" : "Approved this task") + " · suggested by " + (target ? agentName(target) : "the agent")),
+    original && el("button", {type:"button",class:"text-btn",onclick:()=>flash(original.id)}, "View proposal"),
+    el("details", {"data-approved-task-text":""}, el("summary", {}, "Approved task text"),
+      el("p", {}, mentionNodes(m.body, state.dm ? state.dmData : null)),
+      m.edited && el("p", {}, "Edited message: ", mentionNodes(shownText(m), state.dm ? state.dmData : null))));
 }
 
 // controlDetails are the rows Details adds: the original text of an edited
@@ -5399,14 +5414,15 @@ const Zoom = {
         const mine = m.dir === "out";
         const to = m.target && m.target.agent_id ? namedAgentLabel(m.target.agent_id, m.target.address, undefined, whoseAgent(m.pid && agentOf(m.pid))) : m.to && agentOf(m.pid) ? agentName(agentOf(m.pid)) : "";
         const execution = execLine(m, d);
-        const bubble = el("button", { type: "button", class: "mc-bubble" },
+        const compact = !m.deleted && confirmedTask(m);
+        const bubble = el(compact ? "div" : "button", { ...(compact ? {} : {type:"button"}), class: compact ? "mc-bubble compact-approval-bubble" : "mc-bubble" },
           el("span", { class: "mc-who" }, dmAuthor(m, d) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + (to ? " · to " + to : "") + " · " + sentWhen(m)),
           !m.deleted && (m.kind === "question" || m.kind === "task") && m.pid && el("span", {class:"mc-who", "data-agent-recipient":"", title:m.pid}, "To @" + (agentOf(m.pid) ? agentName(agentOf(m.pid)) : "agent")),
-          !m.deleted && m.proposal && el("span", {class:"mc-who", "data-proposal-provenance":""}, (m.dir === "out" ? "You approved " : "Approved ") + (agentOf(m.pid) ? agentName(agentOf(m.pid)) + "’s" : "the agent’s") + " suggested task"),
-          el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
+          compact ? approvalBody(m) : el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
           !m.deleted && (m.attachments || []).length > 0 && el("span", { class: "mc-files" }, "📎 " + m.attachments.map((f) => f.name).join(", ")),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
-        bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
+        if (compact) bubble.append(el("button", {type:"button",class:"text-btn",onclick:()=>this.go(3,{msg:m.id},bubble)}, "Message details"));
+        else bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") }, m.verified_agent ? el("span", {class:"avatar sm", "aria-hidden":"true"}, "🤖") : avatar(mine ? me : humanGroup(d) ? dmAuthor(m,d) : d.peer.label || m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,d),bubble),
           agentDetailFor(m, d) && ((m.actions || []).includes("resolve") || m.exec?.state === "needs_human") && agentNeedsYouTurn(m, d),
           proposalCard(m.proposal),
@@ -5465,11 +5481,13 @@ const Zoom = {
       el("ol", { class: "mini-chat" }, t.messages.map((m) => {
         if (m._local) return el("li", {class:"mc mine",id:"m-"+m.id}, el("div", {class:"mc-stack"}, el("div",{class:"mc-bubble"},el("span",{class:"mc-text"},[m.body,...(m.attachments || m.files || []).map(f=>f.name)].filter(Boolean).join("\n"))),el("p",{class:"narr",role:"status"},m.state_text), m._failed && el("button",{type:"button",onclick:m._retry},"Retry")));
         const mine = m.dir === "out";
-        const bubble = el("button", { type: "button", class: "mc-bubble" },
+        const compact = !m.deleted && confirmedTask(m);
+        const bubble = el(compact ? "div" : "button", { ...(compact ? {} : {type:"button"}), class: compact ? "mc-bubble compact-approval-bubble" : "mc-bubble" },
           el("span", { class: "mc-who" }, authorName(m) + (kindTag[m.kind] ? " · " + kindTag[m.kind] : "") + " · " + sentWhen(m)),
-          el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
+          compact ? approvalBody(m) : el("span", { class: "mc-text" + (m.deleted ? " tombstone" : "") }, m.deleted ? "Message deleted" : shownText(m) + (m.edited ? " · edited" : "")),
           (m.reactions || []).length > 0 && el("span", { class: "mc-files" }, m.reactions.map((r) => r.emoji + " " + (r.by || []).length).join("  ")));
-        bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
+        if (compact) bubble.append(el("button", {type:"button",class:"text-btn",onclick:()=>this.go(3,{msg:m.id},bubble)}, "Message details"));
+        else bubble.addEventListener("click", () => this.go(3, { msg: m.id }, bubble));
         return el("li", { class: "mc " + (mine ? "mine" : "theirs") },
           avatar(mine ? state.overview.me.address : m.from, "sm"), el("div",{class:"mc-stack"},messageReference(m,t),bubble),
           m.summary && el("p", { class: "narr" }, "Your responder's summary: " + m.summary),
