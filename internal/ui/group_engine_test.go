@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -438,14 +439,14 @@ func testBrowserGroupCarrierEngine(t *testing.T, op string) {
 	if result["ok"] != true {
 		t.Fatal(result)
 	}
-	t.Logf("%v checks (%v)", result["checks"], result["storage"])
+	t.Logf("%v checks (%v); profile: %v", result["checks"], result["storage"], result["profile"])
 }
 
 func TestBrowserGroupCarrierRealIndexedDB(t *testing.T) {
 	testBrowserGroupCarrierIndexedDB(t, false)
 }
 
-func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool) {
+func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool, background ...bool) {
 	chrome := os.Getenv("AGENTNET_CHROME")
 	if chrome == "" {
 		t.Skip("AGENTNET_CHROME not set")
@@ -461,8 +462,8 @@ func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool) {
 			if controlOnly {
 				mode = "true"
 			}
-			io.WriteString(w, `<script type="module">import {setup,consent,checks} from '/testdata/group_engine_check.mjs';let out;try {const post=async(path,body)=>{const r=await fetch(path,{method:'POST',body:JSON.stringify(body)});return r.json()};const challenge=await post('/setup',await setup());const v=await post('/consent',{consent:await consent(challenge)});out=await checks(v,true,false,`+mode+`);}catch(e){out={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(out)});</script>`)
-		case "/testdata/group_engine_check.mjs", "/testdata/group_control_history_check.mjs":
+			io.WriteString(w, `<script type="module">import {setup,consent,checks} from '/testdata/group_engine_check.mjs';let out;try {const post=async(path,body)=>{const r=await fetch(path,{method:'POST',body:JSON.stringify(body)});return r.json()};const challenge=await post('/setup',await setup());const v=await post('/consent',{consent:await consent(challenge)});out=await checks(v,true,false,`+mode+`,`+strconv.FormatBool(len(background) > 0 && background[0])+`,`+strconv.FormatBool(len(background) > 1 && background[1])+`);}catch(e){out={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(out)});</script>`)
+		case "/testdata/group_engine_check.mjs", "/testdata/group_control_history_check.mjs", "/testdata/group_receiver_profile.mjs":
 			w.Header().Set("Content-Type", "text/javascript")
 			http.ServeFile(w, r, strings.TrimPrefix(r.URL.Path, "/"))
 		case "/setup":
@@ -520,8 +521,23 @@ func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool) {
 		if result["ok"] != true {
 			t.Fatalf("real IDB: %v", result)
 		}
-		t.Logf("%v checks (%v)", result["checks"], result["storage"])
+		t.Logf("%v checks (%v); profile: %v", result["checks"], result["storage"], result["profile"])
 	case <-time.After(90 * time.Second):
 		t.Fatalf("real IDB timeout: %s", stderr.String())
 	}
+}
+
+func TestBrowserHistoryBackgroundRecovery(t *testing.T) {
+	testBrowserGroupCarrierEngine(t, "background-regression")
+}
+
+func TestBrowserHistoryBackgroundRealIndexedDB(t *testing.T) {
+	testBrowserGroupCarrierIndexedDB(t, false, true)
+}
+
+func TestBrowserHistoryReceiverProfile(t *testing.T) {
+	testBrowserGroupCarrierEngine(t, "receiver-regression")
+}
+func TestBrowserHistoryReceiverRealIndexedDB(t *testing.T) {
+	testBrowserGroupCarrierIndexedDB(t, false, false, true)
 }

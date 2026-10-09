@@ -104,8 +104,10 @@ export type Phase = "decide" | "running" | "needs_human" | "stopped" | "closing"
 export function phaseOf(m: Req): Phase | null {
   const acts = m.actions || [];
   if (m.continuation) return "needs_human";
-  if (!acts.length) return null;
   if (acts.includes("cancel")) return "running";
+  const terminal = m.dir === "in" ? m.state : m.exec?.stale ? "" : m.exec?.state;
+  if (isRequest(m) && ["interrupted","failed","cancelled","stopped","timeout","not_run"].includes(terminal || "")) return "stopped";
+  if (!acts.length) return null;
   if (!isRequest(m)) return acts.includes("resolve") ? "closing" : null; // a report, or a follow-up that needs a person
   const state = m.dir === "in" ? m.state || "" : m.exec?.state || "";
   if (["interrupted", "failed", "cancelled"].includes(state)) return "stopped";

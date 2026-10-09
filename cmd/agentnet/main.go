@@ -48,12 +48,13 @@ func run(args []string) error {
 	if len(args) == 0 || wantsHelp(args) {
 		return printHelp(os.Stdout, args) // before anything touches the home
 	}
-	if err := runGuard(args[0], args[1:]); err != nil { // inside a run: before any command
-		return err
-	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	cmd, rest := args[0], args[1:]
+	if err := receiverCommandGuard(cmd, rest); err != nil {
+		return err
+	}
 	switch cmd {
 	case "hub":
 		return runHub(ctx, rest)
@@ -392,11 +393,6 @@ func runSend(ctx context.Context, a *client.Agent, args []string, reply bool) er
 			extra = " [--reply-to ID] [--progress]"
 		}
 		return fmt.Errorf("usage: %s [--file PATH]... [--wait 5s]%s %s TEXT", name, extra, target)
-	}
-	if !reply {
-		if err := sendGuard(*replyTo); err != nil {
-			return err
-		}
 	}
 	if !reply && *progress && *replyTo == "" {
 		return errors.New("--progress requires --reply-to ID")
@@ -1204,7 +1200,7 @@ func printHarnesses() {
 		}
 		mode := "questions: see agentnet help responder"
 		if h.Limits != "" {
-			mode = "questions use your own setup, read-only (see agentnet help responder)"
+			mode = "questions use your native tools and permissions unchanged (see agentnet help responder)"
 		}
 		fmt.Printf("%-7s %s; %s; %s\n", h.Name, where, mode, tested)
 	}

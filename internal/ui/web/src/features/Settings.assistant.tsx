@@ -25,9 +25,9 @@ export const harnessName = (h: string) => ({ claude: "Claude", codex: "Codex", p
 // What a question may use, per program, in plain words. The server's exact
 // wording stays under Details.
 const questionLimits: Record<string, string> = {
-  claude: "For questions it uses your Claude setup, can’t edit files, and runs only tools your settings already allow.",
-  codex: "For questions it uses your Codex setup. Commands run read-only, and anything that needs an approval is refused.",
-  pi: "For questions it uses your Pi setup, with its shell and file editing turned off.",
+  claude: "Uses your Claude tools, skills and permissions unchanged.",
+  codex: "Uses your Codex tools, skills, sandbox and permissions unchanged.",
+  pi: "Uses your Pi tools, skills and permissions unchanged.",
 };
 
 export function AssistantSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingElement> }) {

@@ -14,7 +14,7 @@ import { deliveryWord, firstLine, owner, personName, plain, reminderOf, timeOf }
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Tag } from "../ui/Tag";
 import { ApprovalCard } from "./Approvals";
-import { deviceWords } from "./Approvals.words";
+import { deviceWords, phaseOf } from "./Approvals.words";
 import { Markdown, type RenderMention } from "./Markdown";
 import { MessageFiles } from "./Message.files";
 import { EmojiDialog, Reactions } from "./Message.reactions";
@@ -35,6 +35,7 @@ export interface MessageProps {
   last?: boolean;            // last of the run: avatar and tail corner
   status?: boolean;          // say this message's delivery in words under it
   compact?: boolean;          // another target of the same explicit human send
+  grouped?: boolean;          // one bubble, with an exact outcome row per target
   readOnly?: boolean;        // shown for reading only ("What Zen saw")
   onJump?: (id: string) => void;
   selecting?: boolean;
@@ -47,7 +48,7 @@ export const MessageView = memo(function MessageView(p: MessageProps) {
   return <Bubble {...p} />;
 });
 
-function Bubble({ m, ctx, all, first = true, last = true, status, compact, readOnly, onJump, selecting, selected, onSelect }: MessageProps) {
+function Bubble({ m, ctx, all, first = true, last = true, status, compact, grouped, readOnly, onJump, selecting, selected, onSelect }: MessageProps) {
   const store = useApp();
   const wide = useWide();
   const who = whoWrote(m, ctx);
@@ -89,8 +90,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, readO
   const touch = useTouchGestures(() => (readOnly ? undefined : setSheet(true)), can.reply ? acts.reply : null);
   const mention = mentionFor(ctx);
 
-  const text = useMemo(() => askChip(shownText(m), m, ctx), [m, ctx]);
-  const time = <Meta m={m} who={who} />;
+  const text = useMemo(() => grouped ? shownText(m) : askChip(shownText(m), m, ctx), [m, ctx, grouped]);
+  const time = <Meta m={m} who={who} shared={grouped} />;
   const parent = referenceParent(all,m.quote);
   const quote=!!m.quote;
   const request=referenceParent(all,m.reply_to);
@@ -105,8 +106,9 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, readO
 
   const needsHumanDetail = isThreadMsg(m) ? "" : m.job_detail || (ctx.overview?.needs_you || []).find(c => c.conv === ctx.conv && c.id === m.id && c.reason === "agent_needs_human")?.why || "";
 
+  const terminal = !selecting && !readOnly && !grouped && phaseOf(m) === "stopped";
   const body = (
-    <div tabIndex={wide && live && !selecting ? 0 : undefined} role={wide && live ? "group" : undefined} aria-label={wide && live ? who.name + ", " + timeOf(m.at) : undefined}
+    <div data-message-bubble tabIndex={wide && live && !selecting ? 0 : undefined} role={wide && live ? "group" : undefined} aria-label={wide && live ? who.name + ", " + timeOf(m.at) : undefined}
       className={"relative min-w-0 max-w-full stroke px-3.5 py-2 focus-visible:outline-offset-2 " + shape + (selected ? " ring-[3px] ring-agent-ink ring-offset-2 ring-offset-canvas" : "")}>
       {wide && hot && live && !selecting && !editing && <Toolbar m={m} ctx={ctx} can={can} acts={acts} mine={who.mine} />}
       {last && !who.mine && (
@@ -115,8 +117,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, readO
         </span>
       )}
       {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
-      {m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
-      {!m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
+      {!grouped && m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
+      {!grouped && !m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
       {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{who.mine ? "You approved this task" : "Approved this task"} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
@@ -137,8 +139,8 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, readO
   );
 
   return (
-    <div data-mid={m.id} className={"min-w-0 [overflow-wrap:anywhere] " + (first && !compact ? "mt-3.5" : "mt-1")}>
-      <div className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
+    <div data-mid={m.id} data-send-target={grouped && !isThreadMsg(m) ? m.pid : undefined} className={"min-w-0 [overflow-wrap:anywhere] " + (first && !compact ? "mt-3.5" : "mt-1")}>
+      <div hidden={terminal} className={"group/msg relative flex px-3 sm:px-4 [touch-action:pan-y] " + (who.mine ? "justify-end" : "justify-start") + (selecting ? " cursor-pointer" : "")}
         onClick={selecting && can.select ? (e) => { if (inside(e)) onSelect?.(m.id); } : undefined}
         onPointerEnter={wide ? () => setHot(true) : undefined} onFocus={wide ? () => setHot(true) : undefined}
         onPointerLeave={wide ? (e) => { if (!e.currentTarget.querySelector("[data-popup-open]")) setHot(false); } : undefined}
@@ -157,9 +159,15 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, readO
           {first && !who.mine && <NameLine m={m} who={who} />}
           {first && who.mine && excerpt(m) && <span className="mb-1 text-[13px] text-muted">From before you joined</span>}
           {first && who.mine && !excerpt(m) && who.sub && <span className="mb-1 pr-1 text-[13px] text-muted">You · {who.sub}</span>}
-          {body}
+          {!compact && !terminal && body}
+          {grouped && m._local && <p className="mt-1 text-[13px] text-muted" role="status">
+            {requestLabel(m, ctx)} · {m.state_text}
+            {m._failed && <button type="button" className="ml-2 min-h-11 underline" onClick={m._retry}>Retry</button>}
+          </p>}
           <Reactions m={m} ctx={ctx} can={can.react} wide={wide} />
-          {!m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} />}
+          {!m._local && <Under m={m} ctx={ctx} all={all} who={who} status={!!status} onDetails={acts.details} onJump={onJump} />}
+          {compact && live && !selecting && <button type="button" className="min-h-11 px-1 text-[13px] underline"
+            aria-label={"Actions for " + requestLabel(m, ctx)} onClick={() => setSheet(true)}>Actions</button>}
           {reminder && !selecting && <ReminderLine r={reminder} m={remindable} />}
         </div>
         {!wide && live && !selecting && (
@@ -177,7 +185,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, readO
       {/* The approval card is a system card across the timeline, never part of the bubble. */}
       {!readOnly && (isRequest(m) || (m.actions || []).length > 0) && (
         <div className="mx-auto mt-2.5 w-full max-w-[600px] px-3 empty:hidden sm:px-4">
-          <ApprovalCard message={m} dm={ctx.dm} thread={ctx.thread} />
+          <ApprovalCard message={m} dm={ctx.dm} thread={ctx.thread} compact={grouped} content={terminal ? <div className="mb-3">{body}{live && <button className="min-h-11 text-[13px] underline" type="button" onClick={()=>setSheet(true)}>Message actions</button>}</div> : undefined} />
         </div>
       )}
     </div>
@@ -202,9 +210,9 @@ function NameLine({ m, who }: { m: AnyMsg; who: Who }) {
 }
 
 /** Meta: the time (and for your messages a delivery tick) at the end of the text. */
-function Meta({ m, who }: { m: AnyMsg; who: Who }) {
+function Meta({ m, who, shared }: { m: AnyMsg; who: Who; shared?: boolean }) {
   const s = ("delivery" in m ? m.delivery : undefined) ?? m.state ?? "";
-  const tick = !who.mine || who.agent || excerpt(m) ? null
+  const tick = shared || !who.mine || who.agent || excerpt(m) ? null
     : m.delivery_uncertain ? <IconAlertTriangle size={15} className="text-approval-ink" />
       : s === "delivered" ? <IconChecks size={15} className="text-ok-ink" />
       : s === "custody" ? <IconCheck size={15} />
@@ -236,10 +244,13 @@ function ReplyQuote({ parent, ctx, onJump }: { parent?: AnyMsg; ctx: Ctx; onJump
 
 // Under a bubble: what a request asked and how far it got, or (for your
 // latest message, or one with a problem) its delivery in words.
-function Under({ m, ctx, all, who, status, onDetails }: { m: AnyMsg; ctx: Ctx; all: AnyMsg[]; who: Who; status: boolean; onDetails: () => void }) {
-  const label = requestLabel(m, ctx);
+function Under({ m, ctx, all, who, status, onDetails, onJump }: { m: AnyMsg; ctx: Ctx; all: AnyMsg[]; who: Who; status: boolean; onDetails: () => void; onJump?: (id: string) => void }) {
+  const target = !isThreadMsg(m) ? agentOf(ctx, m.pid) : undefined;
+  const duplicateName = target && (ctx.dm?.agents || []).some(a => a.pid !== target.pid && agentLabel(a, ctx) === agentLabel(target, ctx));
+  const label = requestLabel(m, ctx) + (duplicateName ? " · " + deviceWords(target.host.address, ctx.overview) + " · " + (target.agent_id || target.pid).slice(0, 8) : "");
   const detail = isThreadMsg(m) ? m.detail : m.job_detail || m.detail;
   if (label) {
+    const answer = all.find(r => isReply(r) && (r.reply_to === m.id || (!isThreadMsg(m) && !!m.lid && r.reply_to === m.lid && referenceParent(all, r.reply_to) === m)));
     const st = requestState(m, all);
     const tone = st.tone === "ok" ? "text-ok-ink" : st.tone === "work" ? "text-agent-ink" : st.tone === "wait" ? "text-approval-ink" : st.tone === "bad" ? "text-danger" : "text-muted";
     return (
@@ -250,6 +261,7 @@ function Under({ m, ctx, all, who, status, onDetails }: { m: AnyMsg; ctx: Ctx; a
           {st.text && <><span aria-hidden="true" className="text-muted">·</span><span className={tone}>{st.text}</span></>}
         </button>
         {detail && !(m.actions || []).length && <span className="mt-0.5 text-muted [overflow-wrap:anywhere]">{detail}</span>}
+        {answer && onJump && <button type="button" className="min-h-11 underline" onClick={() => onJump(answer.id)}>View reply</button>}
       </div>
     );
   }

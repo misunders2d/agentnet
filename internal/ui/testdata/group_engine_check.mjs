@@ -3,6 +3,7 @@
 import * as wire from '../static/wire.mjs';
 import { Engine, memoryStore, openIDB } from '../static/engine.mjs';
 import { checkControlHistory } from './group_control_history_check.mjs';
+import {receiverProfile} from './group_receiver_profile.mjs';
 let keys, address = 'browser/desk', roster, pub;
 const decode = new TextDecoder();
 const assert = (ok, label) => { if (!ok) throw Error(label); };
@@ -16,7 +17,7 @@ export async function consent(challenge) {
  const a = await wire.signGroupAdmission(keys,{conv:await wire.rootID(root),realm:root.realm,person:roster.person,roster:await wire.rosterHash(roster),seq:0,prev:'',history:null,by:await wire.fingerprint(pub)});
  return wire.groupAdmissionJSON(a);
 }
-export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false) {
+export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false) {
  const labels=[], check=(ok,label)=>{assert(ok,label);labels.push(label);};
  const root=wire.parseGroupRoot(v.challenge.root), conv=await wire.rootID(root), states=v.states.map(wire.parseGroupState), records=v.commits.map(wire.parseGroupCommit), c=v.carriers;
  const invitation=await wire.validateGroupInvitation(wire.parseGroupInvitation(v.invitation_json));
@@ -36,7 +37,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
  const world=async()=>{
   const name='agentnet-group-1002h-'+wire.newID();names.push(name);
   let st=realIDB?await openIDB(name):memoryStore();
-  const chains=new Map([...v.challenge.rosters,v.invited_roster].map(r=>[r.person,[r]])), blobs=new Map(), receipts=[];
+  const chains=new Map([...v.challenge.rosters,v.invited_roster].map(r=>[r.person,[r]])), blobs=new Map(), profiles=new Map(), receipts=[];
   let mode='', extraChains=new Map();
   for(const x of Object.values(c))blobs.set(x.blob,bytes(x.ct));
   for(const x of v.participations.files)blobs.set(x.blob,bytes(x.ct));
@@ -45,6 +46,9 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    if(u.pathname.startsWith('/v1/blobs/')){const id=u.pathname.split('/')[3],b=blobs.get(id);if(!b)return new Response('',{status:404});if(mode==='offline')throw Error('fixture offline');if(mode==='short')return new Response(b.slice(0,-2));if(mode==='empty')return new Response(null);if(mode==='oversize'){const x=new Uint8Array(b.length+1);x.set(b);return new Response(x);}if(mode==='stream-error')return new Response(new ReadableStream({start(controller){controller.enqueue(b.slice(0,16));controller.error(Error('fixture interrupted'));}}));if(mode==='corrupt'){const x=b.slice();x[x.length-1]^=1;return new Response(x);}return new Response(b);}
    if(u.pathname.startsWith('/v1/persons/')){const person=u.pathname.split('/')[3],chain=extraChains.get(person)||chains.get(person)||[];const after=Number(u.searchParams.get('after'));return new Response(JSON.stringify({records:chain.filter(r=>r.seq>after),more:false}));}
    if(u.pathname==='/v1/receipts'){receipts.push(JSON.parse(o.body));return new Response('{}');}
+   if(receiverOnly&&u.pathname==='/v1/version')return new Response(JSON.stringify({version:'receiver-fixture',realm_id:root.realm,features:['env2','caps','person2']}));
+   if(receiverOnly&&/^\/v1\/agents\/[^/]+\/[^/]+\/profile$/.test(u.pathname)){const who=u.pathname.split('/').slice(3,5).join('/');if(!profiles.has(who))throw Error('Missing signed profile '+who);return new Response(JSON.stringify(profiles.get(who)));}
+   if(receiverOnly&&/^\/v1\/messages\/[0-9a-f]{32}\/ack$/.test(u.pathname)){receipts.push({id:u.pathname.split('/')[3],...JSON.parse(o.body)});return new Response('{}');}
    throw Error('unexpected fixture fetch '+u.pathname);
   };
   const recovery=new Set(),track=engine=>{const run=engine.recoverGroupIntents.bind(engine);engine.recoverGroupIntents=(...args)=>{const work=run(...args);recovery.add(work);work.then(()=>recovery.delete(work),()=>recovery.delete(work));return work;};};
@@ -58,13 +62,52 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    const inner={v:2,id:wire.newID(),from:alicePub.address,to:address,ts:1700000000,kind:'message',conv,root:wire.rootJSON(root),lid:wire.newID(),sub,body:wire.groupCarrierJSON({v:1,seq,hash,to_key:e.fp}),attachments:[file.attachment],...fields};
    return {envelope:await wire.seal(inner,aliceKeys,pub),blob:file.attachment.blob.id};
   };
-  return {get e(){return e;},st,name,receive,make,blobs,receipts,mode:x=>mode=x,extraChains,
+  return {get e(){return e;},st,name,receive,make,blobs,profiles,receipts,mode:x=>mode=x,extraChains,
    async reload(){await drain();st.close();st=realIDB?await openIDB(name):st;e=new Engine({store:st,base:'http://127.0.0.1:1',fetch});track(e);await e.load();e.realm=root.realm;this.st=st;},
    async close(){await drain();st.close();if(realIDB)await new Promise((res,rej)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=res;r.onerror=()=>rej(r.error);/* close is pending until active read transactions finish; onsuccess proves deletion. */});}};
  };
  const quiet=async(w)=>{for(const s of ['inbox','outbox','convs','lids'])check((await w.st.all(s)).length===0,'quiet '+s);check((await w.e.overview()).threads.length===0,'no visible threads');for(const x of await w.st.all('held'))check(!('body'in x)&&!('plaintext'in x),'held has ciphertext only');for(const x of await w.st.all('files'))check(x.ct instanceof Uint8Array&&!('body'in x),'files ciphertext only');};
+ if(receiverOnly){const profile=await receiverProfile({world,check,realIDB,c,root,conv,keys,address,roster,pub});return {ok:true,storage:profile.storage,checks:labels.length,labels,profile};}
  let w;
  try{
+  // Background disclosure coalesces a burst, including a failed active pass.
+  w=await world();
+  {
+   const original=w.e.discloseHumanPass;let passes=0,start,release;
+   const started=new Promise(r=>{start=r;}),gate=new Promise(r=>{release=r;});
+   w.e.discloseHumanPass=async()=>{if(++passes===1){start();await gate;throw Error('synthetic first-pass failure');}};
+   try {
+    const first=w.e.discloseHumanAudience();await started;
+    const wakes=Array.from({length:64},()=>w.e.discloseHumanAudience());
+    release();await Promise.all([first,...wakes]);
+    check(passes===2,'disclosure burst drains one pending pass even after a failed active pass');
+    await w.e.discloseHumanAudience();
+    check(passes===3&&!w.e.disclosing,'later disclosure wake runs and returns to idle');
+   } finally {release();if(w.e.disclosing)await w.e.disclosing;w.e.discloseHumanPass=original;}
+  }
+  await w.close();
+  w=await world();
+  {
+   const context=wire.groupContextJSON({root,state:states[0]}),accepted='1'.repeat(32),pending='2'.repeat(32),published='3'.repeat(32);
+   await w.st.write([{s:'kv',k:'group/'+conv,v:{root:wire.rootJSON(root),context,records:[wire.groupCommitJSON(records[0])],withdrawals:[],pending:[],rosters:{}}},
+    {s:'kv',k:'group-publication/'+conv+'/0',v:{type:'group-publication',conv,seq:0,context}},
+    ...[[accepted,'accepted'],[pending,'pending'],[published,'published']].map(([id,status])=>({s:'kv',k:'group-invitation/out/'+id,v:{type:'group-invitation',direction:'out',id,status}})),
+    ...Array.from({length:3600},(_,i)=>({s:'kv',k:'group-carrier/perf-'+String(i).padStart(4,'0'),v:true}))]);
+   const all=w.st.all.bind(w.st),publishPacket=w.e.publishGroupPacket,publishInvite=w.e.publishGroupInvitation;
+   let kvReads=0;const publishedCalls=[];
+   w.st.all=async s=>{if(s==='kv')kvReads++;return all(s);};
+   w.e.publishGroupPacket=async p=>{publishedCalls.push('packet:'+p.state.conv);};
+   w.e.publishGroupInvitation=async id=>{publishedCalls.push('invite:'+id);};
+   try {
+    await w.e.recoverGroupIntents();if(w.e.invitationSyncRun)await w.e.invitationSyncRun;
+    await w.e.discloseHumanPass();
+    check(kvReads===0,'history background recovery never scans unrelated kv carrier ledger');
+    check(JSON.stringify(publishedCalls)===JSON.stringify(['invite:'+accepted,'packet:'+conv]),'prefix recovery retains exact accepted invitation and publication, skipping pending and published');
+    check(await w.st.get('kv','group-carrier/perf-3599')===true,'background enumeration preserves unrelated durable carrier evidence');
+   } finally {w.st.all=all;w.e.publishGroupPacket=publishPacket;w.e.publishGroupInvitation=publishInvite;}
+  }
+  await w.close();
+  if(backgroundOnly)return {ok:true,storage:realIDB?"real IndexedDB":"memory unit only",checks:labels.length,labels};
   await checkControlHistory({world,check,realIDB,c,root,conv,keys,address,roster,pub,alicePub});
   if(controlHistoryOnly)return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
   // A set check must notice records that did not exist during verification,
@@ -1339,4 +1382,4 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
  }catch(e){if(w)await w.close().catch(()=>{});throw e;}
 }
-if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}
+if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}

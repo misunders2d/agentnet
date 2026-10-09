@@ -16,6 +16,7 @@ import { openPictureEditor } from "../pictures.mjs";
 import { isThreadMsg, type AnyMsg } from "./Message.model";
 import { SaveToDrive } from "./Drive";
 import { previewText, textPreviewName, TEXT_PREVIEW_LIMIT } from "./Message.files.text";
+import { Markdown } from "./Markdown";
 
 interface FileItem { index: number; name: string; size: number; openable: boolean; availability?: string; note?: string }
 
@@ -246,7 +247,9 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
       )}
       <Sheet open={preview !== null} onOpenChange={(open) => { if (!open) setPreview(null); }} title={f.name} description={bytes(f.size)} wide
         footer={<Button variant="act" disabled={!preview} onClick={() => preview && save(preview.url, f.name, portal)}>Download</Button>}>
-        <pre className="whitespace-pre-wrap break-words text-[14px] [overflow-wrap:anywhere]">{preview?.text}</pre>
+        {/\.md$/i.test(f.name)
+          ? <Markdown text={preview?.text || ""} className="text-[14px] leading-relaxed" />
+          : <pre className="whitespace-pre-wrap break-words text-[14px] [overflow-wrap:anywhere]">{preview?.text}</pre>}
       </Sheet>
       {hasPerson && pictureURL && <Button onClick={async () => { if (await openPictureEditor({ into: portal, src: pictureURL, save: png => store.api.setPersonPicture(png) })) await store.refetch(); }}>Use as my picture</Button>}
       {st === "request" && (

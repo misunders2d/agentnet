@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -90,6 +92,13 @@ func (a *Agent) ChatTopics(conv string) ([]ThreadSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	return a.ChatTopicsForMessages(conv, msgs)
+}
+
+// ChatTopicsForMessages derives the topic view from the same accepted messages
+// the caller is displaying. It avoids loading and decorating the full history a
+// second time for one chat response; local visibility/read state is still fresh.
+func (a *Agent) ChatTopicsForMessages(conv string, msgs []ConvMessage) ([]ThreadSummary, error) {
 	locals, err := a.store.topicLocals(conv)
 	if err != nil {
 		return nil, err
@@ -116,6 +125,10 @@ func (a *Agent) ChatTopics(conv string) ([]ThreadSummary, error) {
 	return ts, nil
 }
 func summarizeChatTopics(conv string, msgs []ConvMessage, locals map[string]topicLocal, now int64) []ThreadSummary {
+	return summarizeChatTopicView(conv, msgs, locals, now, false)
+}
+
+func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]topicLocal, now int64, main bool) []ThreadSummary {
 	assigned := ChatTopicAssignments(msgs)
 	groups := map[string][]ConvMessage{}
 	events := map[string][]ConvMessage{}
@@ -124,10 +137,12 @@ func summarizeChatTopics(conv string, msgs []ConvMessage, locals map[string]topi
 			continue
 		}
 		if m.TopicEvent != nil {
-			events[m.Topic] = append(events[m.Topic], m)
+			if !main {
+				events[m.Topic] = append(events[m.Topic], m)
+			}
 			continue
 		}
-		if topic := assigned[m.LID]; topic != "" {
+		if topic := assigned[m.LID]; main && topic == "" || !main && topic != "" {
 			groups[topic] = append(groups[topic], m)
 		}
 	}
@@ -156,7 +171,11 @@ func summarizeChatTopics(conv string, msgs []ConvMessage, locals map[string]topi
 			if state == "" {
 				state = m.State
 			}
-			facts[i] = threadRow{link: link{id: m.LID, replyTo: m.ReplyTo, at: m.Sent}, kind: m.Kind, status: m.status, topicDone: m.TopicDone, in: incoming || m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult, state: state}
+			execState := ""
+			if m.Exec != nil {
+				execState = m.Exec.State
+			}
+			facts[i] = threadRow{link: link{id: m.LID, replyTo: m.ReplyTo, at: m.Sent}, kind: m.Kind, status: m.status, topicDone: m.TopicDone, in: incoming || m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult, state: state, localJob: m.Job != "", execState: execState}
 		}
 		local := locals[id]
 		shared := topicLocal{}
@@ -186,6 +205,10 @@ func summarizeChatTopics(conv string, msgs []ConvMessage, locals map[string]topi
 		// Shared closure wins over local state. Local archive never hides pending work.
 		l := shared
 		if local.Mark == "archived" && local.MarkCount >= len(g)+len(events[id]) && local.MarkAt >= shared.MarkAt {
+			l = local
+		}
+
+		if main {
 			l = local
 		}
 
@@ -269,7 +292,7 @@ func (a *Agent) ChangeChatTopic(ctx context.Context, conv, id, what, title strin
 	if err != nil {
 		return false, err
 	}
-	ts, err := a.ChatTopics(conv)
+	ts, err := a.ChatTopicsForMessages(conv, msgs)
 	if err != nil {
 		return false, err
 	}
@@ -376,6 +399,11 @@ func (a *Agent) deleteChatTopic(ctx context.Context, conv, id string, msgs []Con
 			continue
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv,key,lid,deletion,shared) VALUES(?,?,?,?,0)`, conv, key, m.LID, deletion); err != nil {
+			return err
+		}
+	}
+	if id == "" {
+		if _, err = tx.Exec(`UPDATE topic_state SET mark='',mark_at=0,mark_count=0 WHERE peer=? AND topic=?`, mainTopicScope(conv), mainTopicKey); err != nil {
 			return err
 		}
 	}
@@ -521,4 +549,84 @@ func (a *Agent) chatTopicHead(conv, topic string) (string, error) {
 		return "", nil
 	}
 	return g[len(g)-1].LID, nil
+}
+
+// Main-flow names use the existing own-device preference channel with a stable
+// private scope. This sentinel is never a signed conversation topic ID.
+const mainTopicKey = "00000000000000000000000000000000"
+
+func mainTopicScope(conv string) string {
+	h := sha256.Sum256([]byte("agentnet/main-flow-preference/v1\x00" + conv))
+	return hex.EncodeToString(h[:])
+}
+func mainChatMessages(msgs []ConvMessage) []ConvMessage {
+	assigned := ChatTopicAssignments(msgs)
+	out := make([]ConvMessage, 0)
+	for _, m := range msgs {
+		if m.Sub == "" && m.TopicEvent == nil && assigned[m.LID] == "" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+func (a *Agent) ChatMainTopicForMessages(conv string, msgs []ConvMessage) (*ThreadSummary, error) {
+	locals, err := a.store.topicLocals(mainTopicScope(conv))
+	if err != nil {
+		return nil, err
+	}
+	ts := summarizeChatTopicView(conv, msgs, map[string]topicLocal{"": locals[mainTopicKey]}, storeNow().Unix(), true)
+	if len(ts) == 0 {
+		return nil, nil
+	}
+	return &ts[0], nil
+}
+func (a *Agent) ChangeChatMainTopic(ctx context.Context, conv, what, title string, seen int) (bool, error) {
+	if !protocol.ValidHash(conv) || seen < 0 {
+		return false, ErrTopicQuery
+	}
+	switch what {
+	case "rename", "archive", "reopen", "delete":
+	default:
+		return false, ErrTopicQuery
+	}
+	if _, _, ok, err := a.store.conversation(conv); err != nil {
+		return false, err
+	} else if !ok {
+		return false, ErrNoMessage
+	}
+	msgs, err := a.ConversationMessages(conv)
+	if err != nil {
+		return false, err
+	}
+	main := mainChatMessages(msgs)
+	if len(main) == 0 {
+		return false, ErrNoMessage
+	}
+	scope := mainTopicScope(conv)
+	if what == "delete" {
+		err = a.deleteChatTopic(ctx, conv, "", main)
+		return err == nil, err
+	}
+	if what == "rename" {
+		title = strings.Join(strings.Fields(title), " ")
+		if utf8.RuneCountInString(title) > TopicTitleMax {
+			return false, ErrTopicTitle
+		}
+		err = a.setTopicTitle(scope, mainTopicKey, title)
+		return err == nil, err
+	}
+	count := len(main)
+	if seen > 0 && seen < count {
+		count = seen
+	}
+	mark := "archived"
+	if what == "reopen" {
+		mark = topicMarkOpen
+	}
+	now := storeNow().Unix()
+	_, err = a.store.db.Exec(`INSERT INTO topic_state(peer,topic,mark,mark_at,mark_count,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(peer,topic) DO UPDATE SET mark=excluded.mark,mark_at=excluded.mark_at,mark_count=excluded.mark_count,updated_at=excluded.updated_at`, scope, mainTopicKey, mark, now, count, now)
+	if err == nil {
+		a.NoteChange()
+	}
+	return count == len(main), err
 }

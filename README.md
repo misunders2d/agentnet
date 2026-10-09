@@ -308,7 +308,7 @@ agentnet reply QUESTION_ID "Use the latest approved stock report."
 | Operation | Authority and result |
 | --- | --- |
 | Message | Stores a message; never grants permission to execute it. |
-| Question | Approved senders can get background answers using the recipient's chosen setup. Editing tools/new approvals are restricted; tools already allowed by that setup retain their effects. |
+| Question | Approved senders can get background answers using the recipient's chosen setup. Native tools and permissions apply unchanged; tools already allowed by that setup retain their effects. |
 | Task | Requires acceptance or a local standing task grant for the verified person/exact device key. A model's suggestion, received text or display name grants nothing. |
 | Follow-up summary | `--follow-up` asks the local responder to summarize the first correlated reply. It does not send that summary back or start an agent loop. |
 
@@ -472,11 +472,11 @@ Transport receipts prove custody, delivery, quarantine or expiry. They do
 not prove that work was accepted or completed. Replies are correlated to
 the original request and checked against the intended peer.
 
-Questions retain the recipient's own skills, tools and permissions, with
-harness-specific editing/new-approval restrictions. Existing allowed MCP or
-extension tools can still have effects. Context sent to a model is visible
-to the configured model provider. See [M4](docs/revival/M4.md) for boundaries;
-do not advertise an unconditional read-only guarantee.
+Questions and accepted tasks retain the recipient's native skills, tools,
+sandbox and permissions unchanged. AgentNet adds no execution policy or
+approval bypass. Native approvals unavailable in a background session require
+human attention. Context sent to a model is visible to its configured provider.
+See [M4](docs/revival/M4.md) for request admission and execution boundaries.
 
 A2A integration uses the official Go SDK through a local authenticated gateway:
 

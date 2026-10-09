@@ -83,7 +83,7 @@ func (a *Agent) codexRoomTool(ctx context.Context, cause string, raw json.RawMes
 	}
 }
 
-const codexRoomUnavailable = "Codex room transport unavailable. Use a Codex version supporting app-server dynamic tools and retry explicitly after recovery; no question was escalated to a task or given network access."
+const codexRoomUnavailable = "Codex room transport unavailable. Use a Codex version supporting app-server dynamic tools. AgentNet did not change your native permissions. Review completed work before an explicit continuation."
 
 type codexRoomBridge struct {
 	ctx                  context.Context
@@ -102,7 +102,7 @@ type codexRoomBridge struct {
 func newCodexRoomBridge(ctx context.Context, cmd *exec.Cmd, prompt string, output io.Writer, call func(context.Context, json.RawMessage) (string, error)) *codexRoomBridge {
 	in, out := io.Pipe()
 	b := &codexRoomBridge{ctx: ctx, input: out, output: output, call: call, calls: map[string]bool{}}
-	cmd.Args = []string{cmd.Path, "app-server", "-c", `approval_policy="never"`}
+	cmd.Args = []string{cmd.Path, "app-server"}
 	cmd.Stdin = in
 	cmd.Stdout = b
 	go func() {
@@ -181,24 +181,19 @@ func (b *codexRoomBridge) event(raw []byte) {
 		case "1":
 			b.send(map[string]any{"method": "initialized"})
 			spec := map[string]any{"type": "function", "name": "agentnet_room", "description": "Ask another active agent in this exact group a question by roster PID, or wait for its correlated reply. Bound to this run; grants, removal and cancellation apply. Cannot assign tasks.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"action"}, "properties": map[string]any{"action": map[string]any{"type": "string", "enum": []string{"ask", "wait"}}, "pid": map[string]string{"type": "string"}, "text": map[string]string{"type": "string"}, "id": map[string]string{"type": "string"}}}}
-			b.send(map[string]any{"id": 2, "method": "thread/start", "params": map[string]any{"cwd": b.cwd, "ephemeral": true, "sandbox": "read-only", "approvalPolicy": "never", "dynamicTools": []any{spec}}})
+			b.send(map[string]any{"id": 2, "method": "thread/start", "params": map[string]any{"cwd": b.cwd, "ephemeral": true, "dynamicTools": []any{spec}}})
 		case "2":
 			var r struct {
 				Thread struct {
 					ID string `json:"id"`
 				} `json:"thread"`
-				Approval string `json:"approvalPolicy"`
-				Sandbox  struct {
-					Type    string `json:"type"`
-					Network bool   `json:"networkAccess"`
-				} `json:"sandbox"`
 			}
-			if json.Unmarshal(m.Result, &r) != nil || r.Thread.ID == "" || r.Approval != "never" || r.Sandbox.Type != "readOnly" || r.Sandbox.Network {
+			if json.Unmarshal(m.Result, &r) != nil || r.Thread.ID == "" {
 				b.fail()
 				return
 			}
 			b.thread = r.Thread.ID
-			b.send(map[string]any{"id": 3, "method": "turn/start", "params": map[string]any{"threadId": b.thread, "cwd": b.cwd, "approvalPolicy": "never", "sandboxPolicy": map[string]any{"type": "readOnly", "networkAccess": false}, "input": []any{map[string]any{"type": "text", "text": b.prompt}}}})
+			b.send(map[string]any{"id": 3, "method": "turn/start", "params": map[string]any{"threadId": b.thread, "cwd": b.cwd, "input": []any{map[string]any{"type": "text", "text": b.prompt}}}})
 		case "3":
 			var r struct {
 				Turn struct {
@@ -272,6 +267,17 @@ func (b *codexRoomBridge) event(raw []byte) {
 			}
 			b.done = true
 			fmt.Fprint(b.output, b.answer)
+			b.close()
+		}
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput", "mcpServer/elicitation/request":
+		if len(m.ID) > 0 {
+			if b.thread == "" || p.ThreadID != b.thread || b.turn == "" || (p.TurnID != b.turn && !(m.Method == "mcpServer/elicitation/request" && p.TurnID == "")) {
+				b.fail()
+				return
+			}
+			b.done = true
+			fmt.Fprintln(b.output, needsHumanMarker)
+			fmt.Fprintln(b.output, "Your Codex setup requires a native approval or input for this action. This background session cannot collect it. Continue in your native Codex session with the specific permission; retrying unchanged will ask again. AgentNet did not approve or bypass it.")
 			b.close()
 		}
 	default:

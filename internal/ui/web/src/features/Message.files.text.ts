@@ -1,5 +1,6 @@
 // Preview only bounded UTF-8 text. The caller renders the returned string
-// as text, never markup; HTML/SVG and binary formats keep Download only.
+// as text or through the existing safe Markdown renderer, never raw HTML.
+// HTML/SVG and binary formats keep Download only.
 export const TEXT_PREVIEW_LIMIT = 256 * 1024;
 export const textPreviewName = (name: string): boolean => /\.(txt|md|csv|json|log|yaml|yml|toml|ini|go|rs|py|js|ts|tsx|jsx|css|sh)$/i.test(name);
 

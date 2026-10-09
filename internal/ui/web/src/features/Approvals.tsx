@@ -199,7 +199,7 @@ function DeviceAdminRow({ r }: { r: T.ReviewItem }) {
 function ReviewRow({ r, o, names }: { r: T.ReviewItem; o: T.Overview; names: Record<string, string> }) {
   const { isOpen, go } = useOpen();
   const from = capital(peerAgent(r.peer, o, names).name);
-  const mine = o.person ? agentName(undefined, names, o.person, o.person) : "Your agent";
+  const mine = o.person ? agentName(r.agent_id, names, o.person, o.person) : (r.agent_id && names[r.agent_id]) || "Your agent";
   const working = isWorkingReview(r);
   const title = working ? mine + " is working on " + inSentence(from) + "’s " + (r.kind === "task" ? "task" : "question")
     : r.kind === "task" ? from + " gave " + inSentence(mine) + " a task" : r.kind === "question" ? from + " asked " + inSentence(mine) + " something"

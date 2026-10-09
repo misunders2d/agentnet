@@ -3,7 +3,7 @@
 // while messages are being chosen to share, the selection bar. Everything
 // shown comes from the conversation's loaded view (store.views); actions
 // go through the store.
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { IconChevronLeft, IconMessages, IconX, IconUserPlus } from "@tabler/icons-react";
 import { useAgentNames, useApp, useWide } from "../context";
 import type { T } from "../api";
@@ -65,9 +65,11 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   }), [open.id, t, th, overview, names]);
   const hs = useMemo(() => helpers(ctx, (fn) => store.run(fn)), [ctx]);
   const canInvite = !!t && !t.frozen && (!t.role || t.role === "member");
-  const draft=useStore(store,s=>s.drafts[open.id]);
+  const topic = useStore(store, s => s.drafts[open.id]?.topic);
+  const newTopic = useStore(store, s => s.drafts[open.id]?.newTopic);
   const personMain=t&&store.personMain(t);
-  const messages: AnyMsg[] = (t ? (t.messages||[]).filter(m=>draft?.newTopic ? !m.topic : (m.topic||"")===(draft?.topic||"")) : th ? th.messages : null) || [];
+  const messages: AnyMsg[] = useMemo(() => (t ? (t.messages||[]).filter(m => newTopic ? !m.topic : (m.topic||"") === (topic||"")) : th?.messages) || [], [t?.messages, th?.messages, topic, newTopic]);
+  const toggle = useCallback((id: string) => setSelected(s => s ? (s.includes(id) ? s.filter(x => x !== id) : [...s, id]) : [id]), []);
 
   useEffect(() => {
     if (!selected) return;
@@ -81,7 +83,6 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   if (!t && !th) return <Loading o={open} />;
 
   const title = t ? (t.kind === "group" ? t.title || "this group" : roomTitle(t)) : threadAgentName(ctx);
-  const toggle = (id: string) => setSelected((s) => (s ? (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]) : [id]));
 
   return (
     <section aria-label={title} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">

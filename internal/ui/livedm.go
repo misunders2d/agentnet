@@ -344,7 +344,15 @@ func (l *Live) DM(id string) (DMThread, error) {
 		} else {
 			t.Members = originalViews(c)
 		}
-		topics, err := l.a.ChatTopics(id)
+		main, err := l.a.ChatMainTopicForMessages(id, msgs)
+		if err != nil {
+			return t, err
+		}
+		if main != nil {
+			summary := threadSummary(*main, false)
+			t.MainTopic = &summary
+		}
+		topics, err := l.a.ChatTopicsForMessages(id, msgs)
 		if err != nil {
 			return DMThread{}, err
 		}
@@ -463,6 +471,9 @@ func (l *Live) DM(id string) (DMThread, error) {
 				dm.Actions = append(dm.Actions, DoContinue)
 			}
 			t.Messages = append(t.Messages, dm)
+			if t.MainTopic != nil && dm.Unread && dm.Topic == "" && dm.TopicEvent == nil && dm.Event == "" {
+				t.MainTopic.Unread++
+			}
 		}
 		linkReplies(msgs, t.Messages)
 		if t.Agents, err = l.agentViews(id, people, msgs); err != nil {

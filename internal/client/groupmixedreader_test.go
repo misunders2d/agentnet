@@ -113,3 +113,62 @@ func groupMixedReaderKeepsHumanMentionQueued(t *testing.T, missing string) {
 		}
 	}
 }
+
+// A reader's incompatible copy is independent of the selected executor.
+func TestGroupMixedReaderDoesNotBlockSelectedExecutors(t *testing.T) {
+	for _, local := range []bool{true, false} {
+		t.Run(fmt.Sprint("local=", local), func(t *testing.T) {
+			stub := installAgentStub(t)
+			w, old, packet, _ := groupTurnsFixture(t)
+			conv := packet.State.Conv
+			for _, a := range []*Agent{w.alice, w.bob, old} {
+				roomReader(t, a)
+			}
+			host := w.bob
+			if local {
+				host = w.alice
+			}
+			if err := host.SetResponder(&Responder{Harness: "agentstub", Dir: stub.dir}); err != nil {
+				t.Fatal(err)
+			}
+			if err := host.Approve(w.alice.Address); err != nil {
+				t.Fatal(err)
+			}
+			part := p6Member(t, w.alice, host, conv)
+			signCapsAfter(t, old, without(ownCaps, protocol.CapGroupHumanParticipation))
+			request, err := w.alice.AskAgent(tctx(t), part.PID, envelope.KindQuestion, "selected executor stays independent")
+			if err != nil {
+				t.Fatalf("unrelated reader blocked selected target: %v", err)
+			}
+			reply := replyAt(t, w.alice, conv, request.LID)
+			if !reply.VerifiedAgent || reply.PID != part.PID || reply.From != host.Address {
+				t.Fatalf("wrong execution outcome: %+v", reply)
+			}
+			var id, raw, state, detail string
+			if err = w.alice.store.db.QueryRow(`SELECT id,envelope,state,coalesce(error,'') FROM outbox WHERE lid=? AND recipient=?`, request.LID, old.Address).Scan(&id, &raw, &state, &detail); err != nil {
+				t.Fatal(err)
+			}
+			if state != stateConvWaiting || !strings.Contains(detail, old.Address) {
+				t.Fatalf("reader copy status confused with execution: %s %s", state, detail)
+			}
+			var attempts int
+			if err = host.store.db.QueryRow(`SELECT attempts FROM inbox WHERE id=?`, request.LID).Scan(&attempts); err != nil || attempts != 1 {
+				t.Fatalf("exact target attempts %d: %v", attempts, err)
+			}
+			roomReader(t, old)
+			eventually(t, "same reader copy delivered after capability recovery", func() bool {
+				var s string
+				_ = w.alice.store.db.QueryRow(`SELECT state FROM outbox WHERE id=?`, id).Scan(&s)
+				return s == protocol.StateDelivered
+			})
+			var after string
+			if err = w.alice.store.db.QueryRow(`SELECT envelope FROM outbox WHERE id=?`, id).Scan(&after); err != nil || after != raw {
+				t.Fatal("reader recovery changed original envelope")
+			}
+			var replica int
+			if err = old.store.db.QueryRow(`SELECT replica,attempts FROM inbox WHERE lid=? AND kind=?`, request.LID, envelope.KindQuestion).Scan(&replica, &attempts); err != nil || replica != 1 || attempts != 0 {
+				t.Fatalf("reader copy gained execution: %d %d %v", replica, attempts, err)
+			}
+		})
+	}
+}

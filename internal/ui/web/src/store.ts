@@ -65,8 +65,11 @@ export interface State {
   invite: null | { conv: string; selected?: string[]; who?: string; label?: string };  // the "Bring someone in" sheet
   section: string;                                        // the open settings section, when chosen from elsewhere
   agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
+  topicBusy: Record<string, string>;
   panel: boolean;                                         // "In this chat" (desktop panel, phone sheet)
 }
+
+export const topicChangeKey = (c: Pick<T.TopicChange, "conv" | "peer" | "id" | "root">) => JSON.stringify([c.conv || "", c.peer || "", c.root ? "root" : c.id || ""]);
 
 const draftsKey = (ws: string) => "agentnet.messenger.drafts." + ws;
 const recovery = { update: [500, 1000, 2000, 4000, 8000, 15000, 30000], missed: [1000, 3000, 8000] };
@@ -78,7 +81,8 @@ export class Store {
   private state: State;
   private subs = new Set<() => void>();
   private stopListen: (() => void) | null = null;
-  private loading = false;
+  private refresh: Promise<void> | null = null;
+  private topicChanges = new Map<string, Promise<{ note: string } | undefined>>();
   private again = false;
   private recovering = false;
   private refreshed = new Set<string>(); // conversations already asked about this open
@@ -97,7 +101,7 @@ export class Store {
     });
     this.state = {
       tab: "chats", overview: null, open: null, pending: null, views: {}, dm: null, thread: null, typing: null, invitations: [],
-      conn: "loading", version: "", newVersion: "", drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, panel: false, section: "", agentNames: {},
+      conn: "loading", version: "", newVersion: "", drafts: this.loadDrafts(), toasts: [], loadError: "", invite: null, topicBusy: {}, panel: false, section: "", agentNames: {},
     };
   }
 
@@ -137,13 +141,40 @@ export class Store {
 
   // refetch loads what is shown once per burst of changes: changes that
   // arrive while it loads cause one more load, not one each.
-  async refetch() {
-    if (this.loading) { this.again = true; return; }
-    this.loading = true;
-    try {
-      do { this.again = false; await this.reload(false); } while (this.again && this.alive);
-    } catch { /* the next change, or the person, tries again */ }
-    this.loading = false;
+  refetch(): Promise<void> {
+    this.again = true;
+    if (!this.refresh) this.refresh = (async () => {
+      try {
+        do { this.again = false; await this.reload(false); } while (this.again && this.alive);
+      } catch { /* the next change, or the person, tries again */ }
+      finally { this.refresh = null; }
+    })();
+    return this.refresh;
+  }
+
+  // One exact topic action stays busy through its view refresh. Multiple
+  // controls cannot enqueue duplicate lifecycle records against a stale view.
+  changeTopic(what: Parameters<Api["changeTopic"]>[0], c: T.TopicChange) {
+    const key = topicChangeKey(c);
+    const pending = this.topicChanges.get(key);
+    if (pending) return pending;
+    this.set({ topicBusy: { ...this.state.topicBusy, [key]: what } });
+    const work = (async () => {
+      try {
+        const result = await this.api.changeTopic(what, c);
+        await this.refetch();
+        return result;
+      } catch (e) {
+        if (errorText(e) !== "stale or disconnected workspace") this.toast(errorText(e), "error");
+        return undefined;
+      } finally {
+        this.topicChanges.delete(key);
+        const topicBusy = { ...this.state.topicBusy }; delete topicBusy[key];
+        this.set({ topicBusy });
+      }
+    })();
+    this.topicChanges.set(key, work);
+    return work;
   }
 
   private async reload(first: boolean) {
@@ -401,7 +432,7 @@ export class Store {
           for (const a of c.agents || []) next[a.record.id] = a.record.label;
         } catch { /* names stay as words from addresses */ }
       }
-      this.set({ agentNames: next });
+      if (Object.keys(next).some(id => this.state.agentNames[id] !== next[id])) this.set({ agentNames: next });
     } finally { this.namesLoading = false; }
   }
 

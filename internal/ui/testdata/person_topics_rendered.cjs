@@ -42,9 +42,10 @@ const host={version:1,platform:'daemon',workspace:{id:'r4-fictional',name:'Ficti
  if(url.pathname==='/api/remind'){const m=views[ids.main].messages.find(m=>m.id===body.id);if(!m)throw Error('Exact stored message required');const r={message:m.id,conv:ids.main,from:m.from,title:m.body,due:new Date(body.due*1000).toISOString(),overdue:false};overview.reminders=overview.reminders.filter(x=>x.message!==m.id).concat(r);localStorage.setItem('fictional-reminders',JSON.stringify(overview.reminders));changed?.({type:'change',seq:++overview.seq});return{note:'Fictional reminder stored.'};}
  if(url.pathname==='/api/overview')return structuredClone(overview);
  if(${process.env.AGENTNET_TOPIC_UNREAD==='1'}&&url.pathname==='/api/act'&&body.do==='read'){if(fixture.failRead)throw Error('Fictional read acknowledgement unavailable');for(const v of Object.values(views))for(const m of v.messages)if(body.ids.includes(m.id))m.unread=false;unreadCounts();changed?.({type:'change',seq:++overview.seq});return{note:'Read.'};}
- if(url.pathname==='/api/dm'){const id=url.searchParams.get('id');if(id===fixture.delay){fixture.delay='';await new Promise(resolve=>release=resolve);}if(!views[id])throw Error('Unknown fictional root');return structuredClone(views[id]);}
+ if(url.pathname==='/api/dm'){const id=url.searchParams.get('id');if(id===ids.other&&fixture.holdReopenRead){fixture.reopenReadWaiting=true;await new Promise(resolve=>fixture.finishReopenRead=()=>{fixture.holdReopenRead=false;resolve();});}if(id===fixture.delay){fixture.delay='';await new Promise(resolve=>release=resolve);}if(!views[id])throw Error('Unknown fictional root');return structuredClone(views[id]);}
  if(url.pathname==='/api/dm/send'){const view=views[body.conv];const m=msg(body.id,body.body,{dir:'out',from:me.address,topic:body.topic||'',reply_to:body.reply_to,at:new Date().toISOString()});view.messages.push(m);overview.dms=overview.dms.map(d=>d.id===view.id?summary(view):d);changed?.({type:'change',seq:++overview.seq});return{id:m.id,lid:m.id,state:'delivered'};}
  if(url.pathname==='/api/topics'){const rows=(views[url.searchParams.get('conv')]?.topics||[]).filter(t=>!url.searchParams.get('state')||t.state===url.searchParams.get('state'));return{topics:structuredClone(rows),matched:rows.length};}
+ if(${process.env.AGENTNET_TOPIC_REOPEN==='1'}&&url.pathname==='/api/topic/reopen'){if(body.conv!==ids.other||body.id!==otherNative||body.count!==1)throw Error('Wrong exact reopen target');await new Promise(resolve=>fixture.finishReopen=resolve);views[ids.other].topics[0].state='active';fixture.holdReopenRead=true;return{note:'Reopened'};}
  if(url.pathname.startsWith('/api/topic/')){const view=views[body.conv],ids=body.ids||[body.id];for(const id of ids){const t=view.topics.find(t=>t.id===id);if(t)t.state=url.pathname.endsWith('/done')?'done':url.pathname.endsWith('/archive')?'archived':'active';}changed?.({type:'change',seq:++overview.seq});return{note:'Fictional topic changed.'};}
  if(url.pathname==='/api/message/react')return{note:'Fictional reaction recorded.'};
  if(p.includes('/groups/invitations'))return[];
@@ -83,6 +84,21 @@ const server=http.createServer((req,res)=>{
    if(skin==='comic')await page.getByRole('list',{name:'Chats',exact:true}).getByRole('button',{name:/Casey/}).first().click();
    else if(skin==='classic')await page.locator('.contact-item').getByRole('button',{name:/Casey/}).first().click();
    else await page.locator('.zoom-content').getByRole('button',{name:/Casey/}).first().click();
+   if(process.env.AGENTNET_TOPIC_REOPEN==='1'){
+    await all().click();await list().getByRole('button',{name:/^Archived(?:\s|$)/}).click();await list().getByRole('button',{name:/Archived details/}).click();
+    const reopen=page.getByRole('button',{name:'Reopen',exact:true});await reopen.waitFor();
+    await reopen.evaluate(button=>{button.click();button.click();});
+    await page.waitForFunction(()=>typeof fixture.finishReopen==='function');
+    const busy=page.getByRole('button',{name:'Reopening…',exact:true});assert.equal(await busy.isDisabled(),true);
+    const calls=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/topic/reopen').length);
+    assert.equal(await calls(),1);await page.evaluate(()=>fixture.tick());assert.equal(await busy.isDisabled(),true);
+    await page.evaluate(()=>fixture.finishReopen());await page.waitForFunction(()=>fixture.reopenReadWaiting);
+    assert.equal(await busy.isDisabled(),true);await busy.evaluate(button=>button.click());assert.equal(await calls(),1);
+    await page.evaluate(()=>fixture.finishReopenRead());await busy.waitFor({state:'hidden'});
+    assert.equal(await calls(),1);assert.equal(await page.evaluate(()=>fixture.views[fixture.ids.other].topics[0].state),'active');
+    assert.equal(await page.evaluate(()=>fixture.requests.some(r=>['/api/act','/api/dm/send'].includes(r.path))),false);
+    assert.deepEqual(errors,[]);await context.close();continue;
+   }
    if(process.env.AGENTNET_PREVIEW_ROUTE==='1'){
     const exact=(id,text)=>skin==='comic'?page.locator('[data-mid="'+id+'"]'):skin==='classic'?page.locator('#m-'+id):page.locator('.zoom-message').filter({hasText:text});
     await exact('other-native','Archived detail').waitFor();

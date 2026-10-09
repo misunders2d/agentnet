@@ -403,7 +403,7 @@ func (a *Agent) RoomReply(cause, request string) (*ConvMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	msgs, err := a.ConversationMessages(conv)
+	msgs, err := a.roomReplyMessages(conv, req.id)
 	if err != nil {
 		return nil, err
 	}
@@ -454,6 +454,25 @@ func (a *Agent) RoomReply(cause, request string) (*ConvMessage, error) {
 		return nil, errors.New("requested agent membership ended")
 	}
 	return nil, nil
+}
+
+// Waiting for one exact reply must not repeatedly decorate every unrelated
+// turn in the room. This is only a negative lookup: candidates still go through
+// ConversationMessages and RoomReply's complete attribution/scope checks.
+func (a *Agent) roomReplyMessages(conv, request string) ([]ConvMessage, error) {
+	var candidate bool
+	err := a.store.db.QueryRow(`SELECT EXISTS(
+ SELECT 1 FROM inbox WHERE conv=? AND reply_to=? AND kind IN ('answer','result')
+ UNION ALL SELECT 1 FROM outbox WHERE conv=? AND reply_to=? AND kind IN ('answer','result')
+ UNION ALL SELECT 1 FROM inbox WHERE conv=? AND ref_id=? AND sub='status'
+  AND CASE WHEN json_valid(body) THEN json_extract(body,'$.state') END IN ('declined','cancelled','failed','interrupted','not_run','needs_human')
+ UNION ALL SELECT 1 FROM outbox WHERE conv=? AND ref_id=? AND sub='status'
+  AND CASE WHEN json_valid(body) THEN json_extract(body,'$.state') END IN ('declined','cancelled','failed','interrupted','not_run','needs_human')
+)`, conv, request, conv, request, conv, request, conv, request).Scan(&candidate)
+	if err != nil || !candidate {
+		return nil, err
+	}
+	return a.ConversationMessages(conv)
 }
 
 func roomPromptName(relation string, p PersonInfo) string {

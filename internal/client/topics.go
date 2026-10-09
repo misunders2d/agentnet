@@ -122,12 +122,20 @@ func topicOpen(r threadRow, replied bool) bool {
 	switch {
 	case r.notice:
 		return r.state == stateNeedHuman // an open review notice
-	case r.in:
+	case r.in || r.localJob:
 		// An interrupted request waits for the person to run it again or
 		// close it (reviewStates): open, like one held for them.
 		return !r.selected && (topicOpenIn[r.state] || r.state == stateInterrupt && (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask))
 	}
-	return (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !replied && !topicUndelivered[r.state]
+	return (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !replied && !topicUndelivered[r.state] && !topicExecutionClosed(r.execState)
+}
+
+func topicExecutionClosed(state string) bool {
+	switch state {
+	case "done", "answered", "failed", "timeout", "cancelled", "stopped", "declined", "resolved", "not_run", "proposal":
+		return true
+	}
+	return false // interrupted and needs_human still require an explicit decision
 }
 
 // pendingTopicRows names the exact rows that keep a topic open. It is derived

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconBolt, IconCheck, IconClock, IconFileText, IconLock, IconPlayerStop, IconRefresh, IconShieldCheck, IconUser, IconEye, IconSparkles, IconArrowBackUp } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useAgentNames, useApp } from "../context";
-import { deliveryWord, deviceKind, personName, timeOf } from "../model";
+import { deliveryWord, deviceKind, firstLine, personName, timeOf } from "../model";
 import { useOwned } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
@@ -21,13 +21,31 @@ import { focusComposer } from "./Composer.focus";
 import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
 
-export function ApprovalCard({ message, dm, thread }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null }) {
+export function ApprovalCard({ message, dm, thread, compact, content }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null; compact?: boolean; content?: ReactNode }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const names = useAgentNames();
   if ((message.actions || []).includes("do_it")) return <ProposalConfirmation m={message}/>;
   const phase = phaseOf(message);
-  if (phase) return <OwnerCard m={message} dm={dm} thread={thread} o={o} names={names} phase={phase} />;
+  if (phase) {
+    const card = <OwnerCard m={message} dm={dm} thread={thread} o={o} names={names} phase={phase} />;
+    if (compact || phase === "stopped") {
+      const agent = myAgent(message, names, o, dm);
+      const state = message.dir === "in" ? message.state : message.exec?.state;
+      const label = phase === "stopped" ? (state === "cancelled" ? "Stopped" : state === "interrupted" ? "Interrupted" : "Didn’t finish")
+        : phase === "running" ? "Working" : phase === "decide" ? "Needs your OK" : "Needs you";
+      return <details key={message.id + ":" + phase} data-request-disclosure data-terminal-request={phase === "stopped" || undefined}
+        className="w-full rounded-xl border border-outline/20 bg-surface">
+        <summary className="min-h-11 cursor-pointer px-3 py-2.5 text-[14px]">
+          <span className="font-semibold">{agent.name} · {label}</span>
+          <span className="ml-2 text-[13px] text-muted">Show details</span>
+          <span className="block truncate text-[13px] text-text-2">{firstLine(requestText(message), 100)}</span>
+        </summary>
+        <div className="p-2">{content}{card}</div>
+      </details>;
+    }
+    return card;
+  }
   if (waitsElsewhere(message)) return <WaitingLine m={message} o={o} />;
   return null;
 }

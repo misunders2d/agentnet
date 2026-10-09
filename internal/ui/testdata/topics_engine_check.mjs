@@ -5,6 +5,7 @@
 // changes as the daemon does. Real Engine over a memory store, no network.
 // stdin: {vectors, constants} from topics_browser_test.go.
 import assert from 'node:assert/strict';
+import * as wire from '../static/wire.mjs';
 import { Engine, memoryStore, deriveTopic, TOPICS, chatTopicAssignments, summarizeChatTopics } from '../static/engine.mjs';
 
 let checks = 0;
@@ -48,6 +49,65 @@ for (const room of [false,true]) {
   await e.askAgent({pid:'participant',kind:'question',body:'Please finish',topic:'flow'});
   same(sent.reply_to,'previous-answer','agent request retains logical topic parent, room='+room);
   same(sent.target.address,'bob/desk','topic parent never changes the execution target');
+}
+
+// Persisted, admitted executor states settle conversation Pending after reload.
+{
+ const st=memoryStore(),conv='a'.repeat(64),topic='b'.repeat(32),fp='11111111-22222222-33333333-44444444',hostFP='aaaaaaaa-bbbbbbbb-cccccccc-dddddddd';
+ const fresh=()=>{const e=new Engine({store:st,base:'https://synthetic.invalid',fetch:async()=>{throw Error('unexpected network')},now:()=>10000});e.address='own/phone';e.fp=fp;return e;};
+ let e=fresh(),seq=10;
+ const ids=['1'.repeat(32),'2'.repeat(32),'3'.repeat(32)];
+ await st.write(ids.map((id,i)=>({s:'outbox',k:id,v:{id,lid:id,conv,to:'peer/desk',state:'delivered',kind:'task',body:'retained request',topic,ts:i+1,at:(i+1)*1000,target:{address:'peer/desk',fingerprint:hostFP}}})));
+ const status=async(id,state,n,key=fp,host='peer/desk')=>{
+  const copy=(++seq).toString(16).padStart(32,'0');
+  return e.admitControl({v:3,conv,lid:copy,kind:'message',sub:wire.SubStatus,body:JSON.stringify({state,n,at:5,attempt:1}),ref:{id,fingerprint:key}}, {id:copy,from:host,to:e.address},{fingerprint:hostFP});
+ };
+ const pending=async(want)=>{const topics=await e.chatTopics(conv);same(topics[0].pending_ids||[],want,'admitted status drives pending');};
+ await e.loadErased();await pending(ids);
+ await refuses(()=>status(ids[0],'resolved',2,fp,'other/desk'),/./,'wrong host cannot settle request');
+ await refuses(()=>status(ids[0],'resolved',2,hostFP),/./,'wrong requester key cannot settle request');
+ await st.write(await status(ids[0],'resolved',2));await st.write(await status(ids[0],'running',1));
+ await st.write(await status(ids[1],'cancelled',3));await st.write(await status(ids[2],'interrupted',4));
+ await pending([ids[2]]);
+ e=fresh();await e.loadErased();await pending([ids[2]]);
+ await st.write(await status(ids[2],'needs_human',5));await pending([ids[2]]);
+ await st.write(await status(ids[2],'stopped',6));await pending([]);
+ const unverified={...await st.get('outbox',ids[0]),id:'9'.repeat(32),lid:'9'.repeat(32),exec:{state:'answered'}};
+ await st.write([{s:'outbox',k:unverified.id,v:unverified}]);await pending([unverified.id]);
+}
+
+// Main-flow preferences never promote, reassign or erase native sibling topics.
+{
+ const st=memoryStore(),conv='d'.repeat(64),fp='11111111-22222222-33333333-44444444',peerFP='aaaaaaaa-bbbbbbbb-cccccccc-dddddddd';
+ const e=new Engine({store:st,base:'https://synthetic.invalid',now:()=>100000,fetch:async()=>{throw Error('Main preferences must not request transport')}});
+ e.address='own/phone';e.fp=fp;e.me={person:'1'.repeat(32),devices:[]};
+ const id=n=>n.toString(16).padStart(32,'0');
+ const row=(n,v={})=>({v:2,id:id(n),lid:id(n),conv,from:'peer/desk',fp:peerFP,kind:'message',body:'turn '+n,at:n*1000,ts:n,read:false,...v});
+ const main=row(1),reply=row(2,{reply_to:main.id}),seed=row(3),child=row(4,{reply_to:seed.id}),promotion=row(5,{topic:seed.lid,topic_event:{action:'create',seen:[]}}),native=row(6,{topic:id(60)}),control=row(7,{sub:'event',control:true,body:'authority survives'}),history=row(8,{fp:'',claimed_key:peerFP,history:true,replica:true,read:true});
+ await st.write([{s:'convs',k:conv,v:{id:conv,root:'retained root'}},...[main,reply,seed,child,promotion,native,control,history].map(v=>({s:'inbox',k:v.id,v}))]);await e.loadErased();
+ const summary=async()=>e.chatTopicSummaries(conv);
+ let v=await summary();same(v.main_topic.count,3,'Main contains only unassigned ordinary originals');same(v.topics.map(t=>t.count).sort(),[1,2],'full assignments retain promoted reply chain');
+ const change=(what,body={})=>e.changeTopic(what,{conv,root:true,...body});
+ for(const body of [{id:seed.id},{ids:[seed.id]},{peer:'peer/desk'}])await refuses(()=>change('delete',body),/invalid|Invalid/,'root mixed identity refused before writes');
+ for(const body of [{ids:{}},{count:false},{root:'true'},{unknown:true}])await refuses(()=>change('delete',body),/Bad request/,'malformed Main change rejected');
+ await refuses(()=>change('done'),/topic|Topic|action|Invalid/,'Main never creates shared done facts');
+ await change('rename',{title:'Private Main'});v=await summary();check(v.main_topic.title==='Private Main'&&v.main_topic.renamed,'private Main title projected');
+ await change('archive',{count:3});same((await summary()).main_topic.state,'archived','Main archive persisted');
+ await change('reopen',{count:3});same((await summary()).main_topic.state,'active','private reopen without signed topic');
+ await change('rename',{title:''});same((await summary()).main_topic.title,main.body,'reset automatic name');
+ const pending=row(9,{kind:'task',state:'held'}),queued=row(10,{to:'peer/desk',from:undefined,fp:undefined,state:'queued'});
+ await st.write([{s:'inbox',k:pending.id,v:pending},{s:'outbox',k:queued.id,v:queued}]);
+ check((await summary()).main_topic.pending_ids.includes(pending.id),'Main pending names exact request');
+ await change('archive');await change('delete');
+ v=await summary();check(!v.main_topic,'deleted Main hidden');same(v.topics.map(t=>t.count).sort(),[1,2],'delete leaves native and promoted chains');
+ same((await st.all('erased')).map(r=>r.lid).sort(),[main,reply,history,pending,queued].map(r=>r.lid).sort(),'delete ledger names only exact Main turns');
+ for(const r of [seed,child,promotion,native,control])same((await st.get('inbox',r.id)).body,r.body,'sibling/authority preserved '+r.id);
+ for(const r of [main,reply,history])same((await st.get('inbox',r.id)).body,'','Main plaintext erased '+r.id);
+ same((await st.get('inbox',pending.id)).body,pending.body,'unfinished task source retained');same((await st.get('outbox',queued.id)).body,queued.body,'queued copy source retained');
+ same((await st.get('convs',conv)).root,'retained root','root/audience unchanged');
+ same(e.rowName({...history,history:false}).key,'','unadmitted claimed key cannot name deletion');
+ const restarted=new Engine({store:st,base:e.base,now:()=>100000});restarted.address=e.address;restarted.fp=fp;restarted.me=e.me;await restarted.loadErased();check(!(await restarted.chatTopicSummaries(conv)).main_topic,'restart keeps Main erased');
+ const fresh=row(11);await st.write([{s:'inbox',k:fresh.id,v:fresh}]);v=await restarted.chatTopicSummaries(conv);check(v.main_topic.state==='active'&&v.main_topic.unread===1,'new Main message remains active and unread after archived deletion');
 }
 
 // 3. Routes, on a browser device holding many topics with one agent.

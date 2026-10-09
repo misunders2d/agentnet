@@ -1,5 +1,13 @@
 # Room v1 (`rm1`): guests and agents as room participants
 
+> October 9, 2026 owner correction (MEL-504, v0.8.13): questions and tasks
+> inherit native tools, skills, sandbox and permissions unchanged. AgentNet
+> removes injected editing/tool exclusions, read-only/approval overrides and
+> blanket background CLI bans. Native permissions, request admission, task
+> acceptance, exact reply bindings and no-replay checks remain. Older preset
+> tables and live traces below are historical evidence, not current policy.
+
+
 Status: plan against HEAD 3372f48 (v0.6.2), covering D1–D5 and D8. D6 is UI-only. Every `file:line` was re-read at HEAD.
 
 Owner decisions (Sergey, 2026-10-03, via Telegram; all approved, D2 refined, D6 explained and accepted):

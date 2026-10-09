@@ -42,9 +42,9 @@ func TestRunArgsGolden(t *testing.T) {
 		got, want []string
 	}{
 		{"claude question", argv(claude.question, question, claude, false),
-			[]string{"-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "dontAsk", "--disallowedTools", "Edit,Write,NotebookEdit", "--add-dir", in}},
+			[]string{"-p", "--output-format", "text", "--no-session-persistence", "--add-dir", in}},
 		{"claude question without files", argv(claude.question, none, claude, false),
-			[]string{"-p", "--output-format", "text", "--no-session-persistence", "--permission-mode", "dontAsk", "--disallowedTools", "Edit,Write,NotebookEdit"}},
+			[]string{"-p", "--output-format", "text", "--no-session-persistence"}},
 		{"claude task", argv(claude.task, task, claude, false),
 			withOut("-p", "--output-format", "text", "--no-session-persistence", "--add-dir", in)},
 		{"claude task without received files", argv(claude.task, outOnly, claude, false),
@@ -52,13 +52,13 @@ func TestRunArgsGolden(t *testing.T) {
 		{"claude task resumed", argv(resumeArgs(claude, "task", claude.task, "S"), task, claude, true),
 			withOut("-p", "--output-format", "text", "--resume", "S", "--add-dir", in)},
 		{"codex question", argv(codex.question, question, codex, false),
-			[]string{"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never", "-c", `approval_policy="never"`}},
+			[]string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"}},
 		{"codex task", argv(codex.task, task, codex, false),
 			withOut("exec", "--ephemeral", "--skip-git-repo-check", "--color", "never")},
 		{"codex task resumed", argv(resumeArgs(codex, "task", codex.task, "T"), task, codex, true),
 			[]string{"exec", "resume", "T", "--json", "--skip-git-repo-check"}},
 		{"pi question", argv(pi.question, question, pi, false),
-			[]string{"-p", "--no-session", "--exclude-tools", "bash,edit,write,powershell"}},
+			[]string{"-p", "--no-session"}},
 		{"pi task", argv(pi.task, task, pi, false), []string{"-p", "--no-session"}},
 	} {
 		if !slices.Equal(c.got, c.want) {

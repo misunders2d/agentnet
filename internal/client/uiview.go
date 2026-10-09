@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -64,6 +65,8 @@ type ThreadSummary struct {
 // threadRow is what a summary needs to know about one message.
 type threadRow struct {
 	link
+	localJob  bool   // local execution state without changing reply direction
+	execState string // exact target's admitted execution report
 	in        bool
 	kind      string
 	state     string
@@ -232,17 +235,19 @@ const (
 // Resolve), an invitation by its PID (AcceptParticipation,
 // DeclineParticipation), as anywhere else.
 type ConvReview struct {
-	Reason string    `json:"reason"`
-	Conv   string    `json:"conv"`
-	PID    string    `json:"pid,omitempty"`
-	ID     string    `json:"id,omitempty"` // the request or turn; an invitation has none (its PID names it)
-	From   string    `json:"from"`         // the asking or inviting device
-	Kind   string    `json:"kind,omitempty"`
-	State  string    `json:"state,omitempty"`
-	Body   string    `json:"body"`             // the request or turn, or the invitation's note
-	Detail string    `json:"detail,omitempty"` // why it waits, as recorded here
-	At     time.Time `json:"at"`
-	Unread bool      `json:"unread,omitempty"`
+	Target *envelope.Target `json:"target,omitempty"`
+	Role   string           `json:"role,omitempty"`
+	Reason string           `json:"reason"`
+	Conv   string           `json:"conv"`
+	PID    string           `json:"pid,omitempty"`
+	ID     string           `json:"id,omitempty"` // the request or turn; an invitation has none (its PID names it)
+	From   string           `json:"from"`         // the asking or inviting device
+	Kind   string           `json:"kind,omitempty"`
+	State  string           `json:"state,omitempty"`
+	Body   string           `json:"body"`             // the request or turn, or the invitation's note
+	Detail string           `json:"detail,omitempty"` // why it waits, as recorded here
+	At     time.Time        `json:"at"`
+	Unread bool             `json:"unread,omitempty"`
 }
 
 // ReviewPage is what waits for the person, as the page lists it: device
@@ -326,7 +331,7 @@ func (a *Agent) stillDecidable(requests []ConvReview) []ConvReview {
 // convReview lists the received conversation rows (alias i) matching where,
 // oldest first; selected local receiver input is never among them.
 func (s *store) convReview(where string, args ...any) ([]ConvReview, error) {
-	rows, err := s.db.Query(`SELECT i.id, i.conv, coalesce(i.pid, ''), i.sender, i.kind, i.state, i.body, coalesce(i.detail, ''), i.received_at, i.read_at IS NULL
+	rows, err := s.db.Query(`SELECT i.id, i.conv, coalesce(i.pid, ''), i.sender, i.kind, i.state, i.body, coalesce(i.detail, ''), i.received_at, i.read_at IS NULL, coalesce(i.target, '')
 		FROM inbox i WHERE i.conv IS NOT NULL AND `+where+` AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs ri WHERE ri.inbox_id = i.id)
 		ORDER BY i.received_at, i.id`, args...)
 	if err != nil {
@@ -337,8 +342,14 @@ func (s *store) convReview(where string, args ...any) ([]ConvReview, error) {
 	for rows.Next() {
 		var r ConvReview
 		var at int64
-		if err := rows.Scan(&r.ID, &r.Conv, &r.PID, &r.From, &r.Kind, &r.State, &r.Body, &r.Detail, &at, &r.Unread); err != nil {
+		var target string
+		if err := rows.Scan(&r.ID, &r.Conv, &r.PID, &r.From, &r.Kind, &r.State, &r.Body, &r.Detail, &at, &r.Unread, &target); err != nil {
 			return nil, err
+		}
+		if target != "" {
+			if err := json.Unmarshal([]byte(target), &r.Target); err != nil {
+				return nil, err
+			}
 		}
 		r.At = time.Unix(at, 0)
 		switch r.State {
@@ -397,11 +408,15 @@ func (a *Agent) hostInvites() ([]ConvReview, error) {
 			a.Logf("needs-you: invitation %s of %s left out: %v", n.pid, n.conv, err)
 			continue
 		}
-		if !info.HostHere || info.State != PartInvited || info.Role == protocol.RoleHuman {
+		if !info.HostHere || info.State != PartInvited || info.Role == protocol.RoleHuman && info.Held != 0 {
 			continue
 		}
-		out = append(out, ConvReview{Reason: ReviewInvite, Conv: info.Conv, PID: info.PID, From: info.Inviter.Address,
-			Body: info.Note, Detail: info.Inviter.Label + " invited your agent. Nothing runs unless you accept.", At: time.Unix(n.at, 0)})
+		detail := info.Inviter.Label + " invited your agent. Nothing runs unless you accept."
+		if info.Role == protocol.RoleHuman {
+			detail = info.Inviter.Label + " invited you to join this conversation as a guest."
+		}
+		out = append(out, ConvReview{Reason: ReviewInvite, Role: info.Role, Conv: info.Conv, PID: info.PID, From: info.Inviter.Address,
+			Body: info.Note, Detail: detail, At: time.Unix(n.at, 0)})
 	}
 	return out, nil
 }

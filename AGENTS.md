@@ -26,8 +26,9 @@ program, `agentnet`, that is both the laptop client and the Hub.
   request is the signed ping acknowledgement.
 - **Questions** are answered automatically only for approved senders, by the
   recipient's chosen harness with the recipient's own setup: their skills,
-  plugins, MCP servers and permissions, minus editing tools and anything
-  needing a new approval (see docs/revival/M4.md). The recipient's own
+  plugins, MCP servers and permissions unchanged (see docs/revival/M4.md).
+  AgentNet injects no tool exclusions, sandbox or approval overrides and no
+  blanket CLI command restrictions on background runs. The recipient's own
   permission grants stay the authority: tools they already allow keep their
   effects, and AgentNet must not claim otherwise. Never blanket-disable skills
   or tools, or run questions with an empty or substitute configuration: the

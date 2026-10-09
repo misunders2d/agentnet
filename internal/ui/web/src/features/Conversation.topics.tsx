@@ -13,7 +13,7 @@ import {
 import type { T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
 import { TOPICS, chatList, dayLabel, firstLine, newestFirst, timeOf, topicMark, topicOf, type Topic } from "../model";
-import { useStore } from "../store";
+import { topicChangeKey, useStore } from "../store";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
@@ -220,6 +220,7 @@ export function TopicBar({ thread,dm }: { thread?: T.Thread;dm?:T.DMThread }) {
 export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: ReactNode; onAll: () => void }) {
   const store = useApp();
   const portal = usePortal();
+  const busy = useStore(store, s => s.topicBusy[topicChangeKey(topic)]);
   const [rename, setRename] = useState(false);
   const [pending, setPending] = useState(false);
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
@@ -231,10 +232,10 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
           <Menu.Positioner side="bottom" align="start" sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {!!topic.pendingIDs?.length && <Menu.Item className={item} onClick={() => setPending(true)}><IconClock size={20} aria-hidden="true" />Show pending requests ({topic.pendingIDs.length})</Menu.Item>}
-              <Menu.Item className={item} onClick={() => setRename(true)}><IconPencil size={20} aria-hidden="true" />Rename…</Menu.Item>
+              <Menu.Item disabled={!!busy} className={item} onClick={() => setRename(true)}><IconPencil size={20} aria-hidden="true" />Rename…</Menu.Item>
               {topic.state === "active"
-                ? <Menu.Item className={item} onClick={() => void changeTopic(store, "done", topic)}><IconCircleCheck size={20} aria-hidden="true" />Mark done</Menu.Item>
-                : <Menu.Item className={item} onClick={() => void changeTopic(store, "reopen", topic)}><IconRotateClockwise size={20} aria-hidden="true" />Reopen</Menu.Item>}
+                ? <Menu.Item disabled={!!busy} className={item} onClick={() => void changeTopic(store, topic.root ? "archive" : "done", topic)}><IconCircleCheck size={20} aria-hidden="true" />{topic.root ? "Archive" : "Mark done"}</Menu.Item>
+                : <Menu.Item disabled={!!busy} className={item} onClick={() => void changeTopic(store, "reopen", topic)}><IconRotateClockwise size={20} aria-hidden="true" />Reopen</Menu.Item>}
               <Menu.Separator className="mx-2 my-1 h-px bg-hairline" />
               <Menu.Item className={item} onClick={onAll}><IconListSearch size={20} aria-hidden="true" />All topics</Menu.Item>
             </Menu.Popup>
@@ -270,9 +271,9 @@ function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChan
 }
 
 /** changeTopic sends one of your changes to a topic and says what it did. */
-export function changeTopic(store: ReturnType<typeof useApp>, what: "rename" | "done" | "reopen", t: Topic, title?: string) {
+export function changeTopic(store: ReturnType<typeof useApp>, what: "rename" | "done" | "reopen" | "archive", t: Topic, title?: string) {
   // count: the messages this view showed, so a mark never covers one you have not seen.
-  return store.run((a) => a.changeTopic(what, { peer: t.peer, conv:t.conv,id: t.id, ...(what === "rename" ? { title: title || "" } : { count: t.count }) })).then((r) => {
+  return store.changeTopic(what, { ...(t.root ? {root:true} : {}), peer: t.peer, conv:t.conv,id: t.id, ...(what === "rename" ? { title: title || "" } : { count: t.count }) }).then((r) => {
     if (r?.note) store.toast(r.note, "ok");
     return !!r;
   });
@@ -318,6 +319,7 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
   const draft=useStore(store,s=>s.drafts[ctx.conv]);
   const current=ctx.dm?.topics?.find(t=>t.id===draft?.topic);
   const t = current?topicOf(current):ctx.thread?.topic ? topicOf(ctx.thread.topic) : null;
+  const busy = useStore(store, s => t ? s.topicBusy[topicChangeKey(t)] : undefined);
   if (!t || t.state === "active" || !ctx.overview?.topic_list) return null;
   const agent = t.concludedBy && t.concludedBy === ctx.overview?.me.address ? "Your agent" : threadAgentName(ctx);
   const archived = t.state === "archived";
@@ -338,7 +340,7 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
         </p>
       )}
       <div className="mt-3">
-        <Button size="sm" variant="outline" icon={<IconRotateClockwise size={18} aria-hidden="true" />} onClick={() => void changeTopic(store, "reopen", t)}>Reopen</Button>
+        <Button size="sm" variant="outline" disabled={!!busy} aria-busy={!!busy} icon={<IconRotateClockwise size={18} aria-hidden="true" />} onClick={() => void changeTopic(store, "reopen", t)}>{busy === "reopen" ? "Reopening…" : "Reopen"}</Button>
       </div>
     </section>
   );

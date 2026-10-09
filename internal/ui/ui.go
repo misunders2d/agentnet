@@ -406,6 +406,7 @@ type LastEvent struct {
 
 // DMThread is one conversation's messages, oldest first.
 type DMThread struct {
+	MainTopic       *ThreadSummary    `json:"main_topic,omitempty"`
 	Topics          []ThreadSummary   `json:"topics,omitempty"`
 	Kind            string            `json:"kind,omitempty"`
 	Title           string            `json:"title,omitempty"`
@@ -955,6 +956,8 @@ const ReasonDeviceAdmin = "device_admin"
 // conversation. DecideOn names the host device where it is decided when
 // that is not this one (a browser runs no agent): then it is read-only.
 type ConvItem struct {
+	Target       *envelope.Target           `json:"target,omitempty"`
+	Role         string                     `json:"role,omitempty"`
 	Continuation *client.ContinuationAction `json:"continuation,omitempty"`
 	Reason       string                     `json:"reason"`
 	Conv         string                     `json:"conv"`

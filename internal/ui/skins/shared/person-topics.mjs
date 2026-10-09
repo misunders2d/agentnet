@@ -37,9 +37,9 @@ export function personTopicEntries(roots, views, main = '') {
     const count=messages ? messages.length : root.count;
     const text=m=>m?.deleted ? 'Message deleted' : m?.edited ? m.text || '' : m?.body || '';
     const body=messages ? text(messages[0]) : undefined;
-    const title=count ? body || root.title || 'Untitled topic' : 'Empty topic';
-    if(root.id !== main) entries.push({key:root.id+':',conv:root.id,topic:'',title,last:messages ? text(messages.at(-1)) : root.last || '',count,
-      unread:messages ? messages.filter(m=>m.unread).length : Math.max(0,(root.unread || 0)-topics.reduce((n,t)=>n+(t.unread || 0),0)),state:'active',guests:root.guests || 0,root});
+    const title=view?.main_topic?.title || (count ? body || root.title || 'Untitled topic' : 'Empty topic');
+    if(root.id !== main && (!view || count > 0 || !topics.length)) entries.push({key:root.id+':',conv:root.id,topic:'',title,last:messages ? text(messages.at(-1)) : root.last || '',count,
+      unread:messages ? messages.filter(m=>m.unread).length : Math.max(0,(root.unread || 0)-topics.reduce((n,t)=>n+(t.unread || 0),0)),state:view?.main_topic?.state || 'active',guests:root.guests || 0,root,main:view?.main_topic});
     for(const native of topics) entries.push({key:root.id+':'+native.id,conv:root.id,topic:native.id,title:native.title || 'Untitled topic',last:native.last || '',count:native.count,
       unread:native.unread || 0,state:native.state || 'active',guests:root.guests || 0,root,native});
   }

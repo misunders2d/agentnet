@@ -43,17 +43,23 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
  },[store,dm,rootIDs,overview?.seq,open]);
  const entries=personTopicEntries(roots,views,main);
  const current=entries.find(e=>e.conv===dm.id&&e.topic===(draft?.topic||""));
- const selectedTopic=current?.native?topicOf({...current.native,conv:current.conv}):null;
+ const selectedTopic=current?.native?topicOf({...current.native,conv:current.conv}):current?.main?{...topicOf({...current.main,conv:current.conv}),root:true}:null;
  const selectedMain=dm.id===main&&!draft?.topic&&!draft?.newTopic;
  const choose=(e:PersonTopicEntry)=>{
   setOpen(false);
   store.setDraft(e.conv,{...store.draft(e.conv),topic:e.topic||undefined,newTopic:false,replyTo:undefined});
   void store.open({kind:"dm",id:e.conv});
  };
- const flatTopics:Topic[]=entries.map(e=>e.native?{...topicOf({...e.native,conv:e.conv}),id:e.key}:{id:e.key,conv:e.conv,peer:"",title:e.title,last:e.last,lastAt:e.root.last_at||e.root.created,unread:e.unread,needsYou:0,waiting:false,pending:false,state:"active",renamed:false,count:e.count,quietSince:e.root.last_at||e.root.created});
+ const flatTopics:Topic[]=entries.map(e=>e.native?{...topicOf({...e.native,conv:e.conv}),id:e.key}:e.main?{...topicOf({...e.main,conv:e.conv}),id:e.key,root:true}:{id:e.key,conv:e.conv,peer:"",title:e.title,last:e.last,lastAt:e.root.last_at||e.root.created,unread:e.unread,needsYou:0,waiting:false,pending:false,state:"active",renamed:false,count:e.count,quietSince:e.root.last_at||e.root.created});
  const change=async(what:"delete"|"done"|"archive",ids:string[],counts:Record<string,number>)=>{
   const groups=new Map<string,{ids:string[];counts:Record<string,number>}>();
   for(const e of entries.filter(e=>e.native&&ids.includes(e.key))){const group=groups.get(e.conv)||{ids:[],counts:{}};group.ids.push(e.topic);group.counts[e.topic]=counts[e.key];groups.set(e.conv,group);}
+  const mainResults=await Promise.all(entries.filter(e=>e.main&&ids.includes(e.key)).map(async e=>{
+   if(what==="done")return undefined;
+   const result=await store.changeTopic(what,{conv:e.conv,root:true,peer:"",id:"",count:counts[e.key]});
+   if(result)try{const loaded=await store.api.dm(e.conv);setViews(current=>({...current,[e.conv]:loaded}));}catch(error){setFailed(errorText(error));}
+   return result;
+  }));
   const results=await Promise.all([...groups].map(async([conv,group])=>{
    const result=await store.run(api=>api.changeTopic(what,{conv,peer:"",id:"",...group}));
    if(!result)return undefined;
@@ -61,7 +67,7 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
    try{const loaded=await store.api.dm(conv);setViews(current=>({...current,[conv]:loaded}));}catch(error){setFailed(errorText(error));}
    return result;
   }));
-  return results.every(Boolean)?{note:results.map(r=>r!.note).join(" ")}:undefined;
+  return [...mainResults,...results].every(Boolean)?{note:[...mainResults,...results].map(r=>r!.note).join(" ")}:undefined;
  };
  const knownCount=!loading&&!failed;
  const chip="min-h-11 min-w-0 truncate rounded-full px-3 text-[14px] font-semibold stroke ";
@@ -72,7 +78,7 @@ export function PersonTopics({ dm, main, onMain }: { dm: T.DMThread; main: strin
    <Button size="sm" variant="outline" onClick={()=>setOpen(true)} aria-label={"All topics"+(knownCount?" ("+entries.length+")":"")}>{wide?"All topics"+(knownCount?" ("+entries.length+")":""):"All"+(knownCount?" "+entries.length:"")}</Button>
    <Button size="sm" variant="ghost" aria-label="New topic" aria-pressed={!!draft?.newTopic} onClick={()=>store.setDraft(dm.id,{...store.draft(dm.id),topic:undefined,newTopic:!draft?.newTopic,replyTo:undefined})}>{wide?"New topic":"+"}</Button>
   </nav>
-  <AllTopics open={open} onOpenChange={setOpen} peer="" conv={dm.id} agent={personName(dm.peer)} current={current?.key} flat={{topics:flatTopics,loading,failed,canSelect:id=>!!entries.find(e=>e.key===id)?.native,detail:id=>{const e=entries.find(e=>e.key===id)!;return e.count+" "+(e.count===1?"message":"messages")+(e.guests?" · "+e.guests+(e.guests===1?" guest":" guests"):"");},choose:id=>{const e=entries.find(e=>e.key===id);if(e)choose(e);},change}}/>
+  <AllTopics open={open} onOpenChange={setOpen} peer="" conv={dm.id} agent={personName(dm.peer)} current={current?.key} flat={{topics:flatTopics,loading,failed,canSelect:id=>!!entries.find(e=>e.key===id&&(e.native||e.main)),detail:id=>{const e=entries.find(e=>e.key===id)!;return e.count+" "+(e.count===1?"message":"messages")+(e.guests?" · "+e.guests+(e.guests===1?" guest":" guests"):"");},choose:id=>{const e=entries.find(e=>e.key===id);if(e)choose(e);},change}}/>
 
  </>;
 }

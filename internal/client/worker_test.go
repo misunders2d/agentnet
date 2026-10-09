@@ -566,53 +566,36 @@ func TestResponderSeesConfiguredDirectory(t *testing.T) {
 	}
 }
 
-// Questions keep the recipient's own harness setup (skills, plugins, MCP
-// servers, permissions) and only lose editing and new approvals: nothing
-// switches skills or tools off wholesale or swaps in an empty configuration.
+// Native permissions govern both admitted questions and accepted tasks.
 func TestQuestionPresetsKeepOwnSetup(t *testing.T) {
-	blanket := []string{"--tools", "--strict-mcp-config", "--mcp-config", "--no-tools", "--no-skills", "--ignore-user-config", "--disable", "--no-builtin-tools"}
-	for name, h := range map[string]harness{"claude": Harnesses["claude"], "codex": Harnesses["codex"], "pi": Harnesses["pi"], "omp": Harnesses["omp"]} {
-		for _, flag := range blanket {
-			if slices.Contains(h.question, flag) {
-				t.Errorf("%s question mode uses %s", name, flag)
+	prohibited := []string{"--tools", "--strict-mcp-config", "--mcp-config", "--no-tools", "--no-skills", "--ignore-user-config", "--disable", "--no-builtin-tools", "--permission-mode", "--disallowedTools", "--allowedTools", "--sandbox", "--approval-mode", "--exclude-tools", "--config", "--dangerously-bypass-approvals-and-sandbox"}
+	for name, h := range Harnesses {
+		if name != "claude" && name != "codex" && name != "pi" && name != "omp" {
+			continue
+		}
+		if !slices.Equal(h.question, h.task) {
+			t.Errorf("%s adds question policy: %v / %v", name, h.question, h.task)
+		}
+		for _, args := range [][]string{h.question, h.task, resumeArgs(h, "question", h.question, "T")} {
+			for _, flag := range prohibited {
+				if slices.Contains(args, flag) {
+					t.Errorf("%s injects %s: %v", name, flag, args)
+				}
+			}
+			for _, arg := range args {
+				if strings.Contains(arg, "sandbox_mode=") || strings.Contains(arg, "approval_policy=") {
+					t.Errorf("%s injects policy %s", name, arg)
+				}
 			}
 		}
 		if h.limits == "" {
-			t.Errorf("%s: question mode undescribed", name)
+			t.Errorf("%s permissions undescribed", name)
 		}
 	}
-	claude := strings.Join(Harnesses["claude"].question, " ")
-	if !strings.Contains(claude, "--permission-mode dontAsk") || !strings.Contains(claude, "--disallowedTools Edit,Write,NotebookEdit") {
-		t.Errorf("claude question gates: %s", claude)
-	}
-	codex := Harnesses["codex"]
-	if q := strings.Join(codex.question, " "); !strings.Contains(q, "--sandbox read-only") || !strings.Contains(q, `-c approval_policy="never"`) {
-		t.Errorf("codex question gates: %s", q)
-	}
-	// Resume keeps both gates in the form codex exec resume accepts.
-	if r := strings.Join(resumeArgs(codex, "question", codex.question, "T"), " "); !strings.Contains(r, `sandbox_mode="read-only"`) ||
-		!strings.Contains(r, `approval_policy="never"`) || strings.Contains(r, "--sandbox") {
-		t.Errorf("codex resume: %s", r)
-	}
-	// Pi: a denylist of the built-ins that change the machine, nothing
-	// else (Pi's allowlist would switch every extension tool off); tasks
-	// keep the plain preset.
-	pi := Harnesses["pi"]
-	if q := strings.Join(pi.question, " "); q != "-p --no-session --exclude-tools bash,edit,write,powershell" {
-		t.Errorf("pi question: %s", q)
-	}
-	if tk := strings.Join(pi.task, " "); tk != "-p --no-session" {
-		t.Errorf("pi task: %s", tk)
-	}
-	oldPi := harness{bin: "pi", question: []string{"-p", "--no-session", "--tools", "read,grep,find,ls"}}
-	if presetID(oldPi, "question", oldPi.question) == presetID(pi, "question", pi.question) {
-		t.Error("the new pi question preset has the same identity as the old one")
-	}
-	// Sessions started under the earlier no-tools flags are not resumed.
-	old := harness{bin: "claude", question: []string{"-p", "--output-format", "text", "--no-session-persistence",
-		"--tools", "", "--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`, "--permission-mode", "dontAsk"}}
-	if presetID(old, "question", old.question) == presetID(Harnesses["claude"], "question", Harnesses["claude"].question) {
-		t.Error("the new question preset has the same identity as the old one")
+	old := Harnesses["codex"]
+	old.question = append(append([]string{}, old.question...), "--sandbox", "read-only")
+	if presetID(old, "question", old.question) == presetID(Harnesses["codex"], "question", Harnesses["codex"].question) {
+		t.Fatal("old restricted session must not resume under changed preset")
 	}
 }
 
@@ -776,15 +759,12 @@ func TestOMPResponderQuestionAndAcceptedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, w.bob, q.ID, stateAnswered)
-	policy, err := os.ReadFile(st.log + ".policy")
-	if err != nil || string(policy) != ompQuestionPolicy {
-		t.Fatalf("question policy %q %v", policy, err)
+	if _, err := os.Stat(st.log + ".policy"); !os.IsNotExist(err) {
+		t.Fatalf("OMP received an injected policy: %v", err)
 	}
-	path, _ := os.ReadFile(st.log + ".path")
-	eventually(t, "OMP overlay removed after worker cleanup", func() bool { _, e := os.Stat(strings.TrimSpace(string(path))); return os.IsNotExist(e) })
 	log, _ := os.ReadFile(st.log)
-	if !strings.Contains(string(log), "--approval-mode always-ask") || !strings.Contains(string(log), "--extension") || strings.Contains(string(log), "--exclude-tools") || strings.Contains(string(log), "--resume") {
-		t.Fatalf("OMP question args %s", log)
+	if !strings.Contains(string(log), "--extension") || strings.Contains(string(log), "--approval-mode") || strings.Contains(string(log), "--config") || strings.Contains(string(log), "--exclude-tools") || strings.Contains(string(log), "--resume") {
+		t.Fatalf("OMP native setup changed: %s", log)
 	}
 	task, err := w.alice.SendMessage(tctx(t), Outgoing{To: w.bob.Address, Kind: envelope.KindTask, Body: "accepted work"})
 	if err != nil {

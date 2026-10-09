@@ -3,7 +3,7 @@
 // bottom (or at the message a notification or approval points to), stays
 // pinned there while you are at the bottom, and otherwise keeps your place
 // and counts what arrived below in a "new" pill.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { IconArrowDown, IconMessageCircle } from "@tabler/icons-react";
 import { useApp } from "../context";
 import { useStore } from "../store";
@@ -16,7 +16,7 @@ import { agentLabel, agentOf, ev, isRequest, isThreadMsg, threadAgentName, whoWr
 type Item =
   | { type: "day"; key: string; label: string }
   | { type: "new"; key: string }
-  | { type: "msg"; key: string; m: AnyMsg; first: boolean; last: boolean; status: boolean; compact: boolean };
+  | { type: "msg"; key: string; m: AnyMsg; first: boolean; last: boolean; status: boolean; compact: boolean; targets?: AnyMsg[] };
 
 const RUN = 5 * 60e3;
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -91,7 +91,7 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
     if (atBottom.current) { if (fresh) setFresh(0); reportSeen(); }
   };
   const down = () => { box.current?.scrollTo({ top: box.current.scrollHeight, behavior: reduced() ? "auto" : "smooth" }); setFresh(0); };
-  const jump = (id: string) => { if (box.current) flash(box.current, id, true); };
+  const jump = useCallback((id: string) => { if (box.current) flash(box.current, id, true); }, []);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -102,6 +102,12 @@ export function Timeline({ ctx, messages, focus, focusSeq, selected, onSelect, e
           {items.map((it) =>
             it.type === "day" ? <DayChip key={it.key} label={it.label} />
               : it.type === "new" ? <NewLine key={it.key} />
+                : it.targets ? <div key={it.key} data-send-group={isThreadMsg(it.m) ? undefined : it.m.send_group} className="mt-3 rounded-2xl border border-outline/20 py-2">
+                    {it.targets.map((m, i) => <MessageView key={m.id} m={m} ctx={ctx} all={messages}
+                      first={i === 0 && it.first} last={i === it.targets!.length - 1 && it.last}
+                      grouped compact={i > 0} onJump={jump}
+                      selecting={!!selected} selected={!!selected?.includes(m.id)} onSelect={onSelect} />)}
+                  </div>
                 : <MessageView key={it.key} m={it.m} ctx={ctx} all={messages} first={it.first} last={it.last} status={it.status} compact={it.compact} onJump={jump}
                     selecting={!!selected} selected={!!selected?.includes(it.m.id)} onSelect={onSelect} />)}
           {items.length > 0 && end}
@@ -131,9 +137,13 @@ function build(messages: AnyMsg[], ctx: Ctx, firstUnread?: string): Item[] {
   let lastMine = -1;
   messages.forEach((m, i) => { if (who[i]?.mine && !isRequest(m) && !m.deleted) lastMine = i; });
   messages.forEach((m, i) => {
+    if (rows[i].compact) return;
+    const targets: AnyMsg[] = [m];
+    for (let j = i + 1; j < rows.length && rows[j].compact; j++) targets.push(rows[j].m);
     if (i === 0 || !sameDay(messages[i - 1].at, m.at)) out.push({ type: "day", key: "d:" + m.at.slice(0, 10) + i, label: dayLabel(m.at) });
-    if (m.id === firstUnread) out.push({ type: "new", key: "new" });
-    out.push({ type: "msg", key: m.id, m, first: !(i > 0 && together(i - 1, i)), last: !(i + 1 < messages.length && together(i, i + 1)), status: i === lastMine, compact: rows[i].compact });
+    if (targets.some(target => target.id === firstUnread)) out.push({ type: "new", key: "new" });
+    const end = i + targets.length - 1;
+    out.push({ type: "msg", key: m.id, m, first: !(i > 0 && together(i - 1, i)), last: !(end + 1 < messages.length && together(end, end + 1)), status: i === lastMine, compact: false, ...(targets.length > 1 ? {targets} : {}) });
   });
   return out;
 }

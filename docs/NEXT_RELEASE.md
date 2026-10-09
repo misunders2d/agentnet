@@ -1,3 +1,15 @@
+# AgentNet v0.8.13 — in preparation
+
+The current performance-first candidate and exact remaining gates are in
+[V0_8_13.md](plans/V0_8_13.md); publication evidence belongs in
+[HANDOFF.md](HANDOFF.md). v0.8.12 remains the published release.
+
+The owner confirmed native agent permissions unchanged. Topic-only continuing
+access and editing proposals before confirmation are explicitly deferred to
+the following release. Historical notes below retain their original scope.
+
+---
+
 # AgentNet v0.8.10 — October 8, 2026 (UTC)
 
 [Published v0.8.10](https://github.com/misunders2d/agentnet/releases/tag/v0.8.10)

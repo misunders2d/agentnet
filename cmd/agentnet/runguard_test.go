@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -17,95 +18,7 @@ import (
 	"github.com/misunders2d/agentnet/internal/testhub"
 )
 
-const refusedText = "is not allowed inside a run AgentNet started for a request"
-
-// guardedCommands are command lines the run guard refuses, one each: every
-// send, decision, trust, participation or group change, and every command
-// that changes this installation, its person or its Hub, or reaches past
-// AgentNet (dir holds the files they would write). Each returns at once
-// even unguarded, so a broken guard fails the test rather than hanging it;
-// commands that would keep running (daemon, a2a serve, ui --demo, open) are
-// checked in TestRunGuardIsAnAllowList.
-func guardedCommands(dir string) [][]string {
-	id, person, hash := protocol.NewID(), protocol.NewID(), strings.Repeat("ab", 32)
-	return [][]string{
-		{"send", "peer/desk", "hello"},
-		{"send", "--reply-to", id, "--progress", "peer/desk", "halfway"},
-		{"reply", id, "done"},
-		{"ask", "peer/desk", "where is it?"},
-		{"task", "peer/desk", "ship it"},
-		{"do", id},
-		{"do", "--answer-wait", "1m", id},
-		{"operator", "grant", "--person", "peer/desk"},
-		{"person", "service", "--steward", "peer/desk"},
-		{"accept", id},
-		{"accept", "--always", "peer/desk"},
-		{"approve", "peer/desk"},
-		{"approve", "--tasks", "peer/desk"},
-		{"unapprove", "peer/desk"},
-		{"unapprove", "--tasks", "peer/desk"},
-		{"decline", id},
-		{"trust", "peer/desk"},
-		{"resolve", id},
-		{"cancel", id},
-		{"dm", "new", "peer/desk"},
-		{"dm", "send", id, "hello"},
-		{"dm", "send", "--task", id, "ship it"},
-		{"dm", "invite", id, "peer/desk"},
-		{"dm", "accept-agent", id},
-		{"dm", "decline-agent", id},
-		{"dm", "dismiss-agent", id},
-		{"dm", "ask-agent", id, "where is it?"},
-		{"group", "create", "Ops"},
-		{"group", "invite", id, person},
-		{"group", "accept", hash},
-		{"group", "decline", hash},
-		{"group", "retry", hash},
-		{"group", "rename", id, "Ops"},
-		{"group", "promote", id, person},
-		{"group", "demote", id, person},
-		{"group", "remove", id, person},
-		{"group", "leave", id},
-		{"group", "request-file", id, id, "0"},
-		{"team", "create", "Ops"},
-		{"team", "join", id},
-		{"team", "leave", id},
-		{"operator", "grant", "peer/desk"},
-		{"operator", "revoke", "peer/desk"},
-		{"person", "create", "Me"},
-		{"person", "rename", "Me"},
-		{"person", "service"},
-		{"person", "link"},
-		{"person", "approve", id},
-		{"person", "refuse", id},
-		{"person", "remove", "peer/desk"},
-		{"person", "admin", "peer/desk"}, // a company setting: the person's own tap
-		{"person", "unadmin", "peer/desk"},
-		{"responder", "set", "--harness", "claude", "--dir", dir},
-		{"responder", "set", "--harness", "claude", "--dir", dir, "--context", filepath.Join(dir, "secret.txt")},
-		{"responder", "off"},
-		{"review-to", "peer/desk"},
-		{"review-to", "--off"},
-		{"remind", id, "tomorrow"},
-		{"remind", "done", id},
-		{"remind", "cancel", id},
-		{"inbox"},
-		{"inbox", "--unread"},
-		{"inbox", "--review"},
-		{"cleanup"},
-		{"admin", "invite", "carol"},
-		{"admin", "revoke", "peer/desk"},
-		{"admin", "release"},
-		{"admin", "workspace", "set", "Mellanni"}, // a company setting: the person's own tap
-		{"admin", "workspace", "clear"},
-		{"ui"},
-		{"update", "--status"},
-		{"hooks", "install", "claude", "--file", filepath.Join(dir, "settings.json")},
-		{"hooks", "remove", "claude", "--file", filepath.Join(dir, "settings.json")},
-		{"join", "--agent", "second", "not-a-code"},
-		{"frobnicate"}, // a command added later is refused until it is allowed
-	}
-}
+const refusedText = "is outside this delegated reply binding"
 
 // runEnv sets the environment the worker gives a harness run (worker.go).
 func runEnv(t *testing.T, background, request, requester, binding string) {
@@ -114,178 +27,6 @@ func runEnv(t *testing.T, background, request, requester, binding string) {
 	t.Setenv(client.ProgressRequestEnv, request)
 	t.Setenv(client.ProgressPeerEnv, requester)
 	t.Setenv(replyBindingEnv, binding)
-}
-
-// homeRows renders every row of the home's database.
-func homeRows(t *testing.T, home string) string {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(home, "agent.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var tables []string
-	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		tables = append(tables, name)
-	}
-	rows.Close()
-	var b strings.Builder
-	for _, name := range tables {
-		rows, err := db.Query(`SELECT * FROM "` + name + `"`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cols, _ := rows.Columns()
-		for rows.Next() {
-			values := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range values {
-				ptrs[i] = &values[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
-				t.Fatal(err)
-			}
-			fmt.Fprintf(&b, "%s %v\n", name, values)
-		}
-		rows.Close()
-	}
-	return b.String()
-}
-
-// Inside a run every command that would send, decide or change a
-// conversation for the local user is refused, plainly and with what the run
-// can do instead, and the home is left as it was.
-func TestRunGuardRefusesInsideARun(t *testing.T) {
-	_, home := diagnosticAgent(t)
-	dir := t.TempDir()
-	runEnv(t, "1", "", "", "")
-	before := homeRows(t, home)
-	for _, args := range guardedCommands(dir) {
-		err := run(append([]string{"--home", home}, args...))
-		if err == nil || !strings.Contains(err.Error(), refusedText) || !strings.Contains(err.Error(), "in your final output") {
-			t.Errorf("%v: %v", args, err)
-		}
-		if homeRows(t, home) != before {
-			t.Fatalf("%v changed the home", args)
-		}
-	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Fatalf("a refused command wrote %v", entries)
-	}
-}
-
-// Inside a run only the commands below pass the guard: reading, help, the
-// harness's own hook (which does nothing there) and send, which sendGuard
-// decides once its flags are parsed. Everything else is refused, with no
-// arguments or with any, including a command added later.
-func TestRunGuardIsAnAllowList(t *testing.T) {
-	runEnv(t, "1", "", "", "")
-	id := protocol.NewID()
-	for _, args := range [][]string{
-		{"version"}, {"version", "--schema"}, {"skill"}, {"whoami"}, {"approvals"}, {"status", "--wait", "30s", id},
-		{"fingerprint", "peer/desk"}, {"sessions", "peer/desk"}, {"members"}, {"doctor"}, {"conversation", id},
-		{"receivers", "--json"}, {"download", "--dir", t.TempDir(), id},
-		{"inbox", "--peek"}, {"inbox", "--unread", "--json", "--peek"}, {"inbox", "-peek=true", "--review"},
-		{"team", "list"}, {"team", "snapshot", id}, {"dm", "list"}, {"dm", "show", id}, {"dm", "agents", id},
-		{"group", "invitations"}, {"person"}, {"person", "links"}, {"operator", "list"}, {"review-to"},
-		{"responder", "list"}, {"responder", "show"}, {"remind", "list"}, {"remind", "list", "--all"},
-		{"send", "peer/desk", "hello"}, {"hook", "claude"}, {"room", "ask", "--pid", id, "question"}, {"room", "wait", id},
-	} {
-		if err := runGuard(args[0], args[1:]); err != nil {
-			t.Errorf("%v: %v", args, err)
-		}
-	}
-	for _, args := range [][]string{
-		{"daemon"}, {"daemon", "--ui", "127.0.0.1:0"}, {"a2a", "serve", "--peer", "peer/desk"}, {"ui", "--demo"},
-		{"open", "--review"}, {"open", id}, {"hub", "serve"}, {"hub", "bootstrap-invite"}, {"update"}, {"update", "--check"},
-		{"update", "v0.0.1"}, {updateHelperCmd}, {"hooks", "show", "claude"}, {"join", "--agent", "x", "CODE"},
-		{"inbox", "--peek=false"}, {"inbox", "--peek", "--bogus"}, {"inbox", "--json"},
-		{"team"}, {"team", "frobnicate"}, {"dm"}, {"dm", "frobnicate"}, {"group"}, {"group", "frobnicate"},
-		{"person", "frobnicate"}, {"operator"}, {"responder"}, {"responder", "frobnicate"}, {"remind"}, {"remind", "frobnicate", "tomorrow"},
-		{"frobnicate"}, {"frobnicate", "list"}, {"room"}, {"room", "accept", id},
-	} {
-		if err := runGuard(args[0], args[1:]); err == nil || !strings.Contains(err.Error(), refusedText) {
-			t.Errorf("%v: %v", args, err)
-		}
-	}
-	// Every command help lists, with no arguments: only these pass.
-	bare := map[string]bool{"version": true, "skill": true, "whoami": true, "approvals": true, "status": true, "fingerprint": true,
-		"sessions": true, "members": true, "doctor": true, "conversation": true, "receivers": true, "download": true,
-		"person": true, "review-to": true, "send": true, "hook": true}
-	for name := range topics {
-		if strings.Contains(name, " ") || guides[name] {
-			continue
-		}
-		if err := runGuard(name, nil); (err == nil) != bare[name] {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-	// Help and the harness's own hook still work through run itself.
-	home := t.TempDir()
-	for _, args := range [][]string{{"help", "dm"}, {"dm", "--help"}, {"hook", "claude"}} {
-		if _, err := diagnosticOutput(t, func() error { return run(append([]string{"--home", home}, args...)) }); err != nil {
-			t.Errorf("%v: %v", args, err)
-		}
-	}
-}
-
-// The refusal does not name the switch that turns the guard off, and says
-// not to change AgentNet's environment to get around it.
-func TestRunGuardRefusalKeepsTheSwitchOut(t *testing.T) {
-	for _, env := range [][3]string{{"", "", ""}, {protocol.NewID(), "peer/desk", ""}, {"", "", protocol.NewID()}} {
-		runEnv(t, "1", env[0], env[1], env[2])
-		msg := refusedInRun("dm invite").Error()
-		if strings.Contains(msg, client.BackgroundEnv) || !strings.Contains(msg, refusedText) || !strings.Contains(msg, "Do not change AgentNet's environment to get around this") {
-			t.Errorf("%v: %s", env, msg)
-		}
-	}
-}
-
-// In a reply receiver's run the refusal offers exactly the follow-up the
-// guard allows: an answer to a message of the binding, with ask or task for a
-// device request and dm send --question or --task in a conversation.
-func TestRunGuardRefusalInAReceiverRun(t *testing.T) {
-	runEnv(t, "1", "", "", protocol.NewID())
-	msg := refusedInRun("dm invite").Error()
-	for _, want := range []string{
-		"agentnet ask (or task) --reply-to ID ADDRESS TEXT",
-		"agentnet dm send --question (or --task) --reply-to ID CONV TEXT",
-		"ID is a message of your reply binding",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("no %q in: %s", want, msg)
-		}
-	}
-	if strings.Contains(msg, "without --reply-receiver") || strings.Contains(msg, "ask-agent") {
-		t.Errorf("offers what the guard refuses: %s", msg)
-	}
-}
-
-// Outside a run (no env, or any value but the worker's "1") the guard lets
-// every command through to its own handler, as before.
-func TestRunGuardOffOutsideARun(t *testing.T) {
-	for _, value := range []string{"", "0", "true"} {
-		runEnv(t, value, protocol.NewID(), "peer/desk", "")
-		for _, args := range guardedCommands(t.TempDir()) {
-			if err := runGuard(args[0], args[1:]); err != nil {
-				t.Errorf("%q %v: %v", value, args, err)
-			}
-		}
-		if err := sendGuard(""); err != nil {
-			t.Errorf("%q send: %v", value, err)
-		}
-		if err := sendGuard(protocol.NewID()); err != nil {
-			t.Errorf("%q send --reply-to: %v", value, err)
-		}
-	}
 }
 
 // A run may still send what its prompt offers: an update or a clarification
@@ -329,12 +70,15 @@ func TestRunGuardLetsARunUpdateItsOwnRequest(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"--reply-to", protocol.NewID(), "--progress", alice.Address, "elsewhere"},
-		{alice.Address, "unasked"},
+		{"--reply-to", asked.ID, bob.Address, "wrong recipient"},
 	} {
 		err := send(args...)
-		if err == nil || !strings.Contains(err.Error(), refusedText) || !strings.Contains(err.Error(), `agentnet send --reply-to "$AGENTNET_REQUEST_ID" --progress "$AGENTNET_REQUESTER" TEXT`) {
+		if err == nil {
 			t.Errorf("%v: %v", args, err)
 		}
+	}
+	if err := send(alice.Address, "native permitted message"); err != nil {
+		t.Fatal(err)
 	}
 	got := map[string]string{}
 	msgs, err := alice.Inbox(false, false)
@@ -371,7 +115,7 @@ func TestRunGuardLetsARunUpdateItsOwnRequest(t *testing.T) {
 	}
 	slices.Sort(sent)
 	// Both reached alice: the progress update and the clarification.
-	if strings.Join(sent, " | ") != "halfway/progress/delivered | outside a run//delivered | which branch?//delivered" {
+	if strings.Join(sent, " | ") != "halfway/progress/delivered | native permitted message//delivered | outside a run//delivered | which branch?//delivered" {
 		t.Fatalf("bob sent %q", sent)
 	}
 }
@@ -463,6 +207,7 @@ func TestRunGuardKeepsAReceiverRunOnItsBinding(t *testing.T) {
 		{"dm", "ask-agent", protocol.NewID(), "an agent"},
 		{"send", "--wait", "0", "--reply-to", input, bob.Address, "a plain send"},
 		{"reply", input, "an answer"},
+		{"do", protocol.NewID()},
 	} {
 		if err := cli(args...); err == nil || !strings.Contains(err.Error(), refusedText) {
 			t.Errorf("%v: %v", args, err)
@@ -497,5 +242,91 @@ func TestRunGuardKeepsAReceiverRunOnItsBinding(t *testing.T) {
 	want := []string{fmt.Sprintf("%s %q true", bob.Address, "original request"), fmt.Sprintf("%s %q true", bob.Address, "follow-up on the original")}
 	if !slices.Equal(sent2, want) {
 		t.Fatalf("alice sent %q, want %q", sent2, want)
+	}
+}
+
+func TestBackgroundRunSendsExactDMAttachment(t *testing.T) {
+	t.Setenv("AGENTNET_NOTIFY", "off")
+	runEnv(t, "", "", "", "")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	hub := filepath.Join(t.TempDir(), "hub")
+	testhub.Start(t, hub, "127.0.0.1:0", "")
+	alice, _ := guardPeer(t, ctx, testhub.BootstrapCode(t, hub), "alice")
+	code, err := alice.Invite(ctx, "bob", time.Hour, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, home := guardPeer(t, ctx, code, "desk")
+	for label, a := range map[string]*client.Agent{"Alice": alice, "Bob": bob} {
+		if _, err = a.CreatePerson(ctx, label); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var conv string
+	eventually(t, "verified DM", func() bool { conv, err = alice.CreateDM(ctx, bob.Address); return err == nil })
+	original, err := alice.SendConv(ctx, conv, client.ConvOutgoing{Body: "return the translated document", Topic: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "exact request on Bob", func() bool {
+		rows, e := bob.ConversationMessages(conv)
+		return e == nil && slices.ContainsFunc(rows, func(m client.ConvMessage) bool { return m.LID == original.LID })
+	})
+	file := filepath.Join(t.TempDir(), "translated.md")
+	payload := []byte("# Completed translation\n")
+	if err = os.WriteFile(file, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runEnv(t, "1", original.ID, alice.Address, "")
+	cli := func(ref string) error {
+		_, e := diagnosticOutput(t, func() error {
+			return run([]string{"--home", home, "dm", "send", "--reply-to", ref, "--file", file, conv, "translated document"})
+		})
+		return e
+	}
+	if err = cli(protocol.NewID()); err == nil {
+		t.Fatal("accepted unknown reply reference")
+	}
+	if err = cli(original.LID); err != nil {
+		t.Fatal(err)
+	}
+	var got client.ConvMessage
+	eventually(t, "exact attachment reaches requester", func() bool {
+		rows, e := alice.ConversationMessages(conv)
+		if e != nil {
+			return false
+		}
+		for _, m := range rows {
+			if m.Body == "translated document" {
+				got = m
+				return true
+			}
+		}
+		return false
+	})
+	if got.Topic == "" || got.ReplyTo != original.LID || got.Quote != original.LID || len(got.Attachments) != 1 || got.Attachments[0].Name != "translated.md" {
+		t.Fatalf("wrong delivered attachment: %+v", got)
+	}
+	paths, err := alice.Download(ctx, got.ID, t.TempDir(), false)
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("download: %v %v", paths, err)
+	}
+	actual, err := os.ReadFile(paths[0])
+	if err != nil || !bytes.Equal(actual, payload) {
+		t.Fatalf("bytes: %q %v", actual, err)
+	}
+	rows, err := bob.ConversationMessages(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, m := range rows {
+		if m.Body == "translated document" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("attachment sent %d times", n)
 	}
 }

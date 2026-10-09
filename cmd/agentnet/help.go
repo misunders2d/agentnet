@@ -246,9 +246,8 @@ Example:
 
 	"do": `Usage: agentnet do [--answer-wait D] ID
 
-"Do it" on a proposal. When a question's answer needs an action its agent
-may not take for a question (editing files, running something, sending
-something), the agent answers with the exact task it proposes instead
+"Do it" on a proposal. When additional work needs the requester's choice,
+the agent may answer with the exact task it proposes instead
 ("proposes an action (not run)"; ID is that answer). do sends exactly that
 text, as stored, as a task replying to it, to the same agent; there it runs
 under the usual task approval (it waits for their OK unless they let your
@@ -257,7 +256,7 @@ this one: person approve --native). Confirming again shows the
 task already sent; nothing runs twice. Refused for a proposal edited or
 deleted after it was made, one from a key whose change is pending, and
 from any device but the one that asked. Confirm with the person first
-unless they already asked for that work. Refused inside a run.
+unless they already asked for that work. Native permissions still apply.
 --answer-wait D waits for the result and prints it, as for ask (default 0).`,
 
 	"reply": `Usage: agentnet reply [--file PATH]... [--wait 5s] ID TEXT
@@ -736,27 +735,15 @@ choice. set selects one; off chooses manual only (no automatic responder).
 show prints the choice, or "not chosen yet". Setup agents: do not pick the
 harness you are running in unless the person says so.
 
-Harnesses: claude and codex (tasks and a skill-backed question tested
-live), pi (not tested live). Questions and follow-ups use your own
-setup, so your skills and context shape the answer. Your own permissions
-stay the authority: AgentNet takes away editing and new approvals, and asks
-the harness not to change anything, but it is not a sandbox of its own:
-  claude  your settings, skills, plugins and MCP servers; permission mode
-          dontAsk runs only tools your settings already allow and refuses
-          the rest; Edit, Write and NotebookEdit are off. Bash commands and
-          MCP tools your settings allow keep their effects.
-  codex   your config, skills and MCP servers; shell commands run in a
-          read-only sandbox and anything needing an approval is refused.
-          MCP tools your config auto-approves are outside the sandbox and
-          keep their effects.
-  pi      your settings, skills and extension tools; bash, edit, write and
-          powershell are off. Pi has no read-only shell or unattended
-          approval gate; extension tools keep their configured effects.
-Before approving a sender, check that what your settings already allow is
-what you would let their questions trigger. Tasks run with the harness's
-normal permissions and only after you accept them (or under a task grant you
-gave that sender's key: agentnet help approve). If a question needs an
-action the harness may not take, it answers AGENTNET: NEEDS-HUMAN instead.
+Harnesses: claude, codex, pi and omp. Questions, follow-ups and accepted
+ tasks use your native settings, skills, plugins, tools and permissions.
+AgentNet adds no tool exclusions, sandbox or approval overrides, and no
+blanket command ban inside background runs. The native harness still
+checks permissions. An explicit delegated reply binding keeps its exact
+request, receiver and recipients; it cannot be redirected by a reply.
+Tasks still require acceptance or an existing task grant. When a native
+approval cannot be obtained in a background session, the result needs your
+attention; AgentNet never silently approves or bypasses it.
 Antigravity can read and reply by hand but is not an automatic responder.
 
 With claude and codex, the worker keeps a background session per

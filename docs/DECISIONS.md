@@ -1,5 +1,14 @@
 # AgentNet Revival — Architectural Decision Records & Linear Roadmap
 
+## October 9, 2026 — MEL-504 native permissions
+
+The owner explicitly selected **Use native permissions unchanged** for v0.8.13.
+AgentNet communicates admitted requests; it adds no execution-policy layer.
+Question/tool exclusions, forced sandbox/approval modes and blanket background
+CLI bans are removed. Native guardrails and exact request/receiver/grant checks
+remain. This supersedes earlier question-only restrictions recorded below.
+
+
 > **Release scope:** [NEXT_RELEASE.md](NEXT_RELEASE.md) describes the current
 > release work; [HANDOFF.md](HANDOFF.md) records publication, verification and remaining work.
 > The decisions below include historical proposals and implementation snapshots.

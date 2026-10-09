@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { IconDeviceDesktop, IconDeviceLaptop, IconDeviceMobile } from "@tabler/icons-react";
 import type { Api, T } from "../api";
-import { useApp } from "../context";
+import { useAgentNames, useApp } from "../context";
 import { agentName, deviceKind, firstLine, isWorkingItem } from "../model";
 import { AgentAvatar, PersonAvatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -18,6 +18,7 @@ type Props = { c: T.ConvItem; o: T.Overview };
 
 /** ConvRow: one item of needs_you or held, by why it waits. */
 export function ConvRow({ c, o }: Props) {
+  if (c.reason === Reason.invite && c.role === "human") return <GuestInviteRow c={c} o={o} />;
   if (c.reason === Reason.invite) return <InviteRow c={c} o={o} />;
   if (c.reason === Reason.heldTurn) return <HeldTurnRow c={c} o={o} />;
   return <RequestRow c={c} o={o} />;
@@ -58,6 +59,7 @@ function useAct() {
 
 /** A request to your agent: waiting for a one-time OK, or for a person. */
 function RequestRow({ c, o }: Props) {
+  const names = useAgentNames();
   const { isOpen, go } = useOpen();
   const { busy, run } = useAct();
   const [sheet, setSheet] = useState<"" | "decline" | "close" | "stop">("");
@@ -67,6 +69,10 @@ function RequestRow({ c, o }: Props) {
   const retry = human || c.reason === Reason.interrupted;
   const working = isWorkingItem(c);
   const title = convTitle(c, o);
+  const targetID = c.target?.agent_id;
+  const targetName = (targetID && names[targetID]) || "Your agent";
+  const duplicateName = targetID && (o.needs_you || []).some(x => x.conv === c.conv && x.target?.agent_id && x.target.agent_id !== targetID && ((names[x.target.agent_id] || "Your agent") === targetName));
+  const targetLabel = c.target ? "To " + targetName + " · " + deviceWords(c.target.address, o) + (duplicateName ? " · " + targetID!.slice(0, 8) : "") : "";
   const who = senderOf(c, o);
   const kind = c.kind === "task" ? "task" : "question";
   const said = human && c.why ? whyWords(c.why, c.peer, o) : "";
@@ -86,6 +92,7 @@ function RequestRow({ c, o }: Props) {
         detail={said ? <details><summary className="cursor-pointer font-semibold">Read the agent’s whole message</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{said}</p></details> : undefined}>
         <Body tag={working ? <Tag tone="agent">Working</Tag> : human ? <Tag tone={c.decide_on ? "muted" : "act"}>Needs you</Tag> : kindTag(c.kind)} at={c.at} title={title} quote={firstLine(c.excerpt, 160)}
           meta={capital(inChat(c.conv, o)) + (working ? " · Already running" : retry || c.decide_on ? "" : c.kind === "task" ? " · Runs only if you allow it" : " · Answered only if you allow it")}>
+          {targetLabel && <p className="pt-1 text-[14px] font-semibold text-agent-ink" data-request-target>{targetLabel}</p>}
           {said && <p className="pt-1 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]"><b className="font-bold text-agent-ink">Your agent says:</b> {said}</p>}
         </Body>
       </OpenCard>
@@ -120,6 +127,34 @@ function useInvitation(c: T.ConvItem, skip: boolean) {
 }
 
 /** An invitation for your agent into a chat: it joins only if you let it. */
+function GuestInviteRow({ c, o }: Props) {
+  const store = useApp();
+  const { isOpen, go } = useOpen();
+  const { busy, run } = useAct();
+  const [guest, setGuest] = useState<T.GuestView | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    if (!c.decide_on) void store.api.dm(c.conv).then(view => {
+      if (alive) { setGuest(view.guests?.find(g => g.pid === c.pid) || null); setFailed(false); }
+    }).catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [store, c.conv, c.pid, c.decide_on]);
+  const decide = (accept: boolean) => run(accept ? "accept" : "decline", api => api.decideGuest(c.pid!, accept), accept ? "You joined the conversation." : "Invitation declined.");
+  const actions = c.decide_on ? <DecideOn address={c.decide_on} o={o} /> : failed ?
+    <Button size="sm" onClick={() => go("dm", c.conv)}>Decide in chat</Button> : <>
+      <Button size="sm" disabled={!!busy || !guest?.can_decide} onClick={() => decide(true)}>{busy === "accept" ? "Joining…" : "Join conversation"}</Button>
+      <Button size="sm" variant="outline" disabled={!!busy || !guest?.can_decide} onClick={() => decide(false)}>{busy === "decline" ? "Declining…" : "No thanks"}</Button>
+    </>;
+  const title = senderOf(c, o) + " invited you";
+  return <OpenCard onOpen={() => go("dm", c.conv)} current={isOpen(c.conv)} label={title + ". Open the conversation."} face={<SenderFace c={c} o={o} />} actions={actions}>
+    <Body tag={<Tag tone="act">Guest invitation</Tag>} at={c.at} title={title} quote={c.excerpt || undefined}
+      meta={capital(inChat(c.conv, o))}>
+      <p className="pt-1 text-[14px] text-text-2">{guest ? ((guest.shared || []).length ? `${(guest.shared?.length || 0)} earlier messages are shared with you.` : "No earlier messages are shared with you.") : c.decide_on ? "Open the invitation on that device." : failed ? "Couldn’t check the invitation. Open the chat to review it." : "Checking the invitation…"}</p>
+    </Body>
+  </OpenCard>;
+}
+
 function InviteRow({ c, o }: Props) {
   const { isOpen, go } = useOpen();
   const { busy, run } = useAct();

@@ -54,7 +54,7 @@ func TestCodexRoomBridgeBoundTransport(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	if strings.Join(cmd.Args, " ") != cmd.Path+` app-server -c approval_policy="never"` {
+	if strings.Join(cmd.Args, " ") != cmd.Path+` app-server` {
 		t.Fatal(cmd.Args)
 	}
 	if next()["method"] != "initialize" {
@@ -66,17 +66,17 @@ func TestCodexRoomBridgeBoundTransport(t *testing.T) {
 	}
 	start := next()
 	p := start["params"].(map[string]any)
-	if p["sandbox"] != "read-only" || p["approvalPolicy"] != "never" || p["cwd"] != cmd.Dir || p["ephemeral"] != true {
+	if p["cwd"] != cmd.Dir || p["ephemeral"] != true {
 		t.Fatal(p)
 	}
-	for _, forbidden := range []string{"disabledPluginIds", "config", "baseInstructions", "developerInstructions"} {
+	for _, forbidden := range []string{"disabledPluginIds", "config", "baseInstructions", "developerInstructions", "sandbox", "sandboxPolicy", "approvalPolicy"} {
 		if _, ok := p[forbidden]; ok {
 			t.Fatal(forbidden)
 		}
 	}
-	event(`{"id":2,"result":{"thread":{"id":"thread"},"approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false}}}`)
+	event(`{"id":2,"result":{"thread":{"id":"thread"},"approvalPolicy":"on-request","sandbox":{"type":"workspaceWrite","networkAccess":true}}}`)
 	turn := next()["params"].(map[string]any)
-	if turn["approvalPolicy"] != "never" || turn["sandboxPolicy"].(map[string]any)["networkAccess"] != false {
+	if turn["approvalPolicy"] != nil || turn["sandboxPolicy"] != nil || turn["sandbox"] != nil || turn["config"] != nil || turn["threadId"] != "thread" {
 		t.Fatal(turn)
 	}
 	event(`{"id":3,"result":{"turn":{"id":"turn"}}}`)
@@ -108,7 +108,7 @@ func TestCodexRoomBridgeBoundTransport(t *testing.T) {
 }
 
 func TestCodexRoomBridgeFailsClosed(t *testing.T) {
-	for _, event := range []string{`{"id":2,"result":{"thread":{"id":"x"},"approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":true}}}`, `{"id":4,"method":"item/tool/call","params":{"threadId":"foreign","turnId":"turn","tool":"agentnet_room","callId":"call"}}`, `{"id":5,"method":"item/commandExecution/requestApproval","params":{}}`, `{"id":6,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","tool":"other_tool","callId":"call"}}`, `{"id":1,"error":{"message":"unsupported"}}`} {
+	for _, event := range []string{`{"id":2,"result":{"thread":{}}}`, `{"id":4,"method":"item/tool/call","params":{"threadId":"foreign","turnId":"turn","tool":"agentnet_room","callId":"call"}}`, `{"id":5,"method":"item/commandExecution/requestApproval","params":{}}`, `{"id":6,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","tool":"other_tool","callId":"call"}}`, `{"id":1,"error":{"message":"unsupported"}}`} {
 		t.Run(event, func(t *testing.T) {
 			in, out := io.Pipe()
 			defer in.Close()
@@ -265,6 +265,36 @@ func TestCodexRoomExecutableLifecycle(t *testing.T) {
 				}
 			} else if !strings.HasPrefix(output.String(), needsHumanMarker+"\n") {
 				t.Fatal(output.String())
+			}
+		})
+	}
+}
+
+func TestCodexRoomBridgeNativeApprovalNeedsHuman(t *testing.T) {
+	for _, method := range []string{"item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "item/tool/requestUserInput", "mcpServer/elicitation/request"} {
+		t.Run(method, func(t *testing.T) {
+			in, out := io.Pipe()
+			defer in.Close()
+			wire := make(chan string, 1)
+			go func() { data, _ := io.ReadAll(in); wire <- string(data) }()
+			var output bytes.Buffer
+			b := &codexRoomBridge{ctx: context.Background(), input: out, output: &output, thread: "thread", turn: "turn", calls: map[string]bool{}, call: func(context.Context, json.RawMessage) (string, error) {
+				t.Error("approval executed room call")
+				return "", nil
+			}}
+			raw, _ := json.Marshal(map[string]any{"id": "approval", "method": method, "params": map[string]any{"threadId": "thread", "turnId": "turn", "itemId": "item"}})
+			b.event(raw)
+			b.finish()
+			if !strings.HasPrefix(output.String(), needsHumanMarker+"\n") || strings.Contains(output.String(), codexRoomUnavailable) || !strings.Contains(output.String(), "native approval") {
+				t.Fatal(output.String())
+			}
+			select {
+			case got := <-wire:
+				if got != "" {
+					t.Fatalf("native decision without owner: %s", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("approval did not release input")
 			}
 		})
 	}

@@ -275,10 +275,10 @@ func (s *store) claimAgentPage(responder, self, selfFP string, pos int64, limit 
 // look moved to a state their requester is told of (headless.go
 // noteStatus): waiting for this host's person, or not run.
 func (s *store) claimAgentPageTold(responder, self, selfFP string, pos int64, limit int, resolve ...func(dbq, string) (*ExecutorStamp, error)) (j job, found bool, next int64, full bool, told []string, err error) {
-	return s.claimAgentPageForCause(responder, self, selfFP, pos, limit, "", "", resolve...)
+	return s.claimAgentPageForCause(responder, self, selfFP, pos, limit, "", "", nil, resolve...)
 }
 
-func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64, limit int, conv, cause string, resolve ...func(dbq, string) (*ExecutorStamp, error)) (j job, found bool, next int64, full bool, told []string, err error) {
+func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64, limit int, conv, cause string, reciprocal func(dbq, job) (*ExecutorStamp, error), resolve ...func(dbq, string) (*ExecutorStamp, error)) (j job, found bool, next int64, full bool, told []string, err error) {
 	next = pos
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -359,6 +359,9 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 				stamp, err = resolve[0](tx, id)
 			} else if id != "" {
 				err = ErrUnknownAgent
+			}
+			if errors.Is(err, errExecutorBusy) && reciprocal != nil {
+				stamp, err = reciprocal(tx, r.j)
 			}
 			if errors.Is(err, errExecutorBusy) {
 				continue
@@ -603,11 +606,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		}
 		fmt.Fprintf(&b, "%s gives you the task below. Work in the current directory under your normal rules. When finished, reply with a short plain-text report of what you did.\n", capFirst(asker))
 	} else {
-		questionRule := "Do not change files or take any action with effects for this question."
-		if info.Member {
-			questionRule = "Do not change files or take any action with effects for this question, except asking another current group agent a scoped question using the room interface described above. Never assign a task."
-		}
-		fmt.Fprintf(&b, "%s asks you the question below. Answer in plain text, concisely. Use the conversation shared with you, your own knowledge, and your skills and the tools you are allowed to use to look things up. %s\n", capFirst(asker), questionRule)
+		fmt.Fprintf(&b, "%s asks you the question below. Answer in plain text, concisely. Use the conversation shared with you and your owner's native skills, tools and permissions unchanged. AgentNet adds no tool exclusions, sandbox or approval overrides. Do not bypass a native refusal.\n", capFirst(asker))
 		fmt.Fprintf(&b, "If you need information from %s to answer, reply with your question for them. They can answer it in this conversation.\n", asker)
 		b.WriteString(lookupText)
 	}

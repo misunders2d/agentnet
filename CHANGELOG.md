@@ -6,6 +6,17 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Speed up chat history and ordinary sends by indexing repeated delivery copies, reusing loaded messages, and returning topic changes after durable local enqueue. Reopen stays disabled until the refreshed state arrives.
+- Keep typing responsive in long Comic conversations without reformatting the retained timeline on each keystroke. Phone catch-up avoids repeated full-store scans while preserving signed, encrypted history admission and background recovery.
+- Show a multi-agent send as one human message with separate exact agent outcomes. Compact stopped requests, including older history, into an expandable row without rerunning them.
+- Allow two already-running agents to answer each other's exact child questions without deadlocking their worker lanes. Cancellation, current permissions, ordered ordinary work and update fences remain enforced.
+- Stop counting terminal local and outgoing requests as pending. Add rename, archive, reopen and exact-message deletion for older Main flows in Comic; replace the phone's ambiguous Back count with a clear Chats label.
+- Show received human guest invitations in Comic OKs with the existing Join and No thanks actions.
+- Use each agent owner's native tools, skills, configuration and permissions unchanged for questions and accepted tasks. Remove AgentNet's injected tool restrictions and sandbox/approval overrides; native requests for human approval still require attention. Exact recipient bindings and AgentNet's existing task acceptance and grants remain enforced.
+- Render Markdown attachment previews with the existing safe renderer while preserving original downloads byte for byte.
+
 ## [0.8.12] — 2026-10-09
 
 ### Added

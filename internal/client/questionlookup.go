@@ -7,8 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -17,9 +15,8 @@ import (
 
 // A question may look up this device's own AgentNet state through the exact
 // installed agentnet program, with fixed read-only arguments. These lookups
-// add no shell, network or write permission: each harness's own rules still
-// decide (Claude's deny and ask rules win over these exact allow rules; Pi's
-// own tool_call handlers still run; Codex keeps its read-only sandbox).
+// add no shell, network or write permission: each harness's native rules decide.
+// Describing a lookup is never an allow rule or an execution policy.
 
 // questionLookups are the fixed read-only argument lists, by name.
 var questionLookups = []struct{ name, args string }{
@@ -30,28 +27,7 @@ var questionLookups = []struct{ name, args string }{
 	{"approvals", "approvals"},
 }
 
-// maxLookupIDs bounds the exact status lookups a question is given.
-const maxLookupIDs = 8
-
-var (
-	lookupID    = regexp.MustCompile(`\b[0-9a-f]{32}\b`)
-	unixRule    = regexp.MustCompile(`^/[A-Za-z0-9._/+-]+$`)
-	windowsRule = regexp.MustCompile(`^[A-Za-z]:/[A-Za-z0-9._/+-]+$`)
-	executable  = os.Executable // a variable so tests can bind another program
-)
-
-// claudeRulePath is exe as it must appear, unquoted, both in the command
-// Claude runs and in its exact Bash allow rule; ok is false when no such
-// spelling exists (spaces or other characters a shell would need quoted).
-// A Windows drive path is given with forward slashes, as Claude's Bash
-// (Git Bash) accepts it; a backslash would be a shell escape.
-func claudeRulePath(goos, exe string) (string, bool) {
-	if goos == "windows" {
-		p := strings.ReplaceAll(exe, `\`, "/")
-		return p, windowsRule.MatchString(p)
-	}
-	return exe, unixRule.MatchString(exe)
-}
+var executable = os.Executable // tests bind a disposable lookup program
 
 // agentnetProgram is this program's own resolved absolute path: the exact
 // binary lookups may run, never a name looked up on PATH or in a directory.
@@ -87,8 +63,7 @@ const lookupsUnavailable = "No lookups of this AgentNet device's own state are a
 
 // questionSetup configures the lookups for a question run by harness h.
 // Whatever cannot be bound exactly is not offered, and the text says so: a
-// program that cannot be resolved, a Claude rule that would need quoting,
-// or a Pi extension that could not be written.
+// program that cannot be resolved or a Pi extension that could not be written.
 func (a *Agent) questionSetup(j job, h string) questionLookup {
 	if j.Kind != envelope.KindQuestion || h != "claude" && h != "codex" && h != "pi" && h != "omp" {
 		return questionLookup{}
@@ -101,27 +76,12 @@ func (a *Agent) questionSetup(j job, h string) questionLookup {
 	}
 	direct := " Answer such a harmless lookup directly; never ask the coworker to resend it as a task.\n"
 	switch h {
-	case "claude":
-		exe, ok := claudeRulePath(runtime.GOOS, exe)
-		if !ok {
-			a.Logf("question lookups unavailable for claude: %s would need shell quoting, which an exact rule cannot express", exe)
-			return none
-		}
-		args, cmds := []string{"--allowedTools"}, []string{}
-		for _, l := range questionLookups {
-			args, cmds = append(args, "Bash("+exe+" "+l.args+")"), append(cmds, exe+" "+l.args)
-		}
-		for _, id := range a.lookupIDs(j.Body) {
-			args, cmds = append(args, "Bash("+exe+" status "+id+")"), append(cmds, exe+" status "+id)
-		}
-		return questionLookup{args: args, text: "To look up this AgentNet device's own state you may run exactly these read-only commands, with no other arguments or shell syntax: " +
-			strings.Join(cmds, "; ") + "." + direct}
-	case "codex":
+	case "claude", "codex":
 		var lists []string
 		for _, l := range questionLookups {
 			lists = append(lists, "`"+l.args+"`")
 		}
-		return questionLookup{text: "To look up this AgentNet device's own state you may run the program " + strconv.Quote(exe) + ", quoted as your shell needs, in your read-only sandbox with exactly one of these argument lists: " +
+		return questionLookup{text: "To look up this AgentNet device's own state you may run the program " + strconv.Quote(exe) + ", quoted as your shell needs, under your native permissions, for example with these argument lists: " +
 			strings.Join(lists, ", ") + ", or `status ID` for a message this device sent (without network it shows the local record, marked as such)." + direct}
 	default: // pi/omp
 		path, err := a.writeQuestionLookup(exe, h)
@@ -134,25 +94,6 @@ func (a *Agent) questionSetup(j job, h string) questionLookup {
 	}
 }
 
-// lookupIDs are the ids named in a request that are messages this device
-// sent: the only ones whose status a question may look up by exact rule.
-func (a *Agent) lookupIDs(body string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, id := range lookupID.FindAllString(body, -1) {
-		if seen[id] || len(out) == maxLookupIDs {
-			continue
-		}
-		seen[id] = true
-		if _, _, found, err := a.store.outboxState(id); err == nil && found {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-// piLookupSource is the Pi extension: one tool that runs the bound agentnet
-// program with fixed arguments, never a shell. Any failure fails the call.
 const piLookupSource = `// Written by AgentNet for questions; regenerated on each run.
 import { Type } from "@earendil-works/pi-ai";
 import { execFile } from "node:child_process";

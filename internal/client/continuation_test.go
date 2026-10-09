@@ -276,7 +276,7 @@ func TestContinueRequestCodexSavedBackgroundStaysFresh(t *testing.T) {
 		t.Fatal(next)
 	}
 	runs := st.runs()
-	if len(runs) != 2 || strings.Contains(runs[1], "resume") || !strings.Contains(runs[1], "--sandbox read-only") {
+	if len(runs) != 2 || strings.Contains(runs[1], "resume") || strings.Contains(runs[1], "--sandbox") || strings.Contains(runs[1], "approval_policy") {
 		t.Fatal(runs)
 	}
 	prompt, e := os.ReadFile(st.log + ".stdin")

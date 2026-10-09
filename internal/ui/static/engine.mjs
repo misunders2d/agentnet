@@ -449,11 +449,12 @@ export const TOPICS = Object.freeze({
 });
 const topicOpenIn = new Set(["held", "awaiting", "needs_human", "pending", "accepted", "running", "cancel_requested", "part_waiting"]);
 const topicUndelivered = new Set(["failed", "expired", "quarantined"]);
+const topicExecutionClosed = new Set(["done", "answered", "failed", "timeout", "cancelled", "stopped", "declined", "resolved", "not_run", "proposal"]);
 const topicRequest = (k) => k === "question" || k === "task";
 // topicOpen: one message keeps its topic pending (client topicOpen).
 const topicOpen = (r, replied) => r.notice ? r.state === "needs_human"
-  : r.in ? !r.selected && (topicOpenIn.has(r.state) || r.state === "interrupted" && topicRequest(r.kind)) // interrupted: waits for the person (client reviewStates)
-  : topicRequest(r.kind) && !replied && !topicUndelivered.has(r.state);
+  : r.in || r.localJob ? !r.selected && (topicOpenIn.has(r.state) || r.state === "interrupted" && topicRequest(r.kind)) // interrupted: waits for the person (client reviewStates)
+  : topicRequest(r.kind) && !replied && !topicUndelivered.has(r.state) && !topicExecutionClosed.has(r.execState);
 const pendingTopicRows = g => {
   const replied = new Set(g.filter(r => r.in && r.reply_to && r.status !== "progress").map(r => r.reply_to));
   return g.flatMap((r,i) => topicOpen(r,replied.has(r.id)) ? [i] : []);
@@ -490,13 +491,19 @@ const sortChatTurns=g=>{const d=chatDepths(g);return g.sort((a,b)=>chatSent(a)==
 const sortChatEvents=g=>{const d=chatDepths(g);return g.sort((a,b)=>d.get(a.lid)-d.get(b.lid)||chatOrder(a,b));};
 const chatOrder=(a,b)=>chatSent(a)-chatSent(b)||(a.lid<b.lid?-1:a.lid>b.lid?1:0);
 export function summarizeChatTopics(conv,msgs,locals=new Map(),now=Math.floor(Date.now()/1000)) {
+ return summarizeChatTopicView(conv,msgs,locals,now,false);
+}
+const MAIN_TOPIC_KEY="0".repeat(32);
+const mainTopicScope=async conv=>wire.hex(await wire.sha256(new TextEncoder().encode("agentnet/main-flow-preference/v1\0"+conv)));
+const mainChatMessages=msgs=>{const assigned=chatTopicAssignments(msgs);return msgs.filter(m=>!m.sub&&!m.topic_event&&!assigned.get(m.lid));};
+function summarizeChatTopicView(conv,msgs,locals,now,main) {
  const assigned=chatTopicAssignments(msgs),groups=new Map(),events=new Map(),out=[];
- for(const m of msgs){if(m.sub)continue;const bag=m.topic_event?events:groups,id=m.topic_event?m.topic:assigned.get(m.lid);if(id)bag.set(id,[...(bag.get(id)||[]),m]);}
+ for(const m of msgs){if(m.sub)continue;if(m.topic_event){if(!main)events.set(m.topic,[...(events.get(m.topic)||[]),m]);continue;}const id=assigned.get(m.lid)||"";if(main?!id:!!id)groups.set(id,[...(groups.get(id)||[]),m]);}
  for(const [id,g] of groups){sortChatTurns(g);const first=g[0],last=g.at(-1),local=locals.get(conv+"/"+id)||{};let shared={},by="";
   const aliases=new Map();for(const m of g){if(m.id)aliases.set(m.id,m.lid);for(const c of m.copies||[])if(c.id)aliases.set(c.id,m.lid);}
-  const facts=g.map(m=>{const job=m.job||"",state=job||m.state||"";return {id:m.lid,reply_to:aliases.get(m.reply_to)||m.reply_to||"",at:chatSent(m),kind:m.kind,status:m.status||"",topic_done:!!m.topic_done,in:!!job&&!m.to||["answer","result"].includes(m.kind),state};});
+  const facts=g.map(m=>{const job=m.job||"",state=job||m.state||"";return {id:m.lid,reply_to:aliases.get(m.reply_to)||m.reply_to||"",at:chatSent(m),kind:m.kind,status:m.status||"",topic_done:!!m.topic_done,in:!!job&&!m.to||["answer","result"].includes(m.kind),state,localJob:!!job,execState:m.exec?.state||""};});
   for(const m of sortChatEvents(events.get(id)||[])){if(m.topic_event.action==="create")continue;const seen=new Set(m.topic_event.seen||[]);if(g.every(r=>seen.has(r.lid))){shared={mark:m.topic_event.action,mark_at:chatSent(m),mark_count:g.length};by=m.from||"";}else{shared={};by="";}}
-  const l=local.mark==="archived"&&local.mark_count>=g.length+(events.get(id)||[]).length&&local.mark_at>=(shared.mark_at||0)?local:shared,v=deriveTopic(facts,l,now);
+  const l=main?local:local.mark==="archived"&&local.mark_count>=g.length+(events.get(id)||[]).length&&local.mark_at>=(shared.mark_at||0)?local:shared,v=deriveTopic(facts,l,now);
   const activity=Math.max(chatSent(last),...(events.get(id)||[]).map(chatSent));
   v.quiet_since=Math.max(v.quiet_since,activity);
   if(v.state==="archived"&&l.mark!=="archived"&&now-v.quiet_since<TOPICS.archiveAfter)v.state=v.done_by?"done":"active";
@@ -3143,12 +3150,13 @@ export class Engine {
 
   // changeTopic is POST /api/topic/{rename,done,reopen} (ui livetopics.go, client setTopic).
   async changeTopic(what, body) {
-    if(!body||typeof body!=="object"||Array.isArray(body)||Object.keys(body).some(k=>!["peer","conv","id","ids","counts","title","count"].includes(k))||body.conv!=null&&typeof body.conv!=="string"||["peer","id","title"].some(k=>body[k]!=null&&typeof body[k]!=="string")||body.count!=null&&(!Number.isInteger(body.count)||body.count<0)||body.ids!=null&&(!Array.isArray(body.ids)||body.ids.some(id=>typeof id!=="string")))throw Error("Bad request.");
+    if(!body||typeof body!=="object"||Array.isArray(body)||Object.keys(body).some(k=>!["peer","conv","id","ids","counts","title","count","root"].includes(k))||body.root!=null&&typeof body.root!=="boolean"||body.conv!=null&&typeof body.conv!=="string"||["peer","id","title"].some(k=>body[k]!=null&&typeof body[k]!=="string")||body.count!=null&&(!Number.isInteger(body.count)||body.count<0)||body.ids!=null&&(!Array.isArray(body.ids)||body.ids.some(id=>typeof id!=="string")))throw Error("Bad request.");
     if(body.counts!=null&&(typeof body.counts!=="object"||Array.isArray(body.counts)||Object.values(body.counts).some(n=>!Number.isInteger(n)||n<1)))throw Error("Bad topic counts.");
+    if(body.root===true)return this.changeChatMainTopic(what,body);
     if(body?.ids) { if(!Array.isArray(body.ids)||!body.ids.length||body.ids.length>TOPICS.pageMax||!["done","archive","delete"].includes(what))throw Error("Bad bulk action.");let changed=0,stale=0;for(const id of [...new Set(body.ids)]){try{const count=body.counts?.[id]??body.count;if(body.counts&&(!Number.isInteger(count)||count<1))throw Error("Invalid topic count.");const r=await this.changeTopic(what,{...body,ids:undefined,id,count});if(r.note===topicNewer)stale++;else changed++;}catch(e){throw Error(changed+" topics changed; remaining topics unchanged: "+e.message);}}return {note:changed+" topics changed."+(stale?" "+stale+" topics kept active because newer messages arrived.":"")}; }
     if(body?.conv)return this.changeChatTopic(what,body);
     if (!["rename", "done", "reopen","archive","delete"].includes(what)) throw new Error("No such topic change.");
-    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["peer", "id", "title", "count","conv","ids","counts"].includes(k))
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((k) => !["peer", "id", "title", "count","conv","ids","counts","root"].includes(k))
       || body.count != null && !Number.isInteger(body.count)) throw new Error("Bad request.");
     const peer = String(body.peer || ""), id = String(body.id || "");
     const g = (await this.v1Threads()).find((x) => x[0].id === id && x[0].peer === peer);
@@ -3186,17 +3194,26 @@ export class Engine {
     return m?chatTopicAssignments(msgs).get(m.lid)||"":"";
   }
   async chatTopicHead(conv,topic){const msgs=await this.convMessages(conv,await this.store.all("inbox"),await this.store.all("outbox")),assigned=chatTopicAssignments(msgs);return sortChatTurns(msgs.filter(m=>assigned.get(m.lid)===topic&&!m.sub&&!m.topic_event)).at(-1)?.lid||"";}
-  async chatTopics(conv,msgs=null) {
+  async chatTopics(conv,msgs=null) { return (await this.chatTopicSummaries(conv,msgs)).topics; }
+  async chatTopicSummaries(conv,msgs=null) {
     msgs ||= await this.convMessages(conv,await this.store.all("inbox"),await this.store.all("outbox"));
+    const controls=(await this.store.all("inbox")).filter(c=>c.control&&c.conv===conv&&c.sub===wire.SubStatus);
     // Sent records must carry their actual author, just as native ConvMessage.
-    msgs=msgs.map(m=>m.to?{...m,from:this.address}:m);
-    const ts=summarizeChatTopics(conv,msgs,await this.topicLocals(),Math.floor(this.now()/1000)),assigned=chatTopicAssignments(msgs);
-    for(const t of ts)t.unread=msgs.filter(m=>!m.to&&!m.own&&!m.read&&!m.topic_event&&assigned.get(m.lid)===t.id).length;
-    return ts;
+    msgs=msgs.map(m=>{
+      const fp=m.to?this.fp:m.fp||(m.history?m.claimed_key:"");
+      const exec=!m.excerpt_pid&&topicRequest(m.kind)&&m.target&&fp?this.execOn(controls.filter(c=>c.ref?.id===m.lid&&c.ref.fingerprint===fp&&c.from===m.target.address),m.target.address,false):undefined;
+      return {...m,...(m.to?{from:this.address}:{}),exec};
+    });
+    const locals=await this.topicLocals(),now=Math.floor(this.now()/1000),assigned=chatTopicAssignments(msgs);
+    const topics=summarizeChatTopics(conv,msgs,locals,now),scope=await mainTopicScope(conv),local=locals.get(scope+"/"+MAIN_TOPIC_KEY)||{};
+    const main_topic=summarizeChatTopicView(conv,msgs,new Map([[conv+"/",local]]),now,true)[0];
+    for(const t of [...topics,...(main_topic?[main_topic]:[])])t.unread=msgs.filter(m=>!m.to&&!m.own&&!m.read&&!m.sub&&!m.topic_event&&(assigned.get(m.lid)||"")===t.id).length;
+    return {topics,...(main_topic?{main_topic}:{})};
   }
+
   async decorateChatTopics(view) {
     const msgs=await this.convMessages(view.id,await this.store.all("inbox"),await this.store.all("outbox")),shown=new Set(view.messages.map(m=>m.lid)),visible=msgs.filter(m=>shown.has(m.lid)),assigned=chatTopicAssignments(visible);
-    view.topics=await this.chatTopics(view.id,visible);
+    Object.assign(view,await this.chatTopicSummaries(view.id,visible));
     for(const m of view.messages){m.topic=assigned.get(m.lid)||"";const raw=visible.find(r=>r.lid===m.lid);if(raw?.topic_event)m.topic_event=raw.topic_event;}
     return view;
   }
@@ -3208,6 +3225,30 @@ export class Engine {
     const start=before?matched.findIndex(t=>cursor(t)===before)+1:0;if(before&&!start)throw Error(topicQueryError);
     const page=matched.slice(start,start+limit);return {topics:page,matched:matched.length,...(start+page.length<matched.length?{next:cursor(page.at(-1))}:{})};
   }
+  async changeChatMainTopic(what,body) {
+    const {conv}=body,count=body.count||0;
+    if(!wire.validHash(conv)||body.peer||body.id||body.ids?.length||body.counts&&Object.keys(body.counts).length||!Number.isInteger(count)||count<0||!["rename","archive","reopen","delete"].includes(what))throw Error("Invalid Main flow change.");
+    if(!await this.store.get("convs",conv)&&!await this.groupRecord(conv))throw Error("No such conversation here.");
+    const inbox=await this.store.all("inbox"),outbox=await this.store.all("outbox"),msgs=await this.convMessages(conv,inbox,outbox),main=mainChatMessages(msgs);
+    if(!main.length)throw Error("No Main flow messages here.");
+    if(what==="delete") {
+      const scope=await mainTopicScope(conv),key="topic/"+scope+"/"+MAIN_TOPIC_KEY,checks=[],prior=await this.groupRead(checks,"kv",key);
+      const allowed=new Set();
+      for(const m of main){const raw=m.excerpt_pid?[...inbox,...outbox].find(r=>r.id===m.id&&r.conv===conv):m;if(raw){const n=this.rowName(raw);if(n.key&&n.lid)allowed.add(erasedKey(conv,n.key,n.lid));}}
+      const names=new Map(),deletion=wire.newID(),ops=[];
+      for(const r of [...inbox,...outbox])if(r.conv===conv&&this.erasable(r)&&!this.erasedRow(r)){const n=this.rowName(r),key=erasedKey(conv,n.key,n.lid);if(n.key&&n.lid&&allowed.has(key))names.set(key,n);}
+      for(const [k,n]of names){ops.push({s:"erased",k,v:{conv,key:n.key,lid:n.lid,deletion,shared:false}});this.erased.add(k);}
+      if(prior)ops.push({s:"kv",k:key,v:{...prior,mark:"",mark_at:0,mark_count:0}});
+      try{ops.push(...this.eraseOps(conv,inbox,outbox));await this.store.write(ops,checks);}finally{await this.loadErased();}this.changed();await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
+    }
+    const scope=await mainTopicScope(conv),key="topic/"+scope+"/"+MAIN_TOPIC_KEY,checks=[],l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:scope,topic:MAIN_TOPIC_KEY};
+    if(what==="rename"){l.title=wire.topicTitle(body.title);if([...l.title].length>TOPICS.titleMax)throw Error("Topic name too long.");}
+    else Object.assign(l,{mark:what==="reopen"?"open":"archived",mark_at:Math.floor(this.now()/1000),mark_count:count>0?Math.min(count,main.length):main.length});
+    const ops=[{s:"kv",k:key,v:l}];if(what==="rename")ops.push(...await this.topicTitleOps(scope,MAIN_TOPIC_KEY,l.title,checks));
+    await this.store.write(ops,checks);this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});
+    return {note:what==="rename"?(l.title?"Main flow renamed across your linked devices.":"Main flow named after its first message again."):count>0&&count<main.length?"Newer Main flow messages remain active.":what==="reopen"?"Reopened on this device.":"Archived on this device. Nothing deleted."};
+  }
+
   async changeChatTopic(what,body) {
     if(!["create","done","reopen","rename","archive","delete"].includes(what))throw Error("No such topic change.");
     const {conv,id}=body;if(!wire.validHash(conv)||!wire.validID(id))throw Error("Invalid topic.");
@@ -3732,7 +3773,7 @@ export class Engine {
   }
 
   async recoverGroupIntents() {
-    const pending=(await this.store.all("kv")).filter(row=>row?.type==="group-publication" || row?.type==="group-invitation"&&row.direction==="out"&&row.status==="accepted");
+    const pending=[...await this.store.prefix("kv","group-invitation/out/"), ...await this.store.prefix("kv","group-publication/")].filter(row=>row?.type==="group-publication" || row?.type==="group-invitation"&&row.direction==="out"&&row.status==="accepted");
     for(const saved of pending) {
       const key=saved.type==="group-publication"?"group-publication/"+saved.conv+"/"+saved.seq:"group-invitation/out/"+saved.id;
       const row=await this.store.get("kv",key);if(!row)continue;
@@ -6654,7 +6695,7 @@ export class Engine {
     this.erased = new Set((await this.store.all("erased")).map((r) => erasedKey(r.conv, r.key, r.lid)));
   }
   // A row's turn name: its conversation ("" for a device thread), sender key, and logical id (a device thread's message id).
-  rowName(r) { return { conv: r.conv || "", key: r.to ? this.fp : r.fp || "", lid: r.conv ? r.lid || "" : r.id }; }
+  rowName(r) { return { conv: r.conv || "", key: r.to ? this.fp : r.history ? r.claimed_key || r.fp || "" : r.fp || "", lid: r.conv ? r.lid || "" : r.id }; }
   erasable(r) { return !r.forwarded && (!r.aside || r.control) && erasableSubs.has(r.sub || ""); }
   erasedRow(r) {
     if (!this.erased.size || !this.erasable(r)) return false;
@@ -7180,7 +7221,7 @@ export class Engine {
       const packet=wire.parseGroupContext(g.context), conv=packet.state.conv, msgs=(await this.convMessages(conv,inbox,outbox));
       const view=await this.groupThread(conv), shown=new Set(view.messages.map(m=>m.id)),visible=msgs.filter(m=>shown.has(m.id));
       const parts=await this.participationsOf({id:conv,kind:"group",root:g.root}).catch(()=>[]),last=visible.length?this.lastEvent(visible.at(-1),view.members):undefined;
-      this.needsYouOf(conv,parts.filter(p=>p.role!=="human"),visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
+      this.needsYouOf(conv,parts,visible,inbox.filter(r=>r.control&&r.conv===conv),needsYou,heldTurns,words,privateReports);
       if(this.erasedConv(conv)&&!visible.some(m=>!m.sub))continue; // deleted here, and no later turn
       const latestView = view.messages.at(-1);
       const latestText = !latestView ? "" : latestView.deleted ? "Message deleted" : firstLine(latestView.edited ? latestView.text || "" : latestView.event || latestView.body);
@@ -8013,7 +8054,16 @@ export class Engine {
   // unconfirmed). Pending or declined invitations are never shared. Runs after
   // participation records arrive and on connect; idempotent by stored copy.
   discloseHumanAudience() {
-    this.disclosing = (this.disclosing || Promise.resolve()).then(() => this.discloseHumanPass()).catch(() => {});
+    this.discloseAgain = true;
+    if (!this.disclosing) this.disclosing = (async () => {
+      try {
+        do {
+          this.discloseAgain = false;
+          try { await this.discloseHumanPass(); }
+          catch { /* retained evidence is reconsidered on the next wake */ }
+        } while (this.discloseAgain);
+      } finally { this.disclosing = null; }
+    })();
     return this.disclosing;
   }
   // A counted room end follows new member admissions even when its original
@@ -8050,12 +8100,12 @@ export class Engine {
   async discloseHumanPass() {
     if (!this.me) return;
     // Quiet group carriers live in kv, without adding visible conversation rows.
-    for(const g of await this.store.all("kv"))if(g.root&&g.context&&Array.isArray(g.records)) {
+    for(const g of await this.store.prefix("kv","group/"))if(g.root&&g.context&&Array.isArray(g.records)) {
       try { const packet=wire.parseGroupContext(g.context);await this.discloseRoomConv({id:packet.state.conv,kind:"group",root:g.root}); }
       catch(e) { /* incomplete/frozen group evidence stays held until the next retry */ }
     }
     const conversations=await this.store.all("convs");
-    for(const g of await this.store.all("kv"))if(g.root&&g.context&&Array.isArray(g.records)){const p=wire.parseGroupContext(g.context);if(!conversations.some(c=>c.id===p.state.conv))conversations.push({id:p.state.conv,kind:"group",root:g.root});}
+    for(const g of await this.store.prefix("kv","group/"))if(g.root&&g.context&&Array.isArray(g.records)){const p=wire.parseGroupContext(g.context);if(!conversations.some(c=>c.id===p.state.conv))conversations.push({id:p.state.conv,kind:"group",root:g.root});}
     for (const c of conversations) {
       let root; try { root = c.kind==="group"?wire.parseGroupRoot(c.root):wire.parseRoot(c.root); } catch (e) { continue; }
       if(c.kind!=="group" && (root.kind!=="dm" || !wire.rootMember(root,this.me.person)))continue;
@@ -8311,14 +8361,15 @@ export class Engine {
         if (group) { const epoch=await wire.groupAdmissionHash(member.admission);for(const d of p.devices)out.epochs.set(d.fingerprint,epoch); }
       }
     }
+    events ||= await this.convEvents(c.id, checks);
     out.hosts = new Map();
-    for (const { e } of events || await this.convEvents(c.id)) {
+    for (const { e } of events) {
       const h = ["invite", "scope", "share"].includes(e.type) && e.host; // a scope names its invite's host
       if (!h || out.has(h.person)) continue;
       const p = group ? await this.groupRead(checks, h.person === this.me?.person ? "kv" : "persons", h.person === this.me?.person ? "person" : h.person) : h.person === this.me?.person ? this.me : await this.store.get("persons", h.person);
       if (p && ["self", "pinned"].includes(p.state) && p.devices.some((d) => d.address === h.address && d.fingerprint === h.fingerprint)) out.hosts.set(h.person, p);
     }
-    if(group) for(const {e,hash} of events || await this.convEvents(c.id)) {
+    if(group) for(const {e,hash} of events) {
       const kept=await this.groupRead(checks,"kv","room-event/"+c.id+"/"+hash);
       if(!kept || kept.pid!==e.pid)continue;
       const p=await this.groupRead(checks,e.author.person===this.me?.person?"kv":"persons",e.author.person===this.me?.person?"person":e.author.person);
@@ -8326,7 +8377,7 @@ export class Engine {
     }
     if (group) {
       const g=await this.groupRead(checks,"kv","group/"+c.id);
-      for(const {e,hash} of events || await this.convEvents(c.id)) {
+      for(const {e,hash} of events) {
         const scope=e.group, author=out.get(e.author.person), record=scope && g.records[scope.seq] && wire.parseGroupCommit(g.records[scope.seq]);
         if(e.type!=="invite"&&e.type!=="scope"&&e.type!=="share" || !scope || !record || record.hash!==scope.hash || scope.seq>packet.state.seq || !out.roomEvents.has(hash) && (!author || out.epochs.get(e.author.fingerprint)!==e.author.group_admission))continue; // a room scope carries its invite's binding
         const host=out.get(e.host.person), isMember=!!host;
@@ -8337,7 +8388,7 @@ export class Engine {
       }
     }
     out.shareGrants = new Map();
-    if(group)for(const {e,hash} of events || await this.convEvents(c.id,checks)) {
+    if(group)for(const {e,hash} of events) {
       if(e.type!=="share")continue;
       const allowed=[];
       for(const ref of e.grant||[]) {
@@ -8506,6 +8557,13 @@ export class Engine {
   needsYouOf(conv, infos, msgs, ctls, needsYou, held, words = (a) => a, reports = []) {
     const mine = (h) => !!h && !!this.me && h.person === this.me.person && h.address !== this.address;
     for (const info of infos) {
+      if(info.role==="human") {
+        if(info.state!=="invited"||info.held||!info.host||info.host.person!==this.me?.person)continue;
+        const here=info.host.address===this.address&&info.host.fingerprint===this.fp;
+        const first=msgs.find(m=>m.sub==="event"&&m.pid===info.pid);
+        needsYou.push({reason:"agent_invite",role:"human",conv,pid:info.pid,peer:info.inviter?.address||"",why:(info.inviter?.label||"Someone")+" invited you to join this conversation as a guest.",excerpt:firstLine(info.note),at:first?iso(first.at):isoClaim(info.invited)||iso(this.now()),...(here?{actions:["accept","decline"]}:{decide_on:info.host.address})});
+        continue;
+      }
       if (info.role === "human" || info.state !== "invited" || !mine(info.host)) continue;
       // Listed when its first record reached this browser (msgs are oldest
       // first); the inviter's own time is only its claim.
@@ -8524,7 +8582,7 @@ export class Engine {
       const answered = msgs.some((r) => r.fp && r.reply_to === m.id && (r.kind === "answer" || r.kind === "result"));
       const e = this.execOn(ctls.filter((x) => x.sub === wire.SubStatus && x.ref && x.ref.id === m.lid && x.ref.fingerprint === fp && x.from === m.target.address), m.target.address, answered);
       if (!e || !["awaiting", "needs_human", "interrupted", "running"].includes(e.state)) continue; // client.PageReview's states
-      needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted", running: "agent_running" }[e.state], conv, pid: m.pid, id: m.id, peer: here ? this.address : m.from, kind: m.kind,
+      needsYou.push({ reason: { awaiting: "agent_awaiting", needs_human: "agent_needs_human", interrupted: "agent_interrupted", running: "agent_running" }[e.state], conv, pid: m.pid, id: m.id, target:m.target, peer: here ? this.address : m.from, kind: m.kind,
         why: (e.state === "needs_human" && this.needsYouText(m, reports)) || (e.state === "running" ? "Running on " + words(e.host) : "Decide on " + words(e.host)) + (e.detail ? ": " + e.detail : "") + ". This browser runs no agent.", excerpt: firstLine(m.body), at: iso(m.at), decide_on: e.host, ...(this.continuationOf(m,fp,e)?{continuation:this.continuationOf(m,fp,e),actions:["continue"]}:{}) });
     }
   }

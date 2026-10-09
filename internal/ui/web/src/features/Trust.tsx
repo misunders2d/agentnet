@@ -120,7 +120,7 @@ export function DeviceGrantConfirm({ change, onClose, peer }: { change: GrantCha
       title: "Answer " + possessive + " questions automatically?", ok: "Answer automatically", danger: false,
       done: "Your agent now answers " + possessive + " questions without asking you.",
       body: <>
-        <p>From now on your agent answers questions from {who} without asking you. It works with your own setup, without editing tools or anything that needs a new OK; tools you already allow keep their effects.</p>
+        <p>From now on your agent answers questions from {who} without asking you. It uses your native tools, skills and permissions unchanged. A native approval may still need your attention.</p>
         <p>Task permissions are unchanged. Questions already waiting stay waiting: answer them, or let your agent answer each one.</p>
       </>,
     },

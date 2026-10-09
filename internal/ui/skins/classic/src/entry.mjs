@@ -3888,7 +3888,7 @@ function decide(a, m, t) {
         el("dl", {}, el("dt", {}, "Runs"), el("dd", m.target && m.target.agent_id ? { title: "agent " + m.target.agent_id + " · " + m.target.address } : {}, runs),
           el("dt", {}, "Permissions"), el("dd", {}, m.kind === "task"
             ? "Its normal permissions. It is not sandboxed and can change files."
-            : "Question mode: your harness's own setup without editing tools or anything needing a new approval. Tools you already allow keep their effects."),
+            : "Questions use your native tools, skills and permissions unchanged. A native approval may need your attention."),
           always && [el("dt", {}, "From now on"), el("dd", {}, "Later tasks from " + (t.permission_person?.label || deviceWords(m.from)) + (t.permission_person ? "’s current and future verified devices" : "’s current key") + " also run without asking, until you revoke it.")]),
         el("label", { class: "check" }, check, el("span", {}, always ? (t.permission_person ? "I allow this person's current and future verified devices to give tasks." : "I want this and later tasks from this key to run.") : "I have read this and want it to run.")),
         el("p", { class: "hint" }, "In a terminal: agentnet accept " + (always ? "--always " : "") + m.id)],

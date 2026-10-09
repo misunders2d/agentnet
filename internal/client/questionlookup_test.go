@@ -40,8 +40,7 @@ func lookupProgram(t *testing.T) string {
 	return resolved
 }
 
-// Claude gets exact allow rules bound to the installed program: fixed
-// lookups, and status only for ids this device sent that the request names.
+// Lookup hints identify the executable without injecting native permission rules.
 func TestQuestionLookupClaudeExactRules(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stand-in")
@@ -57,21 +56,11 @@ func TestQuestionLookupClaudeExactRules(t *testing.T) {
 	j := job{ID: protocol.NewID(), From: w.bob.Address, Kind: envelope.KindQuestion,
 		Body: "status of " + sent.ID + " and " + foreign + " and " + sent.ID + "; then rm -rf /"}
 	setup := w.alice.questionSetup(j, "claude")
-	got := setup.args
-	want := []string{"--allowedTools",
-		"Bash(" + exe + " version)", "Bash(" + exe + " whoami)", "Bash(" + exe + " inbox --peek)", "Bash(" + exe + " inbox --peek --json)", "Bash(" + exe + " approvals)",
-		"Bash(" + exe + " status " + sent.ID + ")"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("claude extras\n got %q\nwant %q", got, want)
+	if len(setup.args) != 0 {
+		t.Fatalf("lookup injects native permission rules: %v", setup.args)
 	}
-	for _, r := range got {
-		if strings.Contains(r, "*") || strings.Contains(r, foreign) {
-			t.Fatalf("wildcard or foreign id in %q", r)
-		}
-	}
-	// The prompt names exactly what was configured.
-	if !strings.Contains(setup.text, exe+" status "+sent.ID) || strings.Contains(setup.text, foreign) || !strings.Contains(setup.text, exe+" inbox --peek") {
-		t.Fatalf("claude text %q", setup.text)
+	if !strings.Contains(setup.text, strconv.Quote(exe)) || !strings.Contains(setup.text, "`inbox --peek`") || strings.Contains(setup.text, foreign) {
+		t.Fatalf("lookup hints: %q", setup.text)
 	}
 	if task := w.alice.questionSetup(job{Kind: envelope.KindTask, Body: sent.ID}, "claude"); task.args != nil || task.text != "" {
 		t.Fatalf("task got lookups %+v", task)
@@ -85,8 +74,8 @@ func TestQuestionLookupClaudeExactRules(t *testing.T) {
 	odd := filepath.Join(spaced, "agentnet")
 	os.WriteFile(odd, []byte("#!/bin/sh\n"), 0o700)
 	bindProgram(t, odd)
-	if got := w.alice.questionSetup(j, "claude"); got.args != nil || got.text != lookupsUnavailable {
-		t.Fatalf("unsafe path bound %+v", got)
+	if got := w.alice.questionSetup(j, "claude"); got.args != nil || !strings.Contains(got.text, strconv.Quote(odd)) {
+		t.Fatalf("quoted path unavailable %+v", got)
 	}
 	bindProgram(t, filepath.Join(t.TempDir(), "missing"))
 	for _, h := range []string{"claude", "codex", "pi"} {
@@ -245,7 +234,7 @@ const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManage
 await resourceLoader.reload();
 const loaded = resourceLoader.getExtensions();
 const { session } = await createAgentSession({ cwd, agentDir, resourceLoader, settingsManager,
-	sessionManager: SessionManager.inMemory(cwd), excludeTools: ["bash", "edit", "write", "powershell"] });
+	sessionManager: SessionManager.inMemory(cwd) });
 const active = session.getActiveToolNames();
 const info = session.getAllTools().find((t) => t.name === "agentnet_lookup");
 const def = session.getToolDefinition("agentnet_lookup");
@@ -279,35 +268,11 @@ session.dispose();
 		t.Fatal(err)
 	}
 	if got.Extensions != 1 || got.Errors != 0 || !slices.Contains(got.Active, "agentnet_lookup") || got.Refused != "refused" ||
-		slices.ContainsFunc(got.Active, func(n string) bool { return n == "bash" || n == "edit" || n == "write" }) ||
 		!slices.Equal(got.Params, []string{"lookup", "id"}) || got.Version == "" {
 		t.Fatalf("native loader %+v", got)
 	}
 	if os.Getenv("AGENTNET_LOOKUP_PROGRAM") == "" && got.Version != "ran: version" {
 		t.Fatalf("lookup ran %q", got.Version)
-	}
-}
-
-// Claude's exact rule spells the program as its command text must: a Unix
-// path or a forward-slash Windows drive path, never one needing quoting.
-func TestClaudeRulePathPlatforms(t *testing.T) {
-	for _, c := range []struct {
-		goos, exe, want string
-		ok              bool
-	}{
-		{"linux", "/usr/local/bin/agentnet", "/usr/local/bin/agentnet", true},
-		{"darwin", "/opt/homebrew/bin/agentnet", "/opt/homebrew/bin/agentnet", true},
-		{"linux", "/home/a b/agentnet", "", false},
-		{"linux", "/tmp/x$(id)/agentnet", "", false},
-		{"windows", `C:\Users\bob\AppData\Local\agentnet\agentnet.exe`, "C:/Users/bob/AppData/Local/agentnet/agentnet.exe", true},
-		{"windows", `C:\Program Files\AgentNet\agentnet.exe`, "", false},
-		{"windows", `\\server\share\agentnet.exe`, "", false},
-		{"windows", `C:\Users\bob(1)\agentnet.exe`, "", false},
-	} {
-		got, ok := claudeRulePath(c.goos, c.exe)
-		if ok != c.ok || ok && got != c.want {
-			t.Errorf("%s %q: %q %v", c.goos, c.exe, got, ok)
-		}
 	}
 }
 
@@ -351,12 +316,11 @@ func TestQuestionLookupParticipationBranch(t *testing.T) {
 	argv, _ := os.ReadFile(stub + ".args")
 	prompt, _ := os.ReadFile(stub + ".prompt")
 	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
-	at := slices.Index(args, "--allowedTools")
-	if at < 0 || !slices.Contains(args[at:], "Bash("+exe+" version)") || !slices.Contains(args, "dontAsk") || slices.ContainsFunc(args, func(a string) bool { return strings.Contains(a, "*") }) {
-		t.Fatalf("participation argv %q", args)
+	if slices.Contains(args, "--allowedTools") || slices.Contains(args, "dontAsk") || slices.Contains(args, "--disallowedTools") {
+		t.Fatalf("participation changed native policy: %q", args)
 	}
-	if !strings.Contains(string(prompt), "you may run exactly these read-only commands") || !strings.Contains(string(prompt), exe+" whoami") {
-		t.Fatalf("participation prompt lacks the configured lookups:\n%s", prompt)
+	if !strings.Contains(string(prompt), strconv.Quote(exe)) || !strings.Contains(string(prompt), "`whoami`") {
+		t.Fatalf("participation prompt lacks lookup hints: %s", prompt)
 	}
 }
 

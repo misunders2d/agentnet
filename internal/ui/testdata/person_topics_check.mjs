@@ -36,3 +36,5 @@ assert.equal(preference(excluded,peer.person),'','guest/group roots cannot retai
 const mismatched=mainPreferences('workspace-one',()=>storage);
 assert.equal(mismatched([{...roots[0],id:'r2',peer:{person:'other'}}],peer.person),'','stored root must belong to verified person');
 console.log('Main UI preference PASS: late sync, reload, workspace identity, removed/guest/mismatched-root exclusion');
+
+assert.deepEqual(personTopicEntries([{id:"root",count:1,peer}],{root:{messages:[{topic:"native",body:"Kept"}],topics:[native]}}).map(t=>t.topic),["native"],"erased Main does not leave a ghost beside surviving native topics");

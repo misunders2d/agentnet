@@ -4,7 +4,32 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Current release — v0.8.12, October 9, 2026 (UTC)
+## Preparing v0.8.13 — October 9, 2026 (UTC)
+
+Branch `release/v0.8.13`, starting at `7e0ea2ef`, contains the performance-first
+bug fixes tracked in [the release checklist](plans/V0_8_13.md). It is not yet
+published. The owner deferred ongoing topic-only access and proposal editing
+(MEL-582/584) to the following release; topic merging remains backlog.
+
+The owner explicitly confirmed **Use native permissions unchanged** (MEL-504),
+superseding earlier question-specific restrictions. Presets, room transport,
+background CLI routes and product guidance now retain each owner's native
+setup. Existing request acceptance, grants, exact receiver bindings, signed
+membership, encryption and output checks remain enforced; native requests for
+approval are reported as needing attention, never automatically granted.
+
+Implemented repairs include indexed history selection, bounded browser recovery,
+long-timeline typing, reciprocal exact agent questions, one visible multi-target
+send, compact stopped cards, terminal Pending projection, old Main topic controls,
+human guest invitations in Comic OKs and safe Markdown attachment previews.
+Focused tests and comparative synthetic measurements are recorded in the
+checklist. Final combined qualification and publication remain pending.
+
+No installed clients, live client databases, grants or desktop sessions were
+changed. Physical phone convergence remains unverified. Deployment scope is
+the existing relay only, after release qualification.
+
+## Current published release — v0.8.12, October 9, 2026 (UTC)
 
 ### Published v0.8.12
 

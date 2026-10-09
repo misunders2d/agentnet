@@ -76,6 +76,7 @@ type TopicPage struct {
 // ThreadSummary.Count; 0: all it has): a mark never covers a message the
 // person has not seen.
 type TopicChange struct {
+	Root   bool           `json:"root,omitempty"`
 	Conv   string         `json:"conv,omitempty"`
 	IDs    []string       `json:"ids,omitempty"`
 	Counts map[string]int `json:"counts,omitempty"`
@@ -168,6 +169,22 @@ func (l *Live) TopicList(q TopicQuery) (TopicPage, error) {
 
 // ChangeTopic implements Topics.
 func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
+	if c.Root {
+		if c.Conv == "" || c.Peer != "" || c.ID != "" || len(c.IDs) > 0 || len(c.Counts) > 0 {
+			return "", Refuse("Invalid Main flow change.")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
+		defer cancel()
+		covered, err := l.a.ChangeChatMainTopic(client.WithQueuedSend(ctx, ""), c.Conv, what, c.Title, c.Count)
+		if err != nil {
+			return "", err
+		}
+		if !covered {
+			return "Newer Main flow messages remain active.", nil
+		}
+		return map[string]string{"rename": "Main flow renamed across your linked devices.", "archive": "Archived on this device. Nothing deleted.", "reopen": "Reopened on this device.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what], nil
+	}
+
 	if len(c.IDs) > 0 {
 		if len(c.IDs) > client.TopicPageMax || what != "done" && what != "archive" && what != "delete" {
 			return "", Refuse("Invalid bulk action.")
@@ -207,6 +224,7 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 	if c.Conv != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 		defer cancel()
+		ctx = client.WithQueuedSend(ctx, "")
 		covered, err := l.a.ChangeChatTopic(ctx, c.Conv, c.ID, what, c.Title, c.Count)
 		if err != nil {
 			return "", err

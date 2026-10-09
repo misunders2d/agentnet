@@ -80,6 +80,7 @@ export type TopicState = "active" | "done" | "archived";
 /** Topic is one of an agent's separate conversations (a device thread): each
  *  is its own reply chain, so its own session on the agent's side. */
 export interface Topic {
+  root?: boolean;
   conv?: string;
   id: string;
   peer: string;

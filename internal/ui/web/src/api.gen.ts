@@ -175,6 +175,8 @@ export interface ControlAction {
 }
 
 export interface ConvItem {
+  target?: Target;
+  role?: string;
   continuation?: ContinuationAction;
   reason: string;
   conv: string;
@@ -289,6 +291,7 @@ export interface DMSummary {
 }
 
 export interface DMThread {
+  main_topic?: ThreadSummary;
   topics?: ThreadSummary[];
   kind?: string;
   title?: string;
@@ -1130,6 +1133,7 @@ export interface ThreadSummary {
 }
 
 export interface TopicChange {
+  root?: boolean;
   conv?: string;
   ids?: string[];
   counts?: Record<string, number>;

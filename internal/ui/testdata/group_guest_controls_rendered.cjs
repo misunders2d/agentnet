@@ -2,7 +2,14 @@
 // No static rebuild, Hub, credentials or harness.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT||'playwright-core');
-const settle=async page=>{await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.evaluate(async()=>{await document.fonts.ready;await Promise.all(document.querySelector('#skin').shadowRoot.querySelector('.skin-root').getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});};
+const settle=async page=>{await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.evaluate(async()=>{
+ await document.fonts.ready;
+ const animations=document.querySelector('#skin').shadowRoot.querySelector('.skin-root').getAnimations({subtree:true}).filter(a=>{
+  const target=a.effect.target,closed=target?.closest('details:not([open])');
+  return a.effect.getComputedTiming().iterations!==Infinity&&(!closed||!!closed.querySelector(':scope > summary')?.contains(target));
+ });
+ let timer;try{await Promise.race([Promise.all(animations.map(a=>a.finished.catch(()=>{}))),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Visible animations did not settle')),4000);})]);}finally{clearTimeout(timer);}
+});};
 const root=process.env.AGENTNET_RENDERED_ASSETS?path.resolve(process.env.AGENTNET_RENDERED_ASSETS):path.resolve(__dirname,'../static'),evidence=process.env.AGENTNET_SCREENSHOTS;
 assert(evidence,'private screenshot directory required');fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const conv='c'.repeat(64),at='2026-10-05T10:00:00Z';
@@ -110,6 +117,25 @@ if(variant.startsWith('delivery-')){
 }
 if(variant==='other-device')Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});
 if(variant==='legacy-flags'){delete fixture.overview.group_invitations[0].can_cancel;delete fixture.overview.group_invitations[0].can_refresh;}
+if(variant==='terminal-card'){
+ fixture.thread.guests=[];fixture.overview.group_invitations=[];
+ fixture.thread.agents=[{pid:'own-agent',host:fixture.overview.person,agent_id:'a'.repeat(32),state:'active',invited:'2026-10-05T10:00:00Z',host_here:true,shared:[],can_ask:true,inviter:fixture.overview.person,tasks_from:[]}];
+ fixture.thread.messages.push({id:'stopped-exact',lid:'stopped-exact',from:fixture.overview.me.address,dir:'out',kind:'task',body:'Translate contribution margin. '+('Keep the full original instructions. '.repeat(40)),at:'2026-10-05T10:01:00Z',pid:'own-agent',target:{address:fixture.overview.me.address,agent_id:'a'.repeat(32)},exec:{state:'cancelled',host:fixture.overview.me.address},job_state:'cancelled',job_detail:'Cancelled by you. Nothing else should run.',actions:['accept'],state:'delivered'});
+}
+if(variant==='guest-oks'){
+ fixture.thread.role='human_guest';fixture.thread.agents=[];fixture.overview.group_invitations=[];
+ fixture.thread.guests=[{pid:'human-invite',host:fixture.overview.person,inviter:fixture.thread.members[1],state:'invited',host_here:true,can_decide:true,shared:[]}];
+ fixture.overview.needs_you=[{conv:fixture.thread.id,pid:'human-invite',role:'human',peer:fixture.thread.members[1].address,reason:'agent_invite',excerpt:'Join this conversation',why:'Invited you to join as a guest',actions:['accept','decline'],at:'2026-10-05T10:00:00Z'}];
+}
+if(variant==='render-perf'){
+ fixture.thread.guests=[];fixture.thread.agents=[];fixture.overview.group_invitations=[];
+ fixture.thread.messages=Array.from({length:1200},(_,i)=>({id:'perf-'+i,lid:'perf-'+i,from:'brin/desktop',dir:'in',kind:'message',body:i===0?'Selected warehouse context':'Retained message '+i,at:new Date(Date.parse('2026-10-05T10:00:00Z')+i*1000).toISOString(),unread:false,actions:[]}));
+ fixture.overview.dms[0].count=fixture.thread.messages.length;
+ fixture.profile={formats:0,inputs:[],measuring:false};
+ const format=Date.prototype.toLocaleTimeString;
+ Date.prototype.toLocaleTimeString=function(...args){if(fixture.profile.measuring)fixture.profile.formats++;return Reflect.apply(format,this,args);};
+ document.addEventListener('input',event=>{if(!fixture.profile.measuring||!event.composedPath().some(node=>node?.tagName==='TEXTAREA'))return;const start=performance.now();requestAnimationFrame(()=>requestAnimationFrame(()=>fixture.profile.inputs.push(performance.now()-start)));},true);
+}
 if(variant==='multi-agent'||variant==='team-tags'){
 fixture.thread.guests=[];fixture.overview.group_invitations=[];fixture.stages=[];fixture.failedOnce=false;
 fixture.thread.agents=['agent-a','agent-b'].map((pid,i)=>({pid,host:fixture.thread.members[1],agent_id:String(i+1).repeat(32),state:'active',state_text:'Active',host_here:false,shared:[],can_ask:true,inviter:fixture.overview.person,invited:'2026-10-05T10:00:00Z',tasks_from:[]}));
@@ -217,12 +243,35 @@ const shadow=document.querySelector('#skin').attachShadow({mode:'open'}),css=new
 const skinRoot=document.createElement('div');skinRoot.className='skin-root';shadow.append(skinRoot);const module=await import(base+manifest.entry);await module.mount(skinRoot,host);
 window.openGroup=()=>open(seed.thread.id,'conversation');window.openFixtureMessage=id=>open(id,'message');window.reloadFixture=()=>changed?.({type:'change',seq:++fixture.overview.seq});
 window.disableInvite=()=>{Object.assign(fixture.overview.group_invitations[0],{can_cancel:false,can_refresh:false});changed?.({type:'change',seq:++fixture.overview.seq});};window.ready=true;
+if(new URL(location.href).searchParams.get('native')==='1'){
+ const frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ setTimeout(async()=>{let result;try{
+  await openGroup();const dom=()=>document.querySelector('#skin').shadowRoot;
+  for(let n=0;n<200&&dom().querySelectorAll('[data-mid]').length!==1200;n++)await sleep(25);
+  await document.fonts.ready;await frame();
+  if(dom().querySelectorAll('[data-mid]').length!==1200)throw Error('Native timeline did not load');
+  const input=dom().querySelector('form[aria-label="Write a message"] textarea');
+  fixture.requests=[];fixture.profile.formats=0;fixture.profile.inputs=[];fixture.profile.measuring=true;
+  const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;
+  for(const text of ['Draft','Draft grows','Draft stays unsent']){setter.call(input,text);input.dispatchEvent(new Event('input',{bubbles:true,composed:true}));await frame();}
+  const typed={...fixture.profile,inputs:[...fixture.profile.inputs]},start=performance.now();
+  fixture.thread.messages.push({id:'perf-new',lid:'perf-new',from:'brin/desktop',dir:'in',kind:'message',body:'Newest arrival remains responsive',at:'2026-10-05T11:00:00Z',unread:false,actions:[]});reloadFixture();
+  for(let n=0;n<200&&!dom().querySelector('[data-mid="perf-new"]');n++)await sleep(25);await frame();
+  result={kind:'native-comic-render-profile',width:innerWidth,typed,arrivalMs:performance.now()-start,rows:dom().querySelectorAll('[data-mid]').length,draft:input.value,sent:fixture.requests.some(r=>['/api/dm/send','/api/dm/agent/ask','/api/act'].includes(r.path))};
+ }catch(e){result={error:String(e),stack:e.stack};}await fetch('/native-result',{method:'POST',body:JSON.stringify(result)});},100);
+}
+
 `;
-const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0.0.1');if(u.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>');return;}if(u.pathname==='/boot.mjs'){res.setHeader('Content-Type','text/javascript');res.end(boot);return;}if(u.pathname.startsWith('/assets/')){const file=path.resolve(root,'.'+u.pathname.slice(7));if(file.startsWith(root+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.woff2')?'font/woff2':'application/octet-stream');res.end(fs.readFileSync(file));return;}}res.statusCode=404;res.end('fixture route missing');});
+let nativeFinish;
+const server=http.createServer((req,res)=>{if(req.url==='/native-result'&&req.method==='POST'){let body="";req.on("data",chunk=>body+=chunk);req.on("end",()=>{fs.writeFileSync(path.join(evidence,"native-result.json"),body);res.end("{}");nativeFinish?.();});return;}const u=new URL(req.url,'http://127.0.0.1');if(u.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}#skin{height:100dvh}</style><div id="skin"></div><script type="module" src="/boot.mjs"></script>');return;}if(u.pathname==='/boot.mjs'){res.setHeader('Content-Type','text/javascript');res.end(boot);return;}if(u.pathname.startsWith('/assets/')){const file=path.resolve(root,'.'+u.pathname.slice(7));if(file.startsWith(root+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.setHeader('Content-Type',file.endsWith('.mjs')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.json')?'application/json':file.endsWith('.woff2')?'font/woff2':'application/octet-stream');res.end(fs.readFileSync(file));return;}}res.statusCode=404;res.end('fixture route missing');});
 (async()=>{
  let browser;const errors=[],shots=[];
  try{
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
+  if(process.env.AGENTNET_NATIVE_FIXTURE==='1'){
+   fs.writeFileSync(path.join(evidence,'native-url'),origin+'/?skin=comic&case=render-perf&native=1');
+   await new Promise(resolve=>{nativeFinish=resolve;});return;
+  }
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
    const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
@@ -465,6 +514,56 @@ if(process.env.AGENTNET_TEAM_EDIT_REGRESSION==='1'){
  finally{await context.close();}
  continue;
 }
+if(process.env.AGENTNET_TERMINAL_CARD==='1'){
+ const {page,context}=await openCase('terminal-card');
+ try{
+  const row=page.locator('[data-mid="stopped-exact"]'),card=row.locator('[data-terminal-request]');
+  await card.waitFor();console.log("terminal card loaded",width);await settle(page);console.log("terminal settled",width);
+  assert.equal(await card.getAttribute('open'),null,'Historical stopped request starts collapsed');
+  assert((await row.boundingBox()).height<120,'Whole stopped request stays compact');
+  assert.match(await card.locator('summary').innerText(),/Stopped/);
+  assert.match(await card.locator('summary').innerText(),/Translate contribution margin/);
+  const retry=card.getByRole('button',{name:'Run it again',exact:true});assert.equal(await retry.isVisible(),false);
+  const actions=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/act'&&r.body?.do!=='read'));
+  await card.locator('summary').focus();await page.keyboard.press('Enter');
+  await retry.waitFor();console.log('terminal expanded',width);assert.match(await card.innerText(),/Cancelled by you/);assert.deepEqual(await actions(),[],'Expanding never retries');
+  await card.locator('summary').focus();await page.keyboard.press('Enter');assert.equal(await retry.isVisible(),false);
+  await page.evaluate(()=>{fixture.thread.messages.find(m=>m.id==='stopped-exact').actions=[];reloadFixture();});console.log('terminal refreshing',width);await settle(page);console.log('terminal refreshed',width);assert.equal(await card.getAttribute('open'),null);assert((await row.boundingBox()).height<120,'History without actions stays compact');
+  const shot=path.join(evidence,'comic-terminal-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_GUEST_OKS==='1'){
+ const {page,context}=await openCase('guest-oks');
+ try{
+  await page.getByRole('button',{name:/^OKs/}).click();
+  await page.getByRole('button',{name:'Join conversation',exact:true}).waitFor();
+  const decline=page.getByRole('button',{name:'No thanks',exact:true});await decline.click();
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/dm/guest/decide'));
+  assert.deepEqual(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/guest/decide').map(r=>r.body)),[{pid:'human-invite',accept:false}]);
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/agent/decide'||r.path==='/api/dm/agent/ask').length),0);
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_RENDER_PERF==='1'){
+ const {page,context}=await openCase('render-perf');
+ try{
+  await settle(page);
+  const input=page.getByRole('form',{name:'Write a message'}).locator('textarea');
+  await page.evaluate(()=>{fixture.requests=[];fixture.profile.formats=0;fixture.profile.inputs=[];fixture.profile.measuring=true;});
+  for(const text of ['Draft','Draft grows','Draft stays unsent']){await input.fill(text);await settle(page);}
+  const typed=await page.evaluate(()=>({...fixture.profile,rows:document.querySelector('#skin').shadowRoot.querySelectorAll('[data-mid]').length,sent:fixture.requests.some(r=>['/api/dm/send','/api/dm/agent/ask','/api/act'].includes(r.path))}));
+  assert.equal(typed.rows,1200);assert.equal(typed.sent,false);
+  if(process.env.AGENTNET_PERF_BASELINE!=='1')assert(typed.formats<8,'Typing must not reformat retained conversation: '+typed.formats);
+  assert.equal(await input.inputValue(),'Draft stays unsent');
+  const arrivalStart=await page.evaluate(()=>performance.now());
+  await page.evaluate(()=>{fixture.profile.formats=0;fixture.thread.messages.push({id:'perf-new',lid:'perf-new',from:'brin/desktop',dir:'in',kind:'message',body:'Newest arrival remains responsive',at:'2026-10-05T11:00:00Z',unread:false,actions:[]});reloadFixture();});
+  await page.locator('[data-mid="perf-new"]').waitFor();await settle(page);
+  assert.equal(await input.inputValue(),'Draft stays unsent');
+  console.log(JSON.stringify({kind:'comic-render-profile',width,typed,arrivalMs:await page.evaluate(start=>performance.now()-start,arrivalStart),arrivalFormats:await page.evaluate(()=>fixture.profile.formats)}));
+ }finally{await context.close();}
+ continue;
+}
 if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
  const {page,context}=await openCase('multi-agent');
  try{
@@ -525,7 +624,13 @@ if(process.env.AGENTNET_MULTI_AGENT_REGRESSION==='1'){
    reloadFixture();
   });
   await settle(page);assert.equal(await visibleCopies(),1,'durable projection replaces previews without duplicating body');
-  for(const a of first){const child=page.locator(skin==='comic'?'[data-mid="'+a.id+'"]':'#m-'+a.id);assert((await child.innerText()).includes('inventory.txt'),'Each exact recipient retains its own attachment name despite compact human body');}
+  if(skin==='comic'){
+   const group=page.locator('[data-send-group]');assert.equal(await group.count(),1);
+   assert.equal(await group.locator('[data-message-bubble]').count(),1,'No empty second bubble');
+   assert.equal(await group.locator('[data-send-target]').count(),2,'Each exact target retains its own state');
+   assert.equal((await group.innerText()).split('inventory.txt').length-1,1,'Shared attachment shown once');
+   assert.match(await group.innerText(),/Working/);assert.match(await group.innerText(),/Done/);
+  } else for(const a of first){const child=page.locator('#m-'+a.id);assert((await child.innerText()).includes('inventory.txt'),'Each exact recipient retains its own attachment name');}
   await page.evaluate(()=>reloadFixture());await settle(page);assert.equal(await visibleCopies(),1,'reloading server projection preserves grouping');
   await page.evaluate(()=>{fixture.thread.messages.push({id:'incoming-ref',lid:'incoming-ref',from:'brin/desktop',dir:'in',kind:'message',body:'[@Analyst](agentnet:agent/agent-a) [@Analyst](agentnet:agent/agent-b) INERT_INCOMING_MARKER',at:'2026-10-05T10:03:00Z'});reloadFixture();});
   await page.getByText(/INERT_INCOMING_MARKER/).first().waitFor();await settle(page);

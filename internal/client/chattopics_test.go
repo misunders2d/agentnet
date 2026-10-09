@@ -388,3 +388,124 @@ func TestChatTopicGroupAgentReply(t *testing.T) {
 		t.Fatalf("finished group topic: %+v %v", topics, e)
 	}
 }
+
+func TestChatMainPreferencesAndExactErasure(t *testing.T) {
+	w, conv, _ := dmFiles(t)
+	a := w.alice
+	ctx := tctx(t)
+	send := func(m ConvOutgoing) ConvMessage {
+		t.Helper()
+		r, err := a.SendConv(ctx, conv, m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return convMsgByID(t, a, conv, r.ID)
+	}
+	first := send(ConvOutgoing{Body: "Main original"})
+	reply := send(ConvOutgoing{Body: "Main reply", ReplyTo: first.LID})
+	seed := send(ConvOutgoing{Body: "Promoted seed"})
+	child := send(ConvOutgoing{Body: "Promoted child", ReplyTo: seed.LID})
+	if _, err := a.ChangeChatTopic(ctx, conv, seed.LID, "create", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	native := send(ConvOutgoing{Body: "Native topic", Topic: "new"})
+	summary := func() *ThreadSummary {
+		t.Helper()
+		msgs, err := a.ConversationMessages(conv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := a.ChatMainTopicForMessages(conv, msgs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	change := func(what, title string, count int) {
+		t.Helper()
+		if _, err := a.ChangeChatMainTopic(ctx, conv, what, title, count); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v := summary(); v == nil || v.ID != "" || v.Count != 2 {
+		t.Fatalf("main: %+v", v)
+	}
+	change("rename", "Private Main", 2)
+	if v := summary(); v.Title != "Private Main" || !v.Renamed {
+		t.Fatalf("renamed: %+v", v)
+	}
+	third := send(ConvOutgoing{Body: "New Main message"})
+	change("archive", "", 2)
+	if v := summary(); v.State != TopicActive || v.Count != 3 {
+		t.Fatalf("stale archive: %+v", v)
+	}
+	before, err := a.ConversationMessages(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change("archive", "", 3)
+	if v := summary(); v.State != TopicArchived {
+		t.Fatalf("archive: %+v", v)
+	}
+	change("reopen", "", 3)
+	if v := summary(); v.State != TopicActive {
+		t.Fatalf("reopen: %+v", v)
+	}
+	automatic := summary().AutoTitle
+	change("rename", "", 3)
+	if v := summary(); v.Title != automatic || v.Renamed {
+		t.Fatalf("reset: %+v", v)
+	}
+	after, err := a.ConversationMessages(conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) || !reflect.DeepEqual(ChatTopicAssignments(before), ChatTopicAssignments(after)) {
+		t.Fatal("private preferences created public turns or assignments")
+	}
+	for _, what := range []string{"done", "create"} {
+		if _, err := a.ChangeChatMainTopic(ctx, conv, what, "", 0); err == nil {
+			t.Fatalf("root allowed %s", what)
+		}
+	}
+	change("archive", "", 3)
+	change("delete", "", 3)
+	if v := summary(); v != nil {
+		t.Fatalf("deleted main: %+v", v)
+	}
+	rows, err := a.store.db.Query(`SELECT key,lid FROM conv_erased WHERE conv=?`, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	erased := map[string]string{}
+	for rows.Next() {
+		var key, lid string
+		if err := rows.Scan(&key, &lid); err != nil {
+			t.Fatal(err)
+		}
+		erased[lid] = key
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+	if !reflect.DeepEqual(erased, map[string]string{first.LID: a.Self().Fingerprint(), reply.LID: a.Self().Fingerprint(), third.LID: a.Self().Fingerprint()}) {
+		t.Fatalf("erased wrong turns: %v", erased)
+	}
+	for _, m := range []ConvMessage{seed, child, native} {
+		if got := convMsgByID(t, a, conv, m.ID); got.Body != m.Body {
+			t.Fatalf("sibling changed: %+v", got)
+		}
+	}
+	if _, _, ok, err := a.store.conversation(conv); err != nil || !ok {
+		t.Fatalf("root changed: %v %v", ok, err)
+	}
+	topics, err := a.ChatTopics(conv)
+	if err != nil || len(topics) != 2 {
+		t.Fatalf("native siblings: %+v %v", topics, err)
+	}
+	send(ConvOutgoing{Body: "A new Main after deletion"})
+	if v := summary(); v == nil || v.Count != 1 || v.State != TopicActive {
+		t.Fatalf("new Main hidden by deleted archive: %+v", v)
+	}
+}

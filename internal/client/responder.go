@@ -24,14 +24,12 @@ type Responder struct {
 	Timeout time.Duration `json:"timeout"`           // the person's own wall-clock limit per question or task; 0: none
 }
 
-// harness is how one installed coding agent is run headless, in its own
-// background session. Question mode uses the recipient's own harness setup
-// (skills, plugins, MCP servers, permissions): never blanket-disable skills
-// or swap in an empty configuration. It only takes away what a question does
-// not need (editing, new approvals); limits says exactly what it allows.
+// harness starts a separate background session with the owner's native setup.
+// Questions and tasks inherit the same tools, skills, sandbox and approval
+// policy. AgentNet admits requests; the native harness decides permitted effects.
 type harness struct {
 	bin      string
-	question []string     // the user's own setup; no editing, no new approvals
+	question []string     // the user's own setup and native permissions
 	task     []string     // the harness's normal permissions; nothing bypassed
 	stdin    bool         // prompt on stdin; otherwise as the last argument
 	out      string       // flag naming a file for the final answer; otherwise stdout
@@ -45,76 +43,24 @@ type harness struct {
 // Harnesses lists the supported automatic responders. Flags were checked
 // against each tool's --help; see docs/revival/M4.md for what was actually
 // run. Other harnesses can still read and reply through the CLI by hand.
+const nativeHarnessPermissions = "Questions and accepted tasks use your native settings, skills, plugins, tools and permissions unchanged. AgentNet adds no tool exclusions, sandbox or approval overrides. If your agent needs a native approval that a background session cannot obtain, the request needs your attention. Your open sessions remain untouched."
+
 var Harnesses = map[string]harness{
 	"claude": {
-		bin: "claude",
-		// The user's own settings, skills, plugins and MCP servers load as
-		// usual; dontAsk runs only tools those settings already allow and
-		// refuses the rest; file-editing tools are off for questions.
-		question: []string{"-p", "--output-format", "text", "--no-session-persistence",
-			"--permission-mode", "dontAsk", "--disallowedTools", "Edit,Write,NotebookEdit"},
-		task:     []string{"-p", "--output-format", "text", "--no-session-persistence"},
-		stdin:    true,
-		tested:   "tasks and a skill-backed question tested live",
-		sessions: claudeSessions,
-		addDir:   "--add-dir",
-		addIn:    true,
-		limits: "claude questions use your Claude settings, skills, plugins and MCP servers; only tools your settings already allow run " +
-			"(permission mode dontAsk: anything else is refused, never asked) and Edit, Write and NotebookEdit are off, " +
-			"but Bash commands and MCP tools your settings allow keep whatever effects they have; " +
-			"questions may also run fixed read-only AgentNet lookups of this device (version, whoami, inbox without marking read, approvals, status of a message this device sent) " +
-			"through the exact installed agentnet program, as exact allow rules your own deny and ask rules still override (none when the program's path would need shell quoting); " +
-			"files a question or task receives are read-only copies, under names AgentNet chooses, in a run folder added with --add-dir, " +
-			"and a device task's outbox folder is added the same way (your settings decide whether Claude may write there)",
+		bin: "claude", question: []string{"-p", "--output-format", "text", "--no-session-persistence"},
+		task:  []string{"-p", "--output-format", "text", "--no-session-persistence"},
+		stdin: true, sessions: claudeSessions, addDir: "--add-dir", addIn: true, limits: nativeHarnessPermissions + " Received files and task output folders are added with --add-dir; your setup decides access.",
 	},
 	"codex": {
-		bin: "codex",
-		// The user's own config (skills, MCP servers with their own approval
-		// modes) in a read-only sandbox; approval "never" refuses anything
-		// that would need an approval.
-		question: []string{"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "--color", "never",
-			"-c", `approval_policy="never"`},
-		task:     []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
-		stdin:    true,
-		out:      "-o",
-		tested:   "tasks and a skill-backed question tested live",
-		sessions: codexSessions,
-		addDir:   "--add-dir",
-		limits: "codex questions use your Codex config, skills and MCP servers; shell commands run in a read-only sandbox and anything that would need an approval is refused, " +
-			"but MCP tools your config auto-approves are not covered by the sandbox and keep whatever effects they have; " +
-			"questions are told the read-only AgentNet lookups of this device, which run inside that sandbox (status shows the local record without network); " +
-			"files a question or task receives are read-only copies it is told the paths of, read as your sandbox allows; " +
-			"a device task run gets one extra writable folder, its outbox, through --add-dir (which codex documents as writable alongside the workspace); " +
-			"that folder is the only change to your sandbox: AgentNet never passes --sandbox or a bypass to a task; " +
-			"a resumed session, where codex cannot add a folder, gets no outbox and is not told of one",
+		bin: "codex", question: []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
+		task:  []string{"exec", "--ephemeral", "--skip-git-repo-check", "--color", "never"},
+		stdin: true, out: "-o", sessions: codexSessions, addDir: "--add-dir", limits: nativeHarnessPermissions + " A device task gets one extra writable folder, its outbox, through --add-dir. AgentNet never passes --sandbox or a bypass; a resumed session, where codex cannot add a folder, gets no outbox.",
 	},
 	"omp": {
-		bin: "omp",
-		// OMP 18.7 refuses noninteractive approval prompts. The worker adds
-		// only built-in editing/shell denies as a one-run native overlay.
-		question: []string{"-p", "--no-session", "--approval-mode", "always-ask"},
-		task:     []string{"-p", "--no-session"},
-		stdin:    true,
-		limits:   "omp questions use your OMP settings, skills, extensions and MCP servers; read tools and tools your settings explicitly allow run, while new approvals are refused. Built-in edit, write, notebook, bash, python and eval are denied for this run only; other tools your setup allows keep their effects. A fixed read-only AgentNet lookup tool respects your own tool policies. Tasks use your normal OMP permissions. Background jobs start fresh sessions; your open sessions are unchanged.",
+		bin: "omp", question: []string{"-p", "--no-session"}, task: []string{"-p", "--no-session"}, stdin: true, limits: nativeHarnessPermissions,
 	},
 	"pi": {
-		bin: "pi",
-		// The user's own Pi setup: settings (defaultTools), skills and
-		// extensions with their tools load as usual; --exclude-tools removes
-		// only the built-ins that change the machine. Pi 0.87.1 has no
-		// unattended permission or read-only mode for its shell, so bash and
-		// powershell are off too (an allowlist would also switch every
-		// extension tool off, which is not the recipient's setup).
-		question: []string{"-p", "--no-session", "--exclude-tools", "bash,edit,write,powershell"},
-		task:     []string{"-p", "--no-session"},
-		// The request on stdin, never in its arguments, which any local
-		// user may read (/proc/PID/cmdline): Pi 0.87.1 reads a piped stdin
-		// as its first message (dist/main.js readPipedStdin).
-		stdin: true,
-		limits: "pi questions use your Pi settings, skills and extensions with their tools; only bash, edit, write and powershell are off " +
-			"(Pi cannot run its shell read-only or ask), and extension tools keep whatever effects your setup gives them; " +
-			"an AgentNet lookup tool runs only the installed agentnet program's fixed read-only lookups (version, whoami, inbox without marking read, approvals, status of a message this device sent); " +
-			"files a question or task receives are read-only copies it is told the paths of, and a device task is told its outbox folder; no folder is added for Pi, whose own tools decide",
+		bin: "pi", question: []string{"-p", "--no-session"}, task: []string{"-p", "--no-session"}, stdin: true, limits: nativeHarnessPermissions + " File paths are supplied in context; no folder is added for Pi.",
 	},
 }
 
@@ -298,12 +244,12 @@ func checkOMPResponderSetup(r *Responder) error {
 	ownProcessGroup(cmd)
 	defer stopGroup(cmd)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("OMP setup unavailable: chosen launcher --help failed; native --config and --approval-mode support is required (%w)", err)
+		return fmt.Errorf("OMP setup unavailable: chosen launcher --help failed; native background invocation support is required (%w)", err)
 	}
 	if out.truncated {
 		return errors.New("OMP setup unavailable: native capability output exceeded the inspection limit")
 	}
-	for _, flag := range []string{"--print", "--no-session", "--config", "--approval-mode", "--extension"} {
+	for _, flag := range []string{"--print", "--no-session", "--extension"} {
 		if !strings.Contains(out.String(), flag) {
 			return fmt.Errorf("OMP setup unsupported: chosen launcher does not advertise %s; native OMP 18.4.8/18.7.0 contract is required", flag)
 		}

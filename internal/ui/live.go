@@ -191,7 +191,7 @@ func countDecisions(o *Overview) {
 // lists it, with the decisions this installation takes on it. words names
 // its sender for the sentence (client.PeerWords).
 func convItem(c client.ConvReview, words func(string) string) ConvItem {
-	v := ConvItem{Reason: c.Reason, Conv: c.Conv, PID: c.PID, ID: c.ID, Peer: c.From, Kind: c.Kind, Excerpt: excerpt(c.Body), At: c.At, Unread: c.Unread}
+	v := ConvItem{Target: c.Target, Role: c.Role, Reason: c.Reason, Conv: c.Conv, PID: c.PID, ID: c.ID, Peer: c.From, Kind: c.Kind, Excerpt: excerpt(c.Body), At: c.At, Unread: c.Unread}
 	switch c.Reason {
 	case client.ReviewInvite:
 		v.Why, v.Actions = c.Detail, []string{DoAccept, DoDecline}

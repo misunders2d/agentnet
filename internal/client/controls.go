@@ -1649,10 +1649,12 @@ func (a *Agent) decorateConv(conv string, msgs []ConvMessage) error {
 		if msg.Sub != "" {
 			continue // events and history carriers are records, not turns
 		}
-		if msg.Target != nil && (msg.Kind == envelope.KindQuestion || msg.Kind == envelope.KindTask) {
+		if msg.ExcerptPID == "" && msg.Target != nil && (msg.Kind == envelope.KindQuestion || msg.Kind == envelope.KindTask) {
 			key := msg.Key
 			if msg.Dir == "out" && msg.Via == "" {
 				key = selfFP
+			} else if key == "" && msg.History {
+				key = msg.Claimed
 			}
 			if e, ok := execs[ControlRef{ID: msg.LID, Fingerprint: key}]; ok && e.Host == msg.Target.Address { // only the target device speaks for it (admission checked the key)
 				status, at := convAnswer(msgs, *msg)

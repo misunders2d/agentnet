@@ -117,8 +117,6 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   const latestReminder = latest ? reminderOf(overview, latest.id) : undefined;
   // Standing permissions for a device's agent: kept on a computer only.
   const grants = !!th && store.host.platform !== "browser";
-  const unread = useStore(store, (s) => [...(s.overview?.dms || []), ...(s.overview?.threads || [])].reduce((n, c) => n + (c.id === ctx.conv || c.id === ctx.thread?.topic?.id ? 0 : c.unread), 0)
-    + (s.overview?.topics || []).reduce((n, c) => n + c.archived_unread, 0)); // archived topics are counted, not listed
 
   const me = overview?.person;
   let title = "", sub = "", online: boolean | null = null, avatar = null;
@@ -167,10 +165,10 @@ export function Header({ ctx, wide, helpers: hs, canInvite }: { ctx: Ctx; wide: 
   return (
     <header className={"flex shrink-0 items-center gap-2 border-b-[1.5px] border-outline bg-surface " + (wide ? "h-[76px] px-5" : "h-16 pl-1 pr-1.5")}>
       {!wide && (
-        <button type="button" onClick={() => store.close()} aria-label={unread ? "Back to chats, " + unread + " unread" : "Back to chats"}
+        <button type="button" onClick={() => store.close()} aria-label="Back to chats"
           className="flex h-11 shrink-0 items-center rounded-full pl-1 pr-1.5 hover:bg-sunken">
           <IconChevronLeft size={26} stroke={2.2} />
-          {unread > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-ink px-1.5 text-[11px] font-bold text-canvas tnum">{unread > 99 ? "99+" : unread}</span>}
+          <span className="text-[13px] font-semibold">Chats</span>
         </button>
       )}
       <button type="button" onClick={t ? () => store.setPanel(true) : undefined} disabled={!t}
