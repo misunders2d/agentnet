@@ -1874,9 +1874,10 @@ function linkDialog(l) {
 
 // historyLine says how far a new device has your chats.
 function historyLine(h) {
-  if (h.state === "done") return h.name + " has your chats.";
+  if (h.state === "done") return "History queued · keep AgentNet running here";
   if (h.state === "ended") return "Copying your chats to " + h.name + " stopped: it is no longer one of your devices.";
   const where = state.overview.device ? "Keep this page open until it is done." : "AgentNet on this computer copies them while it runs.";
+  if (!h.total) return "Getting your chats… " + where;
   return "Copying your chats to " + h.name + ": " + h.done + " of " + h.total + " conversations. " + where;
 }
 
