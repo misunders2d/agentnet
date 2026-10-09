@@ -114,7 +114,7 @@ separately owns MEL-502 collective tags and latency investigation; avoid duplica
 writers. This integrated candidate is ready for the full/native release suite.
 Retain the valid focused and rendered evidence; repeat affected checks only if
 qualification exposes a new failure or a subsequent source change requires it.
-No v0.8.11 tag, publication or relay rollout has occurred. Clients update through
+No v0.8.11 publication or relay rollout has occurred. Clients update through
 their own controls; actual phone convergence remains a separate physical check.
 
 The first full integrated qualification at `634691e7`
@@ -129,6 +129,16 @@ during bulk catch-up. The Windows governance journey now waits for the direct
 incoming file it intends to verify, since a preceding history copy may be replaced.
 No timeout was raised. Preserve passing unaffected evidence and qualify all
 affected paths on the final corrected candidate before tagging.
+
+The corrected application source at `3c880b65183d051dbeb25bc41855eaeab1156377`
+passed all affected native paths on Linux, macOS and Windows in
+[run 37918602575](https://github.com/misunders2d/agentnet/actions/runs/37918602575).
+Final focused race checks cover history/file fairness, removal and frozen-person
+boundaries; final browser checks passed 755 signed Node vectors and 756 actual
+IndexedDB vectors. Repository-wide vet passed locally and on all three runners.
+The release-record commit changes documentation only; application source remains
+identical to that qualified revision. Packaging still must pass its native shell
+and Linux AppImage replacement/restart gates before publication and relay rollout.
 
 Next-release scope from the owner, explicitly excluded from this release:
 MEL-525 own-human task grants using the existing permission machinery;
