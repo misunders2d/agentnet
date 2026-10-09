@@ -3,7 +3,7 @@
 Direct Linear read on October 9, 2026: 108 project issues, 79 open. Each open
 record is accounted for below. Shipped means a recorded implementation and
 qualification exist; it does not close the broader ticket or claim a physical
-user journey. Current fixes still require the release checklist gates.
+user journey. The v0.8.12 fixes passed the release checklist gates and were published on October 9.
 
 Read-only source review and existing release evidence were used before deciding
 to change code. No live grants, sessions, messages, tasks or installation changed
@@ -12,12 +12,12 @@ not justify reimplementing a shipped path.
 
 | Issue | Disposition | Evidence / remaining limit |
 | --- | --- | --- |
-| [MEL-551](https://linear.app/mellanni/issue/MEL-551) | Fix in v0.8.12 | Prominent available-version heading/action in AppControls; retain prior outcome as secondary information. Focused desktop/narrow rendered proof passes. |
-| [MEL-580](https://linear.app/mellanni/issue/MEL-580) | Fix in v0.8.12 | Live metadata shows a genuinely unmatched task. Expose exact pending IDs through existing navigation; preserve exact correlation and late-history recovery. No invented stale-state repair. |
+| [MEL-551](https://linear.app/mellanni/issue/MEL-551) | Shipped v0.8.12 | Prominent available-version heading/action in AppControls; retain prior outcome as secondary information. Focused desktop/narrow rendered proof passes. |
+| [MEL-580](https://linear.app/mellanni/issue/MEL-580) | Shipped v0.8.12 | Live metadata shows a genuinely unmatched task. Expose exact pending IDs through existing navigation; preserve exact correlation and late-history recovery. No invented stale-state repair. |
 | [MEL-526](https://linear.app/mellanni/issue/MEL-526) | Explicit future scope | Optional skin installation/extraction remains separate; no Classic/Zoom removal in this candidate. |
-| [MEL-502](https://linear.app/mellanni/issue/MEL-502) | Integrated; qualifying | Prepared 4fc19719 integrated as fec2b046. Signed v1/v2 compatibility and exact collective selection; merged focused checks pass including rendered fanout/retry. |
+| [MEL-502](https://linear.app/mellanni/issue/MEL-502) | Shipped v0.8.12 | Prepared 4fc19719 integrated as fec2b046. Signed v1/v2 compatibility and exact collective selection; merged focused checks pass including rendered fanout/retry. |
 | [MEL-563](https://linear.app/mellanni/issue/MEL-563) | Remaining diagnosis; no proven new source defect | Concurrency shipped v0.8.8; Pi completion and launch diagnostics have recorded fixes. Current model/MCP/tool versus execution latency remains unmeasured. No model/effort change or paid probe; preserve own settings. |
-| [MEL-525](https://linear.app/mellanni/issue/MEL-525) | Fix in v0.8.12 | Expose existing verified-person task grant on the receiving host. Preserve independent consent, revocations, native permissions and no-replay behavior; focused authority/race/UI checks pass. |
+| [MEL-525](https://linear.app/mellanni/issue/MEL-525) | Shipped v0.8.12 | Expose existing verified-person task grant on the receiving host. Preserve independent consent, revocations, native permissions and no-replay behavior; focused authority/race/UI checks pass. |
 | [MEL-548](https://linear.app/mellanni/issue/MEL-548) | Shipped core; remaining discovery covered separately | Native/browser person/group topics exist in chattopics.go and engine.mjs; v0.8.11 exact preview/unread fixes retained. No new topic model. |
 | [MEL-523](https://linear.app/mellanni/issue/MEL-523) | Shipped; retain regression | trailers.go topicClosurePromptText requires explicit request to close; deriveTopic vectors preserve manual Done/Reopen and multi-turn activity. One answer does not imply topic closure. |
 | [MEL-494](https://linear.app/mellanni/issue/MEL-494) | Shipped preview fix; broader notification limit remains | v0.8.11 exact preview/topic/alias routing and delayed-history tests passed. Channel-only push still carries an opaque conversation rather than an exact message; do not claim that route now highlights a message. |
@@ -29,7 +29,7 @@ not justify reimplementing a shipped path.
 | [MEL-493](https://linear.app/mellanni/issue/MEL-493) | Shipped; presentation follow-up in MEL-551 | v0.8.10 explicit stable-release check is independent of relay advice; v0.8.12 improves notice hierarchy. No polling or new admin rights. |
 | [MEL-542](https://linear.app/mellanni/issue/MEL-542) | Shipped; retain exact-identity regression | v0.8.8 and v0.8.10 suppress stale Bring back after exact active/pending rejoin. Historical memberships and context stay separate. |
 | [MEL-497](https://linear.app/mellanni/issue/MEL-497) | Shipped continuation/guidance; native environment remains separate | v0.8.8 exact request/attempt continuation and v0.8.9 native-permission recovery guidance. A read-only filesystem/IPC failure requires native recovery, not unchanged retry or blanket sandbox bypass. |
-| [MEL-550](https://linear.app/mellanni/issue/MEL-550) | Fix bounded clarity in v0.8.12 | Adjacent local default/named cards and host/default-role labels. Exact identities/routing retained; no agent-registry or full directory redesign. |
+| [MEL-550](https://linear.app/mellanni/issue/MEL-550) | Shipped bounded clarity in v0.8.12 | Adjacent local default/named cards and host/default-role labels. Exact identities/routing retained; no agent-registry or full directory redesign. |
 | [MEL-573](https://linear.app/mellanni/issue/MEL-573) | Shipped v0.8.9 | Raw-link label shortening retains full destinations, descriptive labels and code; retain link parser/rendering tests. |
 | [MEL-540](https://linear.app/mellanni/issue/MEL-540) | Shipped; collective feature qualifying separately | v0.8.8 exact grouped multi-agent requests and distinct-executor concurrency, v0.8.9 causal cycles. Current tags reuse those paths; successful targets must not retry. |
 | [MEL-546](https://linear.app/mellanni/issue/MEL-546) | Shipped source fixes; physical queue incident not newly reproduced | v0.8.6 bounded upload, durable deletion/handover fences and truthful stopped/uncertain status; v0.8.11 catch-up fairness. Preserve queued_retraction and send regressions; no real message replay. |

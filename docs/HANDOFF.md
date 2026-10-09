@@ -4,7 +4,32 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Qualified release candidate — v0.8.12, October 9, 2026
+## Current release — v0.8.12, October 9, 2026 (UTC)
+
+### Published v0.8.12
+
+[Download v0.8.12](https://github.com/misunders2d/agentnet/releases/tag/v0.8.12).
+Published at **12:04:00 UTC** from
+`ba49514927d082bb0b7de46b9ceca1f934c364e4`, a documentation-only release record
+above the qualified application and corrected tests. All five final
+[packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/37926597371)
+passed, including native shell tests on all three systems and actual Linux
+AppImage replacement/restart with durable completion at v0.8.12. All 12 downloaded
+asset sizes/GitHub digests and all 11 SHA256SUMS entries matched. Standalone and
+bundled Linux commands both report the exact clean tagged revision.
+
+The existing Contabo relay upgraded at **12:06:03 UTC**, after a verified
+stopped-state backup. Its running binary and normal HTTPS from both server and
+laptop report v0.8.12 on the original realm and volume; `teams2` is advertised.
+Zero restarts/OOM events; the neighboring service is unchanged. GitHub latest
+is v0.8.12. No installed client, live client grant or desktop session was changed.
+
+Update source computers through the existing app/CLI controls, then refresh
+linked phones. The inspected source laptop was still running v0.8.10 during
+qualification; refreshing its phone does not update that producer. Actual
+physical-phone history convergence remains unverified.
+
+### v0.8.12 scope and qualification
 
 The owner authorized implementation, integration, qualification, publication and
 upgrade of the existing relay. Branch `release/v0.8.12` integrates ThinkPad's
@@ -53,14 +78,11 @@ packages pass race locally (2.559s/2.604s); the actual Chromium IndexedDB gate,
 skipped after the original fixture failure, also passes under race (1.829s).
 No timeout was raised and no full suite was repeated. The release-record commit
 changes documentation only from this corrected candidate. Final tag-stamped
-packaging and downloaded-asset checks remain required before publication.
+packaging and downloaded-asset checks passed as recorded above. The redundant
+main-push full run was cancelled after verifying that the release-record commit
+changed documentation only; the required tag packaging completed normally.
 
-This is not a published release yet. Live clients, grants, requests and desktop
-sessions are unchanged. A fresh read-only runtime check found the inspected
-source laptop still running v0.8.10; a phone refresh does not update its history
-producer. Physical phone convergence remains unverified.
-
-## Current release — v0.8.11, October 9, 2026 (UTC)
+## Previous release — v0.8.11, October 9, 2026 (UTC)
 
 ### Published v0.8.11
 
@@ -216,14 +238,15 @@ The release-record commit changes documentation only; application source remains
 identical to that qualified revision. Final packaging passed its native shell
 and Linux AppImage replacement/restart gates before publication and relay rollout.
 
-### Follow-up release scope — v0.8.12
+### Original v0.8.12 planning scope — completed above
 
 Implementation started on `release/v0.8.12` after fetching/pulling main.
 The shared [release checklist](plans/V0_8_12.md) records owners, acceptance and
 evidence. Root owns integration and publication; ThinkPad has no active writer.
 
 The October 9 post-release Herdr handoff and direct Linear reads confirm these
-outstanding requirements. They are scope, not implementation or shipment claims:
+original requirements. This historical planning snapshot is superseded by the
+published implementation and qualification above:
 
 - [MEL-580](https://linear.app/mellanni/issue/MEL-580): the owner still sees the
   agent topic marked WAITING after v0.8.11. This issue was explicitly unresolved
