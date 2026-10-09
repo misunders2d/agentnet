@@ -34,7 +34,7 @@ func (m dmMembers) keyEpoch(fp string) string {
 			}
 		}
 	}
-	return ""
+	return m.historyTaskEpochs[fp]
 }
 
 // Scope is bound to original public proof, never a label or today's inferred host role.

@@ -22,7 +22,10 @@ func TestGroupParticipationHistoryAfterHostReadmission(t *testing.T) {
 func TestGroupHistoryWitnessMissingOriginalCiphertext(t *testing.T) {
 	groupParticipationHistoryAfterReadmission(t, false)
 }
-func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool) {
+func TestGroupHistoryWitnessRetiredTaskDevice(t *testing.T) {
+	groupParticipationHistoryAfterReadmission(t, true, true)
+}
+func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool, retiredTask ...bool) {
 	w, approver, source, packet := groupHistoryLinkedFixture(t)
 	stopApprover := runAgent(t, approver)
 	stopSource := runAgent(t, source)
@@ -37,7 +40,31 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 		}
 		groupGovernanceAwait(t, packet, source, w.bob)
 	}
-	part := p6Member(t, w.bob, w.bob, conv)
+	var retired *Agent
+	var part ParticipationInfo
+	if len(retiredTask) > 0 && retiredTask[0] {
+		var awaited chan linkOutcome
+		retired, awaited, _ = linkPhone(t, w.bob, "retired-task-phone")
+		request := pendingLink(t, w.bob)
+		if err = w.bob.DecideLink(tctx(t), request.ID, true); err != nil {
+			t.Fatal(err)
+		}
+		if result := <-awaited; result.err != nil {
+			t.Fatal(result.err)
+		}
+		part, err = w.bob.InviteAgent(tctx(t), conv, w.bob.Address, nil, []string{retired.Self().Fingerprint()}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "retired-device fixture invitation", func() bool { p := stateAt(t, w.bob, part.PID); return p.State == PartInvited || p.Claimable() })
+		if stateAt(t, w.bob, part.PID).State == PartInvited {
+			if _, err = w.bob.AcceptParticipation(tctx(t), part.PID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	} else {
+		part = p6Member(t, w.bob, w.bob, conv)
+	}
 	eventually(t, "own laptop sees original accepted member host", func() bool {
 		return stateAt(t, source, part.PID).Claimable() && stateAt(t, approver, part.PID).Claimable()
 	})
@@ -88,6 +115,28 @@ func groupParticipationHistoryAfterReadmission(t *testing.T, sharedOriginal bool
 	}
 	if inboxCount(t, source, `id=? AND group_admission IS NOT NULL`, status.ID) != 1 {
 		t.Fatal("exact original status was not admitted")
+	}
+	if retired != nil {
+		if err = w.bob.RemoveDevice(tctx(t), retired.Address); err != nil {
+			t.Fatal(err)
+		}
+		person, _, e := w.bob.Person()
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, err = source.refreshPerson(tctx(t), person.Person, false); err != nil {
+			t.Fatal(err)
+		}
+		if err = retired.hub.do(tctx(t), "GET", "/v1/agents", nil, nil); !errors.Is(err, ErrRevoked) {
+			t.Fatalf("retired task key regained live access: %v", err)
+		}
+		live, e := source.dmMembers(conv)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if live.memberKey(retired.Self().Fingerprint()) || live.device(retired.Address, retired.Self().Fingerprint()) {
+			t.Fatal("retired task device remains a current member key")
+		}
 	}
 	var original protocol.ParticipationEvent
 	events, err := source.store.participationEvents(conv, part.PID)

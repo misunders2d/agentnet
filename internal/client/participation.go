@@ -74,16 +74,17 @@ type ParticipationInfo struct {
 // roster the root binds it to, is left out. Their devices are the current
 // ones; chains holds each person's pinned roster steps.
 type dmMembers struct {
-	historyEvents []protocol.ParticipationEvent // verified history-only evidence, never persisted as live authority
-	root          protocol.ConvRoot
-	persons       map[string]personRow
-	hosts         map[string]personRow // verified invite hosts; never member/asker/task authority
-	group         *GroupContext        // verified current context; never ordinary visitor authority
-	groupInvites  map[string]bool
-	roomEvents    map[string]bool
-	shareGrants   map[string][]protocol.GrantRef
-	roomAuthors   map[string]personRow
-	chains        map[string]map[string]bool
+	historyEvents     []protocol.ParticipationEvent // verified history-only evidence, never persisted as live authority
+	historyTaskEpochs map[string]string             // original signed task keys, only while verifying inert history
+	root              protocol.ConvRoot
+	persons           map[string]personRow
+	hosts             map[string]personRow // verified invite hosts; never member/asker/task authority
+	group             *GroupContext        // verified current context; never ordinary visitor authority
+	groupInvites      map[string]bool
+	roomEvents        map[string]bool
+	shareGrants       map[string][]protocol.GrantRef
+	roomAuthors       map[string]personRow
+	chains            map[string]map[string]bool
 }
 
 func (a *Agent) dmMembers(conv string) (dmMembers, error) { return membersIn(a.store.db, conv) }
@@ -176,7 +177,7 @@ func (m dmMembers) memberKey(fp string) bool {
 			return true
 		}
 	}
-	return false
+	return m.historyTaskEpochs[fp] != ""
 }
 
 // resolve computes a participation from its events and the DM's members,

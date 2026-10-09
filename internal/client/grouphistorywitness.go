@@ -190,8 +190,24 @@ func groupHistoryMembers(q dbq, root protocol.ConvRoot, item HistoryItem) (dmMem
 	}
 	m.roomEvents = nil
 	m.roomAuthors = nil
+	m.historyTaskEpochs = map[string]string{}
 	for _, ev := range p.Memberships {
 		if ev.Type == protocol.EventInvite || ev.Type == protocol.EventScope {
+			// A device removed since this invitation remains part of its signed
+			// original task-key list. Resolve only that historical binding, never
+			// restore the device as a current author, reader or task executor.
+			roster, ok := resolve(ev.Author.Person, ev.Author.Roster)
+			member, present := p.State.Member(ev.Author.Person)
+			if ok && present && ev.Group != nil {
+				for i, fp := range ev.TaskKeys {
+					if i >= len(ev.Group.TaskAdmissions) || m.keyEpoch(fp) != "" {
+						continue
+					}
+					if _, retained := roster.Device(fp); retained && member.Admission.Hash() == ev.Group.TaskAdmissions[i] {
+						m.historyTaskEpochs[fp] = member.Admission.Hash()
+					}
+				}
+			}
 			valid, e := m.verifyInviteEpoch(q, ev)
 			if e != nil {
 				return dmMembers{}, e
@@ -199,6 +215,7 @@ func groupHistoryMembers(q dbq, root protocol.ConvRoot, item HistoryItem) (dmMem
 			if !valid {
 				return dmMembers{}, errors.New("group: historical invite epochs differ from signed original state")
 			}
+			m.groupInvites[ev.Hash()] = true
 		}
 	}
 	m.historyEvents = p.Memberships
