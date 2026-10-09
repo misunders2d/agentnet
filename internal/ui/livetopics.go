@@ -16,7 +16,8 @@ import (
 // at a time through GET /api/topics. Without the flag the overview lists
 // every thread, archived topics too (a page that knows nothing of topics
 // still reaches them all). A name and Mark done / Reopen are set through
-// POST /api/topic/{rename,done,reopen} and kept on this device only.
+// POST /api/topic/{rename,done,reopen}. Names sync across own linked devices;
+// Mark done / Reopen for agent topics remain on this device.
 
 // Topic states (ThreadSummary.State).
 const (
@@ -213,7 +214,10 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 		if !covered {
 			return topicNewer, nil
 		}
-		note := map[string]string{"create": "Topic created. Its replies stay here.", "done": "Marked done for everyone. A new message reopens it.", "reopen": "Reopened for everyone.", "rename": "Topic renamed on this device.", "archive": "Archived on this device. Nothing deleted.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what]
+		note := map[string]string{"create": "Topic created. Its replies stay here.", "done": "Marked done for everyone. A new message reopens it.", "reopen": "Reopened for everyone.", "rename": "Topic renamed. The name syncs across your linked devices.", "archive": "Archived on this device. Nothing deleted.", "delete": "Deleted for you and your devices. Other people keep their copies."}[what]
+		if what == TopicRename && strings.Join(strings.Fields(c.Title), " ") == "" {
+			note = "Topic named after its first message again."
+		}
 		return note, nil
 	}
 	var err error
@@ -227,7 +231,7 @@ func (l *Live) ChangeTopic(what string, c TopicChange) (string, error) {
 		note = "Deleted on this device. Others keep their copies."
 	case TopicRename:
 		err = l.a.RenameTopic(c.Peer, c.ID, c.Title)
-		note = "Topic renamed on this device."
+		note = "Topic renamed. The name syncs across your linked devices."
 		if strings.Join(strings.Fields(c.Title), " ") == "" { // as RenameTopic reads it
 			note = "Topic named after its first message again."
 		}

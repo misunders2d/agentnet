@@ -215,6 +215,7 @@ async function slowly(browser, w, h, scheme, name) {
       await p.waitForFunction(() => /marked it done/.test(document.getElementById('skin').shadowRoot.querySelector('section[aria-label="Topic state"]')?.textContent || ''));
       await bar.locator('[aria-current="true"]').click();
       await p.getByRole('menuitem', { name: 'Rename…' }).click();
+      await p.getByText('The name syncs across your linked devices. Other people keep their own names.', { exact: true }).waitFor();
       await p.getByRole('textbox', { name: 'Name' }).fill('Aisle 4 count ' + name);
       await snap('rename');
       await p.getByRole('button', { name: 'Save' }).click();

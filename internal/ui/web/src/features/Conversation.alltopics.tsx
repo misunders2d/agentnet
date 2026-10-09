@@ -191,7 +191,7 @@ export function AllTopics({ open, onOpenChange, peer,conv, agent, current, flat 
             {loading && items.length === 0 && <p className="px-4 py-6 text-center text-[14px] text-text-2" role="status">Loading topics…</p>}
           </div>
           <p className="shrink-0 border-t border-hairline px-5 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))] text-[12.5px] text-muted">
-            {conv?"Done and Reopen are shared with everyone. Rename and Archive stay on this device. Delete for me leaves others’ copies.":"Names, Done and Archive stay on this device. Delete for me leaves others’ copies."}
+            {conv?"Names sync across your linked devices. Done and Reopen are shared with everyone. Archive stays on this device. Delete for me leaves others’ copies.":"Names sync across your linked devices. Done and Archive stay on this device. Delete for me leaves others’ copies."}
           </p>
         </Dialog.Popup>
       </Dialog.Portal>

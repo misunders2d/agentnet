@@ -253,7 +253,7 @@ export function changeTopic(store: ReturnType<typeof useApp>, what: "rename" | "
   });
 }
 
-/** RenameTopic: a name of your own for a topic, kept on this device. */
+/** RenameTopic: a name of your own for a topic, synced across your linked devices. */
 function RenameTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChange: (o: boolean) => void; topic: Topic }) {
   const store = useApp();
   const [title, setTitle] = useState(topic.title);
@@ -267,7 +267,7 @@ function RenameTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChang
   };
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Rename topic"
-      description="The new name is kept on this device only. Your agent and your other devices still see its first message."
+      description="The name syncs across your linked devices. Other people keep their own names."
       footer={
         <div className="flex flex-wrap items-center justify-end gap-2">
           {topic.renamed && <Button variant="ghost" disabled={busy} onClick={() => void save("")}>Use its first message</Button>}

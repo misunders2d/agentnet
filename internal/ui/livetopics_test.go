@@ -105,8 +105,8 @@ func TestLiveTopicRoutes(t *testing.T) {
 	if code, body := change("done", TopicChange{Peer: alice.Address, ID: ids[0]}, post(ts)); code != 200 || !strings.Contains(body, "on this device") {
 		t.Fatalf("mark done: %d %s", code, body)
 	}
-	if code, _ := change("rename", TopicChange{Peer: alice.Address, ID: ids[1], Title: "Dock question"}, post(ts)); code != 200 {
-		t.Fatalf("rename: %d", code)
+	if code, body := change("rename", TopicChange{Peer: alice.Address, ID: ids[1], Title: "Dock question"}, post(ts)); code != 200 || !strings.Contains(body, "syncs across your linked devices") {
+		t.Fatalf("rename: %d %s", code, body)
 	}
 	if code, _ := change("rename", TopicChange{Peer: alice.Address, ID: ids[1], Title: strings.Repeat("y", client.TopicTitleMax+1)}, post(ts)); code != http.StatusConflict {
 		t.Fatalf("too long a name: %d", code)
