@@ -17,6 +17,10 @@ on:
         description: 'Run only these race shards (JSON array, e.g. ["client-0","client-6"]); empty uses the full workflow'
         type: string
         default: ''
+      native_os:
+        description: 'Native runner selection as a JSON array; empty uses all three systems'
+        type: string
+        default: ''
       windows_task_probe:
         description: "Run only the native Windows Task Scheduler tests (the probe's private task, and the task agentnet for the update switch; both removed afterwards)"
         type: boolean
@@ -29,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.native_os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

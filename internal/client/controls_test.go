@@ -384,6 +384,11 @@ func findLID(t *testing.T, a *Agent, conv, lid string) (ConvMessage, bool) {
 // sender used), so a linked phone converges without the sender ever
 // learning about it.
 func TestControlsReachDevicesTheSenderDoesNotKnow(t *testing.T) {
+	t.Run("normal", func(t *testing.T) { testControlsReachDevicesTheSenderDoesNotKnow(t, false) })
+	t.Run("queued first control", func(t *testing.T) { testControlsReachDevicesTheSenderDoesNotKnow(t, true) })
+}
+
+func testControlsReachDevicesTheSenderDoesNotKnow(t *testing.T, queueFirst bool) {
 	w, conv, stopBob := dmFiles(t)
 	opening, err := w.alice.SendConv(tctx(t), conv, ConvOutgoing{Body: "opening"})
 	if err != nil {
@@ -398,22 +403,43 @@ func TestControlsReachDevicesTheSenderDoesNotKnow(t *testing.T) {
 	stopBob() // bob's daemon is off: he learns nothing about alice's new device
 	phone := linked(t, w.alice)
 	eventually(t, "the phone has the history", func() bool { _, ok := findLID(t, phone, conv, turn.LID); return ok })
-	if p, _, _ := w.bob.store.personByID(func() string {
-		me, _, _ := w.alice.store.selfPerson(w.alice.Address)
-		return me.info.Person
-	}()); len(p.roster.Devices) != 1 {
+	me, _, _ := w.alice.store.selfPerson(w.alice.Address)
+	if p, _, _ := w.bob.store.personByID(me.info.Person); len(p.roster.Devices) != 1 {
 		t.Fatalf("bob already knows %d devices of alice; the test needs his roster stale", len(p.roster.Devices))
+	}
+	flush := func(ids ...string) {
+		t.Helper()
+		// Bob's daemon stays off to preserve the stale roster. A synchronous
+		// send may leave a durable queued copy, so drive its normal retry.
+		if err := w.bob.FlushOutbox(tctx(t)); err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range ids {
+			if got := outboxState(t, w.bob, id); got != protocol.StateCustody && got != protocol.StateDelivered {
+				t.Fatalf("control %s not handed over: %s", id, got)
+			}
+		}
+		if p, _, _ := w.bob.store.personByID(me.info.Person); len(p.roster.Devices) != 1 {
+			t.Fatalf("retry learned %d devices of alice; forwarding no longer tests a stale roster", len(p.roster.Devices))
+		}
 	}
 	aliceRef, err := w.bob.RefOf(conv, func() string { m, _ := findLID(t, w.bob, conv, opening.LID); return m.ID }(), "in")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ownRef, _ := w.bob.RefOf(conv, turn.ID, "out")
+	if queueFirst {
+		injectFaults(w.bob).add("POST", "/v1/messages", 1, false)
+	}
 	reaction, err := w.bob.React(tctx(t), aliceRef, "🎉", false)
 	if err != nil || len(reaction.Skipped) != 0 {
 		t.Fatalf("react: %+v %v", reaction, err)
 	}
-	if _, err := w.bob.Revise(tctx(t), ownRef, "bob's turn, edited"); err != nil {
+	if queueFirst && reaction.State != stateQueued {
+		t.Fatalf("first failed POST did not remain queued: %+v", reaction)
+	}
+	revision, err := w.bob.Revise(tctx(t), ownRef, "bob's turn, edited")
+	if err != nil {
 		t.Fatal(err)
 	}
 	// Bob sent one copy each (to alice's laptop): the phone was not his to know.
@@ -422,14 +448,17 @@ func TestControlsReachDevicesTheSenderDoesNotKnow(t *testing.T) {
 	if copies != 2 {
 		t.Fatalf("bob sent %d control copies; expected one per control to the one device he knows", copies)
 	}
+	flush(reaction.ID, revision.ID)
 	eventually(t, "the phone shows the reaction and the edit, forwarded by the laptop", func() bool {
 		o, ok1 := findLID(t, phone, conv, opening.LID)
 		b, ok2 := findLID(t, phone, conv, turn.LID)
 		return ok1 && ok2 && len(o.Reactions) == 1 && o.Reactions[0].Emoji == "🎉" && !o.Reactions[0].Mine && b.Edited && b.Text == "bob's turn, edited"
 	})
-	if _, err := w.bob.Retract(tctx(t), ownRef, ""); err != nil {
+	retraction, err := w.bob.Retract(tctx(t), ownRef, "")
+	if err != nil {
 		t.Fatal(err)
 	}
+	flush(retraction.ID)
 	eventually(t, "the phone shows the deletion", func() bool { b, ok := findLID(t, phone, conv, turn.LID); return ok && b.Deleted && b.Body == "" })
 	// Raw rows, not the view: the phone keeps neither the deleted text nor the edit's text.
 	var raw string

@@ -2,13 +2,20 @@ package itest
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"database/sql"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/client"
+	"github.com/misunders2d/agentnet/internal/identity"
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
@@ -76,6 +83,11 @@ func TestCLIGroupGovernanceOfflineLeave(t *testing.T) {
 	}
 	packet := decodePacket("alice", "create", "Native governance")
 	conv := packet.Root.ID()
+	defer func() {
+		if t.Failed() {
+			groupGovernanceFailureDetails(t, c, addr, invitation.CertPEM, conv)
+		}
+	}()
 	waitCurrent := func(p client.GroupContext, homes ...string) {
 		t.Helper()
 		for _, home := range homes {
@@ -261,5 +273,103 @@ func TestCLIGroupGovernanceOfflineLeave(t *testing.T) {
 	packet = decodePacket("bob", "remove", conv, personIDs["alice"])
 	if _, ok := packet.State.Member(personIDs["alice"]); ok {
 		t.Fatal("exact CLI remove kept member")
+	}
+}
+
+// Observe the disposable stores and signed profiles before process cleanup.
+// This does not repair or retry the journey, and prints no message, identity,
+// envelope, session identifier, or free-form error text.
+func groupGovernanceFailureDetails(t *testing.T, c *cli, addr, cert, conv string) {
+	t.Helper()
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM([]byte(cert)) {
+		t.Log("governance diagnostic certificate unavailable")
+		return
+	}
+	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}, Proxy: nil}
+	defer tr.CloseIdleConnections()
+	h := &http.Client{Transport: tr, Timeout: 2 * time.Second}
+	for _, home := range []string{"alice", "phone"} {
+		path := filepath.Join(c.dir, home, "agent.db")
+		for _, line := range groupHistoryStateSummary(path, conv) {
+			t.Logf("governance %s %s", home, line)
+		}
+		func() {
+			db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(100)")
+			if err != nil {
+				t.Logf("governance %s extra database metadata unavailable", home)
+				return
+			}
+			defer db.Close()
+			db.SetMaxOpenConns(1)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			for _, q := range []struct{ label, sql string }{
+				{"carrier", `SELECT sub||':'||state||':cap='||coalesce(required_cap,'')||':error='||CASE WHEN coalesce(error,'')='' THEN 'none' WHEN error LIKE 'peer_update:%' THEN 'peer-update' WHEN error LIKE 'server_update:%' OR error LIKE 'server_unavailable:%' THEN 'server' ELSE 'present' END,count(*) FROM outbox WHERE conv=? AND sub IN ('group-proof','group-context') GROUP BY 1 ORDER BY 1 LIMIT 20`},
+				{"quarantine-all", `SELECT reason||':code='||detail_code,count(*) FROM quarantine WHERE ?<>'' GROUP BY reason,detail_code ORDER BY reason,detail_code LIMIT 20`},
+			} {
+				rows, err := db.QueryContext(ctx, q.sql, conv)
+				if err != nil {
+					t.Logf("governance %s %s unavailable", home, q.label)
+					continue
+				}
+				found := false
+				for rows.Next() {
+					var state string
+					var count int
+					if err = rows.Scan(&state, &count); err != nil {
+						break
+					}
+					found = true
+					t.Logf("governance %s %s %s count=%d", home, q.label, state, count)
+				}
+				if err != nil || rows.Err() != nil {
+					t.Logf("governance %s %s unavailable", home, q.label)
+				} else if !found {
+					t.Logf("governance %s %s count=0", home, q.label)
+				}
+				rows.Close()
+			}
+		}()
+		func() {
+			id, err := identity.Load(filepath.Join(c.dir, home, "identity.json"))
+			if err != nil {
+				t.Logf("governance %s profile unavailable", home)
+				return
+			}
+			address := "admin/phone"
+			if home == "alice" {
+				address = "admin/laptop"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, "GET", "https://"+addr+"/v1/agents/"+address+"/profile", nil)
+			if err != nil {
+				t.Logf("governance %s profile unavailable", home)
+				return
+			}
+			protocol.SignRequest(req, address, id.Sign, nil)
+			res, err := h.Do(req)
+			if err != nil {
+				t.Logf("governance %s profile unavailable", home)
+				return
+			}
+			defer res.Body.Close()
+			var p protocol.Profile
+			if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&p) != nil {
+				t.Logf("governance %s profile unavailable status=%d", home, res.StatusCode)
+				return
+			}
+			public := id.Public(address)
+			t.Logf("governance %s profile live=%t sessions=%d grp1=%t", home, p.Live, len(p.Sessions), p.Supports(address, public.SignKey, protocol.CapGroup))
+			for i, session := range p.Sessions {
+				for _, raw := range p.Caps {
+					record, err := protocol.ParseCapsRecord(raw)
+					if err == nil && record.Address == address && record.Session == session && record.Verify(public.SignKey) == nil {
+						t.Logf("governance %s profile session-index=%d signed-grp1=%t caps-ts=%d", home, i, record.Reads(protocol.CapGroup), record.TS)
+					}
+				}
+			}
+		}()
 	}
 }
