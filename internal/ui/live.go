@@ -196,7 +196,7 @@ func convItem(c client.ConvReview, words func(string) string) ConvItem {
 	case client.ReviewInvite:
 		v.Why, v.Actions = c.Detail, []string{DoAccept, DoDecline}
 	case client.ReviewHeldTurn:
-		v.Why = DMStateText("in", c.Kind, c.State, words(c.From), c.Detail)
+		v.Why, v.Actions = DMStateText("in", c.Kind, c.State, words(c.From), c.Detail), []string{DoResolve}
 	default:
 		v.Why, v.Actions = ReviewWhy(c.Kind, c.State, words(c.From), c.Detail), AgentActions(c.Kind, c.State)
 	}

@@ -152,12 +152,18 @@ function InviteRow({ c, o }: Props) {
 /** A question or task for you, held in its chat: answered there, never run. */
 function HeldTurnRow({ c, o }: Props) {
   const { isOpen, go } = useOpen();
+  const { busy, run } = useAct();
+  const [close, setClose] = useState(false);
   const title = convTitle(c, o);
-  return (
-    <OpenCard onOpen={() => go("dm", c.conv, c.id)} current={isOpen(c.conv, c.id)} label={title + ". Answer in the chat."} face={<SenderFace c={c} o={o} />}>
+  return <>
+    <OpenCard onOpen={() => go("dm", c.conv, c.id)} current={isOpen(c.conv, c.id)} label={title + ". Answer in the chat."} face={<SenderFace c={c} o={o} />}
+      actions={!c.decide_on && c.actions?.includes("resolve") && <Button variant="ghost" size="sm" disabled={!!busy} onClick={() => setClose(true)}>Mark as handled</Button>}>
       <Body tag={kindTag(c.kind, "muted")} at={c.at} title={title} quote={firstLine(c.excerpt, 160)} meta={capital(inChat(c.conv, o)) + " · For you, not your agent"} />
     </OpenCard>
-  );
+    <ConfirmSheet open={close} onOpenChange={setClose} title="Mark as handled?"
+      body="This clears this item on this device. The message stays in the chat. No reply is sent."
+      confirm="Mark as handled" onConfirm={() => run("resolve", api => api.act({ do: "resolve", id: c.id }), "Marked as handled on this device. No reply was sent.")} />
+  </>;
 }
 
 /** A notice that your own agent joined a chat without your accept here,

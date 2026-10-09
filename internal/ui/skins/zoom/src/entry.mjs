@@ -2880,7 +2880,18 @@ function renderReview(items) {
       el("span", {}, who(it.peer), " · ", kindTag[it.kind] || it.kind),
       el("span", { class: "review-why" }, it.why),
       el("span", { class: "review-text" }, it.excerpt)))) : conversations.length ? [] : [el("li", { class: "hint" }, "Nothing here waits for your decision.")]));
-  fill($("activity-extra"), remindersSection(), ...working.map(it => el("li", {},
+  const held = (state.overview.held || []).map(c => el("li", {},
+    el("button", {type:"button", onclick:()=>{ toggleReview(false); openMessage({id:c.id,conv:c.conv}); }},
+      el("strong", {}, "Asked of you"), el("span", {class:"review-text"}, c.excerpt)),
+    el("p", {class:"hint"}, !c.decide_on && (c.actions || []).includes("resolve") ? "Answer in the chat, or mark it as handled on this device. Nothing runs it." : "Answer in the chat if you want to. Nothing runs it."),
+    !c.decide_on && (c.actions || []).includes("resolve") && el("button", {type:"button", class:"text-btn", onclick:()=>{
+      const host = currentHost;
+      dialog({title:"Mark as handled?",ok:"Mark as handled",body:[el("p", {}, "This clears this item on this device. The message stays in the chat. No reply is sent.")],run:async()=>{
+        if(host!==currentHost)throw Error("Workspace changed. Open the request again.");
+        await act({do:"resolve",id:c.id},host); if(host===currentHost)await loadOverview();
+      }});
+    }}, "Mark as handled")));
+  fill($("activity-extra"), remindersSection(), ...held, ...working.map(it => el("li", {},
     el("button", {type:"button", onclick:()=>{ toggleReview(false); openThread(it.id, it.id); }},
       el("strong", {}, "Working · ", who(it.peer)),
       el("span", {class:"review-why"}, it.why),

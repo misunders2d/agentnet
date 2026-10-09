@@ -63,6 +63,39 @@ assert.deepEqual(heldIds([heldTurn, turn(7, { kind: "question", target: { addres
 assert.deepEqual(heldIds([turn(7, { at: received - 1000 }), heldTurn]), [heldTurn.id], "an earlier turn answers nothing");
 console.log("PASS needs-you claimed invitation times: arrival, plausible claim, or now; agent view leaves implausible claims out; requests listed as their host reports them, interrupted included; held turns answered by the person's later turn");
 
+// Explicitly handling an ordinary human question is local and inert, matching
+// native Agent.Resolve. Reading alone never resolves it; no remote job is touched.
+const heldRecord = {...heldTurn, v:2, conv, read:true};
+const otherHeld = {...heldRecord,id:"7".repeat(32),lid:"8".repeat(32)};
+await e.store.write([{s:"inbox",k:heldRecord.id,v:heldRecord},{s:"inbox",k:otherHeld.id,v:otherHeld}]);
+const projected=[],heldProjected=[];
+e.needsYouOf(conv,[],[heldRecord],[],projected,heldProjected);
+assert.deepEqual(heldProjected[0].actions,["resolve"],"read human turn still offers explicit local handling");
+const resolved=await e.apiRequest("/api/act",{do:"resolve",id:heldRecord.id});
+assert.match(resolved.note,/this device/);
+assert.deepEqual(await e.store.get("inbox",heldRecord.id),{...heldRecord,state:"resolved"},"preserves original message bytes");
+assert.deepEqual(await e.store.get("inbox",otherHeld.id),otherHeld,"another held turn stays waiting");
+const reloaded=new Engine({store:e.store,base:"https://synthetic.invalid",fetch:async()=>{throw Error("resolve attempted network");}});
+const afterReload=[],heldAfterReload=[];
+reloaded.needsYouOf(conv,[],await e.store.all("inbox"),[],afterReload,heldAfterReload);
+assert.deepEqual(heldAfterReload.map(x=>x.id),[otherHeld.id],"local handling survives engine reload");
+assert.deepEqual(await e.store.all("outbox"),[],"resolve sends neither reply nor status");
+assert.deepEqual(await e.store.all("receipts"),[],"resolve changes no transport receipt");
+for(const [i,extra] of [{state:"awaiting"},{state:"needs_human"},{state:"running"},{state:"held"},{kind:"message"},{own:true},{sub:"event"},{control:true},{v:1},{conv:""},{target:{address:"admin/laptop",agent_id:"builder"}}].entries()) {
+ const rejected={...heldRecord,id:(i+20).toString(16).padStart(32,"0"),...extra};
+ await e.store.write([{s:"inbox",k:rejected.id,v:rejected}]);
+ await assert.rejects(()=>e.apiRequest("/api/act",{do:"resolve",id:rejected.id}));
+ assert.deepEqual(await e.store.get("inbox",rejected.id),rejected,"refused item unchanged");
+}
+for(const reason of ["invalid","proof_pending","key_changed","identity_conflict","conflicting_duplicate"]) {
+ const q={id:"e".repeat(32),reason,envelope:"SYNTHETIC_RETAINED_BYTES"};
+ await e.store.write([{s:"held",k:q.id,v:q}]);
+ await assert.rejects(()=>e.apiRequest("/api/act",{do:"resolve",id:q.id}));
+ assert.deepEqual(await e.store.get("held",q.id),q,"security hold remains blocked");
+}
+await assert.rejects(()=>e.apiRequest("/api/act",{do:"resolve",id:"missing"}));
+console.log("PASS ordinary held turn resolve: exact local state, reload, no sends, unrelated work and security holds refused");
+
 // Full private output stays whole, bound to the current own executor/key,
 // the original request/key, and the latest report snapshot.
 const hostFP = "a".repeat(8), full = "Which branch?\n\nUse release.\n" + "長い行🙂".repeat(150);

@@ -7990,7 +7990,7 @@ export class Engine {
     }
     for (const m of msgs) {
       if (m.state === "conv_held") {
-        if (this.heldOpen(m, msgs)) held.push({ reason: "person_turn", conv, ...(m.pid ? { pid: m.pid } : {}), id: m.id, peer: m.from, kind: m.kind, why: "Held for you: nothing runs it. Answer here if you want to.", excerpt: firstLine(m.body), at: iso(m.at), ...(m.read ? {} : { unread: true }) });
+        if (this.heldOpen(m, msgs)) held.push({ reason: "person_turn", actions: ["resolve"], conv, ...(m.pid ? { pid: m.pid } : {}), id: m.id, peer: m.from, kind: m.kind, why: "Held for you: nothing runs it. Answer here if you want to.", excerpt: firstLine(m.body), at: iso(m.at), ...(m.read ? {} : { unread: true }) });
         continue;
       }
       const info = m.pid && m.target && ["question", "task"].includes(m.kind) ? infos.find((p) => p.pid === m.pid) : null;
@@ -8609,6 +8609,19 @@ export class Engine {
     return { text: "" };
   }
 
+  // Match native Resolve for an ordinary turn held for this person. This
+  // changes only its local attention state; no reply, status or work is sent.
+  async resolveHeldTurn(id) {
+    const m = wire.validID(id || "") ? await this.store.get("inbox", id) : null;
+    if (!m || m.id !== id || m.v !== 2 || !m.conv || m.state !== "conv_held" || m.own || m.control || m.sub ||
+        !["question", "task"].includes(m.kind) || m.target && (m.target.address !== this.address || m.target.agent_id)) return null;
+    try {
+      await this.store.write([{s:"inbox",k:id,v:{...m,state:"resolved"}}],[{s:"inbox",k:id,v:m}]);
+    } catch (e) { if (e instanceof StoreConflict) return this.resolveHeldTurn(id); throw e; }
+    this.changed();
+    return {note:"Marked as handled on this device. No reply was sent."};
+  }
+
   // A received report is local history, never a job or a remote decision.
   // Dismiss only its exact inbox row; an outbox copy with that id is untouched.
   async dismissReport(id) {
@@ -8800,7 +8813,7 @@ export class Engine {
       if (body.do === "do_it") return this.confirmProposal(body.id);
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
       if (body.do === "reply") return this.replyV1(body.id, body.body, body.send_id);
-      if (body.do === "resolve") return await this.dismissDeviceAdminNotice(body.id) || this.dismissReport(body.id);
+      if (body.do === "resolve") return await this.resolveHeldTurn(body.id) || await this.dismissDeviceAdminNotice(body.id) || this.dismissReport(body.id);
       throw new Error("Nothing runs in this browser: accept, approve and grants are made on a computer with AgentNet.");
     case "/api/send": return this.sendDirect(body);
     case "/api/simulate": throw new Error("Not available here.");

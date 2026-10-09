@@ -91,9 +91,10 @@ function HostReport({ host, notices, o }: { host: string; notices: T.ReviewItem[
   const where = deviceWords(host, o);
   const dismiss = async () => {
     setBusy(true);
-    for (const n of notices) await store.run((api) => api.act({ do: "resolve", id: n.id }));
-    store.toast("Dismissed here. A newer report from " + where + " shows again if requests still wait.", "ok");
-    setBusy(false);
+    try {
+      for (const n of notices) if (!await store.run((api) => api.act({ do: "resolve", id: n.id }))) return;
+      store.toast("Dismissed here. A newer report from " + where + " shows again if requests still wait.", "ok");
+    } finally { setBusy(false); }
   };
   return (
     <li className="rounded-2xl bg-surface p-3.5 stroke">
