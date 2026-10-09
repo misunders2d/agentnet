@@ -13,6 +13,7 @@
 // and have the old one revoked).
 
 import * as wire from "./wire.mjs";
+import {deviceHistory,directHistoryRow} from "./devicehistory.mjs";
 import { Decrypter, Encrypter } from "./vendor/age.mjs";
 import { openDB } from "./vendor/idb.mjs"; // idb: promises over IndexedDB (webvendor, pinned)
 import { createParser } from "./vendor/sse.mjs"; // eventsource-parser: the framing of the signed event stream (webvendor, pinned)
@@ -93,7 +94,7 @@ const historyIndexed = (row,arrival) => {
 export async function openIDB(name = "agentnet") {
   let onBlocked, refused = false;
   const blocked = new Promise((_, rej) => { onBlocked = () => { refused = true; rej(new Error("storage is blocked by another tab")); }; });
-  const opening = openDB(name, 4, { // 4: bounded accepted-history order/arrival indexes
+  const opening = openDB(name, 5, { // 5: continuous direct-thread source journal
     async upgrade(d,oldVersion,newVersion,tx) {
       for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
       if(oldVersion<4) {
@@ -105,6 +106,7 @@ export async function openIDB(name = "agentnet") {
         }
         await tx.objectStore("kv").put(arrival,"history-arrival");
       }
+      if(oldVersion<5){let arrival=0;for(const s of ["inbox","outbox"]){const store=tx.objectStore(s);store.createIndex("device_arrival","device_arrival");for(let c=await store.openCursor();c;c=await c.continue())if(directHistoryRow(c.value))await c.update({...c.value,device_arrival:++arrival});}await tx.objectStore("kv").put(arrival,"device-history-arrival");}
     },
     blocked: onBlocked,
   });
@@ -119,8 +121,14 @@ export async function openIDB(name = "agentnet") {
     all: (s) => db.getAll(s),
     // after returns up to n values whose keys follow k, in key order ("" is the start).
     after: (s, k, n) => db.getAll(s, k === "" ? null : IDBKeyRange.lowerBound(k, true), n),
+    keysAfter: (s,k,n) => db.getAllKeys(s,k === "" ? null : IDBKeyRange.lowerBound(k,true),n),
     // prefix returns the values whose keys start with p, in key order.
     prefix: (s, p) => db.getAll(s, IDBKeyRange.bound(p, p + "\uffff")),
+    async directRows({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={}){
+      if(after>=ceiling)return [];const rows=[],tx=db.transaction(["inbox","outbox"]),range=IDBKeyRange.bound(after,ceiling,true,false);
+      for(const s of ["inbox","outbox"]) {let n=0;for(let c=await tx.objectStore(s).index("device_arrival").openCursor(range,reverse?"prev":"next");c&&n++<limit;c=await c.continue())rows.push({row:c.value,here:s==="outbox"});}
+      await tx.done;return rows.sort((a,b)=>(a.row.device_arrival-b.row.device_arrival)*(reverse?-1:1)).slice(0,limit);
+    },
     async historyRows(s,{after=null,conv="",reverse=false,arrival=false,ceiling=Number.MAX_SAFE_INTEGER,limit=historyPage}={}) {
       let range;
       if(arrival) {if((after||0)>=ceiling)return [];range=IDBKeyRange.bound(after||0,ceiling,true,false);}
@@ -131,7 +139,7 @@ export async function openIDB(name = "agentnet") {
       await tx.done;return rows;
     },
     async write(ops, checks = []) {
-      const names=[...ops,...checks].map(o=>o.s);if(ops.some(o=>o.s==="inbox"&&o.v))names.push("kv");
+      const names=[...ops,...checks].map(o=>o.s);if(ops.some(o=>["inbox","outbox"].includes(o.s)&&o.v))names.push("kv");
       const tx = db.transaction([...new Set(names)], "readwrite", { durability: "strict" });
       try {
         for (const c of checks) {
@@ -155,6 +163,7 @@ export async function openIDB(name = "agentnet") {
               if(!arrival) {arrival=(await tx.objectStore("kv").get("history-arrival")||0)+1;await tx.objectStore("kv").put(arrival,"history-arrival");}
             }
             value=historyIndexed(value,arrival);
+            if(directHistoryRow(value)){let seq=(await tx.objectStore(o.s).get(o.k))?.device_arrival||0;if(!seq){seq=(await tx.objectStore("kv").get("device-history-arrival")||0)+1;await tx.objectStore("kv").put(seq,"device-history-arrival");}value.device_arrival=seq;}else delete value.device_arrival;
           }
           // Each request's own rejection is the transaction's (tx.done); it is not awaited one by one.
           (value === undefined ? tx.objectStore(o.s).delete(o.k) : tx.objectStore(o.s).put(value, o.k)).catch(() => {});
@@ -183,7 +192,9 @@ export function memoryStore() {
     get: async (s, k) => (data[s].has(k) ? structuredClone(data[s].get(k)) : undefined),
     all: async (s) => [...data[s].values()].map((v) => structuredClone(v)),
     after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
+    keysAfter: async (s,k,n) => [...data[s].keys()].filter(x=>x>k).sort().slice(0,n),
     prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
+    directRows:async({after=0,ceiling=Number.MAX_SAFE_INTEGER,reverse=false,limit=historyPage}={})=>[...[...data.inbox.values()].map(row=>({row,here:false})),...[...data.outbox.values()].map(row=>({row,here:true}))].filter(x=>x.row.device_arrival>after&&x.row.device_arrival<=ceiling).sort((a,b)=>(a.row.device_arrival-b.row.device_arrival)*(reverse?-1:1)).slice(0,limit).map(x=>structuredClone(x)),
     historyRows: async(s,{after=null,conv="",reverse=false,arrival=false,ceiling=Number.MAX_SAFE_INTEGER,limit=historyPage}={})=>[...data[s].values()].filter(r=>r.history_pos&&(!conv||r.conv===conv)&&(arrival?r.history_arrival>(after||0)&&r.history_arrival<=ceiling:!after||historyOrder(r.history_pos,after)>0)).sort((a,b)=>(arrival?a.history_arrival-b.history_arrival:historyOrder(a.history_pos,b.history_pos))*(reverse?-1:1)).slice(0,limit).map(r=>structuredClone(r)),
     async write(ops, checks = []) {
       for (const c of checks) {
@@ -201,6 +212,7 @@ export function memoryStore() {
               if(!arrival) {arrival=(data.kv.get("history-arrival")||0)+1;data.kv.set("history-arrival",arrival);}
             }
             value=historyIndexed(value,arrival);
+            if(directHistoryRow(value)){let seq=data[o.s].get(o.k)?.device_arrival||0;if(!seq){seq=(data.kv.get("device-history-arrival")||0)+1;data.kv.set("device-history-arrival",seq);}value.device_arrival=seq;}else delete value.device_arrival;
           }
           data[o.s].set(o.k,value);
         }
@@ -216,6 +228,7 @@ class StoreConflict extends Error { constructor() { super("storage changed durin
 // (a human guest or a room participant), whatever its state; roomAgentScope
 // a scope of an agent room participant, which a member may host.
 const follows = (p) => p.role === "human" || p.audience === "room";
+const sameParticipationTopic = (a,b) => (a == null && b == null) || a != null && b != null && a === b;
 const roomAgentScope = (e) => !e.role && e.audience === "room";
 
 // Authority sets also guard absent records: a new decision or a competing
@@ -280,6 +293,13 @@ const holdText = (reason, peer) => (holdCode(reason) !== "unverified" ? holdWord
 export const heldDiagnosticCode = why => {
   if (/^Group advanced from state [0-9]+ to [0-9]+; inviter must refresh the invitation\. Join the fresh proposal\.$/.test(why)) return "group_invitation_outdated";
   const codes = {
+  "malformed envelope": "envelope_malformed",
+  "envelope verification failed": "envelope_verification_failed",
+  "addressed to another device": "recipient_mismatch",
+  "sender key unavailable": "sender_key_unavailable",
+  "a malformed history item": "history_malformed",
+  "Group history contains nonordinary input.": "history_malformed",
+  "Group history file is not an exact manifest.": "history_malformed",
   "This invitation is out of date; join the newer invitation or ask the inviter to refresh it.": "group_invitation_outdated",
   "Latest group head differs from this proposal; inviter must refresh the invitation. Join the fresh proposal.": "group_invitation_outdated",
   "Invited person changed; obtain fresh consent.": "group_invitation_outdated",
@@ -294,8 +314,16 @@ export const heldDiagnosticCode = why => {
   "Group logical lifecycle conflict.": "group_conflicting_copy",
   "Human history remains with original members' own linked devices.": "history_reader_not_member",
 }; return Object.hasOwn(codes,why) ? codes[why] : ""; };
+const heldFailureCode = (reason,why) => heldDiagnosticCode(why) || (why && reason === "proof_pending" ? "context_unavailable" : why && reason === "invalid" ? "admission_failed" : "");
 export const heldNoticeText = (code, reason) => {
   const words = {
+    envelope_malformed: ["The received envelope has an invalid format.", "Its contents stay blocked. Archiving only hides this notice on this device."],
+    envelope_verification_failed: ["The encrypted message could not pass validation on this device.", "Its signature, encrypted contents or bound fields could not be validated. Nothing was accepted or run."],
+    recipient_mismatch: ["This envelope is addressed to another device.", "It was not accepted here. Archiving does not forward or resend it."],
+    sender_key_unavailable: ["This device could not obtain the sender's public key.", "The claimed sender has not been verified. Archiving does not trust an identity."],
+    history_malformed: ["This history copy does not have a valid message or file manifest.", "The original retained copy stays blocked. Archiving does not import or run it."],
+    context_unavailable: ["This message needs conversation, membership or person proof that is not available here yet.", "Checks continue when connected; the message appears only when verified. Archiving only hides this notice."],
+    admission_failed: ["The message failed this device's conversation or sender checks.", "The precise check has no diagnostic code yet. The retained message stays blocked; archiving does not accept, resend or run it."],
     group_invitation_outdated: ["This invitation no longer matches the current group.", "If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice."],
     group_consent_mismatch: ["This response does not match the invitation and decision recorded on this device.", "Check the group's current invitation. If you still need to join, ask its administrator for a fresh invitation."],
     group_withdrawal_mismatch: ["This departure record could not be verified against the current group and device identity.", "Check the group's current membership with its administrator. This record has not changed anyone's access."],
@@ -585,6 +613,7 @@ export class Engine {
       this.revoked = !!id.revoked;
     }
     this.me = (await this.store.get("kv", "person")) || null;
+    if(id&&!this.revoked)await this.repairCarrierReceiptsPage();
     this.heldHistoryRecovery = !!id && this.me?.state === "self" && !(await this.store.get("kv", "held-group-history-recovery-v1"));
     // Older DM control copies cached their recipient as the author.
     // These locally signed rows belong to this person; retain their wire bytes.
@@ -952,7 +981,7 @@ export class Engine {
     const steps2 = [...((before && before.steps) || [])];
     for (const st of steps) {
       const h = await wire.rosterHash(st);
-      if (!steps2.some((x) => x.hash === h)) steps2.push({ hash: h, devices: await Promise.all(st.devices.map(async (d) => d.address + "|" + (await wire.fingerprint(d)))) });
+      if (!steps2.some((x) => x.hash === h)) steps2.push({ hash: h, human_keys:await wire.rosterHumans(st), devices: await Promise.all(st.devices.map(async (d) => d.address + "|" + (await wire.fingerprint(d)))) });
     }
     return { person: r.person, label: r.label, email: r.email || "", picture: r.picture || "", seq: r.seq, human_keys:await wire.rosterHumans(r), hash: await wire.rosterHash(r), json: wire.rosterJSON(r), hashes, devices, known, steps: steps2,
       address: one.address, fingerprint: one.fingerprint, state, published: before ? !!before.published : false };
@@ -1289,6 +1318,8 @@ export class Engine {
   // and where it ended in one write, so it resumes where it stopped (the
   // page must be open for it to run).
 
+  directHistory() { return this.directHistoryModule ||= deviceHistory(this,Hold); }
+
   async historyBook() {
     return (await this.store.get("kv", "history")) || {};
   }
@@ -1405,7 +1436,8 @@ export class Engine {
       }
       const marks=(await this.store.all("kv")).filter(m=>m?.owner===own.person&&m.ref),saved=await this.store.all("outbox"),ops=[],checks=[];let more=false;
       // A single O(mark count + outbox references) pass, never one scan per mark.
-      const present=new Set();for(const o of saved)if(o.sub===wire.SubReadSync&&o.read_owner===own.person&&["queued","waiting","custody","delivered"].includes(o.state))for(const key of o.read_refs||[])present.add(o.recipient_fp+"|"+key);
+      // Quarantine retains the same ciphertext for recovery, not another batch.
+      const present=new Set();for(const o of saved)if(o.sub===wire.SubReadSync&&o.read_owner===own.person&&["queued","waiting","custody","delivered","quarantined"].includes(o.state))for(const key of o.read_refs||[])present.add(o.recipient_fp+"|"+key);
       for(const dev of own.devices) {
         if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
         const refs=marks.filter(m=>!present.has(dev.fingerprint+"|"+this.readMarkKey(own.person,m.ref))).slice(0,64).map(m=>m.ref);if(!refs.length)continue;
@@ -1484,7 +1516,7 @@ export class Engine {
         for(const saved of page){
           const fact=await this.groupRead(checks,"kv",saved.key);if(!fact)continue;
           const ck=this.topicTitleCopyKey(current.person,dev.fingerprint,fact),copy=await this.groupRead(checks,"kv",ck),row=copy?.id&&await this.groupRead(checks,"outbox",copy.id);
-          if(copy&&this.topicTitleOrder(fact,copy)===0&&fact.title===copy.title&&(copy.seen||row&&["queued","waiting","custody","delivered"].includes(row.state)))continue;
+          if(copy&&this.topicTitleOrder(fact,copy)===0&&fact.title===copy.title&&(copy.seen||row&&["queued","waiting","custody","delivered","quarantined"].includes(row.state)))continue;
           const {scope,topic,title,rev,writer}=fact;titles.push({scope,topic,title,rev,writer});
         }
         if(!titles.length)continue;
@@ -1659,6 +1691,7 @@ export class Engine {
         try{more = (await this.historyStep(dev, j)) || more;}
         catch(e){if(!(e instanceof StoreConflict))throw e;this.historySweeps?.delete(dev.fingerprint);more=true;}
       }
+      for(const dev of (await this.store.get("kv","person"))?.devices||[]){if(dev.address===this.address)continue;try{more=(await this.directHistory().step(dev))||more;}catch(e){if(!(e instanceof StoreConflict))throw e;more=true;}}
       if (!more && !this.historyAgain) return;
     }
   }
@@ -1739,7 +1772,17 @@ export class Engine {
     const queue=async(row,here=false)=>{
       const s=here?"outbox":"inbox",m=await this.groupRead(checks,s,row.id);
       if(!m||!historySource(m)||this.erasedRow(m))return;
-      const item=this.itemOf(m,here),tuple=m.conv+"/"+item.from_key+"/"+item.lid;
+      let item=this.itemOf(m,here);
+      const sourceTuple=m.conv+"/"+item.from_key+"/"+item.lid;
+      try { item=await this.dmLifecycleHistorySource(convs.get(m.conv),item,checks); }
+      catch(e) {if(e instanceof StoreConflict)throw e;await pending({tuple:m.conv+"/"+item.from_key+"/"+item.lid,conv:m.conv,id:m.id,dir:s},e instanceof Hold?e.reason:"proof_pending");return false;}
+      const tuple=m.conv+"/"+item.from_key+"/"+item.lid;
+      const clearSource=async()=>{
+        await clear(tuple);if(sourceTuple===tuple)return;await clear(sourceTuple);
+        const oldKey=copyPrefix+sourceTuple,old=await this.groupRead(checks,"kv",oldKey),row=old?.copy&&await this.groupRead(checks,"outbox",old.copy);
+        if(row?.to!==dev.address||row.recipient_fp!==dev.fingerprint||row.sub!=="history")return;
+        try{const h=wire.parseHistory(row.body);if(wire.historyJSON({...h,from:item.from,from_key:item.from_key})===wire.historyJSON(item))ops.push({s:"kv",k:oldKey});}catch{ /* unrelated or unavailable old ciphertext is never retired */ }
+      };
       if(item.from_key===dev.fingerprint)return true;
       if(visiting.has(tuple))throw new Hold("proof_pending","Historical dependency is cyclic.");
       if(attempted.has(tuple))return attempted.get(tuple);
@@ -1751,10 +1794,10 @@ export class Engine {
         if(saved&&saved.hash!==hash)throw new Hold("conflicting_duplicate","Historical original conflicts with its queued copy.");
         if(saved?.copy) {
           const sent=await this.groupRead(checks,"outbox",saved.copy);
-          if(sent?.to===dev.address&&sent.recipient_fp===dev.fingerprint&&sent.sub==="history"&&["queued","waiting","custody","delivered"].includes(sent.state)) {
+          if(sent?.to===dev.address&&sent.recipient_fp===dev.fingerprint&&sent.sub==="history"&&["queued","waiting","custody","delivered","quarantined"].includes(sent.state)) {
             const h=wire.parseHistory(sent.body),actual=h.ref?await this.groupControlHash(m.conv,h):await wire.groupHistoryContentHash(m.conv,h);
             if(h.from_key!==item.from_key||h.lid!==item.lid||actual!==hash)throw new Hold("conflicting_duplicate","Historical copy ledger differs from its durable envelope.");
-            await clear(tuple);attempted.set(tuple,true);return true;
+            await clearSource();attempted.set(tuple,true);return true;
           }
         }
         if(copies.length>=historyPage*3)throw new Hold("proof_pending","Historical dependencies continue in bounded backfill.");
@@ -1773,12 +1816,31 @@ export class Engine {
         }
         for(const d of dependencies)if(!await queue(d,!!d.to))throw new Hold("proof_pending","Historical dependency remains unavailable.");
         const rec=await this.historyCopy(dev,c,item,checks);rec.recipient_fp=dev.fingerprint;
-        copies.push(rec);ops.push({s:"kv",k:key,v:{hash,copy:rec.id}});await clear(tuple);attempted.set(tuple,true);return true;
+        copies.push(rec);ops.push({s:"kv",k:key,v:{hash,copy:rec.id}});await clearSource();attempted.set(tuple,true);return true;
       } catch(e) {
         if(e instanceof StoreConflict)throw e;
         await pending(ref,e instanceof Hold?e.reason:"proof_pending");return false;
       } finally {visiting.delete(tuple);}
     };
+    // One bounded ledger pass repairs pre-upgrade transport-author copies,
+    // including completed jobs. Normal source verification decides each ref;
+    // unchanged held ciphertext and the snapshot/tail cursors remain intact.
+    const repair=p.lifecycleRepair||={after:copyPrefix,done:false};
+    if(!repair.done) {
+      const keys=(await this.store.keysAfter("kv",repair.after,historyPage)).filter(k=>k.startsWith(copyPrefix));
+      for(const key of keys) {
+        repair.after=key;
+        const saved=await this.groupRead(checks,"kv",key),copy=saved?.copy&&await this.groupRead(checks,"outbox",saved.copy);
+        if(!copy||copy.to!==dev.address||copy.recipient_fp!==dev.fingerprint||copy.sub!=="history")continue;
+        let old;try{old=wire.parseHistory(copy.body);}catch{continue;}
+        if(old.sub!=="event"||key!==copyPrefix+copy.conv+"/"+old.from_key+"/"+old.lid||convs.get(copy.conv)?.kind==="group")continue;
+        const source=await this.groupRead(checks,"outbox",old.id)||await this.groupRead(checks,"inbox",old.id);
+        if(!source||source.conv!==copy.conv||source.sub!=="event"||source.lid!==old.lid)continue;
+        const original=this.itemOf(source,!!source.to);let event;try{event=wire.parseEvent(original.body);}catch{continue;}
+        if(original.from_key===old.from_key&&event.conv===copy.conv&&event.pid===original.pid&&event.author.fingerprint!==old.from_key)await queue(source,!!source.to);
+      }
+      repair.done=keys.length<historyPage;
+    }
     // A bounded fresh-arrival page takes precedence on every step, even while
     // another conversation's older pages or unresolved proof are pending.
     const tail=await this.store.historyRows("inbox",{arrival:true,after:p.tail,ceiling});
@@ -1835,7 +1897,7 @@ export class Engine {
       await this.store.write([...copies.map(c=>({s:"outbox",k:c.id,v:c})),...ops],checks);
       this.changed();if(this.connected)this.queueOutbox();
     }
-    return p.stage!=="tail"||tail.length===historyPage||pendingMore||groups.length>1;
+    return p.stage!=="tail"||tail.length===historyPage||pendingMore||groups.length>1||!repair.done;
   }
 
   // Reuse original signed group journals and existing encrypted carriers.
@@ -1852,7 +1914,7 @@ export class Engine {
     payloads.push({sub:wire.SubGroupContext,descriptor:{v:1,seq:packet.state.seq,hash:await wire.groupStateHash(packet.state)},body:wire.groupContextJSON({...packet,memberships:await this.roomMemberships(c,events,members)})});
     const saved=await this.authorityRows({conv:c.id},checks),seen=new Set(),pub=await wire.publicEntry(this.keys,this.address);
     for(const row of saved) {
-      if(row.to!==dev.address||row.recipient_fp!==dev.fingerprint||row.required_cap!==wire.CapGroup||row.pid||!["queued","waiting","custody","delivered"].includes(row.state))continue;
+      if(row.to!==dev.address||row.recipient_fp!==dev.fingerprint||row.required_cap!==wire.CapGroup||row.pid||!["queued","waiting","custody","delivered","quarantined"].includes(row.state))continue;
       try {
         const descriptor=wire.parseGroupCarrier(row.body),env=wire.parseEnvelope(row.envelope);
         if(descriptor.to_key!==dev.fingerprint||env.v!==wire.Version2||env.from!==this.address||env.to!==dev.address||env.kind!=="message"||env.blobs.length!==1)continue;
@@ -1984,6 +2046,7 @@ export class Engine {
   async requestFile(id, i) {
     const m = await this.store.get("inbox", id);
     if (!m || !m.history) throw new Error("That message is not a history message here.");
+    if(m.device_history)return this.directHistory().requestFile(m,i);
     if(await this.groupRecord(m.conv))return this.requestGroupFile(m,i);
     const a = (m.attachments || [])[i];
     if (!a) throw new Error("That message has no such file.");
@@ -2052,6 +2115,7 @@ export class Engine {
   // device: from a received file's ciphertext, or the copy kept of one
   // sent here.
   async serveFile(s) {
+    if(s.direct)return this.directHistory().serveFile(s);
     if(s.group)return this.serveGroupFile(s);
     const dev = this.me && this.me.devices.find((d) => d.address === s.device);
     if (!dev) throw new Error(s.device + " is no longer a device of your person");
@@ -2076,6 +2140,7 @@ export class Engine {
 
   // offerFile answers request s with files (the file, or none: detail says why).
   async offerFile(s, files, detail) {
+    if(s.direct)return this.directHistory().offerFile(s,files,detail);
     if(s.group)return this.offerGroupFile(s,files,detail);
     const dev = this.me && this.me.devices.find((d) => d.address === s.device);
     const c = await this.store.get("convs", s.conv);
@@ -2324,15 +2389,16 @@ export class Engine {
     if (!c) throw new Error("No conversation " + conv + " here.");
     if (c.kind === "group") {
       if (pid) {
-        const h=await this.humanPlan(c,pid);
+        const h=await this.humanPlan(c,pid,topic);
         return this.sendHumanTurn(c,{id:sendID,queued:true,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver,pid},h);
       }
       const events=await this.convEvents(c.id),members=await this.dmMembers(c,events);
-      if([...new Set(events.map(x=>x.e.pid))].some(pid=>{const p=this.resolveAgent(pid,events,members);return p.external&&follows(p)&&p.state==="active"&&!p.held;}))return this.sendHumanTurn(c,{id:sendID,queued:true,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver},await this.roomPlan(c,events,members));
+      const captured=await this.roomPlan(c,events,members,topic);
+      if(captured)return this.sendHumanTurn(c,{id:sendID,queued:true,kind:"message",body,topic,topic_event,quote,reply_to:replyTo||"",origin:"ui",files,receiver:reply_receiver},captured);
       return this.sendGroupTurn(c, {id:sendID,queued:true,body, topic,topic_event,quote,reply_to:replyTo || "",files,receiver:reply_receiver});
     }
     try { replyTo=await this.logicalReply(conv,replyTo,true,"Conversation"); } catch(e) { throw Error("A reply stays within its conversation: "+e.message); }
-    const human = await this.humanPlan(c, pid);
+    const human = await this.humanPlan(c, pid,topic);
     if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver, pid }, human);
     return this.sendConv(c, { id: sendID, queued: true, kind: "message", body, topic,topic_event,quote,reply_to: replyTo || "", origin: "ui", files, receiver: reply_receiver });
   }
@@ -2362,12 +2428,13 @@ export class Engine {
     ops.checks=checks;return ops;
   }
 
-  async sendConv(c, { id: sendID = "", queued = false, kind, body, topic="",topic_event=null,quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", send_group = "", target = null, files = [], receiver = null }) {
+  async sendConv(c, { id: sendID = "", queued = false, kind, body, topic="",topic_event=null,quote="",reply_to: replyTo = "", origin = "", sub = "", pid = "", send_group = "", target = null, files = [], receiver = null, proposal_choice = null }) {
     if (pid) {
       const ev = sub === "event" ? await this.eventRecord(body) : null;
       const events = [...await this.convEvents(c.id), ...(ev ? [ev] : [])];
       const members = await this.dmMembers(c, events), info = this.resolveAgent(pid, events, members);
-      if (info.external || members.group) return this.sendExternal(c, { id: sendID, queued, kind, body, topic,topic_event,quote,reply_to: replyTo, origin, sub, pid, send_group, target, files, receiver }, info);
+      await this.checkParticipationTopic(info.topic,{conv:c.id,sub,topic,reply_to:replyTo});
+      if (info.external || members.group) return this.sendExternal(c, { id: sendID, queued, kind, body, topic,topic_event,quote,reply_to: replyTo, origin, sub, pid, send_group, target, files, receiver, proposal_choice }, info);
     }
     const required_cap = wire.agentRequirement({ kind, body, sub, target });
     const { why: stop } = await this.gate(c);
@@ -2420,13 +2487,15 @@ export class Engine {
       const envelope = await wire.seal({ v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), kind,
         body, topic,topic_event,quote,reply_to: replyTo, conv: c.id, lid, root: c.root, origin, sub, pid, target, chan, replica, fan, send_group:copyGroup, attachments: sealed.map((f) => f.attachment), receiver_route: prepared?.route },
       this.keys, recipient);
-      recs.push({ id, conv: c.id, lid, body, topic,topic_event,quote,reply_to: replyTo, kind, origin, sub, pid, send_group, send_group_wire:!!copyGroup, target, ...(required_cap ? { required_cap } : {}), ...(prepared ? { receiver_route: prepared.route, recipient_fp: dev.fingerprint } : {}), at, to: dev.address, person:dev.own ? me.person : peer.person,own: dev.own, envelope,
+      recs.push({ id, conv: c.id, lid, body, topic,topic_event,quote,reply_to: replyTo, kind, origin, sub, pid, ...(proposal_choice?{proposal_choice}:{}), send_group, send_group_wire:!!copyGroup, target, ...(required_cap ? { required_cap } : {}), ...(prepared ? { receiver_route: prepared.route, recipient_fp: dev.fingerprint } : {}), at, to: dev.address, person:dev.own ? me.person : peer.person,own: dev.own, envelope,
         attachments: sealed.map((f) => f.attachment), files: sealed.length ? sealed : undefined, state: ok ? "queued" : "waiting", detail: why });
     }
     if (turn && !recs.some((r) => !r.own)) throw new Error("Not sent: no device of the other person can get a copy now.");
     if (!recs.length) throw new Error("No device of this conversation can be sent a copy now.");
     const final = (await this.gate(c)).why; // a profile just read may have frozen the person
     if (final) throw new Error(final);
+    if(sub==="event"){const e=wire.parseEvent(body);await this.checkTopicGrants(c.id,e.topic,e.grant,checks);}
+    if(pid){const evs=await this.convEvents(c.id,checks),info=this.resolveAgent(pid,evs,await this.dmMembers(c,evs,checks));await this.checkParticipationTopic(info.topic,{conv:c.id,sub,topic,reply_to:replyTo},checks);}
     await this.commitReceiverCopies(recs, prepared, checks, [], queued);
     this.changed();
     await this.keepSent(plain);
@@ -2455,6 +2524,7 @@ export class Engine {
     try {
       await this.discoveredHistoryDelivery(rec);
       await this.receiverDeliveryGate(rec);
+      await this.proposalDeliveryGate(rec);
       if(rec.send_group_wire){const pin=await this.pinned(rec.to);if(!await this.sendGroupCopy(rec.to,pin,"present"))throw Object.assign(Error("Recipient needs sg1 again to read this already sealed request."),{code:"send_group_unsupported"});}
       if (rec.required_cap === wire.CapControl) {
         const pin = await this.pinned(rec.to);
@@ -2462,6 +2532,7 @@ export class Engine {
         const [ok, why] = await this.ctlSupport(rec.to, pin);
         if (!ok) throw Object.assign(Error(why), {code:"control_unsupported"});
       }
+      await this.directHistory().gate(rec);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
@@ -2477,7 +2548,7 @@ export class Engine {
         await this.requireAgentReaction(rec.to, pin, carried, rec.required_cap);
       }
 
-      if(rec.required_cap===wire.CapContinuation) {const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Continuation recipient key changed.");const [ok,why]=await this.ctlSupport(rec.to,pin,wire.CapContinuation);if(!ok)throw Error(why);}
+      if([wire.CapContinuation,wire.CapOwnSyncV3].includes(rec.required_cap)) {const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Recipient key changed.");const [ok,why]=await this.ctlSupport(rec.to,pin,rec.required_cap);if(!ok)throw Error(why);}
       if(rec.required_cap===wire.CapGroupInvitationControl) { const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Group recipient key changed.");await this.groupSupport(rec.to,pin);await this.requireGroupInvitationControl(rec.to,pin); }
       if(rec.required_cap===wire.CapGroup) {
         const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Group recipient key changed.");await this.groupSupport(rec.to,pin);
@@ -2501,6 +2572,7 @@ export class Engine {
         await this.requireHumanSupport(rec.to, gate.pin);
         if(c?.kind==="group")await this.requireGroupHumanSupport(rec.to,gate.pin);
       }
+      if(await this.topicCopy(rec))await this.requireTopicSupport(rec.to,await this.pinned(rec.to));
       if (await this.roomCopy(rec)) { // a room shape needs rm1 besides its own requirement (ROOM_V1 §2.5)
         const pin = await this.store.get("pins", rec.to);
         if (!pin || pin.pending || rec.recipient_fp && pin.fingerprint !== rec.recipient_fp) throw new Error(rec.to + "'s key changed: this room copy is not sent.");
@@ -2533,9 +2605,11 @@ export class Engine {
         }
       }
       await this.receiverDeliveryGate(rec);
+      await this.directHistory().gate(rec);
       if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
+      await this.proposalDeliveryGate(rec);
       if (!await this.startHandover(rec)) return;
       const r = await this.call("POST", "/v1/messages", rec.envelope);
       rec.state = (r && r.state) || "custody";
@@ -2544,8 +2618,10 @@ export class Engine {
       if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
-      if (e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "topic_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
+      if (e.code === "proposal_unsupported" || e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "topic_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
         rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
+      } else if(e.code==="device_history_authority") {
+        rec.state="not_delivered";rec.detail=e.message;
       } else if (retryable(e)) {
         rec.detail = e.message;
       } else {
@@ -2616,6 +2692,7 @@ export class Engine {
   async gate(c, rec) {
     try { await this.groupHumanReaderGate(c, rec); }
     catch (e) { return { why: e.message, code: e.code }; }
+    if([wire.SubDeviceHistory,wire.SubDeviceFile].includes(rec?.sub))return this.directHistory().gate(rec);
     if(rec?.sub===wire.SubTopicSync)return this.topicSyncGate(rec);
     if(rec?.sub===wire.SubInvitationSync)return this.invitationSyncGate(rec);
     if(rec?.sub===wire.SubReadSync)return this.readSyncGate(rec);
@@ -2847,6 +2924,7 @@ export class Engine {
   }
 
   async commitReceiverCopies(copies, prepared, checks = [], extraOps = [], queued = false) {
+    if(prepared && prepared.delegation.receiver_setup.choice.kind!=="human")for(const rec of copies)if(await this.topicCopy(rec))throw Error("Topic-only sharing cannot use a selected agent or session to receive replies. Choose Yourself for replies; you can still ask the topic's agent.");
     if (prepared) {
       await this.receiverHost({ address: prepared.route.host, fingerprint: prepared.route.host_key }, checks);
       for (const rec of copies) {
@@ -2862,11 +2940,16 @@ export class Engine {
     // All local batch commits share this short serialization point. No network waits here.
     const previous = this.sendCommit || Promise.resolve();
     const run = previous.catch(() => {}).then(async () => {
+      const choices=new Set();
+      for(const rec of rows.filter(r=>r.proposal_choice)) {
+        const p=await this.proposalCommitCheck(rec,checks),key="proposal-choice/"+(p.conv||"")+"/"+(p.lid||p.id)+"/"+p.fp;
+        if(!choices.has(key)){if(await this.groupRead(checks,"kv",key))throw Error("This proposal was already confirmed.");extraOps.push({s:"kv",k:key,v:{task:rec.lid||rec.id,body:rec.body,target:rec.target||null}});choices.add(key);}
+      }
       const kept = await this.store.all("outbox");
       let order = kept.reduce((last,r) => Math.max(last,r.send_order ?? r.at ?? 0), this.now());
       if (queued && rows.some(r => r.conv && r.lid && kept.some(old => old.conv === r.conv && old.lid === r.lid))) throw Error("This send is already kept here.");
       for (const r of rows) {
-        if (await this.store.get("outbox", r.id)) throw Error("Local send id already exists.");
+        if (await this.groupRead(checks,"outbox", r.id)) throw Error("Local send id already exists.");
         r.send_order = ++order;
         if (["question","task"].includes(r.kind)) r.handover_started = false;
       }
@@ -2954,7 +3037,7 @@ export class Engine {
   // sendV1 seals one version 1 message to the key pinned for to (pinned
   // the first time), keeps it with its files before sending, and sends
   // that exact envelope, retried until the server takes it.
-  async sendV1({ id: sendID = "", queued = false, to, kind, body, quote="",replyTo, files, status, target = null, receiver = null }) {
+  async sendV1({ id: sendID = "", queued = false, to, kind, body, quote="",replyTo, files, status, target = null, receiver = null, proposal_choice = null }) {
     const pin = await this.sendKey(to);
     const required_cap = wire.agentRequirement({ target });
     if (target && (target.address !== to || target.fingerprint !== pin.fingerprint)) throw new Error("Selected agent's host key changed: nothing is sent.");
@@ -2977,7 +3060,7 @@ export class Engine {
       if(!parent || parent.conv || (parent.to ? parent.to!==to : parent.from!==to)) throw Error("Quote stays within its device conversation.");
     }
     const envelope = await wire.seal({ id, from: this.address, to, ts: Math.floor(at / 1000), kind, body, quote,reply_to: replyTo, status, target, attachments, receiver_route: prepared?.route }, this.keys, recipient);
-    const rec = { v: 1, id, to, fp: pin.fingerprint, kind, body, quote,reply_to: replyTo, status, at, envelope,
+    const rec = { v: 1, id, to, fp: pin.fingerprint, kind, body, quote,reply_to: replyTo, status, at, envelope, ...(proposal_choice?{proposal_choice}:{}),
       ...(target ? { target } : {}), ...(required_cap ? { required_cap } : {}), ...(prepared ? { receiver_route: prepared.route } : {}),
       attachments: attachments.length ? attachments : undefined, files: sealed.length ? sealed : undefined, state: "queued", detail: "" };
     const source = replyTo ? await this.store.get("inbox", replyTo) : null;
@@ -2985,7 +3068,8 @@ export class Engine {
     const copies = await this.receiverReplyCopies(rec, source, plain, checks);
     await this.commitReceiverCopies(copies, prepared, checks, [], queued);
     this.changed();
-    await this.keepSent(plain); // as a DM's files: reopened here, offered to your other devices
+    await this.keepSent(plain);
+    this.runHistory().catch(()=>{}); // as a DM's files: reopened here, offered to your other devices
     if (queued) this.queueOutbox();
     else if (prepared) await this.post(prepared.delegation);
     else for (const copy of copies) await this.post(copy);
@@ -3038,8 +3122,8 @@ export class Engine {
   // received and sent, joined by replies as the core does (peerThreads),
   // each oldest first.
   async v1Threads() {
-    const msgs = [...(await this.store.all("inbox")).filter((m) => m.v === 1 && !m.aside && !this.erasedRow(m)).map((m) => ({ ...m, dir: "in", peer: m.from })),
-      ...(await this.store.all("outbox")).filter((r) => r.v === 1 && !r.aside && !this.erasedRow(r)).map((r) => ({ ...r, dir: "out", peer: r.to }))]; // a deleted thread's messages are not shown
+    const msgs = [...(await this.store.all("inbox")).filter((m) => m.v === 1 && !m.aside && !this.erasedRow(m)).map((m) => ({ ...m, dir:m.device_history?.direction||"in", peer:m.device_history?.peer||m.from,author_fp:m.fp,stored_in:true })),
+      ...(await this.store.all("outbox")).filter((r) => r.v === 1 && !r.aside && !this.erasedRow(r)).map((r) => ({ ...r, dir:r.device_history?.direction||"out", peer:r.device_history?.peer||r.to,author_fp:this.fp }))]; // a deleted thread's messages are not shown
     const byID = new Map(msgs.map((m) => [m.id, m]));
     const parent = new Map(msgs.map((m) => [m.id, m.id]));
     const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
@@ -3299,7 +3383,7 @@ export class Engine {
     const agentCards=new Map();
     for(const i of infos) {
       if(!i.host || i.role==="human")continue;
-      const v=this.agentView(i,messages,null,members,role),key=v.host.address+"#"+v.host.fingerprint+"#"+(v.agent_id||"")+(["active","invited"].includes(v.state)?"":"#"+v.pid);
+      const v=this.agentView(i,messages,null,members,role),key=v.host.address+"#"+v.host.fingerprint+"#"+(v.agent_id||"")+"#"+(v.topic==null?"all":"topic/"+v.topic)+(["active","invited"].includes(v.state)?"":"#"+v.pid);
       const prior=agentCards.get(key);
       if(prior && ["active","invited"].includes(prior.state) && ["active","invited"].includes(v.state)) {
         const rank=x=>x.state==="active"?0:1;
@@ -3323,7 +3407,7 @@ export class Engine {
       view.can=view.deleted||event||m.excerpt_pid||frozen||role!=="member"?[]:["react",...(targetPerson===this.me.person?["edit","delete"]:[])];
       const answered=messages.some(r=>r.pid===m.pid&&(r.reply_to===m.lid||shownReply(r.reply_to)===m.id)&&["answer","result"].includes(r.kind));
       const exec=m.target&&["question","task"].includes(m.kind)?this.execOn(ctls.filter(x=>x.sub===wire.SubStatus&&x.ref?.id===m.lid&&x.ref.fingerprint===fp&&x.from===m.target.address),m.target.address,answered):null;
-      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
+      return {id:m.id,lid:m.lid,dir:out?"out":"in",from:here?this.address:m.from,kind:m.kind,status:m.status||"",actions:await this.proposalActions(m),proposal:await this.proposalProvenance(m),body:event?"":m.body,event,...(ev&&ev.type?{event_type:ev.type,event_by:ev.by}:{}),pid:m.pid||"",...(m.human?.author_pid?{agent_author_pid:m.human.author_pid}:{}),...(m.target?{target:m.target,to:m.target.address}:{}),...(m.agent_id?{agent_id:m.agent_id}:{}),...(m.excerpt_pid?{excerpt_pid:m.excerpt_pid}:{}),reply_to:shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",at:iso(m.at),send_group:m.send_group_conflict?"":m.send_group||"",send_group_author:here?this.fp:m.fp||m.claimed_key||"",origin:m.origin||"",verified_agent:verifiedAgent(m,infos.find(i=>i.pid===(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid)),here?this.address:m.from,fp),job_detail:this.needsYouText(m,privateReports),state:m.state||"",...this.cancellationView(m),state_text:event?"":here?this.outStateText(m,"the group"):"",detail:m.detail||"",unread:!out&&!m.read,replica:!!m.replica,synced_from:m.history?m.synced_from:"",claimed_key:m.claimed_key||"",via:m.own&&!m.history?m.from:"",copies:here?await this.shownCopies(m.copies):undefined,group_ref:!frozen&&role==="member"&&m.kind==="message"&&!m.sub&&!m.pid&&!m.excerpt_pid?{lid:m.lid,author:m.claimed_key||m.fp||this.fp,hash:await wire.groupHistoryContentHash(conv,m)}:undefined,...view,...(exec?{exec,...(this.continuationOf(m,fp,exec)?{continuation:this.continuationOf(m,fp,exec),actions:["continue"]}:{})}:{}),attachments:await Promise.all((m.attachments||[]).map(async(a,i)=>({index:i,name:wire.safeName(a.name),size:a.size,...(here?await this.sentState(a):this.fileState(a))}))) };
     }))};
   }
 
@@ -3812,7 +3896,7 @@ export class Engine {
 
   async sendGroupTurn(c,{id:sendID="",queued=false,body,topic="",topic_event=null,quote="",reply_to="",files=[],receiver=null}) {
     checkFiles(files);
-    const consentChecks=[], consentEvents=await this.convEvents(c.id,consentChecks), consentMembers=await this.dmMembers(c,consentEvents,consentChecks), human=await this.roomPlan(c,consentEvents,consentMembers);
+    const consentChecks=[], consentEvents=await this.convEvents(c.id,consentChecks), consentMembers=await this.dmMembers(c,consentEvents,consentChecks), human=await this.roomPlan(c,consentEvents,consentMembers,topic);
     if(human)return this.sendHumanTurn(c,{id:sendID,queued,kind:"message",body,topic,topic_event,quote,reply_to,files,receiver},human);
     const checks=consentChecks, {packet,members}=await this.groupTurnEvidence(c.id,checks), me=await this.groupRead(checks,"kv","person"), own=wire.groupMember(packet.state,me.person), reply=await this.groupReply(c.id,reply_to);
     quote=await this.groupReply(c.id,quote);
@@ -3860,7 +3944,7 @@ export class Engine {
     let sender=members.find(m=>m.devices?.some(d=>d.address===env.from&&d.fingerprint===pin.fingerprint));
     if(n.human) { // a captured audience (ROOM_V1 §3): its author a current member device or the exact host of a following participation
       const evidence=await this.humanEvidence(await this.groupRecord(n.conv),n.human,checks);
-      this.humanTurnAuthorization(n,evidence,null,env.from,pin.fingerprint,this.address,this.fp);
+      await this.humanTurnAuthorization(n,evidence,null,env.from,pin.fingerprint,this.address,this.fp,false,checks);
       if(!sender)sender=await this.personOf(env.from,pin);
     }
     if(!sender)throw new Hold("invalid","Sender is not a current group device.");
@@ -3944,7 +4028,7 @@ export class Engine {
     if(disclosed)await this.admitDisclosed(record,info,members,env.from,pin.fingerprint,c,checks);
     else {
       if(!recipientMember && (!info.external||info.host?.person!==this.me.person||info.host.address!==this.address||info.host.fingerprint!==this.fp))throw new Hold("invalid","Group visitor recipient differs from exact invited host.");
-      this.externalRole(n,info,members,env.from,pin.fingerprint);
+      await this.externalRole(n,info,members,env.from,pin.fingerprint,checks);
     }
     if(record?.e.type==="invite"&&record.hash!==info.invite)throw new Hold("invalid","Group invite differs from counted original.");
     await this.checkExternalReply(n,info,members,checks);
@@ -4252,12 +4336,12 @@ export class Engine {
     if(retiredEnd&&(info.state!=="dismissed"||info.held||info.conflict||info.dismissal!==candidate.hash))throw new Hold("invalid","Historical own transport does not carry the exact counted end.");
     if(h.human) {
       const evidence=await this.groupHumanEvidence(c,h.human,checks,historyPacket);
-      this.humanTurnAuthorization({...h,conv},evidence,info,h.from,h.from_key,this.address,this.fp,true);
+      await this.humanTurnAuthorization({...h,conv},evidence,info,h.from,h.from_key,this.address,this.fp,true,checks);
     }
     // Retained own-member history is inert; only its lifecycle gate differs
     // from live delivery. Exact targets, author keys and requests still bind it.
     const retained=(h.sub==="excerpt"||!h.sub&&(["question","task","answer","result"].includes(h.kind)||progressOutput(h)))&&this.retainedAssistant(info,events);
-    if(!retiredEnd)this.externalRole({...h,conv,replica:h.sub==="excerpt"},retained?{...info,state:"active"}:info,current,h.from,h.from_key);
+    if(!retiredEnd)await this.externalRole({...h,conv,replica:h.sub==="excerpt"},retained?{...info,state:"active"}:info,current,h.from,h.from_key,checks);
     await this.checkExternalReply({...h,conv},info,current,checks,true);
     return info;
   }
@@ -4643,7 +4727,7 @@ export class Engine {
       try { head = JSON.parse(data); } catch (err) { /* nothing to name */ }
       if (typeof head.id === "string" && wire.validID(head.id)) {
         const previous = await this.store.get("held", head.id);
-        await this.store.write([{ s: "held", k: head.id, v: previous || { id: head.id, from: String(head.from || ""), reason: "invalid", envelope: data, at: this.now() } },
+        await this.store.write([{ s: "held", k: head.id, v: previous || { id: head.id, from: String(head.from || ""), reason: "invalid", detail_code:"envelope_malformed", envelope: data, at: this.now() } },
           { s: "receipts", k: head.id, v: { id: head.id, state: "quarantined" } }]);
         this.flushReceipts().catch(() => {});
       }
@@ -4668,9 +4752,26 @@ export class Engine {
     return {note:"Notice archived locally. The retained message has not been accepted or run."};
   }
 
+  async archiveHeldNotices(refs) {
+    if (!Array.isArray(refs) || !refs.length || refs.length > 256 || refs.some(r => !r || !wire.validID(r.id) || !canArchiveHeld(r.reason) || typeof r.detail_code !== "string" || r.detail_code.length > 80)) throw Error("Choose between 1 and 256 exact held notices.");
+    const ops = [], checks = [], seen = new Set();
+    for (const ref of refs) {
+      if (seen.has(ref.id)) continue;
+      seen.add(ref.id);
+      const r = await this.store.get("held", ref.id);
+      if (!r || r.notice_archived || r.reason !== ref.reason || (r.detail_code || "") !== ref.detail_code) continue;
+      checks.push({s:"held",k:ref.id,v:r});
+      ops.push({s:"held",k:ref.id,v:{...r,notice_archived:true}});
+    }
+    if (ops.length) await this.store.write(ops, checks);
+    this.changed(true);
+    return {note:`Archived ${ops.length} notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.`};
+  }
+
   async hold(env, data, reason, why = "") {
     const previous = await this.store.get("held", env.id);
-    await this.store.write([{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code:heldDiagnosticCode(why), notice_archived:canArchiveHeld(reason) && !!previous?.notice_archived } },
+    const detail_code=heldFailureCode(reason,why);
+    await this.store.write([{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code, notice_archived:canArchiveHeld(reason) && previous?.reason===reason && (previous?.detail_code||"")===detail_code && !!previous?.notice_archived } },
       { s: "receipts", k: env.id, v: { id: env.id, state: "quarantined" } }]);
     this.changed(true);
   }
@@ -4689,13 +4790,17 @@ export class Engine {
       for (const op of ops) if (op.s === "inbox" && op.v?.receiver_route?.op === "request" && !op.v.history) await this.receiverOriginAuthority(op.v, checks);
       await this.applyReadArrivals(ops,checks);
       ops.checks = checks;
-      // A held message that now proves out was acknowledged as held already.
-      ops.push(fromHeld ? { s: "held", k: env.id, v: undefined } : { s: "receipts", k: env.id, v: { id: env.id, state: "delivered" } });
+      // The relay accepts quarantined -> delivered only after normal admission
+      // has stored the message. Persist that upgrade with removal of the hold.
+      if (fromHeld) ops.push({ s: "held", k: env.id, v: undefined });
+      ops.push({ s: "receipts", k: env.id, v: { id: env.id, state: "delivered" } });
       await this.store.write(ops, ops.checks);
+      if (fromHeld) this.flushReceipts().catch(() => {});
       if (ops.some((o) => o.s === "erased")) await this.loadErased();
       this.changed(true);
       if (ops.some(o => o.s === "inbox" && o.v?.sub === "event")) { this.recoverHumanExcerpts().catch(() => {}); this.discloseHumanAudience(); this.retryHeld().catch(() => {}); }
       if (ops.groupCarrier) this.retryHeld().catch(() => {});
+      if (ops.directHistory) this.retryHeld().catch(() => {});
       if (ops.groupCarrier) this.recoverGroupIntents().catch(() => {});
       if (this.connected && ops.some(o => o.s === "convs" || o.s === "kv" && o.k.startsWith("group/") && o.v?.context || o.s === "inbox" && o.v?.sub === "event")) {
         this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
@@ -4703,10 +4808,10 @@ export class Engine {
       if(ops.topicSync)this.syncTopicTitles().catch(()=>{});
       if(ops.readSync)this.syncReadMarks().catch(()=>{});
       if(ops.rootSync){this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});}
-      if(ops.groupCarrier || ops.some(o=>o.s==="inbox"&&historySource(o.v)))this.runHistory().catch(()=>{});
+      if(ops.groupCarrier || ops.some(o=>o.s==="inbox"&&(historySource(o.v)||directHistoryRow(o.v))))this.runHistory().catch(()=>{});
       if (this.connected && ops.some((o) => o.s === "outbox")) this.flushOutbox().catch(() => {}); // history forwarded to your other devices
       if (ops.some((o) => o.s === "kv" && o.v && o.v.serve)) this.runServes().catch(() => {});
-      const atts = ops.flatMap((o) => (o.s === "inbox" && o.v && o.v.conv ? (o.v.attachments || []).filter((a) => a.blob) : []));
+      const atts = ops.flatMap((o) => (o.s === "inbox" && o.v && (o.v.conv||o.v.device_history) ? (o.v.attachments || []).filter((a) => a.blob) : []));
       if (atts.length) this.keepFiles(atts).catch(() => {});
     } catch (e) {
       if (e instanceof StoreConflict) return this.admit(data, env, fromHeld, historyRecovery); // reverify; nothing committed or acknowledged
@@ -4714,8 +4819,9 @@ export class Engine {
         if (!fromHeld) await this.hold(env, data, e.reason, e.message);
         else {
           const h = await this.store.get("held", env.id);
-          if (h && (e.reason !== "proof_pending" || h.reason !== e.reason)) {
-            await this.store.write([{s:"held",k:env.id,v:{ ...h, reason: e.reason, notice_archived:canArchiveHeld(e.reason) && !!h.notice_archived, detail_code:heldDiagnosticCode(e.message), ...(historyRecovery && e.reason === "proof_pending" ? {history_recovery:true} : {}) }}],[{s:"held",k:env.id,v:h}]);
+          const detail_code=heldFailureCode(e.reason,e.message);
+          if (h && (h.reason !== e.reason || (h.detail_code||"") !== detail_code || historyRecovery && e.reason === "proof_pending" && !h.history_recovery)) {
+            await this.store.write([{s:"held",k:env.id,v:{ ...h, reason: e.reason, notice_archived:canArchiveHeld(e.reason) && h.reason===e.reason && (h.detail_code||"")===detail_code && !!h.notice_archived, detail_code, ...(historyRecovery && e.reason === "proof_pending" ? {history_recovery:true} : {}) }}],[{s:"held",k:env.id,v:h}]);
             this.changed(true);
           }
         }
@@ -4754,7 +4860,7 @@ export class Engine {
         pin = await this.pinned(env.from);
       } catch (e) {
         if (retryable(e)) throw e;
-        throw new Hold("invalid", "no key for " + env.from);
+        throw new Hold("invalid", "sender key unavailable");
       }
     }
     if (pin.pending) throw new Hold("key_changed", env.from + "'s key changed");
@@ -4767,16 +4873,18 @@ export class Engine {
         d = await this.directory(env.from);
       } catch (e) {
         if (retryable(e)) throw e;
-        throw new Hold("invalid", err.message);
+        throw new Hold("invalid", "envelope verification failed");
       }
       if (d.fingerprint !== pin.fingerprint) {
         await put(this.store, "pins", env.from, { ...pin, pending: { json: d.json, fingerprint: d.fingerprint } });
         throw new Hold("key_changed", env.from + "'s key changed");
       }
-      throw new Hold("invalid", err.message);
+      throw new Hold("invalid", "envelope verification failed");
     }
     if (n.receiver_route && n.receiver_route.op !== "request") return this.admitReceiverSetup(n, env, pin);
     if (n.v === wire.Version3) return this.admitControl(n, env, pin);
+    if(n.sub===wire.SubDeviceHistory)return this.directHistory().admit(n,env,pin);
+    if(n.sub===wire.SubDeviceFile)return this.directHistory().admitFile(n,env,pin);
     if(n.sub===wire.SubTopicSync)return this.admitTopicSync(n,env,pin);
     if(n.sub===wire.SubInvitationSync)return this.admitInvitationSync(n,env,pin);
     if(n.sub===wire.SubReadSync)return this.admitReadSync(n,env,pin);
@@ -4966,7 +5074,7 @@ export class Engine {
     if (!info.invite) throw new Hold("proof_pending", "outside traffic has no unambiguous invitation proof yet");
     if (disclosed) await this.admitDisclosed(record, info, members, env.from, pin.fingerprint, c, checks);
     else if (!recipientMember && (info.host?.person !== this.me.person || info.host.address !== this.address || info.host.fingerprint !== this.fp) && !(this.humanEndEvent(n, info) && await this.humanEndReader(c, this.address, this.fp, checks))) throw new Hold("invalid", "outside recipient differs from the exact invited host");
-    if (!disclosed) this.externalRole(n, info, members, env.from, pin.fingerprint);
+    if (!disclosed) await this.externalRole(n, info, members, env.from, pin.fingerprint);
     if (record?.e.type === "invite" && record.hash !== info.invite) throw new Hold("invalid", "invite differs from the counted invitation");
     if (record?.e.type === "scope" && (record.e.prev !== info.invite || !info.scope)) throw new Hold("invalid", "scope differs from its counted invitation");
     await this.checkExternalReply(n, info, members);
@@ -5025,6 +5133,26 @@ export class Engine {
     return item;
   }
 
+  // A disclosed lifecycle keeps its original event signature. Only counted
+  // DM proof permits replacing the forwarding transport's history attribution.
+  async dmLifecycleHistorySource(c,item,checks=[]) {
+    if(!c||c.kind==="group"||item.sub!=="event"||wire.parseRoot(c.root).kind!=="dm")return item;
+    const record=await this.eventRecord(item.body),e=record.e;
+    if(e.conv!==c.id||e.pid!==item.pid)throw Error("History lifecycle differs from its conversation or participation.");
+    if(e.author.address===item.from&&e.author.fingerprint===item.from_key)return item;
+    const events=await this.convEvents(c.id,checks),members=await this.dmMembers(c,events,checks);
+    if(members.size!==2||![...members.values()].some(p=>p.devices.some(d=>d.address===item.from&&d.fingerprint===item.from_key)))throw Error("History lifecycle forwarder is not a current original member.");
+    // dmMembers' DM reads are shared with legacy paths; capture their current
+    // roster values here too, for the queue's final atomic authority check.
+    for(const p of [...members.values(),...members.hosts.values()])if(JSON.stringify(await this.groupRead(checks,p.person===this.me.person?"kv":"persons",p.person===this.me.person?"person":p.person))!==JSON.stringify(p))throw new StoreConflict();
+    const info=this.resolveAgent(item.pid,events,members),counted={scope:info.scope,accept:info.decision,dismiss:info.dismissal}[e.type];
+    if(!counted||counted!==record.hash)throw Error("History lifecycle is not a counted public participation record.");
+    const pin=await this.groupRead(checks,"pins",e.author.address),transport=await this.groupRead(checks,"pins",item.from);
+    if(transport?.pending||transport&&transport.fingerprint!==item.from_key||!pin||pin.pending||pin.fingerprint!==e.author.fingerprint)throw Error("History lifecycle author or forwarder key is unavailable or changed.");
+    await wire.verifyEvent(e,(await this.pubOf(pin)).sign_key);
+    return {...item,from:e.author.address,from_key:e.author.fingerprint};
+  }
+
   async historyCopy(dev, c, item, checks=[]) {
     if(c.kind==="group") {
       const {packet}=await this.groupTurnEvidence(c.id,checks),members=await this.dmMembers(c,null,checks),stamp=members.epochs.get(this.fp);
@@ -5046,6 +5174,7 @@ export class Engine {
       const rec=await this.groupDataCopy(packet,"history",wire.historyJSON(item),dev);rec.group_history=true;rec.send_group_wire=!!item.send_group;return rec;
     }
     if (!wire.rootMember(wire.parseRoot(c.root), this.me?.person)) throw new Error("An outside host cannot forward room history to sibling devices.");
+    item=await this.dmLifecycleHistorySource(c,item,checks);
     item={...item,send_group:await this.sendGroupCopy(dev.address,await this.pinned(dev.address),item.send_group)};
     const rec = await this.ownCopy(dev, c, "history", wire.historyJSON(item));
     rec.send_group_wire=!!item.send_group;
@@ -5155,7 +5284,7 @@ export class Engine {
       // delivery or execution after dismissal. Their exact author/target
       // and accepted original request remain checked independently.
       const historical = !item.sub && ["question", "task", "answer", "result"].includes(item.kind);
-      this.externalRole({ ...item, conv: n.conv, replica: item.sub === "excerpt" }, historical ? { ...externalInfo, state: "active", held: 0 } : externalInfo, historyMembers, item.from, item.from_key);
+      await this.externalRole({ ...item, conv: n.conv, replica: item.sub === "excerpt" }, historical ? { ...externalInfo, state: "active", held: 0 } : externalInfo, historyMembers, item.from, item.from_key);
       await this.checkExternalReply({ ...item, conv: n.conv }, externalInfo, historyMembers);
     }
     if (!assistant) await this.checkConversationAgent({ ...item, conv: n.conv }, item.from, item.from_key, { id: n.conv, root: n.root, peer: root.members.find((m) => m.person !== this.me.person)?.person }, true);
@@ -5253,9 +5382,31 @@ export class Engine {
     return this.receiptsRun;
   }
 
+  // Older recovery removed the hold without upgrading its receipt. These
+  // markers are written only by normal admitted group/history transactions.
+  // Repair disposition, not admission: a quarantine alone proves no success.
+  async repairCarrierReceiptsPage() {
+    if(this.carrierReceiptRepairDone||!this.keys||!this.address||this.revoked)return false;
+    const key="delivered-carrier-repair-v1",saved=await this.store.get("kv",key);
+    if(saved?.done){this.carrierReceiptRepairDone=true;return false;}
+    const prefix="group-carrier/",after=saved?.after||prefix,keys=await this.store.keysAfter("kv",after,heldPage);
+    const page=keys.filter(k=>k.startsWith(prefix)),checks=[{s:"kv",k:key,v:saved}],ops=[];
+    for(const k of page) {
+      const id=k.slice(prefix.length);if(!wire.validID(id))continue;
+      const marker=await this.store.get("kv",k),held=await this.store.get("held",id);
+      checks.push({s:"kv",k,v:marker},{s:"held",k:id,v:held});
+      if(marker===true&&!held)ops.push({s:"receipts",k:id,v:{id,state:"delivered"}});
+    }
+    const done=keys.length<heldPage||page.length!==keys.length;
+    ops.push({s:"kv",k:key,v:{after:page.at(-1)||after,done}});
+    try{await this.store.write(ops,checks);}catch(e){if(e instanceof StoreConflict)return true;throw e;}
+    this.carrierReceiptRepairDone=done;return !done;
+  }
+
   async receiptPasses() {
     while (this.receiptsAgain) {
       this.receiptsAgain = false;
+      if(await this.repairCarrierReceiptsPage())this.receiptsAgain=true;
       const rows = await this.store.all("receipts"), sent = [];
       let next = 0, kept = false;
       const send = async () => {
@@ -5649,7 +5800,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit crs1 fits the 16-cap advertisement bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapOwnSyncV3, wire.CapTopicParticipation, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit own3/topic scopes fit the 18-cap advertisement bound
       await this.publishPerson().catch(() => {});
       await this.flushReceipts();
       await this.retryHeld();
@@ -6192,6 +6343,7 @@ export class Engine {
   // addressed to its exact host and agent, with an audience), and its
   // audience is within that request's own: never broader than the request's.
   async humanReactionRequest(conv, n, info) {
+    await this.checkParticipationTopic(info.topic,{...n,conv});
     const rows = [...await this.store.all("inbox"), ...await this.store.all("outbox")].filter((r) => r.conv === conv && !r.control && !r.aside && r.lid === n.ref.id && r.pid === n.pid && r.human &&
       ["question", "task"].includes(r.kind) && (r.to ? this.fp : r.fp) === n.ref.fingerprint);
     if (!rows.length) throw new Hold("proof_pending", "the reaction's request is not here (yet)");
@@ -6208,7 +6360,7 @@ export class Engine {
     if (n.human) { // to the request's captured audience: author the exact host, reader this exact device of it
       if (!info.invite) throw new Hold("proof_pending", "the assistant's participation is not here (yet)");
       const evidence = await this.humanEvidence(c, n.human);
-      this.humanTurnAuthorization(n, evidence, info, env.from, pin.fingerprint, this.address, this.fp);
+      await this.humanTurnAuthorization(n, evidence, info, env.from, pin.fingerprint, this.address, this.fp);
       await this.humanReactionRequest(n.conv, n, info);
     } else await this.assistantRequest(n.conv, n.pid, n.ref, n.agent_id, info, members);
     const key = pin.fingerprint + "/" + n.lid;
@@ -6254,7 +6406,7 @@ export class Engine {
     const captured = new Set(turn.human.audience.map((s) => s.pid + "|" + s.invite + "|" + s.decision));
     if (!n.human.audience.every((s) => captured.has(s.pid + "|" + s.invite + "|" + s.decision))) throw new Hold("invalid", "an edit's audience is broader than its turn's");
     const evidence = await this.humanEvidence(c, n.human, checks);
-    this.humanAuthorization(n.human, evidence, env.from, pin.fingerprint, this.address, this.fp);
+    await this.humanTurnAuthorization(n,evidence,null,env.from,pin.fingerprint,this.address,this.fp,false,checks);
     const key = pin.fingerprint + "/" + n.lid;
     if (await this.groupRead(checks, "lids", key)) { const ops = []; ops.checks = checks; return ops; }
     const own = this.me.devices.some((d) => d.address === env.from && d.fingerprint === pin.fingerprint), sp = own ? this.me : await this.personOf(env.from, pin);
@@ -6455,7 +6607,8 @@ export class Engine {
             // A task carrying out its agent's proposal (client.ProposalView, first lines): for the operator approving it.
             const p = it.proposal;
             if (o.actionable && p && typeof p === "object" && typeof p.proposal_id === "string" && p.proposal_id) {
-              o.proposal = Object.fromEntries(["question_id", "question", "asker", "proposal_id", "proposal", "confirmed_by"].map((k) => [k, firstLine(typeof p[k] === "string" ? p[k] : "")]));
+              o.proposal = Object.fromEntries(["question_id", "question", "asker", "proposal_id", "proposal", "confirmed_by", "task"].map((k) => [k, firstLine(typeof p[k] === "string" ? p[k] : "")]));
+              if(p.edited===true)o.proposal.edited=true;
             }
             const res = this.decisionResult(inbox, outbox, m, o);
             if (res) o.result = res;
@@ -6556,6 +6709,7 @@ export class Engine {
   async decide(x) {
     const host = String(x.host || ""), id = String(x.id || ""), key = String(x.key || ""), action = String(x.action || ""), expect = String(x.expect || ""), report = String(x.report || ""), text = String(x.text || "");
     const attempt = Number.isSafeInteger(x.attempt) ? x.attempt : Number.isSafeInteger(Number(x.attempt)) ? Number(x.attempt) : -1;
+    const ownDecision = action === "continue" || action === "resolve" && !report;
     if (!wire.validID(id) || !wire.validFingerprint(key)) throw new Error("A decision names the request's id and its sender's key, as the host reported them.");
     if (!wire.DecisionActions.includes(action)) throw new Error("No such decision.");
     if (!wire.validStateToken(expect) || attempt < 0) throw new Error("A decision names the state and attempt you saw in the report.");
@@ -6563,21 +6717,23 @@ export class Engine {
     if (new TextEncoder().encode(text).length > wire.MaxDecisionText) throw new Error("The text is too long (16 KB at most).");
     if (host === this.address) throw new Error("This browser holds no requests: there is nothing to decide here.");
     const notice = wire.validID(report) ? await this.store.get("inbox", report) : null;
-    if (action!=="continue" && (!notice || notice.v !== 1 || notice.control || notice.kind !== "message" || notice.status !== "review_notice" || notice.from !== host)) throw new Error("That report is not one " + host + " sent this device.");
-    if(action==="continue") {
+    if (!ownDecision && (!notice || notice.v !== 1 || notice.control || notice.kind !== "message" || notice.status !== "review_notice" || notice.from !== host)) throw new Error("That report is not one " + host + " sent this device.");
+    if (ownDecision) {
       const own=this.me;
       if(expect!=="needs_human" || attempt<1 || !own || own.state!=="self" || !(own.human_keys||[]).includes(this.fp) || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp) || !own.devices.some(d=>d.address===host))throw Error("Only a current own human device can answer this exact waiting request here.");
       if(!wire.validID(x.send_id||""))throw Error("Keep the answer's exact send ID when retrying.");
+      const pin = await this.pinned(host);
+      if (pin.pending || !own.devices.some(d => d.address === host && d.fingerprint === pin.fingerprint)) throw Error("The host's current verified key needs attention first.");
     }
     for (const r of await this.store.all("outbox")) { // asked again while unanswered: the one sent stands
-      if (action === "continue" || !r.control || r.sub !== wire.SubDecision || r.to !== host || !r.ref || r.ref.id !== id || r.ref.fingerprint !== key) continue;
+      if (ownDecision || !r.control || r.sub !== wire.SubDecision || r.to !== host || !r.ref || r.ref.id !== id || r.ref.fingerprint !== key) continue;
       let d;
       try { d = JSON.parse(r.body); } catch (e) { continue; }
       if (d.action === action && d.expect === expect && d.attempt === attempt && d.report === report && d.text === text && !(await this.answered(r.id))) {
         return { note: "Already sent to " + host + "; its answer shows here once it decides.", sent: r.id };
       }
     }
-    const sent = await this.sendDeviceControl(host, { id, fingerprint: key }, wire.SubDecision, JSON.stringify({ action, expect, attempt, text, report }), action==="continue"?wire.CapContinuation:wire.CapHeadless, action==="continue"?x.send_id:"");
+    const sent = await this.sendDeviceControl(host, { id, fingerprint: key }, wire.SubDecision, JSON.stringify({ action, expect, attempt, text, report }), ownDecision ? action === "resolve" ? wire.CapOwnSyncV3 : wire.CapContinuation : wire.CapHeadless, ownDecision ? x.send_id : "");
     this.changed();
     return { note: (sent.state === "queued" ? "Queued for " + host + ": it goes when your server is reachable." : "Sent to " + host + ".") + " Its answer shows here once it decides; delivery decides nothing.", sent: sent.id };
   }
@@ -6771,9 +6927,9 @@ export class Engine {
     if (!thread) throw new Error("No such conversation here.");
     const ids = new Set(thread.map((m) => m.id)), names = new Map(), deletion = wire.newID();
     const add = (key, lid) => names.set(erasedKey("", key, lid), { key, lid });
-    for (const m of thread) add(m.dir === "in" ? m.fp : this.fp, m.id);
+    for (const m of thread) add(m.author_fp || (m.dir === "in" ? m.fp : this.fp), m.id);
     for (const r of [...await this.store.all("inbox"), ...await this.store.all("outbox")]) {
-      if (!r.conv && r.control && r.ref && ids.has(r.ref.id) && (r.to ? r.to === peer : r.from === peer)) add(r.to ? this.fp : r.fp, r.id); // its messages' controls go with them
+      if (!r.conv && r.control && r.ref && ids.has(r.ref.id) && (r.device_history?.peer || (r.to ? r.to : r.from)) === peer) add(r.to ? this.fp : r.fp, r.id); // its messages' controls go with them
     }
     const ops = [];
     for (const [k, n] of names) { ops.push({ s: "erased", k, v: { conv: "", key: n.key, lid: n.lid, deletion, shared: true } }); this.erased.add(k); }
@@ -6999,13 +7155,13 @@ export class Engine {
   // ctlSupport says whether a control can go to address: the relay carries
   // version 3 and the device's signed capabilities include controls.
   async ctlSupport(address, pin, cap = wire.CapControl) {
-    const what = cap === wire.CapContinuation ? "human clarification continuations" : cap === wire.CapHeadless ? "operator decisions" : cap === wire.CapDrive ? "Drive space records" : cap === wire.CapConvClear ? "conversation deletions" : "reactions, edits or deletions";
+    const what = cap === wire.CapOwnSyncV3 ? "own-device history and decisions" : cap === wire.CapContinuation ? "human clarification continuations" : cap === wire.CapHeadless ? "operator decisions" : cap === wire.CapDrive ? "Drive space records" : cap === wire.CapConvClear ? "conversation deletions" : "reactions, edits or deletions";
     const f = await this.features();
     if (!f.includes("env3") || !f.includes("caps")) return [false, "server_update: your server cannot carry " + what + " (it needs an update)"];
     let prof = null;
     try { prof = await this.profile(address); } catch (e) { if (retryable(e)) throw e; }
     const key = (await this.pubOf(pin)).sign_key;
-    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, "peer_update: " + address + " cannot " + (cap === wire.CapContinuation ? "continue waiting requests (update the AgentNet app on that computer)" : cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
+    if (!(await wire.profileSupports(prof || {}, address, key, cap))) return [false, "peer_update: " + address + " cannot " + (cap === wire.CapOwnSyncV3 ? "synchronize direct-agent history and handle own requests" : cap === wire.CapContinuation ? "continue waiting requests (update the AgentNet app on that computer)" : cap === wire.CapHeadless ? "receive operator decisions" : cap === wire.CapDrive ? "read Drive space records" : cap === wire.CapConvClear ? "apply conversation deletions" : "read reactions, edits or deletions") + " yet (an older program, or it has not connected since updating)"];
     return [true, ""];
   }
 
@@ -7076,7 +7232,7 @@ export class Engine {
       const prior=await this.store.get("outbox",sendID);
       if(prior){
         if(prior.to!==peer||prior.sub!==sub||prior.body!==body||prior.ref?.id!==ref.id||prior.ref?.fingerprint!==ref.fingerprint||prior.recipient_fp!==pin.fingerprint)throw Error("Send ID already names a different decision or reader key.");
-        if(prior.state==="failed" && cap===wire.CapContinuation){
+        if(prior.state==="failed" && [wire.CapContinuation,wire.CapOwnSyncV3].includes(cap)){
           const retry={...prior,state:"queued",detail:""};await this.store.write([{s:"outbox",k:id,v:retry}],[{s:"outbox",k:id,v:prior}]);await this.post(retry);return {id,state:(await this.store.get("outbox",id)).state,skipped:[]};
         }
         return {id,state:prior.state,skipped:[]};
@@ -7135,7 +7291,7 @@ export class Engine {
       const checks = [...authorityChecks], ops = recs.map(v => ({s:"outbox",k:v.id,v}));
       const control = recs.find(r => r.sub === wire.SubRetraction);
       if (control) ops.push(...await this.cancelRequestCopies(control.conv || "",control.ref,checks));
-      try { await this.store.write(ops, checks); return; }
+      try { await this.store.write(ops, checks); if(recs.some(directHistoryRow))this.runHistory().catch(()=>{}); return; }
       catch (e) { if (!(e instanceof StoreConflict) || authorityChecks.length) throw e; }
     }
   }
@@ -7237,6 +7393,7 @@ export class Engine {
     const now = Math.floor(this.now() / 1000);
     const link = this.link && !["linked", ""].includes(this.link.state) ? { state: this.link.state === "pending" && now >= this.link.expires ? "expired" : this.link.state, detail: this.link.detail || "" } : undefined;
     const arrival=await this.store.get("kv","history-arrival")||0;
+    const historyOutbox=new Map(outbox.map(row=>[row.id,row]));
     const history = await Promise.all(Object.values(await this.historyBook()).map(async j => {
       let {done,total,state}=j;
       if(j.catchup && ["running","done"].includes(state)) {
@@ -7245,7 +7402,20 @@ export class Engine {
           state="running";done=total=0; // unknown remaining work; never project the legacy completed count
         }
       }
-      return {device:j.device,name:j.device.split("/")[1],done,total,state};
+      const counts={queued:0,custody:0,delivered:0,blocked:0};
+      const copies=await this.store.prefix("kv","history-copy/"+j.fingerprint+"/");
+      for(const copy of copies) {
+        const row=historyOutbox.get(copy?.copy);
+        const current=row?.to===j.device&&row.recipient_fp===j.fingerprint&&row.sub==="history"?row.state:"";
+        counts[["queued","waiting"].includes(current)?"queued":current==="custody"?"custody":current==="delivered"?"delivered":"blocked"]++;
+      }
+      let deferred=(await this.store.prefix("kv","history-deferred/"+j.fingerprint+"/")).length;
+      const direct=await this.store.get("kv","device-history/job/"+j.fingerprint);
+      if(direct){const pending=(await this.store.prefix("kv","device-history/pending/"+j.fingerprint+"/")).length;deferred+=pending;
+        if(state!=="ended"&&(direct.older||direct.tail<(await this.store.get("kv","device-history-arrival")||0)||pending)){state="running";done=total=0;}
+        for(const copy of await this.store.prefix("kv","device-history/copy/"+j.fingerprint+"/")){const row=historyOutbox.get(copy.carrier),current=row?.to===j.device&&row.recipient_fp===j.fingerprint&&row.sub===wire.SubDeviceHistory?row.state:"";counts[["queued","waiting"].includes(current)?"queued":current==="custody"?"custody":current==="delivered"?"delivered":"blocked"]++;}
+      }
+      return {device:j.device,name:j.device.split("/")[1],done,total,state,delivery_known:!!j.catchup||!!direct,...counts,deferred};
     }));
     const asks = (await this.linkRequests()).filter((r) => r.state === "pending")
       .map((r) => ({ id: r.id, address: r.address, name: r.address.split("/")[1], fingerprint: r.fingerprint, requested_at: iso(r.requested_at * 1000), expires: iso(r.expires * 1000), state: r.state }));
@@ -7322,7 +7492,7 @@ export class Engine {
         const state = m.state === "conv_held" && !this.heldOpen(m, msgs) ? "manual" : m.state; // answered here (client.turnClosesHeld)
         const event = m.sub === "event" ? this.eventText(m.body, peer, null, humans.get(m.pid) || false, { originals, member }) : "";
         const ev = event ? this.eventFields(m.body, [peer, ...originals], pinned) : null;
-        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
+        return { id: m.id, lid: m.lid, dir: out ? "out" : "in", from: here ? this.address : m.from, kind: m.kind, status: m.status || "", actions: await this.proposalActions(m), proposal:await this.proposalProvenance(m), body: event ? "" : m.body, reply_to: shownReply(m.reply_to),quote:shownReply(m.quote),sent_at:sentAt(m),delivery:m.delivery||"",
           ...(ev && ev.type ? { event_type: ev.type, event_by: ev.by } : {}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           send_group:m.send_group_conflict?"":m.send_group||"", send_group_author:here?this.fp:m.fp||m.claimed_key||"", origin: m.origin || "", verified_agent: verifiedAgent(m, parts.get(m.human&&wire.agentAuthor(m.human)?m.human.author_pid:m.pid), here ? this.address : m.from, here ? this.fp : m.fp),
@@ -7355,6 +7525,57 @@ export class Engine {
     try { e = wire.parseEvent(body); } catch (err) { return false; }
     return e.audience === "room" || (await this.convEvents(rec.conv, null, e.pid)).some((x) => x.e.audience === "room");
   }
+  async topicCopy(rec) {
+    let item=rec;
+    if(rec.sub==="history")item={...wire.parseHistory(rec.body),conv:rec.conv};
+    if(item.group_history?.memberships?.some(e=>e.topic!=null) || item.human?.proof?.some(e=>e.topic!=null))return true;
+    if(item.sub===wire.SubGroupContext && (await this.convEvents(rec.conv)).some(x=>x.e.topic!=null))return true;
+    if(item.sub==="event" && wire.parseEvent(item.body).topic!=null)return true;
+    return !!item.pid && (await this.convEvents(rec.conv,null,item.pid)).some(x=>x.e.topic!=null);
+  }
+  async requireTopicSupport(address,pin) {
+    const before=await this.store.get("pins",address),pub=await this.pubOf(pin),profile=await this.profile(address),after=await this.store.get("pins",address);
+    if(!before || before.pending || before.fingerprint!==pin.fingerprint || !after || after.pending || after.fingerprint!==pin.fingerprint)throw Error("Topic participant key changed.");
+    if(!await wire.profileSupports(profile||{},address,pub.sign_key,wire.CapTopicParticipation))throw Object.assign(Error(address+" needs an update for topic-only participation."),{code:"topic_unsupported"});
+  }
+  async requireTopicParticipants(members,host) {
+    const addresses=new Set([...members.values()].flatMap(p=>p.devices.map(d=>d.address)).concat(host));
+    for(const address of addresses)if(address!==this.address)await this.requireTopicSupport(address,await this.sendKey(address));
+  }
+  // Accepted originals only, exact ID before an unambiguous logical author.
+  // Unknown parents and competing aliases wait; they never become Main.
+  async topicReference(conv,ref,author="",checks=[]) {
+    if(!ref)return "";
+    let rows=[];
+    if(["inbox","outbox"].every(s=>checks.some(c=>c.s===s&&c.scope?.conv===conv&&Object.keys(c.scope).length===1))) {
+      for(const s of ["inbox","outbox"])rows.push(...checks.find(c=>c.s===s&&c.scope?.conv===conv&&Object.keys(c.scope).length===1).rows.map(r=>r.v));
+    } else rows=await this.authorityRows({conv},checks);
+    const pending=()=>new Hold("proof_pending","Exact participation topic evidence is pending."),seen=new Set();
+    for(let i=0;i<256;i++) {
+      if(!ref)return "";
+      if(seen.has(ref))throw pending();seen.add(ref);
+      const key=r=>r.to?this.fp:r.claimed_key||r.fp||"";
+      let found=rows.filter(r=>!r.sub&&!r.control&&!r.aside&&!r.excerpt_pid&&(r.id===ref||r.lid===ref)&&(!author||key(r)===author));
+      if(found.some(r=>r.id===ref))found=found.filter(r=>r.id===ref);
+      const first=found[0];
+      if(!first || !key(first) || found.some(r=>(r.lid||r.id)!==(first.lid||first.id)||key(r)!==key(first)||(r.topic||"")!==(first.topic||"")||(r.reply_to||"")!==(first.reply_to||"")))throw pending();
+      if(first.topic){if(!wire.validID(first.topic))throw pending();return first.topic;}
+      if(rows.some(r=>r.topic===(first.lid||first.id)&&r.topic_event?.action==="create"))return first.lid||first.id;
+      ref=first.reply_to||"";author="";
+    }
+    throw pending();
+  }
+  async checkParticipationTopic(scope,n,checks=[]) {
+    if(scope==null || n.sub==="event" || n.sub==="excerpt")return;
+    const topic=n.ref?await this.topicReference(n.conv,n.ref.id,n.ref.fingerprint,checks):n.topic||await this.topicReference(n.conv,n.reply_to||"","",checks);
+    if(topic!==scope || topic&&!wire.validID(topic))throw new Hold("invalid","Turn is outside the invited topic.");
+  }
+  async checkTopicGrants(conv,topic,grant,checks=[]) {
+    if(topic==null)return;
+    if(typeof topic!=="string" || topic&&!wire.validID(topic))throw Error("Invalid participation topic.");
+    for(const ref of grant||[])if(await this.topicReference(conv,ref.lid,ref.fingerprint,checks)!==topic)throw Error("Selected context is outside the invited topic.");
+  }
+
   async requireRoomSupport(address, pin) {
     const profile = await this.profile(address), key = await this.pubOf(pin);
     if (!await wire.profileSupports(profile || {}, address, key.sign_key, wire.CapRoom)) throw Object.assign(new Error(address + " cannot read room participation yet; update all its active AgentNet sessions."), { code: "room_unsupported" });
@@ -7374,14 +7595,14 @@ export class Engine {
     if (!await wire.profileSupports(profile || {}, address, pub.sign_key, wire.CapHumanParticipation)) throw Object.assign(new Error(address + " cannot read human participation yet; update all active sessions."), { code: "human_unsupported", address });
   }
 
-  async humanPlan(c, authorPID = "") {
+  async humanPlan(c, authorPID = "", topic = "") {
     if (c.kind === "group") {
       const events=await this.convEvents(c.id),members=await this.dmMembers(c,events);
-      if(!authorPID)return this.roomPlan(c,events,members);
+      if(!authorPID)return this.roomPlan(c,events,members,topic);
       const guest=this.resolveAgent(authorPID,events,members);
       if(guest.role!=="human" || guest.state!=="active" || guest.held || guest.host?.address!==this.address || guest.host.fingerprint!==this.fp || members.has(this.me?.person))throw Error("Only the exact active guest device writes as that guest.");
-      const h=await this.roomPlan(c,events,members);
-      if(!h)throw Error("Human participation is not active.");
+      const h=await this.roomPlan(c,events,members,topic);
+      if(!h || !h.audience.some(a=>a.pid===authorPID))throw Error("Human participation is not active in this topic.");
       h.author_pid=authorPID;await wire.validateHumanTurn(h,c.id);return h;
     }
     const root = wire.parseRoot(c.root), member = !!wire.rootMember(root, this.me?.person);
@@ -7393,7 +7614,7 @@ export class Engine {
       await this.refreshPerson(p.host);
     }
     events = await this.convEvents(c.id); members = await this.dmMembers(c, events);
-    infos = [...new Set(events.map(x => x.e.pid))].sort().map(pid => this.resolveAgent(pid, events, members)).filter(p => p.role === "human" && p.state === "active");
+    infos = [...new Set(events.map(x => x.e.pid))].sort().map(pid => this.resolveAgent(pid, events, members)).filter(p => p.role === "human" && p.state === "active" && (p.topic==null || p.topic===topic));
     const h = { ...(authorPID ? { author_pid: authorPID } : {}), audience: [], proof: [] };
     for (const p of infos) {
       if (p.held) throw new Error("Human audience changed during send; review again.");
@@ -7402,6 +7623,7 @@ export class Engine {
       const scope = await this.participationScope(c, p, events).catch(() => { throw new Error("Human audience evidence is pending; review again."); }); // the public projection: never the invitation's note or grant
       h.audience.push({ pid: p.pid, invite: p.invite, decision: p.decision }); h.proof.push(scope, accept);
     }
+    if (authorPID && !h.audience.some(a=>a.pid===authorPID))throw Error("Human participation is not active in this topic.");
     if (!h.audience.length) { if (authorPID) throw new Error("Human participation is not active."); return null; }
     await wire.validateHumanTurn(h, c.id);
     return h;
@@ -7491,11 +7713,11 @@ export class Engine {
     ops.push({s:"kv",k:"room-memberships/"+conv,v:kept});return ops;
   }
 
-  async roomPlan(c,events,members) {
+  async roomPlan(c,events,members,topic="") {
     const h={audience:[],proof:[]};
     for(const pid of new Set(events.map(x=>x.e.pid))) {
       const p=this.resolveAgent(pid,events,members);
-      if(!follows(p)||p.state!=="active"||p.held)continue;
+      if(!follows(p)||p.state!=="active"||p.held||p.topic!=null&&p.topic!==topic)continue;
       const accept=events.find(x=>x.hash===p.decision)?.e;
       if(!accept)throw Error("Room acceptance proof missing.");
       h.audience.push({pid:p.pid,invite:p.invite,decision:p.decision});
@@ -7600,7 +7822,9 @@ export class Engine {
   // humanTurnAuthorization is client.humanTurnAuthorization: on a request
   // addressed to assistant participation x its exact host is also a reader,
   // and that host is its output's author. Scope grants no execution.
-  humanTurnAuthorization(n, evidence, x, from, fromFP, to, toFP, historical = false) {
+  async humanTurnAuthorization(n, evidence, x, from, fromFP, to, toFP, historical = false, checks = []) {
+    for(const scope of evidence.scopes.values())await this.checkParticipationTopic(scope.topic,n,checks);
+    if(x)await this.checkParticipationTopic(x.topic,n,checks);
     const h = n.human;
     if (!n.pid || n.pid === (h.author_pid || "")) return this.humanAuthorization(h, evidence, from, fromFP, to, toFP, false, false, historical);
     if (!x || x.role === "human" || !x.invite || !x.host) throw new Hold("invalid", "Addressed human turn names no assistant participation.");
@@ -7643,10 +7867,10 @@ export class Engine {
       const evidence = await this.humanEvidence(c, rec.human, checks);
       if(c.kind==="group") {
         const x=await this.assistantOf(c,rec,checks);
-        if(x) { this.externalRole(rec,x,evidence.members,this.address,this.fp);await this.checkExternalReply(rec,x,evidence.members,checks); }
+        if(x) { await this.externalRole(rec,x,evidence.members,this.address,this.fp,checks);await this.checkExternalReply(rec,x,evidence.members,checks); }
         if(rec.target && !wire.agentAuthor(rec.human) && evidence.members.epochs.get(this.fp)!==rec.target.group_admission)throw Error("Original group requester admission changed.");
       }
-      this.humanTurnAuthorization(rec, evidence, await this.assistantOf(c, rec, checks), this.address, this.fp, rec.to, pin.fingerprint);
+      await this.humanTurnAuthorization(rec, evidence, await this.assistantOf(c, rec, checks), this.address, this.fp, rec.to, pin.fingerprint,false,checks);
       return { why: "", pin };
     } catch (e) { return { why: e.message }; }
   }
@@ -7680,7 +7904,7 @@ export class Engine {
       const pin = await this.groupRead(checks, "pins", d.address);
       if (!pin || pin.pending || pin.fingerprint !== d.fingerprint) throw new Error("Human audience device key changed.");
       const isHost = request && d.address === x.host.address && d.fingerprint === x.host.fingerprint;
-      this.humanTurnAuthorization({ ...turn, human: h }, evidence, x, this.address, this.fp, d.address, d.fingerprint);
+      await this.humanTurnAuthorization({ ...n, ...turn, conv:c.id, human: h }, evidence, x, this.address, this.fp, d.address, d.fingerprint,false,checks);
       if(c.kind!=="group") await this.requireHumanSupport(d.address, pin);
       // Group reader compatibility is checked per durable copy at handoff.
       if (isHost && (x.external || x.agent_id)) await this.requireAgentIdentity(d.address, pin, x.external ? wire.CapExternalParticipation : wire.CapAgentIdentity);
@@ -7695,7 +7919,7 @@ export class Engine {
       }
       inner.send_group=await this.sendGroupCopy(d.address,pin,n.send_group);
       const envelope = await wire.seal(inner, this.keys, pub);
-      recs.push({ ...inner, send_group:n.send_group||"", send_group_wire:!!inner.send_group, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, ...(groupAdmission?{group_admission:groupAdmission}:{}), recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: "queued", detail: "" });
+      recs.push({ ...inner, ...(n.proposal_choice?{proposal_choice:n.proposal_choice}:{}), send_group:n.send_group||"", send_group_wire:!!inner.send_group, ...(prepared ? { receiver_route: prepared.route } : {}), at, own, envelope, ...(groupAdmission?{group_admission:groupAdmission}:{}), recipient_fp: d.fingerprint, required_cap: wire.CapHumanParticipation, files: sealed.length ? sealed : undefined, state: "queued", detail: "" });
     }
     if (!recs.length) throw new Error("No authorized human audience device.");
     for (const r of recs) { const gate = await this.humanGate(c, r, checks); if (gate.why) throw new Error(gate.why); }
@@ -7724,7 +7948,7 @@ export class Engine {
     const checks = [], stored = group ? await this.groupRecord(n.conv) : await this.groupRead(checks, "convs", n.conv), senderPin = await this.groupRead(checks, "pins", env.from);
     if (!stored || stored.root !== c.root || !senderPin || senderPin.pending || senderPin.fingerprint !== pin.fingerprint) throw new StoreConflict();
     const evidence = await this.humanEvidence(c, n.human, checks), x = await this.assistantOf(c, n, checks);
-    this.humanTurnAuthorization(n, evidence, x, env.from, pin.fingerprint, this.address, this.fp);
+    await this.humanTurnAuthorization(n, evidence, x, env.from, pin.fingerprint, this.address, this.fp,false,checks);
     if(group) {
       const {packet}=await this.groupTurnEvidence(n.conv,checks,true);
       if(wire.rootJSON(root)!==wire.rootJSON(packet.root))throw new Hold("invalid","Group root differs from verified context.");
@@ -7755,7 +7979,7 @@ export class Engine {
 
   guestView(info, member) {
     const hostHere = info.host?.address === this.address && info.host.fingerprint === this.fp, active = info.state === "active" && !info.held;
-    return { needs_update:info.needs_update||[],pid: info.pid, state: info.state, state_text: info.held ? "Waiting for verified participation evidence" : info.state === "dismissed" ? "Ended here. Other devices may not have applied this change yet. Previously shared copies remain." : info.state, host: this.personView(info.host), host_here: !!hostHere, inviter: this.personView(info.inviter), shared: info.grant.map(g => g.lid), missing: 0, held: info.held, can_decide: !!hostHere && info.state === "invited" && !info.held, can_leave: !!hostHere && active, can_end: !!member && ["invited", "active", "conflict"].includes(info.state), can_send: active && (!!member || !!hostHere), audience_pending: !!info.held || info.state === "dismissed" };
+    return { ...(info.topic!=null?{topic:info.topic}:{}), needs_update:info.needs_update||[],pid: info.pid, state: info.state, state_text: info.held ? "Waiting for verified participation evidence" : info.state === "dismissed" ? "Ended here. Other devices may not have applied this change yet. Previously shared copies remain." : info.topic!=null ? (info.topic?"This topic only":"Main flow only") : info.state, host: this.personView(info.host), host_here: !!hostHere, inviter: this.personView(info.inviter), shared: info.grant.map(g => g.lid), missing: 0, held: info.held, can_decide: !!hostHere && info.state === "invited" && !info.held, can_leave: !!hostHere && active, can_end: !!member && ["invited", "active", "conflict"].includes(info.state), can_send: active && (!!member || !!hostHere), audience_pending: !!info.held || info.state === "dismissed" };
   }
 
   async changeHuman(action, body) {
@@ -7828,7 +8052,7 @@ export class Engine {
 
   async shownCopies(copies) { const people=[this.me,...await this.store.all("persons")].filter(Boolean);return (copies||[]).map(c=>({...c,person:c.own?"You":people.find(p=>p.person===c.person||p.devices.some(d=>d.address===c.to))?.label||"Someone"})); }
 
-  async inviteHuman({ conv, host, share = [], note = "" }) {
+  async inviteHuman({ conv, host, share = [], note = "", topic = null }) {
     const c = await this.store.get("convs", conv) || await this.groupRecord(conv);
     if (!c) throw Error("No conversation here.");
     const members=await this.dmMembers(c);
@@ -7837,7 +8061,7 @@ export class Engine {
     if (members.has(person.person)) throw new Error("That person already belongs to this DM.");
     for (const d of [...members.values()].flatMap(p => p.devices).concat([{ address: host }])) { if(members.group)await this.requireGroupHumanSupport(d.address,await this.sendKey(d.address));try{await this.requireHumanSupport(d.address,await this.sendKey(d.address));}catch(e){if(e.code!=="human_unsupported")throw e;} }
     const guests = (await this.participationsOf(c)).filter(p => p.role === "human" && ["active", "invited"].includes(p.state));
-    if (guests.length >= wire.MaxHumanAudience || guests.some(p => p.host.address === host)) throw new Error("Human already invited/active, or audience limit reached; end it before inviting again.");
+    if (guests.length >= wire.MaxHumanAudience || guests.some(p => p.host.address === host && sameParticipationTopic(p.topic,topic))) throw new Error("Human already invited/active, or audience limit reached; end it before inviting again.");
     const msgs = (await this.convMessages(conv, await this.store.all("inbox"), await this.store.all("outbox"))), grant = [];
     for (const id of share) {
       const m = msgs.find(m => (m.id === id || m.lid === id) && !m.sub && !m.excerpt_pid && !m.deleted);
@@ -7845,8 +8069,9 @@ export class Engine {
       if(members.group)await this.groupAgentSelection(conv,m,members);
       grant.push({ lid: m.lid, fingerprint: m.fp || this.fp });
     }
+    if(topic!=null){await this.requireTopicParticipants(members,host);await this.checkTopicGrants(conv,topic,grant);}
     const group=members.group?{seq:members.group.state.seq,hash:await wire.groupStateHash(members.group.state),host_role:"visitor"}:null;
-    const e = await wire.signEvent(this.keys, { conv, pid: wire.newID(), type: "invite", role: "human", ts: Math.floor(this.now() / 1000), author: {...this.author(),...(group?{group_admission:members.epochs.get(this.fp)}:{})}, host: { person: person.person, address: host, fingerprint: pin.fingerprint }, grant: grant.length ? grant : null, audience: group?"room":"conversation", note: String(note).trim(),...(group?{group}:{}) });
+    const e = await wire.signEvent(this.keys, { conv, pid: wire.newID(), type: "invite", role: "human", ...(topic!=null?{topic}:{}), ts: Math.floor(this.now() / 1000), author: {...this.author(),...(group?{group_admission:members.epochs.get(this.fp)}:{})}, host: { person: person.person, address: host, fingerprint: pin.fingerprint }, grant: grant.length ? grant : null, audience: group?"room":"conversation", note: String(note).trim(),...(group?{group}:{}) });
     await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(e), pid: e.pid });
     const scope = await wire.signEvent(this.keys, await wire.scopeOf(e, e.ts)); // what other guests may see of it
     await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(scope), pid: e.pid });
@@ -7928,12 +8153,13 @@ export class Engine {
   // outlive the participation (client.checkConversationAgent).
   async checkConversationAgent(n, address, fingerprint, c, historical = false) {
     const agent = agentTurn(n);
-    if (!n.agent_id && !n.target?.agent_id && !agent) return;
+    if (!n.agent_id && !n.target && !agent) return;
     if (!wire.validID(n.pid)) throw new Hold("invalid", "an agent's or named conversation turn has no participation");
     if (!c) throw new Hold("proof_pending", "named participation's conversation is not here yet");
     let info = this.resolveAgent(n.pid, await this.convEvents(n.conv), await this.dmMembers(c));
     if (!info.invite || !info.host || info.state === "conflict") throw new Hold("proof_pending", "named participation has no unambiguous verified invitation");
-    if (n.target && (n.target.agent_id !== info.agent_id || n.target.address !== info.host.address || n.target.fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "named request differs from its participation host");
+    await this.checkParticipationTopic(info.topic,n);
+    if (n.target && ((n.target.agent_id||"") !== (info.agent_id||"") || n.target.address !== info.host.address || n.target.fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "named request differs from its participation host");
     if(n.human && wire.agentAuthor(n.human)) info=this.resolveAgent(n.human.author_pid,await this.convEvents(n.conv),await this.dmMembers(c));
     if (agent && (info.role === "human" || address !== info.host.address || fingerprint !== info.host.fingerprint)) throw new Hold("invalid", "an agent's turn is not from its participation's exact host");
     // Ended is final, failing closed: an output still in flight at the end is
@@ -7950,7 +8176,8 @@ export class Engine {
     return { e, hash: await wire.eventHash(e) };
   }
 
-  externalRole(n, info, members, address, fp) {
+  async externalRole(n, info, members, address, fp, checks=[]) {
+    await this.checkParticipationTopic(info.topic,n,checks);
     const member = [...members.values()].some((p) => p.devices.some((d) => d.address === address && d.fingerprint === fp));
     const host = info.host && address === info.host.address && fp === info.host.fingerprint;
     if (!info.invite || (!info.external || members.size !== 2) && !members.group || n.pid !== info.pid) throw new Hold("proof_pending", "participation has incomplete pinned evidence");
@@ -8018,6 +8245,7 @@ export class Engine {
       if (!agent && !member || r.conv !== n.conv || r.pid !== n.pid || r.sub || r.excerpt_pid || !["question", "task"].includes(r.kind) || !progressOutput(n) && replyKind(r.kind) !== n.kind || !r.lid || original && (original.lid !== r.lid || original.fp !== fp) || r.target?.address !== info.host.address || r.target?.fingerprint !== info.host.fingerprint || r.target?.agent_id !== info.agent_id || (!agent && (members.group ? members.epochs.get(fp)!==r.target?.group_admission : !!r.target?.group_admission))) throw new Hold("invalid", "external answer does not match its exact participation request");
       original = { lid: r.lid, fp };
     }
+    await this.checkParticipationTopic(info.topic,{conv:n.conv,ref:{id:original.lid,fingerprint:original.fp}},checks);
   }
 
   humanEndEvent(n, info, conv = n.conv) {
@@ -8207,7 +8435,8 @@ export class Engine {
       const events = await this.convEvents(c.id,checks,rec.pid);
       if (rec.sub === "event") events.push(await this.eventRecord(rec.body));
       const members = await this.dmMembers(c, events,checks), info = this.resolveAgent(rec.pid, events, members);
-      this.externalRole(rec, info, members, this.address, this.fp);
+      await this.externalRole(rec, info, members, this.address, this.fp,checks);
+      if(rec.sub==="event"){const e=wire.parseEvent(rec.body);await this.checkTopicGrants(c.id,e.topic,e.grant,checks);}
       await this.checkExternalReply(rec, info, members,checks);
       let dev = [...members.values()].flatMap((p) => p.devices).find((d) => d.address === rec.to);
       if (rec.to === info.host.address) dev = info.host.devices.find((d) => d.address === info.host.address && d.fingerprint === info.host.fingerprint);
@@ -8230,8 +8459,8 @@ export class Engine {
     const checks=[];
     events=await this.convEvents(c.id,checks,members.group || ending ? undefined : n.pid);if(n.sub==="event")events.push(await this.eventRecord(n.body));
     members = await this.dmMembers(c, events, checks); info = this.resolveAgent(n.pid, events, members);
-    if(members.group && info.member && !n.sub && !n.human) n={...n,human:await this.roomPlan(c,events,members)};
-    this.externalRole(n, info, members, this.address, this.fp);
+    if(members.group && info.member && !n.sub && !n.human) n={...n,human:await this.roomPlan(c,events,members,n.topic||"")};
+    await this.externalRole(n, info, members, this.address, this.fp);
     checkFiles(n.files || []);
     const host = info.host.devices.find((d) => d.address === info.host.address && d.fingerprint === info.host.fingerprint);
     const extra = ending ? [...new Set(events.map(x => x.e.pid))].map(pid => this.resolveAgent(pid, events, members)).filter(p => p.role === "human" && p.state === "active" && !p.held).map(p => p.host.devices.find(d => d.address === p.host.address && d.fingerprint === p.host.fingerprint)).filter(Boolean) : [];
@@ -8264,6 +8493,7 @@ export class Engine {
       const pairFan=members.group?[{person:this.me.person,roster:this.me.hash},...(recipientPerson&&recipientPerson.person!==this.me.person?[{person:recipientPerson.person,roster:recipientPerson.hash}]:[])]:fan;
       const inner = { ...n, v: wire.Version2, id, from: this.address, to: dev.address, ts: Math.floor(at / 1000), conv: c.id, root: c.root, lid, replica, fan:pairFan, attachments: sealed.map((f) => f.attachment),receiver_route:prepared?.route };
       inner.send_group=await this.sendGroupCopy(dev.address,pin,n.send_group);
+      delete inner.proposal_choice;
       const envelope = await wire.seal(inner, this.keys, recipient);
       recs.push({ ...n,send_group_wire:!!inner.send_group,...(prepared?{receiver_route:prepared.route,recipient_fp:dev.fingerprint}:{}), ...(info.role === "human" ? {recipient_fp:dev.fingerprint} : {}), id, conv: c.id, lid, at, to: dev.address, replica, own: this.me.devices.some((d) => d.address === dev.address), required_cap: members.group?wire.CapGroup:info.role === "human" ? wire.CapHumanParticipation : wire.CapExternalParticipation, ...(members.group?{recipient_fp:dev.fingerprint,group_admission:members.epochs.get(dev.fingerprint)||""}:{}), envelope,
         attachments: inner.attachments, files: sealed.length ? sealed : undefined, state: ok ? "queued" : "waiting", detail });
@@ -8321,7 +8551,9 @@ export class Engine {
       const m = msgs.find((r) => r.lid === ref.lid && (r.fp || this.fp) === ref.fingerprint && !r.sub && !r.excerpt_pid && !r.deleted);
       if (!m || await this.isRetracted(m)) continue; // missing selections stay honestly missing
       if (c.kind === "group") await this.groupAgentSelection(c.id,m,await this.dmMembers(c));
+      await this.checkTopicGrants(c.id,invite.topic,[ref]);
       const item = this.itemOf(m, !m.fp);
+      if(invite.topic!=null)item.topic=invite.topic;
       const shown = (await (c.kind==="group"?this.groupThread(c.id):this.dm(c.id))).messages.find((r) => r.id === m.id);
       if (!shown || shown.deleted) continue;
       item.body = shown.edited ? shown.text : shown.body; // freeze exactly the selected visible revision
@@ -8475,7 +8707,7 @@ export class Engine {
       const agree = scopes.every(x => wire.sameScope(x.e, s.e)); // protocol.SameScope: audience, end time and group binding too
       if (!agree) return Object.assign(info, { state: "conflict", conflict: "different invitation scopes share this participation id" });
       if (host(s.e.host) && !evs.some((y) => y.e.pid === pid && y.e.type === "invite" && y.hash === s.e.prev)) {
-        invites.set(s.e.prev, { e: { v: 1, conv: s.e.conv, pid, type: "invite", prev: "", author: s.e.author, ts: s.e.ts, host: s.e.host, grant: null, audience: s.e.audience, task_keys: null, note: "", ...(s.e.role ? { role: s.e.role } : {}), ...(s.e.until ? { until: s.e.until } : {}), ...(s.e.group ? { group: s.e.group } : {}) }, hash: s.e.prev });
+        invites.set(s.e.prev, { e: { v: 1, conv: s.e.conv, pid, type: "invite", prev: "", author: s.e.author, ts: s.e.ts, host: s.e.host, grant: null, audience: s.e.audience, task_keys: null, note: "", ...(s.e.role ? { role: s.e.role } : {}), ...(s.e.until ? { until: s.e.until } : {}), ...(s.e.topic!=null?{topic:s.e.topic}:{}), ...(s.e.group ? { group: s.e.group } : {}) }, hash: s.e.prev });
         info.scope = s.hash;
       } else info.held++;
     }
@@ -8484,7 +8716,7 @@ export class Engine {
     if (invites.size === 1) {
       [[info.invite, inv]] = [...invites];
       if (!info.scope) for (const s of scopes) if (wire.projectsHash(s.e, inv.e, info.invite) && (!info.scope || s.hash < info.scope)) info.scope = s.hash;
-      Object.assign(info, { role: inv.e.role || "", host: host(inv.e.host), inviter: author(inv.e.author)||priorAuthor(inv), grant: [...(inv.e.grant || [])], taskKeys: m.group && m.roomEvents?.has(inv.hash) ? (inv.e.task_keys||[]).filter((fp,i)=>m.epochs.get(fp)===inv.e.group.task_admissions?.[i]) : inv.e.task_keys || [], audience: inv.e.audience || "", until: inv.e.until || 0,
+      Object.assign(info, { role: inv.e.role || "", ...(inv.e.topic!=null?{topic:inv.e.topic}:{}), host: host(inv.e.host), inviter: author(inv.e.author)||priorAuthor(inv), grant: [...(inv.e.grant || [])], taskKeys: m.group && m.roomEvents?.has(inv.hash) ? (inv.e.task_keys||[]).filter((fp,i)=>m.epochs.get(fp)===inv.e.group.task_admissions?.[i]) : inv.e.task_keys || [], audience: inv.e.audience || "", until: inv.e.until || 0,
         external: m.group ? inv.e.group.host_role === "visitor" : !m.has(inv.e.host.person),
         ...(m.group ? {group:inv.e.group} : {}),
         ...(inv.e.host.agent_id ? { agent_id: inv.e.host.agent_id } : {}), note: inv.e.note, invited: inv.e.ts, state: "invited" });
@@ -8495,7 +8727,7 @@ export class Engine {
     info.inviters = info.inviter ? [info.inviter] : [];
     info.shares = [];
     for(const x of shares) {
-      if(!inv || x.e.prev!==info.invite || !["person","address","fingerprint","agent_id"].every(k=>(x.e.host?.[k]||"")===(inv.e.host?.[k]||"")) || !m.groupInvites?.has(x.hash) || x.e.audience!==info.audience) {info.held++;continue;}
+      if(!inv || x.e.prev!==info.invite || !["person","address","fingerprint","agent_id"].every(k=>(x.e.host?.[k]||"")===(inv.e.host?.[k]||"")) || !m.groupInvites?.has(x.hash) || x.e.audience!==info.audience || !sameParticipationTopic(x.e.topic,info.topic)) {info.held++;continue;}
       info.shares.push(wire.eventJSON(x.e));const p=author(x.e.author)||priorAuthor(x);if(!info.inviters.some(i=>i.person===p.person))info.inviters.push(p);
       for(const g of m.shareGrants?.get(x.hash)||[])if(!info.grant.some(r=>r.lid===g.lid&&r.fingerprint===g.fingerprint))info.grant.push(g);
     }
@@ -8605,7 +8837,7 @@ export class Engine {
         const p = people.find((x) => x.devices.some((d) => d.fingerprint === fp));
         return p && this.personView({ ...p, fingerprint: fp, address: p.devices.find((d) => d.fingerprint === fp).address });
       }).filter(Boolean),
-      held: info.held, invited: isoClaim(info.invited), can_decide: false, can_dismiss: false, can_ask: false, state_text: "" };
+      ...(info.topic!=null?{topic:info.topic}:{}), held: info.held, invited: isoClaim(info.invited), can_decide: false, can_dismiss: false, can_ask: false, state_text: "" };
     switch (info.state) {
     case "pending": v.state_text = "Its invitation is not here yet: nothing counts until it is."; break;
     case "invited":
@@ -8629,6 +8861,7 @@ export class Engine {
       if(info.member && info.external){v.can_dismiss=[info.host.person,info.inviter.person].includes(this.me.person)||!!groupPeople.find(p=>p.person===this.me.person)?.admin;v.state_text += " Runs on " + label(info.host) + "’s device, outside this group; that device receives every new message and file here until the agent is removed.";}
       if(role!=="member"){v.can_ask=false;v.can_dismiss=false;}
     } else if (info.external && !people.some((p) => p.person === this.me?.person && wire.validID(p.person) && p.person !== info.host.person)) { v.can_ask = false; v.can_dismiss = false; }
+    if(info.topic!=null){const where=info.topic?"this topic":"Main flow";v.state_text=v.state_text.replaceAll("this DM",where).replaceAll("this group",where).replaceAll("this conversation",where).replaceAll("every new message and file here","new messages and files in "+where);if(info.state==="active"&&!info.held)v.state_text="Participates only in "+where+". Its owner decides what runs. Earlier shared copies remain.";}
     return v;
   }
 
@@ -8649,7 +8882,7 @@ export class Engine {
   // inviteAgent invites the agent on the other member's device: never this
   // browser, which runs none. The earlier messages it may be shown and the
   // member keys it takes tasks from without asking are chosen by the person.
-  async inviteAgent({ conv, host, share = [], tasks_from: tasks = [], note = "", agent_id = "" }) {
+  async inviteAgent({ conv, host, share = [], tasks_from: tasks = [], note = "", agent_id = "", topic = null }) {
     const c = await this.store.get("convs", conv) || await this.groupRecord(conv);
     if (!c) throw new Error("No conversation " + conv + " here.");
     if (!this.me) throw new Error("Set up your person first.");
@@ -8677,9 +8910,10 @@ export class Engine {
       grant.push({ lid: x.lid, fingerprint: x.fp || this.fp });
     }
     for (const fp of tasks) if (![...m.values()].some((p) => p.devices.some((d) => d.fingerprint === fp))) throw new Error(fp + " is not the key of a member of that conversation.");
+    if(topic!=null){await this.requireTopicParticipants(m,host);await this.checkTopicGrants(conv,topic,grant);}
     const group=m.group?{seq:m.group.state.seq,hash:await wire.groupStateHash(m.group.state),host_role:external?"visitor":"member",...(external?{}:{host_admission:m.epochs.get(hp.fingerprint)}),...(tasks.length?{task_admissions:tasks.map(fp=>m.epochs.get(fp))}:{})}:null;
-    const existing = m.group && (await this.agentsOf(c)).find(p=>["invited","active"].includes(p.state)&&p.host?.address===hp.address&&p.host.fingerprint===hp.fingerprint&&(p.agent_id||"")===agent_id);
-    const e = await wire.signEvent(this.keys, { conv, pid: existing ? existing.pid : wire.newID(), type: existing ? "share" : "invite",...(existing?{prev:existing.invite}:{}), ts: Math.floor(this.now() / 1000), author: {...this.author(),...(m.group?{group_admission:m.epochs.get(this.fp)}:{})},
+    const existing = m.group && (await this.agentsOf(c)).find(p=>["invited","active"].includes(p.state)&&p.host?.address===hp.address&&p.host.fingerprint===hp.fingerprint&&(p.agent_id||"")===agent_id && sameParticipationTopic(p.topic,topic));
+    const e = await wire.signEvent(this.keys, { conv, pid: existing ? existing.pid : wire.newID(), type: existing ? "share" : "invite",...(topic!=null?{topic}:{}),...(existing?{prev:existing.invite}:{}), ts: Math.floor(this.now() / 1000), author: {...this.author(),...(m.group?{group_admission:m.epochs.get(this.fp)}:{})},
       host: { person: hp.person, address: hp.address, fingerprint: hp.fingerprint, ...(selected ? { agent_id: selected.agent_id } : {}) }, grant: grant.length ? grant : null,
       audience: existing ? existing.audience : m.group ? "room" : "conversation", task_keys: existing ? null : tasks.length ? tasks : null, note: existing ? "" : String(note).trim(),...(group?{group:existing?{...group,task_admissions:undefined}:group}:{}) });
     await this.sendConv(c, { kind: "message", sub: "event", body: wire.eventJSON(e), pid: e.pid });
@@ -8691,7 +8925,7 @@ export class Engine {
   // dismissAgent ends a participation, following the record it ends.
   async dismissAgent(pid,duplicates=true) {
     const { c, info } = await this.agentConv(pid);
-    if(duplicates && (c.kind==="group"||JSON.parse(c.root).kind==="group"))for(const other of await this.participationsOf(c))if(other.pid!==pid && !other.role && ["active","invited"].includes(other.state) && other.host?.address===info.host.address && other.host.fingerprint===info.host.fingerprint && (other.agent_id||"")===(info.agent_id||""))await this.dismissAgent(other.pid,false);
+    if(duplicates && (c.kind==="group"||JSON.parse(c.root).kind==="group"))for(const other of await this.participationsOf(c))if(other.pid!==pid && !other.role && ["active","invited"].includes(other.state) && other.host?.address===info.host.address && other.host.fingerprint===info.host.fingerprint && (other.agent_id||"")===(info.agent_id||"") && sameParticipationTopic(other.topic,info.topic))await this.dismissAgent(other.pid,false);
     if (info.role === "human") throw new Error("Use the human participation end action.");
     const members=await this.dmMembers(c);
     if (!this.me || !members.has(this.me.person) && !(info.member && info.external && info.host?.person===this.me.person)) throw new Error("This device does not speak for a member of that conversation.");
@@ -8717,39 +8951,73 @@ export class Engine {
     if (info.state !== "active" || info.held > 0) throw new Error("The agent's participation is " + info.state + ": not active.");
     if (info.host.address === this.address) throw new Error("This browser runs no agent.");
     topic=await this.outgoingTopic(c.id,topic,"");
+    await this.checkParticipationTopic(info.topic,{conv:c.id,topic});
     const replyTo=topic?await this.chatTopicHead(c.id,topic):"";
     const members=await this.dmMembers(c);
     if (!members.group) { // with guests present the room sees addressed work too; a guest asks only as her exact accepted scope
-      const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(p => p.role === "human" && p.state === "active" && !p.held && p.host?.address === this.address && p.host.fingerprint === this.fp);
+      const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(p => p.role === "human" && p.state === "active" && !p.held && p.host?.address === this.address && p.host.fingerprint === this.fp && (p.topic==null || p.topic===topic));
       if (!members.has(this.me?.person) && !guest) throw new Error("Only a current conversation member or accepted guest asks its agent.");
-      const human = await this.humanPlan(c, guest?.pid || "");
+      const human = await this.humanPlan(c, guest?.pid || "",topic);
       if (human) return this.sendHumanTurn(c, { id: sendID, queued: true, kind, body, topic,send_group,reply_to:replyTo,files, pid, origin: "ui", receiver: reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}) } }, human, info);
     }
     if (!members.has(this.me?.person)) throw new Error("Only a current conversation member asks its agent.");
     return this.sendConv(c, { id: sendID, queued: true, kind, body, topic,send_group,reply_to:replyTo,files, pid, origin: "ui", receiver:reply_receiver, target: { address: info.host.address, fingerprint: info.host.fingerprint, ...(info.agent_id ? { agent_id: info.agent_id } : {}), ...(members.group?{group_admission:members.epochs.get(this.fp)}:{}) } });
   }
 
-  // Do it confirms only this device's own question, exact answer bytes and
-  // executor. The ordinary send paths retain the recipient's task policy.
-  async proposalCandidate(id) {
+  // Confirmation binds the original question and exact executor, including
+  // authenticated own-human history. Revised text uses ordinary task policy.
+  async proposalCandidate(id,checks=[]) {
     if (!this.me || this.me.state !== "self" || !this.me.devices?.some(d=>d.address===this.address && d.fingerprint===this.fp) || !(this.me.human_keys || []).includes(this.fp)) throw Error("Only an approved current human device confirms a proposal.");
-    const p = await this.store.get("inbox", id);
-    if (!p || p.kind !== "answer" || p.status !== wire.StatusProposal || p.control || p.sub || p.history || p.replica && !p.conv || !p.fp || wire.blank(p.body)) throw Error("That is not a proposal you can confirm here.");
+    await this.groupRead(checks,"kv","person");
+    const identity=await this.groupRead(checks,"kv","identity");
+    if(identity?.revoked)throw Error("Only an approved current human device confirms a proposal.");
+    const p = await this.groupRead(checks,"inbox", id);
+    if (!p || p.kind !== "answer" || p.status !== wire.StatusProposal || p.control || p.sub || (p.history || p.replica) && !p.conv && !p.device_history || !p.fp || wire.blank(p.body)) throw Error("That is not a proposal you can confirm here.");
     const ref = p.conv ? p.lid : p.id;
-    if (await this.store.get("erased", erasedKey(p.conv || "", p.fp, ref))) throw Error("This proposal was deleted here.");
-    const pin = await this.store.get("pins", p.from);
-    if (!pin || pin.pending || pin.fingerprint !== p.fp) throw Error("The proposal's host key changed.");
+    if (await this.groupRead(checks,"erased", erasedKey(p.conv || "", p.fp, ref))) throw Error("This proposal was deleted here.");
+    const pin = await this.groupRead(checks,"pins", p.from);
+    if (pin && (pin.pending || pin.fingerprint !== p.fp)) throw Error("The proposal's host key changed.");
     const rows = [...await this.store.all("inbox"), ...await this.store.all("outbox")];
     if (rows.some(r => r.control && (r.conv || "") === (p.conv || "") && r.ref?.id === ref && r.ref.fingerprint === p.fp && [wire.SubRevision, wire.SubRetraction].includes(r.sub))) throw Error("The proposal was edited or deleted after it was made.");
-    const q = (await this.store.all("outbox")).find(r => !r.control && !r.aside && r.kind === "question" && r.id === p.reply_to && (r.conv || "") === (p.conv || ""));
-    if (!q || (q.pid || "") !== (p.pid || "") || (q.topic || "") !== (p.topic || "")) throw Error("Only the device that asked the question confirms its proposal.");
+    let q = (await this.store.all("outbox")).find(r => !r.control && !r.aside && r.kind === "question" && (r.id === p.reply_to || p.conv && r.lid===p.reply_to) && (r.conv || "") === (p.conv || "")), shared=false;
+    if(q) await this.groupRead(checks,"outbox",q.id);
+    if(!q) {
+      if(!p.conv) {
+        const h=await this.directHistory().original(p.id,checks), ask=await this.directHistory().original(p.reply_to,checks);
+        if(!h||!ask||ask.item.kind!=="question"||ask.item.sub||ask.item.from!==h.recipient||ask.item.from_key!==h.recipient_key||ask.recipient!==p.from||ask.recipient_key!==p.fp)throw Error("The exact original question is unavailable.");
+        const view=await this.directHistory().project(ask,this.me,checks);
+        if(view.direction!=="out")throw Error("Only this question’s verified human confirms its proposal.");
+        q={...ask.row,to:ask.recipient,fp:ask.recipient_key};shared=true;
+      } else {
+        q=rows.find(r=>!r.control&&!r.aside&&r.kind==="question"&&r.conv===p.conv&&(r.id===p.reply_to||r.lid===p.reply_to));
+        if(!q||!await this.directHistory().human(this.me,q.from,q.fp||q.claimed_key))throw Error("Only this question’s verified human confirms its proposal.");
+        await this.groupRead(checks,"inbox",q.id);shared=true;
+      }
+    }
+    if(!q || (q.pid || "") !== (p.pid || "") || (q.topic || "") !== (p.topic || ""))throw Error("The proposal differs from its original question context.");
+    if(!pin&&!shared)throw Error("The proposal’s host key is unavailable.");
     if (q.target ? q.target.address !== p.from || q.target.fingerprint !== p.fp || (q.target.agent_id || "") !== (p.agent_id || "") : p.agent_id || p.conv || q.to !== p.from || q.fp !== p.fp) throw Error("The proposal differs from the question's exact executor.");
     let c, info;
     if (p.conv) {
       ({ c, info } = await this.agentConv(p.pid));
       if (c.id !== p.conv || info.state !== "active" || info.held || info.host.address !== p.from || info.host.fingerprint !== p.fp || (info.agent_id || "") !== (q.target.agent_id || "")) throw Error("The proposal's exact agent is no longer active here.");
     }
-    return { p, q, c, info };
+    return { p, q, c, info, shared };
+  }
+
+  async proposalDeliveryGate(rec) {
+    if(!rec.proposal_choice?.needs_new || rec.conv && rec.target?.address!==rec.to)return;
+    const pin=await this.pinned(rec.to);
+    if(pin.pending||pin.fingerprint!==rec.proposal_choice.author)throw Error("Proposal host key changed.");
+    const profile=await this.profile(rec.to),after=await this.pinned(rec.to);
+    if(after.pending||after.fingerprint!==pin.fingerprint)throw Error("Proposal host key changed.");
+    if(!await wire.profileSupports(profile||{},rec.to,(await this.pubOf(pin)).sign_key,wire.CapOwnSyncV3))throw Object.assign(Error("The agent’s computer must update before it can receive this proposal choice."),{code:"proposal_unsupported"});
+  }
+
+  async proposalCommitCheck(rec,checks) {
+    const choice=rec.proposal_choice,{p,q}=await this.proposalCandidate(choice.id,checks),pin=await this.groupRead(checks,"pins",p.from);
+    if(!pin||pin.pending||pin.fingerprint!==p.fp||choice.author!==p.fp||choice.original!==p.body||rec.kind!=="task"||(rec.conv||"")!==(p.conv||"")||rec.reply_to!==(p.conv?p.lid:p.id)||(rec.pid||"")!==(p.pid||"")||(rec.topic||"")!==(p.topic||"")||JSON.stringify(rec.target||null)!==JSON.stringify(q.target||null))throw Error("The proposal’s exact source or executor changed.");
+    return p;
   }
 
   async proposalActions(m) {
@@ -8760,39 +9028,71 @@ export class Engine {
     } catch { return []; }
   }
 
-  async confirmedProposal(p) {
-    const ref = p.conv ? p.lid : p.id;
-    return (await this.store.all("outbox")).find(r => !r.control && !r.aside && r.kind === "task" && (r.conv || "") === (p.conv || "") && r.reply_to === ref && r.body === p.body && (r.pid || "") === (p.pid || "") && (!p.conv ? r.to === p.from : r.target?.address === p.from && r.target.fingerprint === p.fp && (r.target.agent_id || "") === (p.agent_id || "")));
+  async proposalTaskID(fp,p) {
+    const digest=new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(["confirm-proposal-v2",fp,p.conv||"",p.lid||p.id,p.from]))));
+    return Array.from(digest.slice(0,16),b=>b.toString(16).padStart(2,"0")).join("");
   }
 
-  async confirmProposal(id) {
+  async sharedProposalTask(r,p) {
+    if(!this.me||r.control||r.sub||r.kind!=="task"||(r.conv||"")!==(p.conv||"")||r.reply_to!==(p.lid||p.id)||(r.pid||"")!==(p.pid||"")||(r.topic||"")!==(p.topic||""))return false;
+    const fp=r.claimed_key||r.fp;
+    if((r.lid||r.id)!==await this.proposalTaskID(fp,p)||!await this.directHistory().human(this.me,r.from,fp))return false;
+    if(p.conv)return r.target?.address===p.from&&r.target.fingerprint===p.fp&&(r.target.agent_id||"")===(p.agent_id||"");
+    const source=await this.directHistory().source(r,false);
+    return source?.recipient===p.from&&source.recipient_key===p.fp;
+  }
+
+  async confirmedProposal(p) {
+    const ref = p.conv ? p.lid : p.id;
+    const local=(await this.store.all("outbox")).find(r => !r.control && !r.aside && r.kind === "task" && (r.conv || "") === (p.conv || "") && r.reply_to === ref && (r.body === p.body || r.proposal_choice?.id===p.id && r.proposal_choice.author===p.fp) && (r.pid || "") === (p.pid || "") && (!p.conv ? r.to === p.from : r.target?.address === p.from && r.target.fingerprint === p.fp && (r.target.agent_id || "") === (p.agent_id || "")));
+    if(local)return local;
+    for(const r of await this.store.all("inbox"))if(await this.sharedProposalTask(r,p))return r;
+    return null;
+  }
+
+  // Presentation only: original suggestion, final task, and confirming human.
+  // This never turns an imported row or a displayed label into permission.
+  async proposalProvenance(m) {
+    if(m.kind!=="task"||!m.reply_to||m.control)return undefined;
+    const rows=await this.store.all("inbox"),p=rows.find(r=>r.kind==="answer"&&r.status===wire.StatusProposal&&(r.conv||"")===(m.conv||"")&&(r.lid||r.id)===m.reply_to);
+    if(!p)return undefined;
+    const local=await this.store.get("outbox",m.id);
+    if(local?.proposal_choice?.author!==p.fp||local.proposal_choice.id!==p.id){if(!await this.sharedProposalTask(m,p))return undefined;}
+    const q=(await this.store.all("outbox")).find(r=>r.id===p.reply_to||p.conv&&r.conv===p.conv&&r.lid===p.reply_to)||rows.find(r=>r.id===p.reply_to||r.conv===p.conv&&r.lid===p.reply_to);
+    if(!q||q.kind!=="question")return undefined;
+    return {question_id:q.id,question:q.body,asker:q.from||this.address,proposal_id:p.id,proposal:p.body,confirmed_by:local?this.address:m.from,task:m.body,edited:m.body!==p.body};
+  }
+
+  async confirmProposal(id,revised=null) {
     this.confirmingProposals ??= new Map();
-    if (this.confirmingProposals.has(id)) return this.confirmingProposals.get(id);
-    const run = this.confirmProposalOnce(id);
+    if (this.confirmingProposals.has(id)) { await this.confirmingProposals.get(id); return this.confirmProposalOnce(id,revised); }
+    const run = this.confirmProposalOnce(id,revised);
     this.confirmingProposals.set(id, run);
     try { return await run; } finally { this.confirmingProposals.delete(id); }
   }
 
-  async confirmProposalOnce(id) {
-    const {p,q,c,info} = await this.proposalCandidate(id);
+  async confirmProposalOnce(id,revised=null) {
+    const {p,q,c,info,shared} = await this.proposalCandidate(id);
+    const body=revised===null?p.body:revised;
+    if(typeof body!=="string"||wire.blank(body))throw Error("Write the revised task first.");
     const kept = await this.confirmedProposal(p);
-    if (kept) return {note:"This proposal was already sent as a task."};
+    if (kept) {if(kept.body!==body)throw Error("This proposal was already confirmed with different text; open the existing task.");return {note:"This proposal was already sent as a task."};}
     // The existing durable send correlation also deduplicates concurrent
     // engines/retries after reload. No new identity, grant or queue.
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(["confirm-proposal", this.fp, p.conv || "", p.lid || p.id, p.fp]))));
-    const sendID = Array.from(digest.slice(0,16), b=>b.toString(16).padStart(2,"0")).join("");
+    const sendID = await this.proposalTaskID(this.fp,p);
+    const proposal_choice={id:p.id,author:p.fp,original:p.body,needs_new:revised!==null||shared};
     try {
-      if (!c) await this.sendV1({id:sendID,queued:true,to:p.from,kind:"task",body:p.body,replyTo:p.id,files:[],status:"",target:q.target || null});
+      if (!c) await this.sendV1({id:sendID,queued:true,to:p.from,kind:"task",body,replyTo:p.id,files:[],status:"",target:q.target || null,proposal_choice});
       else {
-        const n = {id:sendID,queued:true,kind:"task",body:p.body,topic:p.topic || "",reply_to:p.lid,pid:p.pid,origin:"ui",target:q.target,files:[]};
+        const n = {id:sendID,queued:true,kind:"task",body,proposal_choice,topic:p.topic || "",reply_to:p.lid,pid:p.pid,origin:"ui",target:q.target,files:[]};
         const members = await this.dmMembers(c);
-        const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(x=>x.role==="human" && x.state==="active" && !x.held && x.host?.address===this.address && x.host.fingerprint===this.fp);
+        const guest = members.has(this.me?.person) ? null : (await this.participationsOf(c)).find(x=>x.role==="human" && x.state==="active" && !x.held && x.host?.address===this.address && x.host.fingerprint===this.fp && (x.topic==null || x.topic===(p.topic||"")));
         if (!members.has(this.me?.person) && !guest) throw Error("Only a current member or accepted guest confirms this proposal.");
-        const human = !members.group && await this.humanPlan(c,guest?.pid || "");
+        const human = !members.group && await this.humanPlan(c,guest?.pid || "",n.topic||"");
         if (human) await this.sendHumanTurn(c,n,human,info);
         else await this.sendConv(c,n);
       }
-    } catch(e) { if (!(await this.confirmedProposal(p))) throw e; }
+    } catch(e) { const saved=await this.confirmedProposal(p);if(!saved)throw e;if(saved.body!==body)throw Error("This proposal was already confirmed with different text; open the existing task."); }
     return {note:"Task saved; sending to the same agent."};
   }
 
@@ -9006,9 +9306,10 @@ export class Engine {
   // sent opens from the copy it kept (openSent).
   async openFile(id, i, dir) {
     if (dir && dir !== "in" && dir !== "out") throw new Error("dir is in or out.");
-    const m = dir === "out" ? null : await this.store.get("inbox", id);
+    let m = dir === "out" ? null : await this.store.get("inbox", id);
+    if(dir==="out"&&!await this.store.get("outbox",id)){const row=await this.store.get("inbox",id);if(row?.device_history?.direction==="out")m=row;}
     if (dir === "in" && !m) throw new Error("No received message with that id here.");
-    if (dir === "out" || !m) return this.openSent(id, i);
+    if (!m) return this.openSent(id, i);
     if (await this.isRetracted(m)) throw new Error("That message was deleted.");
     // No dir given: a received id is the sender's choice and can equal a
     // sent one here; then neither is opened.
@@ -9099,7 +9400,7 @@ export class Engine {
     switch (e.type) {
     case "invite": case "scope": return who(e.author.person) + " invited " + (e.host ? whose(e.host.person) + (people && e.group?.host_role==="visitor" ? " agent, whose owner is outside this group" : " agent") : "an agent") + " into " + room + "."; // a scope is the invitation's public part
     case "share": return who(e.author.person) + " shared more selected messages with the agent already in " + room + ".";
-    case "accept": return who(e.author.person) + (people && !e.author.group_admission ? " accepted: this outside agent now receives every new message and file in this group until removed." : " accepted: the agent joins " + room + ".");
+    case "accept": return who(e.author.person) + (people && !e.author.group_admission ? " accepted: this outside agent participates with the scope of its invitation." : " accepted: the agent joins " + room + ".");
     case "decline": return who(e.author.person) + " declined the invitation for the agent.";
     case "dismiss": return who(e.author.person) + " dismissed the agent: it gets nothing more from " + room + ".";
     }
@@ -9112,23 +9413,23 @@ export class Engine {
     if (!g) throw new Error("No message with that id.");
     const peer = g[0].peer;
     const pin = await this.store.get("pins", peer);
-    const ctls = [...(await this.store.all("inbox")).filter((r) => r.control && !r.conv && r.from === peer).map((r) => ({ ...r, author: r.fp, addr: r.from })),
-      ...(await this.store.all("outbox")).filter((r) => r.control && !r.conv && r.to === peer).map((r) => ({ ...r, author: this.fp, addr: this.address }))];
+    const ctls = [...(await this.store.all("inbox")).filter((r) => r.control && !r.conv && (r.device_history?.peer||r.from) === peer).map((r) => ({ ...r, author: r.fp, addr: r.from })),
+      ...(await this.store.all("outbox")).filter((r) => r.control && !r.conv && (r.device_history?.peer||r.to) === peer).map((r) => ({ ...r, author: this.fp, addr: this.address }))];
     const statuses = ctls.filter((x) => x.sub === wire.SubStatus && x.author !== this.fp);
     const execView = (m) => {
       if (m.dir !== "out" || (m.kind !== "question" && m.kind !== "task")) return {};
       const answered = g.some((r) => r.dir === "in" && r.reply_to === m.id && (r.kind === "answer" || r.kind === "result"));
-      const e = this.execOn(statuses.filter((x) => x.ref && x.ref.id === m.id && x.ref.fingerprint === this.fp), peer, answered);
-      const continuation=this.continuationOf(m,this.fp,e);
+      const e = this.execOn(statuses.filter((x) => x.ref && x.ref.id === m.id && x.ref.fingerprint === m.author_fp), peer, answered);
+      const continuation=this.continuationOf(m,m.author_fp,e);
       return e ? { exec: e, ...(continuation?{continuation,actions:["continue"]}:{}) } : {};
     };
     const ctlView = (m) => {
-      const targetFp = m.dir === "in" ? m.fp : this.fp;
+      const targetFp = m.author_fp;
       const rel = ctls.filter((x) => x.ref && x.ref.id === m.id && x.ref.fingerprint === targetFp && x.sub !== wire.SubStatus && x.sub !== wire.SubDecision);
       // Grouped by key; shown as the device's address (the core's By in a device thread), never a label.
       const addr = (fp) => (fp === this.fp ? this.address : peer);
       const view = this.controlsOn(rel, targetFp, (x) => x.author, addr, (fp) => fp === this.fp, addr);
-      view.can = view.deleted ? [] : ["react", ...(targetFp === this.fp ? ["edit", "delete"] : [])];
+      view.can = view.deleted || m.history ? [] : ["react", ...(targetFp === this.fp ? ["edit", "delete"] : [])];
       return view;
     };
     const heldText = "Held for you: nothing runs in this browser. Answer it here if you want to.";
@@ -9138,13 +9439,14 @@ export class Engine {
     return { ...(permissionPerson?{permission_person:this.personView(permissionPerson)}:{}), id: g[0].id, peer, topic, key: { pinned: pin ? pin.fingerprint : "", pending: pin && pin.pending ? pin.pending.fingerprint : "" }, approved: false, task_grant: "",
       messages: await Promise.all(g.map(async (m) => {
         const inbound = m.dir === "in";
-        return { id: m.id, dir: m.dir, from: inbound ? m.from : this.address, to: inbound ? this.address : m.to, kind: m.kind, body: m.body,
+        return { id: m.id, dir: m.dir, from: m.stored_in ? m.from : this.address, to:m.device_history?.recipient||(m.stored_in?this.address:m.to), kind: m.kind, body: m.body,
+          ...(m.history?{history:true,synced_from:m.synced_from,from_key:m.author_fp}:{}),
           ...(m.agent_id ? { agent_id: m.agent_id } : {}), ...(m.target ? { target: m.target } : {}),
           reply_to: m.reply_to || "",quote:m.quote||"",sent_at:sentAt(m), at: iso(m.at), state: m.state, status: m.status || "", detail: m.detail || "", ...this.cancellationView(m), unread: inbound && !m.read,
-          files: await Promise.all((m.attachments || []).map(async (a) => ({ name: wire.safeName(a.name), size: a.size, ...(inbound ? this.fileState(a) : await this.sentState(a)) }))),
-          ...ctlView(m), ...execView(m),
+          files: await Promise.all((m.attachments || []).map(async (a) => ({ name: wire.safeName(a.name), size: a.size, ...(m.stored_in ? this.fileState(a) : await this.sentState(a)) }))),
+          ...ctlView(m), ...execView(m), proposal:await this.proposalProvenance(m),
           actions: m.status === wire.StatusProposal ? await this.proposalActions(m) : inbound && m.state === "held" && !(pin && pin.pending) ? ["reply"] : [], // a held question or task: answered here by hand
-          author: m.agent_id ? { label: "Agent " + m.agent_id, about: "Named executor asserted by host " + m.from + "; its host key and request bind this ID." }
+          author: m.history ? {label:m.agent_id?"Agent "+m.agent_id:inbound?m.from:"You · "+m.from,about:"Synced from "+m.synced_from+"; originally sent by "+m.from+". This copy runs no work."} : m.agent_id ? { label: "Agent " + m.agent_id, about: "Named executor asserted by host " + m.from + "; its host key and request bind this ID." }
             : inbound ? { label: m.from, about: "Signed with " + m.from + "'s key. Whether a person or one of their agents wrote it is not recorded." }
             : { label: "You", about: "Sent from this browser." },
           state_text: inbound ? (m.state === "held" ? heldText : m.state === "answered" ? "You answered it here." : "") : this.outStateText(m, peerWords) };
@@ -9393,7 +9695,9 @@ export class Engine {
     case "/api/refresh": return (await this.store.get("convs", body.id)) ? this.refreshDM(body.id) : this.refreshThread(body.id);
     case "/api/act":
       if (body.do === "archive_held") return this.archiveHeldNotice(body.id);
+      if (body.do === "archive_held_batch") return this.archiveHeldNotices(body.held);
       if (body.do === "do_it") return this.confirmProposal(body.id);
+      if (body.do === "change_proposal") return this.confirmProposal(body.id,body.body);
       if (body.do === "read") { await this.markRead(body.ids); return { note: "" }; }
       if (body.do === "reply") return this.replyV1(body.id, body.body, body.send_id);
       if (body.do === "resolve") return await this.resolveHeldTurn(body.id) || await this.dismissDeviceAdminNotice(body.id) || this.dismissReport(body.id);

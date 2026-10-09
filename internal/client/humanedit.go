@@ -72,6 +72,9 @@ func (a *Agent) capturedHumanEdit(q dbq, ref ControlRef) (*envelope.HumanTurn, b
 	if e = h.Validate(ref.Conv); e != nil {
 		return nil, true, e
 	}
+	if e = topicAudienceAuthorization(q, envelope.Inner{Conv: ref.Conv, Human: h, Ref: &envelope.Ref{ID: ref.ID, Fingerprint: ref.Fingerprint}}, m, a.Address); e != nil {
+		return nil, true, e
+	}
 	if e = humanAuthorization(q, ref.Conv, h, a.Address, a.Self().Fingerprint(), a.Address, a.Self().Fingerprint()); e != nil {
 		return nil, true, e
 	}
@@ -80,8 +83,8 @@ func (a *Agent) capturedHumanEdit(q dbq, ref ControlRef) (*envelope.HumanTurn, b
 
 // The existing HumanEdit wire contract is shared by native and browser readers.
 func (a *Agent) mayDeliverCapturedHumanEdit(env envelope.Envelope) (bool, bool, error) {
-	var conv, sub, state, fp, raw string
-	e := a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(sub,''),state,coalesce(recipient_fp,''),coalesce(human,'') FROM outbox WHERE id=?`, env.ID).Scan(&conv, &sub, &state, &fp, &raw)
+	var conv, sub, state, fp, raw, refID, refFP string
+	e := a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(sub,''),state,coalesce(recipient_fp,''),coalesce(human,''),coalesce(ref_id,''),coalesce(ref_fp,'') FROM outbox WHERE id=?`, env.ID).Scan(&conv, &sub, &state, &fp, &raw, &refID, &refFP)
 	if errors.Is(e, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -102,7 +105,7 @@ func (a *Agent) mayDeliverCapturedHumanEdit(env envelope.Envelope) (bool, bool, 
 	if !ok || pending != nil || key.Fingerprint() != fp {
 		return true, false, nil
 	}
-	return a.mayDeliverHuman(env, envelope.Inner{V: envelope.Version3, Conv: conv, Sub: sub, Human: &h}, state, fp)
+	return a.mayDeliverHuman(env, envelope.Inner{V: envelope.Version3, Conv: conv, Sub: sub, Human: &h, Ref: &envelope.Ref{ID: refID, Fingerprint: refFP}}, state, fp)
 }
 
 func (a *Agent) capturedHumanControlAuthor(conv string, c controlRow, target ControlRef, me personRow) (string, string, bool, bool) {

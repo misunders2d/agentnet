@@ -107,7 +107,7 @@ func TestNeedsYouPrivateReportScope(t *testing.T) {
 		name             string
 		full, actionable bool
 		want             string
-	}{{"own", true, false, text}, {"steward", true, true, text}, {"operator", false, true, "Original request"}} {
+	}{{"own", true, false, "Request: Original request\n\nAgent response:\n" + text}, {"steward", true, true, "Request: Original request\n\nAgent response:\n" + text}, {"operator", false, true, "Original request"}} {
 		parsed, ok := ParseReport(a.reportBodyFor(items, map[string]string{items[0].ID: text}, tc.full, tc.actionable))
 		if !ok || len(parsed.Items) != 1 || parsed.Items[0].Excerpt != tc.want || parsed.Items[0].Actionable != tc.actionable {
 			t.Fatalf("%s: %+v", tc.name, parsed)

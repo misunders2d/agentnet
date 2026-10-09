@@ -105,7 +105,7 @@ const grantActs: Record<GrantChange, (peer: string) => (a: Api) => Promise<unkno
 
 /** DeviceGrantConfirm: turn automatic answers on or off for a device, or stop
  *  running its tasks without asking, after saying what that means. */
-export function DeviceGrantConfirm({ change, onClose, peer }: { change: GrantChange | null; onClose: () => void; peer: string; thread?: { task_grant?: string } }) {
+export function DeviceGrantConfirm({ change, onClose, peer, inherited = false }: { change: GrantChange | null; onClose: () => void; peer: string; inherited?: boolean; thread?: { task_grant?: string } }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
   const person = [o?.person, ...(o?.people || [])].find((p) => p?.person === peer);
@@ -140,7 +140,11 @@ export function DeviceGrantConfirm({ change, onClose, peer }: { change: GrantCha
       body: <><p>On {host}, your agent may run future tasks from {who} without another AgentNet approval. {person ? "This covers their current and future verified devices, including phones." : "This covers only this device’s current key."}</p><p>The agent keeps this computer’s normal tools and permissions; native approval requirements still apply. Removed devices, changed keys and frozen identities stay blocked. Tasks already waiting, failed or interrupted are not restarted. Other receiving computers are unchanged.</p></>,
     },
   };
-  const w = text[shown];
+  const w = inherited && (shown === "unapprove" || shown === "revoke_tasks") ? {
+    title:"Remove the separate permission for " + who + "?", ok:"Remove separate permission", danger:true,
+    done:"Separate permission removed. My devices still allows this device.",
+    body:<><p>My devices still allows {who} on {host}. Removing this separate permission does not turn off that broader permission.</p><p>To change what all your devices may do here, use the My devices controls. Running tasks and other receiving computers are unchanged.</p></>,
+  } : text[shown];
   return (
     <Confirm open={!!change} onOpenChange={(v) => { if (!v) onClose(); }} title={capital(w.title)} ok={w.ok} danger={w.danger}
       onOk={() => void store.run(grantActs[shown](peer), w.done)}>

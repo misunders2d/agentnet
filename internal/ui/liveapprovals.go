@@ -34,13 +34,25 @@ type ApprovalsView struct {
 	Tasks     []TaskGrantView    `json:"tasks"`
 	// NativeTasks are independent trusted-own-device permissions for direct
 	// tasks, not removed by revoking a person or explicit device task grant.
-	NativeTasks    []TaskGrantView      `json:"native_tasks,omitempty"`
-	Participations []ParticipationGrant `json:"participations"`
-	ReadOnly       bool                 `json:"read_only"`
+	NativeTasks    []TaskGrantView       `json:"native_tasks,omitempty"`
+	OwnDevices     []OwnDevicePermission `json:"own_devices,omitempty"`
+	Participations []ParticipationGrant  `json:"participations"`
+	ReadOnly       bool                  `json:"read_only"`
 	// Unresolved: conversations whose agents cannot be resolved here now
 	// (a group whose context is pending). Their grants are not listed, so
 	// not revocable here, until they can be.
 	Unresolved []string `json:"unresolved,omitempty"`
+}
+
+// OwnDevicePermission keeps the current roster visible after a separate grant
+// is removed. Sources describe current local standing permission, not authority
+// received from a label and not the state of an already accepted task.
+type OwnDevicePermission struct {
+	Address   string `json:"address"`
+	Name      string `json:"name"`
+	This      bool   `json:"this,omitempty"`
+	Questions string `json:"questions"`
+	Tasks     string `json:"tasks"`
 }
 
 // QuestionApproval is a person or explicit device whose questions are answered automatically.
@@ -132,6 +144,45 @@ func (l *Live) Approvals() (ApprovalsView, error) {
 		}
 		if g.Tasks {
 			v.Tasks = append(v.Tasks, TaskGrantView{Person: g.Person, Label: g.Label, Status: status})
+		}
+	}
+	if me, ok, err := l.a.Person(); err != nil {
+		return v, err
+	} else if ok {
+		for _, d := range me.Devices {
+			row := OwnDevicePermission{Address: d.Address, Name: d.Name, This: d.This, Questions: "approval", Tasks: "approval"}
+			key, err := l.a.PeerKeyOf(d.Address)
+			if err != nil {
+				return v, err
+			}
+			if me.State != "self" || !d.This && (key.Pending != "" || key.Pinned != d.Fingerprint) {
+				row.Questions, row.Tasks = "identity", "identity"
+			} else {
+				q, t, err := l.a.PermissionState(d.Address, d.Fingerprint)
+				if err != nil {
+					return v, err
+				}
+				_, pq, pt, err := l.a.PersonGrantForPeer(d.Address, d.Fingerprint)
+				if err != nil {
+					return v, err
+				}
+				if q {
+					row.Questions = "device"
+				}
+				if t {
+					row.Tasks = "device"
+				}
+				if slices.ContainsFunc(native, func(g client.Grant) bool { return g.Address == d.Address && g.Status == "active" }) {
+					row.Tasks = "native"
+				}
+				if pq {
+					row.Questions = "person"
+				}
+				if pt {
+					row.Tasks = "person"
+				}
+			}
+			v.OwnDevices = append(v.OwnDevices, row)
 		}
 	}
 	convs, err := l.a.Conversations()

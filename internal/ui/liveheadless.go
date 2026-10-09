@@ -18,7 +18,7 @@ func (l *Live) Decide(x DecisionAction) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	if x.Action == "continue" {
+	if x.Action == "continue" || x.Action == "resolve" && x.Report == "" {
 		ctx = client.WithQueuedSend(ctx, x.SendID)
 	}
 	sent, err := l.a.Decide(ctx, x.Host, x.ID, x.Key, x.Action, x.Expect, x.Attempt, x.Text, x.Report)

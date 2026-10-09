@@ -499,6 +499,8 @@ func (a *Agent) Decide(ctx context.Context, host, id, key, action, expect string
 	cap := protocol.CapHeadless
 	if action == "continue" {
 		cap = protocol.CapContinuation
+	} else if action == "resolve" && report == "" {
+		cap = protocol.CapOwnSyncV3
 	}
 	if ok, why := a.capSupport(ctx, host, hostKey, feats, cap); !ok {
 		return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
@@ -518,8 +520,8 @@ func (a *Agent) Decide(ctx context.Context, host, id, key, action, expect string
 	if err != nil {
 		return ControlSent{}, err
 	}
-	if action == "continue" {
-		if err := a.store.addContinuationOutbox(env, in, hostKey.Fingerprint()); err != nil {
+	if action == "continue" || action == "resolve" && report == "" {
+		if err := a.store.addContinuationOutbox(env, in, hostKey.Fingerprint(), cap); err != nil {
 			return ControlSent{}, err
 		}
 		env, err = a.store.outboxEnvelope(env.ID)
@@ -556,6 +558,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		a.answerDecision(ctx, env.From, in, d, state, refused)
 	}
 	senderFP := sender.Fingerprint()
+	ownerDecision := d.Action == "continue" || d.Action == "resolve" && d.Report == ""
 	// The decision's row, written with whatever it decides (or the refusal
 	// it met), so a replay meets the recorded outcome.
 	record := func(tx *sql.Tx, outcome string) (fresh bool, err error) {
@@ -575,6 +578,8 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		request := in.Ref.ID
 		if d.Action == "continue" {
 			_ = a.store.db.QueryRow(`SELECT request FROM request_continuations WHERE id=?`, in.ID).Scan(&request)
+		} else if ownerDecision {
+			_ = a.store.db.QueryRow(`SELECT id FROM inbox WHERE (id=? OR lid=?) AND verified_by=? AND replica=0`, request, request, in.Ref.Fingerprint).Scan(&request)
 		}
 		state, _ := a.store.jobState(request)
 		if tellsNothing(recorded.String) {
@@ -614,7 +619,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 	var conv bool
 	decide := func(tx *sql.Tx, change string, changeArgs []any) (string, error) {
 		own := false
-		if d.Action == "continue" {
+		if ownerDecision {
 			var err error
 			own, err = ownHumanDeviceHolds(tx, env.From, senderFP)
 			if err != nil {
@@ -645,9 +650,10 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		}
 		var state string
 		var attempts int64
-		err = tx.QueryRow(`SELECT state, kind, sender, attempts, conv IS NOT NULL FROM inbox WHERE (id = ? OR (?='continue' AND lid=?)) AND verified_by = ? AND (local = 0 OR ?='continue') AND ref_id IS NULL
-			AND (conv IS NULL OR pid IS NOT NULL AND replica = 0 AND json_extract(target, '$.address') = ?)`,
-			in.Ref.ID, d.Action, in.Ref.ID, in.Ref.Fingerprint, d.Action, a.Address).Scan(&state, &kind, &from, &attempts, &conv)
+		err = tx.QueryRow(`SELECT id, state, kind, sender, attempts, conv IS NOT NULL FROM inbox WHERE (id = ? OR (? AND lid=?)) AND verified_by = ? AND (local = 0 OR ?) AND ref_id IS NULL AND replica=0
+			AND receiver_route IS NULL AND NOT EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
+			AND (conv IS NULL OR pid IS NOT NULL AND json_extract(target, '$.address') = ?)`,
+			in.Ref.ID, ownerDecision, in.Ref.ID, in.Ref.Fingerprint, ownerDecision, a.Address).Scan(&actualRequest, &state, &kind, &from, &attempts, &conv)
 		if errors.Is(err, sql.ErrNoRows) {
 			return refusedNoRequest, nil
 		}
@@ -656,6 +662,9 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 		}
 		if state != d.Expect || attempts != d.Attempt {
 			return fmt.Sprintf("the request is no longer as you saw it (now %s, attempt %d)", state, attempts), nil
+		}
+		if ownerDecision && (d.Expect != stateNeedHuman || d.Attempt < 1 || kind != envelope.KindQuestion && kind != envelope.KindTask) {
+			return "choose the exact waiting request and attempt", nil
 		}
 		if d.Action == "continue" {
 			if d.Expect != stateNeedHuman || strings.TrimSpace(d.Text) == "" || d.Attempt < 1 {
@@ -675,7 +684,7 @@ func (a *Agent) admitDecision(ctx context.Context, env envelope.Envelope, in env
 			return "a request in a conversation is answered there, not from a report", nil
 		}
 		if change != "" {
-			res, err := tx.Exec(change, append([]any{in.Ref.ID, d.Expect, d.Attempt}, changeArgs...)...)
+			res, err := tx.Exec(change, append([]any{actualRequest, d.Expect, d.Attempt}, changeArgs...)...)
 			if err != nil {
 				return "", err
 			}

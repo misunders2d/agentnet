@@ -155,7 +155,7 @@ func (a *Agent) shareRoomDismissal(ctx context.Context, m dmMembers, ev protocol
 		if !info.Member || info.Held != 0 || info.State != PartDismissed || info.Dismissal != ev.Hash() || !current.mayRemoveAgent(info, ev.Author) {
 			return errors.New("group: membership end no longer counted")
 		}
-		return externalTurn(in, info, current, a.Address, a.Self().Fingerprint())
+		return externalTurn(in, info, current, a.Address, a.Self().Fingerprint(), tx)
 	}
 	if err = a.store.addConvOutbox([]outCopy{copy}, in, guard, ""); errors.Is(err, errHumanShared) {
 		return nil

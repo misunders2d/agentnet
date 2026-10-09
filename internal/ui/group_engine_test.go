@@ -267,6 +267,23 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 		carriers["solo-context"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: solo}, solo.Seq, solo.Hash())
 		participations := groupParticipationEngineVectors(t, root, s0, alice, dana, ar, dr, browser)
 		vectors["participations"] = participations
+		var topicEvents []map[string]string
+		seed := participations["p6-0-invite"].(map[string]any)["inner"].(envelope.Inner)
+		for _, topic := range []string{"", strings.Repeat("d", 32)} {
+			event, err := protocol.ParseParticipationEvent([]byte(seed.Body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			event.Topic = &topic
+			event.Sign(alice.Sign)
+			scope := protocol.ScopeOf(event, event.TS)
+			scope.Sign(alice.Sign)
+			if _, err := protocol.ParseParticipationEvent([]byte(marshal(t, scope))); err != nil {
+				t.Fatal("native scoped projection", err)
+			}
+			topicEvents = append(topicEvents, map[string]string{"event": marshal(t, event), "hash": event.Hash(), "scope": marshal(t, scope)})
+		}
+		vectors["topic_events"] = topicEvents
 		vectors["historical_witness"] = groupHistoryWitnessVectors(t, root, s0, alice, bob, ar, rr, browser, commits[0], participations)
 		var membershipRecords []protocol.ParticipationEvent
 		for _, prefix := range []string{"p6-0", "p6-1"} {
@@ -462,8 +479,8 @@ func testBrowserGroupCarrierIndexedDB(t *testing.T, controlOnly bool, background
 			if controlOnly {
 				mode = "true"
 			}
-			io.WriteString(w, `<script type="module">import {setup,consent,checks} from '/testdata/group_engine_check.mjs';let out;try {const post=async(path,body)=>{const r=await fetch(path,{method:'POST',body:JSON.stringify(body)});return r.json()};const challenge=await post('/setup',await setup());const v=await post('/consent',{consent:await consent(challenge)});out=await checks(v,true,false,`+mode+`,`+strconv.FormatBool(len(background) > 0 && background[0])+`,`+strconv.FormatBool(len(background) > 1 && background[1])+`);}catch(e){out={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(out)});</script>`)
-		case "/testdata/group_engine_check.mjs", "/testdata/group_control_history_check.mjs", "/testdata/group_receiver_profile.mjs":
+			io.WriteString(w, `<script type="module">let out;try {const {setup,consent,checks}=await import('/testdata/group_engine_check.mjs');const post=async(path,body)=>{const r=await fetch(path,{method:'POST',body:JSON.stringify(body)});return r.json()};const challenge=await post('/setup',await setup());const v=await post('/consent',{consent:await consent(challenge)});out=await checks(v,true,false,`+mode+`,`+strconv.FormatBool(len(background) > 0 && background[0])+`,`+strconv.FormatBool(len(background) > 1 && background[1])+`,`+strconv.FormatBool(len(background) > 2 && background[2])+`,`+strconv.FormatBool(len(background) > 3 && background[3])+`);}catch(e){out={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(out)});</script>`)
+		case "/testdata/group_engine_check.mjs", "/testdata/group_control_history_check.mjs", "/testdata/group_receiver_profile.mjs", "/testdata/carrier_receipt_repair_check.mjs", "/testdata/participation_topic_check.mjs":
 			w.Header().Set("Content-Type", "text/javascript")
 			http.ServeFile(w, r, strings.TrimPrefix(r.URL.Path, "/"))
 		case "/setup":
@@ -540,4 +557,18 @@ func TestBrowserHistoryReceiverProfile(t *testing.T) {
 }
 func TestBrowserHistoryReceiverRealIndexedDB(t *testing.T) {
 	testBrowserGroupCarrierIndexedDB(t, false, false, true)
+}
+
+func TestBrowserCarrierReceiptRepair(t *testing.T) {
+	testBrowserGroupCarrierEngine(t, "receipt-repair")
+}
+func TestBrowserCarrierReceiptRepairRealIndexedDB(t *testing.T) {
+	testBrowserGroupCarrierIndexedDB(t, false, false, false, true)
+}
+
+func TestBrowserParticipationTopics(t *testing.T) {
+	testBrowserGroupCarrierEngine(t, "topic-participation")
+}
+func TestBrowserParticipationTopicsRealIndexedDB(t *testing.T) {
+	testBrowserGroupCarrierIndexedDB(t, false, false, false, false, true)
 }

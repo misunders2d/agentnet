@@ -23,6 +23,9 @@ func WithQueuedSend(ctx context.Context, id string) context.Context {
 }
 func queuedSend(ctx context.Context) bool { return ctx.Value(queuedSendKey{}) != nil }
 func sendID(ctx context.Context) (string, error) {
+	if id, ok := ctx.Value(proposalSendIDKey{}).(string); ok {
+		return id, nil
+	}
 	if id, ok := ctx.Value(queuedSendKey{}).(string); ok {
 		if !protocol.ValidID(id) {
 			return "", errors.New("invalid local send id")

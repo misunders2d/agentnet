@@ -4,6 +4,8 @@ import * as wire from '../static/wire.mjs';
 import { Engine, memoryStore, openIDB } from '../static/engine.mjs';
 import { checkControlHistory } from './group_control_history_check.mjs';
 import {receiverProfile} from './group_receiver_profile.mjs';
+import {carrierReceiptRepair} from './carrier_receipt_repair_check.mjs';
+import {participationTopics} from './participation_topic_check.mjs';
 let keys, address = 'browser/desk', roster, pub;
 const decode = new TextDecoder();
 const assert = (ok, label) => { if (!ok) throw Error(label); };
@@ -17,7 +19,8 @@ export async function consent(challenge) {
  const a = await wire.signGroupAdmission(keys,{conv:await wire.rootID(root),realm:root.realm,person:roster.person,roster:await wire.rosterHash(roster),seq:0,prev:'',history:null,by:await wire.fingerprint(pub)});
  return wire.groupAdmissionJSON(a);
 }
-export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false) {
+export async function checks(v, realIDB=false, requireWarmRecovery=false, controlHistoryOnly=false, backgroundOnly=false,receiverOnly=false,receiptRepairOnly=false,topicOnly=false) {
+ if(receiptRepairOnly)return carrierReceiptRepair(realIDB);
  const labels=[], check=(ok,label)=>{assert(ok,label);labels.push(label);};
  const root=wire.parseGroupRoot(v.challenge.root), conv=await wire.rootID(root), states=v.states.map(wire.parseGroupState), records=v.commits.map(wire.parseGroupCommit), c=v.carriers;
  const invitation=await wire.validateGroupInvitation(wire.parseGroupInvitation(v.invitation_json));
@@ -68,6 +71,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
  };
  const quiet=async(w)=>{for(const s of ['inbox','outbox','convs','lids'])check((await w.st.all(s)).length===0,'quiet '+s);check((await w.e.overview()).threads.length===0,'no visible threads');for(const x of await w.st.all('held'))check(!('body'in x)&&!('plaintext'in x),'held has ciphertext only');for(const x of await w.st.all('files'))check(x.ct instanceof Uint8Array&&!('body'in x),'files ciphertext only');};
  if(receiverOnly){const profile=await receiverProfile({world,check,realIDB,c,root,conv,keys,address,roster,pub});return {ok:true,storage:profile.storage,checks:labels.length,labels,profile};}
+ if(topicOnly){await participationTopics({world,check,c,root,conv,keys,address,pub,alicePub,aliceKeys,v});return {ok:true,storage:realIDB?"real IndexedDB":"memory unit only",checks:labels.length,labels};}
  let w;
  try{
   // Background disclosure coalesces a burst, including a failed active pass.
@@ -540,6 +544,15 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    check((await fourthCopies()).length===migrated.length&&(await w.st.get('kv',deferredKey))?.why==='conflicting_duplicate'&&(await w.st.get('kv',copyKey)).hash==='0'.repeat(64),'conflicting local tuple evidence stays deferred without a new carrier or overwritten authority');
    await w.st.write([{s:'kv',k:copyKey,v:ledger}]);await w.e.runHistory();
    check(!await w.st.get('kv',deferredKey)&&(await fourthCopies()).length===migrated.length,'restored exact tuple evidence clears deferral without duplicate sending');
+   const retained=(await w.st.all('outbox')).filter(r=>r.to===fourthAddress&&['history','group-proof','group-context'].includes(r.sub));
+   await w.st.write(retained.map(r=>({s:'outbox',k:r.id,v:{...r,state:'quarantined'}})));
+   // Reconsidering a logical source may encounter a receiver-held carrier;
+   // neither that pass nor a restart should mint a second ciphertext ID.
+   await w.st.write([{s:'kv',k:deferredKey,v:{key:deferredKey,tuple,conv,id:pageItems[0].id,dir:'inbox'}}]);
+   await w.e.runHistory();await w.reload();w.e.groupSupport=async()=>{};await w.e.runHistory();
+   check((await w.st.all('outbox')).filter(r=>r.to===fourthAddress&&['history','group-proof','group-context'].includes(r.sub)).length===retained.length&&!await w.st.get('kv',deferredKey),'unchanged quarantined history and context survive wake/restart without fresh carrier IDs');
+   const blockedProgress=(await w.e.overview()).history.find(j=>j.device===fourthAddress);
+   check(blockedProgress.state==='done'&&blockedProgress.delivery_known&&blockedProgress.blocked===(await w.st.prefix('kv','history-copy/'+fourthFP+'/')).length&&!blockedProgress.queued&&!blockedProgress.custody&&!blockedProgress.delivered,'producer done remains distinct from receiver-held current exact copies');
    const reader=await world();reader.extraChains.set(roster.person,[...chain,fourthRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
    reader.e.keys=fourthKeys;reader.e.address=fourthAddress;reader.e.fp=fourthFP;reader.e.me=four;
    await reader.st.write([{s:'kv',k:'identity',v:{keys:fourthKeys,address:fourthAddress,fingerprint:fourthFP}},{s:'kv',k:'person',v:four}]);await reader.e.pinDevices(four);
@@ -827,12 +840,12 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   const source=await ended.st.get('inbox',pv['p6-root'].inner.id),item=ended.e.itemOf(source,false),dev=linkedPerson.devices.find(d=>d.address===linkedAddress);
   const original=wire.humanJSON(item.human),evidence=await ended.e.groupHumanEvidence(record,item.human,[]);
   let liveRefused=false;
-  try{ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint);}catch{liveRefused=true;}
+  try{await ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint);}catch{liveRefused=true;}
   check(liveRefused,'dismissed assistant remains unavailable to live human delivery');
   ended.e.groupSupport=async()=>{};ended.e.sendGroupCopy=async(_address,_pin,group)=>group || "";
   const copy=await ended.e.historyCopy(dev,record,item);
   check(copy.required_cap===wire.CapGroup&&wire.humanJSON(wire.parseHistory(copy.body).human)===original,'dismissed assistant leaves exact captured own-member history export intact');
-  ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint,true);
+  await ended.e.humanTurnAuthorization({...item,conv},evidence,info,item.from,item.from_key,info.host.address,info.host.fingerprint,true);
   check(true,'historical original-member reader keeps authority independently of its dismissed assistant');
   const carriers=await ended.e.groupHistoryCarriers(record,dev,[]);
   const linkedWorld=async(withContext=true)=>{
@@ -885,7 +898,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    const retainedExcerpt=await target.st.get('inbox',excerpt.id);
    check(retainedExcerpt?.history&&retainedExcerpt.read&&retainedExcerpt.state===''&&retainedExcerpt.body===excerpt.body&&!await target.st.get('held',excerptCopy.id),'clean ended assistant keeps exact selected excerpt in own history without live authority');
    const visitor=await ended.e.agentConv(pv['visitor-pid']);let liveExcerpt=false;
-   try{ended.e.externalRole({...excerpt,conv,replica:true},visitor.info,visitor.members,excerpt.from,excerpt.from_key);}catch{liveExcerpt=true;}
+   try{await ended.e.externalRole({...excerpt,conv,replica:true},visitor.info,visitor.members,excerpt.from,excerpt.from_key);}catch{liveExcerpt=true;}
    check(liveExcerpt,'ended assistant cannot receive a new live excerpt');
    const badExcerpt={...excerpt,body:wire.historyJSON({...wire.parseHistory(excerpt.body),lid:wire.newID()})};let grantRefused=false;
    try{await ended.e.groupParticipationHistoryCheck(conv,badExcerpt,{address:ended.e.address,fingerprint:ended.e.fp},[]);}catch{grantRefused=true;}
@@ -897,7 +910,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    const tampered={...forwarded,id:wire.newID(),lid:wire.newID(),body:wire.eventJSON({...dismissal,ts:dismissal.ts+1})},tamperedEnvelope=await forward(tampered);await target.receive({envelope:tamperedEnvelope});
    check(!!await target.st.get('held',wire.parseEnvelope(tamperedEnvelope).id)&&!await target.st.get('inbox',tampered.id),'forwarded historical dismissal cannot bypass the original signature');
    for(const bad of [{...info,held:1},{...info,state:'conflict'},{...info,host:{...info.host,fingerprint:'f'.repeat(64)}}]){
-    let refused=false;try{ended.e.humanTurnAuthorization({...item,conv},evidence,bad,item.from,item.from_key,info.host.address,info.host.fingerprint,true);}catch{refused=true;}
+    let refused=false;try{await ended.e.humanTurnAuthorization({...item,conv},evidence,bad,item.from,item.from_key,info.host.address,info.host.fingerprint,true);}catch{refused=true;}
     check(refused,'historical reader never bypasses held/conflict/exact target evidence');
    }
   } finally {await target.close();}
@@ -1382,4 +1395,4 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
   return {ok:true,storage:realIDB?'real IndexedDB':'memory unit only',checks:labels.length,labels};
  }catch(e){if(w)await w.close().catch(()=>{});throw e;}
 }
-if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}
+if(globalThis.process?.versions?.node){const {createInterface}=await import('node:readline');for await(const line of createInterface({input:process.stdin})){let out;try{const r=JSON.parse(line);out=r.op==='setup'?await setup():r.op==='consent'?{consent:await consent(r.challenge)}:await checks(r.vectors,false,r.op==='warm-regression',r.op==='control-history',r.op==='background-regression',r.op==='receiver-regression',r.op==='receipt-repair',r.op==='topic-participation');}catch(e){out={error:e.stack};}process.stdout.write(JSON.stringify(out)+'\n');}}

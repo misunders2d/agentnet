@@ -142,7 +142,11 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.convWork.due(convHistory)
 		}
 		more := a.historyStep(ctx)
-		if roots || reads || invites || titles || more {
+		direct, directErr := a.syncDeviceHistory()
+		if directErr != nil {
+			a.Logf("copying direct history: %v", directErr)
+		}
+		if roots || reads || invites || titles || more || direct {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -168,7 +172,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapOwnSyncV2, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 16-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 18-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -531,16 +535,25 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if !found {
 		return ConvSent{}, fmt.Errorf("no conversation %s here", conv)
 	}
+	if m.PID != "" && m.sub == "" {
+		p, e := a.Participation(m.PID)
+		if e != nil {
+			return ConvSent{}, e
+		}
+		if e = checkParticipationTopic(a.store.db, p.Topic, envelope.Inner{Conv: conv, Topic: m.Topic, ReplyTo: m.ReplyTo}); e != nil {
+			return ConvSent{}, e
+		}
+	}
 	if root.Kind == protocol.ConvKindDM && m.sub == "" && (m.Kind == "" || m.Kind == envelope.KindMessage) && m.Target == nil {
 		humanAuthor := m.PID == ""
 		if m.PID != "" {
 			p, e := a.Participation(m.PID)
 			humanAuthor = e == nil && p.Role == protocol.RoleHuman
-		} else if pid, e := a.ownHumanPID(conv); e == nil {
+		} else if pid, e := a.ownHumanPID(conv, m.Topic); e == nil {
 			m.PID = pid // an accepted guest's device: its own exact participation, as the page names it ("" for a member)
 		}
 		if humanAuthor {
-			h, e := a.humanPlan(ctx, conv, m.PID)
+			h, e := a.humanPlan(ctx, conv, m.PID, m.Topic)
 			if e != nil {
 				return ConvSent{}, e
 			}
@@ -556,16 +569,18 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			if request || output {
 				authorPID := ""
 				if request {
-					if authorPID, e = a.ownHumanPID(conv); e != nil {
+					if authorPID, e = a.ownHumanPID(conv, m.Topic); e != nil {
 						return ConvSent{}, e
 					}
 				}
-				h, e := a.humanPlan(ctx, conv, authorPID)
+				h, e := a.humanPlan(ctx, conv, authorPID, m.Topic)
 				if e != nil {
 					return ConvSent{}, e
 				}
 				if h != nil {
-					return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+					if h != nil {
+						return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+					}
 				}
 			}
 		}
@@ -580,7 +595,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 				if !info.HostHere || !info.HumanActive() {
 					return ConvSent{}, errors.New("only the exact active guest device writes as that guest")
 				}
-				h, e := a.roomAudience(conv, info.PID)
+				h, e := a.roomAudience(conv, info.PID, m.Topic)
 				if e != nil {
 					return ConvSent{}, e
 				}
@@ -595,11 +610,13 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			}
 			for _, p := range infos {
 				if p.Following() {
-					h, e := a.roomAudience(conv, "")
+					h, e := a.roomAudience(conv, "", m.Topic)
 					if e != nil {
 						return ConvSent{}, e
 					}
-					return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+					if h != nil {
+						return a.sendHumanTurn(ctx, root, raw, m, h, binding)
+					}
 				}
 			}
 		}
@@ -666,6 +683,14 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			return ConvSent{}, e
 		} else if c != conv {
 			return ConvSent{}, errors.New("a reply stays within its conversation")
+		}
+		if m.status == envelope.StatusProposal {
+			// Keep the physical request authorization above; expose its exact
+			// logical identity so linked humans can confirm the same proposal.
+			m.ReplyTo, err = a.proposalReplyRef(ctx, conv, m.ReplyTo)
+			if err != nil {
+				return ConvSent{}, err
+			}
 		}
 	}
 	if len(m.Files) > 0 {
@@ -837,12 +862,32 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		jobKey = me.info.Fingerprint
 	}
 	local := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, SendGroup: m.SendGroup, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
+		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Topic: m.Topic, TopicEvent: m.TopicEvent, SendGroup: m.SendGroup, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
 	if binding != nil && m.Target == nil {
 		binding.person = peerID
 	}
 	if err := a.prepareRemoteCopies(ctx, binding, copies, m.Files); err != nil {
 		return ConvSent{}, err
+	}
+	priorClaim := m.claim
+	m.claim = func(tx *sql.Tx, id string) error {
+		if m.PID != "" && m.sub == "" {
+			members, e := membersIn(tx, conv)
+			if e != nil {
+				return e
+			}
+			p, e := participationIn(tx, conv, m.PID, members, a.Address)
+			if e != nil {
+				return e
+			}
+			if e = checkParticipationTopic(tx, p.Topic, local); e != nil {
+				return e
+			}
+		}
+		if priorClaim != nil {
+			return priorClaim(tx, id)
+		}
+		return nil
 	}
 	if err := a.store.addConvOutbox(copies, local, a.queuedClaim(ctx, conv, m.claim), jobKey, binding); err != nil {
 		return ConvSent{}, err
@@ -948,7 +993,18 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			a.Logf("conversation message %s: %v", id, err)
 			continue
 		}
+		topicScoped, err := topicCopy(a.store.db, w.conv, w.pid, w.sub, w.body, w.humanRaw)
+		if err != nil {
+			continue
+		}
+		proposalCap, err := proposalCopyNeedsCapability(a.store.db, id)
+		if err != nil {
+			continue
+		}
 		cacheKey := to + "\x00" + w.sub + "\x00" + w.required + "\x00" + w.status + "\x00" + w.agentID + "\x00" + w.conv + "\x00" + w.pid + "\x00" + item.PID + "\x00" + item.AgentID
+		if proposalCap {
+			cacheKey += "\x00proposal-choice"
+		}
 		if w.sub == envelope.SubHistory {
 			var h HistoryItem
 			if json.Unmarshal([]byte(w.body), &h) == nil && h.GroupHistory != nil {
@@ -958,6 +1014,9 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 		if w.human {
 			cacheKey += "\x00human"
 		}
+		if topicScoped {
+			cacheKey += "\x00topic"
+		}
 		if room {
 			cacheKey += "\x00room"
 		}
@@ -966,7 +1025,9 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			key, _, found, err := a.store.peer(to)
 			switch {
 			case err != nil || !found:
-			case w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2:
+			case proposalCap && w.conv == "":
+				ok = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3) == nil && (w.required == "" || a.requireParticipationCaps(ctx, key, w.required) == nil)
+			case w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3:
 				ok = a.requireParticipationCaps(ctx, key, w.required) == nil
 			case w.required == protocol.CapAgentReaction && w.conv == "":
 				// A device thread's assistant reaction: no person gate either.
@@ -1006,6 +1067,9 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 							ok = a.requireParticipationCaps(ctx, key, protocol.CapGroupHumanParticipation) == nil
 						}
 					}
+				}
+				if ok && topicScoped {
+					ok = a.requireParticipationCaps(ctx, key, protocol.CapTopicParticipation) == nil
 				}
 				if ok && room && w.required != protocol.CapRoom {
 					ok = a.requireParticipationCaps(ctx, key, protocol.CapRoom) == nil
@@ -1113,6 +1177,12 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 	}
 	if in.Sub == envelope.SubTopicSync {
 		return a.admitTopicSync(ctx, env, in, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubDeviceHistory {
+		return a.admitDeviceHistory(ctx, env, in, sender, fromQuarantine, hold)
+	}
+	if in.Sub == envelope.SubDeviceFile {
+		return a.admitDeviceFile(ctx, env, in, sender, hold)
 	}
 	if in.Sub == envelope.SubInvitationSync {
 		return a.admitInvitationSync(ctx, env, in, sender, fromQuarantine, hold)
@@ -1269,6 +1339,19 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 				return err
 			}
 		}
+		if in.PID != "" && in.Sub == "" {
+			members, e := membersIn(tx, in.Conv)
+			if e != nil {
+				return e
+			}
+			p, e := participationIn(tx, in.Conv, in.PID, members, a.Address)
+			if e != nil {
+				return e
+			}
+			if e = checkParticipationTopic(tx, p.Topic, in); e != nil {
+				return e
+			}
+		}
 		if err := insertCopies(tx, forward); err != nil {
 			return err
 		}
@@ -1380,6 +1463,13 @@ var errRootInvalid = errors.New("conversation root invalid")
 // person: views show it as sent (Dir "out", Via), and it is stored here as
 // received.
 func (a *Agent) sentElsewhere(id string) (bool, error) {
+	var direct bool
+	if err := a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM device_history_rows h JOIN inbox i ON i.id=h.id WHERE h.storage='in' AND h.id=? AND h.direction='out' AND i.replica=1 AND i.via IS NOT NULL AND NOT EXISTS(SELECT 1 FROM outbox WHERE id=h.id))`, id).Scan(&direct); err != nil {
+		return false, err
+	}
+	if direct {
+		return true, nil
+	}
 	var sent int
 	var sender string
 	if err := a.store.db.QueryRow(`SELECT (SELECT count(*) FROM outbox WHERE id = ?),

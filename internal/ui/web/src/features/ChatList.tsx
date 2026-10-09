@@ -186,11 +186,12 @@ function NeedsYouBanner({ overview: o, agentNames }: { overview: T.Overview; age
     };
   } else if (conv) {
     const invite = conv.reason === Reason.invite;
+    const humanInvite = invite && conv.role === "human";
     const p = personOf(conv.peer, o);
     named = {
-      face: invite ? <AgentAvatar seed={o.me.address} size={40} mood="waiting" /> : <PersonAvatar name={senderOf(conv, o)} seed={p?.person || p?.address || conv.peer} size={40} />,
+      face: invite && !humanInvite ? <AgentAvatar seed={o.me.address} size={40} mood="waiting" /> : <PersonAvatar name={senderOf(conv, o)} seed={p?.person || p?.address || conv.peer} size={40} />,
       headline: invite ? convTitle(conv, o) : firstLine(conv.excerpt, 120) || convTitle(conv, o),
-      line: invite ? "It joins only when you say so" : convTitle(conv, o),
+      line: humanInvite ? "Join when ready" : invite ? "It joins only when you say so" : convTitle(conv, o),
       go: () => void store.open({ kind: "dm", id: conv.conv, focus: conv.id }),
     };
   } else if (device) {

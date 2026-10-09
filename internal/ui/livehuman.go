@@ -13,6 +13,7 @@ import (
 
 // GuestAction is separate from agent actions; receiving it grants no authority.
 type GuestAction struct {
+	Topic  *string  `json:"topic,omitempty"`
 	Action string   `json:"-"`
 	Conv   string   `json:"conv,omitempty"`
 	Host   string   `json:"host,omitempty"`
@@ -22,6 +23,7 @@ type GuestAction struct {
 	Accept *bool    `json:"accept,omitempty"`
 }
 type GuestView struct {
+	Topic           *string    `json:"topic,omitempty"`
 	NeedsUpdate     []string   `json:"needs_update,omitempty"`
 	PID             string     `json:"pid"`
 	State           string     `json:"state"`
@@ -95,7 +97,7 @@ type guestEnd struct {
 }
 
 func guestView(info client.ParticipationInfo, member bool, end guestEnd) GuestView {
-	v := GuestView{NeedsUpdate: info.NeedsUpdate, PID: info.PID, State: info.State, StateText: info.State, Host: personView(info.Host), HostHere: info.HostHere, Inviter: personView(info.Inviter), Shared: []string{}, Held: info.Held}
+	v := GuestView{Topic: info.Topic, NeedsUpdate: info.NeedsUpdate, PID: info.PID, State: info.State, StateText: info.State, Host: personView(info.Host), HostHere: info.HostHere, Inviter: personView(info.Inviter), Shared: []string{}, Held: info.Held}
 	for _, ref := range info.Grant {
 		v.Shared = append(v.Shared, ref.LID)
 	}
@@ -112,6 +114,12 @@ func guestView(info client.ParticipationInfo, member bool, end guestEnd) GuestVi
 			v.AudiencePending = true
 		default:
 			v.StateText = "Ended. Previously shared copies remain."
+		}
+	}
+	if info.Topic != nil && (info.State == client.PartActive || info.State == client.PartInvited) {
+		v.StateText = "Main flow only"
+		if *info.Topic != "" {
+			v.StateText = "This topic only"
 		}
 	}
 	if info.Held != 0 {
@@ -223,7 +231,7 @@ func (l *Live) ChangeHuman(ctx context.Context, c GuestAction) (GuestView, error
 	}
 	switch c.Action {
 	case "invite":
-		info, err = l.a.InviteHuman(ctx, c.Conv, c.Host, c.Share, c.Note)
+		info, err = l.a.InviteHumanInScope(ctx, c.Conv, c.Host, c.Share, c.Note, c.Topic)
 	case "decide":
 		if c.Accept == nil {
 			return GuestView{}, Refuse("Choose accept or decline.")

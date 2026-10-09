@@ -155,6 +155,11 @@ out.push(tools.length, t.name, Object.keys(t.parameters.properties).join(","));
 out.push((await t.execute("x", { lookup: "version" })).content[0].text.trim());
 out.push((await t.execute("x", { lookup: "inbox" })).content[0].text.trim());
 out.push((await t.execute("x", { lookup: "status", id: "0123456789abcdef0123456789abcdef" })).content[0].text.trim());
+const page = await t.execute("x", {lookup:"inbox", before:"cursor_123", section:"invites", review:true});
+if(page.content[0].text.trim()!=="ran: inbox --peek --before cursor_123 --section invites --review")throw Error("inbox page arguments changed");
+const exact = await t.execute("x", {lookup:"inbox", id:"0123456789abcdef0123456789abcdef"});
+if(exact.content[0].text.trim()!=="ran: inbox --peek --id 0123456789abcdef0123456789abcdef")throw Error("inbox exact read lost peek");
+for(const p of [{lookup:"inbox",before:"x;evil"},{lookup:"inbox",section:"--full"},{lookup:"inbox",id:"0123456789abcdef0123456789abcdef",before:"cursor"},{lookup:"version",before:"cursor"},{lookup:"inbox",review:"false"}])if(await fails(p)!=="failed")throw Error("invalid inbox options ran");
 out.push(await fails({ lookup: "status", id: "x; rm -rf /" }));
 out.push(await fails({ lookup: "status" }));
 out.push(await fails({ lookup: "version", id: "0123456789abcdef0123456789abcdef" }));
@@ -180,7 +185,7 @@ console.log(out.join("|"));
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, output)
 	}
-	want := "1|agentnet_lookup|lookup,id|ran: version|ran: inbox --peek|ran: status 0123456789abcdef0123456789abcdef|failed|failed|failed|failed|failed|failed|failed"
+	want := "1|agentnet_lookup|lookup,id,before,section,review|ran: version|ran: inbox --peek|ran: status 0123456789abcdef0123456789abcdef|failed|failed|failed|failed|failed|failed|failed"
 	if got := strings.TrimSpace(string(output)); got != want {
 		t.Fatalf("pi lookup tool\n got %s\nwant %s", got, want)
 	}
@@ -207,7 +212,7 @@ func piPackage(t *testing.T) string {
 
 // Pi's own SDK loader, in an isolated session with no other extensions, no
 // owner settings and no model request, loads the exact emitted extension:
-// its lookup tool is active beside the question's excluded built-ins and
+// its lookup tool is active beside the native built-ins and
 // runs the bound program. AGENTNET_LOOKUP_PROGRAM binds a real build.
 func TestQuestionLookupPiNativeLoader(t *testing.T) {
 	node, err := exec.LookPath("node")
@@ -362,13 +367,15 @@ func TestQuestionLookupOMPUsesNativeReadTool(t *testing.T) {
  const m=await import(pathToFileURL(` + strconv.Quote(lookup.args[1]) + `).href);
  delete process.env.AGENTNET_ROOM_REQUEST;
  const schema={}; const tools=[];
- m.default({typebox:{},zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema})},registerTool:t=>tools.push(t)});
+ m.default({typebox:{},zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema}),boolean:()=>({optional:()=>schema})},registerTool:t=>tools.push(t)});
  if(tools.length!==1||tools[0].name!=='agentnet_lookup'||tools[0].approval!=='read')throw Error('OMP tool registration failed');
  const result=await tools[0].execute('lookup',{lookup:'version'});
  if(result.content[0].text.trim()!=='ran: version')throw Error('fixed lookup did not execute');
+ const page=await tools[0].execute('page',{lookup:'inbox',before:'cursor_123',section:'invites',review:true});
+ if(page.content[0].text.trim()!=='ran: inbox --peek --before cursor_123 --section invites --review')throw Error('OMP inbox page lost read-only arguments');
  let blocked=false;try{await tools[0].execute('lookup',{lookup:'arbitrary'});}catch{blocked=true;}if(!blocked)throw Error('arbitrary operation allowed');
  process.env.AGENTNET_ROOM_REQUEST='0123456789abcdef0123456789abcdef';
- const groupTools=[];m.default({zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema})},registerTool:t=>groupTools.push(t)});
+ const groupTools=[];m.default({zod:{object:()=>schema,enum:()=>schema,string:()=>({optional:()=>schema}),boolean:()=>({optional:()=>schema})},registerTool:t=>groupTools.push(t)});
  const room=groupTools.find(t=>t.name==='agentnet_room');if(!room||room.approval!=='read')throw Error('OMP scoped room tool missing');
  const answer=await room.execute('room',{action:'ask',pid:process.env.AGENTNET_ROOM_REQUEST,text:'hello'});
  if(!answer.content[0].text.includes(' --kind question -- hello'))throw Error('OMP room operation lost question-only binding');`

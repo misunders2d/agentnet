@@ -13,6 +13,7 @@ import { Tag } from "../ui/Tag";
 import { ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { Body, OpenCard, kindTag, useLand, useOpen } from "./Approvals.parts";
 import { Reason, capital, chatName, convTitle, deviceWords, inChat, personOf, senderOf, whyWords } from "./Approvals.words";
+import { ResolveOwnRequest } from "./RequestResolution";
 
 type Props = { c: T.ConvItem; o: T.Overview };
 
@@ -76,7 +77,7 @@ function RequestRow({ c, o }: Props) {
   const who = senderOf(c, o);
   const kind = c.kind === "task" ? "task" : "question";
   const said = human && c.why ? whyWords(c.why, c.peer, o) : "";
-  const actions = c.decide_on ? (working ? <p className="mt-1 text-[14px] text-text-2">Working on {deviceWords(c.decide_on, o)}.</p> : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
+  const actions = c.decide_on ? (working ? <p className="mt-1 text-[14px] text-text-2">Working on {deviceWords(c.decide_on, o)}.</p> : c.continuation?.host ? <ResolveOwnRequest request={c.continuation} disabled={!!busy} /> : <DecideOn address={c.decide_on} o={o} />) : acts.length ? <>
     {can("cancel") && <Button variant="danger" size="sm" disabled={!!busy} onClick={() => setSheet("stop")}>Stop</Button>}
     {can("accept") && <Button variant={retry ? "outline" : "act"} size="sm" disabled={!!busy}
       onClick={() => run("accept", (api) => api.act({ do: "accept", id: c.id }), retry ? "Running it again." : "Allowed once.")}>

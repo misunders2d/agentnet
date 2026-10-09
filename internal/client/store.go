@@ -324,7 +324,7 @@ CREATE TABLE reported(
   PRIMARY KEY(item, recipient));
 `, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema, chatAlertDefaultsSchema, queuedRetractionSchema, heldNoticeSchema, sendGroupSchema, continuationSchema, ownInvitationSchema, historyCatchupSchema, groupHistoryWitnessSchema, topicSyncSchema, `
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
-`}
+`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -577,12 +577,12 @@ func (s *store) queued(filesOnly ...bool) ([]envelope.Envelope, error) {
 	// A conversation message to a frozen (conflicting) person is not sent.
 	filter, limit := "", ""
 	if len(filesOnly) > 0 && filesOnly[0] {
-		filter, limit = " AND sub='file'", " LIMIT 1"
+		filter, limit = " AND sub IN ('file','device-file')", " LIMIT 1"
 	}
 	// File requests/offers do not belong to the readable-turn FIFO. Give
 	// interactive retrieval priority over the accumulated history backlog.
 	rows, err := s.db.Query(`SELECT envelope FROM outbox WHERE state = ? AND (conv IS NULL OR recipient NOT IN
-		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?))`+filter+` ORDER BY CASE WHEN sub='file' THEN 0 ELSE 1 END, created_at, rowid`+limit, stateQueued, personConflict)
+		(SELECT d.address FROM person_devices d JOIN persons p ON p.person = d.person WHERE p.state = ?))`+filter+` ORDER BY CASE WHEN sub IN ('file','device-file') THEN 0 ELSE 1 END, created_at, rowid`+limit, stateQueued, personConflict)
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +605,7 @@ func (s *store) queued(filesOnly ...bool) ([]envelope.Envelope, error) {
 // seen reports whether an envelope id is already in the inbox or quarantine.
 func (s *store) seen(id string) (bool, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE id = ?) + (SELECT count(*) FROM quarantine WHERE id = ?)`, id, id).Scan(&n)
+	err := s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE id = ?) + (SELECT count(*) FROM quarantine WHERE id = ?) + (SELECT count(*) FROM history_receipts WHERE id = ?)`, id, id, id).Scan(&n)
 	return n > 0, err
 }
 
@@ -757,19 +757,21 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	// retry) is not run twice (proposal.go); the requester learns it from
 	// the request's status.
 	duplicate := ""
-	if proposal, err := proposalFor(tx, in, verifiedBy); err != nil {
+	if proposal, prior, err := claimProposalChoice(tx, in, verifiedBy); err != nil {
 		return err
 	} else if proposal != "" {
-		if duplicate, err = proposalConfirmedBy(tx, proposal, in.From, verifiedBy, in.ID); err != nil {
-			return err
-		}
+		duplicate = prior
 		if duplicate != "" {
 			state = stateNotRun
 		}
 		if duplicate == "" && state == stateAwaiting {
+			exact, err := exactChosenProposal(tx, in, verifiedBy)
+			if err != nil {
+				return err
+			}
 			if own, err := ownHumanDeviceHolds(tx, in.From, verifiedBy); err != nil {
 				return err
-			} else if own {
+			} else if own && exact {
 				state = statePending
 			}
 		}
@@ -858,8 +860,12 @@ func (s *store) addReceivedInbox(in envelope.Inner, verifiedBy string, local *en
 
 // quarantine holds an envelope that failed verification, keyed by its id.
 func (s *store) quarantine(id, sender, reason string, raw []byte) error {
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO quarantine(id, sender, reason, envelope, received_at) VALUES(?, ?, ?, ?, ?)`,
-		id, sender, reason, string(raw), time.Now().Unix())
+	return s.quarantineDiagnostic(id, sender, reason, raw, "")
+}
+
+func (s *store) quarantineDiagnostic(id, sender, reason string, raw []byte, why string) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO quarantine(id, sender, reason, envelope, received_at, detail_code) VALUES(?, ?, ?, ?, ?, ?)`,
+		id, sender, reason, string(raw), time.Now().Unix(), heldFailureCode(reason, why))
 	return s.done(err)
 }
 
@@ -907,8 +913,8 @@ type receipt struct{ id, state string }
 
 // unsentReceipts lists dispositions not yet acknowledged to the Hub.
 func (s *store) unsentReceipts() ([]receipt, error) {
-	rows, err := s.db.Query(`SELECT id, ? FROM inbox WHERE acked = 0 UNION ALL SELECT id, ? FROM quarantine WHERE acked = 0`,
-		protocol.StateDelivered, protocol.StateQuarantined)
+	rows, err := s.db.Query(`SELECT id, ? FROM inbox WHERE acked = 0 UNION SELECT id, ? FROM quarantine WHERE acked = 0 UNION SELECT id, ? FROM history_receipts WHERE acked = 0`,
+		protocol.StateDelivered, protocol.StateQuarantined, protocol.StateDelivered)
 	if err != nil {
 		return nil, err
 	}
@@ -930,7 +936,10 @@ func (s *store) resendReceipt(id string) error {
 	if _, err := s.db.Exec(`UPDATE inbox SET acked = 0 WHERE id = ?`, id); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`UPDATE quarantine SET acked = 0 WHERE id = ?`, id)
+	if _, err := s.db.Exec(`UPDATE quarantine SET acked = 0 WHERE id = ?`, id); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE history_receipts SET acked = 0 WHERE id = ?`, id)
 	return err
 }
 
@@ -939,8 +948,14 @@ func (s *store) markAcked(r receipt) error {
 	if r.state == protocol.StateQuarantined {
 		table = "quarantine"
 	}
-	_, err := s.db.Exec(`UPDATE `+table+` SET acked = 1 WHERE id = ?`, r.id)
-	return err
+	if _, err := s.db.Exec(`UPDATE `+table+` SET acked = 1 WHERE id = ?`, r.id); err != nil {
+		return err
+	}
+	if r.state == protocol.StateDelivered {
+		_, err := s.db.Exec(`UPDATE history_receipts SET acked = 1 WHERE id = ?`, r.id)
+		return err
+	}
+	return nil
 }
 
 // Message is a received message as shown to the user.
@@ -987,7 +1002,7 @@ type FileInfo struct {
 // recordSubs are the received records between devices that are never a
 // message: group proofs, contexts, invitations, consents and withdrawals,
 // and Drive space records (a conversation's view leaves them out too).
-const recordSubs = `('topic-sync', 'invitation-sync', 'read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+const recordSubs = `('device-history', 'device-file', 'topic-sync', 'invitation-sync', 'read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
 
 // inbox lists received messages; a local request to this device's own
 // agent (agentjob.go) is not one, nor is a record between devices.
@@ -1100,7 +1115,7 @@ func (s *store) inboxKind(id string) (sender, kind string, err error) {
 // disposition reports how a received message was filed.
 func (s *store) disposition(id string) (string, error) {
 	var n int
-	if err := s.db.QueryRow(`SELECT count(*) FROM inbox WHERE id = ?`, id).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT (SELECT count(*) FROM inbox WHERE id = ?) + (SELECT count(*) FROM history_receipts WHERE id = ?)`, id, id).Scan(&n); err != nil {
 		return "", err
 	}
 	if n > 0 {

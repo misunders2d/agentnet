@@ -32,6 +32,13 @@ func humanTurnAuthorization(q dbq, in envelope.Inner, from, fromFP, to, toFP str
 	if len(context) > 0 && !historical {
 		return errors.New("human: historical context cannot authorize live turns")
 	}
+	topicMembers, topicErr := humanMembers(q, in.Conv, context)
+	if topicErr != nil {
+		return topicErr
+	}
+	if err := topicAudienceAuthorization(q, in, topicMembers, to); err != nil {
+		return err
+	}
 	h := in.Human
 	if h == nil {
 		return errors.New("human: missing captured audience")
@@ -49,6 +56,9 @@ func humanTurnAuthorization(q dbq, in envelope.Inner, from, fromFP, to, toFP str
 	}
 	if x.Role == protocol.RoleHuman || x.Invite == "" {
 		return errors.New("human: addressed turn names no assistant participation")
+	}
+	if err := checkParticipationTopic(q, x.Topic, in); err != nil {
+		return err
 	}
 	live := historical || x.State == PartActive && x.Held == 0
 	hostFrom := x.Host.Address == from && x.Host.Fingerprint == fromFP
@@ -185,7 +195,7 @@ func humanEndEvent(in envelope.Inner, info ParticipationInfo) bool {
 	ev, err := protocol.ParseParticipationEvent([]byte(in.Body))
 	return err == nil && ev.Type == protocol.EventDismiss && ev.PID == info.PID && ev.Conv == info.Conv
 }
-func (a *Agent) humanPlan(ctx context.Context, conv, authorPID string) (*envelope.HumanTurn, error) {
+func (a *Agent) humanPlan(ctx context.Context, conv, authorPID string, topic ...string) (*envelope.HumanTurn, error) {
 	m, err := a.dmMembers(conv)
 	if err != nil {
 		return nil, err
@@ -200,6 +210,9 @@ func (a *Agent) humanPlan(ctx context.Context, conv, authorPID string) (*envelop
 	h := &envelope.HumanTurn{AuthorPID: authorPID, Audience: []envelope.HumanScope{}, Proof: []protocol.ParticipationEvent{}}
 	slices.SortFunc(infos, func(x, y ParticipationInfo) int { return strings.Compare(x.PID, y.PID) })
 	for _, p := range infos {
+		if p.Topic != nil && (len(topic) == 0 || *p.Topic != topic[0]) {
+			continue
+		}
 		if p.Role != protocol.RoleHuman {
 			continue
 		}

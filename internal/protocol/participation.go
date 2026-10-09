@@ -65,6 +65,9 @@ const RoleHuman = "human"
 // capability RoomImplies names, so later programs may stop listing those.
 const CapRoom = "rm1"
 
+// CapTopicParticipation enforces signed ongoing topic bounds; rm1 does not imply it.
+const CapTopicParticipation = "tps1"
+
 // CapSendGroup reads optional signed human-send presentation metadata.
 const CapSendGroup = "sg1"
 
@@ -154,6 +157,8 @@ type ParticipationEvent struct {
 	Role     string              `json:"role,omitempty"`  // invite only; absent retains legacy agent semantics
 	Until    int64               `json:"until,omitempty"` // room invite and scope only: past it, by the reader's own clock, the participation counts as ended; it orders nothing
 
+	Topic *string `json:"topic,omitempty"` // absent: whole chat; present empty: Main; otherwise stable topic ID
+
 	Sig []byte `json:"sig,omitempty"`
 }
 
@@ -186,6 +191,9 @@ func (e ParticipationEvent) Validate() error {
 	}
 	if _, _, err := SplitAddress(a.Address); err != nil {
 		return fmt.Errorf("participation: %w", err)
+	}
+	if e.Topic != nil && (*e.Topic != "" && !ValidID(*e.Topic) || e.Type != EventInvite && e.Type != EventShare && e.Type != EventScope) {
+		return errors.New("participation: invalid topic scope")
 	}
 	room := e.Audience == AudienceRoom
 	if e.Until < 0 || e.Until != 0 && (!room || e.Type != EventInvite && e.Type != EventScope) {
@@ -285,7 +293,7 @@ func (e ParticipationEvent) Validate() error {
 func ScopeOf(inv ParticipationEvent, ts int64) ParticipationEvent {
 	host := *inv.Host
 	s := ParticipationEvent{V: 1, Conv: inv.Conv, PID: inv.PID, Type: EventScope, Prev: inv.Hash(), Author: inv.Author, TS: ts,
-		Host: &host, Audience: inv.Audience, Role: inv.Role, Until: inv.Until}
+		Host: &host, Audience: inv.Audience, Role: inv.Role, Until: inv.Until, Topic: inv.Topic}
 	if g := inv.Group; g != nil {
 		s.Group = &ParticipationGroup{Seq: g.Seq, Hash: g.Hash, HostRole: g.HostRole, HostAdmission: g.HostAdmission}
 	}

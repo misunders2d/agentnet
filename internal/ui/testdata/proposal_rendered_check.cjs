@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
 (async()=>{
+ const revised=process.env.P23_REVISED==='1';
  const skin=process.env.P23_SKIN,mode=process.env.P23_MODE || 'device',width=Number(process.env.P23_WIDTH),shots=process.env.AGENTNET_SCREENSHOTS;
  const browser=await chromium.launch({executablePath:process.env.AGENTNET_CHROMIUM||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
  try {
@@ -42,8 +43,26 @@ const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT);
   const box=await measured.jsonValue();await measured.dispose();
   assert.ok(box && box.x>=0 && box.x+box.width<=width && box.y>=0 && box.y+box.height<=900,'Do it fits the viewport: '+JSON.stringify(box));
   if(shots){fs.mkdirSync(shots,{recursive:true,mode:0o700});await page.screenshot({path:path.join(shots,'p23-'+mode+'-'+skin+'-'+width+'-proposal.png')});}
-  // Dispatch both clicks in the same turn; native persistence must dedup.
-  await doit.evaluate(b=>{b.click();b.click()});
+  if(revised){
+   let changes=0,fail=true;
+   await page.route('**/api/act',async route=>{const data=route.request().postDataJSON();if(data?.do==='change_proposal'){changes++;if(fail){fail=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic temporary failure'})});}}return route.continue();});
+   const change=root.getByRole('button',{name:'Change…',exact:true});
+   await change.click();
+   const dialog=root.getByRole('dialog'),text=dialog.getByRole('textbox',{name:'Task to send'}),send=dialog.getByRole('button',{name:'Send revised task',exact:true});
+   await dialog.waitFor();assert.equal(await text.inputValue(),'Update CHANGELOG.md.\nThen verify the version entry.');
+   await text.fill('');assert.equal(await send.isDisabled(),true,'blank edit cannot send');
+   await text.fill('Cancelled draft');await dialog.getByRole('button',{name:'Cancel',exact:true}).click();await dialog.waitFor({state:'hidden'});assert.equal(changes,0,'opening/editing/cancel runs nothing');
+   await change.click();await dialog.waitFor();
+   const body='Write release notes in English.\n'+'Keep all report details.\n'.repeat(200);
+   await text.fill(body);await send.click();
+   await page.waitForFunction(()=>{const s=document.querySelector('#skin')?.shadowRoot;return [...(s?.querySelectorAll('button')||[])].some(b=>b.textContent.trim()==='Send revised task'&&!b.disabled)});
+   assert.equal(await text.inputValue(),body,'failed request retains full draft');assert.equal(changes,1);
+   if(shots)await page.screenshot({path:path.join(shots,'p23-edited-'+width+'-draft.png')});
+   await send.evaluate(b=>{b.click();b.click()});await dialog.waitFor({state:'hidden',timeout:15000});assert.equal(changes,2,'retry double tap sends once');
+  } else {
+   // Dispatch both clicks in the same turn; native persistence must dedup.
+   await doit.evaluate(b=>{b.click();b.click()});
+  }
   await doit.waitFor({state:'hidden',timeout:15000});
   await page.reload();
   await page.waitForTimeout(500);

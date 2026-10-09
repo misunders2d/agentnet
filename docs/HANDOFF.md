@@ -22,11 +22,11 @@ laptop report v0.8.13 on the original realm and data volume. Zero restarts/OOM
 events; the neighboring service retains its original start time. GitHub latest
 is v0.8.13. No installed client, live client grant or desktop session changed.
 
-**Paused for the owner's update/restart.** Release publication, relay checks and
-handoff are complete. No v0.8.14 implementation has started; resume only when
-the owner directs it. Its immediate issues and today's bugs are saved below
-and in the release checklist, including the final ThinkPad MEL-586/587/588
-inbox-output, app-close crash and quarantine-notice findings.
+**Owner resumed v0.8.14 on October 9 after restart.** Release publication and
+relay checks for v0.8.13 are complete. Active work now follows
+[the v0.8.14 checklist](plans/V0_8_14.md) on branch `release/v0.8.14` from
+`ea2ad0cf`, including the final ThinkPad MEL-586/587/588 inbox-output,
+app-close crash and quarantine-notice findings. No v0.8.14 release yet.
 
 ### v0.8.13 scope and qualification
 

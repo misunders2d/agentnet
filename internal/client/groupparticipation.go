@@ -125,7 +125,7 @@ func (m dmMembers) requestEpoch(sender, fp string, t *envelope.Target) bool {
 func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool, error) {
 	var in envelope.Inner
 	var state, required, fp, epoch, target, human string
-	err := a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(pid,''),kind,body,coalesce(sub,''),coalesce(origin,''),coalesce(reply_to,''),coalesce(agent_id,''),coalesce(target,''),state,coalesce(required_cap,''),coalesce(recipient_fp,''),coalesce(group_admission,''),coalesce(status,''),coalesce(human,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &in.ReplyTo, &in.AgentID, &target, &state, &required, &fp, &epoch, &in.Status, &human)
+	err := a.store.db.QueryRow(`SELECT coalesce(conv,''),coalesce(pid,''),kind,body,coalesce(sub,''),coalesce(origin,''),coalesce(reply_to,''),coalesce(agent_id,''),coalesce(target,''),state,coalesce(required_cap,''),coalesce(recipient_fp,''),coalesce(group_admission,''),coalesce(status,''),coalesce(human,''),coalesce(topic,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &in.ReplyTo, &in.AgentID, &target, &state, &required, &fp, &epoch, &in.Status, &human, &in.Topic)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -192,7 +192,7 @@ func (a *Agent) mayDeliverGroupParticipation(env envelope.Envelope) (bool, bool,
 		allowed = err == nil && originState == stateRunning
 	}
 	if allowed {
-		err = externalTurn(in, info, m, a.Address, a.Self().Fingerprint())
+		err = externalTurn(in, info, m, a.Address, a.Self().Fingerprint(), a.store.db)
 		allowed = err == nil
 	}
 	if allowed {

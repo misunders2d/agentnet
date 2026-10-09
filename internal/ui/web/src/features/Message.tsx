@@ -119,7 +119,7 @@ function Bubble({ m, ctx, all, first = true, last = true, status, compact, group
       {link && <button type="button" className="mb-1 block max-w-full truncate text-left text-[13px] text-muted" onClick={()=>onJump?.(request!.id)}>↳ {m.kind==="message"?"update on":"answer to"} {plain(shownText(request!)).split("\n")[0]}</button>}
       {!grouped && m._local && <p className="text-xs text-muted" role="status">{m.state_text}{m._failed && <button type="button" className="ml-2 underline" onClick={m._retry}>Retry</button>}</p>}
       {!grouped && !m.deleted && !isThreadMsg(m) && isRequest(m) && m.pid && <p className="mb-1 text-[13px]" data-agent-recipient title={m.pid}>To {mention("agent", m.pid, agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "agent")}</p>}
-      {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{who.mine ? "You approved this task" : "Approved this task"} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
+      {!m.deleted && approved && <p className="mb-1 text-[13px] text-muted" data-proposal-provenance>{m.proposal?.edited ? (who.mine ? "You edited and sent this task" : "Edited and sent this task") : (who.mine ? "You approved this task" : "Approved this task")} · suggested by {!isThreadMsg(m) && agentOf(ctx, m.pid) ? agentLabel(agentOf(ctx, m.pid)!, ctx) : "the agent"}</p>}
       {!compact && quote && <ReplyQuote parent={parent} ctx={ctx} onJump={onJump} />}
       {editing ? <EditBox m={m} ctx={ctx} onDone={() => setEditing(false)} />
         : m.deleted ? <p className="flow-root italic text-muted">Message deleted{time}</p>

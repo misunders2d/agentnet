@@ -1897,11 +1897,16 @@ function linkDialog(l) {
 
 // historyLine says how far a new device has your chats.
 function historyLine(h) {
-  if (h.state === "done") return "History queued · keep AgentNet running here";
   if (h.state === "ended") return "Copying your chats to " + h.name + " stopped: it is no longer one of your devices.";
-  const where = state.overview.device ? "Keep this page open until it is done." : "AgentNet on this computer copies them while it runs.";
-  if (!h.total) return "Getting your chats… " + where;
-  return "Copying your chats to " + h.name + ": " + h.done + " of " + h.total + " conversations. " + where;
+  const parts=[];
+  if(h.deferred)parts.push(h.deferred+" history items waiting for context");
+  else if(h.state!=="done")parts.push(h.total?"Preparing history · "+h.done+" of "+h.total+" chats":"Preparing history on this device");
+  if(h.blocked)parts.push(h.blocked+" history copies need attention");
+  if(h.queued)parts.push(h.queued+" waiting to send");
+  if(h.custody)parts.push(h.custody+" on the server, waiting for the device");
+  if(parts.length)return parts.join(" · ");
+  if(!h.delivery_known)return "History prepared here · delivery confirmation unavailable";
+  return h.delivered?h.delivered+" history copies delivered · nothing waiting to send here":"No message history waiting to send from this device";
 }
 
 // devicesDialog lists the person's devices, adds one, removes one.

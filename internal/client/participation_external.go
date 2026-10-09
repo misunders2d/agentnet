@@ -169,7 +169,15 @@ func (a *Agent) externalHostProof(ctx context.Context, h *protocol.Participation
 }
 
 // externalTurn checks roles without giving the host ordinary DM membership.
-func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender, fp string) error {
+func externalTurn(in envelope.Inner, info ParticipationInfo, m dmMembers, sender, fp string, queries ...dbq) error {
+	if info.Topic != nil && in.Sub != envelope.SubEvent && in.Sub != envelope.SubExcerpt {
+		if len(queries) != 1 {
+			return errParticipationTopicPending
+		}
+		if err := checkParticipationTopic(queries[0], info.Topic, in); err != nil {
+			return err
+		}
+	}
 	member := m.device(sender, fp)
 	host := sender == info.Host.Address && fp == info.Host.Fingerprint
 	if in.PID != info.PID || info.Invite == "" || (!info.External || len(m.persons) != 2) && m.group == nil {
@@ -357,6 +365,12 @@ func externalOutputRequestMode(q dbq, in envelope.Inner, info ParticipationInfo,
 	if !found {
 		return reasonProof, errors.New("external output has no matching request proof yet")
 	}
+	if err := checkParticipationTopic(q, info.Topic, envelope.Inner{Conv: in.Conv, Ref: &envelope.Ref{ID: originalLID, Fingerprint: originalKey}}); err != nil {
+		if errors.Is(err, errParticipationTopicPending) {
+			return reasonProof, err
+		}
+		return reasonInvalid, err
+	}
 	return "", nil
 }
 
@@ -372,6 +386,9 @@ func parseGrantedExcerpt(in envelope.Inner, info ParticipationInfo) (HistoryItem
 	}
 	if !slices.Contains([]string{envelope.KindMessage, envelope.KindQuestion, envelope.KindTask, envelope.KindAnswer, envelope.KindResult}, h.Kind) || !slices.Contains(info.Grant, protocol.GrantRef{LID: h.LID, Fingerprint: h.FromKey}) {
 		return h, errors.New("excerpt does not match an exact signed grant reference")
+	}
+	if info.Topic != nil && h.Topic != *info.Topic {
+		return h, errParticipationTopic
 	}
 	if err := envelope.CheckQuote(h.inner(in.Conv)); err != nil {
 		return h, err
@@ -445,9 +462,12 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 				return ConvSent{}, e
 			}
 			if c.human != nil {
-				h, e := a.roomAudience(info.Conv, "")
+				h, e := a.roomAudience(info.Conv, "", out.Topic)
 				if e != nil {
 					return ConvSent{}, e
+				}
+				if h == nil {
+					return ConvSent{}, errParticipationTopic
 				}
 				captured := map[string]bool{}
 				for _, scope := range c.human.Audience {
@@ -459,7 +479,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 			}
 		}
 		if out.human == nil {
-			h, e := a.roomAudience(info.Conv, "")
+			h, e := a.roomAudience(info.Conv, "", out.Topic)
 			if e != nil {
 				return ConvSent{}, e
 			}
@@ -480,7 +500,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 			return ConvSent{}, err
 		}
 	}
-	if err := externalTurn(in, info, m, a.Address, a.Self().Fingerprint()); err != nil {
+	if err := externalTurn(in, info, m, a.Address, a.Self().Fingerprint(), a.store.db); err != nil {
 		return ConvSent{}, err
 	}
 	if _, err := externalOutputRequest(a.store.db, in, info, m, a.Address, a.Self().Fingerprint()); err != nil {
@@ -737,7 +757,7 @@ func (a *Agent) sendExternalParticipation(ctx context.Context, root protocol.Con
 				}
 			}
 		}
-		if err := externalTurn(in, current, members, a.Address, a.Self().Fingerprint()); err != nil {
+		if err := externalTurn(in, current, members, a.Address, a.Self().Fingerprint(), tx); err != nil {
 			return &heldBack{err.Error()}
 		}
 		if _, err := externalOutputRequest(tx, in, current, members, a.Address, a.Self().Fingerprint()); err != nil {
@@ -877,11 +897,17 @@ func (a *Agent) sendGrantedExcerpts(ctx context.Context, invite protocol.Partici
 		if msg == nil {
 			continue
 		} // receiver reports missing selected context honestly
-		original := envelope.Inner{ID: msg.ID, From: msg.From, LID: msg.LID, TS: msg.At, Kind: msg.Kind, Body: msg.Controls.Shown(msg.Body), ReplyTo: msg.ReplyTo, Quote: msg.Quote, Origin: msg.Origin, Emotion: msg.Emotion, Target: msg.Target, PID: msg.PID, AgentID: msg.AgentID}
+		if err := a.checkTopicGrants(a.store.db, invite.Conv, invite.Topic, []protocol.GrantRef{ref}); err != nil {
+			return err
+		}
+		original := envelope.Inner{Topic: msg.Topic, TopicEvent: msg.TopicEvent, ID: msg.ID, From: msg.From, LID: msg.LID, TS: msg.At, Kind: msg.Kind, Body: msg.Controls.Shown(msg.Body), ReplyTo: msg.ReplyTo, Quote: msg.Quote, Origin: msg.Origin, Emotion: msg.Emotion, Target: msg.Target, PID: msg.PID, AgentID: msg.AgentID}
 		for _, f := range msg.Attachments {
 			original.Attachments = append(original.Attachments, envelope.Attachment{Name: f.Name, Size: f.Size, SHA256: f.SHA256})
 		}
 		item := itemOf(original, ref.Fingerprint, msg.At*1000)
+		if invite.Topic != nil {
+			item.Topic = *invite.Topic
+		} // this excerpt is explicitly a forwarder-claimed snapshot
 		body, _ := json.Marshal(item)
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: key.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage,
 			Body: string(body), Conv: invite.Conv, LID: ref.LID, Root: raw, Sub: envelope.SubExcerpt, PID: invite.PID, Replica: true}
@@ -925,7 +951,7 @@ func (a *Agent) sendGrantedExcerpts(ctx context.Context, invite protocol.Partici
 					if err != nil {
 						return err
 					}
-					return externalTurn(in, current, m, a.Address, a.Self().Fingerprint())
+					return externalTurn(in, current, m, a.Address, a.Self().Fingerprint(), tx)
 				}
 				copy := outCopy{in: in, env: sealed, state: stateQueued, required: protocol.CapExternalParticipation}
 				if invite.Role == protocol.RoleHuman {
@@ -1145,13 +1171,13 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 	}
 	turn := externalTurn
 	if disclosed { // another participation's shared public record: counted here, no other authority
-		turn = func(in envelope.Inner, info ParticipationInfo, _ dmMembers, _, _ string) error {
+		turn = func(in envelope.Inner, info ParticipationInfo, _ dmMembers, _, _ string, _ ...dbq) error {
 			return disclosedCounted(in, info)
 		}
 	}
-	if err := turn(in, info, m, env.From, sender.Fingerprint()); err != nil {
+	if err := turn(in, info, m, env.From, sender.Fingerprint(), a.store.db); err != nil {
 		reason := reasonInvalid
-		if info.State == PartInvited && in.Sub == "" || !group && len(m.persons) != 2 {
+		if errors.Is(err, errParticipationTopicPending) || info.State == PartInvited && in.Sub == "" || !group && len(m.persons) != 2 {
 			reason = reasonProof
 		}
 		return true, hold(reason, err.Error())
@@ -1220,7 +1246,7 @@ func (a *Agent) admitExternalParticipation(ctx context.Context, env envelope.Env
 				}
 			}
 		}
-		if err := turn(in, current, members, env.From, sender.Fingerprint()); err != nil {
+		if err := turn(in, current, members, env.From, sender.Fingerprint(), tx); err != nil {
 			return err
 		}
 		if _, err := externalOutputRequest(tx, in, current, members, a.Address, a.Self().Fingerprint()); err != nil {
@@ -1265,8 +1291,8 @@ func (a *Agent) mayDeliverExternal(env envelope.Envelope) (bool, bool, error) {
 	var required, state string
 	var in envelope.Inner
 	var target, humanRaw, capturedFP string
-	err := a.store.db.QueryRow(`SELECT coalesce(required_cap,''), state, conv, coalesce(pid,''), kind, body, coalesce(sub,''), coalesce(origin,''), coalesce(target,''), coalesce(agent_id,''), coalesce(reply_to,''),coalesce(human,''),coalesce(recipient_fp,''),coalesce(status,'') FROM outbox WHERE id=?`, env.ID).
-		Scan(&required, &state, &in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &target, &in.AgentID, &in.ReplyTo, &humanRaw, &capturedFP, &in.Status)
+	err := a.store.db.QueryRow(`SELECT coalesce(required_cap,''), state, conv, coalesce(pid,''), kind, body, coalesce(sub,''), coalesce(origin,''), coalesce(target,''), coalesce(agent_id,''), coalesce(reply_to,''),coalesce(human,''),coalesce(recipient_fp,''),coalesce(status,''),coalesce(topic,'') FROM outbox WHERE id=?`, env.ID).
+		Scan(&required, &state, &in.Conv, &in.PID, &in.Kind, &in.Body, &in.Sub, &in.Origin, &target, &in.AgentID, &in.ReplyTo, &humanRaw, &capturedFP, &in.Status, &in.Topic)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, false, nil
 	}
@@ -1367,7 +1393,7 @@ func (a *Agent) mayDeliverExternal(env envelope.Envelope) (bool, bool, error) {
 		if disclosure {
 			roleErr = disclosedCounted(in, info)
 		} else {
-			roleErr = externalTurn(in, info, m, a.Address, a.Self().Fingerprint())
+			roleErr = externalTurn(in, info, m, a.Address, a.Self().Fingerprint(), a.store.db)
 		}
 		if roleErr != nil {
 			allowed, why = false, roleErr.Error()

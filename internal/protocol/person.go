@@ -456,7 +456,7 @@ func ParseConvRoot(data []byte) (ConvRoot, error) {
 //
 // At most MaxCaps entries of 1–32 characters [a-z0-9-], sorted and unique;
 // the signed record at most MaxCapsRecord bytes. A device advertises at
-// most MaxAdvertisedCaps: readers parse twice that, so a later program may
+// most MaxAdvertisedCaps: readers retain headroom, so a later program may
 // list more without looking, to an older reader, as if it read nothing (a
 // record that does not parse counts for nothing). Each daemon session
 // publishes its own; the relay keeps the newest per (device, session).
@@ -510,7 +510,7 @@ const CapAgent = "agent1"
 // advertises (ROOM_V1 §2.1: parse headroom).
 const (
 	MaxCaps           = 32
-	MaxAdvertisedCaps = 16
+	MaxAdvertisedCaps = 18
 	MaxCapsRecord     = 1024
 )
 

@@ -429,6 +429,8 @@ export interface Participant {
   guest?: T.GuestView;
 }
 
+export const scopeMatches = (p: { topic?: string }, topic: string) => p.topic === undefined || p.topic === topic;
+
 export function participants(t: T.DMThread | null, o: T.Overview | null, agentNames: Record<string, string>): Participant[] {
   if (!t) return [];
   const me = o?.person;
@@ -444,7 +446,7 @@ export function participants(t: T.DMThread | null, o: T.Overview | null, agentNa
   }
   for (const a of t.agents || []) {
     if (a.state === "dismissed" || a.state === "declined") continue;
-    const name = (a.agent_id && agentNames[a.agent_id]) || owner(a.host, me) + " agent";
+    const name = agentName(a.agent_id, agentNames, a.host, me);
     out.push({
       key: "a:" + a.pid, kind: "guest-agent", name,
       subtitle: owner(a.host, me) + " agent · " + niceDevice(a.host.address),
@@ -547,9 +549,12 @@ export function deviceKind(address?: string): DeviceKind | undefined {
 }
 
 /** agentName is what an agent is called everywhere: its own name when its
- *  owner gave it one, otherwise "Your agent" / "Vitalii's agent". */
+ *  owner gave it one. An unnamed own agent on another device also names
+ *  that device, so multiple own agents remain distinguishable. */
 export function agentName(agentId: string | undefined, names: Record<string, string>, host: T.PersonView | null | undefined, me: T.PersonView | null | undefined): string {
-  return (agentId && names[agentId]) || owner(host, me) + " agent";
+  if (agentId && names[agentId]) return names[agentId];
+  const remoteOwn = host?.person && host.person === me?.person && host.address && host.address !== me.address;
+  return owner(host, me) + " agent" + (remoteOwn ? " on " + niceDevice(host.address) : "");
 }
 
 /** agentWhere says whose agent it is and where it runs: "Your agent · Zenbook". */
@@ -567,6 +572,15 @@ export const Reason = { awaiting: "agent_awaiting", needsHuman: "agent_needs_hum
 export const isWorkingItem = (c: T.ConvItem) => (c.actions || []).includes("cancel");
 /** Device requests use review, with a reason set from their local job state. */
 export const isWorkingReview = (r: T.ReviewItem) => !r.notice && r.reason === "agent_running";
+
+/** A current human device can explicitly resolve its own host's exact report
+ * item. This only offers the decision; the host checks roster, key and attempt. */
+export function ownReportResolution(x: T.ReportItem, host: string, o: T.Overview | null): T.ContinuationAction | null {
+  const me = o?.person;
+  if (!me || me.state !== "self" || x.state !== "needs_human" || x.attempt < 1 || !["question", "task"].includes(x.kind) || !x.key || host === o?.me.address) return null;
+  if (!me.devices?.some(d => d.address === o?.me.address && d.human) || !me.devices.some(d => d.address === host)) return null;
+  return {id:x.id,key:x.key,host,attempt:x.attempt};
+}
 /** Items this device decides; other-device and running items stay visible apart. */
 export const decidable = (o: T.Overview | null) => (o?.needs_you || []).filter((c) => !c.decide_on && !isWorkingItem(c));
 
@@ -585,7 +599,7 @@ export const senderOf = (c: T.ConvItem, o: T.Overview | null) => (isMine(c.peer,
 export function convTitle(c: T.ConvItem, o: T.Overview | null): string {
   const who = senderOf(c, o);
   switch (c.reason) {
-    case Reason.invite: return who + " invited your agent into " + chatName(c.conv, o);
+    case Reason.invite: return who + (c.role === "human" ? " invited you into " : " invited your agent into ") + chatName(c.conv, o);
     case Reason.needsHuman: return "Your agent couldn’t finish — it needs your answer";
     case Reason.interrupted: return "Your agent was interrupted — run it again if needed";
     case Reason.heldTurn: return who + (c.kind === "task" ? " gave you a task" : " asked you something");

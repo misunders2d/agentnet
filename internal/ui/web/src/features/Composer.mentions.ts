@@ -9,7 +9,7 @@
 // agentnet:agent/PID), so exact mentions survive switching conversations and
 // reloads; model.plain() reads it back as "@Name".
 import type { T } from "../api";
-import { deviceKind, mentionRef, participants, personName, type DeviceKind } from "../model";
+import { deviceKind, mentionRef, participants, personName, scopeMatches, type DeviceKind } from "../model";
 
 export type RefKind = "person" | "guest" | "agent";
 
@@ -94,19 +94,27 @@ export interface Candidate {
 
 /** guestAuthor is this installation's own joined guest participation in a
  *  conversation it is a temporary guest of (it sends with that pid). */
-export const guestAuthor = (t: T.DMThread) =>
-  t.role === "human_guest" ? (t.guests || []).find((g) => g.host_here && g.can_send) : undefined;
+export const guestAuthor = (t: T.DMThread, topic = "") =>
+  t.role === "human_guest" ? (t.guests || []).find((g) => g.host_here && g.can_send && scopeMatches(g, topic)) : undefined;
 
 /** candidates are the agents that can be asked here and the people here
  *  besides you: members (or the DM's two people) and active guests. */
-export function candidates(t: T.DMThread, o: T.Overview | null, agentNames: Record<string, string>): Candidate[] {
+export function candidates(t: T.DMThread, o: T.Overview | null, agentNames: Record<string, string>, topic = ""): Candidate[] {
   const humanGuest = t.role === "human_guest";
   const out: Candidate[] = [];
-  if (!humanGuest || guestAuthor(t)) {
+  if (!humanGuest || guestAuthor(t, topic)) {
+    // One selected executor appears once even if it has both a whole-chat
+    // invitation and a narrower invitation. Prefer the exact topic PID.
+    const eligible = new Map<string, ReturnType<typeof participants>[number]>();
     for (const p of participants(t, o, agentNames)) {
-      if (p.kind !== "guest-agent" || p.state !== "active" || !p.can.ask || !p.pid) continue;
+      if (p.kind !== "guest-agent" || p.state !== "active" || !p.can.ask || !p.pid || !scopeMatches(p.agent!, topic)) continue;
+      const a = p.agent!, key = [a.host.address, a.host.fingerprint, a.agent_id || ""].join("/");
+      const old = eligible.get(key);
+      if (!old || old.agent?.topic === undefined && a.topic === topic) eligible.set(key, p);
+    }
+    for (const p of eligible.values()) {
       const name = mentionName(p.name);
-      if (name) out.push({ key: "a:" + p.pid, kind: "agent", id: p.pid, name, sub: p.subtitle, seed: p.seed, device: deviceKind(p.agent?.host.address), agentID: p.agent?.agent_id, host: p.agent?.host.address, hostKey: p.agent?.host.fingerprint });
+      if (name) out.push({ key: "a:" + p.pid, kind: "agent", id: p.pid!, name, sub: p.subtitle, seed: p.seed, device: deviceKind(p.agent?.host.address), agentID: p.agent?.agent_id, host: p.agent?.host.address, hostKey: p.agent?.host.fingerprint });
     }
   }
   const me = o?.person?.person;
@@ -129,7 +137,7 @@ export function candidates(t: T.DMThread, o: T.Overview | null, agentNames: Reco
     people.set("p:" + person, { key: "p:" + person, kind: "person", id: person, name, sub: group ? (admin ? "Group admin" : "In this group") : "In this chat", seed: person });
   }
   for (const g of t.guests || []) {
-    if (g.state !== "active" || g.host_here) continue;
+    if (g.state !== "active" || g.host_here || !scopeMatches(g, topic)) continue;
     const name = mentionName(g.host.label);
     if (name) people.set("g:" + g.pid, { key: "g:" + g.pid, kind: "guest", id: g.pid, name, sub: "Guest · invited by " + personName(g.inviter), seed: g.host.person || g.host.address, person: g.host.person });
   }

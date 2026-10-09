@@ -17,11 +17,19 @@ import (
 
 // Opt-in rendered P23 regression across all skins, desktop and touch phone.
 // Real local signed transports; no model, installed identity or production.
-func TestProposalConfirmationRendered(t *testing.T) {
+func TestProposalConfirmationRendered(t *testing.T) { testProposalConfirmationRendered(t, false) }
+
+func TestRevisedProposalConfirmationRendered(t *testing.T) { testProposalConfirmationRendered(t, true) }
+
+func testProposalConfirmationRendered(t *testing.T, revised bool) {
 	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
 		t.Skip("opt-in: set AGENTNET_PLAYWRIGHT")
 	}
-	for _, skin := range []string{"comic", "classic", "zoom"} {
+	skins := []string{"comic", "classic", "zoom"}
+	if revised {
+		skins = []string{"comic"}
+	}
+	for _, skin := range skins {
 		for _, width := range []string{"1440", "390"} {
 			t.Run(skin+width, func(t *testing.T) {
 				alice, bob, live := liveWorld(t)
@@ -62,6 +70,10 @@ func TestProposalConfirmationRendered(t *testing.T) {
 				ts.Start()
 				cmd := exec.Command("node", "testdata/proposal_rendered_check.cjs")
 				cmd.Env = append(os.Environ(), "P23_URL="+ts.URL+"/?t="+testToken, "P23_SKIN="+skin, "P23_WIDTH="+width, "P23_PEER="+alice.Address)
+				if revised {
+					cmd.Env = append(cmd.Env, "P23_REVISED=1")
+					body = "Write release notes in English.\n" + strings.Repeat("Keep all report details.\n", 200)
+				}
 				out, err := cmd.CombinedOutput()
 				if err != nil || !strings.Contains(string(out), "P23 rendered proposal PASS") {
 					t.Fatalf("%v\n%s", err, out)

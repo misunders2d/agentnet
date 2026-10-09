@@ -696,6 +696,22 @@ func (a *Agent) admitAssistantReaction(ctx context.Context, env envelope.Envelop
 // sender's audience is never trusted beyond the request's. Not held yet:
 // proof pending.
 func humanReactionRequest(q dbq, in envelope.Inner, p ParticipationInfo, selfFP string) (string, error) {
+	if err := checkParticipationTopic(q, p.Topic, in); err != nil {
+		if errors.Is(err, errParticipationTopicPending) {
+			return reasonProof, err
+		}
+		return reasonInvalid, err
+	}
+	for _, scope := range in.Human.Proof {
+		if scope.Topic != nil {
+			if err := checkParticipationTopic(q, scope.Topic, in); err != nil {
+				if errors.Is(err, errParticipationTopicPending) {
+					return reasonProof, err
+				}
+				return reasonInvalid, err
+			}
+		}
+	}
 	var target, kind, raw string
 	err := q.QueryRow(`SELECT coalesce(target,''), kind, human FROM inbox WHERE conv=? AND lid=? AND coalesce(verified_by, claimed_fp)=? AND pid=? AND ref_id IS NULL AND human IS NOT NULL
 		UNION ALL SELECT coalesce(target,''), kind, human FROM outbox WHERE conv=? AND lid=? AND ?=? AND pid=? AND ref_id IS NULL AND human IS NOT NULL LIMIT 1`,

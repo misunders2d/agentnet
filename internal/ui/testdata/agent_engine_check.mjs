@@ -155,6 +155,8 @@ for (const oldAfterReload of [false, true]) {
   await f.receive(await f.fromPeer({ v: 2, kind: "message", conv: f.conv, lid: id(), root: f.c.root, sub: "event", pid: futurePID, body: wire.eventJSON(accept) }));
   await e.retryHeld();
   check((await f.store.get("inbox", held)).agent_id === f.agentA.id && !(await f.store.get("held", held)), "the host's signed acceptance releases its named output");
+  await e.flushReceipts();
+  check(f.calls.some(c => c.p === "/v1/messages/" + held + "/ack" && JSON.parse(c.body).state === "delivered"), "verified held recovery upgrades the exact carrier receipt to delivered");
   const asked = await e.api("/api/dm/agent/ask", { pid: futurePID, body: "selected ask" });
   const askRow = await f.store.get("outbox", asked.id);
   check(askRow.target.agent_id === f.agentA.id && askRow.required_cap === "agi1", "ask derives ID only from signed participation");
@@ -406,7 +408,7 @@ for (const bad of ["edited","retracted","replica","history","other-key","other-a
  const topic=(await f.store.get("outbox",seed.id)).topic;
  const asked=await e.askAgent({pid,kind:"question",body:"Should we restart?",topic});
  const body="Restart exactly.\nVerify afterwards.";
- const answer=await f.receive(await f.fromPeer({v:2,conv:f.conv,lid:id(),root:f.c.root,pid,reply_to:asked.id,status:wire.StatusProposal,body,topic,agent_id:f.agentA.id,origin:"agent:stub",emotion:"plain"}));
+ const answer=await f.receive(await f.fromPeer({v:2,conv:f.conv,lid:id(),root:f.c.root,pid,reply_to:(await f.store.get("outbox",asked.id)).lid,status:wire.StatusProposal,body,topic,agent_id:f.agentA.id,origin:"agent:stub",emotion:"plain"}));
  check((await e.dm(f.conv)).messages.find(m=>m.id===answer)?.actions.includes("do_it"),"conversation topic shows Do it to original asker");
  await Promise.all([e.confirmProposal(answer),e.confirmProposal(answer)]);
  const tasks=(await f.store.all("outbox")).filter(r=>r.kind==="task");
@@ -427,5 +429,48 @@ for (const state of ["agent-host","removed","frozen"]) {
  await refuses(()=>e.confirmProposal(answer),/approved current human/);
  check(!(await f.store.all("outbox")).some(r=>r.kind==="task"),state+" refuses before sending");
  e.stop();
+}
+// Edited choices preserve exact text and the same executor; one durable choice
+// wins across concurrent actions and engines, with normal receiver permission.
+{
+ const f=await fixture(),{e}=f;
+ await f.caps([wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapOwnSyncV3]);
+ const asked=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"Report language?",agent_id:f.agentA.id});
+ const original="Write the report in Russian.\n"+"Keep the full detail.\n".repeat(200), revised=original.replace("Russian","English");
+ const answer=await f.receive(await f.fromPeer({reply_to:asked.id,status:wire.StatusProposal,body:original,agent_id:f.agentA.id}));
+ const second=new Engine({store:f.store,now:()=>now,base:e.base,fetch:e.fetch});await second.load();
+ // Both actions on the same engine cover its in-flight latch; the store
+ // comparison below covers a fresh engine/reload's durable choice.
+ const results=await Promise.allSettled([e.confirmProposal(answer,revised),e.confirmProposal(answer)]);
+ check(results.filter(r=>r.status==="fulfilled").length===1,"original and edited concurrent actions have one chosen text");
+ const tasks=(await f.store.all("outbox")).filter(r=>r.kind==="task");
+ check(tasks.length===1&&tasks[0].body===revised,"full edited text persisted exactly once");
+ const opened=await wire.open(tasks[0].envelope,f.peerKeys,f.peerAddress,f.selfPub);
+ check(opened.body===revised&&opened.reply_to===answer&&opened.target.agent_id===f.agentA.id&&!Object.hasOwn(opened,"proposal_choice"),"encrypted revised task keeps exact executor/ref and carries no local choice metadata");
+ check(tasks[0].proposal_choice.needs_new&&tasks[0].proposal_choice.original===original,"revised handoff requires current host choice support and retains original provenance");
+ await e.load();await e.confirmProposal(answer,revised);
+ await refuses(()=>e.confirmProposal(answer),/different text/);
+ await refuses(()=>e.confirmProposal(answer,"Another task"),/different text/);
+ check((await f.store.all("outbox")).filter(r=>r.kind==="task").length===1,"stale editor and reload never replace the chosen bytes");
+ const q2=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"Another report?",agent_id:f.agentA.id});
+ const a2=await f.receive(await f.fromPeer({reply_to:q2.id,status:wire.StatusProposal,body:"Original second task",agent_id:f.agentA.id}));
+ const cross=await Promise.allSettled([e.confirmProposal(a2,"Edited second task"),second.confirmProposal(a2)]);
+ check(cross.filter(r=>r.status==="fulfilled").length===1,"two engines cannot replace one another's original/revised choice");
+ const chosen=(await f.store.all("outbox")).filter(r=>r.kind==="task"&&r.reply_to===a2);
+ check(chosen.length===1,"one durable task across concurrent engines");
+ const bytes=await wire.open(chosen[0].envelope,f.peerKeys,f.peerAddress,f.selfPub);check(bytes.body===chosen[0].body,"chosen exact ciphertext and visible bytes agree");
+ second.stop();e.stop();
+}
+// A legacy host must upgrade before it receives the revised choice. The exact
+// durable task waits and resumes; it is not downgraded to an ordinary legacy send.
+{
+ const f=await fixture(),{e}=f;
+ const q=await e.api("/api/send",{to:f.peerAddress,kind:"question",body:"q",agent_id:f.agentA.id});
+ const answer=await f.receive(await f.fromPeer({reply_to:q.id,status:wire.StatusProposal,body:"Original",agent_id:f.agentA.id}));
+ await e.confirmProposal(answer,"Revised");await e.flushOutbox();
+ const task=(await f.store.all("outbox")).find(r=>r.kind==="task");
+ check(task.state==="waiting"&&!f.posts.some(raw=>wire.parseEnvelope(raw).id===task.id),"old host holds revised choice before transport");
+ await f.caps([wire.CapEnv2,wire.CapPerson,wire.CapAgentIdentity,wire.CapOwnSyncV3]);await e.post({...task,state:"queued"});
+ check((await f.store.get("outbox",task.id)).state==="custody"&&f.posts.filter(raw=>wire.parseEnvelope(raw).id===task.id).length===1,"host upgrade resumes exact queued choice once");e.stop();
 }
 console.log("named-agent engine checks passed: " + checks);

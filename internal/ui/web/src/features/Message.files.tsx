@@ -32,13 +32,14 @@ function sniff(b: Uint8Array): string {
 }
 
 function filesOf(m: AnyMsg): FileItem[] {
-  if (isThreadMsg(m)) return (m.files || []).map((f, i) => ({ index: f.index ?? i, name: f.name, size: f.size, openable: f.openable, note: f.note }));
+  if (isThreadMsg(m)) return (m.files || []).map((f, i) => ({ index: f.index ?? i, name: f.name, size: f.size, openable: f.openable, availability: f.availability, note: f.note }));
   return (m.attachments || []).map((f, i) => ({ index: f.index ?? i, name: f.name, size: f.size, openable: f.openable, availability: f.availability, note: f.note }));
 }
 
 /** Where a file stands for this device: openable here, to ask for, asked, or not here. */
 function standing(m: AnyMsg, f: FileItem): "open" | "request" | "requested" | "gone" | "sent" {
-  const sentHere = m.dir === "out" && !(!isThreadMsg(m) && (m.via || m.synced_from));
+  const imported = m.synced_from || (isThreadMsg(m) ? m.history : m.via);
+  const sentHere = m.dir === "out" && !imported;
   if (sentHere) return f.openable ? "open" : "sent";
   if (f.availability === "requestable") return "request";
   if (f.availability === "requested") return "requested";
@@ -201,7 +202,7 @@ function FileChip({ m, f }: { m: AnyMsg; f: FileItem }) {
   const [pictureURL, setPictureURL] = useState("");
   const [preview, setPreview] = useState<{ text: string; url: string } | null>(null);
   const st = standing(m, f);
-  const from = !isThreadMsg(m) && m.synced_from ? "your " + niceDevice(m.synced_from) : "the device it came from";
+  const from = m.synced_from ? "your " + niceDevice(m.synced_from) : "the device it came from";
   const Icon = /\.(zip|tar|gz|tgz|7z|rar)$/i.test(f.name) ? IconFileZip : /\.(txt|md|csv|json|log|pdf|docx?)$/i.test(f.name) ? IconFileText : IconFile;
 
   const open = async () => {

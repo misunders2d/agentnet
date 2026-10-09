@@ -569,6 +569,9 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		return SendResult{}, err
 	}
 	receiverStored = true
+	a.convWork.due(convHistory)
+	a.kickNow()
+	defer notifyDaemon(a.home)
 	if m.releaseSpoolLock != nil {
 		m.releaseSpoolLock()
 	}
@@ -581,7 +584,6 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 		state, _, _, _ := a.store.outboxState(env.ID)
 		return SendResult{ID: env.ID, State: state}, nil
 	}
-	defer notifyDaemon(a.home)
 	if binding != nil && binding.remote != nil && binding.remote.Role == "origin" {
 		if _, err := a.deliver(ctx, binding.setup.env, nil); err != nil && !retryable(err) {
 			return SendResult{ID: env.ID, State: stateReceiverWaiting, Detail: err.Error()}, err
@@ -659,9 +661,23 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	if required == "" && room {
 		required = protocol.CapRoom
 	}
+	topicScoped, err := topicCopy(a.store.db, conv, pid, sub, body, humanRaw)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if required == "" && topicScoped {
+		required = protocol.CapTopicParticipation
+	}
+	proposalCap, err := proposalCopyNeedsCapability(a.store.db, env.ID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if required == "" && proposalCap {
+		required = protocol.CapOwnSyncV3
+	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
-		if err == nil && (required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation) && capturedFP != "" && key.Fingerprint() != capturedFP {
+		if err == nil && (proposalCap || required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation || required == protocol.CapOwnSyncV3) && capturedFP != "" && key.Fingerprint() != capturedFP {
 			// Sealed for the reader key captured at enqueue: never for its replacement.
 			a.store.setOutboxState(env.ID, stateNotDelivered, "not sent: the reader's key changed", "")
 			return SendResult{ID: env.ID, State: stateNotDelivered}, nil
@@ -690,6 +706,9 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 				}
 			}
 
+			if err == nil && proposalCap && required != protocol.CapOwnSyncV3 {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3)
+			}
 			if err == nil && receiverCap && required != protocol.CapReplyReceiver {
 				err = a.requireParticipationCaps(ctx, key, protocol.CapReplyReceiver)
 			}
@@ -714,6 +733,9 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 			}
 			if err == nil && groupedWire {
 				err = a.requireParticipationCaps(ctx, key, protocol.CapSendGroup)
+			}
+			if err == nil && topicScoped {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapTopicParticipation)
 			}
 			if err == nil && room && required != protocol.CapRoom {
 				err = a.requireParticipationCaps(ctx, key, protocol.CapRoom)
@@ -766,7 +788,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		if err != nil {
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
-			if (conv != "" || required == protocol.CapOwnSyncV2 || required == protocol.CapReadSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
+			if (proposalCap || conv != "" || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {
@@ -876,7 +898,7 @@ func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 	blocked := map[string]bool{}
 	// Readable turns share a FIFO. Controls, history, context carriers and
 	// private receiver operations pass their existing gates independently.
-	const turn = `ref_id IS NULL AND coalesce(sub,'') NOT IN ('topic-sync','read-sync','root-sync','history','file','drive-space','group-proof','group-context','group-invite','group-consent','group-withdrawal')
+	const turn = `ref_id IS NULL AND coalesce(sub,'') NOT IN ` + recordSubs + ` AND coalesce(sub,'') NOT IN ('history','device-history','device-file','file')
 		AND NOT (conv IS NULL AND reply_receiver IS NULL AND (coalesce(required_cap,'')='rcv1' OR coalesce(required_cap,'')='hpm1' AND human IS NULL))`
 	for _, env := range envs {
 		if ctx.Err() != nil {

@@ -159,7 +159,7 @@ func groupReceiverInput(q dbq, b ReplyReceiverBinding, id string) error {
 		if !info.Claimable() {
 			return errors.New("selected group participation is no longer active")
 		}
-		if e = externalTurn(in, info, m, in.From, fp); e != nil {
+		if e = externalTurn(in, info, m, in.From, fp, q); e != nil {
 			return e
 		}
 		if in.Kind == envelope.KindAnswer || in.Kind == envelope.KindResult {

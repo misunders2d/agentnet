@@ -269,8 +269,23 @@ Example:
   agentnet reply 3f9c... "use make deploy-staging"`,
 
 	"inbox": `Usage: agentnet inbox [--unread | --review] [--peek] [--json]
+       [--limit 1..100] [--before CURSOR] [--id ID [--full]]
+       [--section requests|invites|groups|links|held|joined]
 
-List received messages (and mark them read unless --peek). Questions and tasks show their
+Show the newest received messages, with bounded body/detail/file summaries.
+The default is at most 20 records and 7200 output bytes. A smaller page may
+be returned to fit the byte limit. More prints the exact continuation command;
+JSON stays an array, with continuation on stderr. Truncation is explicit.
+--id ID inspects one exact received message; --full with --id returns its
+complete body and file metadata and can exceed capture buffers. Both are read-only.
+Only messages actually displayed are marked read unless --peek; --review and
+--section are always read-only. Page cursors follow receipt order, newest first,
+and do not skip unread messages when an earlier page is marked read.
+Use --section to page review's other waiting items separately. Exact --id also
+works within a section: invites uses PID, groups uses invitation ID. Conversation
+and participation IDs are shown where known; agentnet dm agents CONV inspects
+that conversation's current participants. No inspection accepts or reruns work.
+Questions and tasks show their
 state: pending, held, awaiting, accepted, running, answered, manual, declined,
 failed, cancelled, interrupted, needs_human, resolved. Replies you asked to
 follow up show summarized with the summary. Reading never makes anything run

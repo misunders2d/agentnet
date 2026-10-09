@@ -116,6 +116,18 @@ func agentVerdict(q dbq, r agentReq, self, selfFP string, output bool, views map
 	if !info.Claimable() {
 		return verdictWait, fmt.Sprintf("the agent's participation is %s, with %d record(s) not counted here", info.State, info.Held), nil
 	}
+	if info.Topic != nil {
+		topic, err := topicReference(q, r.Conv, r.ID, r.Key)
+		if errors.Is(err, errParticipationTopicPending) {
+			return verdictWait, err.Error(), nil
+		}
+		if err != nil {
+			return 0, "", err
+		}
+		if topic != *info.Topic {
+			return verdictStop, errParticipationTopic.Error(), nil
+		}
+	}
 	if v.m.group != nil {
 		if h, err := storedHuman(q, "in", r.ID); err != nil {
 			return 0, "", err
@@ -595,7 +607,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		names := a.roomAgentNames(nameCtx, parts)
 		cancelNames()
 		for _, p := range parts {
-			if p.Claimable() {
+			if p.Claimable() && (p.Topic == nil || sameParticipationTopic(p.Topic, info.Topic)) {
 				fmt.Fprintf(&b, "PID %s: claimed agent name %q; %s, agent ID %q\n", p.PID, names[p.PID], roomPromptName("verified group agent host", p.Host), p.AgentID)
 			}
 		}
@@ -813,7 +825,7 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT o.id, o.conv, o.pid, coalesce(i.id, ''), coalesce(i.sender, ''), coalesce(i.verified_by, ''),
 		coalesce(i.kind, ''), coalesce(i.local, 0), coalesce(i.target, '')
-		FROM outbox o LEFT JOIN inbox i ON i.id = o.reply_to AND (coalesce(o.status,'') = 'progress' OR EXISTS (
+		FROM outbox o LEFT JOIN inbox i ON (i.id=o.reply_to OR o.status='proposal' AND i.lid=o.reply_to AND i.conv=o.conv) AND (coalesce(o.status,'') = 'progress' OR EXISTS (
 		 SELECT 1 FROM outbox first WHERE first.id = i.result_id AND first.conv = o.conv AND first.pid = o.pid
 		 AND first.lid = o.lid AND first.reply_to = o.reply_to AND first.body = o.body
 		 AND coalesce(first.agent_id,'') = coalesce(o.agent_id,'')))
@@ -907,6 +919,9 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	}
 	if env.V != envelope.Version2 {
 		return true, nil
+	}
+	if handled, allowed, err := a.mayDeliverDeviceHistory(env); handled {
+		return allowed, err
 	}
 	if handled, allowed, err := a.mayDeliverTopicSync(env); handled {
 		return allowed, err
@@ -1073,6 +1088,20 @@ func (a *Agent) agentContext(info ParticipationInfo, before string, limit int) (
 		ref := protocol.GrantRef{LID: msg.LID, Fingerprint: msg.Key}
 		if msg.ExcerptPID != "" {
 			ref.Fingerprint = msg.Claimed
+		}
+		if info.Topic != nil {
+			if msg.ExcerptPID != "" {
+				if msg.Topic != *info.Topic {
+					c.Unrelated++
+					continue
+				}
+			} else {
+				topic, e := topicReference(a.store.db, info.Conv, msg.LID, msg.Key)
+				if e != nil || topic != *info.Topic {
+					c.Unrelated++
+					continue
+				}
+			}
 		}
 		who := contextSpeaker(msg, names, claims)
 		// Shown as the conversation shows it now: a deleted turn is only

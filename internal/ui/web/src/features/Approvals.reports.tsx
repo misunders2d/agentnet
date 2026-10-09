@@ -10,10 +10,11 @@ import { Collapsible } from "@base-ui/react/collapsible";
 import { IconChevronDown, IconDevices } from "@tabler/icons-react";
 import type { T } from "../api";
 import { useApp } from "../context";
-import { when } from "../model";
+import { ownReportResolution, when } from "../model";
 import { Button } from "../ui/Button";
 import { Sheet } from "../ui/Sheet";
 import { capital, deviceWords, kindWord } from "./Approvals.words";
+import { ResolveOwnRequest } from "./RequestResolution";
 
 type Item = T.ReportItem;
 type Decision = "accept" | "decline" | "reply" | "resolve" | "cancel";
@@ -121,6 +122,7 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
   const store = useApp();
   const [pick, setPick] = useState<Decision | null>(null);
   const decided = x.result && !x.result.refused;
+  const ownResolution = !decided && !x.actionable ? ownReportResolution(x, host, o) : null;
   // A DM or group request is decided here, never answered by hand: its
   // answer belongs in that conversation.
   const acts = x.actionable && !decided ? (byState[x.state] || []).filter((d) => !(x.conv && d === "reply")) : [];
@@ -131,13 +133,13 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
       <p className="text-[15px] leading-snug"><b>{from}</b> {x.kind === "task" ? "gave it a task" : x.kind === "question" ? "asked it something" : "sent a " + kindWord(x.kind)} · {stateWords[x.state] || x.state}</p>
       <p className="pt-0.5 line-clamp-2 text-[14px] text-text-2 [overflow-wrap:anywhere]">{x.excerpt ? "“" + x.excerpt + "”" : "Its text isn’t shared with this device."}</p>
       {x.state === "needs_human" && x.excerpt && <details className="mt-2"><summary className="cursor-pointer font-semibold">Read all available detail</summary><p className="pt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{x.excerpt}</p></details>}
-      {x.state === "needs_human" && !x.actionable && <p className="pt-1 text-[13px]">Open it on {deviceWords(host, o)}.</p>}
+      {x.state === "needs_human" && !x.actionable && !ownResolution && <p className="pt-1 text-[13px]">Open it on {deviceWords(host, o)}.</p>}
       {x.state === "running" && <p role="status" className="pt-1 text-[13px] text-text-2">{x.blocker === "seems_stuck" ? "Seems stuck · " : "Running · "}since {new Date(typeof x.since === "number" ? x.since * 1000 : x.since).toLocaleString()}</p>}
       {x.proposal && <details className="mt-2 text-[14px] [overflow-wrap:anywhere]">
         <summary>How this task was chosen</summary>
         <p>{deviceWords(x.proposal.asker, o)} asked: {x.proposal.question}</p>
         <p>Your agent suggested: {x.proposal.proposal}</p>
-        <p>{deviceWords(x.proposal.confirmed_by, o)} chose Do it. This uses only their usual task approval.</p>
+        <p>{deviceWords(x.proposal.confirmed_by, o)} {x.proposal.edited ? "edited and sent this task." : "chose Do it."} This uses only their usual task approval.</p>
       </details>}
       {x.result && (
         <p className={"mt-1 text-[13px] font-semibold " + (x.result.refused ? "text-danger" : "text-ok-ink")}>
@@ -148,7 +150,7 @@ function ReportRow({ x, host, report, o }: { x: Item; host: string; report: T.Re
         <div className="mt-2 flex flex-wrap gap-2">
           {acts.map((d, i) => <Button key={d} size="sm" variant={i === 0 ? "act" : "outline"} onClick={() => setPick(d)}>{label(d, again)}</Button>)}
         </div>
-      ) : !decided && <p className="pt-1 text-[13px] text-muted">{x.actionable ? "Nothing to decide on it right now." : "This device can’t decide it."}</p>}
+      ) : ownResolution ? <ResolveOwnRequest request={ownResolution} /> : !decided && <p className="pt-1 text-[13px] text-muted">{x.actionable ? "Nothing to decide on it right now." : "This device can’t decide it."}</p>}
       <OperatorSheet open={!!pick} decision={pick} x={x} where={deviceWords(host, o)} again={again}
         onOpenChange={(v) => { if (!v) setPick(null); }}
         onSend={(text) => store.run((api) => api.decide({ host, id: x.id, key: x.key, action: pick!, expect: x.state, attempt: x.attempt, text, report: report.id }), "Sent to " + deviceWords(host, o) + ".")} />
@@ -165,7 +167,7 @@ function OperatorSheet({ open, decision, x, where, again, onOpenChange, onSend }
   const needText = decision === "reply" || decision === "decline";
   const what = { accept: again ? "It starts fresh there, with that device’s usual permissions." : "It runs there, with that device’s usual permissions.",
     decline: "Nothing runs. The sender is told why.", reply: "Your answer goes to the sender from that device.",
-    resolve: "It’s closed there. Nothing is sent.", cancel: "It stops there. Whatever it already did stays done." }[decision];
+    resolve: "It closes this request there without running it again. The host confirms the result here.", cancel: "It stops there. Whatever it already did stays done." }[decision];
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={label(decision, again) + "?"}
       description={"On " + where + ". It applies this only if the request still " + (stateWords[x.state] || "is as reported") + "."}

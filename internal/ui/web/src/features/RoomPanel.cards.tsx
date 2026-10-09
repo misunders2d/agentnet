@@ -35,6 +35,7 @@ export function GuestCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; busy
           <div className={"truncate text-[13px] font-semibold " + (g.kind === "agent" ? "text-agent-ink" : "text-text-2")}>{line}</div>
         </div>
       </div>
+      {g.scope && <p className="mt-2 text-sm font-semibold">Only in topic: {g.scope}</p>}
       {g.kind === "agent" && g.member && <p className="mt-2 text-[13px] text-text-2">{g.online === false ? g.where + " is offline — requests wait" : "Runs on " + g.where}</p>}
       {(g.kind === "agent" || g.state === "conflict") && <p className={"mt-2 text-[13px] " + (g.state === "conflict" || /Some of its records do not count|no responder|not ready|runs no agent/.test(g.stateText) ? "font-semibold text-danger" : "text-text-2")}>{g.stateText}</p>}
       <div className="mt-2.5 rounded-xl border border-outline/20 bg-surface px-2.5 py-2">
@@ -84,6 +85,7 @@ export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; bu
           <div className={"text-[13px] font-semibold " + (mine ? "text-approval-ink" : "text-text-2")}>{waitFor}</div>
         </div>
       </div>
+      {g.scope && <p className="mt-2 text-sm font-semibold">Only in topic: {g.scope}. Other topics are outside this invitation.</p>}
       {g.state === "pending" && <p className="mt-2 text-[13px] text-muted">{g.stateText}</p>}
       {mine && g.kind === "agent" && g.invitedBy !== "you" && (
         <p className="mt-2 text-[14px] leading-snug text-text-2">
@@ -94,7 +96,7 @@ export function PendingCard({ g, t, busy, onAct }: { g: Guest; t: T.DMThread; bu
       {mine && (
         <p className="mt-2 text-[14px] leading-snug text-text-2">
           {g.kind === "agent"
-            ? "It sees only " + (g.shared.length ? plural(g.shared.length, "earlier message") : "what someone asks it here") + (g.member ? ", then new group turns while it is a member" : "") + ". Only you can let it in."
+            ? "It sees only " + (g.shared.length ? plural(g.shared.length, "earlier message") : "what someone asks it here") + (g.member ? g.scope ? ", then new turns in this topic while here" : ", then new group turns while it is a member" : "") + ". Only you can let it in."
             : g.line + ". You’d see " + (g.shared.length + g.missing ? plural(g.shared.length + g.missing, "earlier message") + ", then new ones" : "new messages") + " while you’re here."}
         </p>
       )}
@@ -149,7 +151,7 @@ const endedWords = (g: Guest) => (g.endedBy ? "dismissed by " + g.endedBy : g.en
 export function WhatTheySaw({ t, g, open, onOpenChange, pending }: { t: T.DMThread; g: Guest; open: boolean; onOpenChange: (v: boolean) => void; pending?: boolean }) {
   const who = g.hostHere && g.kind === "person" ? "you" : callName(g.name);
   const title = pending ? "What " + who + (who === "you" ? "’d" : " would") + " see" : "What " + who + " saw";
-  const then = g.kind === "agent" ? "It also sees what someone asks it here." : "Plus new messages while " + (who === "you" ? "you’re" : "they’re") + " here.";
+  const then = g.scope ? "Plus new messages and requests only in “" + g.scope + "” while here." : g.kind === "agent" ? "It also sees what someone asks it here." : "Plus new messages while " + (who === "you" ? "you’re" : "they’re") + " here.";
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title={title.charAt(0).toUpperCase() + title.slice(1)}
       description={(g.shared.length + g.missing ? "Exactly " + plural(g.shared.length + g.missing, "message") + ", nothing earlier. " : "Nothing from before. ") + then}>

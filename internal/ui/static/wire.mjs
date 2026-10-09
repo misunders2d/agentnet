@@ -25,8 +25,10 @@ export const CapExternalParticipation = "apx1"; // selected DM excerpts and exac
 export const CapGroupHumanParticipation = "hgg1"; // complete group human guest lifecycle; NOT implied by rm1
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
 export const CapSendGroup = "sg1"; // optional signed presentation; never a routing or execution capability
+export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
+export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
 export const CapReadSync = "rd1", SubReadSync = "read-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
@@ -681,8 +683,9 @@ async function checkV2(n) {
     if (n.target && (!n.target.agent_id || !["question", "task"].includes(n.kind) || n.target.address !== n.to || !validFingerprint(n.target.fingerprint))) throw new Error("a device message target must name an agent on its exact recipient");
     return;
   }
-  if(n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync) {
-    if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || n.attachments.length || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
+  if(n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
+    if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
+    if(n.sub===SubDeviceHistory||n.sub===SubDeviceFile){if(n.send_group||n.session||n.fallback)throw Error("device history: quiet carrier required");parseDeviceHistory(n.body,n.sub===SubDeviceFile);return;}
     if(n.sub===SubTopicSync){if(n.session||n.fallback)throw Error("topic sync: quiet rootless title carrier required");parseTopicSync(n.body);}else if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
   if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
@@ -771,7 +774,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubRootSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubRootSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -858,7 +861,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubRootSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubRootSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -958,7 +961,7 @@ export const MaxGroupHistory = 64, MaxGroupState = 256 << 10, MaxGroupCiphertext
 const groupRootDomain = "agentnet-conv-root-v3\n";
 export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot : MaxConvRoot;
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
-export const MaxCaps = 32, MaxAdvertisedCaps = 16; // protocol: a record parses with up to 32 names; a device lists at most 16
+export const MaxCaps = 32, MaxAdvertisedCaps = 18; // older readers already parse up to 32 names
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1024,6 +1027,15 @@ function strictRecord(json, max, what, fields) {
   if (typeof json === "string" && utf8.encode(json).length > max) throw new Error(what + ": record too large");
   return strict(typeof json === "string" ? JSON.parse(json) : json, what, fields);
 }
+
+// own3 carriers use a separate rootless shape: an old own2 reader cannot admit
+// the embedded request as an ordinary executable turn.
+export function parseDeviceHistory(json,file=false) {
+ const r=strictRecord(json,MaxBody,"device history",{v:"int",person:"string",roster:"string",...(file?{}:{recipient:"string",recipient_key:"string"}),item:"object"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||!r.item||!file&&(!validAddress(r.recipient)||r.recipient_key&&!validFingerprint(r.recipient_key)))throw Error("device history: invalid owner or original endpoint");
+ return r;
+}
+export const deviceHistoryHash=async(item,to)=>hex(await sha256(utf8.encode('{"Item":'+historyJSON({...item,at:0})+',"To":'+goString(to)+'}')));
 
 // Person roster (version 2), a chain: seq 0 is one device signed by it;
 // each later step names the step before it (prev) and the device of it
@@ -1276,7 +1288,7 @@ export function parseHistory(json) {
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
   const assistant = historyAssistantReaction(f); // a conversation assistant's own reaction: its participation, maybe its agent
   if (assistant && (!validID(f.pid || "") || f.agent_id && !validID(f.agent_id) || f.origin || target)) throw new Error("a malformed assistant reaction history item");
-  if (!assistant && f.agent_id && (!validID(f.agent_id) || !["answer", "result"].includes(f.kind) || !f.reply_to || f.sub) || target?.agent_id && !validID(target.agent_id)) throw new Error("a malformed named history item");
+  if (!assistant && f.agent_id && (!validID(f.agent_id) || !["answer", "result"].includes(f.kind) && f.status !== StatusProgress || !f.reply_to || f.sub) || target?.agent_id && !validID(target.agent_id)) throw new Error("a malformed named history item");
   const ref = f.ref ? strict(f.ref, "ref", { id: "string", fingerprint: "string" }) : null;
   if (ref && (!validID(ref.id || "") || !validFingerprint(ref.fingerprint || ""))) throw new Error("a malformed history item");
   if (ref && !isControl(f.sub || "")) throw new Error("a malformed history item");
@@ -1309,6 +1321,7 @@ export function parseHistory(json) {
 export const excerptLID = async (pid, ref) => hex((await sha256(utf8.encode(pid + "\0" + ref.lid + "\0" + ref.fingerprint))).slice(0, 16));
 export function parseGrantedExcerpt(n, info) {
   const h = parseHistory(n.body), raw = JSON.parse(n.body);
+  if(info.topic!=null && (h.topic||"")!==info.topic)throw Error("Excerpt is outside the invited topic.");
   if (!(h.ts > 0) || h.sub || h.ref || !["message", "question", "task", "answer", "result"].includes(h.kind) ||
       !info.grant.some((g) => g.lid === h.lid && g.fingerprint === h.from_key)) throw new Error("excerpt does not match an exact signed grant reference");
   if (h.attachments.length > 8) throw new Error("too many excerpt files");
@@ -1826,6 +1839,7 @@ function marshalEvent(e, withSig) {
   if (e.group) s += ',"group":{"seq":' + goInt(e.group.seq,"group sequence") + ',"hash":' + goString(e.group.hash) + ',"host_role":' + goString(e.group.host_role) + (e.group.host_admission ? ',"host_admission":' + goString(e.group.host_admission) : "") + (e.group.task_admissions?.length ? ',"task_admissions":' + goStrings(e.group.task_admissions) : "") + "}";
   if (e.role) s += ',"role":' + goString(e.role);
   if (e.until) s += ',"until":' + goInt(e.until, "end time");
+  if (e.topic != null) s += ',"topic":' + goString(e.topic);
   return s + sigJSON(e, withSig) + "}";
 }
 export const eventJSON = (e) => marshalEvent(e, true);
@@ -1869,6 +1883,7 @@ function uniqueList(items, max, valid, what) {
 // null when absent, which matters: an accept, decline or dismiss may not
 // carry them even empty.
 export function validateEvent(e) {
+  if(e.topic != null && (typeof e.topic!=="string" || e.topic!==""&&!validID(e.topic) || !["invite","share","scope"].includes(e.type)))throw Error("participation: invalid topic scope");
   if(e.type === "share") {
     if(!validHash(e.prev)||!e.group||e.role||e.until||e.task_keys?.length||e.note) throw new Error("participation: a share names an existing group agent and selected context only");
     return validateEvent({...e,type:"invite",prev:""});
@@ -1929,7 +1944,7 @@ export async function signEvent(keys, fields) {
 
 export function parseEvent(json) {
   const f = strictRecord(json, MaxParticipationEvent, "participation", { v: "int", conv: "string", pid: "string", type: "string", prev: "string",
-    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", until: "int", sig: "string" });
+    author: "object", ts: "int", host: "object", grant: "array", audience: "string", task_keys: "array", note: "string", group: "object", role: "string", until: "int", topic: "string", sig: "string" });
   const a = strict(f.author || {}, "participation author", { person: "string", roster: "string", address: "string", fingerprint: "string", group_admission: "string" });
   const h = f.host ? strict(f.host, "participation host", { person: "string", address: "string", fingerprint: "string", agent_id: "string" }) : null;
   const group = f.group ? strict(f.group,"participation group",{seq:"int",hash:"string",host_role:"string",host_admission:"string",task_admissions:"array"}) : null;
@@ -1940,7 +1955,7 @@ export function parseEvent(json) {
     host: h ? { person: h.person || "", address: h.address || "", fingerprint: h.fingerprint || "", ...(h.agent_id ? { agent_id: h.agent_id } : {}) } : null,
     grant: f.grant ? f.grant.map((g) => { const x = strict(g, "participation grant", { lid: "string", fingerprint: "string" });
       return { lid: x.lid || "", fingerprint: x.fingerprint || "" }; }) : null,
-    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(f.until ? { until: f.until } : {}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
+    audience: f.audience || "", task_keys: f.task_keys || null, note: f.note || "", ...(f.role ? { role: f.role } : {}), ...(f.until ? { until: f.until } : {}), ...(f.topic!=null?{topic:f.topic}:{}), ...(group ? {group:{seq:group.seq || 0,hash:group.hash || "",host_role:group.host_role || "",host_admission:group.host_admission || "",task_admissions:group.task_admissions || null}} : {}), sig: f.sig ? unb64(f.sig, "event signature") : null };
   validateEvent(e);
   fitsRecord(eventJSON(e), MaxParticipationEvent, "participation");
   return e;
@@ -1952,7 +1967,7 @@ export function parseEvent(json) {
 // projects is ParticipationEvent.Projects, sameScope protocol.SameScope;
 // projectsHash is projects with the invite's hash known (synchronous).
 export const scopeOfHash = (inv, invHash, ts) => ({ v: 1, conv: inv.conv, pid: inv.pid, type: "scope", prev: invHash, author: { ...inv.author }, ts, host: { ...inv.host },
-  grant: null, audience: inv.audience, task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}), ...(inv.until ? { until: inv.until } : {}),
+  grant: null, audience: inv.audience, task_keys: null, note: "", ...(inv.role ? { role: inv.role } : {}), ...(inv.until ? { until: inv.until } : {}), ...(inv.topic!=null?{topic:inv.topic}:{}),
   ...(inv.group ? { group: { seq: inv.group.seq, hash: inv.group.hash, host_role: inv.group.host_role, ...(inv.group.host_admission ? { host_admission: inv.group.host_admission } : {}), task_admissions: null } } : {}) });
 export async function scopeOf(inv, ts) { return scopeOfHash(inv, await eventHash(inv), ts); }
 export const sameScope = (x, y) => marshalEvent({ ...x, ts: 1 }, false) === marshalEvent({ ...y, ts: 1 }, false);

@@ -119,6 +119,11 @@ func TestHistoryCurrentOwnDeviceSuppliesMissingSnapshot(t *testing.T) {
 		groupGovernanceDeliver(t, source, phone, env)
 	}
 	phone.retryProof(tctx(t))
+	for _, env := range envs {
+		if state, err := phone.store.disposition(env.ID); err != nil || state != protocol.StateDelivered {
+			t.Fatalf("admitted history carrier has no durable delivery receipt: %q %v", state, err)
+		}
+	}
 	for _, in := range originals {
 		messages, err := phone.ConversationMessages(in.Conv)
 		if err != nil || len(messages) != 1 {
@@ -133,6 +138,16 @@ func TestHistoryCurrentOwnDeviceSuppliesMissingSnapshot(t *testing.T) {
 	if err := source.store.db.QueryRow(`SELECT pos FROM history_jobs WHERE device=?`, phone.Address).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
+	// A quarantine receipt proves that the receiver retained the ciphertext.
+	// Reconnect must not mint a fresh carrier for the same logical item.
+	var carrierCount int
+	if err := source.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub IN ('history','group-proof','group-context')`, phone.Address).Scan(&carrierCount); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.store.db.Exec(`UPDATE outbox SET state='quarantined' WHERE recipient=? AND sub IN ('history','group-proof','group-context')`, phone.Address); err != nil {
+		t.Fatal(err)
+	}
+	source.convWork.historyDeferred = nil
 	source.historyStep(tctx(t))
 	reopened, err := Open(source.home)
 	if err != nil {
@@ -146,6 +161,10 @@ func TestHistoryCurrentOwnDeviceSuppliesMissingSnapshot(t *testing.T) {
 	}
 	if err := reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub='history'`, phone.Address).Scan(&copies); err != nil || copies != len(originals) {
 		t.Fatalf("repeat/restart duplicated history: copies=%d error=%v", copies, err)
+	}
+	var afterCarriers int
+	if err := reopened.store.db.QueryRow(`SELECT count(*) FROM outbox WHERE recipient=? AND sub IN ('history','group-proof','group-context')`, phone.Address).Scan(&afterCarriers); err != nil || afterCarriers != carrierCount {
+		t.Fatalf("quarantine/restart generated duplicate ciphertext: before=%d after=%d error=%v", carrierCount, afterCarriers, err)
 	}
 	for _, env := range envs {
 		groupGovernanceDeliver(t, reopened, phone, env)

@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 	"github.com/misunders2d/agentnet/internal/sqlitedb"
 	"path/filepath"
 	"testing"
@@ -95,6 +96,55 @@ func TestHeldNoticeDiagnosticAllowlist(t *testing.T) {
 	}
 	if heldDiagnosticCode("SYNTHETIC_PRIVATE_BODY password=secret") != "" {
 		t.Fatal("arbitrary error content persisted")
+	}
+}
+
+func TestHeldNoticeNewFailureKeepsSafeStageAndResurfaces(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "client.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	env := envelope.Envelope{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", From: "alice/laptop"}
+	if err := s.holdAsDiagnostic(env, reasonProof, "group: verified decryptable context unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.archiveHeldNotice(env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.holdAsDiagnostic(env, reasonInvalid, "group: conflicting logical turn"); err != nil {
+		t.Fatal(err)
+	}
+	q, err := (&Agent{store: s}).Quarantine()
+	if err != nil || len(q) != 1 || q[0].DetailCode != "group_conflicting_copy" {
+		t.Fatalf("changed fault remained hidden: %+v %v", q, err)
+	}
+	if err := s.holdAsDiagnostic(env, reasonInvalid, "SYNTHETIC_PRIVATE_BODY password=secret"); err != nil {
+		t.Fatal(err)
+	}
+	q, err = (&Agent{store: s}).Quarantine()
+	if err != nil || len(q) != 1 || q[0].DetailCode != "admission_failed" {
+		t.Fatalf("new failure lost safe stage or leaked text: %+v %v", q, err)
+	}
+}
+
+func TestHeldNoticeEnvelopeProducerPreservesFailureStage(t *testing.T) {
+	w := newWorld(t, "")
+	env := envelope.Envelope{V: 1, ID: protocol.NewID(), From: w.alice.Address, To: w.bob.Address, Kind: envelope.KindMessage, CT: []byte("synthetic invalid ciphertext"), Sig: []byte("bad")}
+	if err := w.bob.verifyAndStore(tctx(t), env); err != nil {
+		t.Fatal(err)
+	}
+	q, err := w.bob.Quarantine()
+	if err != nil || len(q) != 1 || q[0].DetailCode != "envelope_verification_failed" {
+		t.Fatalf("verification stage lost: %+v %v", q, err)
+	}
+	id := protocol.NewID()
+	if err := w.bob.quarantineUndecodable(tctx(t), []byte(fmt.Sprintf(`{"id":%q,"from":%q,"ct":42}`, id, w.alice.Address))); err != nil {
+		t.Fatal(err)
+	}
+	var code string
+	if err := w.bob.store.db.QueryRow(`SELECT detail_code FROM quarantine WHERE id=?`, id).Scan(&code); err != nil || code != "envelope_malformed" {
+		t.Fatalf("malformed stage lost: %q %v", code, err)
 	}
 }
 

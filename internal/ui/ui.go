@@ -301,11 +301,17 @@ type LinkState struct {
 
 // HistoryCopy is the copying of this person's chats to a new device.
 type HistoryCopy struct {
-	Device string `json:"device"` // its address
-	Name   string `json:"name"`
-	Done   int    `json:"done"`
-	Total  int    `json:"total"`
-	State  string `json:"state"` // running, done, or ended (that device is no longer yours)
+	Device        string `json:"device"` // its address
+	Name          string `json:"name"`
+	Done          int    `json:"done"`
+	Total         int    `json:"total"`
+	State         string `json:"state"` // running, done, or ended (that device is no longer yours)
+	DeliveryKnown bool   `json:"delivery_known"`
+	Queued        int    `json:"queued"`
+	Custody       int    `json:"custody"`
+	Delivered     int    `json:"delivered"`
+	Blocked       int    `json:"blocked"`
+	Deferred      int    `json:"deferred"`
 }
 
 // Persons is implemented by providers that hold human DMs.
@@ -714,6 +720,7 @@ type Participants interface {
 // that DM, each exactly) and the member keys that may give it follow-up
 // tasks (TasksFrom, fingerprints).
 type AgentInvite struct {
+	Topic     *string  `json:"topic,omitempty"`
 	AgentID   string   `json:"agent_id,omitempty"`
 	Conv      string   `json:"conv"`
 	Host      string   `json:"host"`
@@ -738,6 +745,7 @@ type AgentAsk struct {
 // installation runs it, who invited it, what it may be shown and who may
 // give it tasks. The host's person decides; either person can end it.
 type AgentView struct {
+	Topic      *string      `json:"topic,omitempty"`
 	PIDs       []string     `json:"pids,omitempty"`
 	Member     bool         `json:"member,omitempty"`
 	Inviters   []PersonView `json:"inviters,omitempty"`
@@ -1072,6 +1080,9 @@ type Presence struct {
 
 // Message is one row of a thread.
 type Message struct {
+	History           bool                       `json:"history,omitempty"`
+	SyncedFrom        string                     `json:"synced_from,omitempty"`
+	FromKey           string                     `json:"from_key,omitempty"`
 	Continuation      *client.ContinuationAction `json:"continuation,omitempty"`
 	Target            *envelope.Target           `json:"target,omitempty"`
 	AgentID           string                     `json:"agent_id,omitempty"`
@@ -1129,9 +1140,10 @@ type File struct {
 	Saved string `json:"saved,omitempty"` // where it was downloaded, if it was
 	// Index and Openable are as FileView's: GET /api/files/{message}/{index}
 	// serves the file when Openable, for received and sent messages alike.
-	Index    int    `json:"index"`
-	Openable bool   `json:"openable"`
-	Note     string `json:"note,omitempty"`
+	Index        int    `json:"index"`
+	Openable     bool   `json:"openable"`
+	Note         string `json:"note,omitempty"`
+	Availability string `json:"availability,omitempty"`
 }
 
 // Draft is a message to send.
@@ -1158,33 +1170,35 @@ type Sent struct {
 
 // Action is a local decision.
 type Action struct {
-	Attempt int64    `json:"attempt,omitempty"`
-	SendID  string   `json:"send_id,omitempty"`
-	Do      string   `json:"do"`
-	ID      string   `json:"id,omitempty"`     // message id, or peer address for peer actions
-	Body    string   `json:"body,omitempty"`   // reply text
-	Reason  string   `json:"reason,omitempty"` // decline reason
-	IDs     []string `json:"ids,omitempty"`    // read: messages to mark read
-	Key     string   `json:"key,omitempty"`    // trust: the fingerprint the person compared
+	Held    []client.HeldNoticeRef `json:"held,omitempty"` // exact local diagnostic snapshots to archive
+	Attempt int64                  `json:"attempt,omitempty"`
+	SendID  string                 `json:"send_id,omitempty"`
+	Do      string                 `json:"do"`
+	ID      string                 `json:"id,omitempty"`     // message id, or peer address for peer actions
+	Body    string                 `json:"body,omitempty"`   // reply text
+	Reason  string                 `json:"reason,omitempty"` // decline reason
+	IDs     []string               `json:"ids,omitempty"`    // read: messages to mark read
+	Key     string                 `json:"key,omitempty"`    // trust: the fingerprint the person compared
 }
 
 // Actions the page can request.
 const (
-	DoIt           = "do_it" // confirm the stored proposal, with its original target and bytes
-	DoContinue     = "continue"
-	DoReply        = "reply"         // answer a received item by hand (takes it over)
-	DoAccept       = "accept"        // run a task once, let the responder answer a held question, or run again
-	DoAcceptAlways = "accept_always" // run this task and grant its verified person (or exact device key)
-	DoDecline      = "decline"
-	DoResolve      = "resolve" // close a needs-human item without sending anything
-	DoCancel       = "cancel"
-	DoApprove      = "approve"     // ID = verified person or explicit device: answer future questions
-	DoUnapprove    = "unapprove"   // ID = peer
-	DoTrust        = "trust"       // ID = peer: trust its changed key
-	DoGrantTasks   = "grant_tasks" // ID = verified person or explicit device: permit future tasks here
-	DoRevokeTasks  = "revoke_tasks"
-	DoArchiveHeld  = "archive_held" // hide only this local notice; retained envelope stays blocked
-	DoRead         = "read"
+	DoIt               = "do_it" // confirm the stored proposal, with its original target and bytes
+	DoContinue         = "continue"
+	DoReply            = "reply"         // answer a received item by hand (takes it over)
+	DoAccept           = "accept"        // run a task once, let the responder answer a held question, or run again
+	DoAcceptAlways     = "accept_always" // run this task and grant its verified person (or exact device key)
+	DoDecline          = "decline"
+	DoResolve          = "resolve" // close a needs-human item without sending anything
+	DoCancel           = "cancel"
+	DoApprove          = "approve"     // ID = verified person or explicit device: answer future questions
+	DoUnapprove        = "unapprove"   // ID = peer
+	DoTrust            = "trust"       // ID = peer: trust its changed key
+	DoGrantTasks       = "grant_tasks" // ID = verified person or explicit device: permit future tasks here
+	DoRevokeTasks      = "revoke_tasks"
+	DoArchiveHeld      = "archive_held" // hide only this local notice; retained envelope stays blocked
+	DoArchiveHeldBatch = "archive_held_batch"
+	DoRead             = "read"
 )
 
 // Errors a Provider returns for requests the page should explain. Wrap

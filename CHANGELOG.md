@@ -6,6 +6,24 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Keep incompatible invitation-sync copies from blocking ordinary questions, files and replies behind them.
+- Synchronize older direct-agent conversations across verified personal devices, preserving the original sender, recipient, request, replies and files. Restored messages remain history and never rerun a task; these new copies wait for compatible clients.
+- Retain admission receipts for restored history and repair missing receipts from earlier browser versions. Reuse held copies while their evidence is pending, and distinguish queued, stored, admitted and blocked transfers in sync progress.
+- Stop unchanged read markers and topic names from generating repeated encrypted copies when a receiving device holds them. New reads and title changes still synchronize normally.
+- Preserve the verified original author of forwarded participation records during history catch-up, and repair older transfer bookkeeping without accepting invalid records or rerunning work.
+- Show repeated background sync failures in one expandable status, grouped by their recorded cause and sender, with bounded bulk archive. Archiving keeps the encrypted message blocked; new or changed reasons remain visible. Older records without a cause are explicitly unknown.
+- Keep human invitations reachable directly in the chat at narrow desktop and phone widths, using the same exact Join and No thanks decisions as OKs.
+- Bound CLI inbox output and provide exact-message lookup and continuation for large inboxes.
+- Keep inherited own-person permissions visible after an individual device grant is removed. Show the actual computer for remote default agents.
+- Let a verified own human device explicitly mark an exact remote needs-human request as handled. The host checks the request and attempt, and its confirmation updates the state without rerunning work. Attachment-only requests retain useful context in reports.
+
+### Added
+
+- Choose ongoing access to only the selected topic when bringing a person or agent into a chat. The signed scope applies to history, files, future messages and agent context; existing whole-chat invitations stay separate. Topic-only sharing requires compatible participants and uses Yourself for replies when a selected agent or live-session receiver would escape that scope.
+- Change a suggested task before sending it to the same agent. Original and revised confirmations share a durable choice across personal devices, so simultaneous approvals and retries cannot create two runs. Revised text keeps its provenance and uses the agent owner's normal task permissions.
+
 ## [0.8.13] — 2026-10-09
 
 ### Fixed

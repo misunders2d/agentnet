@@ -1,17 +1,24 @@
-# AgentNet v0.8.13 — released; paused for owner restart
+# AgentNet v0.8.14 — resumed October 9
 
-Published [v0.8.13](https://github.com/misunders2d/agentnet/releases/tag/v0.8.13)
-at 15:23:08 UTC on October 9; the existing relay upgraded and passed checks at
-15:24:52 UTC. Qualification, exact assets and remaining physical-device limits
-are in [V0_8_13.md](plans/V0_8_13.md) and [HANDOFF.md](HANDOFF.md).
+The owner restarted Codex and resumed release work. Current implementation,
+triage and verification evidence live in [V0_8_14.md](plans/V0_8_14.md).
+The candidate remains uncommitted and unpublished while focused fixes are
+integrated; full qualification follows the stable combined candidate.
 
-The owner confirmed native agent permissions unchanged. Topic-only continuing
-access and editing proposals before confirmation are explicitly deferred to
-the following release. Work is paused for the owner's requested update/restart.
-Begin v0.8.14 only after resumption: take the immediate issues and today's bugs
-from the [saved scope](plans/V0_8_13.md#owner-restart-boundary-and-v0814-scope),
-then read their latest Linear evidence. No installed client or desktop session
-was changed. Historical notes below retain their original scope.
+Implemented areas include direct-agent history across personal devices, durable
+history receipts and progress, grouped/archiveable Held back notices, bounded
+CLI inbox output, visible inherited permissions, exact remote request resolution,
+topic-only invitations and editable proposals. Focused native/browser and rendered
+checks are underway. MEL-589 shared-context authorship and MEL-590 Mac launch are
+awaiting ThinkPad's tested handoff; Mac launch remains a release blocker. The
+reported ThinkPad shutdown abort has not been reproduced by the isolated Linux
+package probe and is not claimed fixed.
+
+Previous [v0.8.13](https://github.com/misunders2d/agentnet/releases/tag/v0.8.13)
+was published15:23:08UTC on October9; the existing relay passed its upgrade
+checks15:24:52UTC. Its retained evidence and physical-device limits are in
+[V0_8_13.md](plans/V0_8_13.md). Deploy only the existing relay; installed clients
+update through their button/CLI. Preserve live sessions and native permissions.
 
 ---
 

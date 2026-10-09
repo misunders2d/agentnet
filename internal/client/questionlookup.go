@@ -106,9 +106,29 @@ export function lookupArgs(params) {
 	const args = Object.hasOwn(LOOKUPS, params?.lookup) ? LOOKUPS[params.lookup] : undefined;
 	if (!args) throw new Error("unknown AgentNet lookup");
 	if (params.lookup === "status") {
+		if (params.before !== undefined || params.section !== undefined || params.review !== undefined) throw new Error("only inbox takes page options");
 		if (typeof params.id !== "string" || !ID.test(params.id)) throw new Error("status needs the 32-character id of a message this device sent");
 		return [...args, params.id];
 	}
+	if (params.lookup === "inbox") {
+		const out = [...args];
+		if (params.id !== undefined) {
+			if (typeof params.id !== "string" || !/^(?:[0-9a-f]{32}|[0-9a-f]{64})$/.test(params.id) || params.before !== undefined) throw new Error("inbox needs one exact id or page cursor");
+			out.push("--id", params.id);
+		}
+		if (params.before !== undefined) {
+			if (typeof params.before !== "string" || !/^[A-Za-z0-9_-]{1,512}$/.test(params.before)) throw new Error("invalid inbox cursor");
+			out.push("--before", params.before);
+		}
+		if (params.section !== undefined) {
+			if (!["requests", "invites", "groups", "links", "held", "joined"].includes(params.section)) throw new Error("unknown inbox review section");
+			out.push("--section", params.section);
+		}
+		if (params.review !== undefined && typeof params.review !== "boolean") throw new Error("review must be boolean");
+		if (params.review) out.push("--review");
+		return out;
+	}
+	if (params.before !== undefined || params.section !== undefined || params.review !== undefined) throw new Error("only inbox takes page options");
 	if (params.id !== undefined) throw new Error("only status takes an id");
 	return [...args];
 }
@@ -150,10 +170,13 @@ export default function (pi) {
 	pi.registerTool({
 		name: "agentnet_lookup",
 		label: "AgentNet lookup",
-		description: "Read-only lookup of this AgentNet device's own state: version, whoami, inbox (not marked read), approvals, or status of a message this device sent.",
+	description: "Read-only lookup of this AgentNet device's own state: version, whoami, inbox summaries (not marked read; use id, before, review or section), approvals, or status of a message this device sent. Inbox continuation comes from the previous page; complete content is available with the CLI inbox --id ID --full.",
 		parameters: Type.Object({
 			lookup: Type.Union([Type.Literal("version"), Type.Literal("whoami"), Type.Literal("inbox"), Type.Literal("approvals"), Type.Literal("status")]),
-			id: Type.Optional(Type.String({ description: "status only: the message id" })),
+			id: Type.Optional(Type.String({ description: "status or inbox: the exact id" })),
+			before: Type.Optional(Type.String({ description: "inbox: previous page cursor" })),
+			section: Type.Optional(Type.String({ description: "inbox: requests, invites, groups, links, held or joined" })),
+			review: Type.Optional(Type.Boolean()),
 		}),
 		async execute(_id, params, signal) {
 			return { content: [{ type: "text", text: await runLookup(params, signal) }], details: undefined };
@@ -190,10 +213,16 @@ func (a *Agent) writeQuestionLookup(exe, harness string) (string, error) {
 		content = bytes.Replace(content, []byte(`import { Type } from "@earendil-works/pi-ai";`), nil, 1)
 		content = bytes.Replace(content, []byte(`parameters: Type.Object({
 			lookup: Type.Union([Type.Literal("version"), Type.Literal("whoami"), Type.Literal("inbox"), Type.Literal("approvals"), Type.Literal("status")]),
-			id: Type.Optional(Type.String({ description: "status only: the message id" })),
+			id: Type.Optional(Type.String({ description: "status or inbox: the exact id" })),
+			before: Type.Optional(Type.String({ description: "inbox: previous page cursor" })),
+			section: Type.Optional(Type.String({ description: "inbox: requests, invites, groups, links, held or joined" })),
+			review: Type.Optional(Type.Boolean()),
 		}),`), []byte(`parameters: pi.zod.object({
 			lookup: pi.zod.enum(["version", "whoami", "inbox", "approvals", "status"]),
 			id: pi.zod.string().optional(),
+			before: pi.zod.string().optional(),
+			section: pi.zod.string().optional(),
+			review: pi.zod.boolean().optional(),
 		}),`), 1)
 		content = bytes.Replace(content, []byte(`parameters: Type.Object({ action: Type.Union([Type.Literal("ask"), Type.Literal("wait")]), pid: Type.Optional(Type.String()), text: Type.Optional(Type.String()), id: Type.Optional(Type.String()) }),`), []byte(`parameters: pi.zod.object({ action: pi.zod.enum(["ask", "wait"]), pid: pi.zod.string().optional(), text: pi.zod.string().optional(), id: pi.zod.string().optional() }),`), 1)
 		content = bytes.Replace(content, []byte(`name: "agentnet_room",`), []byte(`name: "agentnet_room", approval: "read",`), 1)

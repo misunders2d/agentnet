@@ -12,7 +12,7 @@ import { Popover } from "@base-ui/react/popover";
 import { IconAlertCircle, IconAt, IconCloudOff, IconLock } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
-import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, threadAgentID, threadAuthor, whoName } from "../model";
+import { agentName, deviceTarget, deviceWho, firstLine, niceDevice, participants, personName, scopeMatches, threadAgentID, threadAuthor, whoName } from "../model";
 import { useStore, type Draft, type StagedFile } from "../store";
 import { EmojiPicker, useEmojiPreload } from "./Emoji";
 import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useFileDrop } from "./Composer.files";
@@ -84,12 +84,12 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   // ---- who is here and who this goes to
   const {view: teams} = useTeams(!!dm && caret !== null && !!trigger(text, caret));
   const people = useMemo(() => {
-    const here = dm ? candidates(dm, overview, names) : [];
+    const here = dm ? candidates(dm, overview, names, draft.newTopic ? "__new__" : draft.topic || "") : [];
     return [...collectiveOptions(here, teams), ...here];
-  }, [dm, overview, names, teams]);
+  }, [dm, overview, names, teams, draft.topic, draft.newTopic]);
   const humanGuest = dm?.role === "human_guest";
   const visitor = dm?.role === "visitor";
-  const author = dm ? guestAuthor(dm) : undefined;
+  const author = dm ? guestAuthor(dm, draft.newTopic ? "__new__" : draft.topic || "") : undefined;
 
   // A received request this person may still answer by hand (its actions say so).
   const answerable = thread && draft.replyTo ? (thread.messages || []).find((m) => m.id === draft.replyTo && (m.actions || []).includes("reply")) : undefined;
@@ -112,18 +112,18 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
       const a = (dm.agents || []).find((x) => x.pid === selectedPIDs[0]);
       const p = participants(dm, overview, names).find((x) => x.pid === selectedPIDs[0]);
       const name = p?.name || "This agent";
-      return { kind: "agent", pid: selectedPIDs[0], name: selectedPIDs.length > 1 ? selectedPIDs.map(pid => participants(dm, overview, names).find(x => x.pid === pid)?.name || "Unavailable agent").join(", ") : name, seed: p?.seed || selectedPIDs[0], canAsk: selectedPIDs.some(pid => dm.agents?.some(x => x.pid === pid && x.can_ask)), why: a ? a.state_text : "It is no longer in this chat." };
+      return { kind: "agent", pid: selectedPIDs[0], name: selectedPIDs.length > 1 ? selectedPIDs.map(pid => participants(dm, overview, names).find(x => x.pid === pid)?.name || "Unavailable agent").join(", ") : name, seed: p?.seed || selectedPIDs[0], canAsk: selectedPIDs.some(pid => dm.agents?.some(x => x.pid === pid && x.can_ask && scopeMatches(x, draft.newTopic ? "__new__" : draft.topic || ""))), why: a ? scopeMatches(a, draft.newTopic ? "__new__" : draft.topic || "") ? a.state_text : "It is invited to a different topic." : "It is no longer in this chat." };
     }
     return { kind: "conversation" };
-  }, [dm, thread, draft.agent, draft.text, answerable?.id, answerable?.kind, overview, names]);
+  }, [dm, thread, draft.agent, draft.text, draft.topic, draft.newTopic, answerable?.id, answerable?.kind, overview, names]);
   const latest = (): Draft => store.get().drafts[conv] ?? EMPTY;
 
   // Why nothing can be written here now, in words.
-  const mine = humanGuest && !author ? (dm?.guests || []).find((g) => g.host_here) : undefined;
+  const mine = humanGuest && !author ? (dm?.guests || []).find((g) => g.host_here && scopeMatches(g, draft.newTopic ? "__new__" : draft.topic || "")) : undefined;
   const closed: { title: string; detail?: string } | null =
     humanGuest && !author ? (mine?.state === "invited" ? { title: "Join to write here", detail: "You’re invited as a guest. Accept the invitation to write; your draft stays." }
       : mine && (mine.state === "dismissed" || mine.state === "left") ? { title: "You’re no longer a guest here", detail: "New messages don’t reach you. What was already shared stays with you." }
-      : { title: "You can read this chat but not write in it", detail: dm?.frozen })
+      : { title: "You can read this chat but not write in it", detail: dm?.frozen || "Choose the topic you were invited to." })
     : dm?.frozen ? { title: "Nothing more can be sent here", detail: dm.frozen }
     : thread?.key.pending ? { title: "Sending is paused", detail: "This agent’s identity changed. Check it before writing again." }
     : target.kind === "none" ? { title: "Nothing to ask here", detail: target.note + " To answer one of its requests yourself, choose Reply on it." }
@@ -283,7 +283,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
         const plans = pids.map((pid, index) => {
           const a = dm.agents?.find(x => x.pid === pid);
           const p = participants(dm, overview, names).find(x => x.pid === pid);
-          const to: Target = {kind:"agent",pid,name:p?.name || "Unavailable agent",seed:p?.seed || pid,canAsk:!!a?.can_ask,why:a?.state_text};
+          const to: Target = {kind:"agent",pid,name:p?.name || "Unavailable agent",seed:p?.seed || pid,canAsk:!!a?.can_ask && scopeMatches(a, captured.newTopic ? "__new__" : captured.topic || ""),why:a?.state_text};
           const d = {...captured, agent:pid, topic, newTopic:false, files:(captured.files || []).map(f => ({...f,staged:index === 0 ? f.staged : undefined,url:undefined}))};
           return {id:sendID(),c:conv,d,to,here:dm,fanout:true,group};
         });
@@ -342,7 +342,7 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
           if (d.newTopic) store.sends.move(id, id);
           else if ((last as (T.Message & { _topic?: boolean }) | undefined)?._topic) store.sends.move(id, last!.id);
           if (d.newTopic && r && store.isActive()) { store.setDraft(c, { ...(store.get().drafts[c] ?? EMPTY), newTopic: false }); void store.open({ kind: "thread", id: r.id }); }
-        } else r = await store.api.sendDM({ id, conv: c, topic:d.topic,body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here) ? { pid: guestAuthor(here)!.pid } : {}) });
+        } else r = await store.api.sendDM({ id, conv: c, topic:d.topic,body, reply_to: reply, quote:reply, files: fileIds, ...(here && guestAuthor(here, d.topic || "") ? { pid: guestAuthor(here, d.topic || "")!.pid } : {}) });
       } finally {
         for (const f of sent) f.staged = undefined;
         forgetStaged(c, sent); // a send takes the files it names, sent or refused

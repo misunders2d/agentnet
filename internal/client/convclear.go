@@ -190,8 +190,12 @@ func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 	defer tx.Rollback()
 	for _, m := range thread {
 		key := selfFP
-		if rows[m].in {
-			if err := tx.QueryRow(`SELECT verified_by FROM inbox WHERE id = ? AND conv IS NULL`, m).Scan(&key); err != nil {
+		err := tx.QueryRow(`SELECT author_fp FROM device_history_rows WHERE id=? LIMIT 1`, m).Scan(&key)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return out, err
+		}
+		if errors.Is(err, sql.ErrNoRows) && rows[m].in {
+			if err := tx.QueryRow(`SELECT coalesce(verified_by,claimed_fp) FROM inbox WHERE id = ? AND conv IS NULL`, m).Scan(&key); err != nil {
 				return out, err
 			}
 		}
@@ -202,8 +206,8 @@ func (a *Agent) DeleteThread(peer, id string) (ConversationDeleted, error) {
 	}
 	// Controls on its messages are erased with them.
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO conv_erased(conv, key, lid, deletion)
-		SELECT '', i.verified_by, i.id, ? FROM inbox i JOIN conv_erased t ON t.conv = '' AND t.lid = i.ref_id AND t.key = i.ref_fp
-		 WHERE i.conv IS NULL AND i.ref_id IS NOT NULL AND i.verified_by IS NOT NULL AND t.deletion = ?
+		SELECT '', coalesce(i.verified_by,i.claimed_fp), i.id, ? FROM inbox i JOIN conv_erased t ON t.conv = '' AND t.lid = i.ref_id AND t.key = i.ref_fp
+		 WHERE i.conv IS NULL AND i.ref_id IS NOT NULL AND coalesce(i.verified_by,i.claimed_fp) IS NOT NULL AND t.deletion = ?
 		UNION SELECT '', ?, o.id, ? FROM outbox o JOIN conv_erased t ON t.conv = '' AND t.lid = o.ref_id AND t.key = o.ref_fp
 		 WHERE o.conv IS NULL AND o.ref_id IS NOT NULL AND t.deletion = ?`, out.Deletion, out.Deletion, selfFP, out.Deletion, out.Deletion); err != nil {
 		return out, err
@@ -662,8 +666,8 @@ func (a *Agent) sweepErased(ctx context.Context) {
 // withoutErased leaves the device-thread messages with peer erased here out
 // of links.
 func (s *store) withoutErased(peer, selfFP string, links []link) ([]link, error) {
-	rows, err := s.db.Query(`SELECT i.id FROM inbox i WHERE i.sender = ? AND i.conv IS NULL AND `+erasedIn+`
-		UNION SELECT o.id FROM outbox o WHERE o.recipient = ? AND o.conv IS NULL AND `+erasedOut, peer, peer, selfFP)
+	rows, err := s.db.Query(`SELECT i.id FROM inbox i WHERE i.id IN(SELECT id FROM device_thread_links WHERE peer=? AND storage='in') AND i.conv IS NULL AND `+erasedIn+`
+		UNION SELECT o.id FROM outbox o WHERE o.id IN(SELECT id FROM device_thread_links WHERE peer=? AND storage='out') AND o.conv IS NULL AND `+erasedOut, peer, peer, selfFP)
 	if err != nil {
 		return nil, err
 	}

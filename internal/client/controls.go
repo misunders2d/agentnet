@@ -343,6 +343,8 @@ func (a *Agent) capSupport(ctx context.Context, address string, key identity.Pub
 			what = "execution status or operator decisions"
 		} else if cap == protocol.CapContinuation {
 			what = "human clarification continuations (update AgentNet on that computer)"
+		} else if cap == protocol.CapOwnSyncV3 {
+			what = "own-device history and decisions (update AgentNet on that computer)"
 		}
 		return false, WaitPeerUpdate + address + " cannot read " + what + " yet (an older program, or it has not connected since updating)"
 	}
@@ -438,6 +440,8 @@ func (a *Agent) sendControlAs(ctx context.Context, ref ControlRef, sub, body, ca
 			return ControlSent{}, err
 		}
 		defer notifyDaemon(a.home)
+		a.convWork.due(convHistory)
+		a.kickNow()
 		if sub == envelope.SubRetraction {
 			if err := a.stopRetractedRequests(ref); err != nil {
 				return ControlSent{}, err
@@ -1099,6 +1103,13 @@ func (a *Agent) admitHumanEdit(ctx context.Context, env envelope.Envelope, in en
 		if err := insertHumanProof(tx, in.Human); err != nil {
 			return err
 		}
+		members, err := membersIn(tx, in.Conv)
+		if err != nil {
+			return err
+		}
+		if err = topicAudienceAuthorization(tx, in, members, a.Address); err != nil {
+			return err
+		}
 		return humanAuthorization(tx, in.Conv, in.Human, env.From, sender.Fingerprint(), a.Address, a.Self().Fingerprint())
 	})
 	if err != nil {
@@ -1284,10 +1295,10 @@ type controlRow struct {
 
 // legacyControls loads the controls of the device thread with peer.
 func (s *store) legacyControls(peer, self, selfFP string) ([]controlRow, error) {
-	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, ''), coalesce(human,'')
-		  FROM inbox WHERE conv IS NULL AND ref_id IS NOT NULL AND sender = ?
+	rows, err := s.db.Query(`SELECT id, sub, sender, coalesce(verified_by, claimed_fp, ''), ref_id, ref_fp, body, coalesce(received_ms, received_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, ''), coalesce(human,'')
+		  FROM inbox WHERE conv IS NULL AND ref_id IS NOT NULL AND id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='in')
 		UNION ALL SELECT id, sub, ?, ?, ref_id, ref_fp, body, coalesce(created_ms, created_at * 1000), coalesce(pid, ''), coalesce(agent_id, ''), coalesce(origin, ''), coalesce(human,'')
-		  FROM outbox WHERE conv IS NULL AND ref_id IS NOT NULL AND recipient = ?`, peer, self, selfFP, peer)
+		  FROM outbox WHERE conv IS NULL AND ref_id IS NOT NULL AND id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='out')`, peer, self, selfFP, peer)
 	if err != nil {
 		return nil, err
 	}
@@ -1467,14 +1478,18 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 	execs := execViews(rows)
 	for i := range msgs {
 		m := &msgs[i]
-		fp := selfFP
-		if m.Dir == "in" {
+		fp := m.FromKey
+		if fp == "" {
+			fp = selfFP
+		}
+		if m.storedIn {
 			var got string
-			if a.store.db.QueryRow(`SELECT coalesce(verified_by, '') FROM inbox WHERE id = ?`, m.ID).Scan(&got) != nil || got == "" {
+			if a.store.db.QueryRow(`SELECT coalesce(verified_by, claimed_fp, '') FROM inbox WHERE id = ?`, m.ID).Scan(&got) != nil || got == "" {
 				continue
 			}
 			fp = got
-		} else if e, ok := execs[ControlRef{ID: m.ID, Fingerprint: selfFP}]; ok && e.Host == peer { // my request: the peer's word on it
+		}
+		if e, ok := execs[ControlRef{ID: m.ID, Fingerprint: fp}]; m.Dir == "out" && ok && e.Host == peer { // my request: the peer's word on it
 			status, at := legacyAnswer(msgs, m.ID)
 			e.settle(a.hostConnected(peer), status, at, time.Now().Unix())
 			m.Exec = &e
@@ -1484,6 +1499,10 @@ func (a *Agent) decorateLegacy(peer string, msgs []ConversationMessage) error {
 			m.Body = "" // an ordinary message's text is gone; a request keeps what its agent ran
 		}
 		if !m.Deleted {
+			if m.History {
+				m.Can = nil
+				continue
+			} // copying history creates no new device-key edit grant
 			m.Can = []string{CanReact}
 			if m.Dir == "out" {
 				m.Can = append(m.Can, CanEdit, CanDelete)

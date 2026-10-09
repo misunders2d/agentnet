@@ -12,7 +12,7 @@ import { MOTION, Swap, useLeaving } from "../ui/Motion";
 import { Button } from "../ui/Button";
 import { Composer } from "./Composer";
 import { InviteSheet } from "./InviteSheet";
-import { bringIn, RoomSheet } from "./RoomPanel";
+import { bringIn, PendingInvitations, RoomSheet } from "./RoomPanel";
 import { agentRejoinState } from "./RoomPanel.model";
 import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
 import { TopicBar, TopicEnd } from "./Conversation.topics";
@@ -87,6 +87,7 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   return (
     <section aria-label={title} className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
       <Header ctx={ctx} wide={wide} helpers={hs} canInvite={canInvite} />
+      {t && <PendingInvitations t={t} />}
       {!wide && <GuestBar helpers={hs} onDismissed={setLeft} />}
       {t&&personMain ? <PersonTopics dm={t} main={personMain} onMain={()=>{
         store.setDraft(personMain,{...store.draft(personMain),topic:undefined,newTopic:false,replyTo:undefined});

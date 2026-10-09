@@ -365,7 +365,7 @@ func (a *Agent) quarantineUndecodable(ctx context.Context, raw []byte) error {
 		return nil
 	}
 	a.Logf("message %s is malformed; quarantined", head.ID)
-	if err := a.store.quarantine(head.ID, head.From, reasonInvalid, raw); err != nil {
+	if err := a.store.quarantineDiagnostic(head.ID, head.From, reasonInvalid, raw, "malformed envelope"); err != nil {
 		return err
 	}
 	return a.flushReceipts(ctx)
@@ -415,7 +415,7 @@ func (a *Agent) flushReceipts(ctx context.Context) error {
 
 func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error {
 	if env.To != a.Address {
-		return a.hold(env, reasonInvalid)
+		return a.holdDiagnostic(env, reasonInvalid, "addressed to another device")
 	}
 	sender, _, found, err := a.store.peer(env.From)
 	if err != nil {
@@ -427,7 +427,7 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 			if retryable(err) {
 				return err
 			}
-			return a.hold(env, reasonInvalid)
+			return a.holdDiagnostic(env, reasonInvalid, "sender key unavailable")
 		}
 		if err := a.store.pin(e.Public); err != nil {
 			return err
@@ -439,17 +439,22 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		return a.admitConv(ctx, env, in, sender, false)
 	}
 	if err == nil && in.V == envelope.Version3 {
-		return a.admitControl(ctx, env, in, sender, false)
+		err = a.admitControl(ctx, env, in, sender, false)
+		if err == nil && in.Conv == "" {
+			a.convWork.due(convHistory)
+			a.kickNow()
+		}
+		return err
 	}
 	if err == nil {
 		if namedAgentFields(in) {
 			if err := a.checkDeviceAgent(in, sender); err != nil {
-				return a.hold(env, reasonInvalid)
+				return a.holdDiagnostic(env, reasonInvalid, err.Error())
 			}
 		}
 		if in.ReceiverRoute != nil && in.ReceiverRoute.Op != "request" {
 			if err := a.receiverSetupSender(a.store.db, in, sender.Fingerprint()); err != nil {
-				return a.hold(env, reasonInvalid)
+				return a.holdDiagnostic(env, reasonInvalid, err.Error())
 			}
 		}
 		// A person grant needs verified membership before initialState, including
@@ -484,6 +489,8 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		a.wakeWorker()
 		if in.ReceiverRoute == nil || in.ReceiverRoute.Op == "request" {
 			a.noteStatus(in.ID)
+			a.convWork.due(convHistory)
+			a.kickNow()
 		} // setup is not remote task execution
 		if len(in.Attachments) > 0 {
 			a.convWork.due(convFetch) // keep its files here (historyfiles.go prefetchFiles)
@@ -505,13 +512,17 @@ func (a *Agent) verifyAndStore(ctx context.Context, env envelope.Envelope) error
 		a.Logf("message %s held: keys for %s changed; run `agentnet trust %s` after verifying", env.ID, env.From, env.From)
 		return a.hold(env, reasonKeyChanged)
 	}
-	a.Logf("message %s from %s rejected: %v", env.ID, env.From, err)
-	return a.hold(env, reasonInvalid)
+	a.Logf("message %s from %s rejected: envelope verification failed", env.ID, env.From)
+	return a.holdDiagnostic(env, reasonInvalid, "envelope verification failed")
 }
 
 func (a *Agent) hold(env envelope.Envelope, reason string) error {
+	return a.holdDiagnostic(env, reason, "")
+}
+
+func (a *Agent) holdDiagnostic(env envelope.Envelope, reason, why string) error {
 	raw, _ := json.Marshal(env)
-	return a.store.quarantine(env.ID, env.From, reason, raw)
+	return a.store.quarantineDiagnostic(env.ID, env.From, reason, raw, why)
 }
 
 // startWorker marks jobs a previous daemon left running as interrupted and

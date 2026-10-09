@@ -144,7 +144,9 @@ func historyCopyPresent(q dbq, dev identity.Public, c outCopy) (bool, error) {
 			return false, nil
 		}
 	}
-	return state == stateQueued || state == "waiting" || state == "custody" || state == "delivered", nil
+	// Quarantined means the receiver retained this exact ciphertext. Its
+	// normal proof recovery owns reconsideration; a new ID only floods it.
+	return state == stateQueued || state == "waiting" || state == "custody" || state == "delivered" || state == "quarantined", nil
 }
 
 func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) ([]historySourceRow, error) {
@@ -242,6 +244,11 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	if err != nil {
 		return false, err
 	}
+	repairMore, repairSeeded, err := a.repairLifecycleHistory(dev)
+	if err != nil {
+		return false, err
+	}
+	defer func() { more = more || err == nil && repairMore }()
 	before := p
 	a.convWork.mu.Lock()
 	if a.convWork.historyDeferred == nil {
@@ -249,12 +256,15 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 	}
 	sweep, knownWake := a.convWork.historyDeferred[dev.Fingerprint()]
 	a.convWork.mu.Unlock()
+	if repairSeeded {
+		sweep, knownWake = historyDeferredScan{}, false
+	}
 
 	if !knownWake {
 		// Failed/expired copies remain eligible on the next existing wake.
 		// This schedules exact source refs only; their authority is checked
 		// again before any replacement ciphertext is committed.
-		if _, e := a.store.db.Exec(`INSERT OR IGNORE INTO history_deferred(recipient_fp,dir,id) SELECT h.recipient_fp,h.source_dir,h.source_id FROM history_copies h LEFT JOIN outbox o ON o.id=h.carrier WHERE h.recipient_fp=? AND coalesce(o.state,'') NOT IN ('queued','waiting','custody','delivered')`, dev.Fingerprint()); e != nil {
+		if _, e := a.store.db.Exec(`INSERT OR IGNORE INTO history_deferred(recipient_fp,dir,id) SELECT h.recipient_fp,h.source_dir,h.source_id FROM history_copies h LEFT JOIN outbox o ON o.id=h.carrier WHERE h.recipient_fp=? AND coalesce(o.state,'') NOT IN ('queued','waiting','custody','delivered','quarantined')`, dev.Fingerprint()); e != nil {
 			return false, e
 		}
 		p.context = ""
@@ -457,6 +467,11 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			if prior != hash {
 				return fmt.Errorf("%w: page logical duplicate", errHistoryCatchupConflict)
 			}
+			if it.key != item.FromKey {
+				copies = append(copies, *c)
+				sources = append(sources, it)
+				sourceByCopy[c.env.ID] = it
+			}
 			done[id] = true
 			return nil
 		}
@@ -465,6 +480,13 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			return e
 		}
 		if present {
+			if it.key != item.FromKey {
+				// Revalidate this deferred source in the final transaction even
+				// when its corrected copy arrived through an equivalent source.
+				copies = append(copies, *c)
+				sources = append(sources, it)
+				sourceByCopy[c.env.ID] = it
+			}
 			done[id] = true
 			return nil
 		}
@@ -571,21 +593,27 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		if e != nil {
 			return false, e
 		}
-		if present {
-			continue
-		}
 		var item HistoryItem
 		if e = decodeStrict([]byte(c.in.Body), &item); e != nil {
 			return false, e
 		}
-		hash, e := historyCopyHash(c)
-		if e != nil {
-			return false, e
+		if !present {
+			hash, e := historyCopyHash(c)
+			if e != nil {
+				return false, e
+			}
+			if _, e = tx.Exec(`INSERT INTO history_copies(recipient_fp,conv,author,lid,hash,carrier,source_dir,source_id) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(recipient_fp,conv,author,lid) DO UPDATE SET carrier=excluded.carrier`, dev.Fingerprint(), c.in.Conv, item.FromKey, item.LID, hash, c.env.ID, sourceByCopy[c.env.ID].dir, sourceByCopy[c.env.ID].in.ID); e != nil {
+				return false, e
+			}
+			freshCopies = append(freshCopies, c)
 		}
-		if _, e = tx.Exec(`INSERT INTO history_copies(recipient_fp,conv,author,lid,hash,carrier,source_dir,source_id) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(recipient_fp,conv,author,lid) DO UPDATE SET carrier=excluded.carrier`, dev.Fingerprint(), c.in.Conv, item.FromKey, item.LID, hash, c.env.ID, sourceByCopy[c.env.ID].dir, sourceByCopy[c.env.ID].in.ID); e != nil {
-			return false, e
+		if source := sourceByCopy[c.env.ID]; source.key != item.FromKey {
+			// Retire only the obsolete transport attribution, atomically with
+			// its verified original-author copy. Retained ciphertext stays put.
+			if _, e = tx.Exec(`DELETE FROM history_copies WHERE recipient_fp=? AND conv=? AND author=? AND lid=? AND source_dir=? AND source_id=?`, dev.Fingerprint(), c.in.Conv, source.key, item.LID, source.dir, source.in.ID); e != nil {
+				return false, e
+			}
 		}
-		freshCopies = append(freshCopies, c)
 	}
 	if err = insertCopies(tx, append(carriers, freshCopies...)); err != nil {
 		return false, err

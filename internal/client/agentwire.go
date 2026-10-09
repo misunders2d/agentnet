@@ -134,7 +134,7 @@ func copyRequirement(c outCopy) string {
 }
 
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
-	if required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
+	if required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)
@@ -209,7 +209,7 @@ func agentTurn(sub, kind, status, replyTo, pid, origin string) bool {
 // existing proof retry path.
 func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public, historical bool) (string, error) {
 	agent := agentTurn(in.Sub, in.Kind, in.Status, in.ReplyTo, in.PID, in.Origin)
-	if !namedAgentFields(in) && !agent || envelope.AssistantReaction(in) { // a reaction is bound by assistantHistoryCheck / admitAssistantReaction
+	if !namedAgentFields(in) && !agent && !(in.Sub == "" && in.PID != "" && in.Target != nil) || envelope.AssistantReaction(in) { // a reaction is bound by assistantHistoryCheck / admitAssistantReaction
 		return "", nil
 	}
 	if in.PID == "" || !protocol.ValidID(in.PID) {
@@ -224,6 +224,12 @@ func (a *Agent) checkConversationAgent(in envelope.Inner, sender identity.Public
 	}
 	if p.Invite == "" || p.State == PartConflict {
 		return reasonProof, errors.New("named participation has no unambiguous invitation")
+	}
+	if err := checkParticipationTopic(a.store.db, p.Topic, in); err != nil {
+		if errors.Is(err, errParticipationTopicPending) {
+			return reasonProof, err
+		}
+		return reasonInvalid, err
 	}
 	if in.Target != nil && (in.Target.AgentID != p.AgentID || in.Target.Address != p.Host.Address || in.Target.Fingerprint != p.Host.Fingerprint) {
 		return reasonInvalid, errors.New("named request differs from its participation host")
@@ -308,6 +314,10 @@ type NeedsUpdateError struct{ Address, Cap string }
 func (e *NeedsUpdateError) Error() string {
 	message := "cannot read named agents yet; update all its active AgentNet sessions"
 	switch e.Cap {
+	case protocol.CapTopicParticipation:
+		message = "cannot enforce topic-only participation yet; update all its active AgentNet sessions"
+	case protocol.CapOwnSyncV3:
+		message = "cannot synchronize direct-agent history or resolve own requests yet; update all its active AgentNet sessions"
 	case protocol.CapOwnSyncV2:
 		message = "cannot synchronize newer own-device history and invitation views yet; update all its active AgentNet sessions"
 	case protocol.CapReadSync:

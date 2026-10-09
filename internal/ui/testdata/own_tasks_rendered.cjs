@@ -8,13 +8,14 @@ const overview={version:'fixture',seq:1,me:{address:own.address,fingerprint:'fix
 const boot=`
 const seed=${JSON.stringify({overview,person,other})};
 const browser=new URL(location.href).searchParams.has('browser');
-window.fixture={overview:seed.overview,actions:[],tasks:sessionStorage.getItem('own-tasks')==='on',fail:true};
+window.fixture={overview:seed.overview,actions:[],separate:true,tasks:sessionStorage.getItem('own-tasks')==='on',fail:true};
 const host={version:1,platform:browser?'browser':'daemon',workspace:{id:'fixture',name:'Own task fixture',address:seed.overview.me.address},workspaces:null,skins:[],listen(){return()=>{};},onOpen(){},onSkinsChange(){return()=>{};},stage:async()=>{throw Error('No files');},file:async()=>{throw Error('No files');},api:async(p,body)=>{
 if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);
-if(p==='/api/approvals')return {questions:[],tasks:[{person:seed.other,label:'Alex',status:'active'},...(fixture.tasks?[{person:seed.person,label:'Alex',status:'active'}]:[])],native_tasks:[{address:'alex/desk',fingerprint:'native-exact-key',status:'active'}],participations:[]};
+if(p==='/api/approvals')return {questions:[{person:seed.person,label:'Alex',status:'active'},...(fixture.separate?[{address:'alex/phone'}]:[])],own_devices:seed.overview.person.devices.map(d=>({...d,questions:'person',tasks:fixture.tasks?'person':d.address==='alex/desk'?'native':'approval'})),tasks:[{person:seed.other,label:'Alex',status:'active'},...(fixture.tasks?[{person:seed.person,label:'Alex',status:'active'}]:[])],native_tasks:[{address:'alex/desk',fingerprint:'native-exact-key',status:'active'}],participations:[]};
 if(p==='/api/act'){
 fixture.actions.push(structuredClone(body));
 if(browser)throw Error('Browser has no native grant authority');
+if(body.id==='alex/phone'&&body.do==='unapprove'){fixture.separate=false;fixture.overview.seq++;return 'Separate permission removed.';}
 if(body.id!==seed.person)throw Error('Wrong person target');
 if(body.do==='grant_tasks'&&fixture.fail){fixture.fail=false;throw Error('Fixture could not save this permission');}
 if(body.do==='grant_tasks'||body.do==='revoke_tasks'){fixture.tasks=body.do==='grant_tasks';sessionStorage.setItem('own-tasks',fixture.tasks?'on':'off');fixture.overview.seq++;return 'Permission saved on Laptop.';}
@@ -46,6 +47,16 @@ const server=http.createServer((req,res)=>{
    await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());page.on('pageerror',e=>errors.push(String(e)));
    const settings=async()=>{await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:width<700?'You':'Settings',exact:true}).click();await page.getByRole('button',{name:/^Permissions/}).click();};
    await page.goto(origin);await page.waitForFunction(()=>window.ready);await settings();
+   const inventory=page.getByRole('list',{name:'Your devices and current permissions'});
+   await inventory.waitFor();assert.equal(await inventory.getByRole('listitem').count(),3,'all own devices shown before a separate grant is removed');
+   await page.getByRole('button',{name:'Remove separate permission for Your Phone',exact:true}).click();
+   await page.getByText(/Removing this separate permission does not turn off/).waitFor();
+   await page.getByRole('button',{name:'Remove separate permission',exact:true}).click();
+   await page.getByRole('button',{name:'Remove separate permission for Your Phone',exact:true}).waitFor({state:'hidden'});
+   assert.equal(await inventory.getByRole('listitem').count(),3,'removing a separate grant never removes a device');
+   assert.equal(await inventory.getByText('Questions: allowed by My devices',{exact:true}).count(),3,'inherited effective permission remains visible');
+   assert.deepEqual(await page.evaluate(()=>fixture.actions),[{do:'unapprove',id:'alex/phone'}]);
+   await page.evaluate(()=>{fixture.actions=[];});
    const on=()=>page.getByRole('button',{name:'Turn on tasks without asking for My devices',exact:true});
    await on().waitFor();assert(await page.getByText(/Permissions on your Laptop/).count(),'receiving host named');
    assert(await page.getByText(/All your verified devices, including phones/).count(),'verified scope');

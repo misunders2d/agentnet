@@ -335,8 +335,8 @@ func (s *store) firstLines(peer string, ids []string) (map[string]string, error)
 		for _, id := range chunk {
 			args = append(args, id)
 		}
-		rows, err := s.db.Query(`SELECT id, `+line+` FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)
-			UNION ALL SELECT id, `+line+` FROM outbox WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
+		rows, err := s.db.Query(`SELECT id, `+line+` FROM inbox WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='in') AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)
+			UNION ALL SELECT id, `+line+` FROM outbox WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='out') AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}

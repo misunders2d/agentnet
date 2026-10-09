@@ -206,7 +206,7 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		if info.Held != 0 || info.Conflict != "" || ev == nil || ev.Type != protocol.EventDismiss || ev.Hash() != info.Dismissal {
 			return nil, errors.New("group: historical forwarded end is not the exact counted dismissal")
 		}
-	} else if err = externalTurn(original, roleInfo, m, item.From, item.FromKey); err != nil {
+	} else if err = externalTurn(original, roleInfo, m, item.From, item.FromKey, q); err != nil {
 		if info.State == PartInvited && item.Sub == "" {
 			return nil, ErrGroupContextPending
 		}

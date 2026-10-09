@@ -54,6 +54,13 @@ assert.deepEqual(after,{...before,notice_archived:true});
 assert.equal((await store.get('receipts',id)).state,'quarantined');
 assert.equal((await store.all('inbox')).length,0);assert.equal((await store.all('outbox')).length,0);
 assert.equal(after.detail_code,'group_consent_mismatch');
+await engine.hold({id,from:'alice/laptop'},raw,'invalid','Group logical lifecycle conflict.');
+assert.equal((await store.get('held',id)).notice_archived,false,'different persisted invalid cause resurfaces');
+await engine.hold({id,from:'alice/laptop'},raw,'invalid','SYNTHETIC_PRIVATE_BODY password=secret');
+assert.equal((await store.get('held',id)).detail_code,'admission_failed','new admission failure preserves stage without arbitrary text');
+const malformedID='c'.repeat(32);
+await engine.onMessage(JSON.stringify({id:malformedID,from:'alice/laptop',sig:[]}));
+assert.equal((await store.get('held',malformedID)).detail_code,'envelope_malformed','producer records malformed-envelope category');
 await assert.rejects(()=>engine.archiveHeldNotice('e'.repeat(32)));
 await assert.rejects(()=>engine.apiRequest('/api/act',{do:'archive_held',id:'e'.repeat(32)}));
 for(const [i,reason] of ['key_changed','identity_conflict','conflicting_duplicate'].entries()) {
@@ -81,6 +88,20 @@ for(const reason of ['key_changed','identity_conflict','conflicting_duplicate','
  await engine.archiveHeldNotice(proofID);
 }
 checks+=16;
+{
+ const s=memoryStore(),e=new Engine({store:s,base:'https://isolated.invalid',fetch:async()=>{throw Error('archive attempted network');}});
+ const ids=['1','2','3','4'].map(c=>c.repeat(32));
+ for(let i=0;i<ids.length;i++) await s.write([{s:'held',k:ids[i],v:{id:ids[i],from:'claimed/device',reason:i===1?'proof_pending':'invalid',detail_code:i===2?'admission_failed':'',envelope:'retained ciphertext',at:1}}]);
+ const held=ids.slice(0,3).map((id,i)=>({id,reason:i===1?'proof_pending':'invalid',detail_code:''}));
+ const result=await e.apiRequest('/api/act',{do:'archive_held_batch',held});
+ assert.match(result.note,/Archived 2 notices/);
+ assert.match((await e.archiveHeldNotices(held)).note,/Archived 0 notices/,'retry is idempotent');
+ for(let i=0;i<ids.length;i++) {const r=await s.get('held',ids[i]);assert.equal(!!r.notice_archived,i<2);assert.equal(r.envelope,'retained ciphertext');}
+ assert.equal((await s.all('receipts')).length,0);assert.equal((await s.all('inbox')).length,0);assert.equal((await s.all('outbox')).length,0);
+ await assert.rejects(e.archiveHeldNotices([{id:ids[0],reason:'key_changed',detail_code:''}]));
+ await assert.rejects(e.archiveHeldNotices(Array(257).fill(held[0])));
+ e.stop();checks+=12;
+}
 const src = readFileSync(new URL('../static/engine.mjs', import.meta.url), 'utf8');
 assert.ok(!/agentnet trust/.test(src), 'the engine still sends people to "agentnet trust"');
 checks++;

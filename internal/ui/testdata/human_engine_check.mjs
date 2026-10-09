@@ -75,11 +75,11 @@ async function world() {
     return wire.signEvent(sender.keys, { conv, pid, type, prev: prev || info.invite, ts: Math.floor(now / 1000), author: sender.author() });
   };
   const accept = async (pid) => { const ev = await decision(carol, pid); for (const e of [alice, bob, carol]) await receive(await from(carol, e, { sub: 'event', pid, body: wire.eventJSON(ev) }), e); return ev; };
-  const sibling = async (owner, address) => {
+  const sibling = async (owner, address, human = false) => {
     const e = new Engine({ store: memoryStore(), now: () => now, base: owner.base, fetch });
     e.keys = await wire.newKeys(); e.address = address; e.pub = await wire.publicEntry(e.keys, address); e.fp = await wire.fingerprint(e.pub);
     const join = await wire.joinConsent(e.keys, address, owner.me.person, owner.me.seq + 1, owner.me.hash);
-    const next = await wire.nextRoster(owner.keys, owner.address, owner.roster, [...owner.me.devices.map((d) => pubs.get(d.address)), e.pub], join);
+    const next = await wire.nextRoster(owner.keys, owner.address, owner.roster, [...owner.me.devices.map((d) => pubs.get(d.address)), e.pub], join, owner.roster.label, human ? [...await wire.rosterHumans(owner.roster), e.fp] : null);
     await wire.verifyNext(next, owner.roster);
     const steps = [...await Promise.all(rosters.get(owner.me.person).map((r) => wire.parseRoster(r))), next];
     owner.me = await owner.personRecord(steps, 'self', owner.me); owner.roster = next;
@@ -490,5 +490,44 @@ for (const ending of ['original', 'self']) {
  const leave=await b.changeHuman('invite',{conv,host:g.address});await w.drain(g);await w.drain(a);await g.changeHuman('decide',{pid:leave.pid,accept:true});await w.drain(b);await w.drain(a);
  await g.changeHuman('leave',{pid:leave.pid});await w.drain(b);await w.drain(a);
  check((await b.groupThread(conv)).guests.find(x=>x.pid===leave.pid).state==='dismissed','guest may leave without member rights');
+}
+// Pre-upgrade forwarded lifecycle copies used the transport member as author.
+// Repair a completed own-human job without resetting history or hiding holds.
+{
+ const w=await world(),{alice:a,bob:b,carol:c,mallory:d,conv}=w;
+ const cp=await a.changeHuman('invite',{conv,host:c.address});await w.drain(c);await w.drain(b);
+ await c.changeHuman('decide',{pid:cp.pid,accept:true});await w.drain(a);await w.drain(b);
+ const dp=await b.changeHuman('invite',{conv,host:d.address});await w.drain(d);await w.drain(a);
+ await d.changeHuman('decide',{pid:dp.pid,accept:true});await w.drain(a);await w.drain(b);await a.discloseHumanAudience();
+ const source=(await a.store.all('outbox')).find(r=>r.forwarded&&r.to===c.address&&r.pid===dp.pid&&wire.parseEvent(r.body).type==='scope');
+ check(!!source,'real forwarded member-signed lifecycle source exists');
+ const phone=await w.sibling(a,'alice/lifecycle-phone',true),dev=a.me.devices.find(d=>d.address===phone.address),chat=await a.store.get('convs',conv),raw=a.itemOf(source,true);
+ const correct=await a.historyCopy(dev,chat,raw),item=wire.parseHistory(correct.body);
+ check(item.from===b.address&&item.from_key===b.fp&&item.body===source.body&&item.id===source.id&&item.lid===source.lid,'forwarded lifecycle history keeps verified original author and exact source');
+ await w.receive(correct.envelope,phone);
+ check((await phone.store.get('receipts',correct.id))?.state==='delivered'&&!await phone.store.get('held',correct.id),'sealed own-phone receiver accepts unchanged signed lifecycle');
+ for(const field of ['author','conv','pid','sig']) {
+  const e=wire.parseEvent(source.body);
+  if(field==='author')e.author=c.author();else if(field==='conv')e.conv='a'.repeat(64);else if(field==='pid')e.pid=id();else e.sig[0]^=1;
+  await refuses(()=>a.dmLifecycleHistorySource(chat,{...raw,body:wire.eventJSON(e)}),/lifecycle|signature|record/i);
+ }
+ const old=await a.ownCopy(dev,chat,'history',wire.historyJSON(raw));old.recipient_fp=phone.fp;old.state='quarantined';
+ const oldKey='history-copy/'+phone.fp+'/'+conv+'/'+a.fp+'/'+raw.lid,newKey='history-copy/'+phone.fp+'/'+conv+'/'+b.fp+'/'+raw.lid;
+ const ceiling=await a.store.get('kv','history-arrival')||0;
+ const job={device:phone.address,fingerprint:phone.fp,state:'done',pos:{conv,ms:now,id:source.id},done:1,total:1,own_human:a.fp,catchup:{v:2,source:a.fp,stage:'tail',recent:conv,older:null,tail:ceiling,ceiling,started:now}};
+ await a.store.write([{s:'outbox',k:old.id,v:old},{s:'kv',k:oldKey,v:{hash:await wire.groupHistoryContentHash(conv,raw),copy:old.id}},{s:'kv',k:'history',v:{[phone.address]:job}}]);
+ const pin=await a.store.get('pins',b.address);await a.store.write([{s:'pins',k:b.address,v:{...pin,pending:'changed'}}]);
+ await a.historyCatchupStep(dev,job);
+ check(!!await a.store.get('kv',oldKey)&&!await a.store.get('kv',newKey),'pending author key keeps old blocked mapping until verified replacement exists');
+ await a.store.write([{s:'pins',k:b.address,v:pin}]);a.historyWake=(a.historyWake||0)+1;
+ await a.historyCatchupStep(dev,(await a.historyBook())[phone.address]);
+ const repaired=await a.store.get('kv',newKey),row=repaired&&await a.store.get('outbox',repaired.copy);
+ check(!!row&&!await a.store.get('kv',oldKey)&&(await a.store.get('outbox',old.id)).state==='quarantined','verified replacement retires only obsolete progress mapping, retaining old ciphertext');
+ await w.receive(row.envelope,phone);await a.dispatch('receipt',JSON.stringify({id:row.id,state:'delivered',seq:1}));
+ const before=(await a.store.all('outbox')).length,position=JSON.stringify((await a.historyBook())[phone.address].pos);
+ a.historySweeps=new Map();a.historyWake++;
+ await a.historyCatchupStep(dev,(await a.historyBook())[phone.address]);
+ check((await a.store.all('outbox')).length===before&&JSON.stringify((await a.historyBook())[phone.address].pos)===position,'restart/reconnect preserves completed cursor and exact corrected copy');
+ check((await a.overview()).history.find(j=>j.device===phone.address).blocked===0,'old quarantined transport tuple no longer falsely reports blocked history');
 }
 console.log('human engine isolated lifecycle checks passed: ' + checks);

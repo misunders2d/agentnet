@@ -286,7 +286,7 @@ func eventText(body string, p dmPeople) string {
 	case protocol.EventAccept:
 		if p.group {
 			if ev.Author.GroupAdmission == "" {
-				return who + " accepted: this outside agent now receives every new message and file in this group until removed."
+				return who + " accepted: this outside agent participates with the scope of its invitation."
 			}
 			return who + " accepted: the agent participates in this group."
 		}
@@ -378,6 +378,9 @@ func (l *Live) agentViews(conv string, p dmPeople, msgs []client.ConvMessage) ([
 		var merged []AgentView
 		for _, v := range out {
 			k := v.Host.Address + "/" + v.Host.Fingerprint + "/" + v.AgentID
+			if v.Topic != nil {
+				k += "/topic/" + *v.Topic
+			}
 			if i, ok := unique[k]; ok && (merged[i].State == client.PartActive || merged[i].State == client.PartInvited) && (v.State == client.PartActive || v.State == client.PartInvited) {
 				old := merged[i]
 				if old.State != client.PartActive && v.State == client.PartActive || old.State == v.State && (len(v.Shared) > len(old.Shared) || len(v.Shared) == len(old.Shared) && (v.Invited.Before(old.Invited) || v.Invited.Equal(old.Invited) && v.PID < old.PID)) {
@@ -437,7 +440,7 @@ func (l *Live) hasResponder() bool {
 }
 
 func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMessage, responder bool) AgentView {
-	v := AgentView{PID: info.PID, PIDs: []string{info.PID}, AgentID: info.AgentID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
+	v := AgentView{Topic: info.Topic, PID: info.PID, PIDs: []string{info.PID}, AgentID: info.AgentID, State: info.State, Host: personView(info.Host), HostHere: info.HostHere,
 		Inviter: personView(info.Inviter), Note: info.Note, Shared: []string{}, TasksFrom: []PersonView{}, Held: info.Held}
 	v.External, v.Member = info.External, info.Member || p.group && !info.External
 	for _, inviter := range info.Inviters {
@@ -528,6 +531,16 @@ func agentView(info client.ParticipationInfo, p dmPeople, msgs []client.ConvMess
 			v.StateText = "Invited agent context for this group. Only selected snapshots and requests addressed to this agent are supplied."
 		}
 	}
+	if info.Topic != nil {
+		where := "Main flow"
+		if *info.Topic != "" {
+			where = "this topic"
+		}
+		v.StateText = strings.NewReplacer("this DM", where, "this group", where, "this conversation", where, "every new message and file here", "new messages and files in "+where).Replace(v.StateText)
+		if info.State == client.PartActive && info.Held == 0 {
+			v.StateText = "Participates only in " + where + ". Its owner decides what runs. Earlier shared copies remain."
+		}
+	}
 	return v
 }
 
@@ -583,10 +596,7 @@ func (l *Live) InviteAgent(d AgentInvite) (AgentView, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
 	defer cancel()
-	if d.AgentID != "" {
-		return l.agentResult(l.a.InviteNamedAgent(ctx, d.Conv, strings.TrimSpace(d.Host), d.AgentID, lids, d.TasksFrom, strings.TrimSpace(d.Note)))
-	}
-	return l.agentResult(l.a.InviteAgent(ctx, d.Conv, strings.TrimSpace(d.Host), lids, d.TasksFrom, strings.TrimSpace(d.Note)))
+	return l.agentResult(l.a.InviteAgentInScope(ctx, d.Conv, strings.TrimSpace(d.Host), d.AgentID, lids, d.TasksFrom, strings.TrimSpace(d.Note), d.Topic))
 }
 
 // DecideAgent implements Participants.
@@ -623,7 +633,7 @@ func (l *Live) DismissAgent(pid string) (AgentView, error) {
 			return AgentView{}, e
 		}
 		for _, other := range infos {
-			if other.PID == pid || other.Role != "" || other.Host.Address != p.Host.Address || other.Host.Fingerprint != p.Host.Fingerprint || other.AgentID != p.AgentID || other.State != client.PartActive && other.State != client.PartInvited {
+			if other.PID == pid || other.Role != "" || other.Host.Address != p.Host.Address || other.Host.Fingerprint != p.Host.Fingerprint || other.AgentID != p.AgentID || !sameTopicScope(other.Topic, p.Topic) || other.State != client.PartActive && other.State != client.PartInvited {
 				continue
 			}
 			if _, e = l.a.DismissParticipation(ctx, other.PID); e != nil {
@@ -671,4 +681,8 @@ func (l *Live) AskAgent(d AgentAsk) (Sent, error) {
 	}
 	l.a.NoteChange()
 	return Sent{ID: res.ID, LID: res.LID, State: res.State, Detail: res.Detail}, nil
+}
+
+func sameTopicScope(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }

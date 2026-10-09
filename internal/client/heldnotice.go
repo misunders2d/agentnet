@@ -12,6 +12,18 @@ ALTER TABLE quarantine ADD COLUMN notice_archived INTEGER NOT NULL DEFAULT 0;`
 // contain received content; an unmapped cause stays explicitly unknown.
 func heldDiagnosticCode(why string) string {
 	switch why {
+	case "malformed envelope":
+		return "envelope_malformed"
+	case "envelope verification failed":
+		return "envelope_verification_failed"
+	case "addressed to another device":
+		return "recipient_mismatch"
+	case "sender key unavailable":
+		return "sender_key_unavailable"
+	case "group: verified decryptable context unavailable":
+		return "context_unavailable"
+	case "a malformed history item", "group: malformed/nonordinary historical item", "group: history file is not a manifest":
+		return "history_malformed"
 	case ErrGroupInvitationStale.Error(), errGroupInvitationOutdated.Error(), "group: target already has effective membership":
 		return "group_invitation_outdated"
 	case "group: decision conflicts with recorded local intent", "group: consent has no recorded local invitation", "group: consent is not the exact local invitation and current person":
@@ -31,6 +43,23 @@ func heldDiagnosticCode(why string) string {
 	default:
 		return ""
 	}
+}
+
+func heldFailureCode(reason, why string) string {
+	if code := heldDiagnosticCode(why); code != "" {
+		return code
+	}
+	// This stage is known at new admission boundaries; it does not invent a
+	// specific historical cause or persist arbitrary error/received text.
+	if why != "" {
+		if reason == reasonProof {
+			return "context_unavailable"
+		}
+		if reason == reasonInvalid {
+			return "admission_failed"
+		}
+	}
+	return ""
 }
 
 // ArchiveHeldNotice hides a local notice without deleting or admitting the

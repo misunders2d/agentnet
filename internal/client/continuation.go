@@ -171,7 +171,7 @@ func (a *Agent) ContinuationFor(id, key string, exec *ExecView) (*ContinuationAc
 	}
 	if key == "" {
 		var stored sql.NullString
-		e := a.store.db.QueryRow(`SELECT verified_by FROM inbox WHERE id=? OR lid=? LIMIT 1`, id, id).Scan(&stored)
+		e := a.store.db.QueryRow(`SELECT coalesce(verified_by,(SELECT author_fp FROM device_history_rows h WHERE h.storage='in' AND h.id=inbox.id)) FROM inbox WHERE id=? OR lid=? LIMIT 1`, id, id).Scan(&stored)
 		if e == nil {
 			key = stored.String
 		} else if errors.Is(e, sql.ErrNoRows) {
@@ -226,21 +226,26 @@ func (a *Agent) ContinuationFor(id, key string, exec *ExecView) (*ContinuationAc
 	}
 	var n int
 	e = a.store.db.QueryRow(`SELECT count(*) FROM (SELECT id FROM inbox WHERE (id=? OR lid=?) AND verified_by=? AND kind IN (?,?) AND (conv IS NULL AND sender=? OR json_extract(target,'$.address')=?)
- UNION ALL SELECT id FROM outbox WHERE (id=? OR lid=?) AND ?=? AND coalesce(kind,json_extract(envelope,'$.kind')) IN (?,?) AND (conv IS NULL AND recipient=? OR json_extract(target,'$.address')=?))`, id, id, key, envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host, id, id, key, a.Self().Fingerprint(), envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host).Scan(&n)
+	 UNION ALL SELECT id FROM outbox WHERE (id=? OR lid=?) AND ?=? AND coalesce(kind,json_extract(envelope,'$.kind')) IN (?,?) AND (conv IS NULL AND recipient=? OR json_extract(target,'$.address')=?)
+	 UNION ALL SELECT i.id FROM device_history_rows h JOIN inbox i ON h.storage='in' AND h.id=i.id WHERE i.id=? AND h.author_fp=? AND h.recipient=? AND h.recipient_fp=? AND i.conv IS NULL AND i.replica=1 AND i.kind IN (?,?))`, id, id, key, envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host, id, id, key, a.Self().Fingerprint(), envelope.KindQuestion, envelope.KindTask, exec.Host, exec.Host, id, key, exec.Host, fp, envelope.KindQuestion, envelope.KindTask).Scan(&n)
 	if e != nil || n == 0 {
 		return nil, e
 	}
 	return &ContinuationAction{ID: id, Key: key, Host: exec.Host, Attempt: exec.Attempt}, nil
 }
 
-func (s *store) addContinuationOutbox(env envelope.Envelope, in envelope.Inner, recipientFP string) error {
+func (s *store) addContinuationOutbox(env envelope.Envelope, in envelope.Inner, recipientFP string, capabilities ...string) error {
+	capability := protocol.CapContinuation
+	if len(capabilities) > 0 {
+		capability = capabilities[0]
+	}
 	data, _ := json.Marshal(env)
 	tx, e := s.db.Begin()
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback()
-	_, e = tx.Exec(`INSERT OR IGNORE INTO outbox(id,recipient,body,envelope,state,created_at,kind,sub,created_ms,ref_id,ref_fp,required_cap,recipient_fp) VALUES(?,?,?,?,?,unixepoch(),?,?,unixepoch()*1000,?,?,?,?)`, env.ID, env.To, in.Body, string(data), stateQueued, in.Kind, in.Sub, in.Ref.ID, in.Ref.Fingerprint, protocol.CapContinuation, recipientFP)
+	_, e = tx.Exec(`INSERT OR IGNORE INTO outbox(id,recipient,body,envelope,state,created_at,kind,sub,created_ms,ref_id,ref_fp,required_cap,recipient_fp) VALUES(?,?,?,?,?,unixepoch(),?,?,unixepoch()*1000,?,?,?,?)`, env.ID, env.To, in.Body, string(data), stateQueued, in.Kind, in.Sub, in.Ref.ID, in.Ref.Fingerprint, capability, recipientFP)
 	if e != nil {
 		return e
 	}

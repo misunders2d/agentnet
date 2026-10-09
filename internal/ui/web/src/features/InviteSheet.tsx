@@ -31,7 +31,7 @@ const seqs = new WeakMap<object, number>();
 let next = 0;
 const seq = (o: object) => seqs.get(o) ?? (seqs.set(o, ++next), next);
 
-type Invite = { conv: string; selected?: string[]; who?: string; label?: string };
+type Invite = { conv: string; selected?: string[]; who?: string; label?: string; topic?: string };
 
 function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const store = useApp();
@@ -58,15 +58,19 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const hosts = useMemo(() => (t && o ? catalogHosts(t, o) : []), [t?.id, o?.seq]);
   const catalogs = useCatalogs(store.api, hosts, open && allowed && !!o?.agents);
   const [humanMode, setHumanMode] = useState<HumanInviteMode>("guest");
+  const [scope, setScope] = useState<"topic" | "chat">(invite.topic !== undefined ? "topic" : "chat");
+  const selectedTopic = invite.topic || "";
+  const topic = scope === "topic" ? selectedTopic : undefined;
+  const topicName = selectedTopic ? t?.topics?.find(x => x.id === selectedTopic)?.title || "Selected topic" : "Main flow";
   const admin = t?.kind === "group" && !!t.members?.some(m => m.person === o?.person?.person && m.admin);
   const [sent, setSent] = useState<{ key: string; name: string }[]>([]); // people invited to a group from this sheet
   const p = useMemo(() => {
     if (!t || !o) return null;
-    const x = pool(t, o, catalogs, names, invitations, store.host.platform, humanMode);
+    const x = pool(t, o, catalogs, names, invitations, store.host.platform, humanMode, topic);
     // Until the invitation list catches up, someone just invited stays marked here.
     const asked = new Set(sent.map((s) => s.key));
     return { ...x, candidates: x.candidates.map((c) => (asked.has(c.key) && !c.unavailable ? { ...c, unavailable: "Invited · waiting for them to accept" } : c)) };
-  }, [t, o, catalogs, names, invitations, sent, humanMode]);
+  }, [t, o, catalogs, names, invitations, sent, humanMode, topic]);
 
   // Who to preselect ("Bring back") and what the selection is ("Since they left").
   const preset = { who: invite.who || "", label: invite.label || "" };
@@ -96,7 +100,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   const [guestCheck,setGuestCheck]=useState<T.GuestCheck|null>(null);
   const [checkError,setCheckError]=useState("");
   useEffect(()=>{let alive=true;setGuestCheck(null);setCheckError("");if(route==="guest"&&c?.person?.address&&t)store.api.checkGuest({conv:t.id,host:c.person.address}).then(v=>{if(alive)setGuestCheck(v);}).catch(e=>{if(alive)setCheckError(errorText(e));});return()=>{alive=false;};},[route,c?.key,t?.id]);
-  const list = useMemo(() => (t ? shareable(t).filter((m) => (route === "group" || t.kind === "group" ? !!m.group_ref : true)) : []), [t, route]);
+  const list = useMemo(() => (t ? shareable(t).filter((m) => (topic === undefined || (m.topic || "") === topic) && (route === "group" || t.kind === "group" ? !!m.group_ref : true)) : []), [t, route, topic]);
   const cap = t?.kind === "group" && teamPeople.length > 0 && teamHistory ? capFor("group") : route ? capFor(route) : 200;
   const max = Math.min(cap, list.length);
   const count = Math.min(recent, max);
@@ -111,7 +115,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
 
   const shownName = c ? (c.kind === "agent" ? callName(c.name) : c.name) : "";
   const Who = c ? c.name : "They";
-  const after = route === "agent" ? (t?.kind === "group" ? "Then new group turns while it is a member; its owner decides what runs." : "Then only what someone asks it here.") : route === "group" ? "Then everything new: they become a member." : "Then new messages while they’re here.";
+  const after = topic !== undefined ? "Then only new messages and requests in “" + topicName + "” while here. Other topics stay outside this invitation." : route === "agent" ? (t?.kind === "group" ? "Then new group turns while it is a member; its owner decides what runs." : "Then only what someone asks it here.") : route === "group" ? "Then everything new: they become a member." : "Then new messages while they’re here.";
   const offline = conn !== "live";
   const now = route === "agent" && !!c?.mine && !c.alreadyHere; // your own agent joins in this one step
 
@@ -143,9 +147,9 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           const fresh = await readCatalog(store.api, c.host!);
           if (!fresh.some((r) => r.id === c.agentId)) throw new Error(c.name + " is no longer offered on that computer. Nothing was sent.");
         }
-        v = await store.api.inviteAgent({ conv: t.id, host: c.host!, ...(c.agentId ? { agent_id: c.agentId } : {}), share: shared.map((m) => m.id), tasks_from: tasksFrom, note: note.trim() });
+        v = await store.api.inviteAgent({ conv: t.id, ...(topic !== undefined ? { topic } : {}), host: c.host!, ...(c.agentId ? { agent_id: c.agentId } : {}), share: shared.map((m) => m.id), tasks_from: tasksFrom, note: note.trim() });
       } else if (route === "guest") {
-        await store.api.inviteGuest({ conv: t.id, host: c.person!.address, share: shared.map((m) => m.lid || m.id), note: note.trim() });
+        await store.api.inviteGuest({ conv: t.id, ...(topic !== undefined ? { topic } : {}), host: c.person!.address, share: shared.map((m) => m.lid || m.id), note: note.trim() });
       } else {
         await store.api.inviteToGroup({ conv: t.id, person: c.person!.person!, history: shared.length ? { refs: shared.map((m) => m.group_ref!) } : {} });
       }
@@ -184,7 +188,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
   }
 
   async function bringTeamPeople() {
-    if (!t || t.kind !== "group" || !allowed || busy || offline || !teamPeople.length || teamHistory && (tooMany || needFiles)) return;
+    if (topic !== undefined || !t || t.kind !== "group" || !allowed || busy || offline || !teamPeople.length || teamHistory && (tooMany || needFiles)) return;
     setBusy(true); setError("");
     try {
       for (const who of teamPeople) {
@@ -205,7 +209,18 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
     <Quiet>{t.frozen ? "This chat can’t change right now, so no one can be brought in." : "Only the people in this chat can bring someone in."}</Quiet>
   ) : (
     <>
-      {t.kind === "group" && <fieldset className="mb-4 space-y-2">
+      <fieldset className="mb-4 space-y-2">
+        <legend className="font-bold">Where can they take part?</legend>
+        <label className="flex min-h-12 items-start gap-3 rounded-xl stroke bg-surface p-3">
+          <input type="radio" name="invite-scope" checked={scope === "topic"} disabled={busy} onChange={() => { setScope("topic"); setHumanMode("guest"); setTeamPeople([]); setError(""); }} className="mt-1" />
+          <span><b>Only this topic: {topicName}</b><span className="block text-sm text-text-2">Chosen history and future messages stay within this topic, even if it is renamed.</span></span>
+        </label>
+        <label className="flex min-h-12 items-start gap-3 rounded-xl stroke bg-surface p-3">
+          <input type="radio" name="invite-scope" checked={scope === "chat"} disabled={busy} onChange={() => { setScope("chat"); setError(""); }} className="mt-1" />
+          <span><b>Whole chat</b><span className="block text-sm text-text-2">They can take part across this chat’s topics.</span></span>
+        </label>
+      </fieldset>
+      {t.kind === "group" && scope === "chat" && <fieldset className="mb-4 space-y-2">
         <legend className="font-bold">How should people join?</legend>
         <label className="flex min-h-12 items-start gap-3 rounded-xl stroke bg-surface p-3">
           <input type="radio" name="human-invite-mode" value="guest" checked={humanMode === "guest"} disabled={busy} onChange={() => { setHumanMode("guest"); setTeamPeople([]); setError(""); }} className="mt-1" />
@@ -247,6 +262,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
 
       {c && route && (
         <div className="fade-in" key={route}>
+          {c.broadAccess && <p className="mt-3 rounded-xl bg-sunken p-3 text-sm">{c.name} already has a whole-chat invitation. This separate topic invitation does not remove that access; remove the earlier invitation from “In this chat” to narrow it.</p>}
           <h3 className="mt-5 font-display text-[18px] font-bold leading-tight">{c.alreadyHere ? "Share more messages with " : "What can "}{shownName}{c.alreadyHere ? "" : " see?"}</h3>
           {route === "group" && (
             <p className="mt-1.5 flex gap-2 rounded-xl bg-sunken px-3 py-2 text-[13px] font-semibold text-text-2">
@@ -257,7 +273,7 @@ function InviteFlow({ invite, open }: { invite: Invite; open: boolean }) {
           {list.length === 0 ? (
             <p className="mt-2.5 flex gap-2 rounded-2xl border-2 border-dashed border-outline/35 bg-surface/70 px-3 py-2.5 text-[14px] font-semibold text-text-2">
               <IconLock size={17} className="mt-0.5 shrink-0" aria-hidden="true" />
-              <span>Nothing has been said here yet, so nothing earlier is shared.{route === "group" ? "" : " " + after}</span>
+              <span>No earlier messages are available in this scope.{route === "group" ? "" : " " + after}</span>
             </p>
           ) : (
           <div className="mt-2.5">

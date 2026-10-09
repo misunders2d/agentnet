@@ -27,6 +27,7 @@ export interface Candidate {
   agentId?: string;
   mine?: boolean;
   alreadyHere?: boolean;
+  broadAccess?: boolean;
 }
 
 const LIVE = new Set(["active", "invited", "pending", "conflict"]);
@@ -77,12 +78,12 @@ export interface Pool { candidates: Candidate[]; peopleNote: string; pick: strin
 /** pool lists the candidates for t, people first, each with what an invite
  *  would do. invitations are this computer's group invitations (for "already
  *  invited"); platform is the host's ("browser": no agent of its own to offer). */
-export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<string, string>, invitations: T.GroupInvitationView[] = [], platform = "daemon", mode: HumanInviteMode = "guest"): Pool {
+export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<string, string>, invitations: T.GroupInvitationView[] = [], platform = "daemon", mode: HumanInviteMode = "guest", topic?: string): Pool {
   const me = o.person;
   const group = t.kind === "group";
   const admin = group && (t.members || []).some((m) => m.person && m.person === me?.person && m.admin);
   const inside = new Set<string>([...(t.members || []), t.peer, me].flatMap((p) => (p?.person ? [p.person] : [])));
-  for (const g of t.guests || []) if (LIVE.has(g.state) && g.host.person) inside.add(g.host.person);
+  for (const g of t.guests || []) if (g.topic === topic && LIVE.has(g.state) && g.host.person) inside.add(g.host.person);
   const guestsHere = (t.guests || []).filter((g) => g.state === "active" || g.state === "invited").length;
 
   // A group's pending invitations: that person is already asked.
@@ -99,6 +100,7 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
       const was = asked.get(p.person);
       out.push({
         key: "p:" + p.person, kind: "person", name: personName(p), seed: p.person, online: on, person: p,
+        broadAccess: topic !== undefined && (t.guests || []).some(g => g.host.person === p.person && g.topic === undefined && LIVE.has(g.state)),
         subtitle: [group && mode === "member" ? "Becomes a member" : "Joins as a guest", on === true ? "Online" : on === false ? "Offline" : ""].filter(Boolean).join(" · ").replace(" · O", " · o"),
         unavailable: was === "pending" ? "Invited · waiting for them to accept" : was ? "Accepted · not added yet"
           : (!group || mode === "guest") && guestsHere >= 16 ? "This chat already has 16 guests." : undefined,
@@ -108,9 +110,10 @@ export function pool(t: T.DMThread, o: T.Overview, cat: Catalogs, names: Record<
 
   if (o.agents && !cat.loading) { // agents appear together, once every list is in
     // One row per agent (its device and id; a device's default agent has no id), none already here.
-    const current = new Set((t.agents || []).filter((a) => LIVE.has(a.state)).map((a) => a.host.address + "#" + (a.agent_id || "")));
+    const current = new Set((t.agents || []).filter((a) => a.topic === topic && LIVE.has(a.state)).map((a) => a.host.address + "#" + (a.agent_id || "")));
+    const broad = new Set((t.agents || []).filter(a => LIVE.has(a.state) && a.topic === undefined).map(a => a.host.address + "#" + (a.agent_id || "")));
     const seen = new Set<string>(group ? [] : current);
-    const add = (c: Candidate) => { const k = c.host + "#" + (c.agentId || ""); if (!seen.has(k)) { seen.add(k); if (group && current.has(k)) { c.alreadyHere = true; c.subtitle = "Already in this chat · share more messages"; } out.push(c); } };
+    const add = (c: Candidate) => { const k = c.host + "#" + (c.agentId || ""); if (!seen.has(k)) { seen.add(k); c.broadAccess = topic !== undefined && broad.has(k); if (group && current.has(k)) { c.alreadyHere = true; c.subtitle = "Already in this chat · share more messages"; } out.push(c); } };
     // This computer's named agents, then its default agent, which is always offered next to them.
     const self: T.PersonView = me || { person: "this computer", label: "", address: o.me.address, state: "" }; // "Your agent"
     for (const a of (cat.local || []).filter((a) => a.enabled)) add({

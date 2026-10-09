@@ -556,7 +556,7 @@ func (a *Agent) mayDeliverGroupTurn(env envelope.Envelope) (bool, bool, error) {
 	if required == protocol.CapHumanParticipation && sub == "" {
 		var in envelope.Inner
 		var human string
-		if err = a.store.db.QueryRow(`SELECT coalesce(pid,''),kind,coalesce(human,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.PID, &in.Kind, &human); err != nil {
+		if err = a.store.db.QueryRow(`SELECT coalesce(pid,''),kind,coalesce(human,''),coalesce(topic,''),coalesce(reply_to,'') FROM outbox WHERE id=?`, env.ID).Scan(&in.PID, &in.Kind, &human, &in.Topic, &in.ReplyTo); err != nil {
 			return true, false, err
 		}
 		if human != "" {

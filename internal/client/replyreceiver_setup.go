@@ -86,7 +86,7 @@ func (a *Agent) verifyReceiverOriginal(ctx context.Context, r envelope.ReceiverR
 				return e
 			}
 			original := receiverRequestInner(r)
-			if e = externalTurn(original, p, m, r.From, r.FromKey); e != nil {
+			if e = externalTurn(original, p, m, r.From, r.FromKey, a.store.db); e != nil {
 				return e
 			}
 		}

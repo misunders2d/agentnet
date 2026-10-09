@@ -2,7 +2,7 @@
 // agents, each with exactly what they were shown), who is invited, which
 // requests wait for an owner's OK, and who has left. Every button comes from
 // the server's can_* flags; dismissing stops what is new, never what was shared.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconLock, IconUserPlus, IconX } from "@tabler/icons-react";
 import { errorText, type T } from "../api";
 import { useAgentNames, useApp, useWide } from "../context";
@@ -103,7 +103,8 @@ export async function bringIn(store: Store, t: T.DMThread, wide: boolean, who?: 
   }
   const later = since ? shareable(t).filter((m) => m.at > since).map((m) => m.id) : [];
   if (!wide) store.setPanel(false);
-  store.openInvite(t.id, later.length ? later : undefined, who ? { who, label: "Since they left" } : undefined);
+  const previous = pid ? [...(t.agents || []), ...(t.guests || [])].find(p => p.pid === pid) : undefined;
+  store.openInvite(t.id, later.length ? later : undefined, who ? { who, label: "Since they left", ...(previous ? { topic: previous.topic } : {}) } : undefined);
 }
 
 function GroupInviteCard({ invite: i }: { invite: GroupInvite }) {
@@ -142,22 +143,15 @@ function GroupInviteCard({ invite: i }: { invite: GroupInvite }) {
   </li>;
 }
 
-function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) => void }) {
+// The chat and optional room panel use the same exact participation action.
+function useRoomAction(onDismissed?: (s: Snack) => void) {
   const store = useApp();
-  const wide = useWide();
-  const o = useStore(store, (s) => s.overview);
-  const names = useAgentNames();
-  const r = room(t, o, names);
   const [busy, setBusy] = useState("");
-
-  const invitable = canBringIn(t);
-  const rights = groupRights(t, o);
-  const change = useGroupChange(t);
-  const memberOf = (person?: string) => (person ? (t.members || []).find((x) => x.person === person) : undefined);
-
+  const pending = useRef(false);
   // act runs one decision or dismissal; the change stream then redraws the room.
   const act: Act = async (g, what) => {
-    if (busy) return;
+    if (pending.current) return;
+    pending.current = true;
     setBusy(g.key);
     const api = store.api;
     const name = callName(g.name);
@@ -168,10 +162,43 @@ function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) =
       what === "accept" ? (g.kind === "agent" ? cap(name) + " joined — it sees only what was shared with it" : "You joined — you’ll see new messages while you’re here")
         : what === "decline" ? "Declined. Nothing was shared." : what === "cancel" ? "Invitation cancelled" : what === "leave" ? "You left. What you saw stays with you." : undefined,
     );
+    if (ok !== undefined) await store.refetch();
+    pending.current = false;
     setBusy("");
-    if (ok && what === "dismiss") onDismissed({ name: g.name, kind: g.kind, who: g.who, pid: g.kind === "agent" ? g.pid : undefined, id: Date.now() });
+    if (ok && what === "dismiss") onDismissed?.({ name: g.name, kind: g.kind, who: g.who, pid: g.kind === "agent" ? g.pid : undefined, id: Date.now() });
   };
 
+  return { busy, act };
+}
+
+/** Decisions stay in the conversation even when its room panel is closed. */
+export function PendingInvitations({ t }: { t: T.DMThread }) {
+  const store = useApp();
+  const o = useStore(store, s => s.overview);
+  const names = useAgentNames();
+  const { busy, act } = useRoomAction();
+  const hasDecision = t.agents?.some(g => g.can_decide) || t.guests?.some(g => g.can_decide);
+  const invited = hasDecision ? room(t, o, names).invited.filter(g => g.can.decide) : [];
+  if (!invited.length) return null;
+  return (
+    <section aria-label="Invitations waiting for you" className="flex max-h-[45vh] shrink-0 flex-col gap-2 overflow-y-auto border-b border-outline/25 bg-canvas p-3">
+      {invited.map(g => <PendingCard key={g.key} g={g} t={t} busy={busy === g.key} onAct={act} />)}
+    </section>
+  );
+}
+
+function RoomBody({ t, onDismissed }: { t: T.DMThread; onDismissed: (s: Snack) => void }) {
+  const store = useApp();
+  const wide = useWide();
+  const o = useStore(store, (s) => s.overview);
+  const names = useAgentNames();
+  const r = room(t, o, names);
+  const { busy, act } = useRoomAction(onDismissed);
+
+  const invitable = canBringIn(t);
+  const rights = groupRights(t, o);
+  const change = useGroupChange(t);
+  const memberOf = (person?: string) => (person ? (t.members || []).find((x) => x.person === person) : undefined);
   return (
     <div className="relative flex flex-col pb-2">
       <Label n={r.members.length}>Members</Label>

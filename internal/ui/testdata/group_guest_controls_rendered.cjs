@@ -26,6 +26,15 @@ const boot=`
 const seed=${JSON.stringify({overview,thread})};window.fixture={...seed,requests:[]};
 const variant=new URL(location.href).searchParams.get('case')||'admin';
 if(variant==='member')fixture.thread.members[0].admin=false;
+if(variant==='topic-invite'){
+ fixture.overview.group_invitations=[];fixture.thread.guests=[{pid:'broad-human',host:fixture.overview.people.find(p=>p.label==='Cora'),inviter:fixture.overview.person,state:'active',invited:'2026-10-05T10:00:00Z',shared:[],can_end:true}];
+ fixture.overview.agent_devices=['brin/desktop'];
+ fixture.thread.topics=[{id:'1'.repeat(32),title:'Warehouse',state:'active',count:1,last_at:'2026-10-05T10:01:00Z'},{id:'2'.repeat(32),title:'Private plans',state:'active',count:1,last_at:'2026-10-05T10:02:00Z'}];
+ fixture.thread.messages[0].attachments=[];
+ fixture.thread.messages.push({id:'topic-message',lid:'topic-message',topic:'1'.repeat(32),from:'brin/desktop',dir:'in',kind:'message',body:'Warehouse topic context',at:'2026-10-05T10:01:00Z',group_ref:{lid:'topic-message',author:'brin-key',hash:'c'.repeat(64)}},{id:'other-topic-message',lid:'other-topic-message',topic:'2'.repeat(32),from:'brin/desktop',dir:'in',kind:'message',body:'Unrelated private plans',at:'2026-10-05T10:02:00Z',group_ref:{lid:'other-topic-message',author:'brin-key',hash:'d'.repeat(64)}});
+ fixture.thread.agents=[{pid:'broad-agent',host:fixture.thread.members[1],agent_id:'a'.repeat(32),state:'active',state_text:'Active',invited:'2026-10-05T10:00:00Z',host_here:false,shared:[],can_ask:true,can_dismiss:true,inviter:fixture.overview.person}];
+}
+
 if(variant==='browser-app'){
  fixture.overview.device={browser:true};fixture.overview.me.browser=true;
 }
@@ -64,16 +73,24 @@ if(variant.startsWith('continuation-')){
  const mode=variant.slice('continuation-'.length),id='needs-answer-exact';
  fixture.thread.kind='dm';fixture.thread.peer=${JSON.stringify(brin)};fixture.thread.guests=[];fixture.thread.members=[];
  fixture.thread.agents=[{pid:'own-agent',host:fixture.overview.person,agent_id:'a'.repeat(32),state:'active',state_text:'Active',host_here:true,shared:[],can_ask:true,inviter:fixture.overview.person,tasks_from:[]}];
- const descriptor={id,key:'exact-request-key',attempt:7,...(mode==='remote'?{host:'aster/other-laptop'}:{})};
+ const descriptor={id,key:'exact-request-key',attempt:7,...(['remote','resolve'].includes(mode)?{host:'aster/other-laptop'}:{})};
  const request={id,lid:id,from:'brin/desktop',dir:'in',kind:'task',body:'Review the destination',quote:'ordinary-quote',at:'2026-10-05T10:00:00Z',pid:'own-agent',target:{address:'aster/laptop'},state:'needs_human',job_state:'needs_human',job_detail:'Which warehouse should I use? EXACT_QUESTION',detail:'Which warehouse should I use? EXACT_QUESTION',actions:mode==='stale'?['resolve']:['continue','resolve'],...(mode==='stale'?{}:{continuation:descriptor})};
  fixture.thread.messages=[fixture.thread.messages[0],request,{id:'ordinary-quote',from:'brin/desktop',dir:'in',kind:'message',body:'Ordinary quoted note',at:'2026-10-05T09:00:00Z'}];
  fixture.overview.group_invitations=[];fixture.overview.people=[${JSON.stringify(brin)}];
  fixture.overview.dms=[{id:fixture.thread.id,kind:'dm',peer:fixture.thread.peer,count:3,unread:0,last:'Selected warehouse context'}];
  fixture.overview.needs_you=[{conv:fixture.thread.id,id,reason:'agent_needs_human',peer:'brin/desktop',kind:'task',excerpt:request.body,why:request.job_detail,actions:request.actions,continuation:request.continuation,at:request.at}];
+ if(mode==='resolve'){request.actions=['continue'];fixture.overview.needs_you[0].decide_on=descriptor.host;}
 }
 if(variant.startsWith('decline-invite-')){
  fixture.overview.dms=[];fixture.overview.threads=[];
  fixture.overview.group_invitations=[{id:'inbound-exact',conv:'d'.repeat(64),direction:'in',status:variant.endsWith('stale')?'stale':'pending',title:'Orchard inbound invitation',inviter:${JSON.stringify(brin.address)},target:fixture.overview.person.person,history:[]}];
+}
+if(variant==='direct-files'){
+ const id='6'.repeat(32),summary={id,peer:'brin/desktop',title:'Files on my other device',last:'Retained file',last_at:'2026-10-05T10:00:00Z',count:1,unread:0,state:'active'};
+ fixture.overview.dms=[];fixture.overview.threads=[summary];fixture.overview.group_invitations=[];
+ fixture.deviceThread={id,peer:summary.peer,key:{pinned:'brin-key'},approved:false,messages:[{id,from:'aster/phone',dir:'out',kind:'message',body:'Retained file',history:true,synced_from:'aster/laptop',at:'2026-10-05T10:00:00Z',author:{label:'Aster',about:'Synced fictional original'},actions:[],files:[{index:0,name:'retained.txt',size:5,openable:false,availability:'requestable'}]}],topic:summary};
+ window.openSyncedFiles=()=>open(id,'message');
+ window.fileArrives=()=>{Object.assign(fixture.deviceThread.messages[0].files[0],{openable:true,availability:''});reloadFixture();};
 }
 if(variant==='device-oks'){
  fixture.overview.people=[${JSON.stringify(brin)}];fixture.overview.dms=[];fixture.overview.group_invitations=[];fixture.overview.needs_you=[];
@@ -122,11 +139,20 @@ if(variant==='terminal-card'){
  fixture.thread.agents=[{pid:'own-agent',host:fixture.overview.person,agent_id:'a'.repeat(32),state:'active',invited:'2026-10-05T10:00:00Z',host_here:true,shared:[],can_ask:true,inviter:fixture.overview.person,tasks_from:[]}];
  fixture.thread.messages.push({id:'stopped-exact',lid:'stopped-exact',from:fixture.overview.me.address,dir:'out',kind:'task',body:'Translate contribution margin. '+('Keep the full original instructions. '.repeat(40)),at:'2026-10-05T10:01:00Z',pid:'own-agent',target:{address:fixture.overview.me.address,agent_id:'a'.repeat(32)},exec:{state:'cancelled',host:fixture.overview.me.address},job_state:'cancelled',job_detail:'Cancelled by you. Nothing else should run.',actions:['accept'],state:'delivered'});
 }
-if(variant==='guest-oks'){
+if(variant==='guest-oks'||variant==='guest-inline'){
  fixture.thread.role='human_guest';fixture.thread.agents=[];fixture.overview.group_invitations=[];
  fixture.thread.guests=[{pid:'human-invite',host:fixture.overview.person,inviter:fixture.thread.members[1],state:'invited',host_here:true,can_decide:true,shared:[]}];
  fixture.overview.needs_you=[{conv:fixture.thread.id,pid:'human-invite',role:'human',peer:fixture.thread.members[1].address,reason:'agent_invite',excerpt:'Join this conversation',why:'Invited you to join as a guest',actions:['accept','decline'],at:'2026-10-05T10:00:00Z'}];
 }
+if(variant==='guest-inline'){
+ window.setInlineInvitation=(state,decidable=true,pid='human-invite')=>{
+  const g={pid,host:fixture.overview.person,inviter:fixture.thread.members[1],state,host_here:true,can_decide:state==='invited'&&decidable,can_send:state==='active',can_leave:state==='active',shared:[],held:decidable?0:1};
+  fixture.thread.guests=state?[g]:[];
+  fixture.overview.needs_you=g.can_decide?[{conv:fixture.thread.id,pid:g.pid,role:'human',peer:g.inviter.address,reason:'agent_invite',excerpt:'Join this conversation',why:'Invited you to join as a guest',actions:['accept','decline'],at:'2026-10-05T10:00:00Z'}]:[];
+  window.reloadFixture?.();
+ };
+}
+
 if(variant==='render-perf'){
  fixture.thread.guests=[];fixture.thread.agents=[];fixture.overview.group_invitations=[];
  fixture.thread.messages=Array.from({length:1200},(_,i)=>({id:'perf-'+i,lid:'perf-'+i,from:'brin/desktop',dir:'in',kind:'message',body:i===0?'Selected warehouse context':'Retained message '+i,at:new Date(Date.parse('2026-10-05T10:00:00Z')+i*1000).toISOString(),unread:false,actions:[]}));
@@ -164,10 +190,15 @@ if(variant==='heldback'){
  {id:'proof-waiting',peer:'brin/desktop',code:'proof_pending',reason:'proof_pending',can_archive:false,at:'2026-10-05T10:03:00Z'}];
  fixture.retainedHeld=structuredClone(fixture.overview.quarantine);
 }
+if(variant==='held-flood'){
+ fixture.overview.group_invitations=[];fixture.overview.review=[];fixture.overview.needs_you=[];
+ fixture.overview.quarantine=Array.from({length:300},(_,i)=>({id:(i+1).toString(16).padStart(32,'0'),peer:'claimed/remote',code:'invalid',detail_code:'',detail:'The original detailed reason was not recorded or is unavailable.',recovery:'The retained message stays blocked.',at:'2026-10-05T10:00:00Z',can_archive:true}));
+ fixture.retainedHeld=structuredClone(fixture.overview.quarantine);
+}
 if(variant==='team-tags'){fixture.teams=[];fixture.overview.people=[...fixture.overview.people,fixture.thread.members[1]];}
 let open;
 const changeListeners=new Set(),changed=event=>{for(const fn of [...changeListeners])fn(event);};
-const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
+const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});
 if(variant==='reactions'&&p==='/api/message/react'){
  if(body.conv!==fixture.thread.id||body.id!=='context'||body.dir!=='in')throw Error('Unexpected reaction target');
@@ -183,6 +214,10 @@ if(variant.startsWith('continuation-')&&['/api/act','/api/operator/decide'].incl
  const c=fixture.thread.messages.find(m=>m.id==='needs-answer-exact').continuation;
  if(!c||body.id!==c.id||body.key!==c.key||body.attempt!==c.attempt||!body.send_id)throw Error('Unexpected continuation identity');
  if(!fixture.continuationFailed){fixture.continuationFailed=true;throw Error('Synthetic lost transport response; retry this same answer');}
+ if(variant==='continuation-resolve'){
+  if(p!=='/api/operator/decide'||body.action!=='resolve'||body.expect!=='needs_human'||body.report!==''||body.text)throw Error('Unexpected resolution action');
+  fixture.resolutionQueued=true;return {note:'Decision queued. Waiting for the host to confirm.'};
+ }
  const m=fixture.thread.messages.find(m=>m.id===c.id);m.state='running';m.job_state='running';m.actions=['cancel'];delete m.continuation;
  fixture.overview.needs_you=[];changed?.({type:'change',seq:++fixture.overview.seq});return {note:'Answer submitted to the same request.'};
 }
@@ -206,7 +241,20 @@ if(variant.startsWith('decline-invite-')&&p==='/api/groups/decide'){
  if(body.id!=='inbound-exact'||body.accept!==false)throw Error('Unexpected invitation decision');
  fixture.overview.group_invitations=[];changed?.({type:'change',seq:++fixture.overview.seq});return {};
 }
+if(variant==='held-flood'&&p==='/api/act'){
+ if(body.do!=='archive_held_batch'||body.held.length!==256)throw Error('Unexpected batch archive');
+ if(!fixture.archiveFailed){fixture.archiveFailed=true;throw Error('Synthetic archive failure');}
+ fixture.overview.quarantine[0].detail_code='admission_failed';
+ fixture.overview.quarantine.push({id:'f'.repeat(32),peer:'claimed/new',code:'invalid',detail_code:'',detail:'New arrival',at:'2026-10-05T11:00:00Z',can_archive:true});
+ fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>!body.held.some(r=>r.id===q.id&&r.reason===q.code&&r.detail_code===q.detail_code));
+ return {note:'Archived 255 notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.'};
+}
 if(variant==='heldback'&&p==='/api/act'){
+ if(body.do==='archive_held_batch'){
+  if(body.held.length!==2||body.held.some(r=>!['legacy-invalid','invalid-ended-invite'].includes(r.id)))throw Error('Unexpected archive snapshot');
+  fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>!body.held.some(r=>r.id===q.id&&r.reason===q.code&&r.detail_code===(q.detail_code||'')));
+  return {note:'Archived 2 notices on this device. Nothing was accepted or run.'};
+ }
  if(body.do!=='archive_held'||body.id!=='invalid-ended-invite')throw Error('Unexpected or unauthorized held action');
  fixture.overview.quarantine=fixture.overview.quarantine.filter(q=>q.id!==body.id);
  return {note:'Notice archived on this device. Its envelope remains blocked.'};
@@ -221,7 +269,8 @@ if(variant==='team-tags'&&p==='/api/team'){
 if(p==='/api/teams')return {status:'available',current:true,tags:true,teams:variant==='multi-agent'?[{id:'f'.repeat(32),name:'Reviewers',version:2,members:[fixture.thread.members[1].person],agents:fixture.thread.agents.map(a=>({id:a.agent_id,host:a.host.address,host_key:a.host.fingerprint})),listed:true,conflict:false,archived:false,managers:[fixture.overview.person.person]}]:[]};
 if(p==='/api/get-app')return {version:'v0.8.5',detected:'linux',platforms:[{id:'linux',label:'Linux',url:'https://downloads.example/AgentNet.AppImage'},{id:'windows',label:'Windows',url:'https://downloads.example/AgentNet.exe'}]};
 if(p==='/api/device/link')return {url:'https://workspace.example/#agentnet-link-v2:fixture',app_url:'agentnet://open#agentnet-link-v2:fixture',expires:'2026-10-08T23:59:00Z'};
-if((variant==='device-oks'||variant.startsWith('delivery-'))&&p.startsWith('/api/thread?'))return structuredClone(new URL(p,location.origin).searchParams.get('id')==='8'.repeat(32)?fixture.otherDeviceThread:fixture.deviceThread);
+if((variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-'))&&p.startsWith('/api/thread?'))return structuredClone(new URL(p,location.origin).searchParams.get('id')==='8'.repeat(32)?fixture.otherDeviceThread:fixture.deviceThread);
+if(variant==='direct-files'&&p==='/api/file/request'){if(body.id!==fixture.deviceThread.id||body.index!==0)throw Error('wrong original file');fixture.deviceThread.messages[0].files[0].availability='requested';return {};}
 if(variant==='device-oks'&&p==='/api/act'){if(body.do==='cancel')setDeviceState('cancel_requested');return {note:'Fixture action recorded'};}
 if(p.startsWith('/api/agents'))return {host:body?.host||new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address,local:!p.includes('host='),agents:fixture.thread.agents.filter(a=>a.agent_id&&a.host.address===(new URL(p,location.origin).searchParams.get('host')||seed.overview.me.address)).map(a=>({record:{id:a.agent_id,label:a.host.address===seed.overview.me.address?'Prospect':'Analyst',host:a.host.address,host_key:a.host.fingerprint},enabled:true})),sessions:[]};
 if(p==='/api/dm/agent/invite'){fixture.thread.agents[0].shared=body.share;changed?.({type:'change',seq:++fixture.overview.seq});return structuredClone(fixture.thread.agents[0]);}
@@ -229,6 +278,10 @@ if(p==='/api/notify/allow'){fixture.overview.notify.allowed=body.allowed?['brin/
 if(p==='/api/notify/mute'){fixture.overview.notify.mutes=body.muted?[...fixture.overview.notify.mutes,body.conv]:fixture.overview.notify.mutes.filter(id=>id!==body.conv);return {};}
 if(p==='/api/dm/guest/check')return {ready:true,text:'All conversation devices support human guests.'};
 if(p==='/api/dm/guest/invite')return {};if(p==='/api/dm/send')return {id:body.id};
+if(variant==='guest-inline'&&p==='/api/dm/guest/decide'){
+ if(!fixture.thread.guests.find(g=>g.pid===body.pid)?.can_decide)throw Error('Stale or wrong guest decision');
+ return new Promise(resolve=>{window.finishInlineDecision=()=>{setInlineInvitation(body.accept?'active':'declined',true,body.pid);resolve({});};});
+}
 if(p==='/api/dm/guest/decide'){Object.assign(fixture.thread.guests[0],{state:body.accept?'active':'declined',can_send:body.accept,can_decide:false,can_leave:body.accept});return {};}
 if(p==='/api/dm/guest/end'){Object.assign(fixture.thread.guests[0],{state:'dismissed',can_send:false,can_leave:false,can_end:false});return {};}
 if(p==='/api/groups/cancel'){fixture.overview.group_invitations[0].status='cancelled';return {};}
@@ -273,8 +326,91 @@ const server=http.createServer((req,res)=>{if(req.url==='/native-result'&&req.me
    await new Promise(resolve=>{nativeFinish=resolve;});return;
   }
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
-  for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
-   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+  for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of (process.env.AGENTNET_GUEST_INLINE==='1'?[1024,1279,390]:[1280,390])){
+   const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='direct-files'||variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+if(process.env.AGENTNET_GUEST_INLINE==='1'){
+ const {page,context}=await openCase('guest-inline');
+ try{
+  const inline=page.getByRole('region',{name:'Invitations waiting for you',exact:true});
+  const decisions=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/dm/guest/decide').map(r=>r.body));
+  await settle(page);
+  assert.equal(await inline.getByRole('button',{name:'Join',exact:true}).count(),1,'Pending invitation has inline Join without opening the optional sidebar');
+  assert.equal(await page.getByRole('complementary',{name:'In this chat',exact:true}).count(),0,'Sidebar starts hidden below1280');
+  assert.equal(await page.getByRole('dialog',{name:'In this chat',exact:true}).count(),0,'Mobile room sheet remains closed');
+  const shot=path.join(evidence,'comic-guest-inline-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+  const banner=page.getByRole('button',{name:/1 needs your OK/});await banner.waitFor();
+  assert.match(await banner.innerText(),/invited you into.*orchard_dispatch/s,'Human invitation names the person, not their agent');
+  assert.match(await banner.innerText(),/Join when ready/);assert.doesNotMatch(await banner.innerText(),/your agent|It joins/);
+  assert.equal(await banner.locator('[data-size="40"]').count(),1,'Human invitation uses person avatar');
+  await page.evaluate(()=>{fixture.overview.needs_you[0].role='';reloadFixture();});
+  await banner.getByText('It joins only when you say so',{exact:true}).waitFor();assert.match(await banner.innerText(),/invited your agent into/,'Agent invitation retains its original wording');
+  assert.equal(await banner.locator('[data-size="40"]').count(),0,'Agent invitation retains robot avatar');
+  await page.evaluate(()=>{fixture.overview.needs_you[0].role='human';reloadFixture();});await banner.getByText('Join when ready',{exact:true}).waitFor();
+  await page.getByRole('button',{name:/^OKs/}).click();
+  await page.getByRole('button',{name:'Join conversation',exact:true}).waitFor({state:'visible'});
+  assert.equal(await page.getByRole('button',{name:'Join conversation',exact:true}).count(),1,'One authoritative invitation in OKs');
+  await page.evaluate(()=>openGroup());await inline.waitFor();
+  await page.evaluate(()=>setInlineInvitation('dismissed'));await inline.waitFor({state:'hidden'});assert.deepEqual(await decisions(),[],'Withdrawal never sends a decision');
+  await page.evaluate(()=>setInlineInvitation('invited',false));await settle(page);assert.equal(await inline.count(),0,'Unverified/nondecidable invitation has no inline action');
+  await page.evaluate(()=>setInlineInvitation('active'));await settle(page);assert.equal(await inline.count(),0,'Already accepted invite has no second approval');
+  await page.evaluate(()=>setInlineInvitation('invited'));await inline.waitFor();
+  const join=inline.getByRole('button',{name:'Join',exact:true});await join.evaluate(b=>{b.click();b.click();});
+  await page.waitForFunction(()=>!!window.finishInlineDecision);assert(await join.isDisabled(),'Decision stays busy while pending');
+  assert.deepEqual(await decisions(),[{pid:'human-invite',accept:true}],'Double click sends one exact guest decision');
+  await page.evaluate(()=>finishInlineDecision());await inline.waitFor({state:'hidden'});
+  if(width<1024)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+  await page.getByRole('button',{name:/^OKs/}).click();assert.equal(await page.getByRole('button',{name:'Join conversation',exact:true}).count(),0,'Resolution removes the same OKs item');
+  await page.evaluate(()=>openGroup());await page.evaluate(()=>setInlineInvitation('invited',true,'fresh-human-invite'));await inline.waitFor();
+  const decline=inline.getByRole('button',{name:'Decline',exact:true});await decline.focus();await page.keyboard.press('Enter');await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/dm/guest/decide').length===2);await page.evaluate(()=>finishInlineDecision());await inline.waitFor({state:'hidden'});
+  assert.deepEqual(await decisions(),[{pid:'human-invite',accept:true},{pid:'fresh-human-invite',accept:false}],'Fresh invitation has exact keyboard Decline');
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>['/api/dm/agent/ask','/api/dm/agent/decide','/api/groups/decide'].includes(r.path)).length),0,'Guest decision performs no agent work or membership decision');
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_DIRECT_FILES_REGRESSION==='1'){
+ const {page,context}=await openCase('direct-files');
+ try{
+  await page.evaluate(()=>openSyncedFiles());await page.getByText('retained.txt',{exact:true}).waitFor();
+  const get=page.getByRole('button',{name:'Get it',exact:true});await get.click();
+  await page.getByText(/asked your Laptop for it/).waitFor();assert.equal(await get.count(),0);
+  const requests=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/file/request'));
+  assert.deepEqual(requests.map(r=>r.body),[{id:'6'.repeat(32),index:0}]);
+  await page.evaluate(()=>fileArrives());await page.getByRole('button',{name:'Download retained.txt',exact:true}).click();
+  await page.waitForFunction(()=>fixture.download);assert.deepEqual(await page.evaluate(()=>fixture.download),{id:'6'.repeat(32),index:0,dir:'out'});
+  assert(!await page.evaluate(()=>fixture.requests.some(r=>['/api/dm/send','/api/dm/agent/ask'].includes(r.path))));
+  const shot=path.join(evidence,'comic-direct-file-'+width+'.png');await settle(page);await page.screenshot({path:shot});shots.push(shot);
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_TOPIC_INVITE_REGRESSION==='1'){
+ assert.equal(skin,'comic');
+ for(const kind of ['person','agent','main']){
+  const {page,context}=await openCase('topic-invite');
+  try{
+   if(kind!=='main'){await page.getByRole('button',{name:'Warehouse',exact:true}).click();await page.locator('[data-mid="topic-message"]').waitFor();}
+   await page.getByRole('button',{name:width===1280?'Bring in':'Bring someone in',exact:true}).first().click();
+   const dialog=page.getByRole('dialog',{name:'Bring someone in',exact:true});
+   const scope=dialog.getByRole('radio',{name:kind==='main'?'Only this topic: Main flow Chosen history and future messages stay within this topic, even if it is renamed.':/Only this topic: Warehouse/});
+   if(kind==='main')await scope.check();else assert(await scope.isChecked(),'Selected topic is captured before opening the invite');
+   assert.equal(await dialog.locator('input[name=human-invite-mode]').count(),0,'Topic scope does not offer permanent full group membership');
+   await dialog.getByRole('radio',{name:kind==='agent'?/Analyst/:/Cora/}).first().locator('..').click();
+   await dialog.getByText(/already has a whole-chat invitation/).waitFor();
+   const action=dialog.getByRole('button',{name:kind==='agent'?'Bring Analyst in':'Invite Cora as a guest',exact:true});
+   await action.waitFor();
+   const shot=path.join(evidence,'comic-topic-invite-'+kind+'-'+width+'.png');await settle(page);await page.screenshot({path:shot});shots.push(shot);
+   await action.click();
+   const endpoint=kind==='agent'?'/api/dm/agent/invite':'/api/dm/guest/invite';
+   await page.waitForFunction(p=>fixture.requests.some(r=>r.path===p),endpoint);
+   const sent=await page.evaluate(p=>fixture.requests.find(r=>r.path===p).body,endpoint);
+   assert.equal(sent.topic,kind==='main'?'':'1'.repeat(32));
+   assert.deepEqual(sent.share,kind==='main'?['context','private']:['topic-message'],'Only selected-topic history crosses the API boundary');
+   assert(!await page.evaluate(()=>fixture.requests.some(r=>r.path==='/api/groups/invite'||r.path==='/api/dm/agent/ask')),'Invite changes no group membership and runs no agent');
+   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'Topic choices fit phone width');
+  }finally{await context.close();}
+ }
+ continue;
+}
 if(process.env.AGENTNET_REACTION_REGRESSION==='1'){
  const {page,context}=await openCase('reactions');
  try{
@@ -406,6 +542,54 @@ if(process.env.AGENTNET_LONG_LINK_REGRESSION==='1'){
   }
   await settle(page);const shot=path.join(evidence,skin+'-long-links-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
   assert(await message.evaluate(e=>e.scrollWidth<=e.clientWidth+1),'Message stays within viewport');
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_RESOLUTION_REGRESSION==='1'){
+ assert.equal(skin,'comic');
+ const {page,context}=await openCase('continuation-resolve');
+ try{
+  const request=page.locator('[data-mid="needs-answer-exact"]');await request.waitFor();
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide').length),0);
+  await request.getByRole('button',{name:'Mark as handled',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Mark as handled on Other laptop?',exact:true});await dialog.waitFor();
+  assert.match(await dialog.innerText(),/does not run the task again/);
+  await settle(page);{const shot=path.join(evidence,'comic-resolution-confirm-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);}
+  const send=dialog.getByRole('button',{name:'Mark as handled',exact:true});await send.click();
+  await page.waitForFunction(()=>fixture.continuationFailed);await send.waitFor();await send.click();
+  await page.waitForFunction(()=>fixture.resolutionQueued);
+  assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id==='needs-answer-exact').job_state),'needs_human','queueing does not close host work');
+  const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide'));
+  assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1],'explicit retry retains exact target and send ID');
+  assert.deepEqual(calls[0].body,{host:'aster/other-laptop',id:'needs-answer-exact',key:'exact-request-key',attempt:7,action:'resolve',expect:'needs_human',report:'',send_id:calls[0].body.send_id});
+  await page.evaluate(()=>{const m=fixture.thread.messages.find(m=>m.id==='needs-answer-exact');m.job_state=m.state='resolved';m.actions=[];delete m.continuation;fixture.overview.needs_you=[];reloadFixture();});
+  await page.waitForFunction(()=>!document.querySelector('#skin').shadowRoot.textContent.includes('Mark as handled'));
+  assert(!await page.evaluate(()=>fixture.requests.some(r=>['/api/send','/api/dm/send','/api/dm/agent/ask'].includes(r.path))));
+  const shot=path.join(evidence,'comic-resolution-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_HELD_FLOOD_REGRESSION==='1'){
+ assert.equal(skin,'comic');
+ const {page,context}=await openCase('held-flood');
+ try{
+  if(width===390)await page.getByRole('button',{name:'Back to chats',exact:true}).click();
+  await page.getByRole('navigation',{name:'Main',exact:true}).getByRole('button',{name:/^OKs/}).click();
+  const held=page.getByRole('region',{name:'Held back',exact:true});await held.waitFor();
+  await held.locator('summary').filter({hasText:'Chat sync needs attention'}).click();
+  assert.equal(await held.locator('li').count(),1,'300 repeats render one collapsed problem');
+  await held.getByText('300 held messages · unverified sender',{exact:true}).waitFor();
+  await settle(page);{const shot=path.join(evidence,'comic-held-flood-group-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);}
+  await held.locator('summary').filter({hasText:'300 held messages'}).click();await held.locator('li li').first().waitFor();assert.equal(await held.locator('li li').count(),20,'expanded diagnostic records are bounded');
+  assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),0,'background failures do not become individual decision cards');
+  await held.locator('summary').filter({hasText:'300 held messages'}).click();
+  const archive=held.getByRole('button',{name:'Archive 256 notices',exact:true});await archive.click();
+  await page.waitForFunction(()=>fixture.archiveFailed);await archive.click();
+  await page.waitForFunction(()=>fixture.overview.quarantine.length===46);
+  assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),300,'archive retains original ciphertext metadata');
+  assert(await page.evaluate(()=>fixture.overview.quarantine.some(q=>q.detail_code==='admission_failed')&&fixture.overview.quarantine.some(q=>q.id==='f'.repeat(32))),'new and changed records survive stale snapshot');
+  assert(!await page.evaluate(()=>fixture.requests.some(r=>r.body?.do&&r.body.do!=='archive_held_batch')),'bulk archive never admits/trusts/runs');
+  const shot=path.join(evidence,'comic-held-flood-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
  }finally{await context.close();}
  continue;
 }
@@ -655,10 +839,11 @@ if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
   }
   const held=skin==='comic'?page.getByRole('region',{name:'Held back',exact:true}):page.locator('#quarantine');
   await held.waitFor({state:'visible'});
+  if(skin==='comic')await held.locator('summary').filter({hasText:'Chat sync needs attention'}).click();
   assert.equal(await held.locator('li').count(),4);
   const specific=held.locator('li').filter({hasText:'This invitation no longer matches the current group.'});
   await specific.getByText('If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice.',{exact:true}).waitFor();
-  assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),2);
+  assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),skin==='comic'?0:2);
   assert.equal(await held.getByRole('button',{name:/Accept|Approve|Run task|Trust/}).count(),0,'held notices cannot authorize execution or identity');
   assert(!/SECRET_HELD_BODY|SECRET_HELD_ATTACHMENT/.test(await held.innerText()),'encrypted contents never shown');
   // Old invalid DTO has no detail/recovery: safe generic fallback remains.
@@ -666,6 +851,13 @@ if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
   const unknown=held.locator('li').filter({hasText:skin==='comic'?"couldn’t be checked":"couldn't be verified"});
   assert.equal(await unknown.count(),1,'unknown old classification stays unverified');
   assert.equal(await unknown.getByRole('button',{name:'Archive notice'}).count(),0);
+  if(skin==='comic'){
+   await held.getByRole('button',{name:'Archive 2 notices',exact:true}).click();
+   await page.waitForFunction(()=>fixture.overview.quarantine.length===2);
+   assert.deepEqual(await page.evaluate(()=>fixture.overview.quarantine.map(q=>q.id).sort()),['legacy-unknown','proof-waiting']);
+   assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),4,'archiving diagnostics retains blocked messages');
+   assert(!await page.evaluate(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body.do!=='archive_held_batch')),'archive changes no admission or task state');
+  }else{
   await specific.getByRole('button',{name:'Archive notice',exact:true}).click();
   await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/act'&&r.body?.do==='archive_held'));
   await page.waitForFunction(()=>fixture.overview.quarantine.length===3);
@@ -674,6 +866,7 @@ if(process.env.AGENTNET_HELDBACK_REGRESSION==='1'){
   assert.deepEqual(await page.evaluate(()=>fixture.overview.quarantine.map(q=>q.id).sort()),['legacy-invalid','legacy-unknown','proof-waiting']);
   assert.equal(await page.evaluate(()=>fixture.retainedHeld.length),4,'local notice hide retains blocked envelope metadata');
   assert.equal(await held.getByRole('button',{name:'Archive notice',exact:true}).count(),1,'other invalid notice remains');
+  }
   await settle(page);const shot=path.join(evidence,skin+'-heldback-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
  }catch(e){const shot=path.join(evidence,skin+'-heldback-failure-'+width+'.png');await page.screenshot({path:shot});console.error(JSON.stringify({skin,width,shot,errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent),requests:await page.evaluate(()=>fixture.requests)}));throw e;}
  finally{await context.close();}

@@ -102,13 +102,16 @@ func recordRoomContext(tx *sql.Tx, in envelope.Inner, fp, self string) error {
 }
 
 // roomAudience supplies exact signed consent; labels never confer access.
-func (a *Agent) roomAudience(conv, author string) (*envelope.HumanTurn, error) {
+func (a *Agent) roomAudience(conv, author string, topic ...string) (*envelope.HumanTurn, error) {
 	infos, err := a.Participations(conv)
 	if err != nil {
 		return nil, err
 	}
 	h := &envelope.HumanTurn{AuthorPID: author}
 	for _, p := range infos {
+		if p.Topic != nil && (len(topic) == 0 || *p.Topic != topic[0]) {
+			continue
+		}
 		if !p.Following() {
 			continue
 		}
@@ -129,7 +132,10 @@ func (a *Agent) roomAudience(conv, author string) (*envelope.HumanTurn, error) {
 		}
 	}
 	if len(h.Audience) == 0 {
-		return nil, errors.New("room has no accepted agents")
+		if author != "" {
+			return nil, errParticipationTopic
+		}
+		return nil, nil
 	}
 	return h, h.Validate(conv)
 }
@@ -366,11 +372,15 @@ func (a *Agent) SendRoomAsk(ctx context.Context, cause, pid, kind, body string) 
 	if kind == envelope.KindTask && root.kind != envelope.KindTask {
 		return ConvSent{}, errors.New("a question cannot assign a task")
 	}
-	h, err := a.roomAudience(conv, source)
+	topic, err := topicReference(a.store.db, conv, cause, "")
 	if err != nil {
 		return ConvSent{}, err
 	}
-	return a.SendConv(ctx, conv, ConvOutgoing{Kind: kind, PID: pid, Body: body, ReplyTo: root.id, Origin: envelope.OriginAgentPrefix + "room", Emotion: "neutral", Target: &envelope.Target{Address: to.Host.Address, Fingerprint: to.Host.Fingerprint, AgentID: to.AgentID}, human: h, selfJob: to.HostHere, claim: func(tx *sql.Tx, _ string) error {
+	h, err := a.roomAudience(conv, source, topic)
+	if err != nil {
+		return ConvSent{}, err
+	}
+	return a.SendConv(ctx, conv, ConvOutgoing{Kind: kind, PID: pid, Body: body, Topic: topic, ReplyTo: root.id, Origin: envelope.OriginAgentPrefix + "room", Emotion: "neutral", Target: &envelope.Target{Address: to.Host.Address, Fingerprint: to.Host.Fingerprint, AgentID: to.AgentID}, human: h, selfJob: to.HostHere, claim: func(tx *sql.Tx, _ string) error {
 		var current string
 		if e := tx.QueryRow(`SELECT state FROM inbox WHERE id=?`, cause).Scan(&current); e != nil {
 			return e

@@ -225,10 +225,16 @@ export function DevicesSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingE
 }
 
 function copyWords(h: T.HistoryCopy): string {
-  if (h.state === "done") return "History queued · keep AgentNet running here";
   if (h.state === "ended") return "Copying your chats stopped: it’s no longer your device";
-  if (!h.total) return "Getting your chats…";
-  return "Copying your chats · " + h.done + " of " + h.total + " · while AgentNet runs here";
+  const parts: string[] = [];
+  if (h.deferred) parts.push(h.deferred + " history items waiting for context");
+  else if (h.state !== "done") parts.push(h.total ? "Preparing history · " + h.done + " of " + h.total + " chats" : "Preparing history on this device");
+  if (h.blocked) parts.push(h.blocked + " history copies need attention");
+  if (h.queued) parts.push(h.queued + " waiting to send");
+  if (h.custody) parts.push(h.custody + " on the server, waiting for the device");
+  if (parts.length) return parts.join(" · ");
+  if (!h.delivery_known) return "History prepared here · delivery confirmation unavailable";
+  return h.delivered ? h.delivered + " history copies delivered · nothing waiting to send here" : "No message history waiting to send from this device";
 }
 
 /** DeviceRequest: a new device asking to join as you. It is an OK only you give. */

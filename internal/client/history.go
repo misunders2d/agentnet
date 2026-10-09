@@ -212,7 +212,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 	for _, c := range copies {
 		data, _ := json.Marshal(c.env)
 		body := ""
-		if c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 {
+		if c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 {
 			body = c.in.Body
 		} else if c.in.Sub == envelope.SubHistory {
 			var item HistoryItem
@@ -460,7 +460,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 				return err
 			}
 			if p.External {
-				if err := externalTurn(orig, p, m, key.Address, key.Fingerprint()); err != nil {
+				if err := externalTurn(orig, p, m, key.Address, key.Fingerprint(), a.store.db); err != nil {
 					return hold(reasonInvalid, err.Error())
 				}
 			}
@@ -493,7 +493,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 				if _, err := externalOutputRequest(tx, orig, p, m, a.Address, a.Self().Fingerprint()); err != nil {
 					return err
 				}
-			} else if err := externalTurn(orig, p, m, key.Address, key.Fingerprint()); err != nil {
+			} else if err := externalTurn(orig, p, m, key.Address, key.Fingerprint(), tx); err != nil {
 				return err
 			}
 			if event != nil {
@@ -641,7 +641,7 @@ type groupHistoryBatch struct {
 }
 
 func (a *Agent) groupHistoryBatchPresent(q dbq, dev identity.Public, packet GroupContext, payloads []groupDeliveryPayload) (bool, error) {
-	rows, err := q.Query(`SELECT sub,body,envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND required_cap=? AND coalesce(pid,'')='' AND sub IN ('group-proof','group-context') AND state IN ('queued','waiting','custody','delivered')`, packet.State.Conv, dev.Address, dev.Fingerprint(), protocol.CapGroup)
+	rows, err := q.Query(`SELECT sub,body,envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND required_cap=? AND coalesce(pid,'')='' AND sub IN ('group-proof','group-context') AND state IN ('queued','waiting','custody','delivered','quarantined')`, packet.State.Conv, dev.Address, dev.Fingerprint(), protocol.CapGroup)
 	if err != nil {
 		return false, err
 	}
@@ -949,11 +949,17 @@ func (s *store) attachmentManifest(id, dir string) ([]envelope.Attachment, error
 // HistoryJob is the progress of sending this device's conversations to a
 // new device of its person.
 type HistoryJob struct {
-	Device     string `json:"device"`
-	Name       string `json:"name"`
-	ConvsDone  int    `json:"convs_done"`
-	ConvsTotal int    `json:"convs_total"`
-	State      string `json:"state"` // running (queued as this device's connection allows), done, ended (the device left)
+	Device        string `json:"device"`
+	Name          string `json:"name"`
+	ConvsDone     int    `json:"convs_done"`
+	ConvsTotal    int    `json:"convs_total"`
+	State         string `json:"state"` // running (queued as this device's connection allows), done, ended (the device left)
+	DeliveryKnown bool   `json:"delivery_known"`
+	Queued        int    `json:"queued"`
+	Custody       int    `json:"custody"`
+	Delivered     int    `json:"delivered"`
+	Blocked       int    `json:"blocked"`
+	Deferred      int    `json:"deferred"`
 }
 
 // HistoryProgress lists the history snapshots this device sends or sent.
@@ -961,7 +967,7 @@ type HistoryJob struct {
 // queued; delivery follows as the Hub takes it (this device must stay
 // connected until then).
 func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
-	rows, err := a.store.db.Query(`SELECT j.device, j.pos, j.convs_total, j.state,
+	rows, err := a.store.db.Query(`SELECT j.device, j.pos, j.convs_total, j.state, j.fingerprint, COALESCE(c.phase,'') <> '',
  COALESCE(c.phase,'') <> '' AND (c.phase <> 'done' OR c.context_done = 0
  OR c.tail < COALESCE((SELECT CAST(v AS INTEGER) FROM config WHERE k='arrival'),0)
  OR EXISTS(SELECT 1 FROM history_deferred d WHERE d.recipient_fp=j.fingerprint))
@@ -973,11 +979,13 @@ func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
 	defer rows.Close()
 	var out []HistoryJob
 	var at []string // each job's position, counted once the rows are closed
+	var fingerprints []string
 	for rows.Next() {
 		var j HistoryJob
 		var pos string
+		var fingerprint string
 		var pending bool
-		if err := rows.Scan(&j.Device, &pos, &j.ConvsTotal, &j.State, &pending); err != nil {
+		if err := rows.Scan(&j.Device, &pos, &j.ConvsTotal, &j.State, &fingerprint, &j.DeliveryKnown, &pending); err != nil {
 			return nil, err
 		}
 		if pending && j.State != "ended" {
@@ -989,6 +997,7 @@ func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
 		var p historyPos
 		json.Unmarshal([]byte(pos), &p)
 		out, at = append(out, j), append(at, p.Conv)
+		fingerprints = append(fingerprints, fingerprint)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -999,6 +1008,41 @@ func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
 			out[i].ConvsDone = out[i].ConvsTotal
 		} else if at[i] != "" {
 			a.store.db.QueryRow(`SELECT count(*) FROM conversations WHERE id < ?`, at[i]).Scan(&out[i].ConvsDone)
+		}
+		if err := a.store.db.QueryRow(`SELECT count(*) FROM history_deferred WHERE recipient_fp=?`, fingerprints[i]).Scan(&out[i].Deferred); err != nil {
+			return nil, err
+		}
+		// Only the current copy of each exact logical original counts. Older
+		// rejected retries do not turn a later delivered copy into a new fault.
+		counts, err := a.store.db.Query(`SELECT coalesce(o.state,''),count(*) FROM history_copies h LEFT JOIN outbox o ON o.id=h.carrier AND o.recipient=? AND o.recipient_fp=h.recipient_fp AND o.sub='history' WHERE h.recipient_fp=? GROUP BY o.state`, out[i].Device, fingerprints[i])
+		if err != nil {
+			return nil, err
+		}
+		for counts.Next() {
+			var state string
+			var count int
+			if err := counts.Scan(&state, &count); err != nil {
+				counts.Close()
+				return nil, err
+			}
+			switch state {
+			case "queued", "waiting":
+				out[i].Queued += count
+			case "custody":
+				out[i].Custody += count
+			case "delivered":
+				out[i].Delivered += count
+			default:
+				out[i].Blocked += count
+			}
+		}
+		err = counts.Err()
+		counts.Close()
+		if err != nil {
+			return nil, err
+		}
+		if err = a.deviceHistoryProgress(&out[i], fingerprints[i]); err != nil {
+			return nil, err
 		}
 	}
 	return out, nil

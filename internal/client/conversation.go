@@ -41,6 +41,10 @@ type ConversationMessage struct {
 	Attachments       []FileInfo       `json:"attachments,omitempty"`
 	Controls                           // reactions, edits and deletion applied to it (controls.go)
 	Exec              *ExecView        `json:"exec,omitempty"` // a sent request: where its executor last said it stands (headless.go)
+	History           bool             `json:"history,omitempty"`
+	SyncedFrom        string           `json:"synced_from,omitempty"`
+	FromKey           string           `json:"from_key,omitempty"`
+	storedIn          bool
 }
 
 // Conversation is one page of a conversation with one peer.
@@ -116,8 +120,10 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		if !ok {
 			continue // removed meanwhile
 		}
-		if m.Dir == "in" {
-			m.To = a.Address
+		if m.storedIn {
+			if m.To == "" {
+				m.To = a.Address
+			}
 			m.Attachments, err = a.store.attachments(m.ID)
 		} else {
 			m.Attachments, err = a.store.sentAttachments(m.ID)
@@ -125,7 +131,16 @@ func (a *Agent) Conversation(id string, offset, limit int) (Conversation, error)
 		if err != nil {
 			return Conversation{}, err
 		}
-		a.markOpenable(m.Attachments, m.Dir != "in")
+		a.markOpenable(m.Attachments, !m.storedIn)
+		for i, f := range m.Attachments {
+			if strings.HasPrefix(f.BlobID, historyBlob) {
+				m.Attachments[i].Availability = "requestable"
+				var state string
+				if a.store.db.QueryRow(`SELECT state FROM file_requests WHERE message_id=? AND sha256=?`, m.ID, f.SHA256).Scan(&state) == nil {
+					m.Attachments[i].Availability = state
+				}
+			}
+		}
 		c.Messages = append(c.Messages, m)
 	}
 	return c, a.decorateLegacy(peer, c.Messages)
@@ -196,8 +211,9 @@ func (a *Agent) CheckReplyTo(id, to string) error {
 func (s *store) peerOf(id string) (string, error) {
 	var peer string
 	var conv bool
-	err := s.db.QueryRow(`SELECT sender, conv IS NOT NULL FROM inbox WHERE id = ?
-		UNION ALL SELECT recipient, conv IS NOT NULL FROM outbox WHERE id = ? LIMIT 1`, id, id).Scan(&peer, &conv)
+	err := s.db.QueryRow(`SELECT peer,0 FROM device_thread_links WHERE id=?
+		UNION ALL SELECT sender,1 FROM inbox WHERE id=? AND conv IS NOT NULL
+		UNION ALL SELECT recipient,1 FROM outbox WHERE id=? AND conv IS NOT NULL LIMIT 1`, id, id, id).Scan(&peer, &conv)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNoMessage
 	}
@@ -218,8 +234,9 @@ type link struct {
 // one ends the thread there, like a link to an unknown id.
 // Control rows (ref_id set) are in the graph too: they reply to nothing,
 // so they join no thread, and peerMessages leaves them out of any page.
-const peerLinksQuery = `SELECT id, coalesce(reply_to, ''), received_at FROM inbox INDEXED BY inbox_links WHERE sender = ? AND conv IS NULL
-	UNION ALL SELECT id, coalesce(reply_to, ''), created_at FROM outbox INDEXED BY outbox_links WHERE recipient = ? AND conv IS NULL`
+const peerLinksQuery = `SELECT id,coalesce(reply_to,''),received_at FROM inbox i WHERE sender=?1 AND conv IS NULL AND NOT EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='in' AND h.id=i.id)
+ UNION ALL SELECT id,coalesce(reply_to,''),created_at FROM outbox o WHERE recipient=?2 AND conv IS NULL AND NOT EXISTS(SELECT 1 FROM device_history_rows h WHERE h.storage='out' AND h.id=o.id)
+ UNION ALL SELECT id,reply_to,at FROM device_history_rows WHERE peer=?1`
 
 // peerLinks returns the reply links of every message exchanged with peer.
 func (s *store) peerLinks(peer string) ([]link, error) {
@@ -250,18 +267,18 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		for _, id := range chunk {
 			args = append(args, id)
 		}
-		rows, err := s.db.Query(`SELECT id, kind, coalesce(status, ''), body, coalesce(reply_to, ''), ts, received_at, read_at IS NOT NULL,
+		rows, err := s.db.Query(`SELECT i.id, kind, coalesce(status, ''), body, coalesce(i.reply_to, ''), ts, received_at, read_at IS NOT NULL,
 			state, coalesce(responder, ''), coalesce(detail, ''),
-			CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(target, ''),coalesce(quote,'') FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
+			CASE WHEN kind IN ('question', 'task') THEN '' ELSE coalesce(agent_id, '') END, coalesce(target, ''),coalesce(quote,''),l.direction,i.sender,l.recipient,l.author_fp,i.replica,coalesce(i.via,'') FROM inbox i JOIN device_thread_links l ON l.id=i.id AND l.storage='in' WHERE l.peer=? AND i.conv IS NULL AND ref_id IS NULL AND i.id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			m := ConversationMessage{Dir: "in", From: peer}
+			m := ConversationMessage{Dir: "in", From: peer, storedIn: true}
 			var ts, recv int64
 			var read bool
 			var detail, target string
-			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail, &m.AgentID, &target, &m.Quote); err != nil {
+			if err := rows.Scan(&m.ID, &m.Kind, &m.Status, &m.Body, &m.ReplyTo, &ts, &recv, &read, &m.State, &m.Responder, &detail, &m.AgentID, &target, &m.Quote, &m.Dir, &m.From, &m.To, &m.FromKey, &m.History, &m.SyncedFrom); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -283,8 +300,8 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		rows, err = s.db.Query(`SELECT id, envelope, coalesce(status, ''), body, coalesce(reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1
-			FROM outbox WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND id IN (`+marks+`)`, args...)
+		rows, err = s.db.Query(`SELECT o.id, envelope, coalesce(status, ''), body, coalesce(o.reply_to, ''), created_at, state, coalesce(path, ''), coalesce(error, ''), coalesce(agent_id, ''), coalesce(target, ''),coalesce(quote,''),send_stopped,send_stopped=1 AND state='not_delivered' AND coalesce(handover_started,1)=1,l.direction,l.recipient,l.author_fp
+			FROM outbox o JOIN device_thread_links l ON l.id=o.id AND l.storage='out' WHERE l.peer=? AND conv IS NULL AND ref_id IS NULL AND o.id IN (`+marks+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -292,7 +309,7 @@ func (s *store) peerMessages(peer string, ids []string) (map[string]Conversation
 			m := ConversationMessage{Dir: "out", To: peer}
 			var data, target string
 			var created int64
-			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target, &m.Quote, &m.SendStopped, &m.DeliveryUncertain); err != nil {
+			if err := rows.Scan(&m.ID, &data, &m.Status, &m.Body, &m.ReplyTo, &created, &m.State, &m.Path, &m.Detail, &m.AgentID, &target, &m.Quote, &m.SendStopped, &m.DeliveryUncertain, &m.Dir, &m.To, &m.FromKey); err != nil {
 				rows.Close()
 				return nil, err
 			}

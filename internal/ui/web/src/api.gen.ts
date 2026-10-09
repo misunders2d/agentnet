@@ -2,6 +2,7 @@
 // Regenerate: go test ./internal/ui -run TestTypeScriptViewTypes -update
 
 export interface Action {
+  held?: HeldNoticeRef[];
   attempt?: number;
   send_id?: string;
   do: string;
@@ -52,6 +53,7 @@ export interface AgentInDM {
 }
 
 export interface AgentInvite {
+  topic?: string;
   agent_id?: string;
   conv: string;
   host: string;
@@ -77,6 +79,7 @@ export interface AgentRecord {
 }
 
 export interface AgentView {
+  topic?: string;
   pids?: string[];
   member?: boolean;
   inviters?: PersonView[];
@@ -110,6 +113,7 @@ export interface ApprovalsView {
   questions: QuestionApproval[] | null;
   tasks: TaskGrantView[] | null;
   native_tasks?: TaskGrantView[];
+  own_devices?: OwnDevicePermission[];
   participations: ParticipationGrant[] | null;
   read_only: boolean;
   unresolved?: string[];
@@ -395,6 +399,7 @@ export interface File {
   index: number;
   openable: boolean;
   note?: string;
+  availability?: string;
 }
 
 export interface FileLimits {
@@ -513,6 +518,7 @@ export interface GroupMemberView {
 }
 
 export interface GuestAction {
+  topic?: string;
   conv?: string;
   host?: string;
   share?: string[];
@@ -540,6 +546,7 @@ export interface GuestCheckRequest {
 }
 
 export interface GuestView {
+  topic?: string;
   needs_update?: string[];
   pid: string;
   state: string;
@@ -565,12 +572,24 @@ export interface HarnessView {
   question_mode?: string;
 }
 
+export interface HeldNoticeRef {
+  id: string;
+  reason: string;
+  detail_code: string;
+}
+
 export interface HistoryCopy {
   device: string;
   name: string;
   done: number;
   total: number;
   state: string;
+  delivery_known: boolean;
+  queued: number;
+  custody: number;
+  delivered: number;
+  blocked: number;
+  deferred: number;
 }
 
 export interface HubStorage {
@@ -658,6 +677,9 @@ export interface Me {
 }
 
 export interface Message {
+  history?: boolean;
+  synced_from?: string;
+  from_key?: string;
   continuation?: ContinuationAction;
   target?: Target;
   agent_id?: string;
@@ -741,6 +763,14 @@ export interface Overview {
   agent_devices: string[] | null;
 }
 
+export interface OwnDevicePermission {
+  address: string;
+  name: string;
+  this?: boolean;
+  questions: string;
+  tasks: string;
+}
+
 export interface ParticipationGrant {
   conv: string;
   pid: string;
@@ -805,6 +835,8 @@ export interface ProposalView {
   proposal_id: string;
   proposal: string;
   confirmed_by: string;
+  edited?: boolean;
+  task?: string;
 }
 
 export interface QuarantineItem {

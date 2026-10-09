@@ -325,17 +325,17 @@ func (l *Live) Thread(id string) (Thread, error) {
 	peer := l.a.PeerWords()(c.Peer) // the sentences name a person and device, never the address
 	for _, m := range c.Messages {
 		v := Message{ID: m.ID, AgentID: m.AgentID, Target: m.Target, Dir: m.Dir, From: m.From, To: m.To, Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, At: m.At, SentAt: shownSent(m.SentAt, m.At),
-			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, Controls: m.Controls, Exec: m.Exec}
+			State: m.State, Status: m.Status, Path: m.Path, Responder: m.Responder, Summary: m.Summary, Detail: m.Detail, SendStopped: m.SendStopped, DeliveryUncertain: m.DeliveryUncertain, Controls: m.Controls, Exec: m.Exec, History: m.History, SyncedFrom: m.SyncedFrom, FromKey: m.FromKey}
 		v.Continuation, err = l.a.ContinuationFor(m.ID, "", m.Exec)
 		if err != nil {
 			return t, err
 		}
-		if m.Read != nil && !*m.Read {
+		if m.Dir == "in" && m.Read != nil && !*m.Read {
 			v.Unread = true
 		}
 		for i, f := range m.Attachments {
-			fv := File{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Openable: f.Openable} // the name it is saved under
-			if !fv.Openable {
+			fv := File{Index: i, Name: client.SafeName(f.Name), Size: f.Size, Saved: f.SavedPath, Openable: f.Openable, Availability: f.Availability} // the name it is saved under
+			if !fv.Openable && fv.Availability == "" {
 				fv.Note = notKeptNote
 			}
 			v.Files = append(v.Files, fv)
@@ -349,6 +349,13 @@ func (l *Live) Thread(id string) (Thread, error) {
 		if m.AgentID != "" {
 			v.Author = Author{Label: "Agent " + m.AgentID, About: "Named executor asserted by host " + m.From + "; its host key and request bind this ID."}
 		}
+		if m.History {
+			v.Author.About = "Synced from " + m.SyncedFrom + "; originally sent by " + m.From + ". This copy runs no work."
+			if m.Dir == "out" && m.AgentID == "" {
+				v.Author.Label = "You · " + m.From
+			}
+			v.Actions = nil
+		}
 		if m.Kind == KindAnswer && m.Status == envelope.StatusProposal && l.a.CanConfirmProposal(m.ID) {
 			v.Actions = []string{DoIt}
 		}
@@ -359,7 +366,7 @@ func (l *Live) Thread(id string) (Thread, error) {
 				v.StateText = "Delivery unconfirmed; local retries stopped. Cancellation cannot be confirmed."
 			}
 		}
-		if m.Dir == "in" && m.Kind == KindTask {
+		if m.Kind == KindTask {
 			v.Proposal, _ = l.a.ProposalOf(m.ID)
 		}
 		if m.Dir == "in" && (m.State == "running" || m.State == "cancel_requested") && m.Detail != "" {
@@ -493,6 +500,9 @@ func (l *Live) Act(x Action) (string, error) {
 	case DoIt:
 		_, err = l.a.ConfirmProposal(client.WithQueuedSend(ctx, x.SendID), x.ID)
 		note = "Task saved; sending to the same agent."
+	case "change_proposal":
+		_, err = l.a.ConfirmRevisedProposal(client.WithQueuedSend(ctx, x.SendID), x.ID, x.Body)
+		note = "Revised task saved; the agent’s normal task permissions apply."
 	case DoContinue:
 		err = l.a.ContinueRequest(x.ID, x.SendID, x.Attempt, x.Body, x.Key)
 		note = "Answer saved. Continuing the same request with fresh context."
@@ -538,6 +548,10 @@ func (l *Live) Act(x Action) (string, error) {
 	case DoArchiveHeld:
 		err = l.a.ArchiveHeldNotice(x.ID)
 		note = "Notice archived locally. The retained message has not been accepted or run."
+	case DoArchiveHeldBatch:
+		var count int
+		count, err = l.a.ArchiveHeldNotices(x.Held)
+		note = fmt.Sprintf("Archived %d notices on this device. Changed or newer notices stay visible. Nothing was accepted or run.", count)
 	case DoRead:
 		err = l.a.MarkRead(x.IDs)
 	default:

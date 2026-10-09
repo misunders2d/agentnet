@@ -268,6 +268,9 @@ func bindReplyReceiver(tx *sql.Tx, b *replyBinding, copies []outCopy) error {
 		return errors.New("reply receiver requires a deliverable original request")
 	}
 	first := copies[0].in
+	if err := checkTopicReplyReceiver(tx, b, first); err != nil {
+		return err
+	}
 	if first.Sub != "" || first.AgentID != "" || first.Kind != envelope.KindMessage && first.Kind != envelope.KindQuestion && first.Kind != envelope.KindTask {
 		return errors.New("reply receiver binds an original message, question or task")
 	}

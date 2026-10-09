@@ -107,6 +107,13 @@ func (a *Agent) keepSent(path string) error {
 // file index; the answer arrives as an offer, and the file then opens as
 // usual (its Availability says where the request stands).
 func (a *Agent) RequestFile(ctx context.Context, msgID string, index int) error {
+	var direct bool
+	if err := a.store.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM device_history_rows WHERE storage='in' AND id=?)`, msgID).Scan(&direct); err != nil {
+		return err
+	}
+	if direct {
+		return a.requestDeviceHistoryFile(ctx, msgID, index)
+	}
 	var conv, lid, via string
 	err := a.store.db.QueryRow(`SELECT conv, lid, coalesce(via, '') FROM inbox WHERE id = ?`, msgID).Scan(&conv, &lid, &via)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && via == "" {
@@ -304,6 +311,8 @@ func (a *Agent) serveFiles(ctx context.Context) (more bool) {
 		var job groupFileServe
 		if decodeStrict(descriptor, &job) != nil || !protocol.ValidFingerprint(job.Key) || !groupFileMessageValid(job.Message) {
 			err = errors.Join(errPermanent, errors.New("group: invalid persisted file request"))
+		} else if conv == "" {
+			err = a.serveDeviceHistoryFile(ctx, id, device, job)
 		} else {
 			err = a.serveGroupHistoryFile(ctx, id, device, conv, job)
 		}

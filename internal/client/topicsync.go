@@ -136,7 +136,9 @@ func (a *Agent) syncTopicTitles() (bool, error) {
 		if topicSyncAuthority(tx, r, a.Address, fp, dev.Address, dev.Fingerprint()) != nil {
 			continue
 		}
-		rows, e := tx.Query(`SELECT t.scope,t.topic,t.title,t.revision,t.writer FROM topic_titles t WHERE t.owner=? AND NOT EXISTS(SELECT 1 FROM topic_title_copies c JOIN outbox o ON o.id=c.carrier WHERE c.owner=t.owner AND c.recipient_fp=? AND c.scope=t.scope AND c.topic=t.topic AND c.revision=t.revision AND c.writer=t.writer AND o.state IN ('queued','waiting','custody','delivered')) ORDER BY t.scope,t.topic LIMIT ?`, me.info.Person, dev.Fingerprint(), protocol.MaxTopicTitles)
+		// A held carrier retains its exact facts. Only a new revision/writer
+		// needs another copy; a full quarantined batch must not self-reschedule.
+		rows, e := tx.Query(`SELECT t.scope,t.topic,t.title,t.revision,t.writer FROM topic_titles t WHERE t.owner=? AND NOT EXISTS(SELECT 1 FROM topic_title_copies c JOIN outbox o ON o.id=c.carrier WHERE c.owner=t.owner AND c.recipient_fp=? AND c.scope=t.scope AND c.topic=t.topic AND c.revision=t.revision AND c.writer=t.writer AND o.state IN ('queued','waiting','custody','delivered','quarantined')) ORDER BY t.scope,t.topic LIMIT ?`, me.info.Person, dev.Fingerprint(), protocol.MaxTopicTitles)
 		if e != nil {
 			return false, e
 		}

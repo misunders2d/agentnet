@@ -1,6 +1,7 @@
 package client
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 
@@ -268,5 +269,166 @@ func (a *Agent) historySourceItem(q dbq, it historySourceRow) (HistoryItem, erro
 	if err != nil {
 		return HistoryItem{}, err
 	}
-	return itemOf(it.in, it.key, it.pos.Ms), nil
+	return a.dmLifecycleHistorySource(q, it.conv, itemOf(it.in, it.key, it.pos.Ms))
+}
+
+// Public lifecycle disclosure has a member transport sender and a separately
+// signed event author. History names that verified author, not the forwarder.
+// Group lifecycle history keeps its existing admission/witness policy.
+func (a *Agent) dmLifecycleHistorySource(q dbq, conv string, item HistoryItem) (HistoryItem, error) {
+	if item.Sub != envelope.SubEvent {
+		return item, nil
+	}
+	root, _, found, err := conversationIn(q, conv)
+	if err != nil || !found || root.Kind != protocol.ConvKindDM {
+		return item, err
+	}
+	ev, err := protocol.ParseParticipationEvent([]byte(item.Body))
+	if err != nil {
+		return item, err
+	}
+	if ev.Conv != conv || ev.PID != item.PID {
+		return item, errors.New("history lifecycle differs from its conversation or participation")
+	}
+	if ev.Author.Address == item.From && ev.Author.Fingerprint == item.FromKey {
+		return item, nil
+	}
+	m, err := membersIn(q, conv)
+	if err != nil {
+		return item, err
+	}
+	if !humanRoom(m) || !m.device(item.From, item.FromKey) {
+		return item, errors.New("history lifecycle forwarder is not a current original member")
+	}
+	transport, pinned, err := pinnedKey(q, item.From)
+	if err != nil {
+		return item, err
+	}
+	if item.From == a.Address {
+		transport, pinned = a.Self(), true
+	}
+	if pinned && transport.Fingerprint() != item.FromKey {
+		return item, errors.New("history lifecycle forwarder key has changed")
+	}
+	info, err := participationIn(q, conv, item.PID, m, a.Address)
+	if err != nil {
+		return item, err
+	}
+	if err = disclosedCounted(item.inner(conv), info); err != nil {
+		return item, err
+	}
+	key, present, err := pinnedKey(q, ev.Author.Address)
+	if err != nil {
+		return item, err
+	}
+	if ev.Author.Address == a.Address {
+		key, present = a.Self(), true
+	}
+	var pending int
+	if err = q.QueryRow(`SELECT count(*) FROM peers WHERE address IN (?,?) AND pending IS NOT NULL`, ev.Author.Address, item.From).Scan(&pending); err != nil {
+		return item, err
+	}
+	if !present || pending != 0 || key.Fingerprint() != ev.Author.Fingerprint {
+		return item, errors.New("history lifecycle author key is unavailable or changed")
+	}
+	signed := item.inner(conv)
+	signed.From = ev.Author.Address
+	if _, err = checkParticipationEvent(signed, ev.Author.Fingerprint, key.SignKey); err != nil {
+		return item, err
+	}
+	// Resolution checked the exact pinned author/host roster and event hash;
+	// the original signed bytes, source ID, LID and timestamp remain unchanged.
+	item.From, item.FromKey = ev.Author.Address, ev.Author.Fingerprint
+	return item, nil
+}
+
+// Existing completed jobs can retain a poisoned transport-author copy. Walk
+// their ledger once in bounded primary-key pages, scheduling only those exact
+// source refs through normal verification. Neither ciphertext nor cursors are
+// reset, and a corrected original-author tuple deduplicates subsequent wakes.
+func (a *Agent) repairLifecycleHistory(dev identity.Public) (more, seeded bool, err error) {
+	key := "history-lifecycle-author-repair/" + dev.Fingerprint()
+	var progress struct {
+		Pos  [3]string
+		Done bool
+	}
+	tx, err := a.store.db.Begin()
+	if err != nil {
+		return false, false, err
+	}
+	defer tx.Rollback()
+	var raw string
+	if e := tx.QueryRow(`SELECT v FROM config WHERE k=?`, key).Scan(&raw); e == nil {
+		if err = json.Unmarshal([]byte(raw), &progress); err != nil || progress.Done {
+			return false, false, err
+		}
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		return false, false, e
+	}
+	if err = historyRecoveryCurrent(tx, a.Self(), dev); err != nil {
+		return false, false, err
+	}
+	type ref struct{ conv, author, lid, dir, id string }
+	rows, err := tx.Query(`SELECT conv,author,lid,source_dir,source_id FROM history_copies WHERE recipient_fp=? AND (conv,author,lid)>(?,?,?) ORDER BY conv,author,lid LIMIT ?`, dev.Fingerprint(), progress.Pos[0], progress.Pos[1], progress.Pos[2], historyPage)
+	if err != nil {
+		return false, false, err
+	}
+	var refs []ref
+	for rows.Next() {
+		var r ref
+		if err = rows.Scan(&r.conv, &r.author, &r.lid, &r.dir, &r.id); err != nil {
+			rows.Close()
+			return false, false, err
+		}
+		refs = append(refs, r)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return false, false, err
+	}
+	for _, r := range refs {
+		progress.Pos = [3]string{r.conv, r.author, r.lid}
+		items, e := a.historySourceRows(tx, "dir=? AND id=?", "id", 1, r.dir, r.id)
+		if e != nil {
+			return false, false, e
+		}
+		if len(items) != 1 || items[0].conv != r.conv || items[0].key != r.author || items[0].in.LID != r.lid || items[0].in.Sub != envelope.SubEvent {
+			continue
+		}
+		it := items[0]
+		ev, e := protocol.ParseParticipationEvent([]byte(it.in.Body))
+		if e != nil || ev.Conv != r.conv || ev.PID != it.in.PID || ev.Author.Fingerprint == r.author {
+			continue
+		}
+		root, _, found, e := conversationIn(tx, r.conv)
+		if e != nil {
+			return false, false, e
+		}
+		if !found || root.Kind != protocol.ConvKindDM {
+			continue
+		}
+		if corrected, e := a.historySourceItem(tx, it); e == nil && corrected.FromKey != r.author {
+			body, _ := json.Marshal(corrected)
+			candidate := outCopy{in: envelope.Inner{Conv: r.conv, Body: string(body)}, env: envelope.Envelope{From: a.Address}}
+			if present, e := historyCopyPresent(tx, dev, candidate); e != nil {
+				return false, false, e
+			} else if present {
+				if _, err = tx.Exec(`DELETE FROM history_copies WHERE recipient_fp=? AND conv=? AND author=? AND lid=? AND source_dir=? AND source_id=?`, dev.Fingerprint(), r.conv, r.author, r.lid, r.dir, r.id); err != nil {
+					return false, false, err
+				}
+				continue
+			}
+		}
+		if _, err = tx.Exec(`INSERT OR IGNORE INTO history_deferred(recipient_fp,dir,id) VALUES(?,?,?)`, dev.Fingerprint(), r.dir, r.id); err != nil {
+			return false, false, err
+		}
+		seeded = true
+	}
+	progress.Done = len(refs) < historyPage
+	data, _ := json.Marshal(progress)
+	if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, key, string(data)); err != nil {
+		return false, false, err
+	}
+	return !progress.Done, seeded, tx.Commit()
 }

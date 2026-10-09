@@ -62,6 +62,8 @@ export const shareable = (t: T.DMThread) => timeline(t).filter((m) => !m.excerpt
 export interface Member { email?: string; key: string; person?: string; name: string; seed: string; me: boolean; admin: boolean; online: boolean | null; note: string }
 
 export interface Guest {
+  topic?: string;
+  scope?: string;
   key: string;
   pid: string;
   kind: "agent" | "person";
@@ -159,11 +161,12 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
   const agents: Guest[] = (t.agents || []).map((a) => {
     const name = agentName(a.agent_id, names, a.host, me);
     return {
+      topic: a.topic, scope: a.topic !== undefined ? a.topic ? t.topics?.find(x => x.id === a.topic)?.title || "Selected topic" : "Main flow" : undefined,
       key: "a:" + a.pid, pid: a.pid, kind: "agent", name, seed: a.agent_id || a.host.address,
       who: "a:" + a.host.address + "#" + (a.agent_id || ""),
       member: a.member,
       line: a.member ? "Invited by " + (a.inviters?.length ? a.inviters : [a.inviter]).map(inviterWord).join(" and ") : agentWhere(a.host, a.host.address, me), device: a.member ? undefined : deviceKind(a.host.address),
-      where: a.host.person === me?.person ? "your computer" : niceDevice(a.host.address),
+      where: a.host_here ? "this computer" : niceDevice(a.host.address),
       online: online(o, a.host.address), hostName: a.host_here ? "you" : personName(a.host), hostHere: a.host_here,
       invitedBy: inviterWord(a.inviter), note: a.note?.trim() || undefined,
       state: a.state, stateText: a.state_text,
@@ -176,6 +179,7 @@ export function room(t: T.DMThread, o: T.Overview | null, names: Record<string, 
     const lids = new Set(g.shared || []);
     const shared = msgs.filter((m) => lids.has(m.lid || m.id));
     return {
+      topic: g.topic, scope: g.topic !== undefined ? g.topic ? t.topics?.find(x => x.id === g.topic)?.title || "Selected topic" : "Main flow" : undefined,
       key: "g:" + g.pid, pid: g.pid, kind: "person", name: personName(g.host), seed: g.host.person || g.host.address,
       who: "p:" + (g.host.person || g.host.address),
       line: "Invited by " + inviterWord(g.inviter), invitedBy: inviterWord(g.inviter), device: undefined,
@@ -267,6 +271,7 @@ export function agentRejoinState(t: T.DMThread, pid?: string): string {
   if (!old?.host.fingerprint) return "";
   const current = (t.agents || []).find(a => a.pid !== old.pid &&
     a.host.address === old.host.address && a.host.fingerprint === old.host.fingerprint &&
+    a.topic === old.topic &&
     (a.agent_id || "") === (old.agent_id || "") && ["active", "invited"].includes(a.state));
   return current ? current.state === "active" ? "Already in this chat" : "Rejoin pending" : "";
 }

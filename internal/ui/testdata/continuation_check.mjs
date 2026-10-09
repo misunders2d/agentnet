@@ -40,3 +40,28 @@ async function fixture() {
  assert.equal((await store.all('outbox')).length,0);assert.equal(posts.length,0,'unsupported host has no plain-message fallback');e.stop();
 }
 console.log('continuation checks passed');
+{
+ const {e,store,posts}=await fixture(),x={host:'owner/desk',id:'a'.repeat(32),key:e.fp,action:'resolve',expect:'needs_human',attempt:2,send_id:'b'.repeat(32)};
+ e.ctlSupport=async(_host,_pin,cap)=>{assert.equal(cap,wire.CapOwnSyncV3);return [true,''];};
+ await e.decide(x);await e.decide(x);
+ assert.equal(posts.length,1,'exact resolution retry reuses durable decision');
+ const row=await store.get('outbox',x.send_id);assert.equal(row.required_cap,wire.CapOwnSyncV3);assert.equal(JSON.parse(row.body).action,'resolve');
+ assert.equal((await store.all('inbox')).length,0,'sending does not claim a resolved host status');
+ await assert.rejects(e.decide({...x,attempt:3}),/different decision/);
+ e.me.human_keys=[];await assert.rejects(e.decide({...x,send_id:'c'.repeat(32)}),/current own human/);
+ e.stop();
+}
+console.log('own-human resolution checks passed');
+{
+ const {e,store,posts,pin}=await fixture(),x={host:'owner/desk',id:'c'.repeat(32),key:e.fp,action:'resolve',expect:'needs_human',attempt:2,send_id:'d'.repeat(32)};
+ const fetch=e.fetch;e.fetch=async()=>{throw Error('synthetic offline');};
+ e.ctlSupport=async()=>[true,''];await e.decide(x);
+ const row=await store.get('outbox',x.send_id);assert.equal(row.state,'queued');e.fetch=fetch;
+ e.ctlSupport=async()=>[false,'peer_update: own3 unavailable'];await e.post(row);
+ assert.equal(posts.length,0,'a queued resolution cannot reach a downgraded host');
+ assert.match((await store.get('outbox',x.send_id)).detail,/peer_update/);
+ e.ctlSupport=async()=>[true,''];e.pinned=async()=>({...pin,fingerprint:'e'.repeat(64)});
+ await assert.rejects(e.decide(x),/current verified key/);
+ assert.equal(posts.length,0,'explicit retry cannot move a resolution to a changed key');e.stop();
+}
+console.log('queued resolution capability and key checks passed');

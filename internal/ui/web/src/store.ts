@@ -62,7 +62,7 @@ export interface State {
   drafts: Record<string, Draft>;
   toasts: Toast[];
   loadError: string;
-  invite: null | { conv: string; selected?: string[]; who?: string; label?: string };  // the "Bring someone in" sheet
+  invite: null | { conv: string; selected?: string[]; who?: string; label?: string; topic?: string };  // the "Bring someone in" sheet
   section: string;                                        // the open settings section, when chosen from elsewhere
   agentNames: Record<string, string>;                     // agent ids → the names their owners gave them
   topicBusy: Record<string, string>;
@@ -319,7 +319,7 @@ export class Store {
     this.set({ tab, section });
     if (hidden && tab !== "settings") this.markOpenRead();
   }
-  openInvite(conv: string, selected?: string[], preset?: { who: string; label?: string }) { this.set({ invite: { conv, selected, ...preset } }); }
+  openInvite(conv: string, selected?: string[], preset?: { who: string; label?: string; topic?: string }) { this.set({ invite: { conv, selected, topic: this.draft(conv).topic, ...preset } }); }
   closeInvite() { this.set({ invite: null }); }
   setPanel(panel: boolean) { this.set({ panel }); }
 

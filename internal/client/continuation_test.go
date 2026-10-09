@@ -289,34 +289,42 @@ func TestContinueRequestCodexSavedBackgroundStaysFresh(t *testing.T) {
 }
 
 func TestContinueRequestQueuedCapabilityDowngrade(t *testing.T) {
-	w := newWorld(t, "")
-	runWith(t, w, w.bob, RunOptions{})
-	key, e := w.alice.sendKey(tctx(t), w.bob.Address)
-	if e != nil {
-		t.Fatal(e)
-	}
-	body, _ := json.Marshal(envelope.Decision{Action: "continue", Expect: stateNeedHuman, Attempt: 1, Text: "answer"})
-	in := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: w.alice.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Sub: envelope.SubDecision, Body: string(body), Ref: &envelope.Ref{ID: protocol.NewID(), Fingerprint: w.alice.Self().Fingerprint()}}
-	recipient, _ := key.Recipient()
-	env, e := envelope.Seal(in, w.alice.id.Sign, recipient)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = w.alice.store.addContinuationOutbox(env, in, key.Fingerprint()); e != nil {
-		t.Fatal(e)
-	}
-	signCapsAfter(t, w.bob, without(ownCaps, protocol.CapContinuation))
-	if _, e = w.alice.deliver(tctx(t), env, nil); e == nil {
-		t.Fatal("continuation reached unsupported host")
-	}
-	if inboxHas(t, w.bob, env.ID) {
-		t.Fatal("old host admitted unsupported continuation")
-	}
-	var held int
-	if e = w.bob.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id=?`, env.ID).Scan(&held); e != nil || held != 0 {
-		t.Fatal("unsupported control reached old reader quarantine", held, e)
-	}
-	if e = w.alice.store.addContinuationOutbox(env, in, strings.Repeat("0", 64)); e == nil {
-		t.Fatal("captured reader key changed on retry")
+	for _, tc := range []struct{ action, capability, text string }{
+		{"continue", protocol.CapContinuation, "answer"},
+		{"resolve", protocol.CapOwnSyncV3, ""},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			w := newWorld(t, "")
+			runWith(t, w, w.bob, RunOptions{})
+			key, e := w.alice.sendKey(tctx(t), w.bob.Address)
+			if e != nil {
+				t.Fatal(e)
+			}
+			body, _ := json.Marshal(envelope.Decision{Action: tc.action, Expect: stateNeedHuman, Attempt: 1, Text: tc.text})
+			in := envelope.Inner{V: envelope.Version3, ID: protocol.NewID(), From: w.alice.Address, To: w.bob.Address, TS: time.Now().Unix(), Kind: envelope.KindMessage, Sub: envelope.SubDecision, Body: string(body), Ref: &envelope.Ref{ID: protocol.NewID(), Fingerprint: w.alice.Self().Fingerprint()}}
+			recipient, _ := key.Recipient()
+			env, e := envelope.Seal(in, w.alice.id.Sign, recipient)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = w.alice.store.addContinuationOutbox(env, in, key.Fingerprint(), tc.capability); e != nil {
+				t.Fatal(e)
+			}
+			signCapsAfter(t, w.bob, without(ownCaps, tc.capability))
+			result, e := w.alice.deliver(tctx(t), env, nil)
+			if e == nil && (result.State != stateConvWaiting || !strings.HasPrefix(result.Detail, WaitPeerUpdate)) {
+				t.Fatalf("decision did not wait for unsupported host: %+v", result)
+			}
+			if inboxHas(t, w.bob, env.ID) {
+				t.Fatal("old host admitted unsupported continuation")
+			}
+			var held int
+			if e = w.bob.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE id=?`, env.ID).Scan(&held); e != nil || held != 0 {
+				t.Fatal("unsupported control reached old reader quarantine", held, e)
+			}
+			if e = w.alice.store.addContinuationOutbox(env, in, strings.Repeat("0", 64), tc.capability); e == nil {
+				t.Fatal("captured reader key changed on retry")
+			}
+		})
 	}
 }

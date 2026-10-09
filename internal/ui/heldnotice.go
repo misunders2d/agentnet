@@ -2,6 +2,20 @@ package ui
 
 func heldNoticeText(code, reason string) (string, string) {
 	switch code {
+	case "envelope_malformed":
+		return "The received envelope has an invalid format.", "Its contents stay blocked. Archiving only hides this notice on this device."
+	case "envelope_verification_failed":
+		return "The encrypted message could not pass validation on this device.", "Its signature, encrypted contents or bound fields could not be validated. Nothing was accepted or run."
+	case "recipient_mismatch":
+		return "This envelope is addressed to another device.", "It was not accepted here. Archiving does not forward or resend it."
+	case "sender_key_unavailable":
+		return "This device could not obtain the sender's public key.", "The claimed sender has not been verified. Archiving does not trust an identity."
+	case "history_malformed":
+		return "This history copy does not have a valid message or file manifest.", "The original retained copy stays blocked. Archiving does not import or run it."
+	case "context_unavailable":
+		return "This message needs conversation, membership or person proof that is not available here yet.", "Checks continue when connected; the message appears only when verified. Archiving only hides this notice."
+	case "admission_failed":
+		return "The message failed this device's conversation or sender checks.", "The precise check has no diagnostic code yet. The retained message stays blocked; archiving does not accept, resend or run it."
 	case "group_invitation_outdated":
 		return "This invitation no longer matches the current group.", "If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice."
 	case "group_consent_mismatch":

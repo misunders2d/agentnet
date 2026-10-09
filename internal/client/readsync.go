@@ -110,8 +110,10 @@ func (a *Agent) syncReadMarks() (bool, error) {
 			continue
 		}
 		// Batch up to 64 exact references; indexed copy mappings point to existing outbox rows
-		// are the reconciliation marker. Terminal failures may recover on a wake.
-		rows, e := a.store.db.Query(`SELECT r.conv,r.fingerprint,r.lid FROM read_marks r WHERE r.owner=? AND NOT EXISTS(SELECT 1 FROM read_mark_copies c JOIN outbox o ON o.id=c.carrier WHERE c.owner=r.owner AND c.recipient_fp=? AND c.conv=r.conv AND c.fingerprint=r.fingerprint AND c.lid=r.lid AND o.state IN ('queued','waiting','custody','delivered')) ORDER BY r.conv,r.fingerprint,r.lid LIMIT ?`, me.info.Person, dev.Fingerprint(), protocol.MaxReadRefs)
+		// are the reconciliation marker. Quarantine retains that exact encrypted
+		// carrier for receiver recovery; resealing the same full batch would
+		// make convSync immediately schedule it forever.
+		rows, e := a.store.db.Query(`SELECT r.conv,r.fingerprint,r.lid FROM read_marks r WHERE r.owner=? AND NOT EXISTS(SELECT 1 FROM read_mark_copies c JOIN outbox o ON o.id=c.carrier WHERE c.owner=r.owner AND c.recipient_fp=? AND c.conv=r.conv AND c.fingerprint=r.fingerprint AND c.lid=r.lid AND o.state IN ('queued','waiting','custody','delivered','quarantined')) ORDER BY r.conv,r.fingerprint,r.lid LIMIT ?`, me.info.Person, dev.Fingerprint(), protocol.MaxReadRefs)
 		if e != nil {
 			return false, e
 		}

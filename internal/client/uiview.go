@@ -151,7 +151,7 @@ func (a *Agent) peerThreadGroups(peer string) ([][]string, map[string]threadRow,
 // conversationPeers lists every address this installation has exchanged
 // device-history messages with (conversation messages left out).
 func (s *store) conversationPeers() ([]string, error) {
-	rows, err := s.db.Query(`SELECT sender FROM inbox WHERE conv IS NULL UNION SELECT recipient FROM outbox WHERE conv IS NULL`)
+	rows, err := s.db.Query(`SELECT DISTINCT peer FROM device_thread_links`)
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +177,9 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	// A review notice is exactly the shape the store files as one (see
 	// receivedNotice); a reply or a message with files never is.
 	rows, err := s.db.Query(`SELECT id, kind, state, read_at IS NULL, coalesce(reply_to, ''), coalesce(status, ''), (`+receivedNotice+`), EXISTS(SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id),
-		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done
-		FROM inbox WHERE sender = ? AND conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedInFor("inbox"),
+		CASE WHEN kind IN ('`+envelope.KindQuestion+`', '`+envelope.KindTask+`') THEN coalesce(json_extract(target, '$.agent_id'), '') ELSE coalesce(agent_id, '') END,topic_done,
+		(SELECT direction FROM device_thread_links l WHERE l.id=inbox.id AND l.storage='in')
+		FROM inbox WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='in') AND conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedInFor("inbox"),
 		envelope.KindMessage, envelope.StatusReviewNotice, peer)
 	if err != nil {
 		return nil, err
@@ -187,13 +188,14 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 	for rows.Next() {
 		var r threadRow
 		var status string
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent, &r.topicDone); err != nil {
+		var direction string
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.unread, &r.replyTo, &status, &r.notice, &r.selected, &r.agent, &r.topicDone, &direction); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		r.in, r.status = true, status
+		r.in, r.status = direction == "in", status
 		out[r.id] = r
-		if r.replyTo != "" && status != envelope.StatusProgress {
+		if r.in && r.replyTo != "" && status != envelope.StatusProgress {
 			replies[r.replyTo] = true
 		}
 	}
@@ -202,19 +204,29 @@ func (s *store) threadRows(peer, selfFP string) (map[string]threadRow, error) {
 		return nil, err
 	}
 	rows, err = s.db.Query(`SELECT id, coalesce(json_extract(envelope, '$.kind'), ''), state, coalesce(status, ''), coalesce(json_extract(target, '$.agent_id'), agent_id, ''),topic_done,
-		(coalesce(json_extract(envelope,'$.kind'),'')='message' AND coalesce(status,'')='review_notice' AND reply_to IS NULL AND NOT EXISTS(SELECT 1 FROM sent_attachments a WHERE a.message_id=o.id))
-		FROM outbox o WHERE recipient = ? AND conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedOut, peer, selfFP)
+		(coalesce(json_extract(envelope,'$.kind'),'')='message' AND coalesce(status,'')='review_notice' AND reply_to IS NULL AND NOT EXISTS(SELECT 1 FROM sent_attachments a WHERE a.message_id=o.id)),
+		(SELECT direction FROM device_thread_links l WHERE l.id=o.id AND l.storage='out'),coalesce(reply_to,'')
+		FROM outbox o WHERE id IN (SELECT id FROM device_thread_links WHERE peer=? AND storage='out') AND conv IS NULL AND ref_id IS NULL AND coalesce(sub,'') NOT IN `+recordSubs+` AND NOT `+erasedOut, peer, selfFP)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var r threadRow
-		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice); err != nil {
+		var direction string
+		if err := rows.Scan(&r.id, &r.kind, &r.state, &r.status, &r.agent, &r.topicDone, &r.notice, &direction, &r.replyTo); err != nil {
 			return nil, err
+		}
+		r.in = direction == "in"
+		if r.in && r.replyTo != "" && r.status != envelope.StatusProgress {
+			replies[r.replyTo] = true
 		}
 		r.replied = replies[r.id]
 		out[r.id] = r
+	}
+	for id, r := range out {
+		r.replied = replies[id]
+		out[id] = r
 	}
 	return out, rows.Err()
 }

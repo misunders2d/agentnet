@@ -218,10 +218,15 @@ func (a *Agent) sendReviewNotice(ctx context.Context) {
 	}
 	rows.Close()
 	for i := range items { // what a task carries out, for the operator approving it (MEL-521)
+		if items[i].Excerpt == "" {
+			if files, err := a.store.attachments(items[i].ID); err == nil && len(files) > 0 {
+				items[i].Excerpt = reviewFileExcerpt(files)
+			}
+		}
 		if items[i].Kind == envelope.KindTask && !items[i].Conv {
 			items[i].Proposal, _ = a.ProposalOf(items[i].ID)
 			if p := items[i].Proposal; p != nil {
-				p.Question, p.Proposal = firstLine(p.Question), firstLine(p.Proposal)
+				p.Question, p.Proposal, p.Task = firstLine(p.Question), firstLine(p.Proposal), firstLine(p.Task)
 			}
 		}
 	}
@@ -591,12 +596,26 @@ func (a *Agent) reportBodyFor(items []ReportItem, agentText map[string]string, f
 	for _, it := range items {
 		it.Actionable = actionable
 		if full && it.State == stateNeedHuman && agentText[it.ID] != "" {
-			it.Excerpt = agentText[it.ID]
+			if it.Excerpt != "" {
+				it.Excerpt = "Request: " + it.Excerpt + "\n\nAgent response:\n" + agentText[it.ID]
+			} else {
+				it.Excerpt = agentText[it.ID]
+			}
 		}
 		r.Items = append(r.Items, it)
 	}
 	data, _ := json.Marshal(r)
 	return string(data)
+}
+
+// These names come from the accepted request's encrypted manifests. Keep the
+// summary bounded; local paths, file bytes and unrelated requests never travel.
+func reviewFileExcerpt(files []FileInfo) string {
+	names := make([]string, 0, min(len(files), 3))
+	for _, f := range files[:min(len(files), 3)] {
+		names = append(names, firstLine(f.Name))
+	}
+	return firstLine("Files: " + strings.Join(names, ", "))
 }
 
 func ownerReportHolds(q querier, address, fp string) (bool, error) {

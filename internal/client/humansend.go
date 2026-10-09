@@ -13,7 +13,7 @@ import (
 
 // ownHumanPID is this device's exact accepted human participation in conv
 // ("" for an original member device); anyone else has no author scope.
-func (a *Agent) ownHumanPID(conv string) (string, error) {
+func (a *Agent) ownHumanPID(conv string, topics ...string) (string, error) {
 	m, err := a.dmMembers(conv)
 	if err != nil {
 		return "", err
@@ -26,6 +26,9 @@ func (a *Agent) ownHumanPID(conv string) (string, error) {
 		return "", err
 	}
 	for _, p := range infos {
+		if p.Topic != nil && (len(topics) == 0 || *p.Topic != topics[0]) {
+			continue
+		}
 		if p.HumanActive() && p.HostHere && p.Host.Fingerprint == a.Self().Fingerprint() {
 			return p.PID, nil
 		}

@@ -6,6 +6,12 @@ import "errors"
 // and private topic titles.
 const CapOwnSyncV2 = "own2"
 
+// CapOwnSyncV3 adds inert direct-agent history and exact own-human remote
+// resolution and once-only original/revised proposal choices across own humans.
+// Revised and synced-sibling confirmations require this capability; an original
+// device may still confirm exact bytes on a legacy host. Devices retain own2 in their advertisement for older senders.
+const CapOwnSyncV3 = "own3"
+
 // InvitationSync is a view of the sending device's outgoing intent. It is
 // never consent, membership, or authority to publish/cancel an invitation.
 type InvitationSync struct {

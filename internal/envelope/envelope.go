@@ -238,6 +238,8 @@ const (
 	SubEvent           = "event"            // a conversation event; history only, never a request
 	SubExcerpt         = "excerpt"          // shared history; never a request
 	SubHistory         = "history"          // a message or event of the conversation, forwarded by a device of the recipient's own person; never a request
+	SubDeviceHistory   = "device-history"   // inert original device-thread turn, current own-human devices only
+	SubDeviceFile      = "device-file"      // exact original device-thread file, current own-human devices only
 	SubInvitationSync  = "invitation-sync"  // inert outgoing invitation view for own-human devices
 	SubTopicSync       = "topic-sync"       // private topic titles for own-human devices
 	SubReadSync        = "read-sync"        // exact read references between current own-human devices
@@ -494,6 +496,27 @@ func ValidateControl(in Inner) error {
 	return checkVersion3(in)
 }
 
+// ValidateDeviceHistory checks the original device-turn shape without granting
+// execution authority. Its caller separately authenticates the own-human
+// forwarder and the original endpoints. Files are immutable manifests only.
+func ValidateDeviceHistory(in Inner) error {
+	if !validID(in.ID) || !validKind(in.Kind) || in.Conv != "" || in.LID != "" || in.Replica || in.TS <= 0 || len(in.Attachments) > MaxAttachments {
+		return errors.New("device history: malformed original")
+	}
+	if in.V != Version && in.V != Version3 {
+		return errors.New("device history: original version")
+	}
+	if in.Session != "" || in.Fallback || in.Sub == SubDecision {
+		return errors.New("device history contains no executable routing")
+	}
+	for _, a := range in.Attachments {
+		if a.Name == "" || a.Size < 0 || !protocol.ValidHash(a.SHA256) || a.Blob.ID != "" || a.Blob.Size != 0 || a.Blob.SHA256 != "" {
+			return errors.New("device history: malformed file manifest")
+		}
+	}
+	return checkVersion2(in)
+}
+
 func checkVersion3(in Inner) error {
 	if in.Kind != KindMessage || in.Ref == nil || !validID(in.Ref.ID) || !protocol.ValidFingerprint(in.Ref.Fingerprint) {
 		return errors.New("a control is a message about one exact earlier message (ref: id and sender key)")
@@ -696,9 +719,23 @@ func checkVersion2(in Inner) error {
 		}
 		return nil
 	}
-	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync {
-		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Kind != KindMessage || !in.Replica || in.Target != nil || in.PID != "" || len(in.Attachments) != 0 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil || in.AgentID != "" || in.Topic != "" || in.TopicEvent != nil || in.TopicDone || in.Quote != "" || in.Session != "" || in.Fallback {
+	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile {
+		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Kind != KindMessage || !in.Replica || in.Target != nil || in.PID != "" || (len(in.Attachments) != 0 && in.Sub != SubDeviceFile) || len(in.Attachments) > 1 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil || in.AgentID != "" || in.Topic != "" || in.TopicEvent != nil || in.TopicDone || in.Quote != "" || in.Session != "" || in.Fallback {
 			return errors.New("read sync: quiet rootless reference carrier required")
+		}
+		if in.Sub == SubDeviceFile {
+			if in.SendGroup != "" {
+				return errors.New("device file carries no message grouping")
+			}
+			_, err := protocol.ParseDeviceFile([]byte(in.Body))
+			return err
+		}
+		if in.Sub == SubDeviceHistory {
+			if in.SendGroup != "" {
+				return errors.New("device history carries no message grouping")
+			}
+			_, err := protocol.ParseDeviceHistory([]byte(in.Body))
+			return err
 		}
 		if in.Sub == SubTopicSync {
 			if in.SendGroup != "" {
@@ -857,7 +894,7 @@ func SealAttention(in Inner, sender ed25519.PrivateKey, recipient age.Recipient,
 }
 
 func sealEnvelope(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync) && channel != "" {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && channel != "" {
 		return Envelope{}, errors.New("root sync carries no attention")
 	}
 	if !validKind(in.Kind) {
@@ -972,7 +1009,7 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	if err := checkVersion2(in); err != nil {
 		return in, err
 	}
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync) && e.Attn {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && e.Attn {
 		return in, errors.New("root sync carries no attention")
 	}
 	if len(in.Attachments) != len(e.Blobs) {

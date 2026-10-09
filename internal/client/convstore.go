@@ -236,13 +236,10 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	}
 	now := time.Now()
 	duplicate := ""
-	if proposal, err := proposalFor(tx, in, verifiedBy); err != nil {
+	if proposal, prior, err := claimProposalChoice(tx, in, verifiedBy); err != nil {
 		return "", err
 	} else if proposal != "" {
-		duplicate, err = proposalConfirmedBy(tx, proposal, in.From, verifiedBy, in.ID)
-		if err != nil {
-			return "", err
-		}
+		duplicate = prior
 		if duplicate != "" {
 			state = stateNotRun
 		}
@@ -412,6 +409,11 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 			return "", err
 		}
 	}
+	// The visible original has its own ID and is never acknowledged to this
+	// transport. Retain the exact admitted carrier disposition separately.
+	if _, err := tx.Exec(`INSERT INTO history_receipts(id,acked) VALUES(?,0) ON CONFLICT(id) DO UPDATE SET acked=0`, carrier); err != nil {
+		return "", err
+	}
 	return result, s.done(tx.Commit())
 }
 
@@ -455,7 +457,7 @@ func (s *store) holdAsDiagnostic(env envelope.Envelope, reason, why string) erro
 	raw, _ := json.Marshal(env)
 	_, err := s.db.Exec(`INSERT INTO quarantine(id, sender, reason, envelope, received_at, detail_code) VALUES(?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET reason = excluded.reason, detail_code = excluded.detail_code,
-		notice_archived = CASE WHEN excluded.reason IN ('invalid','proof_pending') THEN quarantine.notice_archived ELSE 0 END`, env.ID, env.From, reason, string(raw), time.Now().Unix(), heldDiagnosticCode(why))
+		notice_archived = CASE WHEN excluded.reason IN ('invalid','proof_pending') AND quarantine.reason=excluded.reason AND quarantine.detail_code=excluded.detail_code THEN quarantine.notice_archived ELSE 0 END`, env.ID, env.From, reason, string(raw), time.Now().Unix(), heldFailureCode(reason, why))
 	return s.done(err)
 }
 

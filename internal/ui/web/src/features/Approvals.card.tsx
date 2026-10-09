@@ -11,6 +11,7 @@ import { useOwned } from "../owned";
 import { useStore } from "../store";
 import { AgentAvatar, PersonAvatar, type Mood } from "../ui/Avatar";
 import { Button } from "../ui/Button";
+import { Sheet } from "../ui/Sheet";
 import {
   askerOf, capital, deviceWords, headlineOf, inSentence, isMine, isThreadMsg, kindWord, longer, myAgent, myAgentSeed, nameOf,
   participationOf, phaseOf, placeOf, requestText, waitsElsewhere, type Asker, type Phase, type Req,
@@ -20,6 +21,7 @@ import { AnswerSheet, ConfirmSheet, DeclineSheet } from "./Approvals.sheets";
 import { focusComposer } from "./Composer.focus";
 import { decidersWords } from "./Approvals.reports";
 import { Command, Details } from "./Settings.parts";
+import { ResolveOwnRequest } from "./RequestResolution";
 
 export function ApprovalCard({ message, dm, thread, compact, content }: { message: Req; dm?: T.DMThread | null; thread?: T.Thread | null; compact?: boolean; content?: ReactNode }) {
   const store = useApp();
@@ -53,17 +55,34 @@ export function ApprovalCard({ message, dm, thread, compact, content }: { messag
 function ProposalConfirmation({m}: {m: Req}) {
  const store=useApp(), pending=useRef(false);
  const [busy,setBusy]=useState(false);
- const confirm=async () => {
-  if (pending.current) return;
+ const [edit,setEdit]=useState<{id:string; original:string; body:string}|null>(null);
+ const choice=edit?.id===m.id ? edit : null;
+ const confirm=async (changed=false) => {
+  if (pending.current || changed && (!choice || !choice.body.trim())) return;
+  const id=m.id, body=choice?.body;
   pending.current=true; setBusy(true);
-  try { await store.run(a=>a.act({do:"do_it",id:m.id}),"Task sent to the same agent."); }
-  finally { pending.current=false; setBusy(false); }
+  try {
+   const result=await store.run(a=>a.act(changed ? {do:"change_proposal",id,body:body!} : {do:"do_it",id}));
+   if (result) { setEdit(null); store.toast(result.note || "Task saved; the agent’s normal task permissions apply."); }
+  } finally { pending.current=false; setBusy(false); }
  };
- return <div className="rounded-2xl bg-agent px-4 py-3 text-agent-ink stroke" data-proposal-confirm>
+ return <>
+ <div className="rounded-2xl bg-agent px-4 py-3 text-agent-ink stroke" data-proposal-confirm>
   <p className="font-semibold">Suggested task</p>
-  <p className="pt-1 text-[13px]">Send this exact suggestion to the same agent. Its owner’s task permissions apply.</p>
-  <Button variant="act" className="mt-3" disabled={busy} onClick={()=>void confirm()}>{busy ? "Sending…" : "Do it"}</Button>
- </div>;
+  <p className="pt-1 text-[13px]">Send this exact suggestion to the same agent, or change it first. Its owner’s task permissions apply.</p>
+  <div className="mt-3 flex flex-wrap gap-2">
+   <Button variant="act" disabled={busy} onClick={()=>void confirm()}>{busy ? "Sending…" : "Do it"}</Button>
+   <Button variant="ghost" disabled={busy} onClick={()=>setEdit({id:m.id,original:m.body,body:m.body})}>Change…</Button>
+  </div>
+ </div>
+ <Sheet open={!!choice} onOpenChange={open=>{if(!open&&!busy)setEdit(null);}} title="Change suggested task" description="Nothing runs until you send this task. It stays with the same agent and conversation."
+  footer={<div className="flex flex-wrap justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={()=>setEdit(null)}>Cancel</Button><Button disabled={busy||!choice?.body.trim()} onClick={()=>void confirm(true)}>{busy?"Sending…":"Send revised task"}</Button></div>}>
+  <label className="mt-3 block font-semibold" htmlFor={"proposal-edit-"+m.id}>Task to send</label>
+  <textarea id={"proposal-edit-"+m.id} autoFocus rows={10} className="mt-2 w-full resize-y rounded-xl border border-hairline bg-surface p-3 text-ink" value={choice?.body||""} disabled={busy} onChange={e=>setEdit(old=>old?{...old,body:e.target.value}:old)} />
+  <p className="mt-2 text-[13px] text-muted">Revised tasks use the agent’s normal task permissions and may need approval.</p>
+  <details className="mt-3"><summary className="cursor-pointer py-2 underline">Original suggestion</summary><p className="whitespace-pre-wrap break-words">{choice?.original}</p></details>
+ </Sheet>
+ </>;
 }
 
 // ---- the requester's view ---------------------------------------------------
@@ -174,7 +193,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
         {proposal && <Details label="How this task was chosen" className="mx-4 mt-3">
           <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{nameOf(proposal.asker, o)} asked: {proposal.question}</p>
           <p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">Your agent suggested: {proposal.proposal}</p>
-          <p className="mt-2">{nameOf(proposal.confirmed_by, o)} chose Do it. This uses only their usual task approval.</p>
+          <p className="mt-2">{nameOf(proposal.confirmed_by, o)} {proposal.edited ? "edited and sent this task." : "chose Do it."} This uses only their usual task approval.</p>
         </Details>}
 
         {phase === "needs_human" || (phase === "stopped" && said) ? (
@@ -214,6 +233,7 @@ function OwnerCard({ m, dm, thread, o, names, phase }: Props) {
           {phase === "needs_human" && <>
             <p className="text-[14px] text-text-2">Reply supplies missing information. For a permission or environment problem, review the native agent on its host computer first. Asking again keeps the same permissions.</p>
             {m.continuation && <Button variant="act" size="lg" icon={<IconArrowBackUp size={20} />} disabled={!!busy} onClick={() => setAnswer({request: {...m.continuation!}, send: sendID(), question: said})}>Reply</Button>}
+            {m.continuation?.host && <ResolveOwnRequest request={m.continuation} disabled={!!busy} />}
             {can("accept") && <Button variant="outline" size="lg" className="min-h-12!" icon={<IconRefresh size={19} />} disabled={!!busy} onClick={allow}>{busy === "accept" ? "Starting…" : "Ask again"}</Button>}
             {can("resolve") && <TextButton onClick={() => setSheet("close")} disabled={!!busy}>Mark as handled</TextButton>}
           </>}
