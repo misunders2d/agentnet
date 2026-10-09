@@ -36,11 +36,21 @@ func groupFileRef(m fileMsg) protocol.GroupHistoryRef {
 	return protocol.GroupHistoryRef{LID: m.LID, Author: m.Author, Hash: m.Hash}
 }
 
-func (a *Agent) groupFileSource(q dbq, conv string, m fileMsg) (groupHistorySource, error) {
+func (a *Agent) groupFileSource(q dbq, conv string, m fileMsg, original ...bool) (groupHistorySource, error) {
 	if !groupFileMessageValid(m) {
 		return groupHistorySource{}, errors.Join(errPermanent, errors.New("group: malformed exact file grant"))
 	}
-	source, err := a.groupFileSourceIn(q, conv, groupFileRef(m))
+	var source groupHistorySource
+	var err error
+	if len(original) > 0 && original[0] {
+		source, err = a.groupHistorySourceIn(q, conv, groupFileRef(m), true)
+		if err != nil && !errors.Is(err, ErrGroupHistoryUnavailable) {
+			return source, err
+		}
+	}
+	if !source.original || source.stamp != m.GroupAdmission {
+		source, err = a.groupFileSourceIn(q, conv, groupFileRef(m))
+	}
 	if err != nil {
 		return source, err
 	}
@@ -55,48 +65,66 @@ func (a *Agent) groupFileSource(q dbq, conv string, m fileMsg) (groupHistorySour
 }
 
 func (a *Agent) groupFileAuthorized(q dbq, packet GroupContext, address, fp string, m fileMsg) error {
+	_, err := a.groupFileAuthorizedSource(q, packet, address, fp, m)
+	return err
+}
+
+// Resolve immutable originals only after current own-human and admission checks.
+// Returning this exact source keeps subsequent byte reads on the same projection.
+func (a *Agent) groupFileAuthorizedSource(q dbq, packet GroupContext, address, fp string, m fileMsg) (groupHistorySource, error) {
+	var source groupHistorySource
 	if !groupFileMessageValid(m) {
-		return errors.Join(errPermanent, errors.New("group: file lacks exact message/manifest binding"))
+		return source, errors.Join(errPermanent, errors.New("group: file lacks exact message/manifest binding"))
 	}
 	admission, err := groupMemberAdmission(q, packet, address, fp)
 	if err != nil {
-		return err
+		return source, err
 	}
 	if m.GroupAdmission == "" || m.GroupAdmission != admission.Hash() {
-		return errors.Join(errPermanent, errors.New("group: file requester admission changed"))
+		return source, errors.Join(errPermanent, errors.New("group: file requester admission changed"))
 	}
-	source, err := a.groupFileSource(q, packet.State.Conv, m)
+	own, ok, err := scanPersonIn(q, "state = ?", personSelf)
 	if err != nil {
-		return err
+		return source, err
 	}
-	if source.item.PID != "" {
-		own, ok, e := scanPersonIn(q, "state = ?", personSelf)
+	original := false
+	if ok && own.has(address, fp) && own.roster.Human(fp) && own.roster.Human(a.Self().Fingerprint()) {
+		current, e := groupMemberAdmission(q, packet, a.Address, a.Self().Fingerprint())
 		if e != nil {
-			return e
+			return source, e
 		}
+		dev, _ := own.device(address)
+		if e = historyRecoveryCurrent(q, a.Self(), dev); e != nil {
+			return source, e
+		}
+		original = current.Hash() == m.GroupAdmission
+	}
+	source, err = a.groupFileSource(q, packet.State.Conv, m, original)
+	if err != nil {
+		return source, err
+	}
+	if source.original || source.item.PID != "" {
 		if !ok || !own.has(address, fp) || source.stamp != admission.Hash() {
-			return errors.Join(errPermanent, errors.New("group: PID files require exact current own-linked history"))
+			return source, errors.Join(errPermanent, errors.New("group: original files require exact current own-linked history"))
 		}
-		if source.item.GroupHistory != nil {
+		if source.original || source.item.GroupHistory != nil {
 			dev, _ := own.device(address)
-			return historyRecoveryCurrent(q, a.Self(), dev)
+			if err = historyRecoveryCurrent(q, a.Self(), dev); err != nil {
+				return source, err
+			}
 		}
-		return nil
+		return source, nil
 	}
 	if admission.AllowsHistory(groupFileRef(m)) {
-		return nil
+		return source, nil
 	}
-	me, ok, err := scanPersonIn(q, "state = ?", personSelf)
-	if err != nil {
-		return err
-	}
-	if !ok || !me.has(address, fp) || m.GroupAdmission == "" || m.GroupAdmission != admission.Hash() {
-		return errors.Join(errPermanent, errors.New("group: file is not selected/current own live history"))
+	if !ok || !own.has(address, fp) {
+		return source, errors.Join(errPermanent, errors.New("group: file is not selected/current own live history"))
 	}
 	if source.stamp != m.GroupAdmission {
-		return errors.Join(errPermanent, ErrGroupHistoryUnavailable)
+		return source, errors.Join(errPermanent, ErrGroupHistoryUnavailable)
 	}
-	return nil
+	return source, nil
 }
 
 func (a *Agent) groupFileCarrier(to identity.Public, packet GroupContext, m fileMsg, atts ...envelope.Attachment) (outCopy, error) {
@@ -143,7 +171,34 @@ func (a *Agent) requestGroupHistoryFile(ctx context.Context, msgID string, index
 	if !strings.HasPrefix(f.BlobID, historyBlob) {
 		return nil
 	}
-	sources, err := a.groupFileSources(a.store.db, conv, lid, author, 2)
+	packet, err := a.GroupContext(conv)
+	if err != nil {
+		return err
+	}
+	admission, err := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
+	if err != nil {
+		return err
+	}
+	var sources []groupHistorySource
+	if stamp == admission.Hash() {
+		own, ok, e := a.store.selfPerson(a.Address)
+		if e != nil {
+			return e
+		}
+		dev, found := own.device(via)
+		if ok && found && own.roster.Human(a.Self().Fingerprint()) && own.roster.Human(dev.Fingerprint()) {
+			if e = historyRecoveryCurrent(a.store.db, a.Self(), dev); e != nil {
+				return e
+			}
+			sources, err = a.groupHistorySources(a.store.db, conv, lid, author, 0, 2, true)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if len(sources) == 0 {
+		sources, err = a.groupFileSources(a.store.db, conv, lid, author, 2)
+	}
 	if err != nil {
 		return err
 	}
@@ -153,14 +208,6 @@ func (a *Agent) requestGroupHistoryFile(ctx context.Context, msgID string, index
 	ref := historyRef(conv, sources[0].item)
 	size := f.Size
 	m := fileMsg{V: 1, Type: "request", LID: lid, SHA256: f.SHA256, Author: author, Hash: ref.Hash, Index: &index, Name: f.Name, Size: &size, GroupAdmission: stamp}
-	packet, err := a.GroupContext(conv)
-	if err != nil {
-		return err
-	}
-	admission, err := groupMemberAdmission(a.store.db, packet, a.Address, a.Self().Fingerprint())
-	if err != nil {
-		return err
-	}
 	m.GroupAdmission = admission.Hash()
 	for _, member := range packet.State.Members {
 		if _, err = a.refreshPerson(ctx, member.Person, false); err != nil {
@@ -181,9 +228,6 @@ func (a *Agent) requestGroupHistoryFile(ctx context.Context, msgID string, index
 	}
 	defer tx.Rollback()
 	if err = a.groupFileAuthorized(tx, packet, a.Address, a.Self().Fingerprint(), m); err != nil {
-		return err
-	}
-	if _, err = a.groupFileSource(tx, conv, m); err != nil {
 		return err
 	}
 	if err = groupTurnCheck(tx, packet, via, key.Fingerprint()); err != nil {
@@ -248,8 +292,7 @@ func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in en
 		if e = a.groupFileAuthorized(q, current, address, key, m); e != nil {
 			return e
 		}
-		_, e = a.groupFileSource(q, in.Conv, m)
-		return e
+		return nil
 	}
 	if err = check(a.store.db); err != nil {
 		if errors.Is(err, ErrGroupContextPending) {
@@ -280,7 +323,7 @@ func (a *Agent) admitGroupFile(ctx context.Context, env envelope.Envelope, in en
 		a.kickNow()
 		return nil
 	}
-	source, err := a.groupFileSource(tx, in.Conv, m)
+	source, err := a.groupFileAuthorizedSource(tx, packet, a.Address, a.Self().Fingerprint(), m)
 	if err != nil {
 		return err
 	}
@@ -367,7 +410,8 @@ func (a *Agent) serveGroupHistoryFile(ctx context.Context, id, device, conv stri
 	if err = groupTurnCheck(a.store.db, packet, a.Address, a.Self().Fingerprint()); err != nil {
 		return errors.Join(errPermanent, err)
 	}
-	if err = a.groupFileAuthorized(a.store.db, packet, device, job.Key, job.Message); err != nil {
+	source, err := a.groupFileAuthorizedSource(a.store.db, packet, device, job.Key, job.Message)
+	if err != nil {
 		return errors.Join(errPermanent, err)
 	}
 	key, err := a.sendKey(ctx, device)
@@ -376,10 +420,6 @@ func (a *Agent) serveGroupHistoryFile(ctx context.Context, id, device, conv stri
 	}
 	if key.Fingerprint() != job.Key {
 		return errors.Join(errPermanent, errors.New("group: asking key changed"))
-	}
-	source, err := a.groupFileSource(a.store.db, conv, job.Message)
-	if err != nil {
-		return errors.Join(errPermanent, err)
 	}
 	plain, err := a.groupFilePlain(ctx, source, job.Message)
 	m := job.Message
@@ -436,9 +476,6 @@ func (a *Agent) serveGroupHistoryFile(ctx context.Context, id, device, conv stri
 		if e := a.groupFileAuthorized(tx, packet, device, job.Key, m); e != nil {
 			return e
 		}
-		if _, e := a.groupFileSource(tx, conv, m); e != nil {
-			return e
-		}
 		var saved []byte
 		if e := tx.QueryRow(`SELECT group_descriptor FROM file_serves WHERE id=? AND state='pending'`, id).Scan(&saved); e != nil {
 			return e
@@ -467,14 +504,11 @@ func (a *Agent) groupFileOutboundCheck(q dbq, packet GroupContext, to, fp string
 	if m.Type == "offer" {
 		requester, key = to, fp
 	}
-	if err := a.groupFileAuthorized(q, packet, requester, key, m); err != nil {
-		return err
-	}
-	if _, err := a.groupFileSource(q, packet.State.Conv, m); err != nil {
+	source, err := a.groupFileAuthorizedSource(q, packet, requester, key, m)
+	if err != nil {
 		return err
 	}
 	if m.Type == "request" {
-		source, _ := a.groupFileSource(q, packet.State.Conv, m)
 		var via string
 		if err := q.QueryRow(`SELECT coalesce(via,'') FROM inbox WHERE id=?`, source.item.ID).Scan(&via); err != nil {
 			return err
