@@ -12,7 +12,7 @@ It is built for everyday company work: sales, operations, purchasing,
 accounting, customer support—and the people who build the systems behind them.
 You do not need to write code to use it.
 
-[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
+[Download AgentNet](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15) · [Get started](#get-started) · [What's changed](CHANGELOG.md) · [Choose or create a skin](#make-it-look-and-work-your-way) · [Guides for agents and maintainers](#guides-for-agents-and-maintainers)
 
 ## Start with a topic
 
@@ -162,14 +162,15 @@ compatibility; they do not make arbitrary skin code safe.
 
 ## Get started
 
-**Current release: [v0.8.14](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14)**,
+**Current release: [v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15)**,
 published October 9, 2026. AgentNet is actively developing; the expandable
 release section below names what has been checked and what still needs work.
 
 **Update recovery:** an app attached to a separate daemon may show a local
 connection-refused page while that daemon switches versions. Once the switch
 finishes, quit AgentNet from its tray menu and reopen it from the launcher.
-A permanent handoff fix is in progress; see [the handoff](docs/HANDOFF.md).
+v0.8.15 repairs local-page readiness and shell reload; physical recovery of the
+reported failure remains unconfirmed. See [the handoff](docs/HANDOFF.md).
 
 1. **Install the app on your computer.** Choose your download below. Phones
    use the workspace's browser app and can add it to their home screen.
@@ -185,9 +186,9 @@ A permanent handoff fix is in progress; see [the handoff](docs/HANDOFF.md).
 
 | Computer | Download and open |
 | --- | --- |
-| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.14/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
-| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.14/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14) are also available. |
-| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.14/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
+| Windows | Run the [Windows installer](https://github.com/misunders2d/agentnet/releases/download/v0.8.15/AgentNet-windows-x64-setup.exe), then open AgentNet from Start. |
+| Linux | Download the [AppImage](https://github.com/misunders2d/agentnet/releases/download/v0.8.15/AgentNet-linux-x86_64.AppImage), allow it to run in its file properties, then open it. [deb and rpm packages](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15) are also available. |
+| macOS | Open the [DMG](https://github.com/misunders2d/agentnet/releases/download/v0.8.15/AgentNet-macos-universal.dmg) and copy AgentNet into Applications. Interactive installation remains unverified on a real Mac. |
 
 Closing the desktop window leaves AgentNet in the tray. **Start when I log in**
 controls whether it starts with your computer; **Quit AgentNet** stops it.
@@ -205,9 +206,9 @@ once. v0.8.3 fixes the case where the app updated but an older official
 unchanged official copies automatically.
 
 **Upgrading a v0.8.3/v0.8.4 AppImage:** its old updater still needs one
-manual reopen after installing v0.8.14. Open AgentNet from its launcher if it
+manual reopen after updating to v0.8.15. Open AgentNet from its launcher if it
 closes without returning. If v0.8.4's Update button is unavailable, run
-`agentnet update v0.8.14` for the registered desktop installation, then reopen
+`agentnet update v0.8.15` for the registered desktop installation, then reopen
 once. Updates started by v0.8.5 include the restart fix.
 
 **With v0.8.5 or later installed**, the button and `agentnet update` update AgentNet
@@ -355,7 +356,7 @@ These are different operations:
 | v0.8.0 desktop app | Install the current matching desktop package once. Keep the same data home and app location. |
 | v0.8.1+ desktop app | Settings → About → Update AgentNet. v0.8.3/v0.8.4 AppImages need the one-time reopen described above; use the registered-app CLI if the old Update button is unavailable. |
 | v0.8.3+ command with a registered desktop app | `agentnet update` uses the same whole-app updater and includes verified official PATH copies. An active agent job must finish first. |
-| CLI-only installation, without a registered desktop app | `agentnet update` or `agentnet update v0.8.14`; this changes the executing CLI. |
+| CLI-only installation, without a registered desktop app | `agentnet update` or `agentnet update v0.8.15`; this changes the executing CLI. |
 | Relay | Replace the deployed server binary/image separately, after a stopped-state backup, keeping the existing volume and configuration. |
 
 The app refreshes its bundled command, verified official terminal copies and
@@ -372,7 +373,7 @@ A server recommendation is an admin notice. It does not install software,
 and the app's update button checks GitHub independently of that notice.
 The v0.8.0 About page incorrectly directs desktop users to `agentnet update`;
 use a desktop package instead. If its **What's new** link does nothing, open
-[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14) directly.
+[the release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15) directly.
 
 The [complete update/recovery guide](docs/revival/INSTALL.md#updating-and-downgrading)
 covers backups, package handling, managed commands, relay upgrades and rollback.
@@ -408,7 +409,7 @@ agentnet hub restore --from hub-backup.tgz --data /var/lib/agentnet-restored
 
 # From an enrolled admin device: recommend a client release separately.
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.14 v0.8.14
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.15 v0.8.15
 ```
 
 A server-hosted company agent is an ordinary member with its own separate
@@ -535,7 +536,35 @@ contributors as described in AGENTS.md. Licensed under [Apache 2.0](LICENSE).
 </details>
 
 <details>
-<summary><strong>v0.8.14 release evidence and known limits</strong></summary>
+<summary><strong>v0.8.15 release evidence and known limits</strong></summary>
+
+Published October 9, 2026 at 23:21:55 UTC from
+`7b26d30ca320d25b791c13a2aa40839c2562d909`, a documentation-only record above
+qualified application source `ceb8d0c0b4446c51c3c948252430310d3048d73a`.
+The release repairs restart readiness, signed history, reply correlation and
+delayed statuses. It adds steering/follow-ups, selected-message topic moves,
+assigning a message to an own agent, reviewed history sharing, Antigravity
+support and read-only reported model visibility.
+
+All 12 client race partitions, both UI partitions and affected native checks on
+Linux/macOS/Windows passed, combined with retained unchanged evidence. Earlier
+failures and platform skips remain recorded in the [release checklist](docs/plans/V0_8_15.md).
+All five final [packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/38003220556)
+passed, including actual Linux AppImage replacement/restart. All 12 asset
+digests and 11 SHA256SUMS entries matched before and after publication;
+standalone and bundled Linux commands report the exact clean tag. Only the
+existing relay was deployed, with a verified backup and normal HTTPS checks at
+23:22:23 UTC, unchanged realm/data/neighbor, and zero OOM events or restarts.
+
+Physical phone convergence, post-update CPU and interactive Windows/macOS
+installation remain unverified. The separate phone “Sending” report has no
+exact diagnosis; installers remain unsigned. Mobile responsiveness and sync
+are the next priority. See [the handoff](docs/HANDOFF.md) for evidence and limits.
+
+</details>
+
+<details>
+<summary><strong>Historical v0.8.14 release evidence and known limits</strong></summary>
 
 Published October 9, 2026 at 19:34:43 UTC from
 `760e945a28c38461c74d84c7d4c9610464573dea`. This release improves own-device
@@ -556,13 +585,14 @@ need a source retaining their bytes. A topic invitation does not narrow existing
 whole-chat access. Encryption, signed admission, task grants and each agent
 owner's native permissions remain enforced.
 
-A local page handoff failure after an attached-daemon update is under repair.
+A local page handoff failure was reported after an attached-daemon update;
+its source repair shipped in v0.8.15, with physical recovery still unconfirmed.
 A v0.8.13 phone also showed “Sending” for 15 minutes, with no exact cause
 established for that report. Physical phone convergence and
 post-fix ThinkPad CPU remain unverified. The shutdown abort is unattributed;
 the historical Mac installation report is nonblocking and not claimed fixed.
 Installers remain unsigned. See [the handoff](docs/HANDOFF.md) for exact evidence
-and the urgent post-update investigation.
+and the mobile responsiveness investigation.
 
 </details>
 

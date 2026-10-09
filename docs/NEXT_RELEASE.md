@@ -1,25 +1,27 @@
-# AgentNet v0.8.15 — qualified source; final packaging next
+# AgentNet — mobile responsiveness and sync after v0.8.15
 
-Frozen candidate `ceb8d0c0b4446c51c3c948252430310d3048d73a` is on
-`release/v0.8.15`. [Race qualification](https://github.com/misunders2d/agentnet/actions/runs/38002045084)
-and [affected native qualification](https://github.com/misunders2d/agentnet/actions/runs/38002048457)
-both passed. Final tag packaging and asset verification are next; it is not
-published. The exact retained evidence, initial failures
-and corrections are in [V0_8_15.md](plans/V0_8_15.md).
+[v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15) was
+published October 9 at **23:21:55 UTC** from
+`7b26d30ca320d25b791c13a2aa40839c2562d909`. All five final packaging jobs and
+asset checks passed. The existing Contabo relay was verified at **23:22:23 UTC**
+with unchanged realm/data/neighbor and the exact new browser engine. No installed
+client or live grant was changed. Detailed composed qualification and honest
+limits are in [V0_8_15.md](plans/V0_8_15.md).
 
-The candidate repairs attached-app restart recovery, blocked browser receive
+The owner's next priority is dedicated mobile responsiveness and sync before
+more features: measure first useful messages, fresh replies, and convergence of
+Sending/delivery/answer state. Start from the released source. Investigate the
+remaining known-key proof/file waits and delivery projections using focused
+signed/IndexedDB reproductions, then qualify the integrated candidate. Physical
+phone catch-up and post-update resource use are still unverified. Preserve live
+sessions, native permissions, identity and history; no reset, relink or replay.
+
+The release repairs attached-app restart readiness, blocked browser receive
 queues, rejected signed participation history, cross-device answer correlation,
-out-of-order statuses and affected saved status records. It preserves native
-permissions, current keys, signatures and encryption, and never reruns old tasks.
-The six assigned features are implemented: steering/follow-ups, selected-message
-topic moves, assigning a message to an own agent, reviewed topic/history sharing,
-Antigravity support and read-only reported model visibility.
-
-Finish the combined gates, publish the verified assets, and update only the
-existing Contabo relay. Installed clients use their app/CLI update controls.
-Physical phone convergence and post-update resource use remain unverified.
-Immediately after this release, the owner requests a dedicated mobile
-responsiveness/sync phase before further feature work. No reset or relinking.
+out-of-order statuses and affected saved records. All six assigned features
+shipped. Source computers and receiving clients should use their existing app/CLI
+update controls, then linked phones reload. Keep a source online for retained
+history and files.
 
 ## Previous release — v0.8.14, October 9, 2026 (UTC)
 
@@ -35,11 +37,11 @@ changed no installed client.
 
 **Historical post-update report, owned by root Codex.** The
 owner then updated Zenbook himself and reported “Could not connect 127.0.0.1:
-Connection refused.” The v0.8.15 candidate now repairs local-page readiness and
+Connection refused.” v0.8.15 repairs local-page readiness and
 same-address shell reload; physical recovery is not user-confirmed. The phone
 v0.8.13 report of “Sending” for 15 minutes also has no exact diagnosis;
 v0.8.14 fixes confirmed blockers but is not claimed to fix that exact report.
-The implementation and six-feature batch are now in v0.8.15 qualification above.
+The implementation and six-feature batch shipped in v0.8.15 above.
 
 Implemented areas include direct-agent history across personal devices, durable
 history receipts and progress, grouped/archiveable Held back notices, bounded

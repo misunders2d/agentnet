@@ -4,7 +4,57 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Current published release — v0.8.14, October 9, 2026 (UTC)
+## Current published release — v0.8.15, October 9, 2026 (UTC)
+
+[Download v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15).
+Published at **23:21:55 UTC** from
+`7b26d30ca320d25b791c13a2aa40839c2562d909`, a documentation-only record above
+qualified application source `ceb8d0c0b4446c51c3c948252430310d3048d73a`.
+All five final [packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/38003220556)
+passed, including native shell checks and actual Linux AppImage replacement/restart.
+All 12 asset sizes/GitHub digests and all 11 SHA256SUMS entries matched before
+and after publication. Standalone and bundled Linux commands report the exact
+clean tagged revision. GitHub latest is v0.8.15.
+
+The existing Contabo relay was verified at **23:22:23 UTC**, with container
+start **23:22:22.343 UTC**, on image `agentnet-revived:v0.8.15-7b26d30c`.
+The verified stopped-state backup is
+`/opt/agentnet-revived/backups/pre-v0.8.15-qSEG3Kax`. Normal HTTPS checks from
+server and laptop passed with the original realm and data volume. Both also
+verified the exact released browser engine, SHA256
+`cd76e194b19be65f8b88ab94e3c4d6a0969cbf28830097fef5e9c4ada7e51be9`,
+served with `Cache-Control: no-cache`. The neighboring service is unchanged;
+zero OOM events or restarts. Deployment changed only the existing relay.
+Installed clients, grants and open desktop sessions were not changed by Codex.
+
+This release repairs attached-app restart readiness, incorrectly attributed
+signed participation history, cross-device reply correlation, delayed completion
+statuses and affected retained records. Browser recovery durably retains exact
+encrypted input while a missing-key lookup is unavailable so later messages can
+proceed. Current keys, signatures, membership, native permissions and encryption
+remain enforced; old tasks are not rerun. All six assigned features shipped:
+steering/follow-ups, selected-message topic moves, assigning a message to an own
+agent, reviewed topic/history sharing, Antigravity support and read-only model
+reporting. See [V0_8_15.md](plans/V0_8_15.md) and [CHANGELOG](../CHANGELOG.md).
+
+Qualification combines the final [client/UI race run](https://github.com/misunders2d/agentnet/actions/runs/38002045084)
+(1,011 client and 331 UI assignments) and [affected native checks](https://github.com/misunders2d/agentnet/actions/runs/38002048457)
+on Linux/macOS/Windows with retained unchanged broad platform, container and
+other-package evidence. Earlier failures and corrections remain in the checklist.
+No deadline increased. Shell-dependent Windows and opt-in skips are not claimed
+as executed. Real IndexedDB and signed multi-device journeys passed; physical
+phone catch-up, post-update CPU and interactive platform installation remain
+unverified. Installers remain unsigned.
+
+**Active next phase: mobile responsiveness and sync, before more features.**
+Update source computers and receiving clients through the existing app/CLI
+controls, then reload linked phones; keep a source online for history/files.
+No reset or relinking is needed. Measure first useful message, fresh reply and
+send-state convergence. Investigate remaining known-key proof/file lookup stalls
+and Sending-after-answer projections without claiming the owner's exact delay
+is already attributed or physically resolved. Preserve live sessions and data.
+
+## Previous release — v0.8.14, October 9, 2026 (UTC)
 
 [Download v0.8.14](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14).
 Published at **19:34:43 UTC** from
@@ -33,7 +83,7 @@ server and laptop passed with the original realm and data volume. The neighborin
 service is unchanged; zero OOM events or restarts. Deployment changed only the
 existing relay, with no installed-client mutations by Codex.
 
-**Urgent post-update repair — focused checks passed; integrated gates pending.** After
+**Historical post-update report — source repair shipped in v0.8.15.** After
 publication, the owner updated Zenbook himself and reported
 “Could not connect 127.0.0.1: Connection refused.” Read-only inspection confirms the app/launchers use the permanent application
 data path, not Downloads. Both running backends subsequently reported the exact
@@ -42,9 +92,8 @@ returns200/v0.8.14. The shell can retain a failed page during attached-daemon
 restart: Go does not wait for UI readiness after lock reacquisition, and Rust
 suppresses a same-URL page event. Both source gaps now have failing-before and
 passing-after regressions; six Go tests also pass under race. Root reviewed
-the changes. Full Tauri compilation and physical recovery remain unverified;
-tray Quit/reopen was advised, but recovery is not user-confirmed. This takes
-priority over v0.8.15 feature work. A separate
+the changes. Final Tauri builds and Linux replacement/restart passed for v0.8.15; physical recovery remains unverified;
+tray Quit/reopen was advised, but recovery is not user-confirmed. This repair is included in v0.8.15. A separate
 new report says the phone on v0.8.13 shows “Sending” for 15 minutes; its exact
 cause is unverified. v0.8.14 fixes confirmed sync/queue blockers, but no exact
 fix or physical convergence is claimed for this report. Preserve live sessions,
@@ -56,43 +105,11 @@ historical Mac installation report nonblocking because the app is already
 installed. Absent Developer ID signing/notarization is a possible barrier, not
 an established cause or fix. Installers remain unsigned.
 
-**Active next release — v0.8.15:** based on the released tag with the urgent
-post-update repair first. Follow [V0_8_15.md](plans/V0_8_15.md) for
-MEL-591/592/571/583/574/575, verified directly in Linear. Zenbook owns overnight
-implementation/integration; ThinkPad is offline and no peer response is required.
-MEL-527 remains v0.9. All six features have focused native/browser/rendered
-evidence and independent review. Cross-chat history sharing covers accepted
-destination guests, exact selected encrypted files, stale audience/source review
-and same-operation retry. The first combined qualification found stale fixtures
-and a real cancellation race. The corrective batch and retained passing evidence
-are recorded at the top of the release checklist; it is not published yet. A
-measured worker-query planning regression is corrected and reviewed. The final
-named callback race passes with unchanged bounds; earlier deadline failures,
-including on pre-feature source, remain recorded. A further signed regression
-found that a completion status arriving before its request could be permanently
-rejected. Native and browser fixes pass focused checks, including retained native
-invalid records and browser proof-pending records. Exact executor pins are
-rechecked through delayed recovery and atomic admission. The final focused race
-check passes 29.082 s and vet is clean. Frozen source
-`ceb8d0c0b4446c51c3c948252430310d3048d73a` is in corrective
-[race qualification](https://github.com/misunders2d/agentnet/actions/runs/38002045084)
-and [native qualification](https://github.com/misunders2d/agentnet/actions/runs/38002048457),
-started October 9 at 22:58 UTC. Both passed: all 1,011 client assignments, both UI
-partitions (331 assignments), and affected native checks on all three systems.
-Final tag packaging and asset verification remain; no v0.8.15 release yet.
-
-**October 9 evening correction:** MEL-588 rejected-history flood and MEL-580
-answered requests remaining pending are mandatory v0.8.15 fixes. The active
-checklist's opening checkpoint records exact source causes, failed-before tests,
-focused passes, independent review and remaining verification. Repeated signed
-DM lifecycle history was incorrectly attributed to its forwarder; DM agent
-outputs also retained host-only reply IDs. Narrow native/browser regressions
-now pass. A failed browser lookup also interrupted later push messages; exact
-encrypted carriers now wait durably without receipts while later messages can
-proceed. Actual IndexedDB tests cover restart, changed keys and stream shutdown;
-group catch-up and file-recovery checks pass. No physical phone convergence or
-release is claimed.
-After v0.8.15 the owner requests a dedicated mobile responsiveness/sync phase.
+**Historical v0.8.15 preparation:** the post-update repair, evening sync
+blockers and six-feature batch are now published as recorded above. Detailed
+failed-before checks, corrections, independent reviews and retained evidence
+remain in [V0_8_15.md](plans/V0_8_15.md). Physical phone confirmation remains
+open and leads the dedicated mobile phase.
 
 ## Previous release — v0.8.13, October 9, 2026 (UTC)
 

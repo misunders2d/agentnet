@@ -9,19 +9,19 @@ People do not need Go, Rust, Docker or a database server on their computer.
 ## People: install and open the app
 
 The current published release is
-[v0.8.14](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14), dated
-October 9, 2026, published at 19:34:43 UTC from
-`760e945a28c38461c74d84c7d4c9610464573dea`.
+[v0.8.15](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15), dated
+October 9, 2026, published at 23:21:55 UTC from
+`7b26d30ca320d25b791c13a2aa40839c2562d909`.
 Download the matching package below and verify `SHA256SUMS`. Existing app users
-can use **Settings → About → Update AgentNet** or `agentnet update v0.8.14`, then
+can use **Settings → About → Update AgentNet** or `agentnet update v0.8.15`, then
 reload linked browser clients. If the registered old AppImage has already been
 removed, reinstall the official app once; the updater checks this before shutdown.
 Identity and history remain; no reset or relinking is required.
 
 **Post-update issue:** after the owner updated Zenbook himself,
-it reported “Could not connect 127.0.0.1: Connection refused.” The v0.8.15 candidate
+it reported “Could not connect 127.0.0.1: Connection refused.” v0.8.15
 repairs local-page readiness and shell reload after reattaching to an independent
-daemon. It is still in release qualification; physical recovery is not confirmed.
+daemon. Final shell checks and Linux AppImage replacement/restart passed; physical recovery is not confirmed.
 The separate phone v0.8.13 “Sending” report also has no exact diagnosis. See
 [the handoff](../HANDOFF.md) for current status.
 
@@ -30,7 +30,7 @@ bounded Windows client coverage; the initial full runs were not all green.
 Four shell-stub linked-history scenarios skip Windows. All five final packaging
 jobs passed; all 12 asset digests and 11 SHA256SUMS entries matched. Standalone
 and bundled Linux commands report the exact clean tag. The existing relay passed
-normal HTTPS checks from server and laptop at 19:35:17 UTC after its stopped-state
+normal HTTPS checks from server and laptop at 23:22:23 UTC after its stopped-state
 backup; deployment did not change installed clients.
 
 Source computers and receiving clients need compatible versions for new
@@ -43,9 +43,9 @@ claimed fixed. Installers remain unsigned. Exact evidence is in
 [the handoff](../HANDOFF.md).
 
 **Upgrading a v0.8.3/v0.8.4 AppImage:** its old updater still needs one
-manual reopen after installing v0.8.14. Open AgentNet from its launcher if it
+manual reopen after updating to v0.8.15. Open AgentNet from its launcher if it
 closes without returning. If v0.8.4's Update button is unavailable, run
-`agentnet update v0.8.14` for the registered desktop installation, then reopen
+`agentnet update v0.8.15` for the registered desktop installation, then reopen
 once. Updates started by v0.8.5 include the restart fix.
 
 | Device | Package to choose | How to open it |
@@ -418,7 +418,7 @@ be copied the same way: stop the daemon, then copy the home directory.
 **From v0.8.0:** install the matching desktop package once. v0.8.0 has
 no in-app installer; its About notice incorrectly directs desktop users to
 `agentnet update`. If **What's new** does nothing, open the
-[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14)
+[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.15)
 directly.
 
 - **AppImage:** download `AgentNet-linux-x86_64.AppImage`, verify its entry
@@ -435,7 +435,7 @@ directly.
 
 Keep the local AgentNet data directory: it contains identity, history and
 permissions. Do not reset or re-enroll for an ordinary update. Let active jobs
-finish first. Check **Settings → About → v0.8.14**, then inspect
+finish first. Check **Settings → About → v0.8.15**, then inspect
 `agentnet version` in a fresh terminal separately. If an older manually
 managed daemon owns the home, follow [existing installs and recovery](#existing-installs-and-recovery)
 before assuming the new AppImage changed that daemon.
@@ -448,7 +448,7 @@ refresh with it. This does not update Claude, Codex, Pi or unrelated settings.
 Custom/unrecognized CLI copies require the owner's **Replace command…**
 choice. Package-manager authorization may be required for deb/rpm.
 
-**Upgrading from v0.8.1/v0.8.2:** use About once to reach v0.8.14. Those
+**Upgrading from v0.8.1/v0.8.2:** use About once to reach v0.8.15. Those
 older standalone executables retain their older updater until replaced. The
 new app recognizes unchanged official commands by published checksum and
 adopts them automatically; a separate Replace command step is unnecessary.
@@ -507,7 +507,7 @@ admin device:
 
 ```bash
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.14 v0.8.14
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.15 v0.8.15
 ```
 
 That publishes advice only. It installs nothing on the relay or clients.
