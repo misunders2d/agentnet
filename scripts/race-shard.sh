@@ -7,11 +7,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 shard=$1
-count=${2:-6}
+count=${2:-12}
+if ! [[ "$count" =~ ^[1-9][0-9]*$ ]] ||
+   ! [[ "$shard" = others || "$shard" =~ ^client-[0-9]+$ ]]; then
+	echo 'usage: race-shard.sh others|client-K [positive COUNT]' >&2
+	exit 2
+fi
 if [ "$shard" = others ]; then
 	exec go test -race -count=1 -timeout 600s $(go list ./... | grep -v '/internal/client$')
 fi
 k=${shard#client-}
+if (( k >= count )); then
+	echo "shard $shard is outside count $count" >&2
+	exit 2
+fi
 tests=$(go test -list '.*' ./internal/client | grep '^Test' | awk -v k="$k" -v n="$count" '(NR-1)%n==k')
 if [ -z "$tests" ]; then
 	echo "shard $shard of $count has no tests"

@@ -51,6 +51,12 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Sender custody does not prove that the inviter has admitted the
+	// exact source it is about to share.
+	eventually(t, "inviter has the selected original", func() bool {
+		keys, e := w.alice.store.convLIDKeys(packet.State.Conv, original.LID, w.alice.Self().Fingerprint())
+		return e == nil && len(keys) == 1 && keys[0] == producer.Self().Fingerprint()
+	})
 	p, err := w.alice.InviteNamedAgent(tctx(t), packet.State.Conv, host.Address, record.ID, []string{original.LID}, nil, "selected history scope")
 	if err != nil {
 		t.Fatal(err)

@@ -13,6 +13,10 @@ on:
         description: "Optional Go test -run expression for focused native qualification"
         type: string
         default: ''
+      race_shards:
+        description: 'Run only these race shards (JSON array, e.g. ["client-0","client-6"]); empty uses the full workflow'
+        type: string
+        default: ''
       windows_task_probe:
         description: "Run only the native Windows Task Scheduler tests (the probe's private task, and the task agentnet for the update switch; both removed afterwards)"
         type: boolean
@@ -21,7 +25,7 @@ permissions:
   contents: read
 jobs:
   native:
-    if: ${{ !inputs.windows_task_probe }}
+    if: ${{ !inputs.windows_task_probe && !inputs.race_shards }}
     strategy:
       fail-fast: false
       matrix:
@@ -49,13 +53,14 @@ jobs:
           read -r -a packages <<< "$AGENTNET_TEST_PACKAGES"
           go test -count=1 -timeout 1800s -run "$AGENTNET_TEST_RUN" "${packages[@]}"
   # The race suite on Linux, split over parallel runners: internal/client's
-  # tests in six shards (scripts/race-shard.sh), every other package in one.
+  # tests in twelve bounded shards, every other package in one. Focused
+  # dispatch retains passing evidence when only some shards need a rerun.
   race:
-    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run }}
+    if: ${{ !inputs.windows_task_probe && (inputs.race_shards || (!inputs.test_packages && !inputs.test_run)) }}
     strategy:
       fail-fast: false
       matrix:
-        shard: [client-0, client-1, client-2, client-3, client-4, client-5, others]
+        shard: ${{ fromJSON(inputs.race_shards || '["client-0","client-1","client-2","client-3","client-4","client-5","client-6","client-7","client-8","client-9","client-10","client-11","others"]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +72,9 @@ jobs:
           node-version: '26'
           package-manager-cache: false
       - name: race (${{ matrix.shard }})
-        run: scripts/race-shard.sh ${{ matrix.shard }} 6
+        env:
+          AGENTNET_RACE_SHARD: ${{ matrix.shard }}
+        run: scripts/race-shard.sh "$AGENTNET_RACE_SHARD" 12
       - name: browser storage (real IndexedDB, headless)
         if: matrix.shard == 'others'
         shell: bash
@@ -77,10 +84,10 @@ jobs:
           go test -race -count=1 -timeout 90s -run '^TestDeviceStoreInChrome$' -v ./internal/ui/static
   # The AgentNet app's installers for the three systems (desktop.yml).
   desktop:
-    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run }}
+    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards }}
     uses: ./.github/workflows/desktop.yml
   container:
-    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run }}
+    if: ${{ !inputs.windows_task_probe && !inputs.test_packages && !inputs.test_run && !inputs.race_shards }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

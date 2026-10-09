@@ -41,7 +41,16 @@ delay this release. Official Mac/Tauri guidance and the build's lack of Develope
 ID signing/notarization are recorded as a possible cause, not a confirmed fix.
 Preserve running clients and complete remaining source/package gates before
 publication. The first integrated run exposed history/routing bugs and fixture
-failures; bounded corrections are underway, with no deadline increases.
+failures. All known failures have focused passing regressions at `cde2cba6`;
+[second combined qualification](https://github.com/misunders2d/agentnet/actions/runs/37973201082)
+is running on that corrected candidate. No deadline was increased.
+
+**Queued next phase:** after v0.8.14 publication and relay verification, start
+[v0.8.15](plans/V0_8_15.md) from that release. The owner assigned MEL-591/592/571/583/574/575
+through Herdr; all six assignments were verified directly in Linear. Zenbook is
+the sole overnight implementation/integration owner; ThinkPad is offline and no
+peer response/review is required. MEL-527 stays v0.9. This does not expand or
+delay the current v0.8.14 candidate, and no v0.8.15 feature is implemented yet.
 
 ### v0.8.13 scope and qualification
 
