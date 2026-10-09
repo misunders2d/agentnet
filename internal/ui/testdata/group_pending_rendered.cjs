@@ -14,7 +14,7 @@ const overview={version:'fixture',seq:1,me:{address:me.address,fingerprint:me.fi
 const bohdan=person('Bohdan','bohdan/windows','bohdan-key');
 thread.members=[{...me,admin:true}]; thread.agents=[]; thread.messages=[];
 overview.people=[bohdan]; overview.groups=true;
-overview.group_invitations=[{id:'invite-1',conv,direction:'out',status:'pending',title:'amazon_team',inviter:me.person,target:bohdan.person,history:[]}];
+overview.group_invitations=[{id:'invite-1',conv,direction:'out',status:'pending',title:'amazon_team',inviter:'sergey/other-laptop',target:bohdan.person,history:[],can_cancel:false,can_refresh:false}];
 const boot=`
 const seed=${JSON.stringify({overview,thread})};window.fixture={...seed,requests:[]};
 const variant=new URL(location.href).searchParams.get('case');
@@ -52,7 +52,7 @@ try {
   await page.getByText(/1 (?:current )?member.*1 invited/).and(page.locator(':visible')).first().waitFor();
   if(skin==='comic') {
    if(!await page.getByRole('list',{name:'Invited people',exact:true}).isVisible()) await page.getByRole('button',{name:'amazon_team. Who’s in this chat',exact:true}).click();
-  } else if(skin==='zoom') { const d=page.locator('.zoom-agents'); await d.waitFor(); if(await d.getAttribute('open')===null) await d.locator(':scope > summary').click(); }
+  } else if(skin==='zoom') { const d=page.getByRole('group',{name:'People in this group',exact:true}); await d.waitFor(); if(await d.getAttribute('open')===null) await d.locator(':scope > summary').click(); }
   const invited=skin==='comic'?page.getByRole('list',{name:'Invited people',exact:true}):page.locator('.invited-person:visible');
   await invited.waitFor();
   assert.match(await invited.innerText(),/Bohdan/);

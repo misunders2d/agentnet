@@ -667,9 +667,16 @@ button.reaction { cursor: pointer; }
 .react-pick { position: relative; }
 .react-pick > summary { list-style: none; cursor: pointer; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 999px; border: 1px dashed var(--line); color: var(--muted); font-size: 14px; }
 .react-pick > summary::-webkit-details-marker { display: none; }
-.react-menu { position: absolute; z-index: 5; left: 0; top: 30px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.react-menu { position: absolute; z-index: 5; left: 0; top: 30px; width: max-content; padding: 6px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
 .react-menu button { border: 0; background: transparent; font-size: 20px; padding: 4px 6px; border-radius: 8px; cursor: pointer; }
 .react-menu button:hover { background: var(--hover); }
+.react-pick.up .react-menu { top: auto; bottom: 30px; }
+.react-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-left: 6px; }
+.react-grid { display: grid; grid-template-columns: repeat(6, 44px); }
+.react-menu button { min-width: 44px; min-height: 44px; }
+@media (max-width: 680px) {
+  .react-pick .react-menu { position: fixed; z-index: 60; left: 50%; top: auto; bottom: calc(76px + env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100vw - 24px); }
+}
 .msg-menu { position: relative; display: inline-block; }
 .msg-menu > summary { list-style: none; cursor: pointer; padding: 0 8px; border-radius: 8px; color: var(--muted); font-size: 16px; line-height: 1.2; }
 .msg-menu > summary::-webkit-details-marker { display: none; }

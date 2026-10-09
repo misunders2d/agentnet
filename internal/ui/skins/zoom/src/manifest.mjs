@@ -21,7 +21,8 @@ export default {
     "person-topics.mjs",
     "optimistic.mjs",
     "pictures.mjs",
-    "link-text.mjs"
+    "link-text.mjs",
+    "reaction-preferences.mjs"
   ]
 }
 ;
