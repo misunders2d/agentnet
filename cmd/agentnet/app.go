@@ -297,7 +297,7 @@ func (r *appRunner) attached(ctx context.Context, lock string) error {
 	}
 	r.confirmAppUpdate()
 	for {
-		r.showAttached()
+		r.showAttached(ctx)
 		got := make(chan func(), 1)
 		go func() {
 			release, err := lockfile.Wait(lock)
@@ -333,14 +333,33 @@ func (r *appRunner) attached(ctx context.Context, lock string) error {
 	}
 }
 
-func (r *appRunner) showAttached() {
-	data, err := secfile.Read(filepath.Join(r.home, uiURLFile))
-	if line := strings.TrimSpace(string(data)); err == nil && strings.HasPrefix(line, "http://") {
-		r.emit(appEvent{Event: "page", Mode: "attached", URL: line})
-		return
+func (r *appRunner) showAttached(ctx context.Context) {
+	// A daemon takes its lock before publishing ui-url, and publishes that
+	// file before serving HTTP. Re-read and authenticate readiness only during
+	// this bounded startup/restart window; after it, wait on the OS lock.
+	ready, cancel := context.WithTimeout(ctx, appStartTimeout)
+	defer cancel()
+	for {
+		_, endpoint, err := attachedOverview(ready, r.home)
+		if err == nil {
+			// The approved switch was already requested on app startup. Merely
+			// reconcile its recorded outcome here; do not issue another switch.
+			if err := reconcileAppUpdateResult(r.home, protocol.Version, r.currentCommandStatus()); err != nil && r.logf != nil {
+				r.logf("app update result: %v", err)
+			}
+			r.emit(appEvent{Event: "page", Mode: "attached", URL: endpoint})
+			return
+		}
+		select {
+		case <-ready.Done():
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				r.emit(appEvent{Event: "error", Text: "AgentNet is running, but its local page did not become ready. Choose Retry to reconnect. " +
+					"If it was started without its page, start it with agentnet daemon --ui 127.0.0.1:" + strconv.Itoa(appUIPort) + "; the app takes over when it stops."})
+			}
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-	r.emit(appEvent{Event: "error", Text: "AgentNet already runs on this computer without its page (agentnet daemon). " +
-		"Stop it, or start it with its page (agentnet daemon --ui 127.0.0.1:" + strconv.Itoa(appUIPort) + "); the app takes over when it stops."})
 }
 
 // listen opens the page's one listener for this process: the address

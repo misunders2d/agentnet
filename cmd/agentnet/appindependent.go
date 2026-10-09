@@ -31,6 +31,19 @@ type appIndependentDaemon struct {
 // The home's owner-only UI endpoint authenticates a fresh local Overview.
 // No redirects, proxy or other origin receives its cookie.
 func attachedVersion(ctx context.Context, home string) (version, endpoint string, err error) {
+	version, endpoint, err = attachedOverview(ctx, home)
+	if err != nil {
+		return "", "", err
+	}
+	if _, ok := parseRelease(version); !ok {
+		return "", "", errors.New("The attached daemon is not a supported release build.")
+	}
+	return version, endpoint, nil
+}
+
+// Attaching a page also supports development daemons. Update qualification
+// separately requires an official release version in attachedVersion.
+func attachedOverview(ctx context.Context, home string) (version, endpoint string, err error) {
 	b, err := secfile.Read(filepath.Join(home, uiURLFile))
 	if err != nil {
 		return "", "", err
@@ -61,11 +74,8 @@ func attachedVersion(ctx context.Context, home string) (version, endpoint string
 	var status struct {
 		Version string `json:"version"`
 	}
-	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&status) != nil {
+	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&status) != nil || status.Version == "" {
 		return "", "", errors.New("The attached daemon's version could not be verified.")
-	}
-	if _, ok := parseRelease(status.Version); !ok {
-		return "", "", errors.New("The attached daemon is not a supported release build.")
 	}
 	return status.Version, endpoint, nil
 }

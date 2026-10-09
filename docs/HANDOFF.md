@@ -33,14 +33,16 @@ server and laptop passed with the original realm and data volume. The neighborin
 service is unchanged; zero OOM events or restarts. Deployment changed only the
 existing relay, with no installed-client mutations by Codex.
 
-**Urgent post-update diagnosis — IN PROGRESS, root Codex owns it.** After
+**Urgent post-update repair — focused checks passed; integrated gates pending.** After
 publication, the owner updated Zenbook himself and reported
 “Could not connect 127.0.0.1: Connection refused.” Read-only inspection confirms the app/launchers use the permanent application
 data path, not Downloads. Both running backends subsequently reported the exact
 clean v0.8.14 tag; update activation is running and authenticated local Overview
 returns200/v0.8.14. The shell can retain a failed page during attached-daemon
 restart: Go does not wait for UI readiness after lock reacquisition, and Rust
-suppresses a same-URL page event. Focused reproductions/fixes are in progress;
+suppresses a same-URL page event. Both source gaps now have failing-before and
+passing-after regressions; six Go tests also pass under race. Root reviewed
+the changes. Full Tauri compilation and physical recovery remain unverified;
 tray Quit/reopen was advised, but recovery is not user-confirmed. This takes
 priority over v0.8.15 feature work. A separate
 new report says the phone on v0.8.13 shows “Sending” for 15 minutes; its exact
@@ -54,11 +56,12 @@ historical Mac installation report nonblocking because the app is already
 installed. Absent Developer ID signing/notarization is a possible barrier, not
 an established cause or fix. Installers remain unsigned.
 
-**Queued next phase — v0.8.15:** start from the released tag after the urgent
-post-update diagnosis. Follow [V0_8_15.md](plans/V0_8_15.md) for
+**Active next release — v0.8.15:** based on the released tag with the urgent
+post-update repair first. Follow [V0_8_15.md](plans/V0_8_15.md) for
 MEL-591/592/571/583/574/575, verified directly in Linear. Zenbook owns overnight
 implementation/integration; ThinkPad is offline and no peer response is required.
-MEL-527 remains v0.9. No v0.8.15 feature implementation has started.
+MEL-527 remains v0.9. Feature implementation is assigned and underway;
+none of the six features is yet verified.
 
 ## Previous release — v0.8.13, October 9, 2026 (UTC)
 

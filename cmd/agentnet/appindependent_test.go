@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -149,11 +150,30 @@ func TestIndependentAppRestartFailureResumesVerifiedSwitchOnce(t *testing.T) {
 	if err := secfile.Write(filepath.Join(f.home, "update-activation.json"), data); err != nil {
 		t.Fatal(err)
 	}
-	if err := reconcileAppUpdateResult(f.home, protocol.Version, f.runner.currentCommandStatus()); err != nil {
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("agentnet_ui")
+		if err != nil || cookie.Value != "private" || r.URL.Path != "/api/overview" {
+			t.Error("reattachment did not authenticate daemon readiness")
+		}
+		json.NewEncoder(w).Encode(map[string]string{"version": protocol.Version})
+	}))
+	defer page.Close()
+	if err := secfile.Write(filepath.Join(f.home, uiURLFile), []byte(page.URL+"/?t=private")); err != nil {
 		t.Fatal(err)
+	}
+	var events bytes.Buffer
+	f.runner.out = &events
+	f.runner.showAttached(context.Background())
+	var event appEvent
+	if err := json.Unmarshal(bytes.TrimSpace(events.Bytes()), &event); err != nil || event.Event != "page" || event.Mode != "attached" {
+		t.Fatalf("verified reattachment: %+v %v", event, err)
 	}
 	result, _ = readAppUpdateResult(f.home)
 	if result.State != "complete" {
 		t.Fatalf("matching daemon activation did not complete recovery: %+v", result)
+	}
+	after, _ = secfile.Read(requestPath)
+	if string(before) != string(after) {
+		t.Fatal("verified reattachment reissued the daemon switch")
 	}
 }

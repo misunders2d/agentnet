@@ -12,12 +12,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -425,16 +427,46 @@ func TestAppAttachedNeverOpensTheHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := secfile.Write(filepath.Join(home, uiURLFile), []byte("http://127.0.0.1:17443/?t=SERVICE1\n")); err != nil {
+	var ready [2]atomic.Bool
+	ready[0].Store(true)
+	probed := [2]chan struct{}{make(chan struct{}, 1), make(chan struct{}, 1)}
+	urls := [2]string{}
+	for i := range urls {
+		i := i
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cookie, err := r.Cookie("agentnet_ui")
+			if err != nil || cookie.Value != "private" || r.URL.Path != "/api/overview" || r.URL.RawQuery != "" {
+				t.Error("incorrect authenticated readiness request")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if !ready[i].Load() {
+				select {
+				case probed[i] <- struct{}{}:
+				default:
+				}
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			// Development daemons can be attached too; only update
+			// qualification requires an official release version.
+			json.NewEncoder(w).Encode(map[string]string{"version": "dev"})
+		}))
+		t.Cleanup(server.Close)
+		urls[i] = server.URL + "/?t=private"
+	}
+	if err := secfile.Write(filepath.Join(home, uiURLFile), []byte(urls[0])); err != nil {
 		t.Fatal(err)
 	}
+	oldGrace := takeoverGrace
+	t.Cleanup(func() { takeoverGrace = oldGrace })
 	takeoverGrace = 300 * time.Millisecond
 	app := startApp(t, home, nil)
-	if e := app.next("attached page"); e.Event != "page" || e.Mode != "attached" || e.URL != "http://127.0.0.1:17443/?t=SERVICE1" {
+	if e := app.next("attached page"); e.Event != "page" || e.Mode != "attached" || e.URL != urls[0] {
 		t.Fatalf("attached: %+v", e)
 	}
 	// The service restarts: the app wakes, waits, finds it back.
-	secfile.Write(filepath.Join(home, uiURLFile), []byte("http://127.0.0.1:17443/?t=SERVICE2\n"))
+	ready[0].Store(false)
 	release()
 	app.waitLog("stopped; taking over unless it comes back")
 	var back func()
@@ -444,7 +476,32 @@ func TestAppAttachedNeverOpensTheHome(t *testing.T) {
 			time.Sleep(10 * time.Millisecond) // the app holds it for an instant before letting go
 		}
 	}
-	if e := app.next("attached page again"); e.Mode != "attached" || e.URL != "http://127.0.0.1:17443/?t=SERVICE2" {
+	t.Cleanup(back)
+	waitProbe := func(i int) {
+		t.Helper()
+		select {
+		case <-probed[i]:
+		case e := <-app.events:
+			t.Fatalf("unverified page before daemon readiness: %+v", e)
+		case <-time.After(5 * time.Second):
+			t.Fatal("attached readiness was never checked")
+		}
+	}
+	// A restarted daemon owns the lock before publishing its URL, then
+	// publishes the URL before the HTTP handler is ready. Both are real
+	// startup boundaries; neither should navigate to an unavailable page.
+	waitProbe(0)
+	if err := secfile.Write(filepath.Join(home, uiURLFile), []byte(urls[1])); err != nil {
+		t.Fatal(err)
+	}
+	waitProbe(1)
+	select {
+	case e := <-app.events:
+		t.Fatalf("page emitted before its handler was ready: %+v", e)
+	default:
+	}
+	ready[1].Store(true)
+	if e := app.next("attached page again"); e.Event != "page" || e.Mode != "attached" || e.URL != urls[1] {
 		t.Fatalf("after the service came back: %+v", e)
 	}
 	if after, _ := os.ReadFile(filepath.Join(home, "agent.db")); !bytes.Equal(before, after) {
@@ -490,6 +547,18 @@ func TestAppStopsWhenTheShellIsGone(t *testing.T) {
 		t.Setenv("AGENTNET_TEST_SHELL_EOF_HOME", home)
 		t.Setenv("AGENTNET_TEST_SHELL_EOF_ADDR", freeAddr(t))
 		t.Setenv("AGENTNET_NOTIFY", "off")
+		checking := make(chan struct{}, 1)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case checking <- struct{}{}:
+			default:
+			}
+			<-r.Context().Done()
+		}))
+		defer server.Close()
+		if err := secfile.Write(filepath.Join(home, uiURLFile), []byte(server.URL+"/?t=private")); err != nil {
+			t.Fatal(err)
+		}
 		self, err := os.Executable()
 		if err != nil {
 			t.Fatal(err)
@@ -501,11 +570,8 @@ func TestAppStopsWhenTheShellIsGone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		var stderr bytes.Buffer
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -513,17 +579,12 @@ func TestAppStopsWhenTheShellIsGone(t *testing.T) {
 		done := make(chan error, 1)
 		t.Cleanup(func() { cmd.Process.Kill(); <-done })
 		go func() { err := cmd.Wait(); done <- err }()
-		line, err := bufio.NewReader(stdout).ReadBytes('\n')
-		if err != nil {
-			t.Fatalf("app event: %v", err)
+		select {
+		case <-checking:
+		case <-time.After(5 * time.Second):
+			t.Fatal("app did not start the attached readiness check")
 		}
-		var event appEvent
-		if err := json.Unmarshal(line, &event); err != nil {
-			t.Fatalf("app event: %q: %v", line, err)
-		}
-		if event.Event != "error" || !strings.Contains(event.Text, "without its page") {
-			t.Fatalf("a daemon without a page: %+v", event)
-		}
+		// EOF must cancel even an in-flight authenticated readiness request.
 		stdin.Close()
 		select {
 		case err := <-done:
@@ -533,6 +594,9 @@ func TestAppStopsWhenTheShellIsGone(t *testing.T) {
 			}
 		case <-time.After(time.Minute):
 			t.Fatal("the app kept running without its shell")
+		}
+		if bytes.Contains(stdout.Bytes(), []byte(`"event":"page"`)) {
+			t.Fatalf("unready daemon page was emitted: %s", stdout.String())
 		}
 		if unlocked, err := lockfile.Acquire(filepath.Join(home, "daemon.lock")); !errors.Is(err, lockfile.ErrLocked) {
 			if unlocked != nil {

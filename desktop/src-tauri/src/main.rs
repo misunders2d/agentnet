@@ -14,6 +14,7 @@ mod appcontrols;
 #[cfg(target_os = "linux")]
 mod linux;
 mod navigation;
+mod page_event;
 mod sidecar;
 #[cfg(any(windows, test))]
 mod win_autostart;
@@ -319,15 +320,15 @@ fn signal(app: &AppHandle, s: Signal) {
 /// on_line acts on one line of the program's stdout.
 fn on_line(app: &AppHandle, line: String) {
     match sidecar::parse(&line) {
-        Some(sidecar::Event::Page { url, .. }) => {
+        Some(sidecar::Event::Page { mode, url }) => {
             let Ok(mut u) = Url::parse(&url) else { return };
             let shell = app.state::<Shell>();
             *shell.last_error.lock().unwrap() = None;
             {
                 let mut page = shell.page.lock().unwrap();
-                let same = page.as_ref().is_some_and(|p| p.as_str() == u.as_str());
+                let navigate = page_event::should_navigate(&mode, page.as_ref().map(Url::as_str), u.as_str());
                 *page = Some(u.clone());
-                if same {
+                if !navigate {
                     return; // the same page and session (setup became the messenger in place)
                 }
             }
