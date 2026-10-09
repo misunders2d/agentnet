@@ -358,7 +358,7 @@ func (a *Agent) groupParticipationHistorySource(q dbq, packet GroupContext, item
 		}
 	}
 	stamp, err := a.groupParticipationSourceAdmission(q, packet, item)
-	if err != nil && item.GroupHistory == nil && (errors.Is(err, ErrGroupContextPending) || errors.Is(err, errGroupParticipationHistoryEpoch)) {
+	if err != nil && item.GroupHistory == nil && (errors.Is(err, ErrGroupContextPending) || errors.Is(err, errGroupParticipationHistoryEpoch) || errors.Is(err, errHumanHistoryConsent)) {
 		item.GroupHistory, err = a.makeGroupHistoryWitness(q, packet, item)
 		if err == nil {
 			stamp, err = a.groupParticipationSourceAdmission(q, packet, item)

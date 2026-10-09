@@ -15,6 +15,8 @@ import (
 	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
+var errHumanHistoryConsent = errors.New("human: captured consent differs from local proof")
+
 // humanAuthorization authenticates author and reader independently against the
 // CAPTURED scopes. It never adds a recipient or turns a guest into a member.
 func humanAuthorization(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to, toFP string) error {
@@ -91,6 +93,9 @@ func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to,
 			return err
 		}
 		if !p.follows() || p.Invite != scope.Invite || p.Decision != scope.Decision {
+			if historical && m.group != nil && len(context) == 0 {
+				return errHumanHistoryConsent // exact own history may try its verified original witness
+			}
 			return errors.New("human: captured consent differs from local proof")
 		}
 		if scope.PID == h.AuthorPID && (p.Role == "") != h.AgentAuthor() {

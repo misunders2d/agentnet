@@ -111,6 +111,7 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		}
 	}
 	var ev *protocol.ParticipationEvent
+	retiredOwnEnd := false
 	if item.Sub == envelope.SubEvent {
 		candidate, e := protocol.ParseParticipationEvent([]byte(original.Body))
 		if e != nil {
@@ -118,8 +119,17 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		}
 		author := candidate.Author
 		forwarded := author.Address != item.From || author.Fingerprint != item.FromKey
-		if forwarded && (candidate.Type != protocol.EventDismiss || !m.device(item.From, item.FromKey)) {
-			return nil, errors.New("group: only current members forward historical participation ends")
+		if forwarded && !m.device(item.From, item.FromKey) && candidate.Type == protocol.EventDismiss {
+			if item.GroupHistory == nil {
+				return nil, errGroupParticipationHistoryEpoch
+			}
+			retiredOwnEnd, e = groupHistoryOwnHumanTransport(q, me, m, item)
+			if e != nil {
+				return nil, e
+			}
+		}
+		if forwarded && (candidate.Type != protocol.EventDismiss || !m.device(item.From, item.FromKey) && !retiredOwnEnd) {
+			return nil, errors.New("group: only verified original members forward historical participation ends")
 		}
 		p, found, e := scanPersonIn(q, "person IN (SELECT person FROM person_devices WHERE address=?)", author.Address)
 		if e != nil {
@@ -190,7 +200,13 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 			roleInfo.State = PartActive
 		}
 	}
-	if err = externalTurn(original, roleInfo, m, item.From, item.FromKey); err != nil {
+	if retiredOwnEnd {
+		// The original own human only transported this independently signed,
+		// counted end. Its removal cannot grant live membership or revive the PID.
+		if info.Held != 0 || info.Conflict != "" || ev == nil || ev.Type != protocol.EventDismiss || ev.Hash() != info.Dismissal {
+			return nil, errors.New("group: historical forwarded end is not the exact counted dismissal")
+		}
+	} else if err = externalTurn(original, roleInfo, m, item.From, item.FromKey); err != nil {
 		if info.State == PartInvited && item.Sub == "" {
 			return nil, ErrGroupContextPending
 		}
@@ -203,6 +219,49 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		return nil, e
 	}
 	return ev, nil
+}
+
+// A retired transport is attribution, never present-day authority. Only the
+// verified own chain can establish its original human identity; the independently
+// signed end and witnessed admission supply the exact historical group scope.
+func groupHistoryOwnHumanTransport(q dbq, own personRow, m dmMembers, item HistoryItem) (bool, error) {
+	if item.GroupHistory == nil || m.group == nil || m.historyEvents == nil {
+		return false, nil
+	}
+	member, ok := m.group.State.Member(own.info.Person)
+	if !ok || member.Admission.Hash() != item.GroupAdmission {
+		return false, nil
+	}
+	pin, found, err := pinnedKey(q, item.From)
+	if err != nil {
+		return false, err
+	}
+	var pending int
+	if err = q.QueryRow(`SELECT count(*) FROM peers WHERE address=? AND pending IS NOT NULL`, item.From).Scan(&pending); err != nil {
+		return false, err
+	}
+	if pending != 0 || found && pin.Fingerprint() != item.FromKey {
+		return false, errors.New("group: historical transport pin changed")
+	}
+	rows, err := q.Query(`SELECT record FROM person_chain WHERE person=? ORDER BY seq DESC`, own.info.Person)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			return false, err
+		}
+		var roster protocol.PersonRoster
+		if err = json.Unmarshal([]byte(raw), &roster); err != nil {
+			return false, err
+		}
+		if roster.Person == own.info.Person && roster.Has(item.From, item.FromKey) && roster.Human(item.FromKey) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // retainedAssistant authenticates a cleanly ended, previously accepted
