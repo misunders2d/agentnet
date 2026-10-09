@@ -120,6 +120,20 @@ for (const oldAfterReload of [false, true]) {
   e.stop();
 }
 
+// A changed key found during the normal retry makes a previously hidden notice actionable again.
+{
+ const f=await fixture(), {e}=f;
+ const raw=await f.fromPeer({v:2,conv:f.conv,lid:id(),root:f.c.root,pid:id(),reply_to:id(),agent_id:f.agentA.id,origin:"agent:stub",emotion:"plain"});
+ const held=await f.receive(raw);await e.archiveHeldNotice(held);
+ const pin=await f.store.get("pins",f.peerAddress);
+ await f.store.write([{s:"pins",k:f.peerAddress,v:{...pin,pending:{fingerprint:"changed",json:pin.json}}}]);
+ await e.retryHeld();
+ const row=await f.store.get("held",held);
+ check(row.reason==="key_changed"&&!row.notice_archived&&!await f.store.get("inbox",held),"retry resurfaces changed key without admitting ciphertext");
+ await refuses(()=>e.archiveHeldNotice(held),/cannot be archived/);
+ e.stop();
+}
+
 // Signed selected participation, proof-held named turns, invitation copies and named ask.
 {
   const f = await fixture(), { e } = f;
@@ -127,10 +141,16 @@ for (const oldAfterReload of [false, true]) {
   const raw = await f.fromPeer({ v: 2, conv: f.conv, lid: id(), root: f.c.root, pid: futurePID, reply_to: id(), agent_id: f.agentA.id, origin: "agent:stub", emotion: "plain" });
   const held = await f.receive(raw);
   check((await f.store.get("held", held)).reason === "proof_pending" && !(await f.store.get("inbox", held)), "named turn waits for signed participation");
+  const pendingBefore=await f.store.get("held",held);
+  await e.apiRequest("/api/act",{do:"archive_held",id:held});
+  check((await f.store.get("held",held)).notice_archived && (await f.store.get("held",held)).envelope===pendingBefore.envelope && !(await f.store.get("inbox",held)), "archive retains exact pending ciphertext without admission");
+  await e.load(); e.connected=true;
+  check((await f.store.get("held",held)).notice_archived, "proof archive survives engine reload");
   const inv = await wire.signEvent(e.keys, { conv: f.conv, pid: futurePID, type: "invite", ts: Math.floor(now / 1000), author: e.author(), host: { person: f.peer.person, address: f.peerAddress, fingerprint: f.peer.fingerprint, agent_id: f.agentA.id }, audience: "conversation" });
   await e.sendConv(f.c, { kind: "message", body: wire.eventJSON(inv), sub: "event", pid: futurePID });
   await e.retryHeld();
   check((await f.store.get("held", held)).reason === "proof_pending" && !(await f.store.get("inbox", held)), "a named output waits while its participation is only invited");
+  check((await f.store.get("held",held)).notice_archived, "incomplete proof retry leaves notice archived");
   const accept = await wire.signEvent(f.peerKeys, { conv: f.conv, pid: futurePID, type: "accept", prev: await wire.eventHash(inv), ts: Math.floor(now / 1000), author: { person: f.peer.person, roster: f.peer.hash, address: f.peerAddress, fingerprint: f.peer.fingerprint } });
   await f.receive(await f.fromPeer({ v: 2, kind: "message", conv: f.conv, lid: id(), root: f.c.root, sub: "event", pid: futurePID, body: wire.eventJSON(accept) }));
   await e.retryHeld();

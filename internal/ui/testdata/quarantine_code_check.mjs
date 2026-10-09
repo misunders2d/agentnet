@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { holdCode, quarantineItem, heldDiagnosticCode, Engine, memoryStore } from '../static/engine.mjs';
 
-const { reasons, diagnostics } = JSON.parse(readFileSync(0, 'utf8'));
+const { reasons, diagnostics, proofRecovery } = JSON.parse(readFileSync(0, 'utf8'));
 let checks = 0;
 for(const [code,want] of Object.entries(diagnostics)) {
  const got=quarantineItem({id:'parity',from:'alice/laptop',reason:'invalid',detail_code:code,at:0});
@@ -56,7 +56,7 @@ assert.equal((await store.all('inbox')).length,0);assert.equal((await store.all(
 assert.equal(after.detail_code,'group_consent_mismatch');
 await assert.rejects(()=>engine.archiveHeldNotice('e'.repeat(32)));
 await assert.rejects(()=>engine.apiRequest('/api/act',{do:'archive_held',id:'e'.repeat(32)}));
-for(const [i,reason] of ['proof_pending','key_changed','identity_conflict','conflicting_duplicate'].entries()) {
+for(const [i,reason] of ['key_changed','identity_conflict','conflicting_duplicate'].entries()) {
  const heldID=(i+1).toString(16).padStart(32,'0');
  await engine.hold({id:heldID,from:'alice/laptop'},'SYNTHETIC_'+reason,reason);
  const beforeReject=await store.get('held',heldID);
@@ -66,7 +66,21 @@ for(const [i,reason] of ['proof_pending','key_changed','identity_conflict','conf
  checks++;
 }
 
-checks+=8;
+const proofID='f'.repeat(32);
+await engine.hold({id:proofID,from:'alice/laptop'},'SYNTHETIC_PROOF','proof_pending');
+assert.equal(quarantineItem(await store.get('held',proofID)).can_archive,true);
+assert.equal(quarantineItem(await store.get('held',proofID)).recovery,proofRecovery,'native/browser proof recovery copy');
+await engine.apiRequest('/api/act',{do:'archive_held',id:proofID});
+await engine.hold({id:proofID,from:'alice/laptop'},'SYNTHETIC_PROOF','proof_pending');
+assert.equal((await store.get('held',proofID)).notice_archived,true,'same proof wait stays archived');
+for(const reason of ['key_changed','identity_conflict','conflicting_duplicate','future_safety_reason']) {
+ await engine.hold({id:proofID,from:'alice/laptop'},'SYNTHETIC_PROOF',reason);
+ assert.equal((await store.get('held',proofID)).notice_archived,false,'new safety reason resurfaces');
+ await assert.rejects(()=>engine.apiRequest('/api/act',{do:'archive_held',id:proofID}));
+ await engine.hold({id:proofID,from:'alice/laptop'},'SYNTHETIC_PROOF','proof_pending');
+ await engine.archiveHeldNotice(proofID);
+}
+checks+=16;
 const src = readFileSync(new URL('../static/engine.mjs', import.meta.url), 'utf8');
 assert.ok(!/agentnet trust/.test(src), 'the engine still sends people to "agentnet trust"');
 checks++;

@@ -36,3 +36,19 @@ func TestHeldPersonTurnRendered(t *testing.T) {
 	}
 	t.Logf("%s", out)
 }
+
+func TestPendingHeldNoticeRendered(t *testing.T) {
+	if os.Getenv("AGENTNET_PLAYWRIGHT") == "" {
+		t.Skip("opt-in installed Playwright")
+	}
+	f := &needsYouFixture{Fixture: NewFixture(time.Now), phone: true}
+	ts := httptest.NewUnstartedServer(nil)
+	ts.Config.Handler = New(f, ts.Listener.Addr().String(), testToken).Handler()
+	ts.Start()
+	defer ts.Close()
+	out, err := exec.Command("node", "testdata/pending_held_rendered_check.cjs", ts.URL+"/?t="+testToken).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "Pending held notice rendered PASS") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}

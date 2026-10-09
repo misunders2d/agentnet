@@ -19,6 +19,9 @@ func heldNoticeText(code, reason string) (string, string) {
 	case "captured_consent_mismatch":
 		return "The captured audience does not match the consent proof stored here.", "Check the participation's invitation and acceptance. This notice cannot grant consent."
 	default:
+		if reason == "proof_pending" {
+			return "", "You can archive this notice. Checks continue when connected; the message appears when verified."
+		}
 		if reason != "invalid" {
 			return "", ""
 		}

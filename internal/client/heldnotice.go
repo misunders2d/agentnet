@@ -34,7 +34,8 @@ func heldDiagnosticCode(why string) string {
 }
 
 // ArchiveHeldNotice hides a local notice without deleting or admitting the
-// envelope. Keeping quarantine is essential to the receive deduplication gate.
+// envelope. Pending proof remains in the normal retry queue; keeping quarantine
+// is also essential to the receive deduplication gate.
 func (a *Agent) ArchiveHeldNotice(id string) error {
 	if !protocol.ValidID(id) {
 		return errors.New("invalid held-message ID")
@@ -42,7 +43,7 @@ func (a *Agent) ArchiveHeldNotice(id string) error {
 	return a.store.archiveHeldNotice(id)
 }
 func (s *store) archiveHeldNotice(id string) error {
-	result, err := s.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=? AND reason='invalid'`, id)
+	result, err := s.db.Exec(`UPDATE quarantine SET notice_archived=1 WHERE id=? AND reason IN ('invalid','proof_pending')`, id)
 	if err == nil {
 		count, e := result.RowsAffected()
 		if e != nil {

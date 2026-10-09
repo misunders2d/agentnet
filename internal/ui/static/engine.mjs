@@ -250,11 +250,12 @@ export const heldNoticeText = (code, reason) => {
     history_reader_not_member: ["This history copy is not addressed to an original member's current linked device.", "Check the verified membership and device roster. A history copy cannot grant membership."],
     captured_consent_mismatch: ["The captured audience does not match the consent proof stored here.", "Check the participation's invitation and acceptance. This notice cannot grant consent."],
   };
-  const [detail,recovery] = (Object.hasOwn(words,code) ? words[code] : null) || (reason === "invalid" ? ["The original detailed reason was not recorded or is unavailable.", "The retained message stays blocked. You can archive this notice locally; this does not accept, resend, or run it."] : ["", ""]);
+  const [detail,recovery] = (Object.hasOwn(words,code) ? words[code] : null) || (reason === "invalid" ? ["The original detailed reason was not recorded or is unavailable.", "The retained message stays blocked. You can archive this notice locally; this does not accept, resend, or run it."] : reason === "proof_pending" ? ["", "You can archive this notice. Checks continue when connected; the message appears when verified."] : ["", ""]);
   return {detail,recovery};
 };
+const canArchiveHeld = reason => reason === "invalid" || reason === "proof_pending";
 // quarantineItem is one held message as the overview lists it (ui.QuarantineItem, live.go quarantineItems).
-export const quarantineItem = (h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at), can_archive:h.reason === "invalid", ...(h.detail_code ? {detail_code:h.detail_code} : {}), ...heldNoticeText(h.detail_code,h.reason) });
+export const quarantineItem = (h) => ({ id: h.id, peer: h.from, code: holdCode(h.reason), reason: holdText(h.reason, h.from), at: iso(h.at), can_archive:canArchiveHeld(h.reason), ...(h.detail_code ? {detail_code:h.detail_code} : {}), ...heldNoticeText(h.detail_code,h.reason) });
 
 // deviceWords is client.DeviceWords: a device address in words, as every
 // screen shows it ("bohdan/windows-laptop" → "Windows laptop", "admin/iphone"
@@ -4166,7 +4167,7 @@ export class Engine {
   async archiveHeldNotice(id) {
     if (!wire.validID(id)) throw Error("Invalid held-message ID.");
     const record = await this.store.get("held", id);
-    if (!record || record.reason !== "invalid") throw Error("This held notice cannot be archived.");
+    if (!record || !canArchiveHeld(record.reason)) throw Error("This held notice cannot be archived.");
     await this.store.write([{s:"held",k:id,v:{...record,notice_archived:true}}],[{s:"held",k:id,v:record}]);
     this.changed(true);
     return {note:"Notice archived locally. The retained message has not been accepted or run."};
@@ -4174,7 +4175,7 @@ export class Engine {
 
   async hold(env, data, reason, why = "") {
     const previous = await this.store.get("held", env.id);
-    await this.store.write([{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code:heldDiagnosticCode(why), notice_archived:!!previous?.notice_archived } },
+    await this.store.write([{ s: "held", k: env.id, v: { id: env.id, from: env.from, reason, envelope: data, at: previous?.at || this.now(), detail_code:heldDiagnosticCode(why), notice_archived:canArchiveHeld(reason) && !!previous?.notice_archived } },
       { s: "receipts", k: env.id, v: { id: env.id, state: "quarantined" } }]);
     this.changed(true);
   }
@@ -4217,7 +4218,7 @@ export class Engine {
         else {
           const h = await this.store.get("held", env.id);
           if (h && (e.reason !== "proof_pending" || h.reason !== e.reason)) {
-            await this.store.write([{s:"held",k:env.id,v:{ ...h, reason: e.reason, detail_code:heldDiagnosticCode(e.message), ...(historyRecovery && e.reason === "proof_pending" ? {history_recovery:true} : {}) }}],[{s:"held",k:env.id,v:h}]);
+            await this.store.write([{s:"held",k:env.id,v:{ ...h, reason: e.reason, notice_archived:canArchiveHeld(e.reason) && !!h.notice_archived, detail_code:heldDiagnosticCode(e.message), ...(historyRecovery && e.reason === "proof_pending" ? {history_recovery:true} : {}) }}],[{s:"held",k:env.id,v:h}]);
             this.changed(true);
           }
         }

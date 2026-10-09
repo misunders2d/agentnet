@@ -49,6 +49,9 @@ func TestQuarantineCode(t *testing.T) {
 	}
 	for _, q := range items {
 		reason := strings.TrimPrefix(q.ID, "held-")
+		if q.CanArchive != (reason == "invalid" || reason == "proof_pending") {
+			t.Errorf("archive eligibility for %s: %v", reason, q.CanArchive)
+		}
 		if q.Code != reasons[reason] || q.Peer != "alice/laptop" || !q.At.Equal(at) || q.Reason != holdReason(reason, "alice/laptop") {
 			t.Errorf("overview item for %q: %+v, want code %q", reason, q, reasons[reason])
 		}
@@ -76,7 +79,8 @@ func TestQuarantineCode(t *testing.T) {
 		detail, recovery := heldNoticeText(code, "invalid")
 		diagnostics[code] = map[string]string{"detail": detail, "recovery": recovery}
 	}
-	input, _ := json.Marshal(map[string]any{"reasons": reasons, "diagnostics": diagnostics})
+	_, proofRecovery := heldNoticeText("", "proof_pending")
+	input, _ := json.Marshal(map[string]any{"reasons": reasons, "diagnostics": diagnostics, "proofRecovery": proofRecovery})
 	cmd := exec.Command(node, "testdata/quarantine_code_check.mjs")
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer

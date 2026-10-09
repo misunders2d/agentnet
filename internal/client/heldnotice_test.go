@@ -108,7 +108,7 @@ func TestHeldNoticeArchiveRejectsUnknownAndActionableReasons(t *testing.T) {
 	if err = a.ArchiveHeldNotice("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != ErrNoMessage {
 		t.Fatalf("unknown ID: %v", err)
 	}
-	for i, reason := range []string{reasonProof, reasonKeyChanged, reasonConflict, reasonDuplicate} {
+	for i, reason := range []string{reasonKeyChanged, reasonConflict, reasonDuplicate} {
 		id := fmt.Sprintf("%032x", i+1)
 		raw := "SYNTHETIC_CIPHERTEXT_" + reason
 		if err = s.quarantine(id, "bob/laptop", reason, []byte(raw)); err != nil {
@@ -127,7 +127,96 @@ func TestHeldNoticeArchiveRejectsUnknownAndActionableReasons(t *testing.T) {
 		}
 	}
 	q, err := a.Quarantine()
-	if err != nil || len(q) != 4 {
+	if err != nil || len(q) != 3 {
 		t.Fatalf("actionable notices hidden: %+v %v", q, err)
+	}
+}
+
+// Archiving is a display decision. The normal proof queue still rechecks
+// the exact retained ciphertext after a restart and admits only proven rows.
+func TestHeldNoticeArchivePendingProofStillRetries(t *testing.T) {
+	w, _, valid := setupProofQueue(t, 1)
+	var raw string
+	var acked int
+	if err := w.bob.store.db.QueryRow(`SELECT envelope,acked FROM quarantine WHERE id=?`, valid.ID).Scan(&raw, &acked); err != nil {
+		t.Fatal(err)
+	}
+	q, err := w.bob.Quarantine()
+	if err != nil || len(q) != 2 {
+		t.Fatalf("setup: %+v %v", q, err)
+	}
+	for _, h := range q {
+		if err := w.bob.ArchiveHeldNotice(h.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if q, err := w.bob.Quarantine(); err != nil || len(q) != 0 {
+		t.Fatalf("notice remains: %+v %v", q, err)
+	}
+	var retained string
+	var receipt int
+	if err := w.bob.store.db.QueryRow(`SELECT envelope,acked FROM quarantine WHERE id=?`, valid.ID).Scan(&retained, &receipt); err != nil || retained != raw || receipt != acked {
+		t.Fatalf("archive changed ciphertext/receipt: %v", err)
+	}
+	if inboxCount(t, w.bob, "id=?", valid.ID) != 0 {
+		t.Fatal("archive admitted before proof retry")
+	}
+	w.bob.Close()
+	again, err := Open(w.bobHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { again.Close() })
+	again.Logf = t.Logf
+	if q, err := again.Quarantine(); err != nil || len(q) != 0 {
+		t.Fatalf("archive lost on restart: %+v %v", q, err)
+	}
+	drain(t, again)
+	if inboxCount(t, again, "id=?", valid.ID) != 1 {
+		t.Fatal("archive stopped normal proof admission")
+	}
+	if inboxCount(t, again, "sender=?", "carol/desk") != 0 {
+		t.Fatal("archive admitted unproven message")
+	}
+	var n int
+	if err := again.store.db.QueryRow(`SELECT count(*) FROM quarantine WHERE reason=? AND notice_archived=1`, reasonProof).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("unproven ciphertext lost or surfaced: %d %v", n, err)
+	}
+	if err := again.store.db.QueryRow(`SELECT count(*) FROM inbox WHERE attempts>0`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("archive started work: %d %v", n, err)
+	}
+}
+
+func TestHeldNoticeArchivePendingResurfacesSafetyReason(t *testing.T) {
+	s, err := openStore(filepath.Join(t.TempDir(), "client.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.db.Close()
+	a := &Agent{store: s}
+	for i, reason := range []string{reasonKeyChanged, reasonConflict, reasonDuplicate, "future_safety_reason"} {
+		env := envelope.Envelope{ID: fmt.Sprintf("%032x", i+1), From: "bob/laptop"}
+		if err := s.holdAs(env, reasonProof); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.ArchiveHeldNotice(env.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.holdAs(env, reasonProof); err != nil {
+			t.Fatal(err)
+		}
+		var archived int
+		if err := s.db.QueryRow(`SELECT notice_archived FROM quarantine WHERE id=?`, env.ID).Scan(&archived); err != nil || archived != 1 {
+			t.Fatalf("same proof wait revived notice: %d %v", archived, err)
+		}
+		if err := s.holdAs(env, reason); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.db.QueryRow(`SELECT notice_archived FROM quarantine WHERE id=?`, env.ID).Scan(&archived); err != nil || archived != 0 {
+			t.Fatalf("safety hold hidden: %s %d %v", reason, archived, err)
+		}
+		if err := a.ArchiveHeldNotice(env.ID); err != ErrNoMessage {
+			t.Fatalf("safety hold archive allowed: %s %v", reason, err)
+		}
 	}
 }
