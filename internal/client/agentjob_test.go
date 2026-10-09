@@ -125,7 +125,10 @@ func replyAt(t *testing.T, a *Agent, conv, id string) ConvMessage {
 	eventually(t, "the reply to "+id+" at "+a.Address, func() bool {
 		var n int
 		lid, _ := groupReplyLID(a.store.db, conv, id)
-		r, n = convMsg(t, a, conv, func(m ConvMessage) bool { return m.ReplyTo == id || lid != "" && m.ReplyTo == lid })
+		r, n = convMsg(t, a, conv, func(m ConvMessage) bool {
+			return (m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult) &&
+				(m.ReplyTo == id || lid != "" && m.ReplyTo == lid)
+		})
 		return n == 1
 	})
 	return r
@@ -416,8 +419,10 @@ func TestAgentDismissal(t *testing.T) {
 	j = claimAt(t, w.bob, queued.ID)
 	w.bob.finishAgent(tctx(t), j, &Responder{Harness: "agentstub"}, envelope.StatusDone, "queued reply\nemotion: calm")
 	var out, outState string
-	if err := w.bob.store.db.QueryRow(`SELECT id, state FROM outbox WHERE reply_to = ?`, queued.ID).Scan(&out, &outState); err != nil || outState != stateQueued {
-		t.Fatalf("the output is %q (%v), want queued", outState, err)
+	// Output authorization used the held physical request; its signed reply
+	// names the logical request shared by every recipient and linked device.
+	if err := w.bob.store.db.QueryRow(`SELECT id, state FROM outbox WHERE reply_to = ?`, queued.LID).Scan(&out, &outState); err != nil || outState != stateQueued {
+		t.Fatalf("the output is %q (%v), want queued under logical request %s", outState, err, queued.LID)
 	}
 	if _, err := w.bob.DismissParticipation(tctx(t), pid4); err != nil {
 		t.Fatal(err)

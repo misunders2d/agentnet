@@ -572,6 +572,12 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	cancel()
 	<-watchDone
+	// A room wait can observe Stop and exit before the asynchronous wake
+	// reaches this watcher. The durable cancellation still wins over its
+	// completed output, including a NEEDS-HUMAN marker from the stopped wait.
+	if s, _ := a.store.jobState(j.ID); s == stateCancelReq {
+		cancelled.Store(true)
+	}
 	if stopWhy == "" {
 		stopWhy = a.personGrantStop(j)
 	}
@@ -693,7 +699,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 			rest = r.Harness + " said this needs your decision but gave no reason"
 		}
 		a.endJob(j.ID, stateNeedHuman, rest)
-		a.Logf("%s %s: needs your decision", j.Kind, j.ID)
+		if state, _ := a.store.jobState(j.ID); state == stateNeedHuman {
+			a.Logf("%s %s: needs your decision", j.Kind, j.ID)
+		}
 		return
 	}
 	if outcome == outcomeProposal && status == envelope.StatusDone {
@@ -711,7 +719,9 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 		if why != "" {
 			a.endJob(j.ID, stateNeedHuman, why)
-			a.Logf("%s %s: a proposal needs your decision", j.Kind, j.ID)
+			if state, _ := a.store.jobState(j.ID); state == stateNeedHuman {
+				a.Logf("%s %s: a proposal needs your decision", j.Kind, j.ID)
+			}
 			return
 		}
 		status, body = envelope.StatusProposal, rest

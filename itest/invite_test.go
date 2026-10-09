@@ -147,7 +147,7 @@ func TestResponderChoiceAtSetup(t *testing.T) {
 	}
 	list := c.run("--home", "alice", "responder", "list")
 	for _, want := range []string{"codex   found at " + filepath.Join(bin, "codex") + "; questions use your native tools and permissions unchanged",
-		"not tested live", "manual  no automatic responder", "it was not run", "cannot be the responder"} {
+		"agy     ", "not tested live", "manual  no automatic responder", "it was not run", "Antigravity CLI is available as the agy responder"} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("list lacks %q:\n%s", want, list)
 		}

@@ -492,7 +492,12 @@ func TestP6FixLocalAndNestedHarnessUseRealCLI(t *testing.T) {
 	if err := os.WriteFile(log+".release", nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	replyAt(t, w.alice, conv, ask.LID)
+	// A nested question also names its parent in ReplyTo. Wait for the
+	// parent's committed answer, rather than mistaking that child request
+	// for the completed reply and starting the cleanup deadline too early.
+	eventually(t, "nested chain answers its parent", func() bool {
+		return jobState(t, w.alice, ask.ID) == stateAnswered
+	})
 	eventually(t, "nested runs release whole-app idle fence", func() bool {
 		resume, err := w.alice.PauseForAppUpdate()
 		if err != nil {

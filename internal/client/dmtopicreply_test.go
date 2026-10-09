@@ -56,16 +56,27 @@ func TestDMAgentOldAnsweredStatusRecovery(t *testing.T) {
 		return q
 	}
 	q, pending := ask(), ask()
+	// The host daemon is stopped. FlushOutbox may yield after a history copy
+	// to serve a file, so drive its normal bounded passes while awaiting copies.
+	flush := func() {
+		t.Helper()
+		if err := w.bob.FlushOutbox(tctx(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	observer := phone
 	eventually(t, "sibling request", func() bool {
+		flush()
 		_, n := convMsg(t, phone, conv, func(m ConvMessage) bool { return m.LID == q.LID })
-		return n == 1
+		_, p := convMsg(t, phone, conv, func(m ConvMessage) bool { return m.LID == pending.LID })
+		return n == 1 && p == 1
 	})
 	held, _ := convMsg(t, phone, conv, func(m ConvMessage) bool { return m.LID == q.LID })
 	if held.ID == q.ID {
 		observer = w.alice
 	}
 	eventually(t, "distinct recipient request", func() bool {
+		flush()
 		m, n := convMsg(t, observer, conv, func(m ConvMessage) bool { return m.LID == q.LID })
 		return n == 1 && m.ID != q.ID
 	})
@@ -91,6 +102,7 @@ func TestDMAgentOldAnsweredStatusRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	eventually(t, "old answer on sibling", func() bool {
+		flush()
 		_, n := convMsg(t, observer, conv, func(m ConvMessage) bool { return m.LID == in.LID })
 		return n == 1
 	})
@@ -116,6 +128,7 @@ func TestDMAgentOldAnsweredStatusRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	eventually(t, "exact old completion visible", func() bool {
+		flush()
 		m, n := convMsg(t, observer, conv, func(m ConvMessage) bool { return m.LID == q.LID })
 		return n == 1 && m.Exec != nil && m.Exec.State == "answered"
 	})

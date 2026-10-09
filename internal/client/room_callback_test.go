@@ -171,6 +171,17 @@ printf '%s' "$AGENTNET_ROOM_REQUEST" > "$CALLBACK_DIR/c0"
 	if callbackLane.parent != parent || mode == "named_hop" && intermediateLane.parent != root.ID {
 		t.Fatal("root scheduler stole remote descendant lane ownership")
 	}
+	// Harness and lane ownership retain the exact held physical request.
+	// Signed answers correlate by the logical identity shared by its copies.
+	replyLID := func(host *Agent, id string) string {
+		t.Helper()
+		lid, err := groupReplyLID(host.store.db, conv, id)
+		if err != nil {
+			t.Fatalf("logical reply identity for held request %s: %v", id, err)
+		}
+		return lid
+	}
+	callbackLID := replyLID(w.alice, callback)
 	if mode == "simple" {
 		testRoomCallbackAuthority(t, w.alice, conv, callback, root.ID, readID("b0"))
 		if w.alice.updatePending() == nil {
@@ -200,7 +211,7 @@ printf '%s' "$AGENTNET_ROOM_REQUEST" > "$CALLBACK_DIR/c0"
 			t.Fatal(err)
 		}
 		if _, n := convMsg(t, w.alice, conv, func(m ConvMessage) bool {
-			return m.Kind == envelope.KindAnswer && (m.ReplyTo == callback || m.ReplyTo == root.LID)
+			return m.Kind == envelope.KindAnswer && (m.ReplyTo == callbackLID || m.ReplyTo == root.LID)
 		}); n != 0 {
 			t.Fatal("cancelled callback emitted a late answer")
 		}
@@ -209,15 +220,15 @@ printf '%s' "$AGENTNET_ROOM_REQUEST" > "$CALLBACK_DIR/c0"
 		edges := []struct {
 			host         *Agent
 			id, pid, key string
-		}{{w.bob, callback, a.PID, w.alice.Self().Fingerprint()}, {w.alice, readID("b0"), b.PID, w.bob.Self().Fingerprint()}, {w.alice, root.LID, a.PID, w.alice.Self().Fingerprint()}}
+		}{{w.bob, callbackLID, a.PID, w.alice.Self().Fingerprint()}, {w.alice, replyLID(w.bob, readID("b0")), b.PID, w.bob.Self().Fingerprint()}, {w.alice, root.LID, a.PID, w.alice.Self().Fingerprint()}}
 		if mode == "named_hop" {
 			edges = append(edges, struct {
 				host         *Agent
 				id, pid, key string
-			}{w.alice, readID("b1"), b.PID, w.bob.Self().Fingerprint()}, struct {
+			}{w.alice, replyLID(w.bob, readID("b1")), b.PID, w.bob.Self().Fingerprint()}, struct {
 				host         *Agent
 				id, pid, key string
-			}{w.bob, readID("c0"), firstPID, w.alice.Self().Fingerprint()})
+			}{w.bob, replyLID(w.alice, readID("c0")), firstPID, w.alice.Self().Fingerprint()})
 		}
 		for _, edge := range edges {
 			var reply ConvMessage

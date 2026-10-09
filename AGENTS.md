@@ -88,6 +88,9 @@ program, `agentnet`, that is both the laptop client and the Hub.
 - Tests: `go vet ./...`, `scripts/race-shard.sh others`, and all client
   partitions `scripts/race-shard.sh client-K 12` for K=0 through 11. The script
   derives the current test list and keeps every race package at 600 seconds.
+  `others` runs the remaining packages first, then isolates `internal/ui` in
+  two sequential partitions. Focused UI reruns use `scripts/race-shard.sh ui-0`
+  and `ui-1`; UI always has two partitions, independent of the client count.
   The older four/six partitions outgrew that bound; do not reuse their obsolete
   duration estimates or raise timeouts to make a run fit. Retain passing
   unchanged partitions when correcting a failure. Native Windows client

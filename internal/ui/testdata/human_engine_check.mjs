@@ -591,10 +591,18 @@ for (const ending of ['original', 'self']) {
  const oldKey='history-copy/'+phone.fp+'/'+conv+'/'+a.fp+'/'+raw.lid,newKey='history-copy/'+phone.fp+'/'+conv+'/'+b.fp+'/'+raw.lid;
  const ceiling=await a.store.get('kv','history-arrival')||0;
  const job={device:phone.address,fingerprint:phone.fp,state:'done',pos:{conv,ms:now,id:source.id},done:1,total:1,own_human:a.fp,catchup:{v:2,source:a.fp,stage:'tail',recent:conv,older:null,tail:ceiling,ceiling,started:now}};
- await a.store.write([{s:'outbox',k:old.id,v:old},{s:'kv',k:oldKey,v:{hash:await wire.groupHistoryContentHash(conv,raw),copy:old.id}},{s:'kv',k:'history',v:{[phone.address]:job}}]);
- const pin=await a.store.get('pins',b.address);await a.store.write([{s:'pins',k:b.address,v:{...pin,pending:'changed'}}]);
- await a.historyCatchupStep(dev,job);
- check(!!await a.store.get('kv',oldKey)&&!await a.store.get('kv',newKey),'pending author key keeps old blocked mapping until verified replacement exists');
+ const pin=await a.store.get('pins',b.address);
+ // Simulate the old browser's progress ledger and pending author in one
+ // transaction. Admission already started background history: separate setup
+ // writes otherwise let it legitimately repair the mapping before the pin
+ // becomes pending. Old browsers have no corrected-author progress entry;
+ // reset that fixture metadata only, retaining every ciphertext copy.
+ await a.store.write([{s:'pins',k:b.address,v:{...pin,pending:'changed'}},{s:'outbox',k:old.id,v:old},{s:'kv',k:oldKey,v:{hash:await wire.groupHistoryContentHash(conv,raw),copy:old.id}},{s:'kv',k:newKey},{s:'kv',k:'history',v:{[phone.address]:job}}]);
+ check((await a.store.get('pins',b.address))?.pending==='changed'&&(await a.store.get('kv',oldKey))?.copy===old.id&&!await a.store.get('kv',newKey),'old-browser repair fixture starts with pending author, exact blocked copy and no corrected progress');
+ if(a.historyRun)await a.historyRun;
+ await a.historyCatchupStep(dev,(await a.historyBook())[phone.address]);
+ const blockedOld=await a.store.get('kv',oldKey),blockedNew=await a.store.get('kv',newKey),deferred=await a.store.get('kv','history-deferred/'+phone.fp+'/'+conv+'/'+a.fp+'/'+raw.lid);
+ check(!!blockedOld&&!blockedNew&&deferred?.why==='invalid','pending author key keeps old blocked mapping until verified replacement exists: '+JSON.stringify({old:!!blockedOld,new:!!blockedNew,deferred:deferred?.why,pending:(await a.store.get('pins',b.address))?.pending}));
  await a.store.write([{s:'pins',k:b.address,v:pin}]);a.historyWake=(a.historyWake||0)+1;
  await a.historyCatchupStep(dev,(await a.historyBook())[phone.address]);
  const repaired=await a.store.get('kv',newKey),row=repaired&&await a.store.get('outbox',repaired.copy);

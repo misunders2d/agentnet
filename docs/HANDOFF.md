@@ -63,8 +63,11 @@ implementation/integration; ThinkPad is offline and no peer response is required
 MEL-527 remains v0.9. All six features have focused native/browser/rendered
 evidence and independent review. Cross-chat history sharing covers accepted
 destination guests, exact selected encrypted files, stale audience/source review
-and same-operation retry. The source candidate is frozen for combined release
-qualification; it is not published yet.
+and same-operation retry. The first combined qualification found stale fixtures
+and a real cancellation race. The corrective batch and retained passing evidence
+are recorded at the top of the release checklist; it is not published yet. A
+measured worker-query planning regression is under focused correction before the
+next qualification.
 
 **October 9 evening correction:** MEL-588 rejected-history flood and MEL-580
 answered requests remaining pending are mandatory v0.8.15 fixes. The active

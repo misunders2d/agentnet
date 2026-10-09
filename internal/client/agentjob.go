@@ -298,8 +298,8 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 	}
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(status, ''),
-		conv, pid, coalesce(target, ''), state, local, arrival
-		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND `+requestFollowupReady+` AND arrival > ?
+		conv, pid, coalesce(target, ''), state, local, arrival, request_followup
+		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND arrival > ?
 		  AND (? = '' OR (conv = ? AND json_extract(human,'$.author_pid') IS NOT NULL))
 		  AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
 		  AND EXISTS (SELECT 1 FROM participation_events e WHERE e.conv = inbox.conv AND e.pid = inbox.pid)
@@ -308,16 +308,17 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 		return j, false, pos, false, nil, err
 	}
 	type row struct {
-		j       job
-		state   string
-		arrival int64
+		j        job
+		state    string
+		arrival  int64
+		followup sql.NullString
 	}
 	var page []row
 	for rows.Next() {
 		var r row
 		var target string
 		if err := rows.Scan(&r.j.ID, &r.j.From, &r.j.Key, &r.j.Kind, &r.j.Body, &r.j.ReplyTo, &r.j.Status,
-			&r.j.Conv, &r.j.PID, &target, &r.state, &r.j.Local, &r.arrival); err != nil {
+			&r.j.Conv, &r.j.PID, &target, &r.state, &r.j.Local, &r.arrival, &r.followup); err != nil {
 			rows.Close()
 			return j, false, pos, false, nil, err
 		}
@@ -337,6 +338,15 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 	wrote := false
 	for _, r := range page {
 		next = r.arrival
+		if r.followup.Valid {
+			ready, err := requestFollowupReadyIn(tx, r.j.ID)
+			if err != nil {
+				return j, false, pos, false, nil, err
+			}
+			if !ready {
+				continue
+			}
+		}
 		v, why, err := agentVerdict(tx, r.j.agentReq(r.state), self, selfFP, false, views)
 		if err != nil {
 			return j, false, pos, false, nil, err

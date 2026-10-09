@@ -32,6 +32,15 @@ const requestFollowupReady = `(inbox.request_followup IS NULL OR NOT EXISTS (
            WHERE current.address=inbox.sender AND current.fingerprint=inbox.verified_by AND previous.address=earlier.sender AND previous.fingerprint=earlier.verified_by AND p.state<>'conflict'
            AND EXISTS(SELECT 1 FROM json_each(p.record,'$.human_keys') h WHERE h.value=previous.fingerprint)))))))`
 
+// Evaluate correction ordering only for marked candidates in the same claim
+// transaction. Ordinary pages avoid repeatedly planning the correlated proof
+// query; no authority or row can change between this check and the claim.
+func requestFollowupReadyIn(q dbq, id string) (bool, error) {
+	var ready bool
+	err := q.QueryRow(`SELECT `+requestFollowupReady+` FROM inbox WHERE id=?`, id).Scan(&ready)
+	return ready, err
+}
+
 func requestFollowupJSON(ref *envelope.Ref) string {
 	if ref == nil {
 		return ""

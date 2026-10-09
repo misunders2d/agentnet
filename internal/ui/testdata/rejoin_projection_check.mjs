@@ -22,16 +22,25 @@ console.log('PASS rejoin projection: pending/active, both arrival orders, separa
 for(const skin of ['classic','zoom']) {
  const src=fs.readFileSync(new URL(`../skins/${skin}/src/entry.mjs`,import.meta.url),'utf8');
  const from=src.indexOf('function agentCard(a, t) {'),to=src.indexOf('\n// choice',from);
- assert(from>=0&&to>from);
- const card=new Function('el','isMe','agentName','plural',src.slice(from,to)+'; return agentCard;')(
-  (...parts)=>parts,()=>false,a=>a.agent_id,(n,s)=>`${n} ${s}`);
+ const reportFrom=src.indexOf('function ownModelReport('),reportTo=src.indexOf('function ownModelReports(',reportFrom);
+ const devices=src.match(/function devicesOf\(p\) \{[\s\S]*?\n\}/)?.[0];
+ assert(from>=0&&to>from&&reportFrom>=0&&reportTo>reportFrom&&devices);
+ const state={overview:{person:{devices:[{address:'me/desk'}]},model_reports:[]}};
+ const card=new Function('el','isMe','agentName','plural','state',devices+'\n'+src.slice(reportFrom,reportTo)+src.slice(from,to)+'; return agentCard;')(
+  (...parts)=>parts,()=>false,a=>a.agent_id,(n,s)=>`${n} ${s}`,state);
  const ended={...old,missing:0,inviter:{label:'You'},state_text:'Dismissed'};
  for(const state of ['invited','active']) {
   const rendered=JSON.stringify(card(ended,{agents:[ended,{...current,state}]}));
   assert(rendered.includes('Dismissed'),'Historical lifecycle disappeared');
   assert(rendered.includes(state==='active'?'Already in this chat':'Rejoin pending'),`${skin} hides current rejoin state`);
+  assert(!rendered.includes('data-agent-model'),`${skin} reports a foreign agent as own`);
  }
  const other=JSON.stringify(card(ended,{agents:[ended,{...current,agent_id:'claude'}]}));
  assert(!other.includes('Rejoin pending'),'Different named agents coalesced');
+ state.overview.person.devices.push({address:host.address});
+ assert(JSON.stringify(card(ended,{agents:[ended,current]})).includes('Model unknown'),`${skin} omits own unknown model`);
+ state.overview.model_reports.push({host:host.address,agent_id:ended.agent_id,model:'reported fixture model',at:1790000000});
+ assert(JSON.stringify(card(ended,{agents:[ended,current]})).includes('Last reported model: reported fixture model'),`${skin} omits actual own model helper`);
+ assert(!JSON.stringify(card({...ended,agent_id:'claude'},{agents:[]})).includes('reported fixture model'),`${skin} borrows another named agent model`);
 }
 console.log('PASS Classic/Zoom past cards: exact rejoin explanation, historical lifecycle retained');

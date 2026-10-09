@@ -1184,15 +1184,16 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 		var j job
 		var target, previousState string
 		var receivedAt int64
-		err = tx.QueryRow(`SELECT id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,''),state,received_at
-   FROM inbox WHERE conv IS NULL AND replica = 0 AND `+requestFollowupReady+` AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
+		var followup sql.NullString
+		err = tx.QueryRow(`SELECT id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,''),state,received_at,request_followup
+   FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
     OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
      OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`)))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')
     AND (? = '' OR received_at > ? OR (received_at = ? AND id > ?))
     ORDER BY received_at, id LIMIT 1`,
 			stateAccepted, statePending, envelope.KindQuestion, envelope.KindTask,
-			envelope.KindQuestion, envelope.KindTask, responder, afterID, afterAt, afterAt, afterID).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key, &previousState, &receivedAt)
+			envelope.KindQuestion, envelope.KindTask, responder, afterID, afterAt, afterAt, afterID).Scan(&j.ID, &j.From, &j.Kind, &j.Body, &j.ReplyTo, &j.Status, &target, &j.Quote, &j.Key, &previousState, &receivedAt, &followup)
 		if errors.Is(err, sql.ErrNoRows) {
 			if err = tx.Commit(); err != nil {
 				return job{}, false, err
@@ -1206,6 +1207,15 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 			return job{}, false, err
 		}
 		afterID, afterAt = j.ID, receivedAt
+		if followup.Valid {
+			ready, e := requestFollowupReadyIn(tx, j.ID)
+			if e != nil {
+				return job{}, false, e
+			}
+			if !ready {
+				continue
+			}
+		}
 		if j.Kind == envelope.KindQuestion || j.Kind == envelope.KindTask {
 			person, e := permissionPersonIn(tx, j.From, j.Key)
 			if e != nil {
@@ -1287,10 +1297,15 @@ func (s *store) jobState(id string) (string, error) {
 }
 
 // finishJob records a job's end without a reply. A new needs_human
-// outcome is notified afresh.
+// outcome is notified afresh. A Stop already stored at that commit wins over
+// completed NEEDS-HUMAN output; daemon interruption retains its unknown outcome.
 func (s *store) finishJob(id, state, detail string) error {
-	res, err := s.db.Exec(`UPDATE inbox SET state = ?, detail = nullif(?, ''), notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?)`,
-		state, detail, id, stateRunning, stateCancelReq)
+	res, err := s.db.Exec(`UPDATE inbox
+		SET state = CASE WHEN state = ? AND ? = ? THEN ? ELSE ? END,
+		    detail = CASE WHEN state = ? AND ? = ? THEN 'cancelled by the recipient' ELSE nullif(?, '') END,
+		    notified = 0, review_sent = 0 WHERE id = ? AND state IN (?, ?)`,
+		stateCancelReq, state, stateNeedHuman, stateCancelled, state,
+		stateCancelReq, state, stateNeedHuman, detail, id, stateRunning, stateCancelReq)
 	if err == nil {
 		if n, _ := res.RowsAffected(); n == 1 {
 			_, err = s.db.Exec(`DELETE FROM reported WHERE item = ?`, id) // back in review: reported afresh to each recipient

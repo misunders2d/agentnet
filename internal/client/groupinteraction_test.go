@@ -1020,8 +1020,12 @@ func TestGroupInteractionNamedMemberAndVisitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	replyAt(t, w.alice, packet.State.Conv, memberTask.ID)
-	if stub.runs() != 6 || !strings.HasSuffix(stub.last(), "immutable group task baseline\n") {
-		t.Fatal("admitted request baseline changed or rerun")
+	runs, prompt := stub.runs(), stub.last()
+	if runs != 6 {
+		t.Fatalf("admitted request rerun: runs=%d want=6 prompt=%q", runs, prompt)
+	}
+	if !strings.HasSuffix(strings.TrimSuffix(prompt, modelReportPrompt), "immutable group task baseline\n") {
+		t.Fatalf("admitted request baseline changed: runs=%d prompt=%q", runs, prompt)
 	}
 	phone, await, _ := linkPhone(t, host, "visitor-phone")
 	if err = host.DecideLink(tctx(t), pendingLink(t, host).ID, true); err != nil {
