@@ -884,6 +884,14 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 // hand-over already started is not stopped. A version 1 envelope is not
 // looked at.
 func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
+	if env.V == envelope.Version2 {
+		if err := a.discoveredHistoryDelivery(env); err != nil {
+			if errors.Is(err, errHistoryRecoveryAuthority) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
 	if env.V == envelope.Version3 {
 		if handled, allowed, err := a.groupGuestDeliveryGate(env); handled {
 			return allowed, err

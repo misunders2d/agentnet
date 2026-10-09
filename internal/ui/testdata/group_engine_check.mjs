@@ -334,6 +334,73 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   const answerEnv=wire.parseEnvelope(pv[role+'-answer'].envelope);await w.e.admit(pv[role+'-answer'].envelope,answerEnv);w.st.write=originalWrite;
   check(racedPID&&!await w.st.get('inbox',answerEnv.id)&&(await w.st.get('held',answerEnv.id))?.reason==='invalid','real competing signed dismissal forces fresh PID refusal without partial output');
   await w.reload();check((await w.e.agentConv(pv[role+'-pid'])).info.state==='dismissed','competing dismissal and refused output survive real reload');await w.close();
+  // A different own human approves the phone. This browser already holds
+  // history that approver lacks; following its signed roster must start the
+  // missing local snapshot through ordinary history upkeep.
+  w=await world();await w.receive(c.proof);await w.receive(c.context);await w.receive(v.participations.ordinary);
+  {
+   const approverAddress='browser/approver',approverKeys=await wire.newKeys(),approverPub=await wire.publicEntry(approverKeys,approverAddress),approverFP=await wire.fingerprint(approverPub);
+   const withApprover=await wire.nextRoster(keys,address,roster,[...roster.devices,approverPub],await wire.joinConsent(approverKeys,approverAddress,roster.person,1,await wire.rosterHash(roster)),roster.label,[...await wire.rosterHumans(roster),approverFP]);
+   const phoneAddress='browser/third',phoneKeys=await wire.newKeys(),phonePub=await wire.publicEntry(phoneKeys,phoneAddress),phoneFP=await wire.fingerprint(phonePub);
+   const withPhone=await wire.nextRoster(approverKeys,approverAddress,withApprover,[...withApprover.devices,phonePub],await wire.joinConsent(phoneKeys,phoneAddress,roster.person,2,await wire.rosterHash(withApprover)),roster.label,[...await wire.rosterHumans(withApprover),phoneFP]);
+   await wire.verifyNext(withApprover,roster);await wire.verifyNext(withPhone,withApprover);
+   const chain=[roster,withApprover,withPhone],before=await w.e.personRecord(chain.slice(0,2),'self',null);
+   w.e.me=before;await w.st.write([{s:'kv',k:'person',v:before}]);await w.e.pinDevices(before);
+   w.extraChains.set(roster.person,chain.map(r=>JSON.parse(wire.rosterJSON(r))));
+   w.e.groupSupport=async()=>{};
+   await w.e.refreshPerson(w.e.me);await w.e.runHistory();
+   const copies=(await w.st.all('outbox')).filter(r=>r.to===phoneAddress),history=copies.filter(r=>r.sub==='history');
+   check((await w.e.historyBook())[phoneAddress]?.state==='done'&&history.length===1,'another own human learns phone roster and supplies its missing existing snapshot');
+   const target=await world(),person=await w.e.personRecord(chain,'self',null);
+   target.extraChains.set(roster.person,chain.map(r=>JSON.parse(wire.rosterJSON(r))));
+   target.e.keys=phoneKeys;target.e.address=phoneAddress;target.e.fp=phoneFP;target.e.me=person;
+   await target.st.write([{s:'kv',k:'identity',v:{keys:phoneKeys,address:phoneAddress,fingerprint:phoneFP}},{s:'kv',k:'person',v:person}]);await target.e.pinDevices(person);
+   for(const row of copies){for(const file of row.files||[])target.blobs.set(file.attachment.blob.id,file.ct);await target.receive({envelope:row.envelope});}
+   const original=v.participations.ordinary.inner,stored=await target.st.get('inbox',original.id);
+   check(stored?.lid===original.lid&&stored.claimed_key===await wire.fingerprint(alicePub)&&stored.history&&stored.replica&&stored.state===''&&stored.synced_from===address,'discovered browser snapshot retains exact original attribution and remains inert');
+   await target.close();
+   const checkpoint=JSON.stringify(await w.e.historyBook()),count=(await w.st.all('outbox')).length;
+   await w.e.runHistory();await w.reload();w.e.groupSupport=async()=>{};await w.e.runHistory();
+   check(JSON.stringify(await w.e.historyBook())===checkpoint&&(await w.st.all('outbox')).length===count,'discovered browser snapshots keep existing completed cursors and copies over repeat wake and restart');
+   const valid=await w.st.get('kv','person'),phonePin=await w.st.get('pins',phoneAddress),sourcePin=await w.st.get('pins',address),savedBook=await w.e.historyBook();
+   for(const mode of ['source-agent','recipient-agent','removed','foreign','frozen','changed-key','pending-recipient','pending-source']) {
+    const altered=structuredClone(valid),pin=structuredClone(phonePin),selfPin=structuredClone(sourcePin);
+    if(mode==='source-agent')altered.human_keys=altered.human_keys.filter(fp=>fp!==w.e.fp);
+    if(mode==='recipient-agent')altered.human_keys=altered.human_keys.filter(fp=>fp!==phoneFP);
+    if(mode==='removed')altered.devices=altered.devices.filter(d=>d.address!==phoneAddress);
+    if(mode==='foreign'||mode==='frozen')altered.state=mode==='foreign'?'pinned':'conflict';
+    if(mode==='changed-key')pin.fingerprint=approverFP;
+    if(mode==='pending-recipient')pin.pending={...pin};
+    if(mode==='pending-source')selfPin.pending={...selfPin};
+    w.e.me=altered;
+    await w.st.write([{s:'kv',k:'person',v:altered},{s:'pins',k:phoneAddress,v:pin},{s:'pins',k:address,v:selfPin},{s:'kv',k:'history',v:{}}]);
+    await w.e.reconcileHistory();
+    check(!(await w.e.historyBook())[phoneAddress],'browser history discovery refuses '+mode);
+    await w.st.write([{s:'kv',k:'history',v:savedBook}]);
+    let refused=false;try{await w.e.discoveredHistoryDelivery(history[0]);}catch(e){refused=true;}
+    check(refused,'already queued automatic browser history retains authority guard after '+mode);
+    const call=w.e.call;let sends=0;w.e.call=async()=>{sends++;throw Error('unexpected history send');};
+    await w.e.postStored(history[0]);w.e.call=call;
+    check(sends===0&&(await w.st.get('outbox',history[0].id)).detail.includes('current own human'),'browser post refuses guarded history before transport after '+mode);
+    w.e.me=valid;await w.st.write([{s:'kv',k:'person',v:valid},{s:'pins',k:phoneAddress,v:phonePin},{s:'pins',k:address,v:sourcePin},{s:'outbox',k:history[0].id,v:history[0]}]);
+   }
+   for(const state of ['running','done','ended']) {
+    const kept={...savedBook[phoneAddress],fingerprint:'original-key',state,pos:{conv:'kept',ms:12,id:'kept'},own_human:undefined};
+    await w.st.write([{s:'kv',k:'history',v:{[phoneAddress]:kept}}]);await w.e.reconcileHistory();
+    check(JSON.stringify((await w.e.historyBook())[phoneAddress])===JSON.stringify(kept),'browser discovery preserves existing '+state+' job and key/cursor/policy');
+   }
+   const running={...savedBook[phoneAddress],state:'running',pos:null},dev=valid.devices.find(d=>d.address===phoneAddress),originalWrite=w.st.write.bind(w.st);let raced=false;
+   await w.st.write([{s:'kv',k:'history',v:{[phoneAddress]:running}}]);
+   w.st.write=async(ops,expected)=>{if(!raced&&ops.some(o=>o.s==='outbox'&&o.v?.sub==='history')){raced=true;const changed={...valid,human_keys:valid.human_keys.filter(fp=>fp!==phoneFP)};await originalWrite([{s:'kv',k:'person',v:changed}]);}return originalWrite(ops,expected);};
+   let refused=false;try{await w.e.historyStep(dev,running);}catch(e){refused=e.message==='storage changed during verification';}finally{w.st.write=originalWrite;}
+   check(raced&&refused&&(await w.st.all('outbox')).length===count&&(await w.e.historyBook())[phoneAddress].state==='running','browser transaction aborts new history and cursor when human role changes after preparation');
+   await w.st.write([{s:'kv',k:'person',v:valid},{s:'kv',k:'history',v:savedBook}]);w.e.me=valid;
+   const reconcile=w.e.reconcileHistory.bind(w.e);let scans=0;
+   w.e.reconcileHistory=async()=>{scans++;await reconcile();if(scans===1)w.e.runHistory();};
+   await w.e.runHistory();w.e.reconcileHistory=reconcile;
+   check(scans===2&&JSON.stringify(await w.e.historyBook())===checkpoint,'history wake during an active browser pass is drained once without changing completed jobs');
+  }
+  await w.close();
   // Actual native HistoryItem bytes, forwarded by a newly linked own key.
   // The original participant events stay signed; all replicas remain inert.
   w=await world();await w.receive(c.proof);await w.receive(c.context);

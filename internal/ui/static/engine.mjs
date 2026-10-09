@@ -1218,12 +1218,44 @@ export class Engine {
   }
 
   // ---- copying your chats to a new device (client/history.go): one job
-  // per device this one linked, each step queuing a page of history copies
+  // per linked device, each step queuing a page of history copies
   // and where it ended in one write, so it resumes where it stopped (the
   // page must be open for it to run).
 
   async historyBook() {
     return (await this.store.get("kv", "history")) || {};
+  }
+
+  async ownHistoryAuthority(dev, checks=[]) {
+    const own=await this.groupRead(checks,"kv","person"),identity=await this.groupRead(checks,"kv","identity");
+    if(this.revoked || identity?.revoked || identity?.address!==this.address || identity.fingerprint!==this.fp || own?.state!=="self")return false;
+    for(const [address,fp] of [[this.address,this.fp],[dev.address,dev.fingerprint]]) {
+      if(!own.devices.some(d=>d.address===address&&d.fingerprint===fp)||!own.human_keys?.includes(fp))return false;
+      const pin=await this.groupRead(checks,"pins",address);
+      if(pin?.pending || pin && pin.fingerprint!==fp)return false;
+    }
+    return true;
+  }
+
+  // Only missing snapshots: the approver may not hold this device's history.
+  // Existing jobs (including ended/done) and their positions remain intact.
+  async reconcileHistory() {
+    const checks=[],own=await this.groupRead(checks,"kv","person"),saved=await this.groupRead(checks,"kv","history"),book=structuredClone(saved||{}),added=[];
+    for(const dev of own?.devices||[]) {
+      if(dev.address===this.address || book[dev.address] || !await this.ownHistoryAuthority(dev,checks))continue;
+      book[dev.address]={device:dev.address,fingerprint:dev.fingerprint,pos:null,done:0,total:(await this.store.all("convs")).length,state:"running",own_human:this.fp};
+      added.push(dev);
+    }
+    if(!added.length)return;
+    await this.store.write([{s:"kv",k:"history",v:book}],checks);
+    this.changed();
+    for(const dev of added)await this.replayErased(dev);
+  }
+
+  async discoveredHistoryDelivery(rec) {
+    if(!["history",wire.SubGroupProof,wire.SubGroupContext,wire.SubRootSync].includes(rec.sub))return;
+    const job=(await this.historyBook())[rec.to];
+    if(job?.own_human && (job.own_human!==this.fp || !await this.ownHistoryAuthority({address:job.device,fingerprint:job.fingerprint})))throw Error("History snapshot requires current own human devices and unchanged keys.");
   }
 
   async startHistory(address, fingerprint) {
@@ -1239,6 +1271,7 @@ export class Engine {
   }
 
   runHistory() {
+    this.historyAgain = true;
     if (!this.historyRun) this.historyRun = this.historyPasses().finally(() => { this.historyRun = null; });
     return this.historyRun;
   }
@@ -1409,6 +1442,8 @@ export class Engine {
 
   async historyPasses() {
     for (;;) {
+      this.historyAgain = false;
+      await this.reconcileHistory();
       let more = false;
       for (const j of Object.values(await this.historyBook())) {
         if (!["running", "done"].includes(j.state)) continue;
@@ -1420,7 +1455,7 @@ export class Engine {
         }
         more = (await this.historyStep(dev, j)) || more;
       }
-      if (!more) return;
+      if (!more && !this.historyAgain) return;
     }
   }
 
@@ -1431,6 +1466,7 @@ export class Engine {
   async historyStep(dev, j) {
     const checks=[],book=structuredClone(await this.groupRead(checks,"kv","history"));
     if(!book?.[dev.address] || JSON.stringify(book[dev.address])!==JSON.stringify(j))return false;
+    if(j.own_human && (j.own_human!==this.fp || !await this.ownHistoryAuthority(dev,checks)))return false;
     const contextOnly=j.state==="done";
     const convs = new Map((await this.store.all("convs")).filter((c) => wire.rootMember(wire.parseRoot(c.root), this.me.person)).map((c) => [c.id, c])); // an outside host never lends ambient room history to its siblings
     for(const g of await this.store.all("kv"))if(g?.root&&g.context&&g.records) {
@@ -1835,6 +1871,7 @@ export class Engine {
       await this.pinDevices(this.me);
       this.changed();
       this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});
+      this.runHistory().catch(()=>{});
       return this.me;
     }
     await put(this.store, "persons", next.person, next);
@@ -2079,6 +2116,7 @@ export class Engine {
   async postStored(rec) {
     if (rec.state === "receiver_waiting") return;
     try {
+      await this.discoveredHistoryDelivery(rec);
       await this.receiverDeliveryGate(rec);
       if(rec.send_group_wire){const pin=await this.pinned(rec.to);if(!await this.sendGroupCopy(rec.to,pin,"present"))throw Object.assign(Error("Recipient needs sg1 again to read this already sealed request."),{code:"send_group_unsupported"});}
       if (rec.required_cap === wire.CapControl) {

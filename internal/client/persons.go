@@ -449,6 +449,12 @@ func (a *Agent) refreshPerson(ctx context.Context, person string, adopt bool) (p
 		// requests by name now, one it removed stops deciding (MEL-532).
 		a.wakeWorker()
 	}
+	if err == nil && res.changed {
+		if own, ok, e := a.store.selfPerson(a.Address); e == nil && ok && own.info.Person == person {
+			a.convWork.due(convHistory)
+			a.kickNow()
+		}
+	}
 	return res, err
 }
 

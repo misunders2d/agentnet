@@ -28,8 +28,8 @@ import (
 // Two paths, both through the outbox (durable, receipted, resumed after a
 // restart):
 //
-//   - the snapshot: after this device links a new device of its person,
-//     it walks its conversation rows in order, a page per sync (saved
+//   - the snapshot: after linking a device, or discovering a current own
+//     human device with no local job, it walks its rows a page per sync (saved
 //     position, same transaction as the page queued), until it reaches the
 //     end;
 //   - forwarding: a device that admits a message sent to an older roster of
@@ -527,8 +527,8 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	return err
 }
 
-// History snapshot jobs (history_jobs): one per new device of this person
-// that this device linked.
+// History snapshot jobs (history_jobs): one per linked device of this person.
+// Discovery never restarts a completed or ended snapshot.
 
 // historyPos is where a snapshot continues: after the row (conv, ms, id).
 type historyPos struct {
@@ -541,14 +541,15 @@ const historyPage = 50
 
 // startHistory queues a snapshot of this device's conversations for dev.
 func (a *Agent) startHistory(dev identity.Public) error {
-	var n int
-	if err := a.store.db.QueryRow(`SELECT count(*) FROM conversations`).Scan(&n); err != nil {
+	tx, err := a.store.db.Begin()
+	if err != nil {
 		return err
 	}
-	now := time.Now().Unix()
-	pos, _ := json.Marshal(historyPos{})
-	if _, err := a.store.db.Exec(`INSERT OR IGNORE INTO history_jobs(device, fingerprint, pos, convs_total, state, created_at, updated_at) VALUES(?, ?, ?, ?, 'running', ?, ?)`,
-		dev.Address, dev.Fingerprint(), string(pos), n, now, now); err != nil {
+	defer tx.Rollback()
+	if _, err := insertHistoryJob(tx, dev); err != nil {
+		return err
+	}
+	if err := a.store.done(tx.Commit()); err != nil {
 		return err
 	}
 	a.replayErased(dev) // conversations deleted here stay deleted there (convclear.go)
@@ -572,6 +573,11 @@ func (a *Agent) kickNow() {
 // historyStep queues one page of every running snapshot and reports
 // whether any has more.
 func (a *Agent) historyStep(ctx context.Context) (more bool) {
+	if err := a.reconcileHistory(); err != nil {
+		a.Logf("discovering own-device history: %v", err)
+		a.convWork.due(convHistory)
+		return false
+	}
 	rows, err := a.store.db.Query(`SELECT device, fingerprint, pos, state FROM history_jobs WHERE state IN ('running', 'done')`)
 	if err != nil {
 		return false
@@ -776,6 +782,9 @@ func (a *Agent) historyPageFor(dev identity.Public, pos historyPos) (more bool, 
 }
 
 func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos historyPos, contextOnly bool) (more bool, err error) {
+	if err := a.discoveredHistoryCheck(a.store.db, dev.Address); err != nil {
+		return false, err
+	}
 	release, err := lockfile.Wait(a.spoolLockPath())
 	if err != nil {
 		return false, err
@@ -986,6 +995,9 @@ func (a *Agent) historyPage(ctx context.Context, dev identity.Public, pos histor
 		return false, err
 	}
 	defer tx.Rollback()
+	if err := a.discoveredHistoryCheck(tx, dev.Address); err != nil {
+		return false, err
+	}
 	var carriers []outCopy
 	for _, batch := range batches {
 		if e := a.checkGroupHistoryBatch(tx, dev, batch); e != nil {
