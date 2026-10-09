@@ -266,6 +266,7 @@ func groupEngineVectors(t *testing.T, setup map[string]any) (map[string]any, fun
 		carriers["solo-context"] = carrier(envelope.SubGroupContext, client.GroupContext{Root: root, State: solo}, solo.Seq, solo.Hash())
 		participations := groupParticipationEngineVectors(t, root, s0, alice, dana, ar, dr, browser)
 		vectors["participations"] = participations
+		vectors["historical_witness"] = groupHistoryWitnessVectors(t, root, s0, alice, bob, ar, rr, browser, commits[0], participations)
 		var membershipRecords []protocol.ParticipationEvent
 		for _, prefix := range []string{"p6-0", "p6-1"} {
 			for _, typ := range []string{"invite", "scope", "accept"} {

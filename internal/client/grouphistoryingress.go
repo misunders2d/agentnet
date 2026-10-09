@@ -49,6 +49,9 @@ func (a *Agent) groupHistoryReceiveCheck(q dbq, root protocol.ConvRoot, sender i
 
 func (a *Agent) admitGroupHistory(ctx context.Context, env envelope.Envelope, in envelope.Inner, root protocol.ConvRoot, sender identity.Public, fromQuarantine bool, hold func(string, string) error) error {
 	var item HistoryItem
+	if decodeGroupCarrierJSON([]byte(in.Body), &item) != nil || item.GroupHistory != nil && (!groupParticipationHistoryItem(item) || item.PID == "" && item.Sub != envelope.SubStatus) {
+		return hold(reasonInvalid, "group: invalid historical witness scope")
+	}
 	if decodeGroupCarrierJSON([]byte(in.Body), &item) == nil && item.V == 1 && groupControlSub(item.Sub) {
 		return a.admitGroupControlHistory(ctx, env, in, root, sender, item, fromQuarantine, hold)
 	}

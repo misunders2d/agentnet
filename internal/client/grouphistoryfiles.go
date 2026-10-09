@@ -77,6 +77,10 @@ func (a *Agent) groupFileAuthorized(q dbq, packet GroupContext, address, fp stri
 		if !ok || !own.has(address, fp) || source.stamp != admission.Hash() {
 			return errors.Join(errPermanent, errors.New("group: PID files require exact current own-linked history"))
 		}
+		if source.item.GroupHistory != nil {
+			dev, _ := own.device(address)
+			return historyRecoveryCurrent(q, a.Self(), dev)
+		}
 		return nil
 	}
 	if admission.AllowsHistory(groupFileRef(m)) {

@@ -730,6 +730,9 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 					pid = item.PID
 				}
 			}
+			if err == nil && historical.GroupHistory != nil {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV2)
+			}
 			if err == nil && required == protocol.CapGroup && control {
 				err = a.requireGroupControlCapability(ctx, key)
 			}

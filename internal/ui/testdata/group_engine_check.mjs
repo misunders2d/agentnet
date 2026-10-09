@@ -542,6 +542,69 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    await w.st.write([{s:'kv',k:'history',v:{}}]);w.e.groupSupport=support;
   }
   const historyEnvelope=async body=>wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:linkedAddress,to:address,ts:1700000101,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body},linkedKeys,pub);
+  // Exact old member-host admission survives removal/rejoin only as own
+  // inert history, under the original signed state and current own roster.
+  {
+   const past=await world(),hv=v.historical_witness,hs=hv.states.map(wire.parseGroupState),hr=hv.records.map(wire.parseGroupCommit),original=wire.parseHistory(hv.history);
+   try{
+    past.extraChains.set(roster.person,[roster,linkedRoster].map(r=>JSON.parse(wire.rosterJSON(r))));past.e.me=linkedPerson;
+    await past.st.write([{s:'kv',k:'person',v:linkedPerson}]);await past.e.pinDevices(linkedPerson);
+    await past.receive(await past.make(wire.SubGroupProof,JSON.parse(wire.groupJournalJSON({records:hr,more:false})),3,hr[3].hash));
+    await past.receive(await past.make(wire.SubGroupContext,JSON.parse(wire.groupContextJSON({root,state:hs[3]})),3,hr[3].hash));
+    const current=await past.e.groupCurrent(conv),before=JSON.stringify(await past.st.get('kv','group/'+conv));
+    check(current.state.seq===3&&await wire.groupAdmissionHash(wire.groupMember(current.state,alicePub.person||v.challenge.rosters[0].person).admission)!==original.target.group_admission,'host removal and readmission changes exact native-signed admission');
+    check(wire.historyJSON(original)===hv.history,'native historical witness exact JSON parity');
+    check(wire.capsReads({caps:[wire.CapRoom]},wire.CapConvClear)&&!wire.capsReads({caps:[wire.CapRoom]},wire.CapOwnSyncV2),'released room capability preserves clear support without implying own2');
+    let missing=false;try{await past.e.groupParticipationHistoryCheck(conv,{...original,group_history:undefined},{address:linkedAddress,fingerprint:await wire.fingerprint(linkedPub)});}catch{missing=true;}check(missing,'old PID without witness remains unavailable');
+    const env=await historyEnvelope(hv.history);await past.receive({envelope:env});
+    const stored=await past.st.get('inbox',original.id);
+    check(!await past.st.get('held',wire.parseEnvelope(env).id)&&stored?.history&&stored.state===''&&stored.group_history,'own linked browser accepts historical witness without job');
+    check(JSON.stringify(await past.st.get('kv','group/'+conv))===before,'historical witness never replaces live group context');
+    for(const name of ['p6-ask','p6-answer','p6-status']){
+     const item=wire.parseHistory(pv['history-'+name]);item.group_history=original.group_history;
+     const carrier=await historyEnvelope(wire.historyJSON(item));await past.receive({envelope:carrier});
+     check(!await past.st.get('held',wire.parseEnvelope(carrier).id)&&(await past.st.get('inbox',item.id))?.state==='','original request binds inert historical '+name+' across host readmission');
+    }
+
+    const fileItem=wire.parseHistory(pv['history-member-question']);fileItem.group_history={...original.group_history,memberships:['member-invite','member-accept'].map(name=>wire.parseEvent(pv[name].inner.body))};
+    const fileCarrier=await historyEnvelope(wire.historyJSON(fileItem));await past.receive({envelope:fileCarrier});
+    check(!await past.st.get('held',wire.parseEnvelope(fileCarrier).id),'old PID file manifests admit under exact witness');
+    const filePacket=await past.e.groupTurnEvidence(conv),fileRow=await past.st.get('inbox',fileItem.id),file=fileRow.attachments[0],descriptor={v:1,type:'request',lid:fileRow.lid,author:fileRow.fp,hash:await wire.groupHistoryContentHash(conv,fileRow),index:0,name:file.name,size:file.size,sha256:file.sha256,group_admission:fileRow.group_admission};
+    await past.e.groupFileSource(conv,descriptor);await past.e.groupFileAuthorized(filePacket.packet,filePacket.members,address,past.e.fp,descriptor);
+    check(true,'old PID attachment source reuses exact verified witness');
+    let changedFile=false;try{await past.e.groupFileSource(conv,{...descriptor,sha256:'f'.repeat(64)});}catch{changedFile=true;}check(changedFile,'old witnessed attachment still rejects changed file hash');
+    past.e.groupSupport=async()=>{};await past.e.requestGroupFile(fileRow,0);
+    const offered=await wire.encryptFile(new TextEncoder().encode(pv.files[0].bytes),file.name,pub);past.blobs.set(offered.attachment.blob.id,offered.ct);
+    const offer=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:linkedAddress,to:address,ts:1700000102,kind:'message',conv,root:wire.rootJSON(root),sub:'file',replica:true,body:wire.groupFileMsgJSON({...descriptor,type:'offer',available:true}),attachments:[offered.attachment]},linkedKeys,pub);
+    await past.receive({envelope:offer});const opened=await past.e.openFile(fileRow.id,0,'in');check(decode.decode(opened.bytes)===pv.files[0].bytes,'old witnessed attachment recovers exact encrypted bytes');
+    const live=await past.e.dmMembers(await past.e.groupRecord(conv),await past.e.convEvents(conv)),info=past.e.resolveAgent(original.pid,await past.e.convEvents(conv),live);
+    check(!info.invite&&!(await past.e.convEvents(conv)).some(r=>r.e.pid===original.pid),'historical evidence never enters live participation ledger');
+    for(const mode of ['other-pid','wrong-state','forged-state','unbound-roster','wrong-task-epoch','unknown-own-admission','foreign-forwarder']){
+     const bad=wire.parseHistory(hv.history);let forwarder={address:linkedAddress,fingerprint:await wire.fingerprint(linkedPub)};
+     if(mode==='other-pid')bad.pid=wire.newID();
+     if(mode==='wrong-state')bad.group_history.state=hs[3];
+     if(mode==='forged-state')bad.group_history.state.title+=' forged';
+     if(mode==='unbound-roster')bad.group_history.memberships[0].author.roster='f'.repeat(64);
+     if(mode==='wrong-task-epoch'){const index=bad.group_history.memberships.findIndex(e=>e.type==='invite');bad.group_history.memberships[index]=await wire.signEvent(aliceKeys,{...bad.group_history.memberships[index],task_keys:[await wire.fingerprint(alicePub)],group:{...bad.group_history.memberships[index].group,task_admissions:['e'.repeat(64)]}});}
+     if(mode==='unknown-own-admission')bad.group_admission='e'.repeat(64);
+     if(mode==='foreign-forwarder')forwarder={address:alicePub.address,fingerprint:await wire.fingerprint(alicePub)};
+     let refused=false;try{await past.e.groupParticipationHistoryCheck(conv,bad,forwarder,[]);}catch{refused=true;}check(refused,'historical witness refuses '+mode);
+    }
+    await past.reload();check(wire.groupContextJSON((await past.st.get('inbox',original.id)).group_history)===wire.groupContextJSON(original.group_history),'original historical witness survives reload exactly');
+    past.e.groupSupport=async()=>{};past.e.sendGroupCopy=async()=>'';
+    const dev=linkedPerson.devices.find(d=>d.address===linkedAddress),again=await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(await past.st.get('inbox',original.id),false));
+    check(wire.groupContextJSON(wire.parseHistory(again.body).group_history)===wire.groupContextJSON(original.group_history),'new device forwards exact retained witness');
+    const ownPin=await past.st.get('pins',linkedAddress);await past.st.write([{s:'pins',k:linkedAddress,v:{...ownPin,pending:{fingerprint:"changed-key"}}}]);
+    let pendingIn=false,pendingOut=false;try{await past.e.groupParticipationHistoryCheck(conv,original,dev,[]);}catch{pendingIn=true;}try{await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(stored,false));}catch{pendingOut=true;}
+    check(pendingIn&&pendingOut,'historical witness refuses pending own forwarder and reader pins');await past.st.write([{s:'pins',k:linkedAddress,v:ownPin}]);
+    // Reconstruct source evidence from original ciphertext, with no inferred old epoch.
+    const source={...stored,group_history:undefined};await past.st.write([{s:'inbox',k:source.id,v:source}]);
+    const rebuilt=await past.e.historyCopy(dev,await past.e.groupRecord(conv),past.e.itemOf(source,false));
+    check(wire.parseHistory(rebuilt.body).group_history.state.seq===0,'source reconstructs original encrypted state only when current historical checks fail');
+    const removed={...linkedPerson,devices:linkedPerson.devices.filter(d=>d.address!==address)};await past.st.write([{s:'kv',k:'person',v:removed}]);past.e.me=removed;
+    let stale=false;try{await past.e.groupParticipationHistoryCheck(conv,original,{address:linkedAddress,fingerprint:await wire.fingerprint(linkedPub)},[]);}catch{stale=true;}check(stale,'removed own reader cannot use historical witness');
+   }finally{await past.close();}
+  }
   for(const role of ['member','visitor']) {
    for(const suffix of ['invite','accept','question','status','answer','assistant-reaction']) {
     const body=pv['history-'+role+'-'+suffix];check(wire.historyJSON(wire.parseHistory(body))===body,'native '+role+' '+suffix+' linked history exact bytes');

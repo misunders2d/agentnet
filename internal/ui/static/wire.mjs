@@ -1232,7 +1232,7 @@ export async function checkLinkMAC(o, dev, join, mac) {
 
 // historyJSON is json.Marshal of a HistoryItem.
 export function historyJSON(h) {
-  let s = '{"v":1,"from":' + goString(h.from) + ',"from_key":' + goString(h.from_key) + ',"id":' + goString(h.id) + ',"lid":' + goString(h.lid) +
+  let s = '{' + (h.group_history ? '"group_history":' + groupContextJSON(h.group_history) + ',' : '') + '"v":1,"from":' + goString(h.from) + ',"from_key":' + goString(h.from_key) + ',"id":' + goString(h.id) + ',"lid":' + goString(h.lid) +
     ',"ts":' + goInt(h.ts, "time") + ',"kind":' + goString(h.kind) + ',"body":' + goString(h.body);
   if (h.reply_to) s += ',"reply_to":' + goString(h.reply_to);
   if (h.status) s += ',"status":' + goString(h.status);
@@ -1252,9 +1252,10 @@ export function historyJSON(h) {
 
 // parseHistory reads a history item strictly (as the core's decodeStrict).
 export function parseHistory(json) {
-  const f = strict(JSON.parse(json), "history item", { v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
+  const f = strict(JSON.parse(json), "history item", { group_history:"object", v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
     kind: "string", body: "string", reply_to: "string", status: "string", sub: "string", origin: "string", emotion: "string",
     target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string",topic_done:"boolean",topic:"string",topic_event:"object",send_group:"string" });
+  if(f.group_history && (!(f.pid&&["","event","excerpt"].includes(f.sub||"")) && !(f.sub===SubStatus&&f.ref)))throw Error("historical witness requires exact participation");
   checkTopic({...f,v:Version2});
   checkSendGroup({...f,v:Version2,conv:"history"});
   if (f.quote && (!validID(f.quote) || f.quote===f.id || f.sub || f.status || agentOrigin(f.origin) || !["message","question","task"].includes(f.kind))) throw Error("history quote belongs only on a person's turn");
@@ -1279,7 +1280,7 @@ export function parseHistory(json) {
     if (!reaction && !edit && (f.sub || !ordinary && !request && !output)) throw new Error("human: malformed history turn");
   }
   if (receiver && (receiver.op !== "request" || receiver.request_ref !== f.lid || f.sub || f.agent_id || ref || !["message", "question", "task"].includes(f.kind))) throw Error("receiver: history retains only original inert request routes");
-  return { v: f.v, from: f.from, from_key: f.from_key, id: f.id, lid: f.lid, ts: f.ts || 0, at: f.at || 0, kind: f.kind || "", body: f.body || "",
+  return { ...(f.group_history?{group_history:parseGroupContext(f.group_history)}:{}), v: f.v, from: f.from, from_key: f.from_key, id: f.id, lid: f.lid, ts: f.ts || 0, at: f.at || 0, kind: f.kind || "", body: f.body || "",
     ref: ref ? { id: ref.id, fingerprint: ref.fingerprint } : null,
     reply_to: f.reply_to || "", status: f.status || "", sub: f.sub || "", origin: f.origin || "", emotion: f.emotion || "", pid: f.pid || "",
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,

@@ -158,7 +158,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapConvClear, protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 16-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapOwnSyncV2, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 16-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -939,6 +939,12 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			continue
 		}
 		cacheKey := to + "\x00" + w.sub + "\x00" + w.required + "\x00" + w.status + "\x00" + w.agentID + "\x00" + w.conv + "\x00" + w.pid + "\x00" + item.PID + "\x00" + item.AgentID
+		if w.sub == envelope.SubHistory {
+			var h HistoryItem
+			if json.Unmarshal([]byte(w.body), &h) == nil && h.GroupHistory != nil {
+				cacheKey += "\x00own2"
+			}
+		}
 		if w.human {
 			cacheKey += "\x00human"
 		}
@@ -1008,6 +1014,14 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 					ok = a.refreshRecipientPerson(ctx, to, refreshed) == nil
 				}
 				ok = ok && a.personSendable(to, "")
+			}
+			if ok && w.sub == envelope.SubHistory {
+				var h HistoryItem
+				if json.Unmarshal([]byte(w.body), &h) != nil {
+					ok = false
+				} else if h.GroupHistory != nil {
+					ok = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV2) == nil
+				}
 			}
 			checked[cacheKey] = ok
 		}

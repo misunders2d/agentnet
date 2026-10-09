@@ -74,15 +74,16 @@ type ParticipationInfo struct {
 // roster the root binds it to, is left out. Their devices are the current
 // ones; chains holds each person's pinned roster steps.
 type dmMembers struct {
-	root         protocol.ConvRoot
-	persons      map[string]personRow
-	hosts        map[string]personRow // verified invite hosts; never member/asker/task authority
-	group        *GroupContext        // verified current context; never ordinary visitor authority
-	groupInvites map[string]bool
-	roomEvents   map[string]bool
-	shareGrants  map[string][]protocol.GrantRef
-	roomAuthors  map[string]personRow
-	chains       map[string]map[string]bool
+	historyEvents []protocol.ParticipationEvent // verified history-only evidence, never persisted as live authority
+	root          protocol.ConvRoot
+	persons       map[string]personRow
+	hosts         map[string]personRow // verified invite hosts; never member/asker/task authority
+	group         *GroupContext        // verified current context; never ordinary visitor authority
+	groupInvites  map[string]bool
+	roomEvents    map[string]bool
+	shareGrants   map[string][]protocol.GrantRef
+	roomAuthors   map[string]personRow
+	chains        map[string]map[string]bool
 }
 
 func (a *Agent) dmMembers(conv string) (dmMembers, error) { return membersIn(a.store.db, conv) }
@@ -433,6 +434,9 @@ func participationIn(q dbq, conv, pid string, m dmMembers, self string) (Partici
 	events, err := participationEventsIn(q, conv, pid)
 	if err != nil {
 		return ParticipationInfo{}, err
+	}
+	if m.historyEvents != nil {
+		events = mergeHistoryEvents(nil, m.historyEvents, pid)
 	}
 	if len(events) == 0 {
 		return ParticipationInfo{}, ErrNoParticipation

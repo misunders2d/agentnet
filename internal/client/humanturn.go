@@ -26,15 +26,18 @@ func humanAuthorization(q dbq, conv string, h *envelope.HumanTurn, from, fromFP,
 // reader, and its output's exact host is its author. The request must name
 // that participation's exact host and agent; neither may have ended (unless
 // historical). Scope grants no execution: the host's worker decides that.
-func humanTurnAuthorization(q dbq, in envelope.Inner, from, fromFP, to, toFP string, historical bool) error {
+func humanTurnAuthorization(q dbq, in envelope.Inner, from, fromFP, to, toFP string, historical bool, context ...dmMembers) error {
+	if len(context) > 0 && !historical {
+		return errors.New("human: historical context cannot authorize live turns")
+	}
 	h := in.Human
 	if h == nil {
 		return errors.New("human: missing captured audience")
 	}
 	if in.PID == "" || in.PID == h.AuthorPID {
-		return humanAuthority(q, in.Conv, h, from, fromFP, to, toFP, historical, false, false)
+		return humanAuthority(q, in.Conv, h, from, fromFP, to, toFP, historical, false, false, context...)
 	}
-	m, err := membersIn(q, in.Conv)
+	m, err := humanMembers(q, in.Conv, context)
 	if err != nil {
 		return err
 	}
@@ -52,21 +55,24 @@ func humanTurnAuthorization(q dbq, in envelope.Inner, from, fromFP, to, toFP str
 		if in.Target.Address != x.Host.Address || in.Target.Fingerprint != x.Host.Fingerprint || in.Target.AgentID != x.AgentID || !live {
 			return errors.New("human: request does not name the exact active assistant")
 		}
-		return humanAuthority(q, in.Conv, h, from, fromFP, to, toFP, historical, false, hostTo)
+		return humanAuthority(q, in.Conv, h, from, fromFP, to, toFP, historical, false, hostTo, context...)
 	}
 	if h.AuthorPID != "" || !hostFrom || in.AgentID != x.AgentID || !live {
 		return errors.New("human: assistant output is not from its exact active host")
 	}
-	return humanAuthority(q, in.Conv, h, from, fromFP, to, toFP, historical, true, false)
+	return humanAuthority(q, in.Conv, h, from, fromFP, to, toFP, historical, true, false, context...)
 }
-func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to, toFP string, historical, hostAuthor, hostReader bool) error {
+func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to, toFP string, historical, hostAuthor, hostReader bool, context ...dmMembers) error {
+	if len(context) > 0 && !historical {
+		return errors.New("human: historical context cannot authorize live turns")
+	}
 	if h == nil {
 		return errors.New("human: missing captured audience")
 	}
 	if err := h.Validate(conv); err != nil {
 		return err
 	}
-	m, err := membersIn(q, conv)
+	m, err := humanMembers(q, conv, context)
 	if err != nil {
 		return err
 	}
@@ -108,6 +114,18 @@ func humanAuthority(q dbq, conv string, h *envelope.HumanTurn, from, fromFP, to,
 		return errors.New("human: author or recipient outside captured authority")
 	}
 	return nil
+}
+
+// An override is supplied only by the inert own-history verifier, after its
+// signed original state and exact current own-device gates have passed.
+func humanMembers(q dbq, conv string, context []dmMembers) (dmMembers, error) {
+	if len(context) != 0 {
+		if len(context) != 1 || context[0].historyEvents == nil || context[0].root.ID() != conv {
+			return dmMembers{}, errors.New("human: historical context scope differs")
+		}
+		return context[0], nil
+	}
+	return membersIn(q, conv)
 }
 
 // humanRoom reports whether m's conversation carries a captured audience
@@ -230,7 +248,7 @@ func (a *Agent) humanPlan(ctx context.Context, conv, authorPID string) (*envelop
 
 // Verify carried signed metadata before atomically admitting it. Root/person
 // proofs are the existing pinned chains; event labels never grant authority.
-func (a *Agent) verifyHumanProof(ctx context.Context, root protocol.ConvRoot, h *envelope.HumanTurn) error {
+func (a *Agent) verifyHumanProof(ctx context.Context, root protocol.ConvRoot, h *envelope.HumanTurn, context ...dmMembers) error {
 	if err := h.Validate(root.ID()); err != nil {
 		return err
 	}
@@ -244,7 +262,7 @@ func (a *Agent) verifyHumanProof(ctx context.Context, root protocol.ConvRoot, h 
 			return errors.New("human: original member chain missing")
 		}
 	}
-	m, err := a.dmMembers(root.ID())
+	m, err := humanMembers(a.store.db, root.ID(), context)
 	if err != nil {
 		return err
 	}

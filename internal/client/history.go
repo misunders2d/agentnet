@@ -44,6 +44,7 @@ import (
 // HistoryItem is one message (or participation event, as the message that
 // carried it) forwarded as history.
 type HistoryItem struct {
+	GroupHistory   *GroupContext           `json:"group_history,omitempty"` // inert original authority; never installed as live context
 	V              int                     `json:"v"`
 	From           string                  `json:"from"`
 	FromKey        string                  `json:"from_key"` // the key it was sent under (claimed)
@@ -131,11 +132,15 @@ func (a *Agent) historyCopy(to identity.Public, conv string, raw []byte, item Hi
 			return outCopy{}, e
 		}
 		if groupParticipationHistoryItem(item) {
-			stamp, e := a.groupParticipationSourceAdmission(a.store.db, packet, item)
+			item, e = a.groupParticipationHistorySource(a.store.db, packet, item)
 			if e != nil {
 				return outCopy{}, e
 			}
-			item.GroupAdmission = stamp
+			if item.GroupHistory != nil {
+				if e = historyRecoveryCurrent(a.store.db, a.Self(), to); e != nil {
+					return outCopy{}, e
+				}
+			}
 		}
 		if groupControlSub(item.Sub) {
 			var proof *groupControlIngressProof
@@ -292,7 +297,7 @@ func (a *Agent) forwardStaleWithControlProof(me personRow, in envelope.Inner, ke
 // lists it.
 func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in envelope.Inner, root protocol.ConvRoot, hold func(string, string) error, fromQuarantine bool) error {
 	var item HistoryItem
-	if err := decodeStrict([]byte(in.Body), &item); err != nil || item.V != 1 || !protocol.ValidID(item.ID) || !protocol.ValidID(item.LID) {
+	if err := decodeStrict([]byte(in.Body), &item); err != nil || item.GroupHistory != nil || item.V != 1 || !protocol.ValidID(item.ID) || !protocol.ValidID(item.LID) {
 		return hold(reasonInvalid, "a malformed history item")
 	}
 	if err := envelope.CheckSendGroup(item.inner(in.Conv)); err != nil {

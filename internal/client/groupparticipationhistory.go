@@ -32,8 +32,13 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 	if err != nil {
 		return nil, err
 	}
-	if !ok || !me.has(forwarder.Address, forwarder.Fingerprint()) {
+	if !ok || !me.has(forwarder.Address, forwarder.Fingerprint()) || item.GroupHistory != nil && (!me.roster.Human(forwarder.Fingerprint()) || !me.roster.Human(a.Self().Fingerprint())) {
 		return nil, errors.New("group: participation history requires current own linked forwarder")
+	}
+	if item.GroupHistory != nil {
+		if err = historyRecoveryCurrent(q, a.Self(), forwarder); err != nil {
+			return nil, err
+		}
 	}
 	if err = groupTurnCheck(q, packet, forwarder.Address, forwarder.Fingerprint()); err != nil {
 		return nil, err
@@ -67,19 +72,43 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		if item.PID != "" || len(item.Attachments) != 0 || envelope.ValidateControl(original) != nil || item.Ref == nil {
 			return nil, errors.New("group: malformed historical status")
 		}
-		_, err = a.groupStatusAuthority(q, ControlRef{Conv: root.ID(), ID: item.Ref.ID, Fingerprint: item.Ref.Fingerprint}, item.From, item.FromKey, true)
+		var context []dmMembers
+		if item.GroupHistory != nil {
+			scoped, e := groupHistoryScope(q, root.ID(), item, a.Self().Fingerprint())
+			if e != nil {
+				return nil, e
+			}
+			m, e := groupHistoryMembers(q, root, scoped)
+			if e != nil {
+				return nil, e
+			}
+			if m.keyEpoch(a.Self().Fingerprint()) != item.GroupAdmission {
+				return nil, errGroupParticipationHistoryEpoch
+			}
+			context = append(context, m)
+		}
+		_, err = a.groupStatusAuthority(q, ControlRef{Conv: root.ID(), ID: item.Ref.ID, Fingerprint: item.Ref.Fingerprint}, item.From, item.FromKey, true, context...)
 		return nil, err
 	}
 	if !protocol.ValidID(item.PID) || item.Ref != nil || item.ReplyTo != "" && !protocol.ValidID(item.ReplyTo) {
 		return nil, errors.New("group: malformed historical PID scope")
 	}
 	m, err := membersIn(q, root.ID())
+	if err == nil && item.GroupHistory != nil {
+		m, err = groupHistoryMembers(q, root, item)
+	}
 	if err != nil {
 		return nil, err
 	}
 	events, err := participationEventsIn(q, root.ID(), item.PID)
 	if err != nil {
 		return nil, err
+	}
+	if item.GroupHistory != nil {
+		events = mergeHistoryEvents(nil, m.historyEvents, item.PID)
+		if m.keyEpoch(a.Self().Fingerprint()) != item.GroupAdmission {
+			return nil, errGroupParticipationHistoryEpoch
+		}
 	}
 	var ev *protocol.ParticipationEvent
 	if item.Sub == envelope.SubEvent {
@@ -140,7 +169,11 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 		return nil, ErrGroupContextPending
 	}
 	if item.Human != nil {
-		if err = humanTurnAuthorization(q, original, item.From, item.FromKey, a.Address, a.Self().Fingerprint(), true); err != nil {
+		var context []dmMembers
+		if item.GroupHistory != nil {
+			context = append(context, m)
+		}
+		if err = humanTurnAuthorization(q, original, item.From, item.FromKey, a.Address, a.Self().Fingerprint(), true, context...); err != nil {
 			return nil, err
 		}
 	}
@@ -149,7 +182,7 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 	// lifecycle gate adapted; unresolved evidence and fresh delivery stay closed.
 	roleInfo := info
 	if item.Sub == envelope.SubExcerpt || item.Sub == "" && (item.Kind == envelope.KindQuestion || item.Kind == envelope.KindTask || item.Kind == envelope.KindAnswer || item.Kind == envelope.KindResult || isResponderProgress(original)) {
-		retained, e := retainedAssistant(q, info)
+		retained, e := retainedAssistant(q, info, m.historyEvents)
 		if e != nil {
 			return nil, e
 		}
@@ -174,8 +207,16 @@ func (a *Agent) groupParticipationHistoryCheck(q dbq, root protocol.ConvRoot, fo
 
 // retainedAssistant authenticates a cleanly ended, previously accepted
 // assistant for inert own-member history only. It confers no live authority.
-func retainedAssistant(q dbq, info ParticipationInfo) (bool, error) {
+func retainedAssistant(q dbq, info ParticipationInfo, proofs ...[]protocol.ParticipationEvent) (bool, error) {
 	if info.Role == protocol.RoleHuman || info.Invite == "" || info.State != PartDismissed || info.Held != 0 || info.Conflict != "" || info.Decision == "" {
+		return false, nil
+	}
+	if len(proofs) > 0 && proofs[0] != nil {
+		for _, ev := range proofs[0] {
+			if ev.Conv == info.Conv && ev.PID == info.PID && ev.Hash() == info.Decision {
+				return ev.Type == protocol.EventAccept, nil
+			}
+		}
 		return false, nil
 	}
 	var kind string
@@ -260,7 +301,9 @@ func (a *Agent) groupParticipationSourceAdmission(q dbq, packet GroupContext, it
 	if err != nil {
 		return "", err
 	}
-	if !sameControlItem(stored, item) {
+	originalItem := item
+	originalItem.GroupHistory = nil
+	if !sameControlItem(stored, originalItem) {
 		return "", errors.New("group: participation history differs from original row")
 	}
 	item.GroupAdmission = stamp
@@ -275,8 +318,14 @@ func (a *Agent) groupParticipationHistoryOutboundCheck(q dbq, packet GroupContex
 	if err != nil {
 		return err
 	}
-	if !ok || !own.has(to, fp) {
+	if !ok || !own.has(to, fp) || item.GroupHistory != nil && !own.roster.Human(fp) {
 		return errors.New("group: PID history recipient is not an own linked device")
+	}
+	if item.GroupHistory != nil {
+		dev, _ := own.device(to) // exact current fingerprint checked above
+		if err = historyRecoveryCurrent(q, a.Self(), dev); err != nil {
+			return err
+		}
 	}
 	if err = groupTurnCheck(q, packet, to, fp); err != nil {
 		return err
@@ -315,7 +364,15 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 		}
 	}
 	if item.Human != nil {
-		if err = a.verifyHumanProof(ctx, root, item.Human); err != nil {
+		var context []dmMembers
+		if item.GroupHistory != nil {
+			m, e := groupHistoryMembers(a.store.db, root, item)
+			if e != nil {
+				return hold(reasonProof, e.Error())
+			}
+			context = append(context, m)
+		}
+		if err = a.verifyHumanProof(ctx, root, item.Human, context...); err != nil {
 			return hold(reasonProof, err.Error())
 		}
 	}
@@ -329,7 +386,7 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 		return hold(reasonInvalid, err.Error())
 	}
 	result, err := a.store.addHistoryInbox(item.inner(in.Conv), item.At, item.FromKey, env.From, env.ID, fromQuarantine, func(tx *sql.Tx) error {
-		if item.Human != nil {
+		if item.Human != nil && item.GroupHistory == nil {
 			if err := insertHumanProof(tx, item.Human); err != nil {
 				return err
 			}
@@ -338,12 +395,12 @@ func (a *Agent) admitGroupParticipationHistory(ctx context.Context, env envelope
 		if e != nil {
 			return e
 		}
-		if ev != nil {
+		if ev != nil && item.GroupHistory == nil {
 			if e = insertParticipationEvent(tx, *ev, []byte(item.Body)); e != nil {
 				return e
 			}
 		}
-		_, e = tx.Exec(`UPDATE inbox SET group_admission=? WHERE id=?`, item.GroupAdmission, item.ID)
+		_, e = tx.Exec(`UPDATE inbox SET group_admission=?,group_history=nullif(?,'') WHERE id=?`, item.GroupAdmission, groupHistoryJSON(item.GroupHistory), item.ID)
 		return e
 	})
 	if err != nil {

@@ -81,11 +81,11 @@ func (a *Agent) groupParticipationFileSources(q dbq, conv, lid, author string, l
 		if e != nil {
 			return nil, e
 		}
-		stamp, e := a.groupParticipationSourceAdmission(q, packet, s.item)
+		s.item, e = a.groupParticipationHistorySource(q, packet, s.item)
 		if e != nil {
 			return nil, e
 		}
-		s.item.GroupAdmission, s.stamp = stamp, stamp
+		s.stamp = s.item.GroupAdmission
 	}
 	return sources, nil
 }

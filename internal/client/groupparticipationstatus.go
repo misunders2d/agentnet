@@ -16,7 +16,10 @@ func (a *Agent) groupStatusScope(q dbq, ref ControlRef, host, hostFP string) (Pa
 	return a.groupStatusAuthority(q, ref, host, hostFP, false)
 }
 
-func (a *Agent) groupStatusAuthority(q dbq, ref ControlRef, host, hostFP string, historical bool) (ParticipationInfo, error) {
+func (a *Agent) groupStatusAuthority(q dbq, ref ControlRef, host, hostFP string, historical bool, context ...dmMembers) (ParticipationInfo, error) {
+	if len(context) > 0 && !historical {
+		return ParticipationInfo{}, errors.New("group: historical context cannot authorize live status")
+	}
 	rows, err := q.Query(`SELECT pid,kind,coalesce(target,''),sender,coalesce(verified_by,claimed_fp,''),coalesce(human,'') FROM inbox WHERE conv=? AND lid=? AND ref_id IS NULL
  UNION ALL SELECT pid,kind,coalesce(target,''),?,?,coalesce(human,'') FROM outbox WHERE conv=? AND lid=? AND ref_id IS NULL`, ref.Conv, ref.ID, a.Address, a.Self().Fingerprint(), ref.Conv, ref.ID)
 	if err != nil {
@@ -52,7 +55,7 @@ func (a *Agent) groupStatusAuthority(q dbq, ref ControlRef, host, hostFP string,
 	if json.Unmarshal([]byte(raw), &target) != nil {
 		return ParticipationInfo{}, errors.New("group: status request target malformed")
 	}
-	m, err := membersIn(q, ref.Conv)
+	m, err := humanMembers(q, ref.Conv, context)
 	if err != nil {
 		return ParticipationInfo{}, err
 	}
@@ -63,6 +66,9 @@ func (a *Agent) groupStatusAuthority(q dbq, ref ControlRef, host, hostFP string,
 	if err != nil {
 		return info, err
 	}
+	if historical && info.Invite == "" {
+		return info, ErrGroupContextPending
+	}
 	var captured *envelope.HumanTurn
 	if human != "" {
 		if err = json.Unmarshal([]byte(human), &captured); err != nil {
@@ -72,7 +78,7 @@ func (a *Agent) groupStatusAuthority(q dbq, ref ControlRef, host, hostFP string,
 	agent := captured != nil && captured.AgentAuthor()
 	authorized := info.Claimable()
 	if !authorized && historical {
-		authorized, err = retainedAssistant(q, info)
+		authorized, err = retainedAssistant(q, info, m.historyEvents)
 		if err != nil {
 			return info, err
 		}

@@ -2395,6 +2395,7 @@ export class Engine {
       if(rec.required_cap===wire.CapGroup) {
         const pin=await this.pinned(rec.to);if(pin.pending||pin.fingerprint!==rec.recipient_fp)throw Error("Group recipient key changed.");await this.groupSupport(rec.to,pin);
         let item=rec;if(rec.sub==="history")item=wire.parseHistory(rec.body);
+        if(item.group_history){const [ok,why]=await this.ctlSupport(rec.to,pin,wire.CapOwnSyncV2);if(!ok)throw Error(why);}
         if(item.pid && ![wire.SubGroupProof,wire.SubGroupContext].includes(rec.sub)) {
           const c=await this.groupRecord(rec.conv),events=await this.convEvents(rec.conv),info=this.resolveAgent(item.pid,events,await this.dmMembers(c,events));
           if(info.role==="human") {await this.requireHumanSupport(rec.to,pin);await this.requireGroupHumanSupport(rec.to,pin);} else await this.requireAgentIdentity(rec.to,pin,info.external?wire.CapExternalParticipation:wire.CapAgentIdentity);
@@ -3865,15 +3866,18 @@ export class Engine {
     if(!matching.some(m=>m.kind==="message"&&!m.sub&&!m.pid&&!m.target&&!m.agent_id)) {
       const {packet}=await this.groupTurnEvidence(conv,checks),members=await this.dmMembers(await this.groupRecord(conv),null,checks),stamp=members.epochs.get(this.fp);
       if(!matching.length)throw Error("Original group PID file source is unavailable.");
+      const verified=[];
       for(const source of matching) {
         if(!source.pid||source.sub||source.ref||!["question","task","answer","result"].includes(source.kind)||await wire.groupHistoryContentHash(conv,source)!==message.hash)throw Error("Conflicting exact group PID file source.");
-        const item={...this.itemOf(source,!!source.to),group_admission:source.to?stamp:source.group_admission};
+        const stored=await this.groupRead(checks,source.to?"outbox":"inbox",source.id);
+        let item={...this.itemOf(source,!!source.to),...(stored?.group_history?{group_history:stored.group_history}:{}),group_admission:source.to?stamp:source.group_admission};
         if(item.group_admission!==stamp)throw Error("Original group PID file admission changed.");
         if(source.to) {const env=wire.parseEnvelope(source.envelope),publicKey=await wire.publicEntry(this.keys,this.address);await wire.verifyEnvelope(env,publicKey.sign_key);if(env.id!==source.id||env.from!==this.address||env.kind!==source.kind)throw Error("Group PID file lacks its exact signed original source.");}
-        await this.groupParticipationHistoryCheck(conv,item,{address:this.address,fingerprint:this.fp},checks);
+        item=await this.groupParticipationHistorySource(await this.groupRecord(conv),item,checks);
         const file=item.attachments[message.index];if(!file||file.name!==message.name||file.size!==message.size||file.sha256!==message.sha256)throw Error("Exact group PID file descriptor differs.");
+        verified.push({...source,group_history:item.group_history});
       }
-      const source=matching.slice().sort((a,b)=>b.at-a.at||(a.id<b.id?1:-1))[0];return {...source,source_dir:source.to?"out":"in",group_admission:stamp};
+      const source=verified.sort((a,b)=>b.at-a.at||(a.id<b.id?1:-1))[0];return {...source,source_dir:source.to?"out":"in",group_admission:stamp};
     }
     const items=await this.groupSelectedItems(conv,[{lid:message.lid,author:message.author,hash:message.hash}],checks), item=items[0], file=item.attachments[message.index];
     if(!file || file.name!==message.name || file.size!==message.size || file.sha256!==message.sha256)throw Error("Selected group file descriptor differs.");
@@ -3886,7 +3890,7 @@ export class Engine {
     const member=wire.groupMember(packet.state,person.person), stamp=await wire.groupAdmissionHash(member.admission);
     if(!message.group_admission || message.group_admission!==stamp)throw Error("Group file requester admission changed.");
     const exactSource=await this.groupFileSource(packet.state.conv,message,checks);
-    if(exactSource.pid) {if(person.person!==this.me.person||exactSource.group_admission!==stamp)throw Error("Group PID files require exact current own-linked history.");return;}
+    if(exactSource.pid) {if(person.person!==this.me.person||exactSource.group_admission!==stamp)throw Error("Group PID files require exact current own-linked history.");if(exactSource.group_history&&!await this.ownHistoryAuthority({address,fingerprint:fp},checks))throw Error("Historical witness file requires current own human devices and unchanged pins.");return;}
     if(!wire.groupAllowsHistory(member.admission,{lid:message.lid,author:message.author,hash:message.hash})) {
       if(person.person!==this.me.person)throw Error("Group file lacks its exact selected history grant.");
       const source=await this.groupFileSource(packet.state.conv,message,checks);
@@ -3971,14 +3975,78 @@ export class Engine {
     return {id,lid,conv:packet.state.conv,to:device.address,recipient_fp:device.fingerprint,recipient_admission,required_cap:wire.CapGroup,kind:"message",sub,body,aside:true,replica:true,at:this.now(),envelope,state:"queued",files:sealed.length?sealed.map(f=>({...f,uploaded:false})):undefined};
   }
 
+  async groupHistoryScope(c,h,checks) {
+    if(h.sub!==wire.SubStatus)return h;
+    if(!h.ref)throw new Hold("invalid","Historical status lacks exact request.");
+    const rows=(await this.authorityRows({conv:c.id,lid:h.ref.id},checks)).filter(r=>!r.sub&&!r.control&&!r.aside&&(r.fp||this.fp)===h.ref.fingerprint&&["question","task"].includes(r.kind));
+    if(!rows.length)throw new Hold("proof_pending","Historical status request is missing.");
+    const first=rows[0];if(!first.pid||rows.some(r=>r.pid!==first.pid||JSON.stringify(r.human)!==JSON.stringify(first.human)))throw new Hold("invalid","Historical status request scope conflicts.");
+    return {...h,pid:first.pid,human:first.human};
+  }
+
+  // Inert, item-bound past authority. Only already verified public records and
+  // pinned roster steps count; this never installs a group or person state.
+  async groupHistoryWitness(c,h,checks=[]) {
+    h=await this.groupHistoryScope(c,h,checks);
+    const p=h.group_history,g=await this.groupRead(checks,"kv","group/"+c.id);
+    if(!p||!h.pid||wire.rootJSON(p.root)!==c.root||p.proof?.length||!p.memberships?.length||p.memberships.length>8*(wire.MaxHumanAudience+1))throw new Hold("invalid","Malformed historical group witness.");
+    wire.parseGroupContext(wire.groupContextJSON(p));
+    const records=(g?.records||[]).map(wire.parseGroupCommit),authority=records[p.state.seq];
+    if(!authority)throw new Hold("proof_pending","Original historical authority is missing.");
+    const refs=[p.root.creator,{person:p.state.actor,roster:p.state.actor_roster},...p.state.members,...p.state.members.map(m=>m.admission),...(p.withdrawals||[])],rosters=new Map();
+    for(const ref of refs){
+      const person=await this.groupRead(checks,ref.person===this.me.person?"kv":"persons",ref.person===this.me.person?"person":ref.person),raw=g.rosters?.[ref.roster];
+      if(!person||!["self","pinned"].includes(person.state)||!person.hashes.includes(ref.roster)||!raw)throw new Hold("proof_pending","Historical roster is not pinned here.");
+      const roster=await wire.parseRoster(raw);if(roster.person!==ref.person||await wire.rosterHash(roster)!==ref.roster)throw new Hold("invalid","Historical roster hash differs.");rosters.set(ref.roster,roster);
+    }
+    const resolve=(person,hash)=>rosters.get(hash)?.person===person?rosters.get(hash):null;
+    for(const w of p.withdrawals||[])await wire.verifyGroupWithdrawal(w,p.state,resolve);
+    await wire.verifyGroupCurrent(p.state,p.root,authority,resolve,seq=>records[seq],p.withdrawals||[]);
+    const pids=new Set([h.pid,...(h.human?.audience||[]).map(s=>s.pid)]);let bound=false;
+    for(const e of p.memberships){
+      if(e.conv!==c.id||!pids.has(e.pid)||e.type==="share")throw new Hold("invalid","Historical witness is outside the captured participation.");
+      const person=await this.groupRead(checks,e.author.person===this.me.person?"kv":"persons",e.author.person===this.me.person?"person":e.author.person),pin=await this.groupRead(checks,"pins",e.author.address);
+      if(!person||!["self","pinned"].includes(person.state)||!person.hashes.includes(e.author.roster)||!person.devices.some(d=>d.address===e.author.address&&d.fingerprint===e.author.fingerprint)||!pin||pin.pending||pin.fingerprint!==e.author.fingerprint)throw new Hold("invalid","Historical event exact author or roster differs.");
+      if(!person.steps?.some(step=>step.hash===e.author.roster&&step.devices.includes(e.author.address+"|"+e.author.fingerprint)))throw new Hold("invalid","Historical event lacks original signing roster.");
+      await wire.verifyEvent(e,(await this.pubOf(pin)).sign_key);
+      if(["invite","scope"].includes(e.type)){const member=wire.groupMember(p.state,e.author.person);if(!member||await wire.groupAdmissionHash(member.admission)!==e.author.group_admission)throw new Hold("invalid","Historical inviter admission differs.");}
+      if(e.pid===h.pid&&["invite","scope"].includes(e.type)&&e.group?.seq===p.state.seq&&e.group.hash===await wire.groupStateHash(p.state))bound=true;
+    }
+    const evidence=await Promise.all(p.memberships.map(async e=>({e,hash:await wire.eventHash(e)}))),members=await this.dmMembers(c,evidence,checks,p);
+    for(const {e} of evidence)if(["invite","scope"].includes(e.type)){
+      const scope=e.group,record=scope&&records[scope.seq],host=members.get(e.host?.person),author=wire.groupMember(p.state,e.author.person);
+      if(!scope||!record||record.hash!==scope.hash||scope.seq>p.state.seq||members.epochs.get(e.author.fingerprint)!==e.author.group_admission||(scope.host_role==="member"?!host||members.epochs.get(e.host.fingerprint)!==scope.host_admission:scope.host_role!=="visitor"||host||scope.host_admission)|| (e.task_keys||[]).length!==(scope.task_admissions||[]).length||(e.task_keys||[]).some((fp,i)=>!members.epochs.get(fp)||members.epochs.get(fp)!==scope.task_admissions[i])||scope.host_role==="visitor"&&e.role!=="human"&&(!author?.admin||!record.admins.includes(e.author.person)))throw new Hold("invalid","Historical invite epochs differ from signed original state.");
+    }
+    if(!bound)throw new Hold("invalid","Historical state is not bound to this participation.");
+    return p;
+  }
+
+  async makeGroupHistoryWitness(c,h,checks=[]) {
+    h=await this.groupHistoryScope(c,h,checks);
+    const all=[...await this.convEvents(c.id,checks),...await Promise.all((h.human?.proof||[]).map(async e=>({e,hash:await wire.eventHash(e)})))],unique=[...new Map(all.map(r=>[r.hash,r])).values()];
+    const scopes=unique.filter(r=>r.e.pid===h.pid&&["invite","scope"].includes(r.e.type)&&r.e.group).map(r=>r.e.group),scope=scopes[0];
+    if(!scope)throw new Hold("proof_pending","Original historical scope is missing.");
+    if(scopes.some(s=>s.seq!==scope.seq||s.hash!==scope.hash))throw new Hold("invalid","Historical participation state is ambiguous.");
+    const saved=await this.groupRead(checks,"kv","group/"+c.id),g=structuredClone(saved),record=g.records[scope.seq]&&wire.parseGroupCommit(g.records[scope.seq]);
+    if(!record||record.hash!==scope.hash)throw new Hold("proof_pending","Original historical public record is missing.");
+    const decoded=await this.groupOriginalContext(record,wire.parseGroupRoot(c.root),g,checks);
+    if(!decoded)throw new Hold("proof_pending","Original historical ciphertext excludes this device.");
+    const pids=new Set([h.pid,...(h.human?.audience||[]).map(s=>s.pid)]),p={...decoded.packet,proof:null,memberships:unique.filter(r=>pids.has(r.e.pid)&&r.e.type!=="share").map(r=>r.e)};
+    return this.groupHistoryWitness(c,{...h,group_history:p},checks);
+  }
+
   async groupParticipationHistoryCheck(conv,h,forwarder,checks=[]) {
-    const c=await this.groupRecord(conv),{packet}=await this.groupTurnEvidence(conv,checks),members=await this.dmMembers(c,null,checks),own=members.get(this.me.person);
+    const c=await this.groupRecord(conv),{packet}=await this.groupTurnEvidence(conv,checks);
+    let members=await this.dmMembers(c,null,checks);const own=members.get(this.me.person);
     if(!own?.devices.some(d=>d.address===forwarder.address&&d.fingerprint===forwarder.fingerprint)||!h.group_admission||h.group_admission!==members.epochs.get(this.fp))throw new Hold("invalid","Group PID history requires exact current own linked admission.");
+    if(h.group_history&&!await this.ownHistoryAuthority(forwarder,checks))throw new Hold("invalid","Historical witness requires current own human devices.");
     if(h.v!==1||!wire.validID(h.id)||!wire.validID(h.lid)||!wire.validFingerprint(h.from_key)||h.ts<=0||!wire.validAddress(h.from)||h.reply_to&&!wire.validID(h.reply_to)||h.attachments.length>8||h.attachments.some(a=>!a.name||!Number.isSafeInteger(a.size)||a.size<0||a.size>(100<<20)||!wire.validHash(a.sha256)||a.blob))throw new Hold("invalid","Malformed historical group PID item.");
     if(h.sub===wire.SubStatus) {
       if(h.pid||h.attachments.length||!h.ref)throw new Hold("invalid","Historical group status scope malformed.");
       try{wire.parseControl(h.sub,h.body);}catch(e){throw new Hold("invalid",e.message);}
-      return this.groupStatusScope(conv,h.ref,h.from,h.from_key,checks,true);
+      const historyPacket=h.group_history?await this.groupHistoryWitness(c,h,checks):null;
+      if(historyPacket&&(await this.dmMembers(c,[],checks,historyPacket)).epochs.get(this.fp)!==h.group_admission)throw new Hold("invalid","Historical own status admission differs.");
+      return this.groupStatusScope(conv,h.ref,h.from,h.from_key,checks,true,historyPacket);
     }
     if(wire.historyAssistantReaction(h)) { // an assistant's own reaction: bound to its participation, its host need not be a member
       if(h.attachments.length)throw new Hold("invalid","Historical assistant reaction scope malformed.");
@@ -4000,21 +4068,25 @@ export class Engine {
       return null;
     }
     if(!wire.validID(h.pid)||h.ref||!["","event","excerpt"].includes(h.sub))throw new Hold("invalid","Historical group participation scope malformed.");
-    const events=await this.convEvents(conv,checks,h.pid);let candidate=null;
+    const historyPacket=h.group_history ? await this.groupHistoryWitness(c,h,checks) : null;
+    const events=historyPacket ? (await Promise.all(historyPacket.memberships.map(async e=>({e,hash:await wire.eventHash(e)})))).filter(r=>r.e.pid===h.pid) : await this.convEvents(conv,checks,h.pid);let candidate=null;
+    if(historyPacket){members=await this.dmMembers(c,events,checks,historyPacket);if(members.epochs.get(this.fp)!==h.group_admission)throw new Hold("invalid","Historical own admission differs.");}
     if(h.sub==="event") {
       candidate=await this.eventRecord(h.body);const e=candidate.e,author=e.author,p=[...members.values(),...members.hosts.values()].find(p=>p.devices.some(d=>d.address===author.address&&d.fingerprint===author.fingerprint));
       const forwarded=author.address!==h.from||author.fingerprint!==h.from_key;
       if(forwarded&&(e.type!=="dismiss"||![...members.values()].some(p=>p.devices.some(d=>d.address===h.from&&d.fingerprint===h.from_key))))throw new Hold("invalid","Only current members forward historical participation ends.");
-      if(h.kind!=="message"||e.conv!==conv||e.pid!==h.pid||p?.person!==author.person||!p?.hashes.includes(author.roster)||author.group_admission&&author.group_admission!==members.epochs.get(author.fingerprint))throw new Hold("invalid","Historical group event original author admission differs.");
+      if(h.kind!=="message"||e.conv!==conv||e.pid!==h.pid||p?.person!==author.person||!p?.hashes.includes(author.roster))throw new Hold("invalid","Historical group event original author admission differs.");
+      if(author.group_admission&&author.group_admission!==members.epochs.get(author.fingerprint))throw Object.assign(new Hold("invalid","Historical event original epoch changed."),{historicalEpoch:true});
       const pin=await this.groupRead(checks,"pins",author.address);if(!pin||pin.pending||pin.fingerprint!==author.fingerprint)throw new Hold("invalid","Historical event exact source key changed.");
       try{await wire.verifyEvent(e,(await this.pubOf(pin)).sign_key);}catch(err){throw new Hold("invalid",err.message);}
       if(e.host){const hp=await this.sendKey(e.host.address);if(hp.fingerprint!==e.host.fingerprint||(await this.personOf(e.host.address,hp)).person!==e.host.person)throw new Hold("invalid","Historical invitation host proof differs.");}
       events.push(candidate);
     }
-    const current=await this.dmMembers(c,events,checks),info=this.resolveAgent(h.pid,events,current);
+    const current=await this.dmMembers(c,events,checks,historyPacket),info=this.resolveAgent(h.pid,events,current);
+    if(historyPacket)current.historyEvents=await Promise.all(historyPacket.memberships.map(async e=>({e,hash:await wire.eventHash(e)})));
     if(!info.invite)throw new Hold("proof_pending","Historical PID original invitation is missing.");
     if(h.human) {
-      const evidence=await this.groupHumanEvidence(c,h.human,checks);
+      const evidence=await this.groupHumanEvidence(c,h.human,checks,historyPacket);
       this.humanTurnAuthorization({...h,conv},evidence,info,h.from,h.from_key,this.address,this.fp,true);
     }
     // Retained own-member history is inert; only its lifecycle gate differs
@@ -4761,7 +4833,7 @@ export class Engine {
   itemOf(m, sentHere) {
     return { v:1,from: sentHere ? this.address : m.from, from_key: sentHere ? this.fp : m.fp||m.claimed_key, id: m.id, lid: m.lid, ts: m.ts || (m.envelope?wire.parseEnvelope(m.envelope).ts:Math.floor(m.at / 1000)), at: m.at,
       kind: m.kind, body: m.body || "", reply_to: m.reply_to || "", quote:m.quote||"",send_group:m.send_group_conflict?"":m.send_group||"",topic:m.topic||"",topic_event:m.topic_event||null,topic_done:!!m.topic_done,status: m.status || "", sub: m.sub || "", origin: m.origin || "",
-      emotion: m.emotion || "", target: m.target || null, pid: m.pid || "", ...(m.agent_id ? { agent_id: m.agent_id } : {}), ref: m.ref || null, ...(m.group_admission?{group_admission:m.group_admission}:{}), attachments: (m.attachments || []).map((a) => ({ name: a.name, size: a.size, sha256: a.sha256 })), ...(m.receiver_route ? { receiver_route: m.receiver_route } : {}), ...(m.human ? { human: m.human } : {}) };
+      emotion: m.emotion || "", target: m.target || null, pid: m.pid || "", ...(m.agent_id ? { agent_id: m.agent_id } : {}), ref: m.ref || null, ...(m.group_admission?{group_admission:m.group_admission}:{}), ...(m.group_history?{group_history:m.group_history}:{}), attachments: (m.attachments || []).map((a) => ({ name: a.name, size: a.size, sha256: a.sha256 })), ...(m.receiver_route ? { receiver_route: m.receiver_route } : {}), ...(m.human ? { human: m.human } : {}) };
   }
 
   // ownCopy seals a message of sub ("history", or "file": a file request
@@ -4780,6 +4852,12 @@ export class Engine {
       attachments: attachments.length ? attachments : undefined, files: files.length ? files.map((f) => ({ ...f, uploaded: false })) : undefined, state: "queued", detail: "" };
   }
 
+  async groupParticipationHistorySource(c,item,checks=[]) {
+    try{await this.groupParticipationHistoryCheck(c.id,item,{address:this.address,fingerprint:this.fp},checks);}
+    catch(e){if(item.group_history||e.reason!=="proof_pending"&&!e.historicalEpoch||!item.pid&&item.sub!==wire.SubStatus)throw e;item={...item,group_history:await this.makeGroupHistoryWitness(c,item,checks)};await this.groupParticipationHistoryCheck(c.id,item,{address:this.address,fingerprint:this.fp},checks);}
+    return item;
+  }
+
   async historyCopy(dev, c, item, checks=[]) {
     if(c.kind==="group") {
       const {packet}=await this.groupTurnEvidence(c.id,checks),members=await this.dmMembers(c,null,checks),stamp=members.epochs.get(this.fp);
@@ -4787,10 +4865,11 @@ export class Engine {
       const source=await this.groupRead(checks,item.from===this.address&&item.from_key===this.fp?"outbox":"inbox",item.id);
       if(!source||source.conv!==c.id)throw Error("Original group history source is unavailable.");
       const original=this.itemOf(source,!!source.to);
-      if(wire.historyJSON({...original,group_admission:undefined,send_group:undefined})!==wire.historyJSON({...item,group_admission:undefined,send_group:undefined}))throw Error("Group history differs from its exact source row.");
+      if(wire.historyJSON({...original,group_admission:undefined,group_history:undefined,send_group:undefined})!==wire.historyJSON({...item,group_admission:undefined,group_history:undefined,send_group:undefined}))throw Error("Group history differs from its exact source row.");
       item={...item,send_group:original.send_group,group_admission:source.to?stamp:source.group_admission};
       if(item.group_admission!==stamp)throw Error("Historical group source admission changed.");
-      if(item.pid||item.ref)await this.groupParticipationHistoryCheck(c.id,item,{address:this.address,fingerprint:this.fp},checks);
+      if(item.pid||item.ref)item=await this.groupParticipationHistorySource(c,item,checks);
+      if(item.group_history&&!await this.ownHistoryAuthority(dev,checks))throw Error("Historical witness requires current own human readers and unchanged pins.");
       item={...item,send_group:await this.sendGroupCopy(dev.address,await this.pinned(dev.address),item.send_group)};
       const rec=await this.groupDataCopy(packet,"history",wire.historyJSON(item),dev);rec.group_history=true;rec.send_group_wire=!!item.send_group;return rec;
     }
@@ -5398,7 +5477,7 @@ export class Engine {
       if (teams) teams.connected(f.includes("teams1"));
       // This device reads conversations and the attention hint (it never
       // alerts from the stream: its service worker shows the relay's pushes).
-      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapConvClear, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit crs1 fits the 16-cap advertisement bound
+      if (f.includes("caps")) await this.call("PUT", "/v1/caps", wire.capsJSON(await wire.newCaps(this.keys, this.address, this.session, [wire.CapEnv2, "notify1", wire.CapPerson, wire.CapControl, wire.CapHeadless, wire.CapDrive, wire.CapAgentIdentity, wire.CapGroupHumanParticipation, wire.CapGroup, wire.CapSendGroup, wire.CapRootSync, wire.CapGroupInvitationControl, wire.CapReadSync, wire.CapOwnSyncV2, wire.CapRoom, ...(f.includes("signals1") ? [wire.CapTyping] : [])]))); // rcv1 already implied by rm1; explicit crs1 fits the 16-cap advertisement bound
       await this.publishPerson().catch(() => {});
       await this.flushReceipts();
       await this.retryHeld();
@@ -5838,14 +5917,16 @@ export class Engine {
     return info.role!=="human"&&!!info.invite&&info.state==="dismissed"&&!info.held&&!info.conflict&&events.some(r=>r.hash===info.decision&&r.e.type==="accept");
   }
 
-  async groupStatusScope(conv,ref,host,hostFP,checks=[],historical=false) {
+  async groupStatusScope(conv,ref,host,hostFP,checks=[],historical=false,historyPacket=null) {
     const c=await this.groupRecord(conv);if(!c)throw new Hold("proof_pending","Group status context missing.");
     await this.groupTurnEvidence(conv,checks);
     const rows=(await this.authorityRows({conv,lid:ref.id},checks)).filter(r=>!r.control&&!r.aside&&(r.fp||this.fp)===ref.fingerprint);
     if(!rows.length)throw new Hold("proof_pending","Group status immutable request missing.");
     const first=rows[0];
     if(rows.some(r=>!r.pid||r.sub||!["question","task"].includes(r.kind)||r.pid!==first.pid||r.kind!==first.kind||JSON.stringify(r.target)!==JSON.stringify(first.target)))throw new Hold("invalid","Group status request is conflicting.");
-    const events=await this.convEvents(conv,checks,first.pid),members=await this.dmMembers(c,events,checks),info=this.resolveAgent(first.pid,events,members);
+    const events=historyPacket?await Promise.all(historyPacket.memberships.map(async e=>({e,hash:await wire.eventHash(e)}))):await this.convEvents(conv,checks,first.pid),members=await this.dmMembers(c,events,checks,historyPacket),info=this.resolveAgent(first.pid,events,members);
+    if(historyPacket)members.historyEvents=events;
+    if(historical&&!info.invite)throw new Hold("proof_pending","Historical status participation proof is missing.");
     const target=first.target,fp=first.fp||this.fp;
     if(info.state!=="active"&&!(historical&&this.retainedAssistant(info,events))||info.held||info.host?.address!==host||info.host.fingerprint!==hostFP||target?.address!==host||target.fingerprint!==hostFP||target.agent_id!==info.agent_id||!(first.human && wire.agentAuthor(first.human)) && target.group_admission!==members.epochs.get(fp))throw new Hold("invalid","Group status differs from exact PID/host/requester admission.");
     await this.checkExternalReply({conv,pid:first.pid,kind:replyKind(first.kind),reply_to:ref.id,agent_id:info.agent_id},info,members,checks,historical);
@@ -7305,11 +7386,11 @@ export class Engine {
   // verifyHumanProof and humanAuthority): the members are the verified
   // current context's (dmMembers), and a scope counts once its group
   // binding does (dmMembers' groupInvites, the proof's own scopes too).
-  async groupHumanEvidence(c, h, checks) {
+  async groupHumanEvidence(c, h, checks, historyPacket=null) {
     const identity = await this.groupRead(checks, "kv", "identity");
     if (identity?.address !== this.address || identity.fingerprint !== this.fp || identity.revoked) throw new Hold("invalid", "Local human identity changed.");
-    const records = [...await this.convEvents(c.id, checks), ...await Promise.all(h.proof.map(async e => ({ e, hash: await wire.eventHash(e) })))];
-    const unique = [...new Map(records.map(e => [e.hash, e])).values()], members = await this.dmMembers(c, unique, checks), invitations = new Map();
+    const records = [...(historyPacket ? await Promise.all(historyPacket.memberships.map(async e=>({e,hash:await wire.eventHash(e)}))) : await this.convEvents(c.id, checks)), ...await Promise.all(h.proof.map(async e => ({ e, hash: await wire.eventHash(e) })))];
+    const unique = [...new Map(records.map(e => [e.hash, e])).values()], members = await this.dmMembers(c, unique, checks, historyPacket), invitations = new Map();
     for (const e of h.proof) {
       const p = await this.groupRead(checks, e.author.person === this.me?.person ? "kv" : "persons", e.author.person === this.me?.person ? "person" : e.author.person), pin = await this.groupRead(checks, "pins", e.author.address);
       if (!p || !["self", "pinned"].includes(p.state) || !p.hashes.includes(e.author.roster) || !p.devices.some(d => d.address === e.author.address && d.fingerprint === e.author.fingerprint) || !pin || pin.pending || pin.fingerprint !== e.author.fingerprint) throw new Hold("proof_pending", "Human event author is not a current pinned device.");
@@ -7733,7 +7814,7 @@ export class Engine {
   async checkExternalReply(n, info, members, checks, historical = false) {
     if (!["answer", "result"].includes(n.kind) && !progressOutput(n) || n.sub) return;
     if (!info.decision) throw new Hold("proof_pending", "external output has no host acceptance proof yet");
-    const decision = (await this.convEvents(n.conv,checks,n.pid)).find((r) => r.hash === info.decision);
+    const decision = (historical&&members.historyEvents ? members.historyEvents : await this.convEvents(n.conv,checks,n.pid)).find((r) => r.e.pid===n.pid && r.hash === info.decision);
     if (!decision) throw new Hold("proof_pending", "external output has no host acceptance proof yet");
     if (decision.e.type !== "accept") throw new Hold("invalid", "external output participation was not accepted by its host");
     let candidates;
@@ -7748,7 +7829,7 @@ export class Engine {
       const member = [...members.values()].some((p) => p.devices.some((d) => d.address === address && d.fingerprint === fp));
       const agent=!!r.human && wire.agentAuthor(r.human);
       if(agent) {
-        const e=await this.convEvents(n.conv,checks,r.human.author_pid),asking=this.resolveAgent(r.human.author_pid,e,await this.dmMembers(await this.groupRecord(n.conv)||await this.store.get("convs",n.conv),e,checks));
+        const e=historical&&members.historyEvents?members.historyEvents:await this.convEvents(n.conv,checks,r.human.author_pid),asking=this.resolveAgent(r.human.author_pid,e,await this.dmMembers(await this.groupRecord(n.conv)||await this.store.get("convs",n.conv),e,checks,historical&&members.historyEvents?members.group:null));
         if(asking.state!=="active" && !(historical && this.retainedAssistant(asking,e)) || asking.held || asking.host?.address!==address || asking.host.fingerprint!==fp)throw new Hold("invalid","Asking agent membership ended or changed.");
       }
       if (!agent && !member || r.conv !== n.conv || r.pid !== n.pid || r.sub || r.excerpt_pid || !["question", "task"].includes(r.kind) || !progressOutput(n) && replyKind(r.kind) !== n.kind || !r.lid || original && (original.lid !== r.lid || original.fp !== fp) || r.target?.address !== info.host.address || r.target?.fingerprint !== info.host.fingerprint || r.target?.agent_id !== info.agent_id || (!agent && (members.group ? members.epochs.get(fp)!==r.target?.group_admission : !!r.target?.group_admission))) throw new Hold("invalid", "external answer does not match its exact participation request");
@@ -8151,6 +8232,7 @@ export class Engine {
     const out = [], seen = new Set();
     for(const raw of await this.groupRead(checks||[],"kv","room-memberships/"+conv)||[]) { const e=wire.parseEvent(raw), hash=await wire.eventHash(e);if((!pid||e.pid===pid)&&!seen.has(hash)){seen.add(hash);out.push({e,hash});} }
     for (const m of rows) {
+      if(m.history&&m.group_history)continue; // inert past proof is never a live participation ledger
       try {
         const events = m.sub === "event" ? [wire.parseEvent(m.body)] : m.human ? wire.parseHumanTurn(m.human).proof : [];
         for (const e of events) {

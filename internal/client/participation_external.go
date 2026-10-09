@@ -281,11 +281,20 @@ func externalOutputRequestMode(q dbq, in envelope.Inner, info ParticipationInfo,
 		return reasonProof, errors.New("external output has no host acceptance proof yet")
 	}
 	var decision string
-	if err := q.QueryRow(`SELECT type FROM participation_events WHERE hash=? AND conv=? AND pid=?`, info.Decision, in.Conv, info.PID).Scan(&decision); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return reasonProof, errors.New("external output has no host acceptance proof yet")
+	if historical && m.historyEvents != nil {
+		for _, ev := range m.historyEvents {
+			if ev.Conv == in.Conv && ev.PID == info.PID && ev.Hash() == info.Decision {
+				decision = ev.Type
+			}
 		}
-		return "", err
+	}
+	if decision == "" {
+		if err := q.QueryRow(`SELECT type FROM participation_events WHERE hash=? AND conv=? AND pid=?`, info.Decision, in.Conv, info.PID).Scan(&decision); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return reasonProof, errors.New("external output has no host acceptance proof yet")
+			}
+			return "", err
+		}
 	}
 	if decision != protocol.EventAccept {
 		return reasonInvalid, errors.New("external output participation was not accepted by its host")
@@ -336,7 +345,7 @@ func externalOutputRequestMode(q dbq, in envelope.Inner, info ParticipationInfo,
 		}
 		authorized := p.Claimable()
 		if !authorized && historical {
-			authorized, err = retainedAssistant(q, p)
+			authorized, err = retainedAssistant(q, p, m.historyEvents)
 			if err != nil {
 				return reasonProof, err
 			}
