@@ -147,7 +147,7 @@ func historyCopyPresent(q dbq, dev identity.Public, c outCopy) (bool, error) {
 	return state == stateQueued || state == "waiting" || state == "custody" || state == "delivered", nil
 }
 
-func (a *Agent) historyDependencies(it historySourceRow) ([]historySourceRow, error) {
+func (a *Agent) historyDependencies(it historySourceRow, prepared HistoryItem) ([]historySourceRow, error) {
 	var deps []historySourceRow
 	if it.in.Sub == envelope.SubEvent {
 		ev, e := protocol.ParseParticipationEvent([]byte(it.in.Body))
@@ -155,19 +155,32 @@ func (a *Agent) historyDependencies(it historySourceRow) ([]historySourceRow, er
 			return nil, e
 		}
 		if ev.Prev != "" {
-			rows, e := a.historySourceRows(a.store.db, "conv=? AND pid=? AND sub='event'", "ms,id", maxPendingPerConversation+1, it.conv, it.in.PID)
-			if e != nil {
-				return nil, e
-			}
-			if len(rows) > maxPendingPerConversation {
-				return nil, errTooManyEvents
-			}
 			found := false
-			for _, row := range rows {
-				candidate, e := protocol.ParseParticipationEvent([]byte(row.in.Body))
-				if e == nil && candidate.Hash() == ev.Prev {
-					deps = append(deps, row)
-					found = true
+			// historyCopy already reverified this exact source's witness. Its
+			// signed predecessor travels with the copy and stays inert; it does
+			// not need a separately installed inbox or live participation row.
+			if prepared.ID == it.in.ID && prepared.PID == it.in.PID && prepared.GroupHistory != nil {
+				for _, candidate := range prepared.GroupHistory.Memberships {
+					if candidate.Conv == it.conv && candidate.PID == it.in.PID && candidate.Hash() == ev.Prev {
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				rows, e := a.historySourceRows(a.store.db, "conv=? AND pid=? AND sub='event'", "ms,id", maxPendingPerConversation+1, it.conv, it.in.PID)
+				if e != nil {
+					return nil, e
+				}
+				if len(rows) > maxPendingPerConversation {
+					return nil, errTooManyEvents
+				}
+				for _, row := range rows {
+					candidate, e := protocol.ParseParticipationEvent([]byte(row.in.Body))
+					if e == nil && candidate.Hash() == ev.Prev {
+						deps = append(deps, row)
+						found = true
+					}
 				}
 			}
 			if !found {
@@ -451,7 +464,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		if len(visiting) > 64 || len(copies) >= 4*historyPage {
 			return ErrGroupContextPending
 		}
-		deps, e := a.historyDependencies(it)
+		deps, e := a.historyDependencies(it, item)
 		if e != nil {
 			return e
 		}

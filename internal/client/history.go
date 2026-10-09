@@ -961,7 +961,12 @@ type HistoryJob struct {
 // queued; delivery follows as the Hub takes it (this device must stay
 // connected until then).
 func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
-	rows, err := a.store.db.Query(`SELECT device, pos, convs_total, state FROM history_jobs ORDER BY created_at DESC`)
+	rows, err := a.store.db.Query(`SELECT j.device, j.pos, j.convs_total, j.state,
+ COALESCE(c.phase,'') <> '' AND (c.phase <> 'done' OR c.context_done = 0
+ OR c.tail < COALESCE((SELECT CAST(v AS INTEGER) FROM config WHERE k='arrival'),0)
+ OR EXISTS(SELECT 1 FROM history_deferred d WHERE d.recipient_fp=j.fingerprint))
+ FROM history_jobs j LEFT JOIN history_catchup c ON c.device=j.device AND c.fingerprint=j.fingerprint
+ ORDER BY j.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -971,8 +976,14 @@ func (a *Agent) HistoryProgress() ([]HistoryJob, error) {
 	for rows.Next() {
 		var j HistoryJob
 		var pos string
-		if err := rows.Scan(&j.Device, &pos, &j.ConvsTotal, &j.State); err != nil {
+		var pending bool
+		if err := rows.Scan(&j.Device, &pos, &j.ConvsTotal, &j.State, &pending); err != nil {
 			return nil, err
+		}
+		if pending && j.State != "ended" {
+			// The legacy cursor cannot count recent-first or deferred work.
+			// Keep storage and scheduling intact; report unfinished copying.
+			j.State, j.ConvsTotal, pos = "running", 0, ""
 		}
 		_, j.Name, _ = protocol.SplitAddress(j.Device)
 		var p historyPos
