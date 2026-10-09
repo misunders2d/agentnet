@@ -157,7 +157,9 @@ func (l *Live) dmOverview(o *Overview) error {
 			switch {
 			case m.Dir == "in" && m.State == "conv_held":
 				s.Held++
-			case m.Dir == "out" && m.State == "waiting":
+			// Match the message's delivery tick: one lagging device copy
+			// must not turn delivery to that person back into an unsent turn.
+			case m.Dir == "out" && cmp.Or(m.Delivery, m.State) == "waiting":
 				s.Waiting++
 			}
 		}

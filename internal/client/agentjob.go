@@ -610,6 +610,7 @@ func (a *Agent) agentPrompt(j job, r *Responder, lookupText string, contexts ...
 		fmt.Fprintf(&b, "If you need information from %s to answer, reply with your question for them. They can answer it in this conversation.\n", asker)
 		b.WriteString(lookupText)
 	}
+	b.WriteString(requestIntentPromptText)
 	b.WriteString(reactionConvPromptText)
 	b.WriteString(topicClosurePromptText)
 	b.WriteString("If an explicitly requested topic close is included, put topic: done before emotion.\n")
@@ -1171,6 +1172,21 @@ func contextSpeaker(msg ConvMessage, names, claims map[string]string) string {
 	}
 	if who == "" {
 		who = "someone"
+	}
+	// A selected snapshot can contain an earlier participation's reply. Its
+	// host's person is ownership context, not the author of the agent's text.
+	// Keep forwarded/excerpt provenance intact; an origin label alone never
+	// upgrades a claimed speaker to a verified agent.
+	if msg.VerifiedAgent || envelope.AgentOrigin(msg.Origin) {
+		name := msg.AgentID
+		if name == "" {
+			name = strings.TrimPrefix(msg.Origin, "agent:")
+		}
+		role := "Claimed agent"
+		if msg.VerifiedAgent {
+			role = "Agent"
+		}
+		who = fmt.Sprintf("%s %s, %s; host person: %s", role, promptLabel(name), msg.Kind, who)
 	}
 	return who + " (" + msg.From + ")"
 }

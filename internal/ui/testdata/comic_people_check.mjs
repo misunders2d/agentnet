@@ -101,3 +101,12 @@ assert.deepEqual([r.kind, r.title, r.subtitle], ["agent", "Your agent", "on Lapt
 w = m.threadAuthor({ id: "o", dir: "out", from: "admin/pixel", kind: "question", body: "?" }, phone, {}, "admin/laptop");
 assert.equal(w.name, "You");
 console.log("Comic people model: agents only where one runs, own devices are you, people are people, look-alikes keyed, Bring in agents only PASS");
+
+// Same-named assistants remain distinguishable in compact labels and mentions.
+const names = { mine: "Codex", theirs: "Codex" };
+assert.equal(m.agentName("mine", names, me, me), "Your Codex");
+assert.equal(m.agentName("theirs", names, vitalii, me), "Vitalii’s Codex");
+const agents = [{ pid:"mine-pid", agent_id:"mine", host:me, state:"active" },
+  { pid:"their-pid", agent_id:"theirs", host:vitalii, state:"active" }];
+const ps = m.participants({ peer:vitalii, agents }, o, names).filter(p => p.kind === "guest-agent");
+assert.deepEqual(ps.map(p => [p.pid,p.name]), [["mine-pid","Your Codex"],["their-pid","Vitalii’s Codex"]]);

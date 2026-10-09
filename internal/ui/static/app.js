@@ -2115,7 +2115,8 @@ const catalogRecords = host => state.dm && state.dmNames?.[host] || (state.targe
 const catalogName = (id, host, records = catalogRecords(host)) => (records.find(a => a.host === host && a.id === id && a.label) || {}).label || "";
 const unnamedAgent = (whose, host) => (whose ? whose + " assistant" : "Assistant on " + host) + " · name unavailable";
 function namedAgentLabel(id, host, records = catalogRecords(host), whose = "") {
-  return catalogName(id, host, records) || unnamedAgent(whose, host);
+  const name = catalogName(id, host, records);
+  return name ? (whose ? whose + " " : "") + name : unnamedAgent(whose, host);
 }
 // namedAgentOn is namedAgentLabel with its host device, said once.
 const namedAgentOn = (id, host, whose = "") => {
@@ -2123,7 +2124,7 @@ const namedAgentOn = (id, host, whose = "") => {
   return name ? name + " on " + host : (whose ? whose + " assistant on " : "Assistant on ") + host + " · name unavailable";
 };
 // whoseAgent: a participation's host as the owner of its agent ("Your", "Bob's").
-const whoseAgent = (a) => !a ? "" : a.host_here ? "Your" : a.host && a.host.label ? a.host.label + "'s" : "";
+const whoseAgent = (a) => !a ? "" : (a.host_here || isMe(a.host)) ? "Your" : a.host && a.host.label ? a.host.label + "'s" : "";
 const agentName = (a) => a.agent_id ? namedAgentLabel(a.agent_id, a.host.address, undefined, whoseAgent(a)) : (a.host_here ? "Your agent" : a.host.label + "'s agent");
 const namedAuthor = (m) => namedAgentOn(m.agent_id, m.from, whoseAgent(m.pid && agentOf(m.pid)));
 // catalogLabel names a record in a picker: the same catalog name, plus a short

@@ -1044,6 +1044,13 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
    const original={v:2,id,lid,from:address,to:alicePub.address,ts:1700000000,kind:'message',conv,root:wire.rootJSON(root),body:'my old message',fan:[{person:roster.person,roster:await wire.rosterHash(roster)}]};
    const sealed=await wire.seal(original,keys,alicePub);
    await w.st.write([{s:'outbox',k:id,v:{...original,fp:w.e.fp,at:1700000000000,state:'delivered',envelope:sealed,group_admission:stamp,recipient_fp:await wire.fingerprint(alicePub),required_cap:wire.CapGroup}}]);
+   const delivered=await w.st.get('outbox',id), lagID=wire.newID(),person=v.challenge.rosters[0].person;
+   await w.st.write([{s:'outbox',k:lagID,v:{...delivered,id:lagID,to:'alice/legacy',person,state:'waiting'}}]);
+   check((await w.e.overview()).dms.find(d=>d.id===conv)?.waiting===0,'group sidebar does not call a delivered person unsent because another device waits');
+   check((await w.e.convMessages(conv,await w.st.all('inbox'),await w.st.all('outbox'))).find(m=>m.lid===lid)?.copies.some(x=>x.state==='waiting'),'group delayed device copy is retained');
+   await w.st.write([{s:'outbox',k:id,v:{...delivered,state:'waiting'}}]);
+   check((await w.e.overview()).dms.find(d=>d.id===conv)?.waiting===1,'group genuinely unreached recipient stays counted once');
+   await w.st.write([{s:'outbox',k:id,v:delivered},{s:'outbox',k:lagID}]);
    await w.receive(c['solo-proof']);await w.receive(c['solo-context']);
    check((await w.e.dmMembers(await w.e.groupRecord(conv))).size===1,'signed admin transition leaves only our person');
    w.e.post=async()=>{throw Error('local control must not contact relay');};

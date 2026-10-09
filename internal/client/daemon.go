@@ -293,6 +293,10 @@ func (b *streamBody) Read(p []byte) (int, error) {
 // on connect and on each Hub ping, so retries ride on existing traffic
 // instead of a poll loop.
 func (a *Agent) sync(ctx context.Context) {
+	// Durable receipts get a turn before bulk history and proof recovery.
+	if err := a.flushReceipts(ctx); err != nil {
+		a.Logf("receipts: %v", err)
+	}
 	a.convSync(ctx)  // only what an event made due: no request otherwise
 	a.syncTeams(ctx) // team references queued by the stream, verified and pinned (teams.go)
 	a.groupSync(ctx) // group journal: pending publications first, then heads the stream said changed (convgroup.go)
@@ -320,9 +324,12 @@ func (a *Agent) dispatch(ctx context.Context, event, data string) error {
 		if err := json.Unmarshal([]byte(data), &env); err != nil {
 			return a.quarantineUndecodable(ctx, []byte(data))
 		}
-		if err := a.accept(ctx, env); err != nil {
+		if err := a.storeReceived(ctx, env); err != nil {
 			return errors.Join(errors.New("message "+env.ID+" not processed yet"), err)
 		}
+		// Persist in stream order, but let the existing sync worker send the
+		// receipt. A slow receipt POST must not stop incoming turns or pings.
+		a.kickNow()
 	case "release":
 		// The Hub operator's recommended client version: saved, then the
 		// worker is woken to tell the person (never on this reader).
@@ -368,7 +375,8 @@ func (a *Agent) quarantineUndecodable(ctx context.Context, raw []byte) error {
 	if err := a.store.quarantine(head.ID, head.From, reasonInvalid, raw); err != nil {
 		return err
 	}
-	return a.flushReceipts(ctx)
+	a.kickNow()
+	return nil
 }
 
 // accept verifies, decrypts and persists one envelope, then sends its receipt:
@@ -376,6 +384,15 @@ func (a *Agent) quarantineUndecodable(ctx context.Context, raw []byte) error {
 // verification (so a hostile or broken sender cannot wedge the mailbox).
 // Transient failures return an error before any receipt.
 func (a *Agent) accept(ctx context.Context, env envelope.Envelope) error {
+	if err := a.storeReceived(ctx, env); err != nil {
+		return err
+	}
+	return a.flushReceipts(ctx)
+}
+
+// storeReceived retains the durable disposition before a receipt is sent.
+// The stream queues receipts; other callers retain their synchronous path.
+func (a *Agent) storeReceived(ctx context.Context, env envelope.Envelope) error {
 	seen, err := a.store.seen(env.ID)
 	if err != nil {
 		return err
@@ -385,10 +402,7 @@ func (a *Agent) accept(ctx context.Context, env envelope.Envelope) error {
 	} else {
 		err = a.verifyAndStore(ctx, env)
 	}
-	if err != nil {
-		return err
-	}
-	return a.flushReceipts(ctx)
+	return err
 }
 
 // flushReceipts sends every stored disposition the Hub has not acknowledged.

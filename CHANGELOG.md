@@ -6,6 +6,14 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+### Fixed
+
+- Keep incoming messages and heartbeat acknowledgements moving while delivery receipts are delayed. Pending invitation synchronization no longer blocks ordinary queued turns.
+- Use recipient delivery for the chat-list waiting count, matching message ticks; a lagging extra device no longer leaves a delivered conversation marked as unsent.
+- Preserve agent authorship in selected conversation history after reinviting an agent. Clarify that admitted action requests use native tools and permissions even when classified as questions.
+- Include the owner in named agent labels so same-named agents can be distinguished in mentions and participant cards.
+- Record participation device/conversation mismatches as synchronization diagnostics, without implying that a failed check proves signature tampering.
+
 ## [0.8.13] — 2026-10-09
 
 ### Fixed

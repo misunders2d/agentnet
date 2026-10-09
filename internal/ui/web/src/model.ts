@@ -444,7 +444,7 @@ export function participants(t: T.DMThread | null, o: T.Overview | null, agentNa
   }
   for (const a of t.agents || []) {
     if (a.state === "dismissed" || a.state === "declined") continue;
-    const name = (a.agent_id && agentNames[a.agent_id]) || owner(a.host, me) + " agent";
+    const name = agentName(a.agent_id, agentNames, a.host, me);
     out.push({
       key: "a:" + a.pid, kind: "guest-agent", name,
       subtitle: owner(a.host, me) + " agent · " + niceDevice(a.host.address),
@@ -546,10 +546,11 @@ export function deviceKind(address?: string): DeviceKind | undefined {
   return undefined;
 }
 
-/** agentName is what an agent is called everywhere: its own name when its
- *  owner gave it one, otherwise "Your agent" / "Vitalii's agent". */
+/** Include ownership in the name itself, including mention chips and compact
+ *  cards where the separate owner/device subtitle may not be visible. */
 export function agentName(agentId: string | undefined, names: Record<string, string>, host: T.PersonView | null | undefined, me: T.PersonView | null | undefined): string {
-  return (agentId && names[agentId]) || owner(host, me) + " agent";
+  const name = agentId && names[agentId];
+  return name ? (host ? owner(host, me) + " " : "") + name : owner(host, me) + " agent";
 }
 
 /** agentWhere says whose agent it is and where it runs: "Your agent · Zenbook". */

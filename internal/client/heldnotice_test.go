@@ -90,6 +90,9 @@ func TestHeldNoticeDiagnosticPersistsAcrossRestart(t *testing.T) {
 	}
 }
 func TestHeldNoticeDiagnosticAllowlist(t *testing.T) {
+	if heldDiagnosticCode("participation: the event is not the sending device's own, for this conversation") != "participation_binding_mismatch" {
+		t.Fatal("participation mismatch lost its recorded cause")
+	}
 	if heldDiagnosticCode("group: conflicting logical turn") != "group_conflicting_copy" {
 		t.Fatal("known safe cause missing")
 	}

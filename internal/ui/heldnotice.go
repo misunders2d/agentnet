@@ -2,6 +2,8 @@ package ui
 
 func heldNoticeText(code, reason string) (string, string) {
 	switch code {
+	case "participation_binding_mismatch":
+		return "An internal invitation or membership record does not match its sending device or conversation.", "This is a synchronization error, not a request for your approval. The record stays held."
 	case "group_invitation_outdated":
 		return "This invitation no longer matches the current group.", "If you still need to join, use the newer invitation or ask the inviter for a fresh one. You can archive this old notice."
 	case "group_consent_mismatch":

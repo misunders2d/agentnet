@@ -876,7 +876,7 @@ func (a *Agent) flushOutbox(ctx context.Context, filesOnly bool) error {
 	blocked := map[string]bool{}
 	// Readable turns share a FIFO. Controls, history, context carriers and
 	// private receiver operations pass their existing gates independently.
-	const turn = `ref_id IS NULL AND coalesce(sub,'') NOT IN ('topic-sync','read-sync','root-sync','history','file','drive-space','group-proof','group-context','group-invite','group-consent','group-withdrawal')
+	const turn = `ref_id IS NULL AND coalesce(sub,'') NOT IN ('invitation-sync','topic-sync','read-sync','root-sync','history','file','drive-space','group-proof','group-context','group-invite','group-consent','group-withdrawal')
 		AND NOT (conv IS NULL AND reply_receiver IS NULL AND (coalesce(required_cap,'')='rcv1' OR coalesce(required_cap,'')='hpm1' AND human IS NULL))`
 	for _, env := range envs {
 		if ctx.Err() != nil {

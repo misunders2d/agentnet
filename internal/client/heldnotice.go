@@ -12,6 +12,8 @@ ALTER TABLE quarantine ADD COLUMN notice_archived INTEGER NOT NULL DEFAULT 0;`
 // contain received content; an unmapped cause stays explicitly unknown.
 func heldDiagnosticCode(why string) string {
 	switch why {
+	case "participation: the event is not the sending device's own, for this conversation":
+		return "participation_binding_mismatch"
 	case ErrGroupInvitationStale.Error(), errGroupInvitationOutdated.Error(), "group: target already has effective membership":
 		return "group_invitation_outdated"
 	case "group: decision conflicts with recorded local intent", "group: consent has no recorded local invitation", "group: consent is not the exact local invitation and current person":

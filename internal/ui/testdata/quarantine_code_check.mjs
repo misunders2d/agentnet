@@ -41,6 +41,7 @@ assert.equal(legacy.can_archive,true);
 assert.ok(legacy.detail.includes('not recorded') && legacy.recovery.includes('does not accept'));
 for (const why of ['SYNTHETIC_PRIVATE_BODY password=secret','toString','constructor','__proto__']) assert.equal(heldDiagnosticCode(why),'');
 assert.equal(heldDiagnosticCode('Consent conflicts with recorded decision.'),'group_consent_mismatch');
+for (const why of ["event is not this sending device's own", "event is not its sending device's own"]) assert.equal(heldDiagnosticCode(why),'participation_binding_mismatch');
 const store=memoryStore(),engine=new Engine({store,base:'http://127.0.0.1:1',fetch:async()=>{throw Error('archive attempted network');}});
 const id='d'.repeat(32),raw=JSON.stringify({id,from:'alice/laptop',invalid:true});
 await engine.hold({id,from:'alice/laptop'},raw,'invalid','Consent conflicts with recorded decision.');

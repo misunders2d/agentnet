@@ -75,7 +75,7 @@ func TestQuarantineCode(t *testing.T) {
 		t.Skip("node unavailable")
 	}
 	diagnostics := map[string]map[string]string{}
-	for _, code := range []string{"group_invitation_outdated", "group_consent_mismatch", "group_withdrawal_mismatch", "group_admission_unavailable", "group_authority_conflict", "group_conflicting_copy", "history_reader_not_member", "captured_consent_mismatch", "", "unknown_future_code"} {
+	for _, code := range []string{"participation_binding_mismatch", "group_invitation_outdated", "group_consent_mismatch", "group_withdrawal_mismatch", "group_admission_unavailable", "group_authority_conflict", "group_conflicting_copy", "history_reader_not_member", "captured_consent_mismatch", "", "unknown_future_code"} {
 		detail, recovery := heldNoticeText(code, "invalid")
 		diagnostics[code] = map[string]string{"detail": detail, "recovery": recovery}
 	}

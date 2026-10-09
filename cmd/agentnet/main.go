@@ -652,7 +652,10 @@ func printWaiting(w client.Waiting) {
 		if i == 0 {
 			fmt.Println("messages held here, not shown (nothing runs them):")
 		}
-		why := "it did not verify (it may have been tampered with), so it is refused"
+		why := "it could not be accepted; the recorded checks failed, so it stays held"
+		if q.DetailCode == "participation_binding_mismatch" {
+			why = "an internal participation record does not match its sending device or conversation; it stays held"
+		}
 		switch q.Reason {
 		case "key_changed":
 			why = q.Sender + "'s key changed: run agentnet trust " + q.Sender + " once you verified the new key with them"
