@@ -73,7 +73,13 @@ found that a completion status arriving before its request could be permanently
 rejected. Native and browser fixes pass focused checks, including retained native
 invalid records and browser proof-pending records. Exact executor pins are
 rechecked through delayed recovery and atomic admission. The final focused race
-check passes 29.082 s and vet is clean; the next combined qualification is ready.
+check passes 29.082 s and vet is clean. Frozen source
+`ceb8d0c0b4446c51c3c948252430310d3048d73a` is in corrective
+[race qualification](https://github.com/misunders2d/agentnet/actions/runs/38002045084)
+and [native qualification](https://github.com/misunders2d/agentnet/actions/runs/38002048457),
+started October 9 at 22:58 UTC. Both passed: all 1,011 client assignments, both UI
+partitions (331 assignments), and affected native checks on all three systems.
+Final tag packaging and asset verification remain; no v0.8.15 release yet.
 
 **October 9 evening correction:** MEL-588 rejected-history flood and MEL-580
 answered requests remaining pending are mandatory v0.8.15 fixes. The active

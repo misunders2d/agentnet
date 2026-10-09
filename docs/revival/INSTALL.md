@@ -18,9 +18,10 @@ reload linked browser clients. If the registered old AppImage has already been
 removed, reinstall the official app once; the updater checks this before shutdown.
 Identity and history remain; no reset or relinking is required.
 
-**Current issue under investigation:** after the owner updated Zenbook himself,
-it reported “Could not connect 127.0.0.1: Connection refused.” Root Codex is
-investigating before v0.8.15 feature work; no cause or recovery is claimed yet.
+**Post-update issue:** after the owner updated Zenbook himself,
+it reported “Could not connect 127.0.0.1: Connection refused.” The v0.8.15 candidate
+repairs local-page readiness and shell reload after reattaching to an independent
+daemon. It is still in release qualification; physical recovery is not confirmed.
 The separate phone v0.8.13 “Sending” report also has no exact diagnosis. See
 [the handoff](../HANDOFF.md) for current status.
 

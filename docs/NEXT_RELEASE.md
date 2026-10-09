@@ -1,4 +1,27 @@
-# AgentNet v0.8.14 — released October 9, 2026 (UTC)
+# AgentNet v0.8.15 — qualified source; final packaging next
+
+Frozen candidate `ceb8d0c0b4446c51c3c948252430310d3048d73a` is on
+`release/v0.8.15`. [Race qualification](https://github.com/misunders2d/agentnet/actions/runs/38002045084)
+and [affected native qualification](https://github.com/misunders2d/agentnet/actions/runs/38002048457)
+both passed. Final tag packaging and asset verification are next; it is not
+published. The exact retained evidence, initial failures
+and corrections are in [V0_8_15.md](plans/V0_8_15.md).
+
+The candidate repairs attached-app restart recovery, blocked browser receive
+queues, rejected signed participation history, cross-device answer correlation,
+out-of-order statuses and affected saved status records. It preserves native
+permissions, current keys, signatures and encryption, and never reruns old tasks.
+The six assigned features are implemented: steering/follow-ups, selected-message
+topic moves, assigning a message to an own agent, reviewed topic/history sharing,
+Antigravity support and read-only reported model visibility.
+
+Finish the combined gates, publish the verified assets, and update only the
+existing Contabo relay. Installed clients use their app/CLI update controls.
+Physical phone convergence and post-update resource use remain unverified.
+Immediately after this release, the owner requests a dedicated mobile
+responsiveness/sync phase before further feature work. No reset or relinking.
+
+## Previous release — v0.8.14, October 9, 2026 (UTC)
 
 [Published v0.8.14](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14)
 at **19:34:43 UTC** from `760e945a28c38461c74d84c7d4c9610464573dea`.
@@ -10,13 +33,13 @@ verified stopped-state backup, with normal HTTPS from server and laptop,
 unchanged realm/volume/neighbor, and zero OOM events or restarts. Deployment
 changed no installed client.
 
-**Current priority: urgent post-update diagnosis, owned by root Codex.** The
+**Historical post-update report, owned by root Codex.** The
 owner then updated Zenbook himself and reported “Could not connect 127.0.0.1:
-Connection refused.” Cause and recovery remain unverified. The new phone
+Connection refused.” The v0.8.15 candidate now repairs local-page readiness and
+same-address shell reload; physical recovery is not user-confirmed. The phone
 v0.8.13 report of “Sending” for 15 minutes also has no exact diagnosis;
 v0.8.14 fixes confirmed blockers but is not claimed to fix that exact report.
-Resolve the urgent regression before the queued
-[six-feature v0.8.15 batch](plans/V0_8_15.md). No v0.8.15 feature work has started.
+The implementation and six-feature batch are now in v0.8.15 qualification above.
 
 Implemented areas include direct-agent history across personal devices, durable
 history receipts and progress, grouped/archiveable Held back notices, bounded

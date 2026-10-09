@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.15] — 2026-10-09
+
 ### Fixed
 
 - Wait for the authenticated local page when reattaching after an independent daemon update, and reload an attached page even when its address is unchanged. A failed connection during restart no longer prevents the new page event from recovering it. Preserve ordinary setup transitions and reconcile the already-approved update without starting it again.
