@@ -123,7 +123,7 @@ func historyCopyPresent(q dbq, dev identity.Public, c outCopy) (bool, error) {
 		return false, err
 	}
 	if hash != prior {
-		return false, errHistoryCatchupConflict
+		return false, fmt.Errorf("%w: retained ledger", errHistoryCatchupConflict)
 	}
 	if fp != dev.Fingerprint() || conv != c.in.Conv || sub != envelope.SubHistory {
 		return false, nil
@@ -424,7 +424,11 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			return e
 		}
 		if c == nil {
-			return ErrGroupHistoryUnavailable
+			// The shared source policy deliberately excludes this row (for
+			// example a retraction or previous admission). Missing evidence is
+			// an error above; an intentional skip must not become a stuck job.
+			done[id] = true
+			return nil
 		}
 		c.recipientFP = dev.Fingerprint()
 		if _, ok := batches[it.conv]; !ok {
@@ -448,7 +452,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		}
 		if prior, ok := logical[logicalID]; ok {
 			if prior != hash {
-				return errHistoryCatchupConflict
+				return fmt.Errorf("%w: page logical duplicate", errHistoryCatchupConflict)
 			}
 			done[id] = true
 			return nil
@@ -523,7 +527,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 		raw, _ := json.Marshal(it.in)
 		fresh, _ := json.Marshal(current[0].in)
 		if it.key != current[0].key || !bytes.Equal(raw, fresh) {
-			return false, errHistoryCatchupConflict
+			return false, fmt.Errorf("%w: transaction source row", errHistoryCatchupConflict)
 		}
 		item, e := a.historySourceItem(tx, current[0])
 		if e != nil {
@@ -534,7 +538,7 @@ func (a *Agent) historyCatchupPage(ctx context.Context, dev identity.Public) (mo
 			return false, e
 		}
 		if historyRef(it.conv, item).Hash != historyRef(it.conv, offered).Hash || !sameHistoryRef(item.Ref, offered.Ref) {
-			return false, errHistoryCatchupConflict
+			return false, fmt.Errorf("%w: transaction source metadata", errHistoryCatchupConflict)
 		}
 	}
 	var carriers []outCopy

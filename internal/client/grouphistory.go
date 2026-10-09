@@ -32,9 +32,10 @@ type GroupHistorySelection struct {
 }
 
 type groupHistorySource struct {
-	item  HistoryItem
-	dir   string
-	stamp string
+	item     HistoryItem
+	dir      string
+	stamp    string
+	original bool // full immutable source, restricted to current own admission
 }
 
 func historyRef(conv string, item HistoryItem) protocol.GroupHistoryRef {
@@ -71,7 +72,7 @@ func groupHistorySelected(q dbq, packet GroupContext, address, fp string, ref pr
 // Ordinary rows are the only source. Recipient-specific ciphertext and file
 // blob keys never enter the selected hash. Copies of one authored logical turn
 // must resolve to the same visible bytes; an arbitrary first candidate is unsafe.
-func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64, limit int) ([]groupHistorySource, error) {
+func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64, limit int, original ...bool) ([]groupHistorySource, error) {
 	rows, err := q.Query(`SELECT * FROM (
  SELECT id,'in',sender,coalesce(verified_by,claimed_fp,'') AS author,ts,body,coalesce(reply_to,''),coalesce(origin,''),coalesce(emotion,''),lid,coalesce(received_ms,received_at*1000) AS ms,coalesce(group_admission,'') FROM inbox WHERE conv=? AND kind='message' AND coalesce(sub,'')='' AND ref_id IS NULL AND target IS NULL AND pid IS NULL AND agent_id IS NULL AND local=0
  UNION ALL
@@ -102,58 +103,56 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 	}
 	visible := result[:0]
 	for _, s := range result {
-		s.item.ReceiverRoute, err = receiverStoredRoute(q, s.dir, s.item.ID)
-		if err != nil {
-			return nil, err
+		// Preserve the complete immutable source before optionally projecting edits
+		// for a selected excerpt. Own-device sync sends edits as separate controls.
+		rows, e := a.historySourceRows(q, "dir=? AND id=?", "conv,ms,id", 1, s.dir, s.item.ID)
+		if e != nil {
+			return nil, e
+		}
+		if len(rows) != 1 {
+			continue
+		}
+		complete, e := a.historySourceItem(q, rows[0])
+		if e != nil {
+			return nil, e
+		}
+		if len(original) > 0 && original[0] {
+			s.item = complete
+			s.original = true
+		} else {
+			// Existing selected grants bind the legacy visible projection's
+			// bytes. Do not add fields to an already signed selection.
+			s.item.Attachments = complete.Attachments
+			s.item.ReceiverRoute = complete.ReceiverRoute
 		}
 		if retractedRef(q, conv, s.item.LID, s.item.FromKey) {
 			continue
 		}
-		// Stored revisions already passed the ordinary control authority boundary.
-		revisions, e := q.Query(`SELECT body FROM inbox WHERE conv=? AND ref_id=? AND ref_fp=? AND sub='revision' UNION ALL SELECT body FROM outbox WHERE conv=? AND ref_id=? AND ref_fp=? AND sub='revision'`, conv, s.item.LID, s.item.FromKey, conv, s.item.LID, s.item.FromKey)
-		if e != nil {
-			return nil, e
-		}
-		var rev int64
-		for revisions.Next() {
-			var raw string
-			var r envelope.Revision
-			if e = revisions.Scan(&raw); e != nil {
-				break
+		if len(original) == 0 || !original[0] {
+			// Stored revisions already passed the ordinary control authority boundary.
+			revisions, e := q.Query(`SELECT body FROM inbox WHERE conv=? AND ref_id=? AND ref_fp=? AND sub='revision' UNION ALL SELECT body FROM outbox WHERE conv=? AND ref_id=? AND ref_fp=? AND sub='revision'`, conv, s.item.LID, s.item.FromKey, conv, s.item.LID, s.item.FromKey)
+			if e != nil {
+				return nil, e
 			}
-			if json.Unmarshal([]byte(raw), &r) == nil && r.Rev > rev {
-				rev = r.Rev
-				s.item.Body = r.Text
+			var rev int64
+			for revisions.Next() {
+				var raw string
+				var r envelope.Revision
+				if e = revisions.Scan(&raw); e != nil {
+					break
+				}
+				if json.Unmarshal([]byte(raw), &r) == nil && r.Rev > rev {
+					rev = r.Rev
+					s.item.Body = r.Text
+				}
 			}
-		}
-		if e == nil {
-			e = revisions.Err()
-		}
-		revisions.Close()
-		if e != nil {
-			return nil, e
-		}
-		table, column := "attachments", "message_id"
-		if s.dir == "out" {
-			table = "sent_attachments"
-		}
-		files, e := q.Query("SELECT name,size,sha256 FROM "+table+" WHERE "+column+"=? ORDER BY rowid", s.item.ID)
-		if e != nil {
-			return nil, e
-		}
-		for files.Next() {
-			var f envelope.Attachment
-			if e = files.Scan(&f.Name, &f.Size, &f.SHA256); e != nil {
-				break
+			if e == nil {
+				e = revisions.Err()
 			}
-			s.item.Attachments = append(s.item.Attachments, f)
-		}
-		if e == nil {
-			e = files.Err()
-		}
-		files.Close()
-		if e != nil {
-			return nil, e
+			revisions.Close()
+			if e != nil {
+				return nil, e
+			}
 		}
 		if !ordinaryGroupTurn(s.item.inner(conv)) {
 			continue
@@ -163,8 +162,8 @@ func (a *Agent) groupHistorySources(q dbq, conv, lid, author string, since int64
 	return visible, nil
 }
 
-func (a *Agent) groupHistorySourceIn(q dbq, conv string, ref protocol.GroupHistoryRef) (groupHistorySource, error) {
-	sources, err := a.groupHistorySources(q, conv, ref.LID, ref.Author, 0, 3)
+func (a *Agent) groupHistorySourceIn(q dbq, conv string, ref protocol.GroupHistoryRef, original ...bool) (groupHistorySource, error) {
+	sources, err := a.groupHistorySources(q, conv, ref.LID, ref.Author, 0, 3, original...)
 	if err != nil {
 		return groupHistorySource{}, err
 	}
@@ -289,6 +288,7 @@ func (a *Agent) groupHistoryOutboundCheck(q dbq, packet GroupContext, to, fp str
 		return err
 	}
 	ref := historyRef(packet.State.Conv, item)
+	original := false
 	if !admission.AllowsHistory(ref) {
 		me, ok, e := scanPersonIn(q, "state = ?", personSelf)
 		if e != nil {
@@ -301,8 +301,9 @@ func (a *Agent) groupHistoryOutboundCheck(q dbq, packet GroupContext, to, fp str
 		// when the message arrived. The original author may since have left.
 		// Exact source resolution below binds the claimed author and content;
 		// only the forwarding and receiving devices need current membership.
+		original = true
 	}
-	source, err := a.groupHistorySourceIn(q, packet.State.Conv, ref)
+	source, err := a.groupHistorySourceIn(q, packet.State.Conv, ref, original)
 	if err != nil {
 		return err
 	}

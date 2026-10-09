@@ -121,7 +121,7 @@ func (a *Agent) prepareHistorySource(dev identity.Public, it historySourceRow) (
 			if retractedRef(a.store.db, it.conv, prepared.LID, prepared.FromKey) {
 				return nil, nil
 			}
-			sources, e := a.groupHistorySources(a.store.db, it.conv, prepared.LID, prepared.FromKey, 0, 64)
+			sources, e := a.groupHistorySources(a.store.db, it.conv, prepared.LID, prepared.FromKey, 0, 64, true)
 			if e != nil {
 				return nil, e
 			}
@@ -130,7 +130,7 @@ func (a *Agent) prepareHistorySource(dev identity.Public, it historySourceRow) (
 				if source.item.ID == prepared.ID {
 					// Existing resolver checks every logical duplicate against the
 					// visible content hash; never choose a conflicting first row.
-					verified, e := a.groupHistorySourceIn(a.store.db, it.conv, historyRef(it.conv, source.item))
+					verified, e := a.groupHistorySourceIn(a.store.db, it.conv, historyRef(it.conv, source.item), true)
 					if e != nil {
 						return nil, e
 					}
