@@ -35,6 +35,14 @@ if(variant==='topic-invite'){
  fixture.thread.agents=[{pid:'broad-agent',host:fixture.thread.members[1],agent_id:'a'.repeat(32),state:'active',state_text:'Active',invited:'2026-10-05T10:00:00Z',host_here:false,shared:[],can_ask:true,can_dismiss:true,inviter:fixture.overview.person}];
 }
 
+if(variant==='followup'){
+ const key='aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa',originalKey='eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee',id='1'.repeat(32);
+ fixture.overview.me.fingerprint=key;fixture.overview.person.fingerprint=key;fixture.thread.members[0].fingerprint=key;fixture.overview.person.devices=[{address:'aster/laptop',fingerprint:key},{address:'aster/other-laptop',fingerprint:originalKey}];
+ fixture.overview.group_invitations=[];fixture.thread.guests=[];fixture.followupOriginal='Prepare contribution-margin.md in Russian';
+ fixture.thread.agents=[{pid:'followup-agent',host:fixture.thread.members[1],agent_id:'a'.repeat(32),state:'active',state_text:'Active',invited:'2026-10-05T10:00:00Z',host_here:false,shared:[],can_ask:true,inviter:fixture.overview.person}];
+ fixture.thread.messages.push({id,lid:id,from:'aster/other-laptop',send_group_author:originalKey,via:'aster/other-laptop',dir:'out',kind:'question',body:fixture.followupOriginal,at:'2026-10-05T10:01:00Z',pid:'followup-agent',target:{address:'brin/desktop',fingerprint:'bbbbbbbb-bbbbbbbb-bbbbbbbb-bbbbbbbb',agent_id:'a'.repeat(32)},state:'delivered',exec:{state:'running',host:'brin/desktop'},actions:[]});
+ fixture.followupID=id;fixture.followupStages=[];
+}
 if(variant==='browser-app'){
  fixture.overview.device={browser:true};fixture.overview.me.browser=true;
 }
@@ -198,8 +206,14 @@ if(variant==='held-flood'){
 if(variant==='team-tags'){fixture.teams=[];fixture.overview.people=[...fixture.overview.people,fixture.thread.members[1]];}
 let open;
 const changeListeners=new Set(),changed=event=>{for(const fn of [...changeListeners])fn(event);};
-const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
+const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changeListeners.add(fn);return()=>changeListeners.delete(fn);},stage:async f=>{if(variant==='followup'){if(fixture.followupStageFailure&&f.name==='fail-second.md'){fixture.followupStageFailure=false;throw Error('Synthetic second stage failure');}const id='followup-staged-'+(fixture.followupStages.length+1);fixture.followupStages.push({id,name:f.name,size:f.size,text:await f.text()});if(fixture.followupStagePause){fixture.followupStagePause=false;await new Promise(resolve=>{window.finishFollowupStage=resolve;});}return id;}if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async(id,index,dir)=>{if(variant==='direct-files'){fixture.download={id,index,dir};return {bytes:new TextEncoder().encode('hello')};}throw Error('fixture contains no files');},api:async(p,body)=>{
 fixture.requests.push({path:p,body});
+if(variant==='followup'&&p==='/api/upload/discard')return {};
+if(variant==='followup'&&p==='/api/request/followup'){
+ if(!fixture.followupFailed){fixture.followupFailed=true;throw Error('Synthetic uncertain response; retry the same follow-up');}
+ fixture.followupSent=true;return {note:'Follow-up queued; native acceptance has not been proven.'};
+}
+
 if(variant==='reactions'&&p==='/api/message/react'){
  if(body.conv!==fixture.thread.id||body.id!=='context'||body.dir!=='in')throw Error('Unexpected reaction target');
  if(fixture.failReaction){fixture.failReaction=false;throw Error('Synthetic reaction failed');}
@@ -212,6 +226,11 @@ if(variant==='reactions'&&p==='/api/message/react'){
 }
 if(variant.startsWith('continuation-')&&['/api/act','/api/operator/decide'].includes(p)){
  const c=fixture.thread.messages.find(m=>m.id==='needs-answer-exact').continuation;
+ if(variant==='continuation-resolve'&&body.check){
+  if(body.check!==true||body.action!=='resolve'||body.host!==c.host||body.id!==c.id||body.key!==c.key||body.attempt!==c.attempt||body.send_id)throw Error('Unexpected read-only resolution check');
+  if(fixture.resolveUnsupported)throw Error('peer_update: Other laptop cannot handle own requests yet. Update AgentNet on that computer and reconnect all its open sessions.');
+  return {note:'The host can receive this decision. Nothing has been sent.'};
+ }
  if(!c||body.id!==c.id||body.key!==c.key||body.attempt!==c.attempt||!body.send_id)throw Error('Unexpected continuation identity');
  if(!fixture.continuationFailed){fixture.continuationFailed=true;throw Error('Synthetic lost transport response; retry this same answer');}
  if(variant==='continuation-resolve'){
@@ -551,7 +570,14 @@ if(process.env.AGENTNET_RESOLUTION_REGRESSION==='1'){
  try{
   const request=page.locator('[data-mid="needs-answer-exact"]');await request.waitFor();
   assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide').length),0);
+  await page.evaluate(()=>{fixture.resolveUnsupported=true;});
   await request.getByRole('button',{name:'Mark as handled',exact:true}).click();
+  await request.getByRole('button',{name:'Check host again',exact:true}).waitFor();
+  assert.match(await request.innerText(),/Update AgentNet on that computer/);
+  assert.equal(await page.getByRole('dialog',{name:'Mark as handled on Other laptop?',exact:true}).count(),0,'Unsupported host is explained before confirmation');
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide'&&!r.body.check).length),0,'Capability refusal queues no decision');
+  await page.evaluate(()=>{fixture.resolveUnsupported=false;});
+  await request.getByRole('button',{name:'Check host again',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Mark as handled on Other laptop?',exact:true});await dialog.waitFor();
   assert.match(await dialog.innerText(),/does not run the task again/);
   await settle(page);{const shot=path.join(evidence,'comic-resolution-confirm-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);}
@@ -559,7 +585,7 @@ if(process.env.AGENTNET_RESOLUTION_REGRESSION==='1'){
   await page.waitForFunction(()=>fixture.continuationFailed);await send.waitFor();await send.click();
   await page.waitForFunction(()=>fixture.resolutionQueued);
   assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id==='needs-answer-exact').job_state),'needs_human','queueing does not close host work');
-  const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide'));
+  const calls=await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/operator/decide'&&!r.body.check));
   assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1],'explicit retry retains exact target and send ID');
   assert.deepEqual(calls[0].body,{host:'aster/other-laptop',id:'needs-answer-exact',key:'exact-request-key',attempt:7,action:'resolve',expect:'needs_human',report:'',send_id:calls[0].body.send_id});
   await page.evaluate(()=>{const m=fixture.thread.messages.find(m=>m.id==='needs-answer-exact');m.job_state=m.state='resolved';m.actions=[];delete m.continuation;fixture.overview.needs_you=[];reloadFixture();});
@@ -590,6 +616,50 @@ if(process.env.AGENTNET_HELD_FLOOD_REGRESSION==='1'){
   assert(await page.evaluate(()=>fixture.overview.quarantine.some(q=>q.detail_code==='admission_failed')&&fixture.overview.quarantine.some(q=>q.id==='f'.repeat(32))),'new and changed records survive stale snapshot');
   assert(!await page.evaluate(()=>fixture.requests.some(r=>r.body?.do&&r.body.do!=='archive_held_batch')),'bulk archive never admits/trusts/runs');
   const shot=path.join(evidence,'comic-held-flood-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+ }finally{await context.close();}
+ continue;
+}
+if(process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'){
+ const {page,context}=await openCase('followup');
+ try{
+  const request=page.locator('[data-mid="'+('1'.repeat(32))+'"]');await request.waitFor();
+  const show=async()=>{if(width===390){const actions=request.getByRole('button',{name:'Message actions',exact:true});await actions.focus();await actions.press('Enter');}else{await request.hover();await request.getByRole('button',{name:'More actions',exact:true}).click();}await page.getByRole(width===390?'button':'menuitem',{name:'Follow up with this agent…',exact:true}).click();};
+  const calls=()=>page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/request/followup'));
+  await show();const dialog=page.getByRole('dialog',{name:'Follow up with the same agent',exact:true});await dialog.waitFor();
+  assert.match(await dialog.innerText(),/Brin|Analyst/);assert.match(await dialog.innerText(),/Desktop|desktop/);assert.match(await dialog.innerText(),/The status shows what the agent accepted/);
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();assert.deepEqual(await calls(),[],'Close sends nothing');
+  await show();await dialog.getByRole('textbox').fill('A staged correction');
+  await dialog.locator('input[type=file]').setInputFiles([{name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')},{name:'fail-second.md',mimeType:'text/markdown',buffer:Buffer.from('later file')}]);
+  await page.evaluate(()=>fixture.followupStageFailure=true);
+  await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();await dialog.getByRole('alert').getByText(/second stage failure/).waitFor();
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/upload/discard'&&r.body.ids.includes(fixture.followupStages[0].id)));
+  assert.deepEqual(await calls(),[],'Second stage failure sends no correction');assert.match(await dialog.innerText(),/terms.md/,'Original File objects survive staging failure');
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+  await show();await dialog.getByRole('textbox').fill('A correction abandoned before send');
+  await dialog.locator('input[type=file]').setInputFiles({name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')});
+  await page.evaluate(()=>fixture.followupStagePause=true);await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();
+  await page.waitForFunction(()=>!!window.finishFollowupStage);await page.evaluate(()=>openGroup());await page.evaluate(()=>finishFollowupStage());
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.path==='/api/upload/discard'&&r.body.ids.includes(fixture.followupStages[1].id)));
+  assert.deepEqual(await calls(),[],'Captured view change during staging sends no correction');
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+  await show();await dialog.getByRole('textbox').fill('Use English instead');
+  await dialog.locator('input[type=file]').setInputFiles({name:'terms.md',mimeType:'text/markdown',buffer:Buffer.from('English terminology')});
+  await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();await dialog.getByRole('alert').getByText(/Synthetic uncertain response/).waitFor();
+  assert.equal(await dialog.getByRole('textbox').inputValue(),'Use English instead');assert(await dialog.getByRole('textbox').isDisabled(),'Uncertain send retains immutable text');
+  assert.match(await dialog.innerText(),/terms.md/,'Attachment stays on retry');
+  await settle(page);const shot=path.join(evidence,'comic-followup-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  await dialog.getByRole('button',{name:'Retry this follow-up',exact:true}).click();await dialog.waitFor({state:'hidden'});
+  const sent=await calls();assert.equal(sent.length,2);assert.deepEqual({...sent[0].body,files:[]},{...sent[1].body,files:[]},'Retry retains exact ID, target and text');
+  const stages=await page.evaluate(()=>fixture.followupStages);for(const call of sent){assert.equal(call.body.files.length,1);const staged=stages.find(s=>s.id===call.body.files[0]);assert(staged);assert.deepEqual({name:staged.name,size:staged.size,text:staged.text},{name:'terms.md',size:19,text:'English terminology'},'Retry re-stages exact retained bytes');}
+  assert.notEqual(sent[0].body.files[0],sent[1].body.files[0],'Native retries use fresh staged upload IDs');
+  await page.waitForFunction(()=>fixture.followupStages.every(s=>fixture.requests.some(r=>r.path==='/api/upload/discard'&&r.body.ids.includes(s.id))));
+  assert.match(sent[0].body.id,/^[a-f0-9]{32}$/);assert.deepEqual(sent[0].body.ref,{id:'1'.repeat(32),fingerprint:'eeeeeeee-eeeeeeee-eeeeeeee-eeeeeeee'});assert.equal(sent[0].body.conv,conv);assert.equal(sent[0].body.body,'Use English instead');assert.equal(typeof sent[0].body.files[0],'string');
+  assert.equal(await page.evaluate(()=>fixture.thread.messages.find(m=>m.id===fixture.followupID).body),'Prepare contribution-margin.md in Russian','Original unchanged');
+  await show();await dialog.getByRole('textbox').fill('Later clarification');
+  await page.evaluate(()=>{fixture.thread.messages.find(m=>m.id===fixture.followupID).deleted=true;});
+  await dialog.getByRole('button',{name:'Send follow-up',exact:true}).click();await dialog.getByRole('alert').getByText(/no longer available/).waitFor();
+  assert.equal((await calls()).length,2,'Deleted/stale source refuses before handover');
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
  }finally{await context.close();}
  continue;
 }
@@ -1072,6 +1142,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    const {page,context}=await openCase('admin');await page.getByRole('button',{name:'Retract invitation…',exact:true}).filter({visible:true}).first().click();await page.evaluate(()=>disableInvite());await page.waitForTimeout(40);await page.locator('#dialog-ok').click();await page.getByText('This invitation can no longer be changed here. Refresh the conversation and review it again.',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/groups/cancel').length),0,'Stale capability blocks action');await context.close();
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_REACTION_REGRESSION==='1'?'All skins: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_FOLLOWUP_REGRESSION==='1'?'Comic follow-up: exact original/target, no send on close, retained text/files, same-ID uncertain retry, unused staging cleanup, deleted-source refusal; desktop1280/mobile390':process.env.AGENTNET_REACTION_REGRESSION==='1'?'All skins: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

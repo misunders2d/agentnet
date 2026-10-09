@@ -119,6 +119,8 @@ type Overview struct {
 	// an agent (MEL-529): the only "runs an agent" signal for skins, kept
 	// offline. A hint for display and offers, never authority.
 	AgentDevices []string `json:"agent_devices"`
+	// ModelReports are private, read-only reports from verified own-human hosts.
+	ModelReports []client.PrivateModelReport `json:"model_reports,omitempty"`
 }
 
 // WorkspaceView is the workspace's own name ("" when its admin set none)
@@ -840,6 +842,7 @@ type Me struct {
 
 // ThreadSummary is one row of the thread list.
 type ThreadSummary struct {
+	Redirect   string    `json:"redirect,omitempty"`
 	Conv       string    `json:"conv,omitempty"`
 	ID         string    `json:"id"`
 	Peer       string    `json:"peer"`
@@ -991,6 +994,7 @@ type OperatorDecisions interface {
 
 // DecisionAction names a reported request exactly and what to do with it.
 type DecisionAction struct {
+	Check   bool   `json:"check,omitempty"` // read-only own-resolution capability check
 	SendID  string `json:"send_id,omitempty"`
 	Host    string `json:"host"`
 	ID      string `json:"id"`  // the request's id on the host (ReportItem.ID)

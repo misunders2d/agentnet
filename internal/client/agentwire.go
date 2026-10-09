@@ -22,6 +22,9 @@ var errAgentIdentityUnsupported = fmt.Errorf("%w: named agent capability unavail
 // conversation's primary (a group's grp1, a DM's hgp1); delivery adds rm1
 // to it (roomCopy, ROOM_V1 §2.5).
 func agentRequirement(in envelope.Inner) string {
+	if in.Followup != nil && in.Conv == "" {
+		return protocol.CapRequestFollowup
+	}
 	if isResponderProgress(in) && in.Conv == "" { // a conversation's progress keeps its own requirement; delivery adds prg1
 		return protocol.CapProgress
 	}
@@ -134,7 +137,7 @@ func copyRequirement(c outCopy) string {
 }
 
 func (a *Agent) requireParticipationCaps(ctx context.Context, key identity.Public, required string) error {
-	if required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
+	if required != protocol.CapModelSync && required != protocol.CapTopicOrganization && required != protocol.CapRequestFollowup && required != protocol.CapTopicParticipation && required != protocol.CapOwnSyncV3 && required != protocol.CapOwnSyncV2 && required != protocol.CapContinuation && required != protocol.CapSendGroup && required != protocol.CapReadSync && required != protocol.CapGroupInvitationControl && required != protocol.CapGroupHumanParticipation && required != protocol.CapRootSync && required != protocol.CapHumanParticipation && required != protocol.CapAgentIdentity && required != protocol.CapExternalParticipation && required != protocol.CapGroup && required != protocol.CapHeadless && required != protocol.CapReplyReceiver && required != protocol.CapProgress && required != protocol.CapAgentReaction && required != protocol.CapConvClear && required != protocol.CapRoom {
 		return errors.New("unknown queued capability requirement")
 	}
 	label, device, err := protocol.SplitAddress(key.Address)
@@ -314,6 +317,12 @@ type NeedsUpdateError struct{ Address, Cap string }
 func (e *NeedsUpdateError) Error() string {
 	message := "cannot read named agents yet; update all its active AgentNet sessions"
 	switch e.Cap {
+	case protocol.CapRequestFollowup:
+		message = "cannot safely queue bound request follow-ups yet; update all its active AgentNet sessions"
+	case protocol.CapModelSync:
+		message = "cannot read private model reports yet; update all its active AgentNet sessions"
+	case protocol.CapTopicOrganization:
+		message = "cannot read selected topic moves and merges yet; update all its active AgentNet sessions"
 	case protocol.CapTopicParticipation:
 		message = "cannot enforce topic-only participation yet; update all its active AgentNet sessions"
 	case protocol.CapOwnSyncV3:

@@ -9,6 +9,19 @@ This record starts with v0.8.1; earlier releases remain on the
 ### Fixed
 
 - Wait for the authenticated local page when reattaching after an independent daemon update, and reload an attached page even when its address is unchanged. A failed connection during restart no longer prevents the new page event from recovering it. Preserve ordinary setup transitions and reconcile the already-approved update without starting it again.
+- Keep a failed incoming lookup from dropping or repeatedly blocking the rest of the phone's push stream. Retain the exact encrypted message for bounded recovery, and send a receipt only after admission. Reconnect recovery no longer delays fresh outgoing messages; downloads have a deadline and stop with the workspace.
+- Recover older signed conversation participation history whose forwarding device was mistaken for the original author. Recovery still checks the original signature, verified human devices and disclosure scope; it does not accept rejected work or rerun tasks.
+- Match direct-conversation answers to their shared request IDs across devices, and reconcile retained answered jobs through signed status updates. Pending lists distinguish missing completion evidence from an actual reported running state.
+- Check the exact remote host's compatibility before marking a waiting request as handled, and explain which computer needs an update.
+
+### Added
+
+- In Comic, send a correction or follow-up to an exact agent request. A running owned Codex group question accepts steering through its existing native bridge; unsupported runs receive a queued follow-up. Uncertain acknowledgements remain explicit and never silently repeat the work.
+- In Comic, select messages and move them to a new or existing topic, or merge the reviewed messages of one topic into another. Original messages, replies and files keep their identities, and later unselected messages stay in their original topic.
+- In Comic, assign a reviewed message and selected available files to one of your agents. The new task preserves its source attribution and opens in the exact agent's private chat; retries retain the same task and file bytes.
+- In Comic, share selected history from a chat into a group as an attributed, inert quotation. Review the destination audience and selected files before sending. Originals stay in their source chat, and imported questions or tasks do not run.
+- Support Antigravity's `agy` responder through its native command-line setup, preserving the owner's tools, skills and permissions.
+- Show an own agent's last reported model, or an explicit unknown value, across verified personal devices. This reports execution metadata without changing native model settings.
 
 ## [0.8.14] — 2026-10-09
 

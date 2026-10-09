@@ -13,8 +13,11 @@ import (
 // outgoing transport is not a newly authored event. Copying its history to
 // the member's own phone must not claim the transport sender signed the scope.
 func TestForwardedParticipationHistoryToOwnPhone(t *testing.T) {
-	w, carol, _, conv, pc, pd, _, stub := twoGuests(t)
+	w, carol, dana, conv, pc, pd, _, stub := twoGuests(t)
 	if _, err := carol.AcceptParticipation(tctx(t), pc.PID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dana.AcceptParticipation(tctx(t), pd.PID); err != nil {
 		t.Fatal(err)
 	}
 	var shared sharedCopy
@@ -93,6 +96,125 @@ func TestForwardedParticipationHistoryToOwnPhone(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, root := rootOf(t, w.alice, conv)
+	var sharedAccept sharedCopy
+	eventually(t, "Alice discloses Dana's acceptance", func() bool {
+		var ok bool
+		sharedAccept, ok = sharedOf(humanSharedCopies(t, w.alice, conv, pd.PID, carol.Address), protocol.EventAccept)
+		return ok
+	})
+	acceptRows, err := w.alice.historySourceRows(w.alice.store.db, "dir='out' AND id=?", "id", 1, sharedAccept.id)
+	if err != nil || len(acceptRows) != 1 {
+		t.Fatalf("forwarded acceptance source: count=%d err=%v", len(acceptRows), err)
+	}
+	oldAccept := itemOf(acceptRows[0].in, acceptRows[0].key, acceptRows[0].pos.Ms)
+	acceptCarrier := craft(t, w.alice, phone, envelope.Inner{Kind: envelope.KindMessage, Conv: conv, Root: root, LID: protocol.NewID(), Replica: true, Sub: envelope.SubHistory, Body: mustJSON(oldAccept)})
+	if err := phone.verifyAndStore(tctx(t), acceptCarrier); err != nil {
+		t.Fatal(err)
+	}
+	historyRecoveryReason(t, phone, acceptCarrier.ID, reasonProof)
+	// Older producers put the forwarding member in From even though the
+	// enclosed public event keeps its original author's valid signature.
+	// A fresh linked phone must recover that exact inert record too.
+	legacyItem := item
+	legacyItem.From, legacyItem.FromKey = w.alice.Address, w.alice.Self().Fingerprint()
+	legacy := craft(t, w.alice, phone, envelope.Inner{Kind: envelope.KindMessage, Conv: conv, Root: root, LID: protocol.NewID(), Replica: true, Sub: envelope.SubHistory, Body: mustJSON(legacyItem)})
+	if err := phone.verifyAndStore(tctx(t), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := phone.store.disposition(legacy.ID); err != nil || state != protocol.StateDelivered {
+		_, _, checkErr := phone.dmLifecycleHistoryReceived(phone.store.db, legacy.From, conv, legacyItem)
+		t.Fatalf("legacy forwarded scope did not recover: state=%s reason=%s check=%v err=%v", state, heldReason(t, phone, legacy.ID), checkErr, err)
+	}
+	for phone.retryProof(tctx(t)) {
+	}
+	if state, err := phone.store.disposition(acceptCarrier.ID); err != nil || state != protocol.StateDelivered {
+		t.Fatalf("exact acceptance stayed held after its signed scope arrived: %s %v", state, err)
+	}
+	t.Run("retained invalid copies recover once across restart", func(t *testing.T) {
+		var retained []envelope.Envelope
+		for range 3 {
+			x := craft(t, w.alice, phone, envelope.Inner{Kind: envelope.KindMessage, Conv: conv, Root: root, LID: protocol.NewID(), Replica: true, Sub: envelope.SubHistory, Body: mustJSON(legacyItem)})
+			if err := phone.store.holdAs(x, reasonInvalid); err != nil {
+				t.Fatal(err)
+			}
+			retained = append(retained, x)
+		}
+		if err := phone.store.deleteConfig(lifecycleHistoryRecoveryScan); err != nil {
+			t.Fatal(err)
+		}
+		restarted, err := Open(phone.home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer restarted.Close()
+		for _, x := range retained {
+			historyRecoveryReason(t, restarted, x.ID, reasonProof)
+		}
+		for restarted.retryProof(tctx(t)) {
+		}
+		for _, x := range retained {
+			if got, err := restarted.store.disposition(x.ID); err != nil || got != protocol.StateDelivered {
+				t.Fatalf("retained carrier was not admitted and acknowledged: %s %v", got, err)
+			}
+			if err := restarted.verifyAndStore(tctx(t), x); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := inboxCount(t, restarted, "lid=? AND claimed_fp=?", item.LID, item.FromKey); got != 1 {
+			t.Fatalf("recovery stored %d copies of the same logical event", got)
+		}
+		if stub.runs() != 0 {
+			t.Fatal("history recovery ran an old task")
+		}
+	})
+	for _, badCase := range []string{"wrong transport", "wrong conversation", "wrong participation", "forged signature", "private invitation", "unrelated attachment", "request target", "source ID collision"} {
+		t.Run("legacy refuses "+badCase, func(t *testing.T) {
+			bad := legacyItem
+			bad.ID, bad.LID = protocol.NewID(), protocol.NewID()
+			ev := shared.ev
+			switch badCase {
+			case "wrong transport":
+				bad.From, bad.FromKey = carol.Address, carol.Self().Fingerprint()
+			case "wrong conversation":
+				ev.Conv = protocol.NewID() + protocol.NewID()
+			case "wrong participation":
+				bad.PID = protocol.NewID()
+			case "forged signature":
+				ev.Sig = append([]byte(nil), ev.Sig...)
+				ev.Sig[0] ^= 1
+			case "private invitation":
+				ev.Type = protocol.EventInvite
+				ev.Sign(w.bob.id.Sign)
+			case "unrelated attachment":
+				bad.Attachments = []envelope.Attachment{{Name: "unrelated.txt", Size: 1, SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+			case "request target":
+				bad.Target = &envelope.Target{Address: dana.Address, Fingerprint: dana.Self().Fingerprint()}
+			case "source ID collision":
+				bad.ID = legacyItem.ID // a different logical source may not overwrite this accepted row
+			}
+			bad.Body = mustJSON(ev)
+			x := craft(t, w.alice, phone, envelope.Inner{Kind: envelope.KindMessage, Conv: conv, Root: root, LID: protocol.NewID(), Replica: true, Sub: envelope.SubHistory, Body: mustJSON(bad)})
+			if err := phone.verifyAndStore(tctx(t), x); err != nil {
+				t.Fatal(err)
+			}
+			if heldReason(t, phone, x.ID) != reasonInvalid || inboxCount(t, phone, "id=? AND lid=?", bad.ID, bad.LID) != 0 {
+				t.Fatal("legacy repair accepted unrelated or unauthenticated history")
+			}
+		})
+	}
+	t.Run("authority is rechecked before duplicate acknowledgement", func(t *testing.T) {
+		tx, err := phone.store.db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`UPDATE peers SET pending=public WHERE address=?`, w.alice.Address); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := phone.dmLifecycleHistoryReceived(tx, w.alice.Address, conv, legacyItem); err == nil {
+			t.Fatal("pending forwarder key bypassed the final transaction guard")
+		}
+	})
 
 	t.Run("altered signature remains rejected", func(t *testing.T) {
 		badEvent := shared.ev

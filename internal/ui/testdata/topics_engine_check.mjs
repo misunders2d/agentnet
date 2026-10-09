@@ -66,7 +66,11 @@ for (const room of [false,true]) {
  await e.loadErased();await pending(ids);
  await refuses(()=>status(ids[0],'resolved',2,fp,'other/desk'),/./,'wrong host cannot settle request');
  await refuses(()=>status(ids[0],'resolved',2,hostFP),/./,'wrong requester key cannot settle request');
- await st.write(await status(ids[0],'resolved',2));await st.write(await status(ids[0],'running',1));
+ // A retained old reply names a host-only physical copy. It cannot settle a
+ // different request by text/order; an authenticated logical status can.
+ const oldReply={v:2,id:'a'.repeat(32),lid:'a'.repeat(32),conv,from:'peer/desk',fp:hostFP,kind:'result',body:'retained final answer',topic,reply_to:'f'.repeat(32),status:'done',ts:4,at:4000};
+ await st.write([{s:'inbox',k:oldReply.id,v:oldReply}]);await pending(ids);
+ await st.write(await status(ids[0],'answered',2));await st.write(await status(ids[0],'running',1));
  await st.write(await status(ids[1],'cancelled',3));await st.write(await status(ids[2],'interrupted',4));
  await pending([ids[2]]);
  e=fresh();await e.loadErased();await pending([ids[2]]);

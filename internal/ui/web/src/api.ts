@@ -6,6 +6,25 @@ import type { Host } from "./host";
 
 export type { T };
 
+export interface TopicOrganizationRequest {
+  conv: string; ids: string[]; topic: string; merge?: string; new?: boolean; title?: string;
+}
+export interface TopicOrganizationReview extends TopicOrganizationRequest {
+  operation: string; token: string; parent?: string;
+  moves: { lid: string; author: string; hash: string; topic?: string }[];
+}
+
+export interface HistoryContributionRequest {
+  source: string; ids: string[]; destination: string; topic?: string; new_topic?: boolean; title?: string;
+  files?: { id: string; index: number }[];
+}
+export interface HistoryContributionReview extends HistoryContributionRequest {
+  operation: string; token: string; body: string; imported_at: string; audience_pending?: boolean;
+  items: { id: string; lid: string; author: string; hash: string; from: string; label?: string; sent_at: string; body: string; reply_to?: string; selected_parent?: number;
+    files: { index: number; name: string; size: number; sha256: string; available: boolean; selected: boolean }[] }[];
+  audience: { person: string; address: string; fingerprint: string; label: string; role: "member" | "guest" | "agent"; topic?: string; pid?: string; agent_id?: string }[];
+}
+
 // Read-only folder listings use the daemon's generated contract.
 export type FoldersView = T.FoldersView;
 export type FolderEntry = T.FolderView;
@@ -70,6 +89,10 @@ export function api(host: Host) {
     topics: (p: { conv?: string; peer?: string; state?: string; q?: string; before?: string; limit?: number }) =>
       get<T.TopicPage>(q("/api/topics", Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)])))),
     changeTopic: (what: "create" | "archive" | "delete" | "rename" | "done" | "reopen", c: T.TopicChange) => post<{ note: string }>("/api/topic/" + what, c),
+    previewTopicOrganization: (d: TopicOrganizationRequest) => post<TopicOrganizationReview>("/api/topic/organization/preview", d),
+    applyTopicOrganization: (d: TopicOrganizationReview) => post<T.Sent>("/api/topic/organization/apply", d),
+    previewHistoryContribution: (d: HistoryContributionRequest) => post<HistoryContributionReview>("/api/history/contribution/preview", d),
+    applyHistoryContribution: (d: HistoryContributionReview) => post<T.Sent>("/api/history/contribution/apply", d),
 
     // Files
     stage: (file: File) => host.stage(file),

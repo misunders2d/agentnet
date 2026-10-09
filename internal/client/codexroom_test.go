@@ -181,6 +181,7 @@ func TestCodexRoomFixtureProcess(t *testing.T) {
 		var m struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
 		}
 		if d.Decode(&m) != nil {
 			os.Exit(0)
@@ -199,7 +200,23 @@ func TestCodexRoomFixtureProcess(t *testing.T) {
 			enc.Encode(map[string]any{"id": m.ID, "result": map[string]any{"thread": map[string]string{"id": "thread"}, "approvalPolicy": "never", "sandbox": map[string]any{"type": "readOnly", "networkAccess": false}}})
 		case "turn/start":
 			enc.Encode(map[string]any{"id": m.ID, "result": map[string]any{"turn": map[string]string{"id": "turn"}}})
+			if mode == "steer" {
+				continue
+			}
 			enc.Encode(map[string]any{"id": "tool", "method": "item/tool/call", "params": map[string]any{"threadId": "thread", "turnId": "turn", "tool": "agentnet_room", "callId": "call", "arguments": map[string]string{"action": "wait", "id": "fixture"}}})
+		case "turn/steer":
+			var p struct {
+				ThreadID       string                        `json:"threadId"`
+				ExpectedTurnID string                        `json:"expectedTurnId"`
+				ClientID       string                        `json:"clientUserMessageId"`
+				Input          []struct{ Type, Text string } `json:"input"`
+			}
+			if json.Unmarshal(m.Params, &p) != nil || p.ThreadID != "thread" || p.ExpectedTurnID != "turn" || p.ClientID == "" || len(p.Input) != 1 || !strings.Contains(p.Input[0].Text, "Use English instead") {
+				os.Exit(2)
+			}
+			enc.Encode(map[string]any{"id": m.ID, "result": map[string]string{"turnId": "turn"}})
+			enc.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn", "item": map[string]string{"type": "agentMessage", "text": "OWNED_CORRECTION_ACCEPTED"}}})
+			enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread", "turn": map[string]string{"id": "turn", "status": "completed"}}})
 		case "":
 			if string(m.ID) == `"tool"` {
 				enc.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "thread", "turnId": "turn", "item": map[string]string{"type": "agentMessage", "text": "NATIVE_REPLY"}}})
@@ -297,5 +314,114 @@ func TestCodexRoomBridgeNativeApprovalNeedsHuman(t *testing.T) {
 				t.Fatal("approval did not release input")
 			}
 		})
+	}
+}
+
+func TestCodexRoomBridgeSteerExactTurn(t *testing.T) {
+	for _, mode := range []string{"accepted", "unsupported", "wrong-turn", "error", "complete-first", "cancel", "completed-before"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			in, out := io.Pipe()
+			defer in.Close()
+			var output bytes.Buffer
+			b := &codexRoomBridge{ctx: ctx, input: out, output: &output, thread: "owned-thread", turn: "owned-turn", calls: map[string]bool{}}
+			defer b.close()
+			if mode == "completed-before" {
+				b.event([]byte(`{"method":"item/completed","params":{"threadId":"owned-thread","turnId":"owned-turn","item":{"type":"agentMessage","text":"done"}}}`))
+				b.event([]byte(`{"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"owned-turn","status":"completed"}}}`))
+				if got := b.steer(ctx, "correction", "Use English"); got != steerQueued {
+					t.Fatal(got)
+				}
+				return
+			}
+			wire := make(chan map[string]any, 1)
+			go func() { var request map[string]any; _ = json.NewDecoder(in).Decode(&request); wire <- request }()
+			done := make(chan string, 1)
+			go func() { done <- b.steer(ctx, "exact-correction", "Use English") }()
+			var request map[string]any
+			select {
+			case request = <-wire:
+			case <-time.After(time.Second):
+				t.Fatal("no native steer")
+			}
+			if request["method"] != "turn/steer" {
+				t.Fatal(request)
+			}
+			params := request["params"].(map[string]any)
+			if params["threadId"] != "owned-thread" || params["expectedTurnId"] != "owned-turn" || params["clientUserMessageId"] != "exact-correction" {
+				t.Fatal(params)
+			}
+			if len(params) != 4 {
+				t.Fatalf("native settings overridden: %v", params)
+			}
+			encoded, _ := json.Marshal(params["input"])
+			if string(encoded) != `[{"text":"Use English","type":"text"}]` {
+				t.Fatal(string(encoded))
+			}
+			expected := steerUnknown
+			var response map[string]any
+			switch mode {
+			case "accepted", "complete-first":
+				response = map[string]any{"id": request["id"], "result": map[string]string{"turnId": "owned-turn"}}
+				expected = steerAccepted
+			case "unsupported":
+				response = map[string]any{"id": request["id"], "error": map[string]any{"code": -32601, "message": "method unavailable"}}
+				expected = steerUnsupported
+			case "wrong-turn":
+				response = map[string]any{"id": request["id"], "result": map[string]string{"turnId": "other-turn"}}
+			case "error":
+				response = map[string]any{"id": request["id"], "error": map[string]any{"code": -32000, "message": "uncertain failure"}}
+			case "cancel":
+				cancel()
+			}
+			if mode == "complete-first" {
+				b.event([]byte(`{"method":"item/completed","params":{"threadId":"owned-thread","turnId":"owned-turn","item":{"type":"agentMessage","text":"done"}}}`))
+				b.event([]byte(`{"method":"turn/completed","params":{"threadId":"owned-thread","turn":{"id":"owned-turn","status":"completed"}}}`))
+			}
+			if response != nil {
+				raw, _ := json.Marshal(response)
+				b.event(raw)
+			}
+			select {
+			case got := <-done:
+				if got != expected {
+					t.Fatalf("got %s want %s", got, expected)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("missing correlated outcome")
+			}
+			b.stateMu.Lock()
+			ended := b.done
+			b.stateMu.Unlock()
+			if ended && mode != "complete-first" {
+				t.Fatal("steer rejection killed the original run")
+			}
+		})
+	}
+}
+
+func TestCodexRoomBridgeModelReportBound(t *testing.T) {
+	in, out := io.Pipe()
+	defer in.Close()
+	go io.Copy(io.Discard, in)
+	var output bytes.Buffer
+	b := &codexRoomBridge{ctx: context.Background(), input: out, output: &output, calls: map[string]bool{}}
+	defer b.close()
+	b.event([]byte(`{"id":2,"result":{"thread":{"id":"exact"},"model":"native-model"}}`))
+	if got := b.modelReport(); got != "native-model" {
+		t.Fatal(got)
+	}
+	b.event([]byte(`{"method":"thread/settings/updated","params":{"threadId":"foreign","threadSettings":{"model":"foreign-model"}}}`))
+	if got := b.modelReport(); got != "native-model" {
+		t.Fatal(got)
+	}
+	b.event([]byte(`{"method":"thread/settings/updated","params":{"threadId":"exact","threadSettings":{"model":"new-native-model"}}}`))
+	if got := b.modelReport(); got != "new-native-model" {
+		t.Fatal(got)
+	}
+	b.event([]byte(`{"method":"thread/settings/updated","params":{"threadId":"exact","threadSettings":{"model":"bad\nmodel"}}}`))
+	if got := b.modelReport(); got != "new-native-model" {
+		t.Fatal(got)
 	}
 }

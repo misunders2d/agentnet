@@ -141,12 +141,17 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying topic titles: %v", titleErr)
 			a.convWork.due(convHistory)
 		}
+		models, modelErr := a.syncModelReports()
+		if modelErr != nil {
+			a.Logf("copying model reports: %v", modelErr)
+			a.convWork.due(convHistory)
+		}
 		more := a.historyStep(ctx)
 		direct, directErr := a.syncDeviceHistory()
 		if directErr != nil {
 			a.Logf("copying direct history: %v", directErr)
 		}
-		if roots || reads || invites || titles || more || direct {
+		if roots || reads || invites || titles || models || more || direct {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -172,7 +177,7 @@ func (a *Agent) relayFeatures(ctx context.Context) ([]string, error) {
 // hint (advertisedCaps) it is at most protocol.MaxAdvertisedCaps long;
 // rm1 (protocol.CapRoom) says this program enforces every room reader rule
 // (ROOM_V1 §2.1), so what rm1 implies (rcv1 among them) is not listed.
-var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapNotify, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 18-cap advertisement bound including agent1
+var ownCaps = []string{protocol.CapContinuation, protocol.CapRootSync, protocol.CapControl, protocol.CapDriveSpace, protocol.CapEnv2, protocol.CapRequestFollowup, protocol.CapGroupInvitationControl, protocol.CapHeadless, protocol.CapGroupHumanParticipation, protocol.CapModelSync, protocol.CapNotify, protocol.CapTopicOrganization, protocol.CapOwnSyncV2, protocol.CapOwnSyncV3, protocol.CapPerson, protocol.CapReadSync, protocol.CapRoom, protocol.CapSendGroup, protocol.CapTopicParticipation, protocol.CapTyping} // apx1 and aid1 are already implied by rm1; preserve the 21-cap advertisement bound including agent1
 
 // capsPublisher is the one publisher of this run's capability records:
 // the daemon's and link.go's waiting session share the session id, and the
@@ -417,8 +422,9 @@ func (a *Agent) ConversationMessages(conv string) ([]ConvMessage, error) {
 
 // ConvOutgoing is a message to send in a conversation.
 type ConvOutgoing struct {
-	SendGroup     string // explicit human composer gesture; presentation only
-	Kind          string // message (default), question or task
+	Followup      *envelope.Ref // explicit original request, never inferred from a reply or quotation
+	SendGroup     string        // explicit human composer gesture; presentation only
+	Kind          string        // message (default), question or task
 	Body          string
 	ReplyTo       string
 	Quote         string
@@ -433,12 +439,13 @@ type ConvOutgoing struct {
 	Files         []OutgoingFile   // files to attach (a turn only): encrypted to the recipient while sending
 	ReplyReceiver *ReplyReceiver   // private local return selection
 
-	stored  func()                                 // the message and its files are stored: the spool is theirs
-	sub     string                                 // envelope.SubEvent for participation events (participation.go)
-	status  string                                 // an agent output's status (agentjob.go)
-	claim   func(tx *sql.Tx, replyID string) error // decides, with the outbox write, that it may be stored (agentjob.go)
-	human   *envelope.HumanTurn
-	selfJob bool // a request to this device's own agent: its job is recorded with it
+	stored       func()                                 // the message and its files are stored: the spool is theirs
+	sub          string                                 // envelope.SubEvent for participation events (participation.go)
+	status       string                                 // an agent output's status (agentjob.go)
+	claim        func(tx *sql.Tx, replyID string) error // decides, with the outbox write, that it may be stored (agentjob.go)
+	human        *envelope.HumanTurn
+	selfJob      bool // a request to this device's own agent: its job is recorded with it
+	contribution bool // reviewed ordinary quoted history; its local claim rechecks disclosure
 }
 
 // ConvSent is what became of a conversation message: one copy per device
@@ -514,6 +521,9 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 	if m.Topic, err = a.outgoingTopic(conv, m.Topic, m.ReplyTo); err != nil {
 		return ConvSent{}, err
 	}
+	if err := a.prepareTopicOrganization(ctx, conv, &m); err != nil {
+		return ConvSent{}, err
+	}
 	if m.Topic != "" && m.ReplyTo == "" && m.TopicEvent == nil && m.sub == "" && (m.Kind == "" || m.Kind == envelope.KindMessage || m.Kind == envelope.KindQuestion || m.Kind == envelope.KindTask) && !envelope.AgentOrigin(m.Origin) {
 		// Addressed questions/tasks continue the same causal topic chain as chat.
 		m.ReplyTo, err = a.chatTopicHead(conv, m.Topic)
@@ -552,7 +562,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		} else if pid, e := a.ownHumanPID(conv, m.Topic); e == nil {
 			m.PID = pid // an accepted guest's device: its own exact participation, as the page names it ("" for a member)
 		}
-		if humanAuthor {
+		if humanAuthor && !envelope.TopicOrganization(m.TopicEvent) {
 			h, e := a.humanPlan(ctx, conv, m.PID, m.Topic)
 			if e != nil {
 				return ConvSent{}, e
@@ -603,7 +613,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			}
 			return a.sendExternalParticipation(ctx, root, raw, info, m)
 		}
-		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) {
+		if m.sub == "" && m.Target == nil && (m.Kind == "" || m.Kind == envelope.KindMessage) && !envelope.TopicOrganization(m.TopicEvent) {
 			infos, e := a.Participations(conv)
 			if e != nil {
 				return ConvSent{}, e
@@ -688,6 +698,13 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 			// Keep the physical request authorization above; expose its exact
 			// logical identity so linked humans can confirm the same proposal.
 			m.ReplyTo, err = a.proposalReplyRef(ctx, conv, m.ReplyTo)
+			if err != nil {
+				return ConvSent{}, err
+			}
+		} else if m.Kind == envelope.KindAnswer || m.Kind == envelope.KindResult {
+			// Authorization above still checks the exact held physical request.
+			// Every recipient must then see the same logical reply reference.
+			m.ReplyTo, err = groupReplyLID(a.store.db, conv, m.ReplyTo)
 			if err != nil {
 				return ConvSent{}, err
 			}
@@ -801,7 +818,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		}
 		target := m.Target != nil && m.Target.Address == dev.Address && m.Target.Fingerprint == dev.Fingerprint()
 		in := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: dev.Address, TS: time.Now().Unix(),
-			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, SendGroup: m.SendGroup, Quote: m.Quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
+			Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Followup: m.Followup, SendGroup: m.SendGroup, Quote: m.Quote, Topic: m.Topic, TopicEvent: m.TopicEvent, TopicDone: m.TopicDone, Conv: conv, LID: lid, Root: raw, Replica: own[dev.Address] && !target,
 			Origin: m.Origin, Emotion: m.Emotion, Target: m.Target, PID: m.PID, Sub: m.sub, Status: m.status, Fan: fan, AgentID: m.AgentID}
 		if binding != nil && binding.receiver.Host != nil && target {
 			in.ID = lid
@@ -862,7 +879,7 @@ func (a *Agent) SendConv(ctx context.Context, conv string, m ConvOutgoing) (Conv
 		jobKey = me.info.Fingerprint
 	}
 	local := envelope.Inner{V: envelope.Version2, ID: protocol.NewID(), From: a.Address, To: a.Address, TS: time.Now().Unix(),
-		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Topic: m.Topic, TopicEvent: m.TopicEvent, SendGroup: m.SendGroup, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
+		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Followup: m.Followup, Topic: m.Topic, TopicEvent: m.TopicEvent, SendGroup: m.SendGroup, Conv: conv, LID: lid, Origin: m.Origin, Target: m.Target, PID: m.PID, Fan: fan, AgentID: m.AgentID}
 	if binding != nil && m.Target == nil {
 		binding.person = peerID
 	}
@@ -1027,7 +1044,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			case err != nil || !found:
 			case proposalCap && w.conv == "":
 				ok = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3) == nil && (w.required == "" || a.requireParticipationCaps(ctx, key, w.required) == nil)
-			case w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3:
+			case w.required == protocol.CapModelSync || w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2 || w.required == protocol.CapOwnSyncV3:
 				ok = a.requireParticipationCaps(ctx, key, w.required) == nil
 			case w.required == protocol.CapAgentReaction && w.conv == "":
 				// A device thread's assistant reaction: no person gate either.
@@ -1111,6 +1128,11 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 // proof, continuing from where the previous page ended, and reports whether
 // more follow. Messages still without proof stay held, in place.
 func (a *Agent) retryProof(ctx context.Context) (more bool) {
+	if err := a.recoverInvalidLifecycleHistory(); err != nil {
+		a.Logf("recovering held lifecycle history: %v", err)
+		a.convWork.due(convRetry)
+		return false
+	}
 	if err := a.recoverInvalidGroupHistory(); err != nil {
 		a.Logf("recovering held group history: %v", err)
 		a.convWork.due(convRetry)
@@ -1174,6 +1196,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return hold(reasonProof, err.Error())
 		}
 		return err
+	}
+	if in.Sub == envelope.SubModelSync {
+		return a.admitModelSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubTopicSync {
 		return a.admitTopicSync(ctx, env, in, sender, fromQuarantine, hold)
@@ -1330,6 +1355,14 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		}
 		raw := []byte(in.Body)
 		also = func(tx *sql.Tx) error { return insertParticipationEvent(tx, ev, raw) }
+	}
+	if envelope.TopicOrganization(in.TopicEvent) {
+		if err := topicOrganizationAuthor(a.store.db, in.Conv, sender.Address, sender.Fingerprint()); err != nil {
+			return hold(reasonInvalid, err.Error())
+		}
+		also = func(tx *sql.Tx) error {
+			return topicOrganizationAuthor(tx, in.Conv, sender.Address, sender.Fingerprint())
+		}
 	}
 	now, event := time.Now(), also
 	forward := a.forwardStale(me, in, sender.Fingerprint(), in.Root) // for this person's devices its sender did not know

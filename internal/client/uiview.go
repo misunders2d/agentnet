@@ -21,17 +21,18 @@ import (
 
 // ThreadSummary is one reply-linked conversation with one peer.
 type ThreadSummary struct {
-	Conv    string    `json:"conv,omitempty"`
-	ID      string    `json:"id"` // earliest message of the thread (derived, not stored)
-	Peer    string    `json:"peer"`
-	Title   string    `json:"title"` // first line of the first message
-	Last    string    `json:"last"`  // first line of the latest message
-	LastAt  time.Time `json:"last_at"`
-	Count   int       `json:"count"`
-	Review  int       `json:"review"`  // received items waiting for a decision here
-	Unread  int       `json:"unread"`  // received messages not yet read (review notices not counted)
-	Running int       `json:"running"` // received items the worker is on
-	Waiting bool      `json:"waiting"` // a question or task sent here has no reply yet
+	Redirect string    `json:"redirect,omitempty"` // reviewed merge destination; navigation only
+	Conv     string    `json:"conv,omitempty"`
+	ID       string    `json:"id"` // earliest message of the thread (derived, not stored)
+	Peer     string    `json:"peer"`
+	Title    string    `json:"title"` // first line of the first message
+	Last     string    `json:"last"`  // first line of the latest message
+	LastAt   time.Time `json:"last_at"`
+	Count    int       `json:"count"`
+	Review   int       `json:"review"`  // received items waiting for a decision here
+	Unread   int       `json:"unread"`  // received messages not yet read (review notices not counted)
+	Running  int       `json:"running"` // received items the worker is on
+	Waiting  bool      `json:"waiting"` // a question or task sent here has no reply yet
 	// Notices counts open review notices: reports from another machine that
 	// requests wait for a person there. They are not decisions here.
 	Notices    int  `json:"notices"`

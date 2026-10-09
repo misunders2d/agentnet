@@ -319,6 +319,7 @@ export interface Decider {
 }
 
 export interface DecisionAction {
+  check?: boolean;
   send_id?: string;
   host: string;
   id: string;
@@ -761,6 +762,7 @@ export interface Overview {
   history?: HistoryCopy[];
   workspace?: WorkspaceView;
   agent_devices: string[] | null;
+  model_reports?: PrivateModelReport[];
 }
 
 export interface OwnDevicePermission {
@@ -826,6 +828,17 @@ export interface PersonView {
 export interface Presence {
   text: string;
   at?: string;
+}
+
+export interface PrivateModelReport {
+  agent_id: string;
+  model: string;
+  harness: string;
+  executor: string;
+  at: number;
+  revision: number;
+  host: string;
+  host_key: string;
 }
 
 export interface ProposalView {
@@ -1138,6 +1151,7 @@ export interface Thread {
 }
 
 export interface ThreadSummary {
+  redirect?: string;
   conv?: string;
   id: string;
   peer: string;
@@ -1178,6 +1192,15 @@ export interface TopicChange {
 export interface TopicEvent {
   action: string;
   seen?: string[];
+  moves?: TopicMove[];
+  merge?: string;
+}
+
+export interface TopicMove {
+  lid: string;
+  author: string;
+  hash: string;
+  topic?: string;
 }
 
 export interface TopicPage {

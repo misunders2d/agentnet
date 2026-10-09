@@ -76,6 +76,8 @@ type ReceiverRequest struct {
 	GroupAdmission string             `json:"group_admission,omitempty"`
 	GroupReplies   []ReceiverReplyKey `json:"group_replies,omitempty"`
 	Human          *HumanTurn         `json:"human,omitempty"`
+	Followup       *Ref               `json:"followup,omitempty"`
+	Topic          string             `json:"topic,omitempty"`
 }
 type ReceiverReplyKey struct {
 	Key       string `json:"key"`
@@ -140,6 +142,9 @@ func (r ReceiverChoice) Validate() error {
 // Validate checks only wire shape. Current signatures, own-person association,
 // membership epochs, local approval and installed executor remain caller authority.
 func (r ReceiverRequest) Validate() error {
+	if r.Topic != "" && r.Followup == nil {
+		return errors.New("receiver: explicit topic retention requires a bound follow-up")
+	}
 	if !protocol.ValidID(r.ID) || !protocol.ValidFingerprint(r.FromKey) || r.TS <= 0 || !utf8.ValidString(r.Body) || r.Kind != KindMessage && r.Kind != KindQuestion && r.Kind != KindTask {
 		return errors.New("receiver: invalid original request")
 	}
@@ -149,7 +154,7 @@ func (r ReceiverRequest) Validate() error {
 	if r.ReplyTo != "" && !protocol.ValidID(r.ReplyTo) {
 		return errors.New("receiver: invalid original reply reference")
 	}
-	in := Inner{V: Version, ID: r.ID, From: r.From, To: r.From, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, LID: r.LID, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID, Human: r.Human}
+	in := Inner{V: Version, ID: r.ID, From: r.From, To: r.From, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, LID: r.LID, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID, Human: r.Human, Followup: r.Followup, Topic: r.Topic}
 	group := false
 	if r.Conv != "" {
 		if r.To != "" || r.ToKey != "" {

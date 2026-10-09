@@ -136,7 +136,7 @@ export function requestLabel(m: AnyMsg, ctx: Ctx): string {
 }
 
 const localJob: Record<string, string> = {
-  queued: "Queued", stopped: "Stopped", not_run: "Not run", resolved: "Closed", cancel_requested: "Stopping…",
+  steered: "Accepted into current run", queued: "Queued", stopped: "Stopped", not_run: "Not run", resolved: "Closed", cancel_requested: "Stopping…",
   part_waiting: "Not started yet", not_delivered: "Reply kept here", manual: "Answered by hand", conv_held: "Held for you",
 };
 const word = (s?: string) => jobWord(s) || (s ? localJob[s] || "" : "");

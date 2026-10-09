@@ -243,7 +243,7 @@ function PickPeople({ overview, onGroup, onDone }: { overview: T.Overview; onGro
   );
 }
 
-export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack: () => void; onCreated: () => void; initialPeople?: Pick<T.PersonRef, "id">[] }) {
+export function NewGroupForm({ onBack, onCreated, initialPeople = [], navigate = true, onBusy }: { onBack: () => void; onCreated: (id: string) => void; initialPeople?: Pick<T.PersonRef, "id">[]; navigate?: boolean; onBusy?: (busy: boolean) => void }) {
   const store = useApp();
   const overview = useStore(store, (s) => s.overview);
   const [title, setTitle] = useState("");
@@ -256,7 +256,7 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack
     const t = title.trim();
     if (!t && !created) { setError("Give the group a name."); return; }
     if (busy) return;
-    setBusy(true); setError("");
+    setBusy(true); onBusy?.(true); setError("");
     let id = created;
     try {
       if (!id) { id = (await store.api.newGroup(t)).id; if (!store.isActive()) return; setCreated(id); }
@@ -266,12 +266,14 @@ export function NewGroupForm({ onBack, onCreated, initialPeople = [] }: { onBack
         setPeople((ps) => ps.filter((x) => x.id !== p.id));
       }
       if (!store.isActive()) return;
-      onCreated();
-      await store.open({ kind: "dm", id });
-      store.showTab("chats");
-      store.openInvite(id);
+      onCreated(id);
+      if (navigate) {
+        await store.open({ kind: "dm", id });
+        store.showTab("chats");
+        store.openInvite(id);
+      }
     } catch (e) { if (store.isActive()) setError(errorText(e) + (id ? " The group is already created; retry only the remaining invitations." : "")); }
-    finally { setBusy(false); void store.refetch(); }
+    finally { setBusy(false); onBusy?.(false); void store.refetch(); }
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-3 pt-1 pb-2">

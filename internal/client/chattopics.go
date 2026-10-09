@@ -77,6 +77,7 @@ func ChatTopicAssignments(msgs []ConvMessage) map[string]string {
 			cur = r.ReplyTo
 		}
 	}
+	applyTopicOrganization(msgs, assigned)
 	return assigned
 }
 
@@ -183,7 +184,7 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 		ev := events[id]
 		sortChatEvents(ev)
 		for _, m := range ev {
-			if m.TopicEvent.Action == "create" {
+			if m.TopicEvent.Action != "done" && m.TopicEvent.Action != "open" {
 				continue
 			}
 			seen := map[string]bool{}
@@ -257,6 +258,43 @@ func summarizeChatTopicView(conv string, msgs []ConvMessage, locals map[string]t
 		}
 		out = append(out, t)
 	}
+	if !main {
+		originals := make([]ConvMessage, 0, len(msgs))
+		for _, m := range msgs {
+			if !envelope.TopicOrganization(m.TopicEvent) {
+				originals = append(originals, m)
+			}
+		}
+		var previous []ThreadSummary
+		for source, destination := range ChatTopicRedirects(msgs) {
+			if previous == nil {
+				previous = summarizeChatTopics(conv, originals, locals, now)
+			}
+			found := false
+			for i := range out {
+				if out[i].ID == source {
+					out[i].Redirect, found = destination, true
+					for _, old := range previous {
+						if old.ID == source {
+							out[i].Title, out[i].AutoTitle, out[i].Renamed = old.Title, old.AutoTitle, old.Renamed
+						}
+					}
+				}
+			}
+			if found {
+				continue
+			}
+			for _, old := range previous {
+				if old.ID == source {
+					old.Redirect, old.State, old.Count = destination, TopicDone, 0
+					old.Review, old.Running, old.Unread = 0, 0, 0
+					old.Pending, old.Waiting, old.PendingIDs = false, false, nil
+					out = append(out, old)
+					break
+				}
+			}
+		}
+	}
 	sortTopics(out)
 	return out
 }
@@ -278,7 +316,15 @@ func (a *Agent) outgoingTopic(conv, topic, reply string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	assigned := ChatTopicAssignments(msgs)
+	// A reply without an explicit topic keeps its signed original placement;
+	// display organization never expands old chains or task scope.
+	originals := make([]ConvMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if !envelope.TopicOrganization(m.TopicEvent) {
+			originals = append(originals, m)
+		}
+	}
+	assigned := ChatTopicAssignments(originals)
 	for _, m := range msgs {
 		if m.ID == reply || m.LID == reply {
 			return assigned[m.LID], nil

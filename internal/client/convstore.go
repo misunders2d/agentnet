@@ -149,7 +149,8 @@ func contentHash(in envelope.Inner) string {
 		TopicDone                                                    bool                    `json:",omitempty"`
 		Topic                                                        string                  `json:",omitempty"`
 		TopicEvent                                                   *envelope.TopicEvent    `json:",omitempty"`
-	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID, in.AgentID, in.ReceiverRoute, in.Human, in.Quote, in.TopicDone, in.Topic, in.TopicEvent}
+		Followup                                                     *envelope.Ref           `json:",omitempty"`
+	}{in.Conv, in.LID, in.Kind, in.Body, in.ReplyTo, in.Status, in.Sub, in.Origin, in.Emotion, in.Target, nil, in.PID, in.AgentID, in.ReceiverRoute, in.Human, in.Quote, in.TopicDone, in.Topic, in.TopicEvent, in.Followup}
 	for _, a := range in.Attachments {
 		c.Attachments = append(c.Attachments, att{a.Name, a.Size, a.SHA256})
 	}
@@ -265,6 +266,9 @@ func (s *store) addConvInbox(in envelope.Inner, verifiedBy, state string, fromQu
 	if _, err := tx.Exec(`UPDATE inbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=? WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, in.ID); err != nil {
 		return "", err
 	}
+	if err := storeRequestFollowup(tx, "inbox", in.ID, in.Followup); err != nil {
+		return "", err
+	}
 	if histID != "" {
 		if _, err := tx.Exec(`UPDATE inbox SET send_group=?,send_group_conflict=? WHERE id=?`, histGroup, histGroupConflict, in.ID); err != nil {
 			return "", err
@@ -371,6 +375,9 @@ func (s *store) addHistoryInbox(in envelope.Inner, at int64, claimedFP, via, car
 			return "", err
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
+			if err := storeRequestFollowup(tx, "inbox", in.ID, in.Followup); err != nil {
+				return "", err
+			}
 			result = admitted
 			if err := mergeSendGroup(tx, in, claimedFP); err != nil {
 				return "", err
@@ -543,6 +550,9 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 		if _, err := tx.Exec(`UPDATE outbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=?,recipient_person=(SELECT person FROM person_devices WHERE address=?) WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, env.To, env.ID); err != nil {
 			return err
 		}
+		if err := storeRequestFollowup(tx, "outbox", env.ID, in.Followup); err != nil {
+			return err
+		}
 		if i == 0 {
 			if err := recordRoomContext(tx, in, jobKeyOrSelf(tx, in.From), in.From); err != nil {
 				return err
@@ -594,6 +604,9 @@ func (s *store) addConvOutbox(copies []outCopy, local envelope.Inner, claim func
 		in := local
 		if len(copies) > 0 {
 			in = copies[0].in
+		}
+		if err := storeRequestFollowup(tx, "inbox", first, in.Followup); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(`UPDATE inbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=?,human=nullif(?,'') WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, humanJSON(in.Human), first); err != nil {
 			return err

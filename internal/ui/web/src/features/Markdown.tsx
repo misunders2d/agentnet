@@ -4,7 +4,7 @@
 // open in a new tab). Mentions ([@Name](agentnet:person/ID)) are handed to
 // the caller, who knows who is in the conversation.
 import { Lexer, type Token, type Tokens } from "marked";
-import { Fragment, useMemo, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useMemo, type ReactNode } from "react";
 import { shortLinkLabel } from "../linkText";
 
 export type MentionKind = "person" | "guest" | "agent";
@@ -12,6 +12,13 @@ export type RenderMention = (kind: MentionKind, id: string, name: string) => Rea
 
 const mentionHref = /^agentnet:(person|guest|agent)\/([A-Za-z0-9_-]{1,64})$/;
 const safeHref = /^(https?:\/\/|mailto:)/i;
+const sourceHref = /^agentnet:message\/([0-9a-f]{32})(?:\?conv=([0-9a-f]{64}))?$/;
+export const MessageLinks = createContext<((id: string, conv?: string) => void) | null>(null);
+
+function SourceLink({id, conv, children}: {id: string; conv?: string; children: ReactNode}) {
+  const open = useContext(MessageLinks);
+  return open ? <button type="button" className="font-medium underline underline-offset-2" onClick={() => open(id, conv)}>{children}</button> : children;
+}
 
 const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " };
 // The lexer leaves character references as typed; read the common ones.
@@ -109,6 +116,8 @@ function span(t: Tokens.Generic, mention?: RenderMention): ReactNode {
       const l = t as Tokens.Link;
       const ref = mentionHref.exec(l.href);
       if (ref && mention && l.text.startsWith("@")) return mention(ref[1] as MentionKind, ref[2], l.text.slice(1));
+      const source = sourceHref.exec(l.href);
+      if (source) return <SourceLink id={source[1]} conv={source[2]}>{inline(l.tokens, mention)}</SourceLink>;
       if (!safeHref.test(l.href)) return inline(l.tokens, mention);
       const label = shortLinkLabel(l.text, l.href);
       const shortened = label !== l.text;

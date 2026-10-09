@@ -314,6 +314,9 @@ func (a *Agent) admitDeviceHistory(ctx context.Context, env envelope.Envelope, i
 	if err != nil {
 		return err
 	}
+	if err = storeRequestFollowup(tx, "inbox", h.ID, h.Followup); err != nil {
+		return err
+	}
 	if err = storeDeviceHistoryMetadata(tx, r); err != nil {
 		return err
 	}

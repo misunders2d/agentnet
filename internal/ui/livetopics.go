@@ -138,7 +138,7 @@ func threadSummary(t client.ThreadSummary, keyChanged bool) ThreadSummary {
 	return ThreadSummary{Conv: t.Conv, ID: t.ID, Peer: t.Peer, Title: t.Title, Last: t.Last, LastAt: t.LastAt,
 		Count: t.Count, Review: t.Review, Unread: t.Unread, Running: t.Running, Waiting: t.Waiting, KeyChanged: keyChanged,
 		Notices: t.Notices, NoticeOnly: t.NoticeOnly, State: t.State, DoneBy: t.DoneBy, Conclusion: t.Conclusion,
-		ConcludedBy: t.ConcludedBy, Pending: t.Pending, PendingIDs: t.PendingIDs, Renamed: t.Renamed, AutoTitle: t.AutoTitle, QuietSince: t.QuietSince, AgentID: t.AgentID}
+		ConcludedBy: t.ConcludedBy, Pending: t.Pending, PendingIDs: t.PendingIDs, Renamed: t.Renamed, AutoTitle: t.AutoTitle, QuietSince: t.QuietSince, AgentID: t.AgentID, Redirect: t.Redirect}
 }
 
 // TopicList implements Topics.

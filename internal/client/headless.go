@@ -227,6 +227,10 @@ func statusOf(state string) (public, detail string, ok bool) {
 		return "awaiting", BlockerApproval, true
 	case stateRunning:
 		return "running", "", true
+	case stateAnswered:
+		return "answered", "", true
+	case stateSteered:
+		return "steered", "accepted into the current native run; completion is not proven", true
 	case stateNeedHuman:
 		return "needs_human", BlockerNeedsHuman, true
 	case stateResolved:
@@ -341,10 +345,11 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	var due, attempt int64
 	var sender, key, kind, state string
 	var conv, lid sql.NullString
-	var local, replica, selected bool
+	var local, replica, selected, ownTarget bool
 	err := a.store.db.QueryRow(`SELECT status_due, sender, coalesce(verified_by, ''), kind, state, conv, lid, local, replica, attempts,
-		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id) FROM inbox WHERE id = ?`, id).
-		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &attempt, &selected)
+		EXISTS (SELECT 1 FROM reply_receiver_inputs WHERE inbox_id = inbox.id),
+		coalesce(json_extract(target,'$.address')=? AND json_extract(target,'$.fingerprint')=?,0) FROM inbox WHERE id = ?`, a.Address, a.Self().Fingerprint(), id).
+		Scan(&due, &sender, &key, &kind, &state, &conv, &lid, &local, &replica, &attempt, &selected, &ownTarget)
 	if err != nil || due == 0 {
 		return true
 	}
@@ -361,9 +366,9 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 			detail = busy
 		}
 	}
-	// Selected input is local continuation data, and a request asked here,
-	// a replica or one without a verified key has no remote requester.
-	if !ok || selected || local || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {
+	// A local addressed conversation job has remote sibling copies too.
+	// Device-thread local data, replicas and selected inputs still tell nobody.
+	if !ok || selected || conv.Valid && state == stateAnswered && !ownTarget || local && (!conv.Valid || !ownTarget || key != a.Self().Fingerprint()) || replica || key == "" || (kind != envelope.KindQuestion && kind != envelope.KindTask) {
 		told()
 		return true
 	}
@@ -379,7 +384,11 @@ func (a *Agent) tellStatus(ctx context.Context, id string) bool {
 	body, _ := json.Marshal(envelope.Status{State: public, N: n, At: time.Now().Unix(), Detail: detail, Attempt: attempt})
 	sctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	res, err := a.sendControlAs(sctx, ref, envelope.SubStatus, string(body), protocol.CapHeadless)
+	capability := protocol.CapHeadless
+	if state == stateSteered {
+		capability = protocol.CapRequestFollowup
+	}
+	res, err := a.sendControlAs(sctx, ref, envelope.SubStatus, string(body), capability)
 	if err != nil && res.ID == "" && !errors.Is(err, ErrNoControls) && unreachableNow(err) {
 		a.Logf("status of %s not told to %s yet: %v", id, sender, err)
 		return false // still due: told on a later pass
@@ -503,7 +512,7 @@ func (a *Agent) Decide(ctx context.Context, host, id, key, action, expect string
 		cap = protocol.CapOwnSyncV3
 	}
 	if ok, why := a.capSupport(ctx, host, hostKey, feats, cap); !ok {
-		return ControlSent{}, fmt.Errorf("%w: %s", ErrNoControls, why)
+		return ControlSent{}, &controlCapabilityError{why}
 	}
 	recipient, err := hostKey.Recipient()
 	if err != nil {

@@ -1042,7 +1042,7 @@ func printHarnesses() {
 	fmt.Println("manual  no automatic responder: questions and tasks wait for you (agentnet responder off)")
 	fmt.Println()
 	fmt.Println("Found only means the program is on PATH; it was not run, so login and setup are unchecked.")
-	fmt.Println("Other coding agents (e.g. Antigravity) can read and reply by hand but cannot be the responder.")
+	fmt.Println("Other coding agents can read and reply by hand; Antigravity CLI is available as the agy responder.")
 	fmt.Println("Choose with the person: agentnet responder set --harness NAME --dir DIR, or agentnet responder off.")
 }
 

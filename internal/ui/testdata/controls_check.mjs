@@ -229,6 +229,27 @@ async function makeWorld() {
   return { keysA, keysP, keysB, pubA, pubP, pubB, fpA, fpP, fpB, H0, H1, HB, A, P, convId, convRec, pinB: pinOf("bob/desk", pubB, fpB), rootJSON: wire.rootJSON(root) };
 }
 
+// An own-host capability check precedes confirmation, and is entirely inert.
+{
+ const {keysB,fpA,fpB,A}=await makeWorld(),e=A.e,store=A.store;
+ e.me={state:'self',person:'a'.repeat(32),human_keys:[fpA],devices:[{address:e.address,fingerprint:fpA},{address:'bob/desk',fingerprint:fpB}]};
+ e.featureList=['env2','env3','caps','person2'];
+ const session='7'.repeat(32),body={host:'bob/desk',id:'8'.repeat(32),key:fpA,attempt:1,action:'resolve',expect:'needs_human',report:'',check:true};
+ const profile=async caps=>({sessions:[session],caps:[wire.capsJSON(await wire.newCaps(keysB,'bob/desk',session,caps))]});
+ e.profile=async()=>profile([wire.CapEnv2,wire.CapHeadless]);
+ let refused='';try{await e.decide(body)}catch(x){refused=x.message}
+ check(refused.includes('own requests')&&!refused.includes('reactions'),'own check names the relevant missing capability');
+ e.profile=async()=>profile([wire.CapEnv2,wire.CapHeadless,wire.CapOwnSyncV3]);
+ const checked=await e.decide(body);check(/Nothing has been sent/.test(checked.note),'supported check is not a decision');
+ check((await store.all('outbox')).length===0,'preflight does not queue or grant');
+ e.profile=async()=>profile([wire.CapEnv2,wire.CapHeadless]);
+ refused='';try{await e.decide({...body,check:false,send_id:'9'.repeat(32)})}catch(x){refused=x.message}
+ check(refused.includes('own requests'),'actual send rechecks after capability changed');
+ check((await store.all('outbox')).length===0,'failed real send queues no decision');
+ refused='';try{await e.decide({...body,action:'accept'})}catch(x){refused=x.message}
+ check(/Only an own waiting/.test(refused),'check flag cannot bypass another action');
+}
+
 // 7. Stale-roster forwarding (0930av): Bob's control names Alice's OLD
 // roster (before her phone was linked). Her laptop, which knows the new
 // roster, forwards the control as history to the phone; the phone admits

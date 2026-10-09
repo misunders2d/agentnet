@@ -12,6 +12,7 @@ import (
 
 const historyRecoveryScan = "group-history-invalid-recovery-v1"
 const historyRecoveryCarrier = historyRecoveryScan + "/"
+const lifecycleHistoryRecoveryScan = "dm-lifecycle-history-invalid-recovery-v1"
 
 var errHistoryRecoveryAuthority = errors.New("group history recovery requires current own human devices and unchanged pins")
 
@@ -72,13 +73,21 @@ func (d historyRecoveryDevices) check(q dbq) error {
 // encrypted replicas enter the existing bounded proof queue; all current
 // history admission checks still run there, with no grant/cursor changes.
 func (a *Agent) recoverInvalidGroupHistory() error {
+	return a.recoverInvalidHistory(historyRecoveryScan, false)
+}
+
+func (a *Agent) recoverInvalidLifecycleHistory() error {
+	return a.recoverInvalidHistory(lifecycleHistoryRecoveryScan, true)
+}
+
+func (a *Agent) recoverInvalidHistory(scan string, lifecycle bool) error {
 	tx, err := a.store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var done string
-	err = tx.QueryRow(`SELECT v FROM config WHERE k=?`, historyRecoveryScan).Scan(&done)
+	err = tx.QueryRow(`SELECT v FROM config WHERE k=?`, scan).Scan(&done)
 	if err == nil {
 		return nil
 	}
@@ -145,18 +154,40 @@ func (a *Agent) recoverInvalidGroupHistory() error {
 				continue
 			}
 			root, err := protocol.ParseConvRoot(in.Root)
-			if err != nil || root.Kind != protocol.ConvKindGroup || root.ID() != in.Conv {
+			kind := protocol.ConvKindGroup
+			if lifecycle {
+				kind = protocol.ConvKindDM
+			}
+			if err != nil || root.Kind != kind || root.ID() != in.Conv {
 				continue
 			}
 			var item HistoryItem
 			if decodeGroupCarrierJSON([]byte(in.Body), &item) != nil || item.V != 1 || !protocol.ValidID(item.ID) || !protocol.ValidID(item.LID) || !protocol.ValidFingerprint(item.FromKey) || item.PID == "" && item.Ref == nil {
 				continue
 			}
+			if lifecycle {
+				if item.Sub != envelope.SubEvent || item.GroupHistory != nil || item.From != sender.Address || item.FromKey != sender.Fingerprint() {
+					continue
+				}
+				ev, err := protocol.ParseParticipationEvent([]byte(item.Body))
+				if err != nil || ev.Conv != in.Conv || ev.PID != item.PID || ev.Author.Address == item.From && ev.Author.Fingerprint == item.FromKey || ev.Type != protocol.EventScope && ev.Type != protocol.EventAccept && ev.Type != protocol.EventDismiss {
+					continue
+				}
+				author, found, err := a.lifecycleHistoryAuthorKey(tx, ev.Author)
+				if err != nil {
+					return err
+				}
+				// An unavailable author roster is proof to fetch, never an
+				// acceptance. Known wrong keys/signatures remain invalid.
+				if found && (author.Fingerprint() != ev.Author.Fingerprint || ev.Verify(author.SignKey) != nil) {
+					continue
+				}
+			}
 			raw, err := json.Marshal(devices)
 			if err != nil {
 				return err
 			}
-			if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?,?)`, historyRecoveryCarrier+env.ID, string(raw)); err != nil {
+			if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?,?) ON CONFLICT(k) DO NOTHING`, historyRecoveryCarrier+env.ID, string(raw)); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(`UPDATE quarantine SET reason=? WHERE id=? AND reason=?`, reasonProof, env.ID, reasonInvalid); err != nil {
@@ -165,7 +196,7 @@ func (a *Agent) recoverInvalidGroupHistory() error {
 		}
 	}
 
-	if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?, '1')`, historyRecoveryScan); err != nil {
+	if _, err = tx.Exec(`INSERT INTO config(k,v) VALUES(?, '1')`, scan); err != nil {
 		return err
 	}
 	return a.store.done(tx.Commit())

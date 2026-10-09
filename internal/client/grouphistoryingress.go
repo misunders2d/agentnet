@@ -11,6 +11,14 @@ import (
 )
 
 func (a *Agent) groupHistoryReceiveCheck(q dbq, root protocol.ConvRoot, sender identity.Public, item HistoryItem) error {
+	if err := envelope.CheckTopic(item.inner(root.ID())); err != nil {
+		return err
+	}
+	if envelope.TopicOrganization(item.TopicEvent) {
+		if err := topicOrganizationAuthor(q, root.ID(), item.From, item.FromKey); err != nil {
+			return err
+		}
+	}
 	if err := receiverHistoryRoute(q, item.inner(root.ID()), item.FromKey); err != nil {
 		return err
 	}

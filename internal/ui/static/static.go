@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-//go:embed pictures.mjs index.html loader.js core.css skin-base.css skinbar.mjs skinbar.css skin-choice.mjs skins device.mjs engine.mjs devicehistory.mjs wire.mjs optimistic.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css setup.mjs getapp.json getapp.mjs landing.mjs landing.css google-signin.mjs
+//go:embed pictures.mjs index.html loader.js core.css skin-base.css skinbar.mjs skinbar.css skin-choice.mjs skins device.mjs engine.mjs devicehistory.mjs historycontribution.mjs wire.mjs optimistic.mjs vendor/age.mjs vendor/qr.mjs vendor/idb.mjs vendor/sse.mjs manifest.webmanifest sw.js workspaces-sw.js ant.png drivespace.mjs drivespace.css drivespace-setup.mjs assistant-setup.mjs assistant-setup.css typing.mjs local-skins.mjs teams.mjs workspaces.mjs workspaces.css setup.mjs getapp.json getapp.mjs landing.mjs landing.css google-signin.mjs
 var files embed.FS
 
 // Files is the bundle: the daemon's page (index.html and its assets) and the
@@ -31,41 +31,42 @@ var Files fs.FS = files
 // is the device page, made from index.html. With relayIcons, they are the
 // only paths it serves.
 var relayFiles = map[string]string{
-	"/assets/pictures.mjs":         "pictures.mjs",
-	"/assets/google-signin.mjs":    "google-signin.mjs",
-	"/":                            "",
-	"/manifest.webmanifest":        "manifest.webmanifest",
-	"/sw.js":                       "sw.js",            // push/click and explicitly selected local-package assets (origin scope)
-	"/workspaces-sw.js":            "workspaces-sw.js", // the workspace switcher's worker: registered per local workspace id (workspaces.mjs)
-	"/assets/core.css":             "core.css",
-	"/assets/loader.js":            "loader.js",
-	"/assets/skin-base.css":        "skin-base.css", // the host's base sheet in every skin's shadow tree
-	"/assets/skinbar.mjs":          "skinbar.mjs",   // the switcher over every skin but the default
-	"/assets/skinbar.css":          "skinbar.css",
-	"/assets/skin-choice.mjs":      "skin-choice.mjs", // which skin opens and its trust (loader.js, local-skins.mjs)
-	"/assets/device.mjs":           "device.mjs",
-	"/assets/optimistic.mjs":       "optimistic.mjs",
-	"/assets/engine.mjs":           "engine.mjs",
-	"/assets/devicehistory.mjs":    "devicehistory.mjs",
-	"/assets/wire.mjs":             "wire.mjs",
-	"/assets/vendor/age.mjs":       "vendor/age.mjs",
-	"/assets/vendor/qr.mjs":        "vendor/qr.mjs",  // loaded only to show a new device's link
-	"/assets/vendor/idb.mjs":       "vendor/idb.mjs", // idb: the device store's IndexedDB plumbing
-	"/assets/vendor/sse.mjs":       "vendor/sse.mjs", // eventsource-parser: the signed stream's framing
-	"/assets/drivespace.mjs":       "drivespace.mjs",
-	"/assets/drivespace.css":       "drivespace.css",
-	"/assets/drivespace-setup.mjs": "drivespace-setup.mjs",
-	"/assets/assistant-setup.mjs":  "assistant-setup.mjs",
-	"/assets/assistant-setup.css":  "assistant-setup.css",
-	"/assets/local-skins.mjs":      "local-skins.mjs",
-	"/assets/typing.mjs":           "typing.mjs",
-	"/assets/teams.mjs":            "teams.mjs",
-	"/assets/workspaces.mjs":       "workspaces.mjs",
-	"/assets/workspaces.css":       "workspaces.css",
-	"/assets/landing.mjs":          "landing.mjs", // "Get AgentNet" for a device that has not joined
-	"/assets/landing.css":          "landing.css",
-	"/assets/getapp.mjs":           "getapp.mjs", // the app's downloads, from getapp.json (shared with Go)
-	"/assets/getapp.json":          "getapp.json",
+	"/assets/pictures.mjs":            "pictures.mjs",
+	"/assets/google-signin.mjs":       "google-signin.mjs",
+	"/":                               "",
+	"/manifest.webmanifest":           "manifest.webmanifest",
+	"/sw.js":                          "sw.js",            // push/click and explicitly selected local-package assets (origin scope)
+	"/workspaces-sw.js":               "workspaces-sw.js", // the workspace switcher's worker: registered per local workspace id (workspaces.mjs)
+	"/assets/core.css":                "core.css",
+	"/assets/loader.js":               "loader.js",
+	"/assets/skin-base.css":           "skin-base.css", // the host's base sheet in every skin's shadow tree
+	"/assets/skinbar.mjs":             "skinbar.mjs",   // the switcher over every skin but the default
+	"/assets/skinbar.css":             "skinbar.css",
+	"/assets/skin-choice.mjs":         "skin-choice.mjs", // which skin opens and its trust (loader.js, local-skins.mjs)
+	"/assets/device.mjs":              "device.mjs",
+	"/assets/optimistic.mjs":          "optimistic.mjs",
+	"/assets/engine.mjs":              "engine.mjs",
+	"/assets/devicehistory.mjs":       "devicehistory.mjs",
+	"/assets/historycontribution.mjs": "historycontribution.mjs",
+	"/assets/wire.mjs":                "wire.mjs",
+	"/assets/vendor/age.mjs":          "vendor/age.mjs",
+	"/assets/vendor/qr.mjs":           "vendor/qr.mjs",  // loaded only to show a new device's link
+	"/assets/vendor/idb.mjs":          "vendor/idb.mjs", // idb: the device store's IndexedDB plumbing
+	"/assets/vendor/sse.mjs":          "vendor/sse.mjs", // eventsource-parser: the signed stream's framing
+	"/assets/drivespace.mjs":          "drivespace.mjs",
+	"/assets/drivespace.css":          "drivespace.css",
+	"/assets/drivespace-setup.mjs":    "drivespace-setup.mjs",
+	"/assets/assistant-setup.mjs":     "assistant-setup.mjs",
+	"/assets/assistant-setup.css":     "assistant-setup.css",
+	"/assets/local-skins.mjs":         "local-skins.mjs",
+	"/assets/typing.mjs":              "typing.mjs",
+	"/assets/teams.mjs":               "teams.mjs",
+	"/assets/workspaces.mjs":          "workspaces.mjs",
+	"/assets/workspaces.css":          "workspaces.css",
+	"/assets/landing.mjs":             "landing.mjs", // "Get AgentNet" for a device that has not joined
+	"/assets/landing.css":             "landing.css",
+	"/assets/getapp.mjs":              "getapp.mjs", // the app's downloads, from getapp.json (shared with Go)
+	"/assets/getapp.json":             "getapp.json",
 }
 
 // relayIcons are the app icon's paths and sizes, named by the manifest.

@@ -299,7 +299,7 @@ func (s *store) claimAgentPageForCause(responder, self, selfFP string, pos int64
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT id, sender, coalesce(verified_by, ''), kind, body, coalesce(reply_to, ''), coalesce(status, ''),
 		conv, pid, coalesce(target, ''), state, local, arrival
-		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND arrival > ?
+		FROM inbox WHERE pid IS NOT NULL AND state IN ('`+stateAgentWaiting+`', '`+stateAccepted+`') AND replica = 0 AND `+requestFollowupReady+` AND arrival > ?
 		  AND (? = '' OR (conv = ? AND json_extract(human,'$.author_pid') IS NOT NULL))
 		  AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id)
 		  AND EXISTS (SELECT 1 FROM participation_events e WHERE e.conv = inbox.conv AND e.pid = inbox.pid)
@@ -784,6 +784,7 @@ func (a *Agent) finishAgent(ctx context.Context, j job, r *Responder, status, bo
 		a.endJob(j.ID, stateNotDelivered, "not sent: "+err.Error()+". The reply:\n"+text)
 	default:
 		a.Logf("%s %s: answered in its conversation (reply %s %s)", j.Kind, j.ID, res.ID, res.State)
+		a.noteStatus(j.ID)                                 // exact logical completion also reaches other own copies
 		a.sendAssistantReaction(ctx, j, r.Harness, choice) // after the stored reply; failure changes nothing
 	}
 }
@@ -826,7 +827,7 @@ func (a *Agent) holdEndedOutputs(only string) (int, error) {
 	defer tx.Rollback()
 	rows, err := tx.Query(`SELECT o.id, o.conv, o.pid, coalesce(i.id, ''), coalesce(i.sender, ''), coalesce(i.verified_by, ''),
 		coalesce(i.kind, ''), coalesce(i.local, 0), coalesce(i.target, '')
-		FROM outbox o LEFT JOIN inbox i ON (i.id=o.reply_to OR o.status='proposal' AND i.lid=o.reply_to AND i.conv=o.conv) AND (coalesce(o.status,'') = 'progress' OR EXISTS (
+		FROM outbox o LEFT JOIN inbox i ON (i.id=o.reply_to OR o.kind IN ('answer','result') AND i.lid=o.reply_to AND i.conv=o.conv AND i.pid=o.pid) AND (coalesce(o.status,'') = 'progress' OR EXISTS (
 		 SELECT 1 FROM outbox first WHERE first.id = i.result_id AND first.conv = o.conv AND first.pid = o.pid
 		 AND first.lid = o.lid AND first.reply_to = o.reply_to AND first.body = o.body
 		 AND coalesce(first.agent_id,'') = coalesce(o.agent_id,'')))
@@ -922,6 +923,9 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 		return true, nil
 	}
 	if handled, allowed, err := a.mayDeliverDeviceHistory(env); handled {
+		return allowed, err
+	}
+	if handled, allowed, err := a.mayDeliverModelSync(env); handled {
 		return allowed, err
 	}
 	if handled, allowed, err := a.mayDeliverTopicSync(env); handled {

@@ -132,14 +132,17 @@ type Inner struct {
 	TopicDone     bool           `json:"topic_done,omitempty"`
 	Topic         string         `json:"topic,omitempty"`
 	TopicEvent    *TopicEvent    `json:"topic_event,omitempty"`
+	Followup      *Ref           `json:"followup,omitempty"`   // explicit queued correction/continuation; never a rerun
 	SendGroup     string         `json:"send_group,omitempty"` // signed presentation only; never execution identity
 }
 
 // TopicEvent is a shared human action. Seen names exact logical turns covered
 // by done/open; a later or previously unseen turn always ends the mark.
 type TopicEvent struct {
-	Action string   `json:"action"`
-	Seen   []string `json:"seen,omitempty"`
+	Action string      `json:"action"`
+	Seen   []string    `json:"seen,omitempty"`
+	Moves  []TopicMove `json:"moves,omitempty"`
+	Merge  string      `json:"merge,omitempty"` // old topic; only the explicitly selected cutoff moves
 }
 
 // CheckTopic is shared by live envelopes and retained history.
@@ -151,7 +154,10 @@ func CheckTopic(in Inner) error {
 		if in.Topic == "" || in.Kind != KindMessage || in.Target != nil || AgentOrigin(in.Origin) || in.Status != "" || len(in.Attachments) != 0 {
 			return errors.New("topic event belongs only on a human conversation message")
 		}
-		if e.Action != "create" && e.Action != "done" && e.Action != "open" {
+		if TopicOrganization(e) {
+			return checkTopicOrganization(in)
+		}
+		if e.Action != "create" && e.Action != "done" && e.Action != "open" || len(e.Moves) != 0 || e.Merge != "" {
 			return errors.New("invalid topic action")
 		}
 		for _, id := range e.Seen {
@@ -241,6 +247,7 @@ const (
 	SubDeviceHistory   = "device-history"   // inert original device-thread turn, current own-human devices only
 	SubDeviceFile      = "device-file"      // exact original device-thread file, current own-human devices only
 	SubInvitationSync  = "invitation-sync"  // inert outgoing invitation view for own-human devices
+	SubModelSync       = "model-sync"       // private agent-reported model snapshots
 	SubTopicSync       = "topic-sync"       // private topic titles for own-human devices
 	SubReadSync        = "read-sync"        // exact read references between current own-human devices
 	SubRootSync        = "root-sync"        // signed DM root only, current own-human devices; no turn or execution
@@ -313,7 +320,7 @@ type Status struct {
 
 // Execution states a Status may carry (the terminal answer or result is a
 // message of its own kind, not a status).
-var statusStates = map[string]bool{"queued": true, "awaiting": true, "running": true, "needs_human": true, "resolved": true,
+var statusStates = map[string]bool{"queued": true, "awaiting": true, "running": true, "steered": true, "needs_human": true, "resolved": true,
 	"stopped": true, "not_run": true, "declined": true, "failed": true, "cancelled": true, "interrupted": true, "answered": true}
 
 // Decision is an operator's decision on a request a host holds: Action on
@@ -663,6 +670,9 @@ func CheckQuote(in Inner) error {
 // checkVersion2 validates the version 2 fields of in (or their absence in
 // version 1).
 func checkVersion2(in Inner) error {
+	if err := CheckFollowup(in); err != nil {
+		return err
+	}
 	if err := CheckSendGroup(in); err != nil {
 		return err
 	}
@@ -719,7 +729,7 @@ func checkVersion2(in Inner) error {
 		}
 		return nil
 	}
-	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile {
+	if in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile {
 		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Kind != KindMessage || !in.Replica || in.Target != nil || in.PID != "" || (len(in.Attachments) != 0 && in.Sub != SubDeviceFile) || len(in.Attachments) > 1 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil || in.AgentID != "" || in.Topic != "" || in.TopicEvent != nil || in.TopicDone || in.Quote != "" || in.Session != "" || in.Fallback {
 			return errors.New("read sync: quiet rootless reference carrier required")
 		}
@@ -735,6 +745,13 @@ func checkVersion2(in Inner) error {
 				return errors.New("device history carries no message grouping")
 			}
 			_, err := protocol.ParseDeviceHistory([]byte(in.Body))
+			return err
+		}
+		if in.Sub == SubModelSync {
+			if in.SendGroup != "" {
+				return errors.New("model sync carries no message grouping")
+			}
+			_, err := protocol.ParseModelSync([]byte(in.Body))
 			return err
 		}
 		if in.Sub == SubTopicSync {
@@ -894,7 +911,7 @@ func SealAttention(in Inner, sender ed25519.PrivateKey, recipient age.Recipient,
 }
 
 func sealEnvelope(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && channel != "" {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && channel != "" {
 		return Envelope{}, errors.New("root sync carries no attention")
 	}
 	if !validKind(in.Kind) {
@@ -1009,7 +1026,7 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	if err := checkVersion2(in); err != nil {
 		return in, err
 	}
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && e.Attn {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync || in.Sub == SubModelSync || in.Sub == SubTopicSync || in.Sub == SubDeviceHistory || in.Sub == SubDeviceFile) && e.Attn {
 		return in, errors.New("root sync carries no attention")
 	}
 	if len(in.Attachments) != len(e.Blobs) {

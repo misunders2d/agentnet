@@ -257,6 +257,10 @@ func (a *Agent) historySourceItem(q dbq, it historySourceRow) (HistoryItem, erro
 	if err != nil {
 		return HistoryItem{}, err
 	}
+	it.in.Followup, err = storedRequestFollowup(q, it.dir, it.in.ID)
+	if err != nil {
+		return HistoryItem{}, err
+	}
 	it.in.ReceiverRoute, err = receiverStoredRoute(q, it.dir, it.in.ID)
 	if err != nil {
 		return HistoryItem{}, err
@@ -276,6 +280,10 @@ func (a *Agent) historySourceItem(q dbq, it historySourceRow) (HistoryItem, erro
 // signed event author. History names that verified author, not the forwarder.
 // Group lifecycle history keeps its existing admission/witness policy.
 func (a *Agent) dmLifecycleHistorySource(q dbq, conv string, item HistoryItem) (HistoryItem, error) {
+	return a.dmLifecycleHistoryAuthor(q, conv, item, false)
+}
+
+func (a *Agent) dmLifecycleHistoryAuthor(q dbq, conv string, item HistoryItem, receiving bool) (HistoryItem, error) {
 	if item.Sub != envelope.SubEvent {
 		return item, nil
 	}
@@ -310,13 +318,6 @@ func (a *Agent) dmLifecycleHistorySource(q dbq, conv string, item HistoryItem) (
 	if pinned && transport.Fingerprint() != item.FromKey {
 		return item, errors.New("history lifecycle forwarder key has changed")
 	}
-	info, err := participationIn(q, conv, item.PID, m, a.Address)
-	if err != nil {
-		return item, err
-	}
-	if err = disclosedCounted(item.inner(conv), info); err != nil {
-		return item, err
-	}
 	key, present, err := pinnedKey(q, ev.Author.Address)
 	if err != nil {
 		return item, err
@@ -324,9 +325,20 @@ func (a *Agent) dmLifecycleHistorySource(q dbq, conv string, item HistoryItem) (
 	if ev.Author.Address == a.Address {
 		key, present = a.Self(), true
 	}
+	if receiving && !present {
+		// A linked reader can hold the verified person's roster without a
+		// separate transport pin for an author it has never contacted.
+		key, present, err = a.lifecycleHistoryAuthorKey(q, ev.Author)
+		if err != nil {
+			return item, err
+		}
+	}
 	var pending int
 	if err = q.QueryRow(`SELECT count(*) FROM peers WHERE address IN (?,?) AND pending IS NOT NULL`, ev.Author.Address, item.From).Scan(&pending); err != nil {
 		return item, err
+	}
+	if !present && receiving {
+		return item, errLifecycleHistoryProof
 	}
 	if !present || pending != 0 || key.Fingerprint() != ev.Author.Fingerprint {
 		return item, errors.New("history lifecycle author key is unavailable or changed")
@@ -334,6 +346,30 @@ func (a *Agent) dmLifecycleHistorySource(q dbq, conv string, item HistoryItem) (
 	signed := item.inner(conv)
 	signed.From = ev.Author.Address
 	if _, err = checkParticipationEvent(signed, ev.Author.Fingerprint, key.SignKey); err != nil {
+		return item, err
+	}
+	if receiving {
+		// The first scope is precisely the missing record on a fresh reader.
+		// Resolve its verified candidate in memory; never insert it to make
+		// its own check pass. The resolver retains exact host/parent checks
+		// and a public scope conveys no private grant or task keys.
+		if ev.Type != protocol.EventScope && ev.Type != protocol.EventAccept && ev.Type != protocol.EventDismiss {
+			return item, errors.New("history lifecycle is not a public disclosure")
+		}
+		events, err := participationEventsIn(q, conv, item.PID)
+		if err != nil {
+			return item, err
+		}
+		m.historyEvents = append(events, ev)
+	}
+	info, err := participationIn(q, conv, item.PID, m, a.Address)
+	if err != nil {
+		return item, err
+	}
+	if err = disclosedCounted(item.inner(conv), info); err != nil {
+		if receiving {
+			return item, errLifecycleHistoryProof
+		}
 		return item, err
 	}
 	// Resolution checked the exact pinned author/host roster and event hash;

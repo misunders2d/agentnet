@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/protocol"
@@ -91,6 +92,13 @@ type codexRoomBridge struct {
 	output               io.Writer
 	call                 func(context.Context, json.RawMessage) (string, error)
 	writeMu              sync.Mutex
+	stateMu              sync.Mutex
+	readMu               sync.Mutex
+	ready                chan struct{}
+	readyOnce            sync.Once
+	steerID              int
+	steering             map[string]chan codexSteerResult
+	model                string
 	closeOnce            sync.Once
 	prompt, cwd          string
 	buf                  []byte
@@ -101,7 +109,7 @@ type codexRoomBridge struct {
 
 func newCodexRoomBridge(ctx context.Context, cmd *exec.Cmd, prompt string, output io.Writer, call func(context.Context, json.RawMessage) (string, error)) *codexRoomBridge {
 	in, out := io.Pipe()
-	b := &codexRoomBridge{ctx: ctx, input: out, output: output, call: call, calls: map[string]bool{}}
+	b := &codexRoomBridge{prompt: prompt, cwd: cmd.Dir, ctx: ctx, input: out, output: output, call: call, calls: map[string]bool{}, ready: make(chan struct{}), steering: map[string]chan codexSteerResult{}}
 	cmd.Args = []string{cmd.Path, "app-server"}
 	cmd.Stdin = in
 	cmd.Stdout = b
@@ -109,8 +117,6 @@ func newCodexRoomBridge(ctx context.Context, cmd *exec.Cmd, prompt string, outpu
 		b.send(map[string]any{"id": 1, "method": "initialize", "params": map[string]any{"clientInfo": map[string]any{"name": "agentnet", "version": protocol.Version}, "capabilities": map[string]any{"experimentalApi": true}}})
 	}()
 	// Prompt is retained only for this invocation, never in command arguments.
-	b.prompt = prompt
-	b.cwd = cmd.Dir
 	go func() { <-ctx.Done(); b.close() }()
 	return b
 }
@@ -120,7 +126,7 @@ func (b *codexRoomBridge) send(v any) {
 	defer b.writeMu.Unlock()
 	_ = json.NewEncoder(b.input).Encode(v)
 }
-func (b *codexRoomBridge) fail() {
+func (b *codexRoomBridge) failLocked() {
 	if !b.done {
 		b.done = true
 		fmt.Fprintln(b.output, needsHumanMarker)
@@ -129,12 +135,20 @@ func (b *codexRoomBridge) fail() {
 	b.close()
 }
 func (b *codexRoomBridge) finish() {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	for id, ch := range b.steering {
+		ch <- codexSteerResult{outcome: steerUnknown}
+		delete(b.steering, id)
+	}
 	if !b.done {
-		b.fail()
+		b.failLocked()
 	}
 	b.close()
 }
 func (b *codexRoomBridge) Write(p []byte) (int, error) {
+	b.readMu.Lock()
+	defer b.readMu.Unlock()
 	n := len(p)
 	for len(p) > 0 {
 		i := bytes.IndexByte(p, '\n')
@@ -158,9 +172,8 @@ func (b *codexRoomBridge) Write(p []byte) (int, error) {
 	return n, nil
 }
 func (b *codexRoomBridge) event(raw []byte) {
-	if b.done {
-		return
-	}
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
 	var m struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -169,11 +182,31 @@ func (b *codexRoomBridge) event(raw []byte) {
 		Error  json.RawMessage `json:"error"`
 	}
 	if json.Unmarshal(raw, &m) != nil {
-		b.fail()
+		b.failLocked()
+		return
+	}
+	if ch, ok := b.steering[string(m.ID)]; ok && m.Method == "" {
+		result := codexSteerResult{outcome: steerUnknown}
+		var rpcErr struct {
+			Code int `json:"code"`
+		}
+		var response struct {
+			TurnID string `json:"turnId"`
+		}
+		if json.Unmarshal(m.Error, &rpcErr) == nil && rpcErr.Code == -32601 {
+			result.outcome = steerUnsupported
+		} else if (len(m.Error) == 0 || string(m.Error) == "null") && json.Unmarshal(m.Result, &response) == nil && response.TurnID == b.turn {
+			result.outcome = steerAccepted
+		}
+		delete(b.steering, string(m.ID))
+		ch <- result
+		return
+	}
+	if b.done || m.Method == "" && strings.HasPrefix(string(m.ID), `"agentnet-steer-`) {
 		return
 	}
 	if len(m.Error) > 0 && string(m.Error) != "null" {
-		b.fail()
+		b.failLocked()
 		return
 	}
 	if m.Method == "" {
@@ -184,15 +217,19 @@ func (b *codexRoomBridge) event(raw []byte) {
 			b.send(map[string]any{"id": 2, "method": "thread/start", "params": map[string]any{"cwd": b.cwd, "ephemeral": true, "dynamicTools": []any{spec}}})
 		case "2":
 			var r struct {
+				Model  string `json:"model"`
 				Thread struct {
 					ID string `json:"id"`
 				} `json:"thread"`
 			}
 			if json.Unmarshal(m.Result, &r) != nil || r.Thread.ID == "" {
-				b.fail()
+				b.failLocked()
 				return
 			}
 			b.thread = r.Thread.ID
+			if protocol.ValidReportedModel(r.Model) {
+				b.model = r.Model
+			}
 			b.send(map[string]any{"id": 3, "method": "turn/start", "params": map[string]any{"threadId": b.thread, "cwd": b.cwd, "input": []any{map[string]any{"type": "text", "text": b.prompt}}}})
 		case "3":
 			var r struct {
@@ -201,10 +238,11 @@ func (b *codexRoomBridge) event(raw []byte) {
 				} `json:"turn"`
 			}
 			if json.Unmarshal(m.Result, &r) != nil || r.Turn.ID == "" || b.turn != "" && b.turn != r.Turn.ID {
-				b.fail()
+				b.failLocked()
 				return
 			}
 			b.turn = r.Turn.ID
+			b.markReady()
 		}
 		return
 	}
@@ -228,17 +266,28 @@ func (b *codexRoomBridge) event(raw []byte) {
 		return
 	}
 	switch m.Method {
+	case "thread/settings/updated":
+		var settings struct {
+			ThreadID       string `json:"threadId"`
+			ThreadSettings struct {
+				Model string `json:"model"`
+			} `json:"threadSettings"`
+		}
+		if json.Unmarshal(m.Params, &settings) == nil && settings.ThreadID == b.thread && protocol.ValidReportedModel(settings.ThreadSettings.Model) {
+			b.model = settings.ThreadSettings.Model
+		}
 	case "turn/started":
 		if p.ThreadID == b.thread {
 			if b.turn != "" && b.turn != p.Turn.ID {
-				b.fail()
+				b.failLocked()
 				return
 			}
 			b.turn = p.Turn.ID
+			b.markReady()
 		}
 	case "item/tool/call":
 		if p.ThreadID != b.thread || b.turn == "" || p.TurnID != b.turn || p.Tool != "agentnet_room" || p.Namespace != nil || p.CallID == "" || len(m.ID) == 0 {
-			b.fail()
+			b.failLocked()
 			return
 		}
 		if b.calls[p.CallID] {
@@ -262,7 +311,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 	case "turn/completed":
 		if p.ThreadID == b.thread && p.Turn.ID == b.turn {
 			if p.Turn.Status != "completed" || strings.TrimSpace(b.answer) == "" {
-				b.fail()
+				b.failLocked()
 				return
 			}
 			b.done = true
@@ -272,7 +321,7 @@ func (b *codexRoomBridge) event(raw []byte) {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput", "mcpServer/elicitation/request":
 		if len(m.ID) > 0 {
 			if b.thread == "" || p.ThreadID != b.thread || b.turn == "" || (p.TurnID != b.turn && !(m.Method == "mcpServer/elicitation/request" && p.TurnID == "")) {
-				b.fail()
+				b.failLocked()
 				return
 			}
 			b.done = true
@@ -282,7 +331,62 @@ func (b *codexRoomBridge) event(raw []byte) {
 		}
 	default:
 		if len(m.ID) > 0 {
-			b.fail()
+			b.failLocked()
 		} // new approval or unsupported client action: never approve it
 	}
+}
+
+// stateMu protects the run identity and every correlated steer response. Only
+// the owned app-server receives input; no user session is opened or resumed.
+type codexSteerResult struct{ outcome string }
+
+const (
+	steerAccepted    = "accepted"
+	steerQueued      = "queued"
+	steerUnsupported = "unsupported"
+	steerUnknown     = "unknown"
+)
+
+func (b *codexRoomBridge) fail() { b.stateMu.Lock(); defer b.stateMu.Unlock(); b.failLocked() }
+func (b *codexRoomBridge) markReady() {
+	if b.ready != nil {
+		b.readyOnce.Do(func() { close(b.ready) })
+	}
+}
+func (b *codexRoomBridge) modelReport() string {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	return b.model
+}
+func (b *codexRoomBridge) steer(ctx context.Context, id, text string) string {
+	b.stateMu.Lock()
+	if b.done || b.thread == "" || b.turn == "" || b.ctx.Err() != nil {
+		b.stateMu.Unlock()
+		return steerQueued
+	}
+	if b.steering == nil {
+		b.steering = map[string]chan codexSteerResult{}
+	}
+	b.steerID++
+	rpcID := fmt.Sprintf("agentnet-steer-%d", b.steerID)
+	keyRaw, _ := json.Marshal(rpcID)
+	key := string(keyRaw)
+	ch := make(chan codexSteerResult, 1)
+	b.steering[key] = ch
+	request := map[string]any{"id": rpcID, "method": "turn/steer", "params": map[string]any{"threadId": b.thread, "expectedTurnId": b.turn, "clientUserMessageId": id, "input": []any{map[string]string{"type": "text", "text": text}}}}
+	b.stateMu.Unlock()
+	// A write failure can follow a partial handover: it proves no rejection.
+	go b.send(request)
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case result := <-ch:
+		return result.outcome
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+	b.stateMu.Lock()
+	delete(b.steering, key)
+	b.stateMu.Unlock()
+	return steerUnknown
 }

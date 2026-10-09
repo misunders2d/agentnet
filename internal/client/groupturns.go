@@ -178,7 +178,7 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 		m.Origin = envelope.OriginUI
 	}
 	test := envelope.Inner{Kind: m.Kind, Sub: m.sub, Target: m.Target, PID: m.PID, AgentID: m.AgentID, Status: m.status, Origin: m.Origin}
-	if !ordinaryGroupTurn(test) || m.claim != nil || m.selfJob {
+	if !ordinaryGroupTurn(test) || m.claim != nil && !envelope.TopicOrganization(m.TopicEvent) && !m.contribution || m.selfJob {
 		return ConvSent{}, errors.New("group: only ordinary human messages are supported")
 	}
 	if envelope.Blank(m.Body) && len(m.Files) == 0 {
@@ -344,6 +344,9 @@ func (a *Agent) sendGroupTurn(ctx context.Context, conv string, m ConvOutgoing, 
 				return e
 			}
 		}
+		if m.claim != nil {
+			return m.claim(tx, copies[0].env.ID)
+		}
 		return nil
 	}), "", binding)
 	if err != nil {
@@ -424,6 +427,11 @@ func (a *Agent) admitGroupTurn(ctx context.Context, env envelope.Envelope, in en
 		}
 		for _, d := range []identity.Public{a.Self(), sender} {
 			if e = groupTurnCheck(q, current, d.Address, d.Fingerprint()); e != nil && (in.Human == nil || errors.Is(e, ErrGroupContextPending) || errors.Is(e, errPersonConflict)) {
+				return e
+			}
+		}
+		if envelope.TopicOrganization(in.TopicEvent) {
+			if e = topicOrganizationAuthor(q, in.Conv, sender.Address, sender.Fingerprint()); e != nil {
 				return e
 			}
 		}

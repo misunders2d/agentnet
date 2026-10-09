@@ -6,18 +6,20 @@ const root=path.resolve(__dirname,'../static'),evidence=process.env.AGENTNET_SCR
 assert(evidence,'private screenshot directory required');fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const at='2026-10-06T10:00:00Z',local='sergey/laptop',remote='sergey/zenbook',localID='a'.repeat(32),remoteID='b'.repeat(32);
 const me={person:'sergey',label:'Sergey',address:local,state:'self',devices:[{address:local,fingerprint:'local-key'},{address:remote,fingerprint:'remote-key'},{address:'sergey/iphone',fingerprint:'phone-key'}]};
-const overview={version:'fixture',seq:1,me:{address:local,fingerprint:'local-key',responder:'codex',responder_dir:'/fixture',agent:true},person:me,persons:true,agents:true,role:'person',people:[],review:[],links:[],reminders:[],threads:[],dms:[],agent_devices:[remote],directory:{current:true,members:[]},quarantine:[]};
+const overview={version:'fixture',seq:1,me:{address:local,fingerprint:'local-key',responder:'codex',responder_dir:'/fixture',agent:true},person:me,persons:true,agents:true,role:'person',people:[],review:[],links:[],reminders:[],threads:[],dms:[],agent_devices:[remote],directory:{current:true,members:[]},quarantine:[],files:{max_count:8,max_file:100000,max_message:200000}};
+if(process.env.AGENTNET_MODEL_REPORT){overview.model_reports=[{host:local,host_key:"local-key",agent_id:"",model:"gpt-6.1-sol",harness:"codex",executor:"a".repeat(64),at:1791280800,revision:1},{host:remote,host_key:"remote-key",agent_id:remoteID,model:"Claude Opus 4.6",harness:"claude",executor:"b".repeat(64),at:1791280800,revision:1}];}
 const responder={chosen:true,manual:false,harness:'codex',dir:'/fixture',ready:true,harnesses:[{name:'codex',found:true}]};
 const record=(host,id,label)=>({v:1,id,host,host_key:host===local?'local-key':'remote-key',label,ts:1});
 const boot=`
-const seed=${JSON.stringify({overview,responder,local,remote,localID,remoteID})};window.fixture={...seed,requests:[],threads:{},disabled:false,badRemote:false};
+const seed=${JSON.stringify({overview,responder,local,remote,localID,remoteID,assignMode:!!process.env.AGENTNET_ASSIGN_MESSAGE})};window.fixture={...seed,requests:[],threads:{},staged:[],uploads:{},storedBytes:{},discarded:[],fileReads:0,disabled:false,badRemote:false};
 let opened,changed;
-const host={version:1,platform:'daemon',workspace:{id:'default',name:'Agent starter fixture',endpoint:location.origin,address:seed.local,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){opened=fn;},listen(fn){changed=fn;return()=>{};},stage:async()=>{throw Error('No files');},file:async()=>{throw Error('No files');},api:async(p,body)=>{
+const host={version:1,platform:'daemon',workspace:{id:'default',name:'Agent starter fixture',endpoint:location.origin,address:seed.local,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){opened=fn;},listen(fn){changed=fn;return()=>{};},stage:async file=>{if(fixture.failStageAfterFirst&&Object.keys(fixture.uploads).length){fixture.failStageAfterFirst=false;throw Error('Temporary upload failure');}const value={name:file.name,text:await file.text()};fixture.staged.push(value);const id='upload-'+fixture.staged.length;fixture.uploads[id]=value;return id;},file:async(id,index,dir)=>{fixture.fileReads++;const kept=fixture.storedBytes[id+':'+index];return {bytes:new TextEncoder().encode(kept===undefined?'Reviewed source file':fixture.corruptStoredBytes?'Different saved file':kept)};},api:async(p,body)=>{
 fixture.requests.push({path:p,body});
 if(p.startsWith('/api/overview'))return structuredClone(fixture.overview);
 if(p==='/api/responder')return structuredClone(fixture.responder);
 if(p.startsWith('/api/agents')){const h=new URL(p,location.origin).searchParams.get('host'),remote=!!h;return {host:remote?(fixture.badRemote?'wrong/computer':h):seed.local,local:!remote,harnesses:seed.responder.harnesses,agents:remote?[{record:${JSON.stringify(record(remote,remoteID,'Zenbook agent'))},enabled:true}]:[{record:${JSON.stringify(record(local,localID,'Laptop agent'))},enabled:!fixture.disabled,responder:fixture.responder},{record:${JSON.stringify(record(local,'c'.repeat(32),'Sleeping agent'))},enabled:true,responder:{...fixture.responder,ready:false,problem:'Not ready in fixture'}}]};}
-if(p==='/api/send'){const id='question-'+(Object.keys(fixture.threads).length+1),message={id,dir:'out',from:seed.local,to:body.to,kind:body.kind,body:body.body,at:'${at}',state:'queued',author:{label:'You',about:''},target:body.agent_id?{address:body.to,fingerprint:body.to===seed.local?'local-key':'remote-key',agent_id:body.agent_id}:undefined};const summary={id,peer:body.to,title:body.body,last:body.body,last_at:'${at}',count:1,review:0,unread:0,running:0,waiting:false,state:'active',quiet_since:'${at}',agent_id:body.agent_id};fixture.threads[id]={id,peer:body.to,key:{pinned:'fixture-key'},approved:true,task_grant:'',messages:[message],topic:summary};fixture.overview.threads.push(summary);fixture.overview.seq++;return {id,state:'queued',path:'fixture'};}
+if(p==='/api/upload/discard'){for(const id of body.ids){fixture.discarded.push(id);delete fixture.uploads[id];}return {};}
+if(p==='/api/send'){const staged=(body.files||[]).map(id=>fixture.uploads[id]);for(const id of body.files||[])delete fixture.uploads[id];if(fixture.failNextSend){fixture.failNextSend=false;throw Error('Temporary send failure');}const id=body.kind==='task'?body.id:(Object.keys(fixture.threads).length+1).toString(16).padStart(32,'0');if(fixture.threads[id])throw Error('This send is already kept here.');for(const [index,file] of staged.entries())fixture.storedBytes[id+':'+index]=file.text;const message={id,dir:'out',from:seed.local,to:body.to,kind:body.kind,body:body.body,at:'${at}',state:'queued',author:{label:'You',about:''},files:seed.assignMode&&body.body==='Default question'?[{name:'source.txt',size:20,openable:true},{name:'second.txt',size:20,openable:true},{name:'missing.txt',size:40,openable:false}]:staged.length?staged.map((f,index)=>({index,name:f.name,size:f.text.length,openable:true})):undefined,target:body.agent_id?{address:body.to,fingerprint:body.to===seed.local?'local-key':'remote-key',agent_id:body.agent_id}:undefined};const summary={id,peer:body.to,title:body.body,last:body.body,last_at:'${at}',count:1,review:0,unread:0,running:0,waiting:false,state:'active',quiet_since:'${at}',agent_id:body.agent_id};fixture.threads[id]={id,peer:body.to,key:{pinned:'fixture-key'},approved:true,task_grant:'',messages:[message],topic:summary};fixture.overview.threads.push(summary);fixture.overview.seq++;if(fixture.loseNextSendSuccess){fixture.loseNextSendSuccess=false;fixture.lostTask=id;throw Error('Response lost after durable storage');}return {id,state:'queued',path:'fixture'};}
 if(p.startsWith('/api/thread?'))return structuredClone(fixture.threads[new URL(p,location.origin).searchParams.get('id')]);
 if(p==='/api/groups/invitations')return [];if(p.startsWith('/api/typing/status'))return {send:false,scopes:[]};if(p.includes('/topics'))return {topics:[],placements:[]};if(p==='/api/permissions')return {questions:[],tasks:[]};return {};
 }};
@@ -49,6 +51,16 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    const localLast=await page.getByRole('button',{name:'Chat with Sleeping agent',exact:true}).boundingBox(),remoteFirst=await page.getByRole('button',{name:'Chat with Zenbook agent',exact:true}).boundingBox();
    assert(localLast && remoteFirst && localLast.y<remoteFirst.y,'local managed agents stay together before other-device agents');
    assert.deepEqual(await sent(),[],'discovery must send nothing');
+   if(process.env.AGENTNET_MODEL_REPORT){
+    await settle(page);
+    await yours.getByText(/^Last reported model: gpt-6.1-sol/).waitFor();await yours.getByText(/^Last reported model: Claude Opus 4.6/).waitFor();
+    assert.equal(await localCard.getByText('Model unknown',{exact:true}).count(),1,'named identity never borrows default model');
+    const modelRows=yours.locator('[data-agent-model]');assert(await modelRows.count()>=4,'metadata and unknown states beside each own identity');
+    assert.equal(await modelRows.locator('time').count(),2,'reported values retain timestamps');
+    for(const row of await modelRows.all()){const b=await row.boundingBox();if(!b||b.x<0||b.x+b.width>width+1)await page.screenshot({path:path.join(evidence,'model-overflow-'+width+'.png')});assert(b&&b.x>=0&&b.x+b.width<=width+1,'metadata fits desktop/mobile card '+JSON.stringify({b,width,text:await row.innerText()}));}
+    assert.equal(await yours.getByRole('combobox',{name:/model/i}).count(),0,'read-only model visibility');
+   }
+
    await settle(page);const agentsShot=path.join(evidence,'comic-agent-list-'+width+'.png');await page.screenshot({path:agentsShot});shots.push(agentsShot);
    await page.getByRole('button',{name:'Chat with Laptop agent',exact:true}).click();
    let sheet=page.getByRole('dialog',{name:'Chat with Laptop agent',exact:true});
@@ -57,8 +69,8 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    await sheet.getByRole('alert').waitFor();assert.match(await sheet.getByRole('alert').innerText(),/selected agent is unavailable/);
    assert.equal(await sheet.getByRole('textbox',{name:'Your message',exact:true}).inputValue(),'Keep my named question');assert.deepEqual(await sent(),[],'disabled selected agent must not become default');
    await page.evaluate(()=>fixture.disabled=false);await sheet.getByRole('button',{name:'Send question',exact:true}).click();await sheet.waitFor({state:'hidden'});
-   await page.locator('[data-mid="question-1"]').waitFor();
-   assert.match(await page.locator('[data-mid="question-1"]').innerText(),/Keep my named question/);
+   await page.locator('[data-mid="00000000000000000000000000000001"]').waitFor();
+   assert.match(await page.locator('[data-mid="00000000000000000000000000000001"]').innerText(),/Keep my named question/);
    const first=(await sent())[0];assert.equal(first.to,local);assert.equal(first.agent_id,localID);assert.equal(first.kind,'question');
    if(width<1024){await settle(page);await page.getByRole('button',{name:'Back to chats',exact:true}).click();await settle(page);}
    await nav.getByRole('button',{name:/^Chats/}).click();await page.getByRole('button',{name:'New',exact:true}).click();
@@ -71,6 +83,43 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    await nav.getByRole('button',{name:'Agents',exact:true}).click();await page.getByRole('button',{name:'Chat with Your agent',exact:true}).click();
    sheet=page.getByRole('dialog',{name:'Chat with Your agent',exact:true});await sheet.getByRole('textbox',{name:'Your message',exact:true}).fill('Default question');await sheet.getByRole('button',{name:'Send question',exact:true}).click();await sheet.waitFor({state:'hidden'});
    const third=(await sent())[2];assert.equal(third.to,local);assert.equal(third.agent_id,undefined);
+   if(process.env.AGENTNET_ASSIGN_MESSAGE){
+    const source=page.locator('[data-mid="00000000000000000000000000000003"]');
+    if(width>=1024){await source.locator('[data-message-bubble]').hover();await source.getByRole('button',{name:'More actions',exact:true}).click();await page.getByRole('menuitem',{name:'Assign to your agent…',exact:true}).click();}
+    else{await source.getByRole('button',{name:'Message actions',exact:true}).focus();await source.getByRole('button',{name:'Message actions',exact:true}).click();await page.getByRole('button',{name:'Assign to your agent…',exact:true}).click();}
+    const assign=page.getByRole('dialog',{name:'Assign to your agent',exact:true});await assign.getByRole('combobox',{name:'Your agent',exact:true}).selectOption(remote+'#'+remoteID);
+    await assign.getByRole('textbox',{name:'What should it do?',exact:true}).fill('Review the selected request');
+    assert.equal((await sent()).length,3,'opening a reviewed assignment sends no task');assert(await assign.getByRole('checkbox',{name:'source.txt',exact:true}).isChecked());assert(await assign.getByRole('checkbox',{name:/missing.txt/}).isDisabled());
+    await settle(page);const assignmentShot=path.join(evidence,'comic-assign-preview-'+width+'.png');await page.screenshot({path:assignmentShot});shots.push(assignmentShot);
+    assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'assignment preview overflow');
+    await page.evaluate(()=>fixture.threads['00000000000000000000000000000003'].messages[0].body='Changed after selection');
+    await assign.getByRole('button',{name:'Send task',exact:true}).click();await assign.getByRole('alert').waitFor();assert.match(await assign.getByRole('alert').innerText(),/message changed|no longer available/i);assert.equal((await sent()).length,3,'stale source is not silently delegated');
+    await page.evaluate(()=>{fixture.threads['00000000000000000000000000000003'].messages[0].body='Default question';fixture.failStageAfterFirst=true;});
+    await assign.getByRole('button',{name:'Send task',exact:true}).click();await assign.getByRole('button',{name:'Retry this task',exact:true}).waitFor();
+    assert.match(await assign.getByRole('alert').innerText(),/upload failure/i);assert.equal((await sent()).length,3,'failed second upload sends no task');
+    assert.deepEqual(await page.evaluate(()=>Object.keys(fixture.uploads)),[],'failed upload attempt discards earlier staged bytes');
+    assert.equal(await page.evaluate(()=>fixture.discarded.length),1,'exact unused stage is discarded');
+    await page.evaluate(()=>fixture.failNextSend=true);await assign.getByRole('button',{name:'Retry this task',exact:true}).click();await assign.getByRole('alert').waitFor();
+    assert.match(await assign.getByRole('alert').innerText(),/send failure/i);assert.equal((await sent()).length,4,'pre-storage failed send remains one explicit attempt');
+    assert(await assign.getByRole('combobox',{name:'Your agent',exact:true}).isDisabled(),'uncertain send keeps the exact target');
+    assert(await assign.getByRole('textbox',{name:'What should it do?',exact:true}).isDisabled(),'uncertain send keeps reviewed bytes');
+    await page.evaluate(()=>fixture.loseNextSendSuccess=true);await assign.getByRole('button',{name:'Retry this task',exact:true}).click();await assign.getByRole('alert').waitFor();
+    assert.match(await assign.getByRole('alert').innerText(),/response lost/i);assert.equal((await sent()).length,5);
+    const keptID=await page.evaluate(()=>fixture.lostTask),beforeStages=await page.evaluate(()=>fixture.staged.length);
+    assert.equal(await page.evaluate(()=>Object.values(fixture.threads).filter(t=>t.messages[0]?.kind==='task').length),1,'lost success really persisted one task');
+    await page.evaluate(()=>fixture.corruptStoredBytes=true);await assign.getByRole('button',{name:'Retry this task',exact:true}).click();await assign.getByRole('alert').waitFor();
+    assert.match(await assign.getByRole('alert').innerText(),/file bytes differ/i);assert.equal((await sent()).length,5,'same metadata with differing saved bytes never resends');
+    assert.equal(await page.evaluate(()=>fixture.staged.length),beforeStages,'recovery does not upload replacement bytes');
+    await page.evaluate(()=>fixture.corruptStoredBytes=false);await assign.getByRole('button',{name:'Retry this task',exact:true}).click();await assign.waitFor({state:'hidden'});
+    await page.locator('[data-mid="'+keptID+'"]').waitFor();
+    const attempts=(await sent()).slice(3);assert.equal(attempts.length,2);assert.deepEqual({...attempts[0],files:[]},{...attempts[1],files:[]},'retry retains exact request ID, recipient and body');
+    assert.equal(attempts[0].files.length,2);assert.equal(attempts[1].files.length,2);assert.notEqual(attempts[0].files[0],attempts[1].files[0],'consumed upload is restaged');
+    assert.equal(await page.evaluate(()=>fixture.staged.length),5,'only failed uploads and two actual send attempts stage files');
+    assert.deepEqual(await page.evaluate(()=>Object.keys(fixture.uploads)),[],'successful and failed send stages are consumed or discarded');
+    assert.equal(await page.evaluate(()=>fixture.fileReads),5,'source bytes retained once; saved file mismatch and final exact files are read for recovery');
+    assert.equal(attempts[1].id,keptID);assert.equal(attempts[1].to,remote);assert.equal(attempts[1].agent_id,remoteID);assert.equal(attempts[1].kind,'task');assert.match(attempts[1].body,/Review the selected request/);assert.match(attempts[1].body,/> Default question/);assert.match(attempts[1].body,/Selected message from You/);
+    const sourceLink=page.getByRole('button',{name:'View original',exact:true});await sourceLink.waitFor();await sourceLink.click();await source.waitFor();assert.equal((await sent()).length,5,'recovery and source navigation never execute again');
+   }
    assert(!await page.evaluate(()=>fixture.requests.some(r=>r.body!==undefined && ['/api/dm/new','/api/groups/new','/api/dm/agent/invite'].includes(r.path))),'starter must not create human chats or invite');
    await settle(page);const shot=path.join(evidence,'comic-agent-starter-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
    assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'document overflow');assert.deepEqual(errors,[]);await context.close();

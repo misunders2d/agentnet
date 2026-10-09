@@ -46,6 +46,11 @@ type harness struct {
 const nativeHarnessPermissions = "Questions and accepted tasks use your native settings, skills, plugins, tools and permissions unchanged. AgentNet adds no tool exclusions, sandbox or approval overrides. If your agent needs a native approval that a background session cannot obtain, the request needs your attention. Your open sessions remain untouched."
 
 var Harnesses = map[string]harness{
+	"agy": {
+		bin: "agy", question: []string{"--input-format", "stream-json", "--output-format", "stream-json"},
+		task:  []string{"--input-format", "stream-json", "--output-format", "stream-json"},
+		stdin: true, sessions: agySessions, addDir: "--add-dir", addIn: true, limits: nativeHarnessPermissions + " Received files and task output folders are added with --add-dir; your setup decides access.",
+	},
 	"claude": {
 		bin: "claude", question: []string{"-p", "--output-format", "text", "--no-session-persistence"},
 		task:  []string{"-p", "--output-format", "text", "--no-session-persistence"},

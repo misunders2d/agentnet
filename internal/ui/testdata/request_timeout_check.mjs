@@ -10,9 +10,20 @@ globalThis.setTimeout = (fn, ms, ...args) => {
 const bounded = p => Promise.race([p, new Promise((_, reject) => realSetTimeout(() => reject(Error('HTTP stall still blocks recovery')), 300))]);
 const stalled = signal => new Promise((_, reject) => {
   const stop = () => reject(new DOMException('aborted', 'AbortError'));
-  if (signal.aborted) stop(); else signal.addEventListener('abort', stop, {once:true});
+  if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, {once:true});
 });
 const retryable = err => err instanceof HubError && err.status === 0;
+// A group proof/context is downloaded while the receive stream admits its
+// carrier. A suspended download must not hold that stream forever.
+for (const phase of ['headers','body','bounded-body']) {
+ const e = new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async(_, {signal}) => {
+  if (phase === 'headers') return stalled(signal);
+  return {ok:true,arrayBuffer:()=>stalled(signal),body:{getReader:()=>({read:()=>stalled(signal),cancel:async()=>{}})}};
+ }});
+ e.keys=await wire.newKeys();e.address='alice/phone';
+ await assert.rejects(bounded(e.getBytes('/fixture',phase==='bounded-body'?3:undefined)),retryable);
+ e.stop();
+}
 // Bound stalled headers, successful response body, and error response body.
 for (const phase of ['headers','body','error-body']) {
  const e = new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async(_, {signal}) => {
@@ -34,11 +45,46 @@ for (const phase of ['headers','body','error-body']) {
  e.stop();
 }
 // Both caller cancellation and engine shutdown survive the per-request signal.
+for (const bound of [undefined,3]) {
+ let requested,start;const entered=new Promise(r=>start=r);
+ const e=new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async(_, {signal})=>{
+  requested=signal;start();
+  return {ok:true,arrayBuffer:()=>stalled(signal),body:{getReader:()=>({read:()=>stalled(signal),cancel:async()=>{}})}};
+ }});
+ e.keys=await wire.newKeys();e.address='alice/phone';
+ const pending=e.getBytes('/fixture',bound);await entered;e.stop();assert(requested.aborted,'stop cancels the active download immediately, not at its later deadline');await assert.rejects(bounded(pending),retryable);
+}
+for (const size of [2,3,4]) {
+ const e=new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async()=>new Response(new Uint8Array(size))});
+ e.keys=await wire.newKeys();e.address='alice/phone';
+ if(size===3)assert.equal((await e.getBytes('/fixture',3)).length,3);
+ else await assert.rejects(e.getBytes('/fixture',3),size<3?/incomplete/:/exceeds signed ciphertext size/);
+ e.stop();
+}
 for (const closing of [false,true]) {
  const e = new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async(_, {signal})=>stalled(signal)}), caller=new AbortController();
  const request = e.call('GET','/fixture',undefined,{signed:false,signal:caller.signal});
  (closing ? e.sendAbort : caller).abort();
  await assert.rejects(bounded(request),retryable);e.stop();
+}
+// Existing unresolved proof and receipt retries must not stand in front of a
+// newly queued user request on foreground reconnect.
+{
+ const store=memoryStore(),posts=[],e=new Engine({store,base:'https://isolated.invalid',fetch:async(url,{body})=>{
+  if(url.endsWith('/v1/version'))return new Response(JSON.stringify({version:'fixture',features:[]}));
+  if(url.endsWith('/v1/messages')){posts.push(body);return new Response(JSON.stringify({state:'custody'}));}
+  throw Error('Unexpected request '+url);
+ }});
+ e.keys=await wire.newKeys();e.address='alice/phone';
+ const recipient=await wire.publicEntry(await wire.newKeys(),'bob/host'),pin={fingerprint:'f'.repeat(64)};
+ e.sendKey=async()=>pin;e.pubOf=async()=>recipient;await store.write([{s:'pins',k:'bob/host',v:pin}]);
+ for(const method of ['publishPerson','recoverGroupIntents','retryApproved','syncRoots','syncReadMarks','syncTopicTitles','syncInvitations','discloseHumanAudience','runHistory','runServes','keepFiles','reconcileNotify'])e[method]=async()=>{};
+ let release;const background=new Promise(r=>release=r);
+ e.retryHeld=()=>background;e.flushReceipts=()=>background;
+ const sent=await e.sendDirect({to:'bob/host',kind:'question',body:'fresh request during old proof recovery'});
+ const original=await store.get('outbox',sent.id);e.connected=true;
+ try {await bounded(e.onConnect());assert.deepEqual(posts,[original.envelope]);assert.equal((await store.get('outbox',sent.id)).state,'custody');}
+ finally {release();e.stop();}
 }
 // A cancelled stream previously awaited its hung onConnect forever. The
 // real onConnect must now finish; reconnect can flush the same durable row.

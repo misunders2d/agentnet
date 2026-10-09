@@ -29,6 +29,14 @@ func TestBrowserDeviceHistory(t *testing.T) {
 }
 
 func TestBrowserDeviceHistoryRealIndexedDB(t *testing.T) {
+	testOwnDeviceModuleIndexedDB(t, "devicehistory_engine_check.mjs", "deviceHistoryResult")
+}
+
+func TestBrowserReceivePendingRealIndexedDB(t *testing.T) {
+	testOwnDeviceModuleIndexedDB(t, "receive_pending_check.mjs", "receivePendingResult")
+}
+
+func testOwnDeviceModuleIndexedDB(t *testing.T, module, resultField string) {
 	chrome := os.Getenv("AGENTNET_CHROME")
 	if chrome == "" {
 		t.Skip("AGENTNET_CHROME not set")
@@ -38,14 +46,14 @@ func TestBrowserDeviceHistoryRealIndexedDB(t *testing.T) {
 		switch r.URL.Path {
 		case "/":
 			w.Header().Set("Content-Type", "text/html")
-			io.WriteString(w, `<script type="module">let result;try{await import('/testdata/devicehistory_engine_check.mjs');result=window.deviceHistoryResult}catch(e){result={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(result)});</script>`)
+			io.WriteString(w, `<script type="module">let result;try{await import('/testdata/`+module+`');result=window.`+resultField+`}catch(e){result={error:e.stack}}await fetch('/result',{method:'POST',body:JSON.stringify(result)});</script>`)
 		case "/result":
 			var result map[string]any
 			if json.NewDecoder(r.Body).Decode(&result) == nil {
 				done <- result
 			}
 		default:
-			if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/testdata/devicehistory_engine_check.mjs" {
+			if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/testdata/"+module {
 				http.NotFound(w, r)
 				return
 			}

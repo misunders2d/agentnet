@@ -493,6 +493,10 @@ const CapDriveSpace = "drv1"
 // review reports. CapControl alone says nothing about these.
 const CapHeadless = "hdl1"
 
+// CapRequestFollowup reads explicit bound corrections and checks their original
+// request before a separate run. It does not advertise native in-run steering.
+const CapRequestFollowup = "flw1"
+
 // CapContinuation reads exact-attempt human clarification decisions.
 const CapContinuation = "cont1"
 
@@ -510,7 +514,7 @@ const CapAgent = "agent1"
 // advertises (ROOM_V1 §2.1: parse headroom).
 const (
 	MaxCaps           = 32
-	MaxAdvertisedCaps = 18
+	MaxAdvertisedCaps = 21
 	MaxCapsRecord     = 1024
 )
 

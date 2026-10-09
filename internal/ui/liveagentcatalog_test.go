@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -235,6 +236,38 @@ func TestLiveAgentCatalogGuardLocalSaveAndVerifiedSelection(t *testing.T) {
 	if err != nil || len(thread.Messages) != 1 || thread.Messages[0].Target == nil || thread.Messages[0].Target.AgentID != peerCreated.Agent.Record.ID {
 		t.Fatalf("native selected DTO %+v %v", thread, err)
 	}
+	// Assignment recovery relies on the actual public provider shape and the
+	// caller's preserved ID. A kept file must be checked as bytes, not labels.
+	taskID, taskBody, taskFile := protocol.NewID(), "explicit selected-message task", "exact retained selected file"
+	upload, err := l.StageFile("selected.txt", strings.NewReader(taskFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSent, err := l.Send(Draft{ID: taskID, To: peer.Address, Kind: KindTask, Body: taskBody, AgentID: peerCreated.Agent.Record.ID, Files: []string{upload}})
+	if err != nil || taskSent.ID != taskID {
+		t.Fatalf("preserved assignment ID %+v %v", taskSent, err)
+	}
+	kept, err := l.Thread(taskID)
+	if err != nil || len(kept.Messages) != 1 {
+		t.Fatalf("kept assignment DTO %+v %v", kept, err)
+	}
+	selectedTask := kept.Messages[0]
+	if selectedTask.ID != taskID || selectedTask.Dir != "out" || selectedTask.From != a.Address || selectedTask.To != peer.Address || selectedTask.Kind != KindTask || selectedTask.Body != taskBody || selectedTask.Target == nil || selectedTask.Target.Address != peer.Address || selectedTask.Target.Fingerprint != peer.Self().Fingerprint() || selectedTask.Target.AgentID != peerCreated.Agent.Record.ID || kept.Key.Pinned != peer.Self().Fingerprint() {
+		t.Fatalf("assignment recovery identity contract %+v key=%+v", selectedTask, kept.Key)
+	}
+	if len(selectedTask.Files) != 1 || selectedTask.Files[0].Index != 0 || selectedTask.Files[0].Name != "selected.txt" || selectedTask.Files[0].Size != int64(len(taskFile)) || !selectedTask.Files[0].Openable {
+		t.Fatalf("assignment recovery file view %+v", selectedTask.Files)
+	}
+	reader, name, err := l.OpenFile(ctx, "out", taskID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytes, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil || name != "selected.txt" || string(bytes) != taskFile {
+		t.Fatalf("assignment recovery exact bytes %q %q %v", name, bytes, err)
+	}
+
 	disabled, err := l.ChangeAgent(ctx, AgentCatalogChange{Action: "disable", ID: id})
 	if err != nil || disabled.Agent.Enabled || !disabled.Published {
 		t.Fatalf("disable %+v %v", disabled, err)

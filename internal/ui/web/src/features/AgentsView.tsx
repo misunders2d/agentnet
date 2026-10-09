@@ -17,6 +17,7 @@ import { ConfirmSheet, Details, Row } from "./Approvals.sheets";
 import { capital, deviceWords, isMine } from "./Approvals.words";
 import { AgentSheet, type AgentSetup } from "./AgentsView.forms";
 import { AgentChatButton, OwnAgentChats } from "./AgentChat";
+import { AgentModelReport } from "./AgentModelReport";
 import { AssistantSetup } from "./AssistantSetup";
 import { latestThreads, Permissions, useGrants, warmGrants } from "./AgentsView.grants";
 import { eventKind } from "./Message.model";
@@ -115,6 +116,7 @@ function MyAgent({ o, r }: { o: T.Overview; r: Load<T.ResponderView> }) {
           <p className="truncate text-[14px] font-medium text-text-2">On {niceDevice(o.me.address)}{harness && state !== "manual" && state !== "unset" ? " · " + capital(harness) : ""}</p>
         </div>
       </div>
+      <AgentModelReport overview={o} host={o.me.address} />
       <p className="pt-2 text-[13px] text-muted">Used when a request to this computer doesn’t name an agent.</p>
       <p className="pt-3 flex items-center gap-2 text-[15px] font-bold">
         <Dot tone={state === "ready" ? "ok" : state === "problem" ? "bad" : "off"} />
@@ -229,6 +231,7 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
           </Switch.Root>
         </label>
       </div>
+      <AgentModelReport overview={o} host={a.record.host} agentId={a.record.id} />
       {a.enabled && r && !r.ready && r.problem && <p className="pt-2 text-[14px] text-danger">{r.problem}</p>}
       {chats.length > 0 && <Chats o={o} dms={chats} />}
       <div className="mt-3"><AgentChatButton target={{host:a.record.host,agentId:a.record.id,label:a.record.label,local:true,unavailable:!a.enabled || !r?.ready ? "This agent is not ready" : undefined}} /></div>

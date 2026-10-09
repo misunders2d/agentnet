@@ -39,6 +39,7 @@ const (
 	noSessions     sessionStyle = iota // every job is a fresh, unsaved run
 	claudeSessions                     // --session-id UUID creates, --resume UUID continues
 	codexSessions                      // exec --json reports thread_id; exec resume ID continues
+	agySessions                        // stream-json reports conversation_id; --conversation ID continues
 )
 
 // sessionRef is recorded on the received question or task whose job ran
@@ -145,6 +146,8 @@ func resumeArgs(h harness, mode string, base []string, id string) []string {
 			}
 		}
 		return args
+	case agySessions:
+		return append(slices.Clone(base), "--conversation", id)
 	}
 	return slices.Clone(base)
 }

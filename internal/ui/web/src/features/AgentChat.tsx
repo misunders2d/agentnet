@@ -1,3 +1,4 @@
+import { AgentModelReport } from "./AgentModelReport";
 // Direct questions to an exact agent host. No person DM or participation is created.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { errorText, type Api, type T } from "../api";
@@ -120,10 +121,17 @@ export function OwnAgentChats({overview:o, includeLocal = true, query = "", onSt
   }, [store, o.seq, includeLocal]);
   if (!data) return <p className="text-[13px] text-muted">Reading your agents…</p>;
   const targets = data.targets.filter(t => !query || (t.label + " " + niceDevice(t.host)).toLowerCase().includes(query.toLowerCase()));
+  const reports = (o.model_reports || []).filter(r => (includeLocal || r.host !== o.me.address) && !data.targets.some(t => t.host === r.host && (t.agentId || "") === r.agent_id) && (!query || (r.model + " " + niceDevice(r.host)).toLowerCase().includes(query.toLowerCase())));
   return <div className="space-y-2">
     {targets.map(t => <div key={t.host + "#" + (t.agentId || "")} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-surface p-3 stroke">
-      <div><p className="font-semibold">{t.label}</p><p className="text-[13px] text-muted">On {niceDevice(t.host)}{t.unavailable ? " · " + t.unavailable : ""}</p></div>
+      <div className="min-w-0 flex-1 basis-40"><p className="font-semibold">{t.label}</p><p className="text-[13px] text-muted">On {niceDevice(t.host)}{t.unavailable ? " · " + t.unavailable : ""}</p></div>
       <AgentChatButton target={t} onStarted={onStarted} />
+      <div className="w-full"><AgentModelReport overview={o} host={t.host} agentId={t.agentId} /></div>
+    </div>)}
+    {reports.map(r => <div key={r.host + "#" + r.agent_id} className="rounded-xl bg-surface p-3 stroke">
+      <p className="font-semibold">{r.agent_id ? "Agent " + r.agent_id.slice(0, 8) : "Default agent"}</p>
+      <p className="text-[13px] text-muted">On {niceDevice(r.host)}</p>
+      <AgentModelReport overview={o} host={r.host} agentId={r.agent_id} />
     </div>)}
     {data.problems.map((p,i) => <p key={i} className="text-[13px] text-muted">Agent list unavailable: {p}</p>)}
   </div>;

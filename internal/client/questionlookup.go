@@ -65,7 +65,7 @@ const lookupsUnavailable = "No lookups of this AgentNet device's own state are a
 // Whatever cannot be bound exactly is not offered, and the text says so: a
 // program that cannot be resolved or a Pi extension that could not be written.
 func (a *Agent) questionSetup(j job, h string) questionLookup {
-	if j.Kind != envelope.KindQuestion || h != "claude" && h != "codex" && h != "pi" && h != "omp" {
+	if j.Kind != envelope.KindQuestion || h != "claude" && h != "codex" && h != "pi" && h != "omp" && h != "agy" {
 		return questionLookup{}
 	}
 	none := questionLookup{text: lookupsUnavailable}
@@ -76,7 +76,7 @@ func (a *Agent) questionSetup(j job, h string) questionLookup {
 	}
 	direct := " Answer such a harmless lookup directly; never ask the coworker to resend it as a task.\n"
 	switch h {
-	case "claude", "codex":
+	case "claude", "codex", "agy":
 		var lists []string
 		for _, l := range questionLookups {
 			lists = append(lists, "`"+l.args+"`")

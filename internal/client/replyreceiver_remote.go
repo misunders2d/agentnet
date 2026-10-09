@@ -156,7 +156,10 @@ func (a *Agent) prepareRemoteCopies(ctx context.Context, b *replyBinding, copies
 		return errors.New("cross-device receiver has no original request")
 	}
 	original := copies[first].in
-	request := envelope.ReceiverRequest{ID: original.ID, LID: original.LID, From: original.From, FromKey: a.Self().Fingerprint(), TS: original.TS, Conv: original.Conv, Root: original.Root, Kind: original.Kind, Body: original.Body, ReplyTo: original.ReplyTo, Origin: original.Origin, Emotion: original.Emotion, Target: original.Target, PID: original.PID, Human: original.Human}
+	request := envelope.ReceiverRequest{ID: original.ID, LID: original.LID, From: original.From, FromKey: a.Self().Fingerprint(), TS: original.TS, Conv: original.Conv, Root: original.Root, Kind: original.Kind, Body: original.Body, ReplyTo: original.ReplyTo, Origin: original.Origin, Emotion: original.Emotion, Target: original.Target, PID: original.PID, Human: original.Human, Followup: original.Followup}
+	if original.Followup != nil {
+		request.Topic = original.Topic
+	}
 	if original.Conv == "" {
 		request.To, request.ToKey = original.To, copies[first].recipientFP
 	}

@@ -28,7 +28,7 @@ export function draftFiles(list: File[], pasted = false): StagedFile[] {
 export const releaseFiles = (files: StagedFile[]) => { for (const f of files) if (f.url) URL.revokeObjectURL(f.url); };
 
 /** overLimit says why these files cannot go in one message ("" when they can). */
-export function overLimit(files: StagedFile[], lim: T.FileLimits | undefined): string {
+export function overLimit(files: Pick<StagedFile, "name" | "size">[], lim: T.FileLimits | undefined): string {
   if (!files.length) return "";
   if (!lim) return "Files can’t be sent from here.";
   if (files.length > lim.max_count) return "One message takes at most " + lim.max_count + " files. Remove " + (files.length - lim.max_count) + " to send.";

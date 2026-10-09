@@ -274,6 +274,11 @@ func Open(home string) (*Agent, error) {
 		st.db.Close()
 		return nil, err
 	}
+	if err := a.recoverInvalidLifecycleHistory(); err != nil {
+		a.hub.release()
+		st.db.Close()
+		return nil, err
+	}
 	a.hub.workspaceCheck = a.WorkspaceRequestGuard()
 	a.typing.groupMembers = a.GroupMembers // verified effective group membership (groups.go); never the frozen root
 	return a, nil
@@ -351,15 +356,16 @@ type SendResult struct {
 
 // Outgoing is a message to send.
 type Outgoing struct {
-	To        string // person/agent, or person/agent#session for one running daemon
-	Body      string
-	ReplyTo   string
-	Quote     string
-	TopicDone bool
-	Files     []string
-	Named     []OutgoingFile // more files, each with the name it is shown under (a page's staged uploads)
-	Fallback  bool           // if the addressed session has ended, deliver to the agent's inbox
-	Kind      string         // envelope.KindMessage (default), KindQuestion or KindTask
+	RequestFollowup *envelope.Ref // explicit original request, separate from legacy local summaries
+	To              string        // person/agent, or person/agent#session for one running daemon
+	Body            string
+	ReplyTo         string
+	Quote           string
+	TopicDone       bool
+	Files           []string
+	Named           []OutgoingFile // more files, each with the name it is shown under (a page's staged uploads)
+	Fallback        bool           // if the addressed session has ended, deliver to the agent's inbox
+	Kind            string         // envelope.KindMessage (default), KindQuestion or KindTask
 	// Wait, if positive, waits up to this long for the recipient's receipt
 	// after the Hub takes custody (one request, woken by the receipt).
 	Wait    time.Duration
@@ -465,7 +471,7 @@ func (a *Agent) SendMessage(ctx context.Context, m Outgoing) (SendResult, error)
 	in := envelope.Inner{
 		ID: id, From: a.Address, To: to, TS: time.Now().Unix(),
 		Kind: m.Kind, Body: m.Body, ReplyTo: m.ReplyTo, Quote: m.Quote, TopicDone: m.TopicDone, Session: session, Fallback: m.Fallback, Status: m.Status,
-		Target: m.Target, AgentID: m.AgentID,
+		Target: m.Target, AgentID: m.AgentID, Followup: m.RequestFollowup,
 	}
 	if namedAgentFields(in) {
 		if m.Target != nil && (m.Target.Address != to || m.Target.Fingerprint != peer.Fingerprint()) {
@@ -668,6 +674,25 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	if required == "" && topicScoped {
 		required = protocol.CapTopicParticipation
 	}
+	organizationCap, err := topicOrganizationCopy(a.store.db, env.ID, sub, body)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if required == "" && organizationCap {
+		required = protocol.CapTopicOrganization
+	}
+	if organizationCap && sub == "" {
+		if err := topicOrganizationAuthor(a.store.db, conv, a.Address, a.Self().Fingerprint()); err != nil {
+			return SendResult{ID: env.ID, State: stateConvWaiting, Detail: err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, err.Error(), "")
+		}
+	}
+	followupCap, err := requestFollowupCopy(a.store.db, env.ID, sub, body)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if required == "" && followupCap {
+		required = protocol.CapRequestFollowup
+	}
 	proposalCap, err := proposalCopyNeedsCapability(a.store.db, env.ID)
 	if err != nil {
 		return SendResult{}, err
@@ -677,7 +702,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 	}
 	if required != "" {
 		key, err := a.sendKey(ctx, env.To)
-		if err == nil && (proposalCap || required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation || required == protocol.CapOwnSyncV3) && capturedFP != "" && key.Fingerprint() != capturedFP {
+		if err == nil && (followupCap || proposalCap || required == protocol.CapAgentReaction || required == protocol.CapControl || required == protocol.CapContinuation || required == protocol.CapOwnSyncV3) && capturedFP != "" && key.Fingerprint() != capturedFP {
 			// Sealed for the reader key captured at enqueue: never for its replacement.
 			a.store.setOutboxState(env.ID, stateNotDelivered, "not sent: the reader's key changed", "")
 			return SendResult{ID: env.ID, State: stateNotDelivered}, nil
@@ -706,6 +731,12 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 				}
 			}
 
+			if err == nil && organizationCap && required != protocol.CapTopicOrganization {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapTopicOrganization)
+			}
+			if err == nil && followupCap && required != protocol.CapRequestFollowup {
+				err = a.requireParticipationCaps(ctx, key, protocol.CapRequestFollowup)
+			}
 			if err == nil && proposalCap && required != protocol.CapOwnSyncV3 {
 				err = a.requireParticipationCaps(ctx, key, protocol.CapOwnSyncV3)
 			}
@@ -788,7 +819,7 @@ func (a *Agent) deliver(ctx context.Context, env envelope.Envelope, route *proto
 		if err != nil {
 			// Waiting copies release when the recipient's signed capabilities
 			// change; progress is never sent unmarked to an older session.
-			if (proposalCap || conv != "" || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
+			if (proposalCap || conv != "" || required == protocol.CapModelSync || required == protocol.CapOwnSyncV2 || required == protocol.CapOwnSyncV3 || required == protocol.CapReadSync || required == protocol.CapProgress || required == protocol.CapAgentReaction) && errors.Is(err, errAgentIdentityUnsupported) {
 				return SendResult{ID: env.ID, State: stateConvWaiting, Detail: WaitPeerUpdate + err.Error()}, a.store.setOutboxState(env.ID, stateConvWaiting, WaitPeerUpdate+err.Error(), "")
 			}
 			if retryable(err) {

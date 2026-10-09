@@ -64,6 +64,10 @@ func (l *Live) overview(listArchived bool) (Overview, error) {
 		o.Me.Responder, o.Me.ResponderDir = r.Harness, r.Dir
 	}
 	o.Me.Agent, o.AgentDevices = l.a.AdvertisesAgent(), l.a.AgentDevices()
+	var modelErr error
+	if o.ModelReports, modelErr = l.a.ModelReports(); modelErr != nil {
+		return o, modelErr
+	}
 	o.Workspace = &WorkspaceView{Name: l.a.WorkspaceName(), Server: l.a.RelayHost()}
 	words := l.a.PeerWords() // people never see addresses in sentences
 	o.Release = recommended(l.a.Release())

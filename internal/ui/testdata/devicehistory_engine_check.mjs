@@ -176,6 +176,32 @@ const restarted=new Engine({store:a.store,base:a.base,fetch});Object.assign(rest
  const erasedConflict=await receiveHistory(await seal(source,{...known,recipient_key:reader.fp},reader),reader);
  check((await reader.store.get('held',erasedConflict))?.reason==='conflicting_copy'&&(await reader.store.get('inbox',knownID)).body==='','erased original also keeps exact recipient-key conflict fence');
 }
+// Explicit corrections from another own human device stay separate signed work.
+{
+ const owner=await person('followup/desk'),host=await person('followup-host/desk'),phone=await sibling(owner,'followup/phone');
+ for(const e of [owner,phone])await e.store.write([{s:'persons',k:host.me.person,v:{...host.me,state:'pinned'}},{s:'pins',k:host.address,v:{address:host.address,json:wire.marshalPublic(host.pub),fingerprint:host.fp,pending:null}}]);
+ const oid=wire.newID(),original={v:1,id:oid,from:owner.address,to:host.address,ts:1,kind:'question',body:'Write contribution-margin.md in Russian'};
+ const originalEnvelope=await wire.seal(original,owner.keys,host.pub);
+ await owner.store.write([{s:'outbox',k:oid,v:{...original,at:1000,fp:host.fp,envelope:originalEnvelope,state:'delivered'}}]);
+ await drain(owner,phone);for(const r of await copies(owner))await receiveHistory(r.envelope,phone);
+ const ref={id:oid,fingerprint:owner.fp},id=wire.newID(),bytes=new TextEncoder().encode('English terminology'),files=[{name:'terms.md',bytes,size:bytes.length}];
+ const note=await phone.queueRequestFollowup({ref,id,body:'Use English instead',files});
+ const saved=await phone.store.get('outbox',id),opened=await wire.open(saved.envelope,host.keys,host.address,phone.pub);
+ check(note.includes('queued')&&note.includes('not proven native acceptance')&&opened.followup.id===oid&&opened.followup.fingerprint===owner.fp&&opened.kind==='question'&&opened.to===host.address&&opened.reply_to===oid,'linked correction retains exact original human, host, kind and explicit queued state');
+ check(opened.attachments.length===1&&opened.attachments[0].sha256===wire.hex(await wire.sha256(bytes)),'correction retains its exact attachment manifest');
+ await assert.rejects(()=>phone.followupDeliveryGate(saved),/cannot safely queue bound request follow-ups/);checks++;
+ await phone.post(saved);if(phone.outboxPass)await phone.outboxPass;check((await phone.store.get('outbox',id)).state==='waiting','unsupported receiver retains a queued waiting correction, never an ordinary request');
+ await caps(host,[wire.CapEnv2,wire.CapPerson,wire.CapRoom,wire.CapRequestFollowup]);await phone.followupDeliveryGate(saved);checks++;
+ check((await phone.queueRequestFollowup({ref,id,body:'Use English instead',files})).includes('already queued')&&(await phone.store.get('outbox',id)).envelope===saved.envelope,'identical retry retains one exact sealed correction');
+ await assert.rejects(()=>phone.queueRequestFollowup({ref,id,body:'Do different work',files}),/different follow-up/);checks++;
+ await assert.rejects(()=>phone.queueRequestFollowup({ref,id,body:'Use English instead',files:[{name:'terms.md',size:1,bytes:new Uint8Array([1])}]}),/different saved attachments/);checks++;
+ await receive(saved.envelope,host);check((await host.store.get('inbox',id)).followup.id===oid,'signed received correction retains explicit intent');
+ await drain(phone,owner);const history=(await copies(phone)).find(r=>wire.parseDeviceHistory(r.body).item.id===id);check(!!history,'new correction gets onward inert history');await receiveHistory(history.envelope,owner);
+ check((await owner.store.get('inbox',id)).followup.id===oid&&(await owner.store.get('inbox',id)).replica,'onward copy retains provenance without executing work');
+ const pin=await phone.store.get('pins',host.address);await phone.store.write([{s:'pins',k:host.address,v:{...pin,pending:wire.marshalPublic(owner.pub)}}]);
+ await assert.rejects(()=>phone.queueRequestFollowup({ref,id:wire.newID(),body:'Late change'}),/key changed/);checks++;
+ check((await owner.store.get('outbox',oid)).body===original.body,'correction never edits or reruns the original request');
+}
 // Original endpoint identity also governs local deletion of imported outgoing rows.
 await p.deleteThread(b.address,id);
 check(!(await p.v1Threads()).some(g=>g.some(m=>m.id===id||m.id===answer)), 'local deletion removes imported request and replies');

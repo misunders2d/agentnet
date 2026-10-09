@@ -504,8 +504,84 @@ for (const ending of ['original', 'self']) {
  const phone=await w.sibling(a,'alice/lifecycle-phone',true),dev=a.me.devices.find(d=>d.address===phone.address),chat=await a.store.get('convs',conv),raw=a.itemOf(source,true);
  const correct=await a.historyCopy(dev,chat,raw),item=wire.parseHistory(correct.body);
  check(item.from===b.address&&item.from_key===b.fp&&item.body===source.body&&item.id===source.id&&item.lid===source.lid,'forwarded lifecycle history keeps verified original author and exact source');
+ const legacy=await a.ownCopy(dev,chat,'history',wire.historyJSON(raw));
+ const authorPin=await phone.store.get('pins',b.address);
+ await phone.store.write([{s:'pins',k:b.address,v:undefined}]);
+ await w.receive(legacy.envelope,phone);
+ check((await phone.store.get('receipts',legacy.id))?.state==='delivered'&&!await phone.store.get('held',legacy.id),'fresh phone recovers old transport-attributed signed public scope');
+ check(!await phone.store.get('pins',b.address),'verified current author roster suffices without inventing an absent transport pin');
+ await phone.store.write([{s:'pins',k:b.address,v:authorPin}]);
  await w.receive(correct.envelope,phone);
  check((await phone.store.get('receipts',correct.id))?.state==='delivered'&&!await phone.store.get('held',correct.id),'sealed own-phone receiver accepts unchanged signed lifecycle');
+ await w.receive(legacy.envelope,phone);
+ check((await phone.store.all('inbox')).filter(r=>r.lid===raw.lid).length===1&&(await phone.store.get('inbox',item.id)).state==='','old and corrected repeated carriers keep one inert item, no execution state');
+ const atomic=await phone.admitInner(legacy.envelope,wire.parseEnvelope(legacy.envelope));
+ await phone.store.write([{s:'pins',k:b.address,v:{...authorPin,pending:'changed'}}]);
+ await refuses(()=>phone.store.write(atomic,atomic.checks),/storage changed during verification/);
+ await phone.store.write([{s:'pins',k:b.address,v:authorPin}]);
+ const collision=id(),occupied={id:collision,conv,lid:id(),from:b.address,fp:b.fp,sub:'',kind:'message',body:'different accepted record',at:now};
+ await phone.store.write([{s:'inbox',k:collision,v:occupied}]);
+ const savedOccupied=await phone.store.get('inbox',collision);
+ const conflicting=await a.ownCopy(dev,chat,'history',wire.historyJSON({...raw,id:collision}));await w.receive(conflicting.envelope,phone);
+ check((await phone.store.get('held',conflicting.id))?.reason==='conflicting_duplicate','legacy history cannot acknowledge an unrelated accepted source ID: '+(await phone.store.get('held',conflicting.id))?.reason);
+ assert.deepEqual(await phone.store.get('inbox',collision),savedOccupied);checks++;
+ const privateInvite=(await b.store.all('outbox')).find(r=>r.sub==='event'&&r.pid===dp.pid&&wire.parseEvent(r.body).type==='invite');
+ const foreignScope=await wire.signEvent(c.keys,{...wire.parseEvent(raw.body),author:c.author()});
+ const decline=await w.decision(d,dp.pid,'decline');
+ for(const [body,why] of [[privateInvite.body,'private invite'],[wire.eventJSON(decline),'private decline'],[wire.eventJSON(foreignScope),'valid signature of unrelated guest']]) {
+  const bad=await a.ownCopy(dev,chat,'history',wire.historyJSON({...raw,id:id(),lid:id(),body}));await w.receive(bad.envelope,phone);
+  check((await phone.store.get('receipts',bad.id))?.state==='quarantined'&&!!await phone.store.get('held',bad.id),'legacy repair refuses '+why);
+ }
+ // Refusals must still apply to a previously seen item: a duplicate cannot
+ // acknowledge a sender whose current authority changed after acceptance.
+ for(const mode of ['sender-agent','reader-agent','removed-sender','removed-reader','frozen','pending-author','pending-sender','changed-author','wrong-transport','wrong-conv','wrong-pid','bad-signature']) {
+  const own=await phone.store.get('kv','person'),savedAuthor=await phone.store.get('pins',b.address),savedSender=await phone.store.get('pins',a.address);
+  let bad={...raw},restore=[];
+  if(['sender-agent','reader-agent','removed-sender','removed-reader','frozen'].includes(mode)) {
+   const fp=mode.includes('sender')?a.fp:phone.fp;
+   const changed=mode==='frozen'?{...own,state:'conflict'}:mode.startsWith('removed')?{...own,devices:own.devices.filter(d=>d.fingerprint!==fp)}:{...own,human_keys:own.human_keys.filter(k=>k!==fp)};
+   await phone.store.write([{s:'kv',k:'person',v:changed}]);restore.push({s:'kv',k:'person',v:own});
+  } else if(mode==='pending-author'||mode==='changed-author') {
+   await phone.store.write([{s:'pins',k:b.address,v:mode==='pending-author'?{...savedAuthor,pending:'changed'}:{...savedAuthor,fingerprint:c.fp,json:wire.marshalPublic(c.pub)}}]);restore.push({s:'pins',k:b.address,v:savedAuthor});
+  } else if(mode==='pending-sender') {
+   await phone.store.write([{s:'pins',k:a.address,v:{...savedSender,pending:'changed'}}]);restore.push({s:'pins',k:a.address,v:savedSender});
+  } else if(mode==='wrong-transport')bad={...bad,from:c.address,from_key:c.fp};
+  else {
+   const e=wire.parseEvent(raw.body);if(mode==='wrong-conv')e.conv='a'.repeat(64);else if(mode==='wrong-pid')e.pid=id();else e.sig[0]^=1;bad.body=wire.eventJSON(e);
+  }
+  const copy=await a.ownCopy(dev,chat,'history',wire.historyJSON(bad));await w.receive(copy.envelope,phone);
+  check((await phone.store.get('receipts',copy.id))?.state==='quarantined'&&!!await phone.store.get('held',copy.id),'legacy duplicate preserves '+mode+' refusal');
+  await phone.store.write(restore);
+ }
+ // The exact same signed bytes stored as invalid by an old browser recover
+ // after restart. The old group migration marker cannot consume this repair.
+ const upgrade=await w.sibling(a,'alice/lifecycle-upgrade',true),upgradeDev=a.me.devices.find(d=>d.address===upgrade.address);
+ const kept=await a.ownCopy(upgradeDev,chat,'history',wire.historyJSON(raw));
+ await upgrade.store.write([{s:'held',k:kept.id,v:{id:kept.id,from:a.address,reason:'invalid',envelope:kept.envelope,at:now}},{s:'kv',k:'held-group-history-recovery-v1',v:true}]);
+ const restarted=new Engine({store:upgrade.store,base:upgrade.base,fetch:upgrade.fetch,now:()=>now});await restarted.load();await restarted.retryHeld();
+ check(!await upgrade.store.get('held',kept.id)&&(await upgrade.store.get('receipts',kept.id))?.state==='delivered','pre-held legacy ciphertext recovers through normal admission after restart');
+ check(!!await upgrade.store.get('kv','held-dm-lifecycle-recovery-v1')&&!!await upgrade.store.get('kv','held-group-history-recovery-v1'),'DM upgrade records its own one-time marker without resetting group recovery');
+ const stored=await upgrade.store.get('inbox',item.id);
+ check(stored?.history&&stored.fp===b.fp&&stored.from===b.address&&stored.body===raw.body&&stored.state==='','recovery keeps exact original signed author and inert stored record');
+ await restarted.load();await restarted.retryHeld();
+ check((await upgrade.store.all('inbox')).filter(r=>r.lid===raw.lid).length===1&&!(await upgrade.store.all('outbox')).some(r=>['question','task'].includes(r.kind)),'restart neither duplicates history nor queues agent work');
+ const accepted=(await a.store.all('outbox')).find(r=>r.forwarded&&r.to===c.address&&r.pid===dp.pid&&wire.parseEvent(r.body).type==='accept');
+ check(!!accepted,'real outside-host acceptance was disclosed by original member');
+ const late=await w.sibling(a,'alice/lifecycle-late',true),lateDev=a.me.devices.find(d=>d.address===late.address),acceptRaw=a.itemOf(accepted,true);
+ const acceptCopy=await a.ownCopy(lateDev,chat,'history',wire.historyJSON(acceptRaw));
+ await late.store.write([{s:'held',k:acceptCopy.id,v:{id:acceptCopy.id,from:a.address,reason:'invalid',envelope:acceptCopy.envelope,at:now}},{s:'kv',k:'held-group-history-recovery-v1',v:true}]);
+ await late.load();await late.retryHeld();
+ check((await late.store.get('held',acceptCopy.id))?.reason==='proof_pending'&&!!(await late.store.get('held',acceptCopy.id))?.history_recovery&&!await late.store.get('inbox',acceptRaw.id),'old acceptance waits inertly for its exact public scope after upgrade');
+ const scopeCopy=await a.ownCopy(lateDev,chat,'history',wire.historyJSON(raw));await w.receive(scopeCopy.envelope,late);await late.retryHeld();
+ check(!await late.store.get('held',acceptCopy.id)&&(await late.store.get('inbox',acceptRaw.id))?.fp===d.fp,'later exact scope rechecks and recovers original host acceptance');
+ await late.store.write([{s:'persons',k:d.me.person,v:undefined},{s:'pins',k:d.address,v:undefined}]);
+ const missingAuthor=await a.ownCopy(lateDev,chat,'history',wire.historyJSON(acceptRaw));await w.receive(missingAuthor.envelope,late);
+ check((await late.store.get('receipts',missingAuthor.id))?.state==='delivered'&&(await late.store.get('persons',d.me.person))?.state==='pinned','missing acceptance-author proof is fetched and verified through the normal person chain');
+ await d.changeHuman('leave',{pid:dp.pid});await w.drain(a);await w.drain(b);await a.discloseHumanAudience();
+ const ended=(await a.store.all('outbox')).find(r=>r.forwarded&&r.to===c.address&&r.pid===dp.pid&&wire.parseEvent(r.body).type==='dismiss');
+ check(!!ended,'original member discloses exact outside human-host end');
+ const endRaw=a.itemOf(ended,true),endCopy=await a.ownCopy(lateDev,chat,'history',wire.historyJSON(endRaw));await w.receive(endCopy.envelope,late);
+ check((await late.store.get('receipts',endCopy.id))?.state==='delivered'&&(await late.store.get('inbox',endRaw.id))?.fp===d.fp,'forwarded outside-host end retains its verified signer and counted predecessor');
  for(const field of ['author','conv','pid','sig']) {
   const e=wire.parseEvent(source.body);
   if(field==='author')e.author=c.author();else if(field==='conv')e.conv='a'.repeat(64);else if(field==='pid')e.pid=id();else e.sig[0]^=1;

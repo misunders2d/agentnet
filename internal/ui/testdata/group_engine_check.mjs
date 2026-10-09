@@ -639,7 +639,17 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false, contro
     await past.e.groupFileSource(conv,descriptor);await past.e.groupFileAuthorized(filePacket.packet,filePacket.members,address,past.e.fp,descriptor);
     check(true,'old PID attachment source reuses exact verified witness');
     let changedFile=false;try{await past.e.groupFileSource(conv,{...descriptor,sha256:'f'.repeat(64)});}catch{changedFile=true;}check(changedFile,'old witnessed attachment still rejects changed file hash');
-    past.e.groupSupport=async()=>{};await past.e.requestGroupFile(fileRow,0);
+    past.e.groupSupport=async()=>{};
+    const fileWrite=past.st.write;let fileRace=false;
+    past.st.write=async(ops,checks)=>{
+      if(!fileRace&&ops.some(o=>o.s==='outbox'&&o.v?.sub==='file')){
+        fileRace=true;const current=await past.st.get('inbox',fileRow.id);
+        await fileWrite([{s:'inbox',k:fileRow.id,v:{...current,read:!current.read}}]);
+      }
+      return fileWrite(ops,checks);
+    };
+    try{await past.e.requestGroupFile(fileRow,0);}finally{past.st.write=fileWrite;}
+    check(fileRace&&(await past.st.all('outbox')).filter(r=>r.sub==='file').length===1,'concurrent read update retries exact selected file once without duplicate request');
     const offered=await wire.encryptFile(new TextEncoder().encode(pv.files[0].bytes),file.name,pub);past.blobs.set(offered.attachment.blob.id,offered.ct);
     const offer=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:linkedAddress,to:address,ts:1700000102,kind:'message',conv,root:wire.rootJSON(root),sub:'file',replica:true,body:wire.groupFileMsgJSON({...descriptor,type:'offer',available:true}),attachments:[offered.attachment]},linkedKeys,pub);
     await past.receive({envelope:offer});const opened=await past.e.openFile(fileRow.id,0,'in');check(decode.decode(opened.bytes)===pv.files[0].bytes,'old witnessed attachment recovers exact encrypted bytes');

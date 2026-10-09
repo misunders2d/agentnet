@@ -147,7 +147,7 @@ func receiverRequestInner(r envelope.ReceiverRequest) envelope.Inner {
 	if r.Conv != "" {
 		v = envelope.Version2
 	}
-	return envelope.Inner{V: v, ID: r.ID, LID: r.LID, From: r.From, To: r.To, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID, Attachments: r.Attachments, Human: r.Human}
+	return envelope.Inner{V: v, ID: r.ID, LID: r.LID, From: r.From, To: r.To, TS: r.TS, Kind: r.Kind, Body: r.Body, ReplyTo: r.ReplyTo, Conv: r.Conv, Root: r.Root, Origin: r.Origin, Emotion: r.Emotion, Target: r.Target, PID: r.PID, Attachments: r.Attachments, Human: r.Human, Followup: r.Followup, Topic: r.Topic}
 }
 func (a *Agent) acceptReceiverDelegation(ctx context.Context, in envelope.Inner, fp string) error {
 	if err := a.receiverSetupSender(a.store.db, in, fp); err != nil {

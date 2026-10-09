@@ -35,6 +35,8 @@ export interface Acts {
   remind?: () => void;        // "Remind me…" (or "Change reminder…" when it has one)
   reminded?: boolean;         // it has a pending reminder
   topic?:()=>void;
+  assign?: () => void;
+  followup?: () => void;
 }
 
 // ---- desktop: the hover toolbar ---------------------------------------------------
@@ -74,6 +76,8 @@ function Items({ can, acts, m, render }: { can: Can; acts: Acts; m: AnyMsg; rend
   return (
     <>
       {text && render(<IconCopy size={20} />, "Copy text", acts.copy)}
+      {acts.assign && render(<IconSquareCheck size={20} />, "Assign to your agent…", acts.assign)}
+      {acts.followup && render(<IconArrowBackUp size={20} />, "Follow up with this agent…", acts.followup)}
       {acts.topic && render(<IconSquareCheck size={20}/>,"Make a topic",acts.topic)}
       {can.select && acts.select && render(<IconSquareCheck size={20} />, "Select", acts.select)}
       {can.remind && acts.remind && render(<IconAlarm size={20} />, acts.reminded ? "Change reminder…" : "Remind me…", acts.remind)}
@@ -108,7 +112,7 @@ export function ActionSheet({ open, onOpenChange, m, ctx, can, acts, who, onMore
       )}
       <div className="flex flex-col">
         {can.reply && <SheetItem icon={<IconArrowBackUp size={22} />} label="Reply" onClick={reply} />}
-        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select), remind: acts.remind && close(acts.remind), topic: acts.topic && close(acts.topic) }} m={m}
+        <Items can={can} acts={{ ...acts, copy: close(acts.copy), edit: close(acts.edit), del: close(acts.del), details: close(acts.details), select: acts.select && close(acts.select), remind: acts.remind && close(acts.remind), topic: acts.topic && close(acts.topic), assign: acts.assign && close(acts.assign), followup: acts.followup && close(acts.followup) }} m={m}
           render={(icon, label, onClick, danger) => <SheetItem key={label} icon={icon} label={label} onClick={onClick} danger={danger} />} />
       </div>
     </Sheet>

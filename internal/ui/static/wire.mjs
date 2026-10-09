@@ -25,12 +25,15 @@ export const CapExternalParticipation = "apx1"; // selected DM excerpts and exac
 export const CapGroupHumanParticipation = "hgg1"; // complete group human guest lifecycle; NOT implied by rm1
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
 export const CapSendGroup = "sg1"; // optional signed presentation; never a routing or execution capability
+export const CapRequestFollowup = "flw1";
+export const CapTopicOrganization = "org1";
 export const CapTopicParticipation = "tps1"; // explicit ongoing topic scope, never implied by rm1
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
 export const CapOwnSyncV3 = "own3", CapDeviceHistory = CapOwnSyncV3, SubDeviceHistory = "device-history", SubDeviceFile="device-file";
 export const SubTopicSync = "topic-sync";
 export const CapReadSync = "rd1", SubReadSync = "read-sync";
+export const CapModelSync = "mdl1", SubModelSync = "model-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
 export const SubGroupProof = "group-proof", SubGroupContext = "group-context"; // bounded quiet carriers; no capability advertisement
@@ -45,7 +48,7 @@ export const isControl = (sub) => sub === SubReaction || sub === SubRevision || 
 // A person's deletion of their copy of one conversation, to their own devices
 // only (envelope.SubClear, version 3). Never history (protocol.CapConvClear).
 export const SubClear = "clear", CapConvClear = "clr1", MaxClearParts = 1024, MaxClearTurns = 2000;
-export const ExecStates = ["queued", "awaiting", "running", "needs_human", "resolved", "stopped", "not_run", "declined", "failed", "cancelled", "interrupted", "answered"]; // envelope.statusStates
+export const ExecStates = ["steered", "queued", "awaiting", "running", "needs_human", "resolved", "stopped", "not_run", "declined", "failed", "cancelled", "interrupted", "answered"]; // envelope.statusStates
 export const DecisionActions = ["accept", "decline", "resolve", "reply", "cancel", "continue"];
 export const MaxDetailBytes = 400;
 export const MaxRevisionBytes = 64 << 10, MaxReasonBytes = 200, MaxEmojiBytes = 64, MaxEmojiRunes = 12;
@@ -464,6 +467,7 @@ function marshalInner(n) {
   if (n.topic) s += ',"topic":'+goString(n.topic);
   if (n.topic_event) s += ',"topic_event":'+topicEventJSON(n.topic_event);
   if (n.send_group) s += ',"send_group":' + goString(n.send_group);
+  if (n.followup) s += ',"followup":' + followupJSON(n.followup);
   return s + "}";
 }
 
@@ -627,18 +631,33 @@ const goBlank = (s) => /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029
 // checkV2 is envelope.checkVersion2: the conversation fields, only in
 // version 2, and their shapes. (The pid rules follow the core as it is now;
 // participation is still in review there.)
-export function topicEventJSON(e) { return '{"action":'+goString(e.action)+(e.seen?.length?',"seen":['+e.seen.map(goString).join(',')+']':'')+'}'; }
-export function parseTopicEvent(e) { const v=strict(e,"topic event",{action:"string",seen:"array"}); if(!["create","done","open"].includes(v.action)||v.seen?.some(id=>typeof id!=="string"||!validID(id)))throw Error("invalid topic action");return {action:v.action,...(v.seen?.length?{seen:v.seen}:{})}; }
+export const topicOrganization=e=>!!e&&["move","merge"].includes(e.action);
+export function topicEventJSON(e) {
+ return '{"action":'+goString(e.action)+(e.seen?.length?',"seen":['+e.seen.map(goString).join(',')+']':'')+(e.moves?.length?',"moves":['+e.moves.map(m=>'{"lid":'+goString(m.lid)+',"author":'+goString(m.author)+',"hash":'+goString(m.hash)+(m.topic?',"topic":'+goString(m.topic):'')+'}').join(',')+']':'')+(e.merge?',"merge":'+goString(e.merge):'')+'}';
+}
+export function parseTopicEvent(e) {
+ const v=strict(e,"topic event",{action:"string",seen:"array",moves:"array",merge:"string"});
+ if(!["create","done","open","move","merge"].includes(v.action)||v.seen?.some(id=>typeof id!=="string"||!validID(id)))throw Error("invalid topic action");
+ if(!topicOrganization(v)){if(v.moves?.length||v.merge)throw Error("unexpected organization fields");return {action:v.action,...(v.seen?.length?{seen:v.seen}:{})};}
+ if(v.seen?.length||!v.moves?.length||v.moves.length>200||v.action==="merge"&&!validID(v.merge)||v.action==="move"&&v.merge)throw Error("invalid selected topic action");
+ const seen=new Set(),moves=v.moves.map(ref=>{const m=strict(ref,"topic move",{lid:"string",author:"string",hash:"string",topic:"string"}),key=m.author+":"+m.lid;if(!validID(m.lid)||!validFingerprint(m.author)||!validHash(m.hash)||m.topic&&!validID(m.topic)||seen.has(key)||v.merge&&m.topic!==v.merge)throw Error("invalid selected topic message");seen.add(key);return {lid:m.lid,author:m.author,hash:m.hash,...(m.topic?{topic:m.topic}:{})};});
+ return {action:v.action,moves,...(v.merge?{merge:v.merge}:{})};
+}
 export function checkTopic(n) {
  if(n.topic && (n.v!==Version2||!validID(n.topic)||n.sub))throw Error("topic belongs only on a conversation turn");
  if(n.topic_event){parseTopicEvent(n.topic_event);if(!n.topic||n.kind!=="message"||n.target||agentOrigin(n.origin)||n.status||n.attachments?.length)throw Error("topic event belongs only on a human conversation message");}
+ if(topicOrganization(n.topic_event)&&(n.pid||n.human||n.agent_id||n.ref||n.receiver_route||n.followup||n.topic_event.merge===n.topic||n.topic_event.moves.some(m=>m.topic===n.topic)))throw Error("topic organization is an original-member display action");
  if(n.topic_done&&(![Version,Version2].includes(n.v)||n.status!=="done"||!["answer","result"].includes(n.kind)||n.v===Version2&&(!n.topic||!n.pid||!agentOrigin(n.origin))))throw Error("topic_done belongs only on a completed agent answer or result");
 }
 export function checkSendGroup(n) {
   if (!n.send_group) return;
   if (!validID(n.send_group) || n.v !== Version2 || !n.conv || !n.pid || !n.target || n.origin !== "ui" || n.sub || n.status || n.agent_id || n.human && agentAuthor(n.human) || !["question","task"].includes(n.kind)) throw Error("send group belongs only on a human addressed request");
 }
+export const followupJSON = r => '{"id":'+goString(r.id)+',"fingerprint":'+goString(r.fingerprint)+'}';
+export function parseFollowup(r) { const f=strict(r,"follow-up",{id:"string",fingerprint:"string"});if(!validID(f.id)||!validFingerprint(f.fingerprint))throw Error("follow-up requires exact original request and key");return {id:f.id,fingerprint:f.fingerprint}; }
+export function checkFollowup(n) { if(!n.followup)return;const f=parseFollowup(n.followup);if(f.id===n.id||f.id===n.lid||!n.reply_to||![Version,Version2].includes(n.v)||!["question","task"].includes(n.kind)||n.sub||n.status||n.agent_id||agentOrigin(n.origin)||n.topic_event||n.topic_done)throw Error("follow-up must bind another exact request on a human question or task"); }
 async function checkV2(n) {
+  checkFollowup(n);
   checkSendGroup(n);
   if (n.quote && (!validID(n.quote) || n.quote === n.id || n.v === Version3 || n.sub || n.status || agentOrigin(n.origin) || !["message","question","task"].includes(n.kind))) throw new Error("quote belongs only on a person's turn and must name another message");
   checkTopic(n);
@@ -683,8 +702,9 @@ async function checkV2(n) {
     if (n.target && (!n.target.agent_id || !["question", "task"].includes(n.kind) || n.target.address !== n.to || !validFingerprint(n.target.fingerprint))) throw new Error("a device message target must name an agent on its exact recipient");
     return;
   }
-  if(n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
+  if(n.sub===SubModelSync || n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync || n.sub===SubDeviceHistory || n.sub===SubDeviceFile) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || (n.attachments.length && n.sub!==SubDeviceFile) || n.attachments.length>1 || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
+    if(n.sub===SubModelSync){if(n.send_group||n.session||n.fallback)throw Error("model sync: quiet carrier required");parseModelSync(n.body);return;}
     if(n.sub===SubDeviceHistory||n.sub===SubDeviceFile){if(n.send_group||n.session||n.fallback)throw Error("device history: quiet carrier required");parseDeviceHistory(n.body,n.sub===SubDeviceFile);return;}
     if(n.sub===SubTopicSync){if(n.session||n.fallback)throw Error("topic sync: quiet rootless title carrier required");parseTopicSync(n.body);}else if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
@@ -764,7 +784,7 @@ export async function seal(m, keys, recipient) {
     reply_to: m.reply_to || "", attachments, session: m.session || "", fallback: !!m.fallback, status: text(m.status || "", "status"),
     conv: m.conv || "", lid: m.lid || "", root: m.root || "", sub: m.sub || "", replica: !!m.replica,
     origin: text(m.origin || "", "origin"), emotion: text(m.emotion || "", "emotion"), target: m.target || null, pid: m.pid || "",
-    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null, quote: m.quote || "", topic_done: !!m.topic_done, topic:m.topic||"",topic_event:m.topic_event?parseTopicEvent(m.topic_event):null, send_group:m.send_group||"" };
+    fan: m.fan && m.fan.length ? m.fan : null, ref: m.ref ? { id: m.ref.id, fingerprint: m.ref.fingerprint } : null, agent_id: m.agent_id || "", receiver_route: m.receiver_route ? parseReceiverRoute(m.receiver_route) : null, human: m.human ? parseHumanTurn(m.human) : null, quote: m.quote || "", topic_done: !!m.topic_done, topic:m.topic||"",topic_event:m.topic_event?parseTopicEvent(m.topic_event):null, send_group:m.send_group||"", ...(m.followup?{followup:parseFollowup(m.followup)}:{}) };
   await checkV2(inner);
   if (v === Version2 && agentOrigin(inner.origin) && inner.sub === "" && !inner.emotion) throw new Error("an agent's turn must carry an emotion");
   const e = new Encrypter();
@@ -774,7 +794,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubRootSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubRootSync || inner.sub === SubModelSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync || inner.sub === SubDeviceHistory || inner.sub === SubDeviceFile) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -838,7 +858,7 @@ export async function open(json, keys, selfAddress, sender) {
   const f = strict(v, "inner", { v: "int", id: "string", from: "string", to: "string", ts: "int", kind: "string", body: "string",
     reply_to: "string", attachments: "array", session: "string", fallback: "boolean", status: "string",
     conv: "string", lid: "string", root: "object", sub: "string", replica: "boolean", origin: "string", emotion: "string",
-    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object", quote: "string", topic_done: "boolean", topic:"string",topic_event:"object",send_group:"string" });
+    target: "object", pid: "string", fan: "array", ref: "object", agent_id: "string", receiver_route: "object", human: "object", quote: "string", topic_done: "boolean", topic:"string",topic_event:"object",send_group:"string",followup:"object" });
   const target = f.target ? strict(f.target, "target", { address: "string", fingerprint: "string", agent_id: "string", group_admission: "string" }) : null;
   const ref = f.ref ? strict(f.ref, "ref", { id: "string", fingerprint: "string" }) : null;
   const fan = f.fan ? f.fan.map((x) => { const y = strict(x, "fan", { person: "string", roster: "string" }); return { person: y.person || "", roster: y.roster || "" }; }) : null;
@@ -849,7 +869,7 @@ export async function open(json, keys, selfAddress, sender) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.receiver_route ? { receiver_route: parseReceiverRoute(f.receiver_route) } : {}),
-    ...(f.human ? { human: parseHumanTurn(f.human) } : {}), quote: f.quote || "", topic_done: !!f.topic_done,topic:f.topic||"",topic_event:f.topic_event?parseTopicEvent(f.topic_event):null, send_group:f.send_group||"",
+    ...(f.human ? { human: parseHumanTurn(f.human) } : {}), quote: f.quote || "", topic_done: !!f.topic_done,topic:f.topic||"",topic_event:f.topic_event?parseTopicEvent(f.topic_event):null, send_group:f.send_group||"", ...(f.followup?{followup:parseFollowup(f.followup)}:{}),
     ref: ref ? { id: ref.id || "", fingerprint: ref.fingerprint || "" } : null,
     attachments: (f.attachments || []).map((a) => {
       const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
@@ -861,7 +881,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubRootSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubRootSync || n.sub === SubModelSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync || n.sub === SubDeviceHistory || n.sub === SubDeviceFile) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -961,7 +981,7 @@ export const MaxGroupHistory = 64, MaxGroupState = 256 << 10, MaxGroupCiphertext
 const groupRootDomain = "agentnet-conv-root-v3\n";
 export const convRootVersionLimit = (v) => v === GroupRootVersion ? MaxGroupRoot : MaxConvRoot;
 const convRootSizeLimit = (json) => { try { return convRootVersionLimit(JSON.parse(json).v); } catch (_) { return MaxConvRoot; } };
-export const MaxCaps = 32, MaxAdvertisedCaps = 18; // older readers already parse up to 32 names
+export const MaxCaps = 32, MaxAdvertisedCaps = 21; // older readers already parse up to 32 names
 export const MaxCapsRecord = 1024;
 export const CapEnv2 = "env2";
 export const CapPerson = "person2"; // reads person roster chains, roots v2, fan-out and history
@@ -1003,6 +1023,17 @@ export function validLabel(s) {
 // bytes, or an already parsed value) with only the named fields. A parsed
 // value is measured as Go would write it (fitsRecord), which is how devices
 // write records.
+export const validReportedModel = s => typeof s === "string" && !!s && [...s].length <= 120 && s === s.trim() && !/[\p{Cc}\p{Cs}]/u.test(s);
+export function parseModelSync(json) {
+ const r=strictRecord(json,65536,"model report",{v:"int",person:"string",roster:"string",reports:"array"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||!r.reports?.length||r.reports.length>64)throw Error("model report: invalid owner or snapshot");
+ const seen=new Set();r.reports=r.reports.map(report=>{
+  const m=strict(report,"agent model",{agent_id:"string",model:"string",harness:"string",executor:"string",at:"int",revision:"int"});
+  m.agent_id=m.agent_id||"";
+  if(m.agent_id&&!validID(m.agent_id)||!validReportedModel(m.model)||!validReportedModel(m.harness)||utf8.encode(m.harness).length>32||!validHash(m.executor)||!Number.isSafeInteger(m.at)||m.at<1||!Number.isSafeInteger(m.revision)||m.revision<1||seen.has(m.agent_id))throw Error("model report: invalid or duplicate agent");
+  seen.add(m.agent_id);return {agent_id:m.agent_id,model:m.model,harness:m.harness,executor:m.executor,at:m.at,revision:m.revision};
+ });return r;
+}
 export function parseReadSync(json) {
  const r=strictRecord(json,32768,"read sync",{v:"number",person:"string",roster:"string",refs:"array"});
  if(r.v!==1 || !validID(r.person) || !validHash(r.roster) || !r.refs?.length || r.refs.length>64)throw Error("read sync: invalid owner or references");
@@ -1271,15 +1302,16 @@ export function historyJSON(h) {
   }
   s += ',"at":' + goInt(h.at, "time");
   if (h.ref) s += ',"ref":{"id":' + goString(h.ref.id) + ',"fingerprint":' + goString(h.ref.fingerprint) + "}";
-  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + (h.quote ? ',"quote":' + goString(h.quote) : "") + (h.topic_done?',"topic_done":true':"") + (h.topic?',"topic":'+goString(h.topic):"") + (h.topic_event?',"topic_event":'+topicEventJSON(h.topic_event):"") + (h.send_group?',"send_group":'+goString(h.send_group):"") + "}";
+  return s + (h.agent_id ? ',"agent_id":' + goString(h.agent_id) : "") + (h.group_admission ? ',"group_admission":' + goString(h.group_admission) : "") + (h.receiver_route ? ',"receiver_route":' + receiverRouteJSON(h.receiver_route) : "") + (h.human ? ',"human":' + humanJSON(h.human) : "") + (h.quote ? ',"quote":' + goString(h.quote) : "") + (h.topic_done?',"topic_done":true':"") + (h.topic?',"topic":'+goString(h.topic):"") + (h.topic_event?',"topic_event":'+topicEventJSON(h.topic_event):"") + (h.send_group?',"send_group":'+goString(h.send_group):"") + (h.followup?',"followup":'+followupJSON(h.followup):"") + "}";
 }
 
 // parseHistory reads a history item strictly (as the core's decodeStrict).
 export function parseHistory(json) {
   const f = strict(JSON.parse(json), "history item", { group_history:"object", v: "int", from: "string", from_key: "string", id: "string", lid: "string", ts: "int",
     kind: "string", body: "string", reply_to: "string", status: "string", sub: "string", origin: "string", emotion: "string",
-    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string",topic_done:"boolean",topic:"string",topic_event:"object",send_group:"string" });
+    target: "object", pid: "string", attachments: "array", at: "int", ref: "object", agent_id: "string", group_admission: "string", receiver_route: "object", human: "object", quote: "string",topic_done:"boolean",topic:"string",topic_event:"object",send_group:"string",followup:"object" });
   if(f.group_history && (!(f.pid&&["","event","excerpt"].includes(f.sub||"")) && !(f.sub===SubStatus&&f.ref)))throw Error("historical witness requires exact participation");
+  checkFollowup({...f,v:Version2});
   checkTopic({...f,v:Version2});
   checkSendGroup({...f,v:Version2,conv:"history"});
   if (f.quote && (!validID(f.quote) || f.quote===f.id || f.sub || f.status || agentOrigin(f.origin) || !["message","question","task"].includes(f.kind))) throw Error("history quote belongs only on a person's turn");
@@ -1310,7 +1342,7 @@ export function parseHistory(json) {
     target: target ? { address: target.address || "", fingerprint: target.fingerprint || "", ...(target.agent_id ? { agent_id: target.agent_id } : {}), ...(target.group_admission ? { group_admission: target.group_admission } : {}) } : null,
     ...(f.agent_id ? { agent_id: f.agent_id } : {}),
     ...(f.group_admission ? { group_admission: f.group_admission } : {}),
-    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}), ...(f.quote ? {quote:f.quote} : {}),...(f.topic?{topic:f.topic}:{}),...(f.topic_done?{topic_done:true}:{}),...(f.topic_event?{topic_event:parseTopicEvent(f.topic_event)}:{}),...(f.send_group?{send_group:f.send_group}:{}),
+    ...(receiver ? { receiver_route: receiver } : {}), ...(human ? { human } : {}), ...(f.quote ? {quote:f.quote} : {}),...(f.topic?{topic:f.topic}:{}),...(f.topic_done?{topic_done:true}:{}),...(f.topic_event?{topic_event:parseTopicEvent(f.topic_event)}:{}),...(f.send_group?{send_group:f.send_group}:{}),...(f.followup?{followup:parseFollowup(f.followup)}:{}),
     attachments: (f.attachments || []).map((a) => { const x = strict(a, "attachment", { blob: "object", name: "string", size: "int", sha256: "string" });
       return { name: text(x.name || "", "attachment name"), size: x.size || 0, sha256: x.sha256 || "" }; }) };
 }
@@ -1658,6 +1690,7 @@ export function groupHistoryContentHash(conv,n) {
   if(n.topic_done)json+=',"TopicDone":true';
   if(n.topic)json+=',"Topic":'+goString(n.topic);
   if(n.topic_event)json+=',"TopicEvent":'+topicEventJSON(n.topic_event);
+  if(n.followup)json+=',"Followup":'+followupJSON(n.followup);
   return hashOf(utf8.encode(json+'}'));
 }
 export function parseGroupInvitation(json) {
@@ -2163,13 +2196,14 @@ function receiverRawRoot(json) {
 }
 export async function parseReceiverRequest(value) {
  const raw=typeof value==='string', source=raw?JSON.parse(value):value;
- const f=strict(source,'receiver request',{id:'string',lid:'string',from:'string',from_key:'string',to:'string',to_key:'string',ts:'int',conv:'string',root:raw?'object':typeof source?.root==='string'?'string':'object',kind:'string',body:'string',reply_to:'string',origin:'string',emotion:'string',target:'object',pid:'string',attachments:'array',group_admission:'string',group_replies:'array',human:'object'});
- const r={id:f.id||'',lid:f.lid||'',from:f.from||'',from_key:f.from_key||'',to:f.to||'',to_key:f.to_key||'',ts:f.ts||0,conv:f.conv||'',root:raw?receiverRawRoot(value)||'':f.root?(typeof f.root==='string'?f.root:rootJSON(parseConvRoot(f.root))):'',kind:f.kind||'',body:f.body||'',reply_to:f.reply_to||'',origin:f.origin||'',emotion:f.emotion||'',target:f.target?strict(f.target,'receiver target',{address:'string',fingerprint:'string',agent_id:'string',group_admission:'string'}):null,pid:f.pid||'',attachments:(f.attachments||[]).map(a=>{const x=strict(a,'receiver attachment',{blob:'object',name:'string',size:'int',sha256:'string'});return {blob:x.blob?strict(x.blob,'receiver blob',{id:'string',size:'int',sha256:'string'}):{id:'',size:0,sha256:''},name:x.name||'',size:x.size||0,sha256:x.sha256||''};}),group_admission:f.group_admission||'',group_replies:(f.group_replies||[]).map(k=>strict(k,'receiver reply key',{key:'string',admission:'string'})),...(f.human?{human:parseHumanTurn(f.human)}:{})};
+ const f=strict(source,'receiver request',{id:'string',lid:'string',from:'string',from_key:'string',to:'string',to_key:'string',ts:'int',conv:'string',root:raw?'object':typeof source?.root==='string'?'string':'object',kind:'string',body:'string',reply_to:'string',origin:'string',emotion:'string',target:'object',pid:'string',attachments:'array',group_admission:'string',group_replies:'array',human:'object',followup:'object',topic:'string'});
+ const r={id:f.id||'',lid:f.lid||'',from:f.from||'',from_key:f.from_key||'',to:f.to||'',to_key:f.to_key||'',ts:f.ts||0,conv:f.conv||'',root:raw?receiverRawRoot(value)||'':f.root?(typeof f.root==='string'?f.root:rootJSON(parseConvRoot(f.root))):'',kind:f.kind||'',body:f.body||'',reply_to:f.reply_to||'',origin:f.origin||'',emotion:f.emotion||'',target:f.target?strict(f.target,'receiver target',{address:'string',fingerprint:'string',agent_id:'string',group_admission:'string'}):null,pid:f.pid||'',attachments:(f.attachments||[]).map(a=>{const x=strict(a,'receiver attachment',{blob:'object',name:'string',size:'int',sha256:'string'});return {blob:x.blob?strict(x.blob,'receiver blob',{id:'string',size:'int',sha256:'string'}):{id:'',size:0,sha256:''},name:x.name||'',size:x.size||0,sha256:x.sha256||''};}),group_admission:f.group_admission||'',group_replies:(f.group_replies||[]).map(k=>strict(k,'receiver reply key',{key:'string',admission:'string'})),...(f.human?{human:parseHumanTurn(f.human)}:{}),...(f.followup?{followup:parseFollowup(f.followup)}:{}),...(f.topic?{topic:f.topic}:{})};
  if(!validID(r.id)||!validAddress(r.from)||!validFingerprint(r.from_key)||!(r.ts>0)||!['message','question','task'].includes(r.kind)||!wellFormed(r.body)||r.reply_to&&!validID(r.reply_to))throw Error('receiver: invalid original request');
  let group=false;
  if(r.conv){if(r.to||r.to_key)throw Error('receiver: conversation recipient derives from verified root and target');const root=parseConvRoot(r.root);if(rootJSON(root)!==r.root||await rootID(root)!==r.conv)throw Error('receiver: original root must use exact typed signed encoding');group=root.kind==='group';if(r.target&&r.id!==r.lid)throw Error('receiver: targeted conversation copy must use its committed logical ID');}
  else if(!validAddress(r.to)||!validFingerprint(r.to_key)||r.target&&(r.target.address!==r.to||r.target.fingerprint!==r.to_key))throw Error('receiver: direct original requires exact recipient address and key');
- const n={v:r.conv?Version2:Version,id:r.id,from:r.from,to:r.conv?r.from:r.to,ts:r.ts,kind:r.kind,body:r.body,reply_to:r.reply_to,conv:r.conv,lid:r.lid,root:r.root,origin:r.origin,emotion:r.emotion,target:r.target,pid:r.pid,human:r.human,attachments:[],fan:null,sub:'',replica:false,status:'',agent_id:'',session:'',fallback:false,ref:null};
+ if(r.topic&&!r.followup)throw Error('receiver: explicit topic retention requires a bound follow-up');
+ const n={v:r.conv?Version2:Version,id:r.id,from:r.from,to:r.conv?r.from:r.to,ts:r.ts,kind:r.kind,body:r.body,reply_to:r.reply_to,conv:r.conv,lid:r.lid,root:r.root,origin:r.origin,emotion:r.emotion,target:r.target,pid:r.pid,human:r.human,followup:r.followup,topic:r.topic,attachments:[],fan:null,sub:'',replica:false,status:'',agent_id:'',session:'',fallback:false,ref:null};
  await checkV2(n);if(n.v===Version2&&agentOrigin(r.origin)&&!r.emotion)throw Error('receiver: agent request requires emotion');
  if(r.attachments.length>MaxAttachments)throw Error('receiver: too many original files');
  for(const a of r.attachments){if(a.blob.id||a.blob.size||a.blob.sha256||!a.name||!wellFormed(a.name)||a.size<0||!validHash(a.sha256))throw Error('receiver: original files require plaintext-only manifests');}
@@ -2181,7 +2215,7 @@ export function receiverRequestJSON(r) {
  let s='{"id":'+goString(r.id)+(r.lid?',"lid":'+goString(r.lid):'')+',"from":'+goString(r.from)+',"from_key":'+goString(r.from_key)+(r.to?',"to":'+goString(r.to):'')+(r.to_key?',"to_key":'+goString(r.to_key):'')+',"ts":'+goInt(r.ts,'time')+(r.conv?',"conv":'+goString(r.conv):'')+(r.root?',"root":'+r.root:'')+',"kind":'+goString(r.kind)+',"body":'+goString(r.body);
  for(const k of ['reply_to','origin','emotion'])if(r[k])s+=',"'+k+'":'+goString(r[k]);
  if(r.target)s+=',"target":'+receiverTargetJSON(r.target);if(r.pid)s+=',"pid":'+goString(r.pid);if(r.attachments?.length)s+=',"attachments":['+r.attachments.map(receiverAttachmentJSON).join(',')+']';
- if(r.group_admission)s+=',"group_admission":'+goString(r.group_admission);if(r.group_replies?.length)s+=',"group_replies":['+r.group_replies.map(k=>'{"key":'+goString(k.key)+(k.admission?',"admission":'+goString(k.admission):'')+'}').join(',')+']';if(r.human)s+=',"human":'+humanJSON(r.human);return s+'}';
+ if(r.group_admission)s+=',"group_admission":'+goString(r.group_admission);if(r.group_replies?.length)s+=',"group_replies":['+r.group_replies.map(k=>'{"key":'+goString(k.key)+(k.admission?',"admission":'+goString(k.admission):'')+'}').join(',')+']';if(r.human)s+=',"human":'+humanJSON(r.human);if(r.followup)s+=',"followup":'+followupJSON(r.followup);if(r.topic)s+=',"topic":'+goString(r.topic);return s+'}';
 }
 export async function receiverDigest(route,request,receiver) {
  if(!['request','delegate','ready'].includes(route.op)||route.request_digest&&!validHash(route.request_digest))throw Error('receiver: invalid commitment operation or digest');

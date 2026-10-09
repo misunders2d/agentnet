@@ -19,7 +19,8 @@ import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
 import { focusedIn, usePortal } from "../owned";
 import { AllTopics } from "./Conversation.alltopics";
-import { shownText, threadAgentName, type Ctx } from "./Message.model";
+import { OrganizeMessages } from "./Conversation.organize";
+import { deviceWords, requestState, shownText, threadAgentName, type Ctx } from "./Message.model";
 
 /** barTopics picks the bar's chips: what needs you, then unread, then the
  *  open topic, then the most recent active ones; the open topic always gets
@@ -223,6 +224,8 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
   const busy = useStore(store, s => s.topicBusy[topicChangeKey(topic)]);
   const [rename, setRename] = useState(false);
   const [pending, setPending] = useState(false);
+  const [merge, setMerge] = useState<string[] | null>(null);
+  const dm = useStore(store, s => topic.conv ? s.views[topic.conv] as T.DMThread | undefined : undefined);
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
   return (
     <>
@@ -233,6 +236,7 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
               {!!topic.pendingIDs?.length && <Menu.Item className={item} onClick={() => setPending(true)}><IconClock size={20} aria-hidden="true" />Show pending requests ({topic.pendingIDs.length})</Menu.Item>}
               <Menu.Item disabled={!!busy} className={item} onClick={() => setRename(true)}><IconPencil size={20} aria-hidden="true" />Rename…</Menu.Item>
+              {dm && !dm.frozen && (!dm.role || dm.role === "member") && <Menu.Item className={item} onClick={() => setMerge((dm.messages || []).filter(m => m.topic === topic.id && !m.topic_event && !m.event && !m.deleted && !m.excerpt_pid).map(m => m.id))}>Merge into another topic…</Menu.Item>}
               {topic.state === "active"
                 ? <Menu.Item disabled={!!busy} className={item} onClick={() => void changeTopic(store, topic.root ? "archive" : "done", topic)}><IconCircleCheck size={20} aria-hidden="true" />{topic.root ? "Archive" : "Mark done"}</Menu.Item>
                 : <Menu.Item disabled={!!busy} className={item} onClick={() => void changeTopic(store, "reopen", topic)}><IconRotateClockwise size={20} aria-hidden="true" />Reopen</Menu.Item>}
@@ -244,6 +248,7 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
       </Menu.Root>
       <RenameTopic open={rename} onOpenChange={setRename} topic={topic} />
       <PendingTopic open={pending} onOpenChange={setPending} topic={topic} />
+      {merge && dm && <OrganizeMessages dm={dm} ids={merge} merge={topic.id} onClose={() => setMerge(null)} onDone={() => setMerge(null)} />}
     </>
   );
 }
@@ -252,6 +257,7 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
 function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChange: (open: boolean) => void; topic: Topic }) {
   const store = useApp();
   const view = useStore(store, s => s.views[topic.conv || topic.id]);
+  const overview = useStore(store, s => s.overview);
   return <Sheet open={open} onOpenChange={onOpenChange} title="Pending requests"
     description="These items keep this topic open. Open one to see its current status and available actions.">
     <div className="grid gap-2">
@@ -262,7 +268,9 @@ function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChan
           void store.openMessage(id, topic.conv ? { conv: topic.conv } : undefined);
         }}>
           <span><span className="block text-[12px] text-text-2">Open pending {m?.kind === "task" ? "task" : m?.kind === "question" ? "question" : "item"} {i + 1}</span>
-            <span>{m ? firstLine(shownText(m)) || "Message without text" : "Open request"}</span></span>
+            <span>{m ? firstLine(shownText(m)) || "Message without text" : "Open request"}</span>
+            {m && <span className="block pt-1 text-[12px] text-text-2">{m.exec || m.state === "running" || m.state === "needs_human" ? requestState(m,view?.messages || []).text : "No completion recorded here"}{(m.target?.address || m.exec?.host) ? " · on " + deviceWords(m.target?.address || m.exec?.host || "",overview) : ""}</span>}
+          </span>
         </Button>;
       })}
       {!topic.pendingIDs?.length && <p className="text-text-2">No pending requests remain in this topic.</p>}
@@ -320,7 +328,11 @@ export function TopicEnd({ ctx }: { ctx: Ctx }) {
   const current=ctx.dm?.topics?.find(t=>t.id===draft?.topic);
   const t = current?topicOf(current):ctx.thread?.topic ? topicOf(ctx.thread.topic) : null;
   const busy = useStore(store, s => t ? s.topicBusy[topicChangeKey(t)] : undefined);
-  if (!t || t.state === "active" || !ctx.overview?.topic_list) return null;
+  if (!t || t.state === "active" && !t.redirect || !ctx.overview?.topic_list) return null;
+  if (t.redirect && ctx.dm) return <section aria-label="Merged topic" className="mx-3 mt-4 rounded-2xl bg-surface p-4 stroke lg:mx-5">
+    <p className="text-[14px]">Selected messages moved to another topic. Later posts stay here.</p>
+    <Button className="mt-2" onClick={() => store.setDraft(ctx.conv, { ...store.draft(ctx.conv), topic: t.redirect, newTopic: false, replyTo: undefined }, true)}>Open {ctx.dm.topics?.find(x => x.id === t.redirect)?.title || "destination topic"}</Button>
+  </section>;
   const agent = t.concludedBy && t.concludedBy === ctx.overview?.me.address ? "Your agent" : threadAgentName(ctx);
   const archived = t.state === "archived";
   return (

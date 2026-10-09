@@ -2626,6 +2626,19 @@ function mentionKey(e) {
   } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && n) { e.preventDefault(); pickMention(mentionView.index); }
 }
 
+function ownModelReport(host,agentID="") {
+  const o=state.overview;
+  if(!o?.person || !devicesOf(o.person).some(d=>d.address===host))return null;
+  const report=(o.model_reports||[]).find(r=>r.host===host&&r.agent_id===agentID);
+  const date=report?new Date(report.at*1000):null,stamp=date&&Number.isFinite(date.getTime())?date.toLocaleString():"Timestamp unavailable";
+  return el("p", {class:"hint report-line", "data-agent-model":host+"#"+agentID}, report ? "Last reported model: "+report.model+" · "+stamp : "Model unknown");
+}
+function ownModelReports() {
+  const o=state.overview,targets=new Map();
+  for(const host of o?.agent_devices||[])if(devicesOf(o.person||{}).some(d=>d.address===host))targets.set(host+"#",{host,id:"",label:"Default agent"});
+  for(const report of o?.model_reports||[])targets.set(report.host+"#"+report.agent_id,{host:report.host,id:report.agent_id,label:report.agent_id?namedAgentLabel(report.agent_id,report.host):"Default agent"});
+  return targets.size ? el("section",{"aria-label":"Your agents’ reported models"},el("h3",{},"Your agents’ reported models"),[...targets.values()].map(t=>el("div",{},el("strong",{},t.label+" · "+deviceWords(t.host)),ownModelReport(t.host,t.id)))) : null;
+}
 function agentCard(a, t) {
   const rejoined = ["dismissed", "declined"].includes(a.state) && a.host.fingerprint &&
     (t.agents || []).find(b => b.pid !== a.pid && b.host.address === a.host.address &&
@@ -2640,6 +2653,7 @@ function agentCard(a, t) {
   return el("div", { class: "agent-card " + a.state },
     el("div", { class: "agent-head" }, el("span", { class: "tag" }, "Agent"), el("strong", { ...(a.agent_id ? { title: a.agent_id + " · " + a.host.address } : {}) }, agentName(a)),
       el("details", {}, el("summary", {}, "Runs on " + (a.host_here ? "your computer" : a.host.label + "’s computer")), el("span", { class: "hint" }, a.state_text))),
+    ownModelReport(a.host.address,a.agent_id||""),
     el("p", { class: "agent-state" }, a.state_text),
     rejoined && el("p", { class: "hint" }, rejoined.state === "active" ? "Already in this chat" : "Rejoin pending"),
     el("p", { class: "hint" }, facts.join(" · ")),
@@ -3436,7 +3450,7 @@ function controlDetails(m) {
 // time. Delivery facts stay in the footer as before. An old status is
 // said to be old.
 
-const execWord = { queued: "Queued there", awaiting: "Waiting for their acceptance", running: "Running", needs_human: "Needs a person there", stopped: "Stopped",
+const execWord = { steered: "Accepted into current run", queued: "Queued there", awaiting: "Waiting for their acceptance", running: "Running", needs_human: "Needs a person there", stopped: "Stopped",
   not_run: "Not run", declined: "Declined there", failed: "Failed there", cancelled: "Cancelled there", interrupted: "Interrupted there",
   // a host's own state names, as its report shows them (client.stateXxx)
   held: "Waiting for approval there", pending: "Queued there", accepted: "Accepted there", resolved: "Closed there", answered: "Answered there", cancel_requested: "Stopping there" };
@@ -4699,7 +4713,7 @@ async function renderResponder() {
   const host = currentHost, gen = state.gen, ws = wsNow();
   const currentView = () => gen === state.gen && wsNow() === ws;
   if ((host && host.platform === "browser") || (state.overview && state.overview.device)) {
-    fill(box, el("p", { class: "hint" }, "This browser runs nothing: questions and tasks wait for you. Choose an agent on a computer with AgentNet."));
+    fill(box, el("p", { class: "hint" }, "This browser runs nothing: questions and tasks wait for you. Choose an agent on a computer with AgentNet."),ownModelReports());
     fill($("named-agents"));
     return;
   }
@@ -4730,7 +4744,7 @@ async function renderResponder() {
     } catch (e) { if (currentView()) err.textContent = e.message; }
   };
   fill(box,
-    el("h3", {}, "Answers for you"),
+    el("h3", {}, "Answers for you"), ownModelReport(state.overview?.me.address),ownModelReports(),
     el("p", {}, !r.chosen ? "Nothing chosen yet" + (r.problem ? ": " + r.problem : ".") : r.manual ? "No automatic responder: everything waits for you."
       : r.harness + " answers approved questions and runs accepted tasks in " + r.dir + (r.ready ? "." : ". Not ready: " + (r.problem || "check the folder and the program."))),
     el("div", { class: "responder-choice", role: "radiogroup", "aria-label": "Your agent" }, options.map((o) =>
@@ -4817,6 +4831,7 @@ async function renderNamedAgents(note = "", host = currentHost, gen = state.gen,
       const r = entry.responder;
       return el("section", { class: "named-agent-card", "aria-label": "Local agent " + namedAgentLabel(entry.record.id, view.host, records) },
         el("strong", { title: entry.record.id + " · " + view.host + " (host-signed agent)" }, namedAgentLabel(entry.record.id, view.host, records)), el("p", {}, "On " + view.host),
+        ownModelReport(view.host,entry.record.id),
         el("p", { class: "hint" }, !entry.enabled ? "Disabled on this computer. Earlier messages remain." : r ? "Program: " + r.harness + " · " + r.dir + (r.ready ? " · program/folder checks pass" : " · not ready: " + (r.problem || "check program and folder")) : "Program settings unavailable."),
         r && el("p", { class: "hint" }, (r.timeout_seconds ? "Your time limit: " + r.timeout_seconds + " seconds · " : "") + "Context files: " + ((r.context || []).join(", ") || "none")),
         el("div", { class: "detail-actions" }, el("button", { type: "button", class: "btn", onclick: () => edit(entry) }, "Configure…"),

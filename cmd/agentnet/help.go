@@ -750,7 +750,7 @@ choice. set selects one; off chooses manual only (no automatic responder).
 show prints the choice, or "not chosen yet". Setup agents: do not pick the
 harness you are running in unless the person says so.
 
-Harnesses: claude, codex, pi and omp. Questions, follow-ups and accepted
+Harnesses: agy (Antigravity), claude, codex, pi and omp. Questions, follow-ups and accepted
  tasks use your native settings, skills, plugins, tools and permissions.
 AgentNet adds no tool exclusions, sandbox or approval overrides, and no
 blanket command ban inside background runs. The native harness still
@@ -759,7 +759,7 @@ request, receiver and recipients; it cannot be redirected by a reply.
 Tasks still require acceptance or an existing task grant. When a native
 approval cannot be obtained in a background session, the result needs your
 attention; AgentNet never silently approves or bypasses it.
-Antigravity can read and reply by hand but is not an automatic responder.
+Antigravity uses its native headless CLI. Native hooks remain separate and unsupported.
 
 With claude and codex, the worker keeps a background session per
 conversation: the next question in the same conversation (same agent), or

@@ -324,7 +324,7 @@ CREATE TABLE reported(
   PRIMARY KEY(item, recipient));
 `, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema, chatAlertDefaultsSchema, queuedRetractionSchema, heldNoticeSchema, sendGroupSchema, continuationSchema, ownInvitationSchema, historyCatchupSchema, groupHistoryWitnessSchema, topicSyncSchema, `
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
-`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema}
+`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema, requestFollowupSchema, answeredConversationStatusSchema, modelReportSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -488,6 +488,9 @@ func (s *store) addOutbox(env envelope.Envelope, in envelope.Inner, followUp str
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE outbox SET topic=nullif(?,''),topic_event=nullif(?,''),quote=nullif(?,''),topic_done=? WHERE id=?`, in.Topic, topicEventJSON(in.TopicEvent), in.Quote, in.TopicDone, env.ID); err != nil {
+		return err
+	}
+	if err := storeRequestFollowup(tx, "outbox", env.ID, in.Followup); err != nil {
 		return err
 	}
 	if len(selected) > 0 && selected[0].binding != nil {
@@ -784,6 +787,9 @@ func insertInner(tx *sql.Tx, in envelope.Inner, verifiedBy string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil // already stored
 	}
+	if err := storeRequestFollowup(tx, "inbox", in.ID, in.Followup); err != nil {
+		return err
+	}
 	if in.ReceiverRoute != nil {
 		if _, err := tx.Exec(`UPDATE inbox SET receiver_route=? WHERE id=?`, receiverRouteJSON(in.ReceiverRoute), in.ID); err != nil {
 			return err
@@ -1007,7 +1013,7 @@ type FileInfo struct {
 // recordSubs are the received records between devices that are never a
 // message: group proofs, contexts, invitations, consents and withdrawals,
 // and Drive space records (a conversation's view leaves them out too).
-const recordSubs = `('device-history', 'device-file', 'topic-sync', 'invitation-sync', 'read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
+const recordSubs = `('model-sync', 'device-history', 'device-file', 'topic-sync', 'invitation-sync', 'read-sync', 'root-sync', 'drive-space', 'group-proof', 'group-context', 'group-invite', 'group-consent', 'group-withdrawal')`
 
 // inbox lists received messages; a local request to this device's own
 // agent (agentjob.go) is not one, nor is a record between devices.
@@ -1179,7 +1185,7 @@ func (s *store) claimJob(responder string, resolve ...func(dbq, string) (*Execut
 		var target, previousState string
 		var receivedAt int64
 		err = tx.QueryRow(`SELECT id,sender,kind,body,coalesce(reply_to,''),coalesce(status,''),coalesce(target,''),coalesce(quote,''),coalesce(verified_by,''),state,received_at
-   FROM inbox WHERE conv IS NULL AND replica = 0 AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
+   FROM inbox WHERE conv IS NULL AND replica = 0 AND `+requestFollowupReady+` AND (receiver_route IS NULL OR json_extract(receiver_route,'$.op')='request') AND NOT EXISTS (SELECT 1 FROM reply_receiver_inputs x WHERE x.inbox_id=inbox.id) AND (state = ?
     OR (state = ? AND (kind NOT IN (?, ?) OR (kind = ? AND `+questionApprovalHolds+`)
      OR (kind = ? AND (`+taskGrantHolds+` OR `+ownTaskHolds+` OR `+ownProposalHolds+`)))))
     AND (? != '' OR coalesce(json_extract(target, '$.agent_id'),'') != '')

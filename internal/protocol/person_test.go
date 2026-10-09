@@ -365,7 +365,7 @@ func TestCapsRoomImplicationAndHeadroom(t *testing.T) {
 			t.Errorf("a %d-name record: parse error %v, want parsed %v", n, err, ok)
 		}
 	}
-	if MaxCaps != 32 || MaxAdvertisedCaps != 18 || MaxAdvertisedCaps >= MaxCaps {
+	if MaxCaps != 32 || MaxAdvertisedCaps != 21 || MaxAdvertisedCaps >= MaxCaps {
 		t.Fatalf("parse %d, advertise %d", MaxCaps, MaxAdvertisedCaps)
 	}
 }

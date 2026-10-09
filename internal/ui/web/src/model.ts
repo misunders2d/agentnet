@@ -80,6 +80,7 @@ export type TopicState = "active" | "done" | "archived";
 /** Topic is one of an agent's separate conversations (a device thread): each
  *  is its own reply chain, so its own session on the agent's side. */
 export interface Topic {
+	redirect?: string;
   root?: boolean;
   conv?: string;
   id: string;
@@ -103,6 +104,7 @@ export interface Topic {
 }
 
 export const topicOf = (t: T.ThreadSummary): Topic => ({
+	redirect: t.redirect,
   id: t.id, conv:t.conv,peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
   needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending, pendingIDs: t.pending_ids,
   state: t.state === "done" || t.state === "archived" ? t.state : "active",

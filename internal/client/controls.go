@@ -112,6 +112,13 @@ type ControlSent struct {
 // ErrNoControls means the recipient cannot read controls.
 var ErrNoControls = errors.New("cannot read reactions, edits or deletions yet")
 
+// Keep the existing error identity without putting an unrelated control label
+// in front of a precise capability refusal (for example an own-host decision).
+type controlCapabilityError struct{ detail string }
+
+func (e *controlCapabilityError) Error() string { return e.detail }
+func (e *controlCapabilityError) Unwrap() error { return ErrNoControls }
+
 // RefOf turns a message as shown (its conversation or "", its id and its
 // direction) into the exact reference a control needs. A message whose
 // sender key is not known here cannot be referred to.
@@ -326,8 +333,16 @@ func (a *Agent) ctlSupport(ctx context.Context, address string, key identity.Pub
 // capSupport is ctlSupport for one named capability of a version 3
 // control (protocol.CapControl or CapHeadless): each is checked by name.
 func (a *Agent) capSupport(ctx context.Context, address string, key identity.Public, feats []string, cap string) (bool, string) {
+	what := "reactions, edits or deletions"
+	if cap == protocol.CapHeadless {
+		what = "execution status or operator decisions"
+	} else if cap == protocol.CapContinuation {
+		what = "human clarification continuations"
+	} else if cap == protocol.CapOwnSyncV3 {
+		what = "own-device history and decisions"
+	}
 	if !slices.Contains(feats, protocol.FeatureEnv3) || !slices.Contains(feats, protocol.FeatureCaps) {
-		return false, WaitServerUpdate + "your Hub cannot carry reactions, edits or deletions (it needs an update)"
+		return false, WaitServerUpdate + "your Hub cannot carry " + what + " (it needs an update)"
 	}
 	label, name, err := protocol.SplitAddress(address)
 	if err != nil {
@@ -338,15 +353,7 @@ func (a *Agent) capSupport(ctx context.Context, address string, key identity.Pub
 		return false, WaitServerUnavailable + "cannot ask the Hub what " + address + " can read: " + err.Error()
 	}
 	if !prof.Supports(address, key.SignKey, cap) {
-		what := "reactions, edits or deletions"
-		if cap == protocol.CapHeadless {
-			what = "execution status or operator decisions"
-		} else if cap == protocol.CapContinuation {
-			what = "human clarification continuations (update AgentNet on that computer)"
-		} else if cap == protocol.CapOwnSyncV3 {
-			what = "own-device history and decisions (update AgentNet on that computer)"
-		}
-		return false, WaitPeerUpdate + address + " cannot read " + what + " yet (an older program, or it has not connected since updating)"
+		return false, WaitPeerUpdate + address + " cannot read " + what + " yet. Update AgentNet on that computer and reconnect all its open sessions."
 	}
 	return true, ""
 }

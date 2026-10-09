@@ -72,11 +72,12 @@ type HistoryItem struct {
 	Topic          string                  `json:"topic,omitempty"`
 	TopicEvent     *envelope.TopicEvent    `json:"topic_event,omitempty"`
 	SendGroup      string                  `json:"send_group,omitempty"`
+	Followup       *envelope.Ref           `json:"followup,omitempty"` // inert explicit request provenance
 }
 
 // inner is the item as the message it records.
 func (h HistoryItem) inner(conv string) envelope.Inner {
-	in := envelope.Inner{V: envelope.Version2, ID: h.ID, From: h.From, TS: h.TS, Kind: h.Kind, Body: h.Body, ReplyTo: h.ReplyTo, Quote: h.Quote, Topic: h.Topic, TopicEvent: h.TopicEvent, TopicDone: h.TopicDone,
+	in := envelope.Inner{Followup: h.Followup, V: envelope.Version2, ID: h.ID, From: h.From, TS: h.TS, Kind: h.Kind, Body: h.Body, ReplyTo: h.ReplyTo, Quote: h.Quote, Topic: h.Topic, TopicEvent: h.TopicEvent, TopicDone: h.TopicDone,
 		SendGroup: h.SendGroup, Status: h.Status, Sub: h.Sub, Origin: h.Origin, Emotion: h.Emotion, Target: h.Target, PID: h.PID, Conv: conv, LID: h.LID, Replica: true, AgentID: h.AgentID, ReceiverRoute: h.ReceiverRoute, Human: h.Human}
 	if envelope.IsControl(h.Sub) { // a control travels as history with its target reference
 		in.V, in.Ref = envelope.Version3, h.Ref
@@ -88,7 +89,7 @@ func (h HistoryItem) inner(conv string) envelope.Inner {
 }
 
 func itemOf(in envelope.Inner, key string, at int64) HistoryItem {
-	h := HistoryItem{SendGroup: in.SendGroup, V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, Quote: in.Quote, Topic: in.Topic, TopicEvent: in.TopicEvent, TopicDone: in.TopicDone,
+	h := HistoryItem{Followup: in.Followup, SendGroup: in.SendGroup, V: 1, From: in.From, FromKey: key, ID: in.ID, LID: in.LID, TS: in.TS, Kind: in.Kind, Body: in.Body, ReplyTo: in.ReplyTo, Quote: in.Quote, Topic: in.Topic, TopicEvent: in.TopicEvent, TopicDone: in.TopicDone,
 		Status: in.Status, Sub: in.Sub, Origin: in.Origin, Emotion: in.Emotion, Target: in.Target, PID: in.PID, At: at, Ref: in.Ref, AgentID: in.AgentID, ReceiverRoute: in.ReceiverRoute, Human: in.Human}
 	for _, a := range in.Attachments {
 		h.Attachments = append(h.Attachments, envelope.Attachment{Name: a.Name, Size: a.Size, SHA256: a.SHA256})
@@ -212,7 +213,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 	for _, c := range copies {
 		data, _ := json.Marshal(c.env)
 		body := ""
-		if c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 {
+		if c.required == protocol.CapModelSync || c.required == protocol.CapGroup || c.required == protocol.CapReadSync || c.required == protocol.CapOwnSyncV2 || c.required == protocol.CapOwnSyncV3 {
 			body = c.in.Body
 		} else if c.in.Sub == envelope.SubHistory {
 			var item HistoryItem
@@ -227,7 +228,7 @@ func insertCopies(tx *sql.Tx, copies []outCopy) error {
 			if err != nil {
 				return err
 			}
-			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); item.ReceiverRoute != nil || assistant || room || scoped { // delivery reads the item's own requirement
+			if _, assistant := historyAssistant(c.in.Body, c.in.Conv); envelope.TopicOrganization(item.TopicEvent) || item.Followup != nil || item.ReceiverRoute != nil || assistant || room || scoped { // delivery reads the item's own requirement
 				body = c.in.Body
 			}
 		}
@@ -304,7 +305,37 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	if err := decodeStrict([]byte(in.Body), &item); err != nil || item.GroupHistory != nil || item.V != 1 || !protocol.ValidID(item.ID) || !protocol.ValidID(item.LID) {
 		return hold(reasonInvalid, "a malformed history item")
 	}
+	if err := envelope.CheckFollowup(item.inner(in.Conv)); err != nil {
+		return hold(reasonInvalid, err.Error())
+	}
 	if err := envelope.CheckSendGroup(item.inner(in.Conv)); err != nil {
+		return hold(reasonInvalid, err.Error())
+	}
+	originalItem := item
+	item, repaired, err := a.dmLifecycleHistoryReceived(a.store.db, env.From, in.Conv, item)
+	if errors.Is(err, errLifecycleHistoryProof) {
+		// A new reader may not have the signed author's/host's roster yet.
+		// Use the ordinary pinned proof fetch, then retry once; unavailable
+		// predecessors remain in the existing bounded proof queue.
+		ev, _ := protocol.ParseParticipationEvent([]byte(originalItem.Body))
+		if _, present := a.store.deviceKey(ev.Author.Person, ev.Author.Address, ev.Author.Fingerprint); !present {
+			if _, e := a.refreshPerson(ctx, ev.Author.Person, false); e != nil {
+				return hold(reasonProof, e.Error())
+			}
+		}
+		if ev.Host != nil {
+			if _, known := a.store.deviceKey(ev.Host.Person, ev.Host.Address, ev.Host.Fingerprint); !known {
+				if _, e := a.externalHostProof(ctx, ev.Host); e != nil {
+					return hold(reasonProof, e.Error())
+				}
+			}
+		}
+		item, repaired, err = a.dmLifecycleHistoryReceived(a.store.db, env.From, in.Conv, originalItem)
+	}
+	if err != nil {
+		if errors.Is(err, errLifecycleHistoryProof) {
+			return hold(reasonProof, err.Error())
+		}
 		return hold(reasonInvalid, err.Error())
 	}
 	owner := ""
@@ -346,7 +377,7 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	decision := false
 	if item.Sub == envelope.SubEvent {
 		if ev, err := protocol.ParseParticipationEvent([]byte(item.Body)); err == nil {
-			decision = ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline
+			decision = ev.Type == protocol.EventAccept || ev.Type == protocol.EventDecline || repaired && ev.Type == protocol.EventDismiss
 		}
 	}
 	assistantReaction := envelope.AssistantReaction(item.inner(in.Conv))
@@ -378,6 +409,11 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 	orig := item.inner(in.Conv)
 	if err := envelope.CheckTopic(orig); err != nil {
 		return err
+	}
+	if envelope.TopicOrganization(orig.TopicEvent) {
+		if err := topicOrganizationAuthor(a.store.db, in.Conv, item.From, item.FromKey); err != nil {
+			return hold(reasonInvalid, err.Error())
+		}
 	}
 	if err := envelope.CheckQuote(orig); err != nil {
 		return hold(reasonInvalid, err.Error())
@@ -521,7 +557,19 @@ func (a *Agent) admitHistory(ctx context.Context, env envelope.Envelope, in enve
 			return nil
 		}
 	}
-	res, err := a.store.addHistoryInbox(orig, item.At, item.FromKey, env.From, env.ID, fromQuarantine, also)
+	var guards []func(*sql.Tx) error
+	if envelope.TopicOrganization(orig.TopicEvent) {
+		guards = append(guards, func(tx *sql.Tx) error {
+			return topicOrganizationAuthor(tx, in.Conv, item.From, item.FromKey)
+		})
+	}
+	if repaired {
+		guards = append(guards, func(tx *sql.Tx) error {
+			_, _, err := a.dmLifecycleHistoryReceived(tx, env.From, in.Conv, originalItem)
+			return err
+		})
+	}
+	res, err := a.store.addHistoryInbox(orig, item.At, item.FromKey, env.From, env.ID, fromQuarantine, also, guards...)
 	if errors.Is(err, errTooManyEvents) {
 		return hold(reasonInvalid, err.Error())
 	}

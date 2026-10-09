@@ -60,8 +60,24 @@ an established cause or fix. Installers remain unsigned.
 post-update repair first. Follow [V0_8_15.md](plans/V0_8_15.md) for
 MEL-591/592/571/583/574/575, verified directly in Linear. Zenbook owns overnight
 implementation/integration; ThinkPad is offline and no peer response is required.
-MEL-527 remains v0.9. Feature implementation is assigned and underway;
-none of the six features is yet verified.
+MEL-527 remains v0.9. All six features have focused native/browser/rendered
+evidence and independent review. Cross-chat history sharing covers accepted
+destination guests, exact selected encrypted files, stale audience/source review
+and same-operation retry. The source candidate is frozen for combined release
+qualification; it is not published yet.
+
+**October 9 evening correction:** MEL-588 rejected-history flood and MEL-580
+answered requests remaining pending are mandatory v0.8.15 fixes. The active
+checklist's opening checkpoint records exact source causes, failed-before tests,
+focused passes, independent review and remaining verification. Repeated signed
+DM lifecycle history was incorrectly attributed to its forwarder; DM agent
+outputs also retained host-only reply IDs. Narrow native/browser regressions
+now pass. A failed browser lookup also interrupted later push messages; exact
+encrypted carriers now wait durably without receipts while later messages can
+proceed. Actual IndexedDB tests cover restart, changed keys and stream shutdown;
+group catch-up and file-recovery checks pass. No physical phone convergence or
+release is claimed.
+After v0.8.15 the owner requests a dedicated mobile responsiveness/sync phase.
 
 ## Previous release — v0.8.13, October 9, 2026 (UTC)
 

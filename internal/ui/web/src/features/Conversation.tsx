@@ -16,6 +16,8 @@ import { bringIn, PendingInvitations, RoomSheet } from "./RoomPanel";
 import { agentRejoinState } from "./RoomPanel.model";
 import { Header, GuestBar, helpers, type Helper } from "./Conversation.header";
 import { TopicBar, TopicEnd } from "./Conversation.topics";
+import { OrganizeMessages } from "./Conversation.organize";
+import { ContributeHistory } from "./Conversation.import";
 import { PersonTopics } from "./PersonTopics";
 import { EmptyTimeline, Timeline } from "./Conversation.timeline";
 import { roomTitle, threadAgentName, type AnyMsg, type Ctx } from "./Message.model";
@@ -55,6 +57,8 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
   const overview = useStore(store, (s) => s.overview);
   const names = useAgentNames();
   const [selected, setSelected] = useState<string[] | null>(null);
+  const [organize, setOrganize] = useState(false);
+  const [contribute, setContribute] = useState(false);
   const [left, setLeft] = useState<Helper | null>(null);
 
   const t = open.kind === "dm" && view && view.id === open.id ? view as T.DMThread : null;
@@ -110,20 +114,25 @@ function OpenView({ open }: { open: NonNullable<Open> }) {
           to={t ? "What you write here goes to " + (t.kind === "group" ? "the members of " + title : title) + " only." : "Messages with " + title + " show up here."} />} />
       </Swap>
       {selected
-        ? <SelectBar count={selected.length} onCancel={() => setSelected(null)}
+        ? <SelectBar count={selected.length} onCancel={() => setSelected(null)} onMove={canInvite ? () => setOrganize(true) : undefined}
+            onContribute={canInvite ? () => setContribute(true) : undefined}
             onBringIn={() => { store.openInvite(ctx.conv, selected); setSelected(null); }} />
         : <Composer dm={t ?? undefined} thread={th ?? undefined} />}
       {!wide && !leaving && <RoomSheet />}
       {!leaving && <InviteSheet />}
+      {organize && t && selected && <OrganizeMessages dm={t} ids={selected} onClose={() => setOrganize(false)} onDone={() => { setOrganize(false); setSelected(null); }} />}
+      {contribute && t && selected && <ContributeHistory dm={t} ids={selected} names={names} onClose={() => setContribute(false)} onDone={() => { setContribute(false); setSelected(null); }} />}
     </section>
   );
 }
 
-function SelectBar({ count, onCancel, onBringIn }: { count: number; onCancel: () => void; onBringIn: () => void }) {
+function SelectBar({ count, onCancel, onBringIn, onMove, onContribute }: { count: number; onCancel: () => void; onBringIn: () => void; onMove?: () => void; onContribute?: () => void }) {
   return (
-    <div className="flex shrink-0 items-center gap-2 border-t-[1.5px] border-outline bg-surface px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]">
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-t-[1.5px] border-outline bg-surface px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))]">
       <button type="button" onClick={onCancel} aria-label="Stop selecting" className="grid size-11 place-items-center rounded-full hover:bg-sunken"><IconX size={22} /></button>
-      <p className="min-w-0 flex-1 text-[15px] font-semibold" aria-live="polite">{count === 0 ? "Tap messages to share" : count === 1 ? "1 message selected" : count + " messages selected"}</p>
+      <p className="min-w-0 flex-1 text-[15px] font-semibold" aria-live="polite">{count === 0 ? "Tap messages to select" : count === 1 ? "1 message selected" : count + " messages selected"}</p>
+      {onMove && <Button disabled={!count} onClick={onMove}>Move to topic</Button>}
+      {onContribute && <Button disabled={!count} onClick={onContribute}>Continue in a group</Button>}
       <Button variant="act" icon={<IconUserPlus size={20} />} disabled={!count} onClick={onBringIn}>Bring someone in</Button>
     </div>
   );

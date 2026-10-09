@@ -117,13 +117,15 @@ func convMsg(t *testing.T, a *Agent, conv string, match func(ConvMessage) bool) 
 	return found, n
 }
 
-// replyAt waits for the reply to request id in a's copy of conv.
+// replyAt accepts the caller's physical request reference and resolves only
+// its exact stored logical identity, as every recipient now sees the answer.
 func replyAt(t *testing.T, a *Agent, conv, id string) ConvMessage {
 	t.Helper()
 	var r ConvMessage
 	eventually(t, "the reply to "+id+" at "+a.Address, func() bool {
 		var n int
-		r, n = convMsg(t, a, conv, func(m ConvMessage) bool { return m.ReplyTo == id })
+		lid, _ := groupReplyLID(a.store.db, conv, id)
+		r, n = convMsg(t, a, conv, func(m ConvMessage) bool { return m.ReplyTo == id || lid != "" && m.ReplyTo == lid })
 		return n == 1
 	})
 	return r
@@ -141,7 +143,8 @@ func jobState(t *testing.T, a *Agent, id string) string {
 func noReply(t *testing.T, a *Agent, conv, id string) {
 	t.Helper()
 	time.Sleep(300 * time.Millisecond)
-	if _, n := convMsg(t, a, conv, func(m ConvMessage) bool { return m.ReplyTo == id }); n != 0 {
+	lid, _ := groupReplyLID(a.store.db, conv, id)
+	if _, n := convMsg(t, a, conv, func(m ConvMessage) bool { return m.ReplyTo == id || lid != "" && m.ReplyTo == lid }); n != 0 {
 		t.Fatalf("%s got a reply to %s", a.Address, id)
 	}
 }

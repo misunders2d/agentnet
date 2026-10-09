@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
+	"github.com/misunders2d/agentnet/internal/protocol"
 )
 
 // The worker answers approved questions and runs accepted tasks with the
@@ -266,6 +268,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	var prompt string
 	var err error
 	var lookup questionLookup // a receiver continuation keeps its delegation; no lookups
+	followupContext, followupErr := a.requestFollowupPrompt(j)
+	if followupErr != nil {
+		a.endJob(j.ID, stateNeedHuman, followupErr.Error())
+		return
+	}
 	h := Harnesses[r.Harness]
 	// The session is planned first: whether the run gets an outbox, and its
 	// prompt names one, depends on it (runfiles.go). A planning error ends
@@ -297,6 +304,10 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		prompt, err = a.promptWith(ctx, j, r, lookup.text)
 	}
 	if err == nil {
+		prompt += followupContext + a.requestFollowupFiles(ctx, j)
+		if j.Executor != nil && j.Receiver == nil {
+			prompt += modelReportPrompt
+		}
 		if err = j.run.seal(); err != nil {
 			err = fmt.Errorf("its files could not be made read-only, so nothing was run: %w", err)
 		}
@@ -472,7 +483,11 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		}
 	}
 	if h.stdin {
-		cmd.Stdin = strings.NewReader(prompt)
+		input := prompt
+		if h.sessions == agySessions {
+			input = agyInput(prompt)
+		}
+		cmd.Stdin = strings.NewReader(input)
 	}
 	// A codex session run reports on stdout as JSON events; the answer is
 	// taken from them (codexstream.go).
@@ -483,18 +498,44 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		})
 	}
 	var events *codexStream
+	var agy *agyStream
+	var agyErr agyDiagnostics
 	if plan.ref != nil && h.sessions == codexSessions {
 		events = &codexStream{}
 		cmd.Stdout = activityWriter{Writer: events, activity: activity, first: first}
+	} else if h.sessions == agySessions {
+		agy = &agyStream{}
+		if plan.ref != nil {
+			agy.expected = plan.ref.ID
+		}
+		cmd.Stdout = activityWriter{Writer: agy, activity: activity, first: first}
 	} else {
 		cmd.Stdout = activityWriter{Writer: &stdout, activity: activity, first: first}
 	}
 	cmd.Stderr = activityWriter{Writer: &stderr, activity: activity, first: first}
+	if agy != nil {
+		cmd.Stderr = activityWriter{Writer: io.MultiWriter(&stderr, &agyErr), activity: activity, first: first}
+	}
 	var roomBridge *codexRoomBridge
+	var stopNativeFollowups func()
 	if roomCodex {
 		roomBridge = newCodexRoomBridge(runCtx, cmd, prompt, cmd.Stdout, func(ctx context.Context, raw json.RawMessage) (string, error) { return a.codexRoomTool(ctx, j.ID, raw) })
 		cmd.Stdout = activityWriter{Writer: roomBridge, activity: activity, first: first}
 		defer roomBridge.close()
+		followupCtx, stopFollowups := context.WithCancel(runCtx)
+		followupsDone := make(chan struct{})
+		processFinished := make(chan struct{})
+		var finishFollowups sync.Once
+		go func() {
+			defer close(followupsDone)
+			a.watchNativeFollowups(followupCtx, j, roomBridge, processFinished)
+		}()
+		stopNativeFollowups = func() {
+			stopFollowups()
+			finishFollowups.Do(func() { close(processFinished) })
+			<-followupsDone
+		}
+		defer stopNativeFollowups()
 	}
 	cmd.WaitDelay = 5 * time.Second
 	ownProcessGroup(cmd)
@@ -517,6 +558,7 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		runErr = cmd.Wait()
 	}
 	if roomBridge != nil {
+		stopNativeFollowups()
 		roomBridge.finish()
 		if runCtx.Err() == nil {
 			runErr = nil
@@ -535,6 +577,16 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	}
 	if events != nil {
 		events.flush()
+	}
+	if agy != nil {
+		agy.flush()
+		if plan.ref != nil && plan.ref.ID == "" && agy.complete && !agy.damaged && ctx.Err() == nil {
+			plan.ref.ID = agy.conversation
+			if err := a.store.setSessionRef(j.ID, *plan.ref); err != nil {
+				a.endJob(j.ID, stateJobFailed, "Antigravity ran, but its background session could not be recorded; its result was not used and it was not retried")
+				return
+			}
+		}
 	}
 	if events != nil && plan.ref.ID == "" && ctx.Err() == nil {
 		// Codex names a new session only once it has run; record it before
@@ -587,6 +639,18 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 		status, body = envelope.StatusCancelled, "cancelled by the recipient"
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		status, body = envelope.StatusTimeout, fmt.Sprintf("stopped after %s", r.Timeout)
+	case agy != nil:
+		var attention string
+		body, status, attention = agy.result(runErr, &agyErr)
+		if attention != "" {
+			a.endJob(j.ID, stateNeedHuman, attention)
+			return
+		}
+		output = body
+		if len(body) > maxOutput {
+			body, output = body[:maxOutput], output[:maxOutput]
+			stdout.truncated = true
+		}
 	case runErr != nil:
 		status = envelope.StatusFailed
 		body = strings.TrimSpace(fmt.Sprintf("%s failed: %v\n%s", r.Harness, runErr, stderr.String()))
@@ -604,6 +668,24 @@ func (a *Agent) runJob(ctx context.Context, j job, r *Responder, wake <-chan str
 	if stdout.truncated {
 		body += "\n[output truncated]"
 		output += "\n[output truncated]"
+	}
+	if status == envelope.StatusDone && !stdout.truncated && j.Executor != nil && j.Receiver == nil {
+		var model string
+		body, model = reportedModel(body)
+		if model != "" {
+			output = body
+		}
+		if body == "" {
+			status, body = envelope.StatusFailed, r.Harness+" produced no answer"
+		}
+		if roomBridge != nil && protocol.ValidReportedModel(roomBridge.modelReport()) {
+			model = roomBridge.modelReport()
+		}
+		if model != "" && status == envelope.StatusDone {
+			if err := a.recordModelReport(j, r, model); err != nil {
+				a.Logf("model report could not be stored: %v", err)
+			}
+		}
 	}
 	outcome, rest := outcomeOf(output) // inspect the real first line before display trimming
 	if outcome == outcomeNeedsHuman && status == envelope.StatusDone {
