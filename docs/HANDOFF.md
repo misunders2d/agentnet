@@ -4,11 +4,35 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## v0.8.13 — qualified for packaging, October 9, 2026 (UTC)
+## Current published release — v0.8.13, October 9, 2026 (UTC)
+
+[Download v0.8.13](https://github.com/misunders2d/agentnet/releases/tag/v0.8.13).
+Published at **15:23:08 UTC** from
+`ee420e63087bdc224d07bdd2f163de13d27c5207`, a documentation-only release record
+above the qualified application and corrected tests. All five final
+[packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/37949926805)
+passed, including native shell tests on all three systems and Linux AppImage
+replacement/restart. All 12 downloaded asset sizes/GitHub digests and all 11
+SHA256SUMS entries matched; the published assets retain those exact digests.
+Standalone and bundled Linux commands report the exact clean tagged revision.
+
+The existing Contabo relay upgraded at **15:24:52 UTC**, after a verified
+stopped-state backup. Its running binary and normal HTTPS from both server and
+laptop report v0.8.13 on the original realm and data volume. Zero restarts/OOM
+events; the neighboring service retains its original start time. GitHub latest
+is v0.8.13. No installed client, live client grant or desktop session changed.
+
+**Paused for the owner's update/restart.** Release publication, relay checks and
+handoff are complete. No v0.8.14 implementation has started; resume only when
+the owner directs it. Its immediate issues and today's bugs are saved below
+and in the release checklist, including the final ThinkPad MEL-586/587/588
+inbox-output, app-close crash and quarantine-notice findings.
+
+### v0.8.13 scope and qualification
 
 Branch `release/v0.8.13`, starting at `7e0ea2ef`, contains the performance-first
-bug fixes tracked in [the release checklist](plans/V0_8_13.md). It is not yet
-published. The owner deferred ongoing topic-only access and proposal editing
+bug fixes tracked in [the release checklist](plans/V0_8_13.md). The owner
+deferred ongoing topic-only access and proposal editing
 (MEL-582/584) to the following release; topic merging remains backlog.
 
 The owner explicitly confirmed **Use native permissions unchanged** (MEL-504),
@@ -34,11 +58,14 @@ fixtures, macOS path normalization, a cleanup-observation race and unlinked-owne
 prompt wording required the bounded corrections documented in the checklist.
 All affected cases pass on all three systems, with local focused race and vet;
 unchanged passing evidence is retained. No full suite or timeout was increased.
-Final tag-stamped packaging, downloaded assets and publication remain pending.
+Final tag-stamped packaging, downloaded assets and publication passed as above.
+The redundant main-push full run was cancelled after confirming the release
+record changed only documentation; final tag packaging completed normally.
 
 No installed clients, live client databases, grants or desktop sessions were
-changed. Physical phone convergence remains unverified. Deployment scope is
-the existing relay only, after release qualification.
+changed. Physical phone convergence and ThinkPad's reported sustained busy
+renderer CPU remain unverified; the synthetic native profile did not reproduce
+that load. Deployment changed the existing relay only.
 
 **Owner restart boundary:** after publishing v0.8.13 and verifying the relay,
 save this handoff and pause for the owner's update/restart. Do not start v0.8.14
@@ -49,7 +76,7 @@ physical catch-up/quarantine, exact unresolved needs-human topics, own-agent
 consent, bounded inbox output and remote-agent labels. Topic-only ongoing access
 and editable proposals remain next-release features. No old task is replayed.
 
-## Current published release — v0.8.12, October 9, 2026 (UTC)
+## Previous release — v0.8.12, October 9, 2026 (UTC)
 
 ### Published v0.8.12
 

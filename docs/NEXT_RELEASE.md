@@ -1,13 +1,17 @@
-# AgentNet v0.8.13 — source qualified; packaging next
+# AgentNet v0.8.13 — released; paused for owner restart
 
-The current performance-first candidate and exact remaining gates are in
-[V0_8_13.md](plans/V0_8_13.md); publication evidence belongs in
-[HANDOFF.md](HANDOFF.md). v0.8.12 remains the published release.
+Published [v0.8.13](https://github.com/misunders2d/agentnet/releases/tag/v0.8.13)
+at 15:23:08 UTC on October 9; the existing relay upgraded and passed checks at
+15:24:52 UTC. Qualification, exact assets and remaining physical-device limits
+are in [V0_8_13.md](plans/V0_8_13.md) and [HANDOFF.md](HANDOFF.md).
 
 The owner confirmed native agent permissions unchanged. Topic-only continuing
 access and editing proposals before confirmation are explicitly deferred to
-the following release. After publication and relay verification, pause for the owner’s requested restart.
-Begin v0.8.14 only after resumption. Historical notes below retain their original scope.
+the following release. Work is paused for the owner's requested update/restart.
+Begin v0.8.14 only after resumption: take the immediate issues and today's bugs
+from the [saved scope](plans/V0_8_13.md#owner-restart-boundary-and-v0814-scope),
+then read their latest Linear evidence. No installed client or desktop session
+was changed. Historical notes below retain their original scope.
 
 ---
 
