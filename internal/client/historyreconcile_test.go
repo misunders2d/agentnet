@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/misunders2d/agentnet/internal/envelope"
 	"github.com/misunders2d/agentnet/internal/identity"
@@ -268,5 +269,135 @@ func TestHistoryDiscoveryKeepsExistingJobsAndRollsBack(t *testing.T) {
 	}
 	if err := a.discoveredHistoryCheck(a.store.db, recipient.Address); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A's sealed history can arrive after B finished C's snapshot. A is now
+// offline; B must continue the person's history even when the old turn's
+// conversation sorts before C's existing snapshot cursor.
+func TestHistoryLateOwnCopyConvergesAfterCompletedSnapshot(t *testing.T) {
+	w, first, source, packet := groupHistoryLinkedFixture(t)
+	stopFirst := runAgent(t, first)
+	stopSource := runAgent(t, source)
+	publishGroupFixtureCaps(t, source, true)
+	groupGovernanceAwait(t, packet, source)
+	dms := []string{newDM(t, w.bob, source), newDM(t, w.bob, source)}
+	slices.Sort(dms)
+	stopFirst()
+	_, highRoot := rootOf(t, w.bob, dms[1])
+	high := envelope.Inner{ID: protocol.NewID(), LID: protocol.NewID(), Conv: dms[1], Root: highRoot, Kind: envelope.KindMessage, Body: "already received newest conversation", Origin: envelope.OriginUI}
+	if err := source.verifyAndStore(tctx(t), craft(t, w.bob, source, high)); err != nil {
+		t.Fatal(err)
+	}
+	if n := inboxCount(t, source, "id=?", high.ID); n != 1 {
+		t.Fatal("source lacks original newest conversation")
+	}
+	_, lowRoot := rootOf(t, w.bob, dms[0])
+	late := []envelope.Inner{
+		{Conv: dms[0], Root: lowRoot, Body: "older person history delayed before phone link"},
+		{Conv: packet.State.Conv, Root: json.RawMessage(mustJSON(packet.Root)), Body: "older group history delayed before phone link"},
+	}
+	var delayed []outCopy
+	for i := range late {
+		in := &late[i]
+		in.ID, in.LID, in.Kind, in.Origin, in.TS = protocol.NewID(), protocol.NewID(), envelope.KindMessage, envelope.OriginUI, time.Now().Add(-24*time.Hour).Unix()
+		env := craft(t, w.bob, first, *in)
+		if err := first.verifyAndStore(tctx(t), env); err != nil {
+			t.Fatal(err)
+		}
+		original, err := envelope.Open(env, first.id, first.Address, w.bob.Self())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var at int64
+		if err := first.store.db.QueryRow(`SELECT received_ms FROM inbox WHERE id=?`, in.ID).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		copy, err := first.historyCopy(source.Self(), in.Conv, in.Root, itemOf(original, w.bob.Self().Fingerprint(), at))
+		if err != nil {
+			t.Fatal(err)
+		}
+		delayed = append(delayed, copy)
+		if n := inboxCount(t, source, "lid=?", in.LID); n != 0 {
+			t.Fatal("delayed original arrived before the phone snapshot")
+		}
+	}
+
+	phone, awaited, _ := linkPhone(t, source, "late-history-phone")
+	request := pendingLink(t, source)
+	stopSource()
+	if err := source.DecideLink(tctx(t), request.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-awaited; result.err != nil {
+		t.Fatal(result.err)
+	}
+	if _, err := source.historyPageFor(phone.Self(), historyPos{}); err != nil {
+		t.Fatal(err)
+	}
+	var state, before string
+	if err := source.store.db.QueryRow(`SELECT state,pos FROM history_jobs WHERE device=?`, phone.Address).Scan(&state, &before); err != nil || state != "done" {
+		t.Fatalf("phone snapshot has not finished: %s %v", state, err)
+	}
+	var pos historyPos
+	if err := json.Unmarshal([]byte(before), &pos); err != nil || pos.Conv != dms[1] || late[0].Conv >= pos.Conv {
+		t.Fatalf("late conversation is not before the completed cursor: %s %v", before, err)
+	}
+	reopened, err := Open(source.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	for i, copy := range delayed {
+		// Admission of an already sealed, reordered own replica. A's daemon
+		// remains offline and cannot discover or backfill C itself.
+		if err := reopened.verifyAndStore(tctx(t), copy.env); err != nil {
+			t.Fatal(err)
+		}
+		if n := inboxCount(t, reopened, "id=? AND claimed_fp=? AND replica=1", late[i].ID, w.bob.Self().Fingerprint()); n != 1 {
+			t.Fatalf("late own history was not validly admitted: count=%d held=%s", n, heldReason(t, reopened, copy.env.ID))
+		}
+	}
+	// The same upkeep a reconnect schedules; no cursor reset or broad replay.
+	reopened.convWork.due(convHistory | convRetry)
+	reopened.convSync(tctx(t))
+	var after string
+	if err := reopened.store.db.QueryRow(`SELECT pos FROM history_jobs WHERE device=?`, phone.Address).Scan(&after); err != nil || before != after {
+		t.Fatalf("completed snapshot cursor changed: %v", err)
+	}
+	rows, err := reopened.store.db.Query(`SELECT envelope FROM outbox WHERE recipient=? AND sub='history'`, phone.Address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var copies int
+	for rows.Next() {
+		var raw []byte
+		var env envelope.Envelope
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatal(err)
+		}
+		in, err := envelope.Open(env, phone.id, phone.Address, reopened.Self())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var item HistoryItem
+		if err := json.Unmarshal([]byte(in.Body), &item); err != nil {
+			t.Fatal(err)
+		}
+		for _, original := range late {
+			if item.LID == original.LID && item.FromKey == w.bob.Self().Fingerprint() {
+				copies++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if copies != len(late) {
+		t.Fatalf("late accepted own history stranded behind done snapshot: onward copies=%d want=%d; one conversation sorts before old cursor", copies, len(late))
 	}
 }

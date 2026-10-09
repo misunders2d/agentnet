@@ -25,7 +25,11 @@ func TestGroupParticipationHistoryInvalidUpgradeRecovery(t *testing.T) {
 	testGroupParticipationHistoryLinkedRestartReorder(t, true, true)
 }
 
-func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, recoverInvalid bool) {
+func TestHistoryCatchupGroupParticipation(t *testing.T) {
+	testGroupParticipationHistoryLinkedRestartReorder(t, false, false, true)
+}
+
+func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, recoverInvalid bool, catchup ...bool) {
 	stub := installAgentStub(t)
 	w, producer, packet, stops := groupTurnsFixture(t)
 	host := proofReader(t, w, "history-visitor")
@@ -117,8 +121,20 @@ func testGroupParticipationHistoryLinkedRestartReorder(t *testing.T, dismissed, 
 	if _, err = phone.GroupContext(packet.State.Conv); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = producer.historyPageFor(phone.Self(), historyPos{}); err != nil {
-		t.Fatal(err)
+	if len(catchup) > 0 && catchup[0] {
+		for pages := 0; ; pages++ {
+			more, e := producer.historyCatchupPage(tctx(t), phone.Self())
+			if e != nil || pages > 10 {
+				t.Fatalf("catch-up did not settle: %d %v", pages, e)
+			}
+			if !more {
+				break
+			}
+		}
+	} else {
+		if _, err = producer.historyPageFor(phone.Self(), historyPos{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	type history struct {
 		env  envelope.Envelope

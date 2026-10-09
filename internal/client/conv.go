@@ -54,9 +54,10 @@ const (
 const proofPage = 50
 
 type convWork struct {
-	bits atomic.Uint32
-	mu   sync.Mutex
-	pos  heldPos // where the look at held messages continues
+	bits            atomic.Uint32
+	mu              sync.Mutex
+	pos             heldPos // where the look at held messages continues
+	historyDeferred map[string]historyDeferredScan
 }
 
 func (w *convWork) due(b uint32) { w.bits.Or(b) }
@@ -93,6 +94,8 @@ func (a *Agent) convSync(ctx context.Context) {
 		if work&convRetry != 0 {
 			a.convWork.mu.Lock()
 			a.convWork.pos = heldPos{}
+			a.convWork.historyDeferred = nil
+			work |= convHistory
 			a.convWork.mu.Unlock()
 		}
 		if a.retryProof(ctx) {
@@ -1272,6 +1275,8 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 		return hold(reasonDuplicate, "a message with the same key and logical id but other content is stored")
 	}
 	if res == admitted {
+		a.convWork.due(convHistory)
+		a.kickNow()
 		if in.Sub == envelope.SubEvent {
 			a.convWork.due(convRetry)
 			a.kickNow()
