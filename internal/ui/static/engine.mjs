@@ -1267,7 +1267,7 @@ export class Engine {
       this.changed();
       await this.replayErased({ address, fingerprint }).catch(() => {}); // what was deleted here stays deleted there
     }
-    this.syncRoots().catch(() => {});this.syncReadMarks().catch(()=>{});
+    this.syncRoots().catch(() => {});this.syncReadMarks().catch(()=>{});this.syncInvitations().catch(()=>{});
     this.runHistory().catch(() => {});
   }
 
@@ -1300,7 +1300,7 @@ export class Engine {
   }
 
   readRef(m) {
-    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
+    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
     const ref={conv:m.conv||"",fingerprint:m.fp||m.claimed_key||"",lid:m.lid||m.id};
     if(!wire.validFingerprint(ref.fingerprint) || !wire.validID(ref.lid))return null;
     return ref;
@@ -1378,6 +1378,64 @@ export class Engine {
     }
     ops.checks=checks;ops.readSync=true;return ops;
   }
+  invitationViewKey(fp,id) { return "own-invitation/"+fp+"/"+id; }
+  syncInvitations() {
+    this.invitationSyncAgain=true;
+    if(!this.invitationSyncRun)this.invitationSyncRun=(async()=>{
+      do {this.invitationSyncAgain=false;try {await this.syncInvitationPages();}catch(e){if(e instanceof StoreConflict)this.invitationSyncAgain=true;else throw e;}}while(this.invitationSyncAgain);
+    })().finally(()=>{this.invitationSyncRun=null;});
+    return this.invitationSyncRun;
+  }
+  async syncInvitationPages() {
+    for(;;) {
+      const checks=[],ops=[],own=await this.groupRead(checks,"kv","person");
+      if(!own || own.state!=="self" || !(own.human_keys||[]).includes(this.fp) || !own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
+      const local=(await this.store.all("kv")).filter(v=>v?.type==="group-invitation"&&v.direction==="out"&&v.inviter===this.address&&v.fp===this.fp&&v.owner===own.person),views=[];
+      for(const saved of local) {
+        const row=await this.groupRead(checks,"kv","group-invitation/out/"+saved.id);if(!row)continue;
+        const k=this.invitationViewKey(this.fp,row.id),old=await this.groupRead(checks,"kv",k);
+        const r={v:1,person:own.person,roster:own.hash,id:row.id,revision:old?.record.revision||1,status:row.status,proposal:row.proposal};
+        if(old&&wire.invitationSyncJSON(r)!==wire.invitationSyncJSON(old.record))r.revision++;
+        await wire.validateInvitationSync(r);
+        if(!old||r.revision!==old.record.revision)ops.push({s:"kv",k,v:{type:"own-invitation",from:this.address,fp:this.fp,record:r}});
+        views.push(r);
+      }
+      const saved=await this.store.all("outbox"),present=new Set(saved.filter(o=>o.sub===wire.SubInvitationSync&&["queued","waiting","custody","delivered"].includes(o.state)).map(o=>o.recipient_fp+"/"+o.invitation_id+"/"+o.invitation_revision));
+      let count=0;
+      outer:for(const dev of own.devices) {
+        if(dev.address===this.address||!(own.human_keys||[]).includes(dev.fingerprint))continue;
+        for(const r of views) {
+          if(present.has(dev.fingerprint+"/"+r.id+"/"+r.revision))continue;
+          try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks);}catch{continue;}
+          const body=wire.invitationSyncJSON(r),id=wire.newID(),at=this.now(),envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub:wire.SubInvitationSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
+          ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapOwnSyncV2,sub:wire.SubInvitationSync,body,envelope,at,state:"queued",aside:true,invitation_id:r.id,invitation_revision:r.revision}});
+          if(++count===historyPage)break outer;
+        }
+      }
+      if(ops.length){await this.store.write(ops,checks);this.changed();if(this.connected)this.queueOutbox();}
+      if(count<historyPage)return;
+    }
+  }
+  async invitationSyncGate(rec) {
+    await this.refreshPerson(this.me);
+    const r=await wire.validateInvitationSync(wire.parseInvitationSync(rec.body));
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
+    const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
+    if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapOwnSyncV2))throw Object.assign(Error("This device needs to update AgentNet to synchronize invitations."),{code:"invitation_sync_unsupported"});
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
+    return {why:"",pin};
+  }
+  async admitInvitationSync(n,env,pin) {
+    const r=await wire.validateInvitationSync(wire.parseInvitationSync(n.body)),checks=[],ops=[];
+    if(!this.me||this.me.person!==r.person)throw new Hold("invalid","Invitation view belongs to another person.");
+    await this.refreshPerson(this.me);
+    try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
+    const k=this.invitationViewKey(pin.fingerprint,r.id),old=await this.groupRead(checks,"kv",k);
+    if(old?.record.revision===r.revision&&wire.invitationSyncJSON(old.record)!==wire.invitationSyncJSON(r))throw new Hold("invalid","Invitation view has a conflicting revision.");
+    if(!old||old.record.revision<r.revision)ops.push({s:"kv",k,v:{type:"own-invitation",from:env.from,fp:pin.fingerprint,record:r}});
+    ops.checks=checks;return ops;
+  }
+
   async applyReadArrivals(ops,checks) {
     const own=await this.groupRead(checks,"kv","person");if(!own || own.state!=="self")return;
     for(const op of ops)if(op.s==="inbox"&&op.v&&!op.v.read) {
@@ -1871,7 +1929,7 @@ export class Engine {
       await put(this.store, "kv", "person", this.me);
       await this.pinDevices(this.me);
       this.changed();
-      this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});
+      this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});this.syncInvitations().catch(()=>{});
       this.runHistory().catch(()=>{});
       return this.me;
     }
@@ -2126,6 +2184,7 @@ export class Engine {
         const [ok, why] = await this.ctlSupport(rec.to, pin);
         if (!ok) throw Object.assign(Error(why), {code:"control_unsupported"});
       }
+      if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
       if(rec.sub===wire.SubRootSync)await this.rootSyncGate(rec);
       // An assistant's reaction, as history too, needs agr1 at the reader
@@ -2194,6 +2253,7 @@ export class Engine {
         }
       }
       await this.receiverDeliveryGate(rec);
+      if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
       if (!await this.startHandover(rec)) return;
       const r = await this.call("POST", "/v1/messages", rec.envelope);
@@ -2203,7 +2263,7 @@ export class Engine {
       if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
-      if (e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
+      if (e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
         rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
       } else if (retryable(e)) {
         rec.detail = e.message;
@@ -2275,6 +2335,7 @@ export class Engine {
   async gate(c, rec) {
     try { await this.groupHumanReaderGate(c, rec); }
     catch (e) { return { why: e.message, code: e.code }; }
+    if(rec?.sub===wire.SubInvitationSync)return this.invitationSyncGate(rec);
     if(rec?.sub===wire.SubReadSync)return this.readSyncGate(rec);
     if(rec?.sub===wire.SubRootSync)return this.rootSyncGate(rec);
     if (rec?.sub === wire.SubClear) return this.clearGate(rec);
@@ -3149,7 +3210,11 @@ export class Engine {
   }
 
   async groupInvitations() {
-    const rows=(await this.store.all("kv")).filter(v=>v?.type==="group-invitation");
+    const all=await this.store.all("kv"),rows=all.filter(v=>v?.type==="group-invitation");
+    for(const view of all.filter(v=>v?.type==="own-invitation"&&v.fp!==this.fp)) {
+      try {await this.readSyncAuthority(view.record,view.from,view.fp,this.address,this.fp);}catch{continue;}
+      const r=view.record;rows.push({id:r.id,direction:"out",status:r.status,proposal:r.proposal,inviter:view.from,fp:view.fp,owner:r.person});
+    }
     return Promise.all(rows.map(async i=>({id:i.id,conv:i.proposal.state.conv,direction:i.direction,status:i.status,title:i.proposal.state.title,inviter:i.inviter,target:i.proposal.target,history:i.proposal.history || [],...await this.groupInvitationCapabilities(i)})));
   }
 
@@ -3177,7 +3242,7 @@ export class Engine {
       await this.groupRead(checks,"pins",device.address);
       copies.push(await this.groupCarrierCopy(row.proposal.root,wire.SubGroupConsent,{v:1,seq:row.proposal.seq,hash:row.proposal.prev},wire.groupConsentJSON({v:1,invitation:id,decision:"cancelled"}),device,{group_lifecycle:id,group_direction:"out",group_cancel:true},true));
     }
-    await this.store.write([{s:"kv",k,v:{...row,status:"cancelled"}},...copies.map(v=>({s:"outbox",k:v.id,v}))],checks);this.changed();
+    await this.store.write([{s:"kv",k,v:{...row,status:"cancelled"}},...copies.map(v=>({s:"outbox",k:v.id,v}))],checks);this.changed();this.syncInvitations().catch(()=>{});
     if(this.connected)for(const rec of copies)await this.post(rec);
     return {cancelled:true};
   }
@@ -3224,7 +3289,7 @@ export class Engine {
     }
     const intent={type:"group-invitation",id,direction:"out",status:"pending",proposal,inviter:this.address,owner:me.person,fp:this.fp};
     const ops=[{s:"kv",k,v:intent},{s:"kv",k:slot,v:{id}},...copies.map(v=>({s:"outbox",k:v.id,v}))];if(refreshKey)ops.push({s:"kv",k:refreshKey,v:{successor:id}});
-    await this.store.write(ops,checks);this.changed();
+    await this.store.write(ops,checks);this.changed();this.syncInvitations().catch(()=>{});
     if(this.connected)for(const rec of copies) await this.post(rec);
     return (await this.groupInvitations()).find(i=>i.id===id&&i.direction==="out");
   }
@@ -3361,7 +3426,7 @@ export class Engine {
     }
     const ops=[{s:"kv",k:key,v:g},{s:"kv",k:pendingKey,v:undefined},...copies.map(v=>({s:"outbox",k:v.id,v}))];
     if(invitation) {const k="group-invitation/out/"+invitation,row=await this.groupRead(finalChecks,"kv",k);if(!row || row.status!=="accepted") throw Error("Exact accepted invitation missing.");ops.push({s:"kv",k,v:{...row,status:"published"}});}
-    await this.store.write(ops,finalChecks);this.changed();
+    await this.store.write(ops,finalChecks);this.changed();this.syncInvitations().catch(()=>{});
     if (this.connected) this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
     for(const rec of copies) await this.post(rec);
     return packet;
@@ -3397,6 +3462,7 @@ export class Engine {
         } else if(row.status==="accepted")await this.publishGroupInvitation(row.id);
       } catch(e) { /* retained exact intent; common publisher alone retries conditional conflicts */ }
     }
+    this.syncInvitations().catch(()=>{});
   }
 
   async groupTurnEvidence(conv, checks=[], captured=false) {
@@ -4280,6 +4346,7 @@ export class Engine {
     }
     if (n.receiver_route && n.receiver_route.op !== "request") return this.admitReceiverSetup(n, env, pin);
     if (n.v === wire.Version3) return this.admitControl(n, env, pin);
+    if(n.sub===wire.SubInvitationSync)return this.admitInvitationSync(n,env,pin);
     if(n.sub===wire.SubReadSync)return this.admitReadSync(n,env,pin);
     if(n.sub===wire.SubRootSync)return this.admitRootSync(n,env,pin);
     if (n.v === wire.Version2 && (n.sub === wire.SubGroupProof || n.sub === wire.SubGroupContext)) return this.admitGroupCarrier(n, env, pin);
@@ -5143,7 +5210,7 @@ export class Engine {
       await this.recoverGroupIntents();
       await this.flushOutbox();
       await this.retryApproved();
-      await this.syncRoots();await this.syncReadMarks();
+      await this.syncRoots();await this.syncReadMarks();await this.syncInvitations();
       await this.discloseHumanAudience(); // after a restart or reconnect: accepted guests learn each other
       this.runHistory().catch(() => {});
       this.runServes().catch(() => {});

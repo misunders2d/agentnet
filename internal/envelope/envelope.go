@@ -238,6 +238,7 @@ const (
 	SubEvent           = "event"            // a conversation event; history only, never a request
 	SubExcerpt         = "excerpt"          // shared history; never a request
 	SubHistory         = "history"          // a message or event of the conversation, forwarded by a device of the recipient's own person; never a request
+	SubInvitationSync  = "invitation-sync"  // inert outgoing invitation view for own-human devices
 	SubReadSync        = "read-sync"        // exact read references between current own-human devices
 	SubRootSync        = "root-sync"        // signed DM root only, current own-human devices; no turn or execution
 	SubFile            = "file"             // a request for, or the offer of, a history message's file between devices of one person; never a request to run
@@ -694,9 +695,13 @@ func checkVersion2(in Inner) error {
 		}
 		return nil
 	}
-	if in.Sub == SubReadSync {
+	if in.Sub == SubReadSync || in.Sub == SubInvitationSync {
 		if in.Conv != "" || in.LID != "" || len(in.Root) != 0 || in.Kind != KindMessage || !in.Replica || in.Target != nil || in.PID != "" || len(in.Attachments) != 0 || in.ReplyTo != "" || in.Origin != "" || in.Emotion != "" || in.Status != "" || in.Fan != nil || in.Human != nil || in.ReceiverRoute != nil || in.AgentID != "" || in.Topic != "" || in.TopicEvent != nil || in.TopicDone || in.Quote != "" || in.Session != "" || in.Fallback {
 			return errors.New("read sync: quiet rootless reference carrier required")
+		}
+		if in.Sub == SubInvitationSync {
+			_, err := protocol.ParseInvitationSync([]byte(in.Body))
+			return err
 		}
 		_, err := protocol.ParseReadSync([]byte(in.Body))
 		return err
@@ -844,7 +849,7 @@ func SealAttention(in Inner, sender ed25519.PrivateKey, recipient age.Recipient,
 }
 
 func sealEnvelope(in Inner, sender ed25519.PrivateKey, recipient age.Recipient, channel string) (Envelope, error) {
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync) && channel != "" {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync) && channel != "" {
 		return Envelope{}, errors.New("root sync carries no attention")
 	}
 	if !validKind(in.Kind) {
@@ -959,7 +964,7 @@ func Open(e Envelope, self *identity.Identity, selfAddress string, sender identi
 	if err := checkVersion2(in); err != nil {
 		return in, err
 	}
-	if (in.Sub == SubRootSync || in.Sub == SubReadSync) && e.Attn {
+	if (in.Sub == SubRootSync || in.Sub == SubReadSync || in.Sub == SubInvitationSync) && e.Attn {
 		return in, errors.New("root sync carries no attention")
 	}
 	if len(in.Attachments) != len(e.Blobs) {

@@ -57,6 +57,7 @@ func (a *Agent) onGroupHeads(raw []byte) {
 // heads the stream said changed. What fails stays due for the next pass.
 func (a *Agent) groupSync(ctx context.Context) {
 	if a.groupWork.recover.CompareAndSwap(true, false) {
+		a.convWork.due(convHistory)
 		if err := a.RecoverGroupPublications(ctx); err != nil {
 			a.Logf("group publications: %v", err)
 			a.groupWork.recover.Store(true)

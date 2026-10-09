@@ -26,6 +26,7 @@ export const CapGroupHumanParticipation = "hgg1"; // complete group human guest 
 export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: reads human guests' scoped turns
 export const CapSendGroup = "sg1"; // optional signed presentation; never a routing or execution capability
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
+export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
 export const CapReadSync = "rd1", SubReadSync = "read-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
@@ -679,9 +680,9 @@ async function checkV2(n) {
     if (n.target && (!n.target.agent_id || !["question", "task"].includes(n.kind) || n.target.address !== n.to || !validFingerprint(n.target.fingerprint))) throw new Error("a device message target must name an agent on its exact recipient");
     return;
   }
-  if(n.sub===SubReadSync) {
+  if(n.sub===SubReadSync || n.sub===SubInvitationSync) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || n.attachments.length || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
-    parseReadSync(n.body);return;
+    if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
   if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
   if (!n.root || utf8.encode(n.root).length > convRootSizeLimit(n.root)) throw new Error("missing or oversized conversation root");
@@ -769,7 +770,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubRootSync || inner.sub === SubReadSync) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubRootSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -856,7 +857,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubRootSync || n.sub === SubReadSync) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubRootSync || n.sub === SubReadSync || n.sub === SubInvitationSync) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -2191,3 +2192,15 @@ export async function validateReceiverRoute(n) {
 
 export { validatePicture };
 export const pictureHash = hashOf;
+
+// Inert source-device intent views; never interpreted as group consent.
+export const invitationSyncJSON = r => '{"v":1,"person":'+goString(r.person)+',"roster":'+goString(r.roster)+',"id":'+goString(r.id)+',"revision":'+goInt(r.revision,"revision")+',"status":'+goString(r.status)+',"proposal":'+groupInvitationJSON(r.proposal)+'}';
+export function parseInvitationSync(json) {
+ const r=strictRecord(json,MaxGroupState+1024,"invitation sync",{v:"int",person:"string",roster:"string",id:"string",revision:"int",status:"string",proposal:"object"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||!validHash(r.id)||!Number.isSafeInteger(r.revision)||r.revision<1||!["pending","accepted","declined","cancelled","published","stale","reissue","history-unavailable"].includes(r.status))throw Error("invitation sync: invalid view");
+ r.proposal=parseGroupInvitation(r.proposal);fitsRecord(invitationSyncJSON(r),MaxGroupState+1024,"invitation sync");return r;
+}
+export async function validateInvitationSync(r) {
+ parseInvitationSync(invitationSyncJSON(r));await validateGroupInvitation(r.proposal);
+ if(await groupInvitationID(r.proposal)!==r.id)throw Error("invitation sync: proposal differs");return r;
+}

@@ -119,8 +119,13 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying read state: %v", readErr)
 			a.convWork.due(convHistory)
 		}
+		invites, inviteErr := a.syncInvitations()
+		if inviteErr != nil {
+			a.Logf("copying invitation views: %v", inviteErr)
+			a.convWork.due(convHistory)
+		}
 		more := a.historyStep(ctx)
-		if roots || reads || more {
+		if roots || reads || invites || more {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -942,7 +947,7 @@ func (a *Agent) releaseConv(ctx context.Context, feats []string) {
 			key, _, found, err := a.store.peer(to)
 			switch {
 			case err != nil || !found:
-			case w.required == protocol.CapReadSync:
+			case w.required == protocol.CapReadSync || w.required == protocol.CapOwnSyncV2:
 				ok = a.requireParticipationCaps(ctx, key, w.required) == nil
 			case w.required == protocol.CapAgentReaction && w.conv == "":
 				// A device thread's assistant reaction: no person gate either.
@@ -1078,6 +1083,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return hold(reasonProof, err.Error())
 		}
 		return err
+	}
+	if in.Sub == envelope.SubInvitationSync {
+		return a.admitInvitationSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubReadSync {
 		return a.admitReadSync(ctx, env, in, sender, fromQuarantine, hold)

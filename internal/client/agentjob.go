@@ -909,6 +909,9 @@ func (a *Agent) mayDeliver(env envelope.Envelope) (bool, error) {
 	if env.V != envelope.Version2 {
 		return true, nil
 	}
+	if handled, allowed, err := a.mayDeliverInvitationSync(env); handled {
+		return allowed, err
+	}
 	if handled, allowed, err := a.mayDeliverReadSync(env); handled {
 		return allowed, err
 	}

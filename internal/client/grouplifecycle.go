@@ -93,7 +93,11 @@ func (a *Agent) GroupInvitations() ([]GroupInvitationInfo, error) {
 		r.CanCancel, r.CanRefresh = a.groupInvitationCapabilities(r)
 		result = append(result, r.GroupInvitationInfo)
 	}
-	return result, nil
+	mirrors, err := a.ownInvitationViews()
+	if err != nil {
+		return nil, err
+	}
+	return append(result, mirrors...), nil
 }
 
 // CreateGroup obtains only the creator's explicit self consent, then uses the

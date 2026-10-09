@@ -435,6 +435,6 @@ func (a *Agent) admitGroupLifecycle(ctx context.Context, env envelope.Envelope, 
 			a.kickNow()
 		}
 	}
-	a.convWork.due(convRetry)
+	a.convWork.due(convRetry | convHistory)
 	return nil
 }
