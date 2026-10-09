@@ -26,8 +26,8 @@ import (
 // is active again unless the new message itself makes it done. Archiving
 // hides a topic from the overview only: nothing is ever deleted by it.
 //
-// What the person sets (a name, Mark done, Reopen) is kept on this device
-// only, like read marks: there is no sync between devices in this release.
+// Private names sync between the person's current human devices. Legacy
+// Mark done/Reopen remain local; they never grant permission to run work.
 // The derived states are the same on every device that holds the same
 // messages. The browser device (engine.mjs) derives exactly the same.
 
@@ -586,7 +586,7 @@ func (a *Agent) RenameTopic(peer, id, title string) error {
 	if utf8.RuneCountInString(title) > TopicTitleMax {
 		return ErrTopicTitle
 	}
-	return a.setTopic(peer, id, func(l *topicLocal, _ int) { l.Title = title })
+	return a.setTopic(peer, id, func(l *topicLocal, _ int) { l.Title = title }, true)
 }
 
 // MarkTopicDone marks topic id with peer done by the person, here, until
@@ -619,7 +619,7 @@ func (a *Agent) mark(peer, id, mark string, seen int) (covered bool, err error) 
 
 // setTopic changes what the person set on topic id (its earliest message)
 // with peer and stores it under that id.
-func (a *Agent) setTopic(peer, id string, change func(l *topicLocal, count int)) error {
+func (a *Agent) setTopic(peer, id string, change func(l *topicLocal, count int), renamed ...bool) error {
 	groups, _, err := a.peerThreadGroups(peer)
 	if err != nil {
 		return err
@@ -644,20 +644,26 @@ func (a *Agent) setTopic(peer, id string, change func(l *topicLocal, count int))
 		return err
 	}
 	defer tx.Rollback()
+	rename := len(renamed) > 0 && renamed[0]
 	if was != "" && was != id {
 		if _, err := tx.Exec(`DELETE FROM topic_state WHERE peer = ? AND topic = ?`, peer, was); err != nil {
 			return err
 		}
 	}
 	if _, err := tx.Exec(`INSERT INTO topic_state(peer, topic, title, mark, mark_at, mark_count, updated_at) VALUES(?, ?, nullif(?, ''), nullif(?, ''), nullif(?, 0), nullif(?, 0), ?)
-		ON CONFLICT(peer, topic) DO UPDATE SET title = excluded.title, mark = excluded.mark, mark_at = excluded.mark_at, mark_count = excluded.mark_count, updated_at = excluded.updated_at`,
-		peer, id, l.Title, l.Mark, l.MarkAt, l.MarkCount, storeNow().Unix()); err != nil {
+		ON CONFLICT(peer, topic) DO UPDATE SET title = CASE WHEN ? THEN excluded.title ELSE topic_state.title END, mark = excluded.mark, mark_at = excluded.mark_at, mark_count = excluded.mark_count, updated_at = excluded.updated_at`,
+		peer, id, l.Title, l.Mark, l.MarkAt, l.MarkCount, storeNow().Unix(), rename); err != nil {
 		return err
+	}
+	if rename {
+		if err = a.recordTopicTitle(tx, peer, id, l.Title); err != nil {
+			return err
+		}
 	}
 	if err := a.store.done(tx.Commit()); err != nil {
 		return err
 	}
-	notifyDaemon(a.home)
+	a.topicTitlesChanged()
 	return nil
 }
 

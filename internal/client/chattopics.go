@@ -317,27 +317,25 @@ func (a *Agent) ChangeChatTopic(ctx context.Context, conv, id, what, title strin
 			parent = prior[len(prior)-1].LID
 		}
 		_, err = a.SendConv(ctx, conv, ConvOutgoing{Body: text, Topic: id, ReplyTo: parent, TopicEvent: &envelope.TopicEvent{Action: action, Seen: seen}})
-	case "rename", "archive":
+	case "rename":
+		title = strings.Join(strings.Fields(title), " ")
+		if utf8.RuneCountInString(title) > TopicTitleMax {
+			return false, ErrTopicTitle
+		}
+		err = a.setTopicTitle(conv, id, title)
+	case "archive":
 		local, err := a.store.topicLocals(conv)
 		if err != nil {
 			return false, err
 		}
 		l := local[id]
-		if what == "rename" {
-			title = strings.Join(strings.Fields(title), " ")
-			if utf8.RuneCountInString(title) > TopicTitleMax {
-				return false, ErrTopicTitle
-			}
-			l.Title = title
-		} else {
-			l.Mark, l.MarkAt, l.MarkCount = "archived", storeNow().Unix(), t.Count
-			for _, m := range msgs {
-				if m.Topic == id && m.TopicEvent != nil {
-					l.MarkCount++
-				}
+		l.Mark, l.MarkAt, l.MarkCount = "archived", storeNow().Unix(), t.Count
+		for _, m := range msgs {
+			if m.Topic == id && m.TopicEvent != nil {
+				l.MarkCount++
 			}
 		}
-		_, err = a.store.db.Exec(`INSERT INTO topic_state(peer,topic,title,mark,mark_at,mark_count,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(peer,topic) DO UPDATE SET title=excluded.title,mark=excluded.mark,mark_at=excluded.mark_at,mark_count=excluded.mark_count,updated_at=excluded.updated_at`, conv, id, l.Title, l.Mark, l.MarkAt, l.MarkCount, storeNow().Unix())
+		_, err = a.store.db.Exec(`INSERT INTO topic_state(peer,topic,title,mark,mark_at,mark_count,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(peer,topic) DO UPDATE SET mark=excluded.mark,mark_at=excluded.mark_at,mark_count=excluded.mark_count,updated_at=excluded.updated_at`, conv, id, l.Title, l.Mark, l.MarkAt, l.MarkCount, storeNow().Unix())
 		if err == nil {
 			a.NoteChange()
 		}

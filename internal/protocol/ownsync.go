@@ -2,7 +2,8 @@ package protocol
 
 import "errors"
 
-// CapOwnSyncV2 advertises history witnesses and inert own-human invitation views.
+// CapOwnSyncV2 advertises history witnesses, inert own-human invitation views
+// and private topic titles.
 const CapOwnSyncV2 = "own2"
 
 // InvitationSync is a view of the sending device's outgoing intent. It is

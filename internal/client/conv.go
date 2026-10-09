@@ -127,8 +127,13 @@ func (a *Agent) convSync(ctx context.Context) {
 			a.Logf("copying invitation views: %v", inviteErr)
 			a.convWork.due(convHistory)
 		}
+		titles, titleErr := a.syncTopicTitles()
+		if titleErr != nil {
+			a.Logf("copying topic titles: %v", titleErr)
+			a.convWork.due(convHistory)
+		}
 		more := a.historyStep(ctx)
-		if roots || reads || invites || more {
+		if roots || reads || invites || titles || more {
 			a.convWork.due(convHistory) // one page per sync; the next follows at once
 			a.kickNow()
 		}
@@ -1100,6 +1105,9 @@ func (a *Agent) admitConv(ctx context.Context, env envelope.Envelope, in envelop
 			return hold(reasonProof, err.Error())
 		}
 		return err
+	}
+	if in.Sub == envelope.SubTopicSync {
+		return a.admitTopicSync(ctx, env, in, sender, fromQuarantine, hold)
 	}
 	if in.Sub == envelope.SubInvitationSync {
 		return a.admitInvitationSync(ctx, env, in, sender, fromQuarantine, hold)
