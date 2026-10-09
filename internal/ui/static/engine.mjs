@@ -68,6 +68,18 @@ const burstFirst = 1000, burstMost = 8000, burstQuiet = 250;
 // never changes under its key, so no other write can.
 const retractionWrite = (ops) => ops.some((o) => (o.s === "inbox" || o.s === "outbox") && (o.v === undefined || (o.v.control && o.v.sub === wire.SubRetraction)));
 
+// Sparse source indexes exclude carriers, local harness records and erased
+// controls. Arrival is storage order, independent of an old copy's display time.
+const historySource = r => r?.conv && r.lid && Number.isFinite(r.at) && !r.local && !r.aside && !["history","file","clear","root-sync","group-proof","group-context","group-invite","group-consent","group-withdrawal"].includes(r.sub);
+const historyOrder = (a,b) => { for(let i=0;i<a.length;i++)if(a[i]!==b[i])return a[i]<b[i]?-1:1;return 0; };
+const historyIndexed = (row,arrival) => {
+  const value=structuredClone(row);delete value.history_pos;
+  if(historySource(value))value.history_pos=[value.conv,value.at,value.id];
+  else delete value.history_arrival;
+  if(arrival)value.history_arrival=arrival;
+  return value;
+};
+
 // ---- storage -------------------------------------------------------------------------------
 
 // openIDB opens this device's database (idb: promises over IndexedDB).
@@ -80,8 +92,19 @@ const retractionWrite = (ops) => ops.some((o) => (o.s === "inbox" || o.s === "ou
 export async function openIDB(name = "agentnet") {
   let onBlocked, refused = false;
   const blocked = new Promise((_, rej) => { onBlocked = () => { refused = true; rej(new Error("storage is blocked by another tab")); }; });
-  const opening = openDB(name, 3, { // 3: the erased store (conversation deletion)
-    upgrade(d) { for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s); },
+  const opening = openDB(name, 4, { // 4: bounded accepted-history order/arrival indexes
+    async upgrade(d,oldVersion,newVersion,tx) {
+      for (const s of stores) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s);
+      if(oldVersion<4) {
+        let arrival=0;
+        for(const s of ["inbox","outbox"]) {
+          const store=tx.objectStore(s);store.createIndex("history_pos","history_pos");
+          if(s==="inbox")store.createIndex("history_arrival","history_arrival");
+          for(let c=await store.openCursor();c;c=await c.continue())if(historySource(c.value))await c.update(historyIndexed(c.value,s==="inbox"?++arrival:0));
+        }
+        await tx.objectStore("kv").put(arrival,"history-arrival");
+      }
+    },
     blocked: onBlocked,
   });
   opening.then((d) => { if (refused) d.close(); }, () => {}); // late: the tab that blocked it went away after the refusal
@@ -97,8 +120,18 @@ export async function openIDB(name = "agentnet") {
     after: (s, k, n) => db.getAll(s, k === "" ? null : IDBKeyRange.lowerBound(k, true), n),
     // prefix returns the values whose keys start with p, in key order.
     prefix: (s, p) => db.getAll(s, IDBKeyRange.bound(p, p + "\uffff")),
+    async historyRows(s,{after=null,conv="",reverse=false,arrival=false,ceiling=Number.MAX_SAFE_INTEGER,limit=historyPage}={}) {
+      let range;
+      if(arrival) {if((after||0)>=ceiling)return [];range=IDBKeyRange.bound(after||0,ceiling,true,false);}
+      else if(conv)range=IDBKeyRange.bound([conv],[conv,[]]);
+      else if(after)range=IDBKeyRange.lowerBound(after,true);
+      const tx=db.transaction(s),rows=[];
+      for(let c=await tx.store.index(arrival?"history_arrival":"history_pos").openCursor(range,reverse?"prev":"next");c&&rows.length<limit;c=await c.continue())rows.push(c.value);
+      await tx.done;return rows;
+    },
     async write(ops, checks = []) {
-      const tx = db.transaction([...new Set([...ops, ...checks].map((o) => o.s))], "readwrite", { durability: "strict" });
+      const names=[...ops,...checks].map(o=>o.s);if(ops.some(o=>o.s==="inbox"&&o.v))names.push("kv");
+      const tx = db.transaction([...new Set(names)], "readwrite", { durability: "strict" });
       try {
         for (const c of checks) {
           if (c.scope) {
@@ -113,8 +146,17 @@ export async function openIDB(name = "agentnet") {
           if (JSON.stringify(actual) !== JSON.stringify(c.v)) throw new StoreConflict();
         }
         for (const o of ops) {
+          let value=o.v;
+          if(value&&(o.s==="inbox"||o.s==="outbox")) {
+            let arrival=0;
+            if(o.s==="inbox"&&historySource(value)) {
+              arrival=(await tx.objectStore("inbox").get(o.k))?.history_arrival||0;
+              if(!arrival) {arrival=(await tx.objectStore("kv").get("history-arrival")||0)+1;await tx.objectStore("kv").put(arrival,"history-arrival");}
+            }
+            value=historyIndexed(value,arrival);
+          }
           // Each request's own rejection is the transaction's (tx.done); it is not awaited one by one.
-          (o.v === undefined ? tx.objectStore(o.s).delete(o.k) : tx.objectStore(o.s).put(o.v, o.k)).catch(() => {});
+          (value === undefined ? tx.objectStore(o.s).delete(o.k) : tx.objectStore(o.s).put(value, o.k)).catch(() => {});
         }
       } catch (e) {
         // A request that cannot be made (a value that cannot be stored)
@@ -141,6 +183,7 @@ export function memoryStore() {
     all: async (s) => [...data[s].values()].map((v) => structuredClone(v)),
     after: async (s, k, n) => [...data[s].keys()].filter((x) => x > k).sort().slice(0, n).map((x) => structuredClone(data[s].get(x))),
     prefix: async (s, p) => [...data[s].keys()].filter((x) => x.startsWith(p)).sort().map((x) => structuredClone(data[s].get(x))),
+    historyRows: async(s,{after=null,conv="",reverse=false,arrival=false,ceiling=Number.MAX_SAFE_INTEGER,limit=historyPage}={})=>[...data[s].values()].filter(r=>r.history_pos&&(!conv||r.conv===conv)&&(arrival?r.history_arrival>(after||0)&&r.history_arrival<=ceiling:!after||historyOrder(r.history_pos,after)>0)).sort((a,b)=>(arrival?a.history_arrival-b.history_arrival:historyOrder(a.history_pos,b.history_pos))*(reverse?-1:1)).slice(0,limit).map(r=>structuredClone(r)),
     async write(ops, checks = []) {
       for (const c of checks) {
         const actual = c.scope ? [...data[c.s].entries()].filter(([, v]) => scopeRow(v, c.scope)).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([k, v]) => ({ k, v: authorityValue(c.s, v) })) : data[c.s].get(c.k);
@@ -148,7 +191,18 @@ export function memoryStore() {
       }
       for (const o of ops) {
         if (o.v === undefined) data[o.s].delete(o.k);
-        else data[o.s].set(o.k, structuredClone(o.v));
+        else {
+          let value=structuredClone(o.v);
+          if(o.s==="inbox"||o.s==="outbox") {
+            let arrival=0;
+            if(o.s==="inbox"&&historySource(value)) {
+              arrival=data.inbox.get(o.k)?.history_arrival||0;
+              if(!arrival) {arrival=(data.kv.get("history-arrival")||0)+1;data.kv.set("history-arrival",arrival);}
+            }
+            value=historyIndexed(value,arrival);
+          }
+          data[o.s].set(o.k,value);
+        }
       }
       if (retractionWrite(ops)) retractionMark++;
     },
@@ -1272,6 +1326,7 @@ export class Engine {
   }
 
   runHistory() {
+    this.historyWake = (this.historyWake || 0) + 1;
     this.historyAgain = true;
     if (!this.historyRun) this.historyRun = this.historyPasses().finally(() => { this.historyRun = null; });
     return this.historyRun;
@@ -1500,6 +1555,7 @@ export class Engine {
   }
 
   async historyPasses() {
+    this.historyWake = (this.historyWake || 0) + 1;
     for (;;) {
       this.historyAgain = false;
       await this.reconcileHistory();
@@ -1512,7 +1568,8 @@ export class Engine {
           this.changed();
           continue;
         }
-        more = (await this.historyStep(dev, j)) || more;
+        try{more = (await this.historyStep(dev, j)) || more;}
+        catch(e){if(!(e instanceof StoreConflict))throw e;this.historySweeps?.delete(dev.fingerprint);more=true;}
       }
       if (!more && !this.historyAgain) return;
     }
@@ -1523,6 +1580,7 @@ export class Engine {
   // received ones with the key they came under, each message sent here
   // once (its first copy), none the device itself sent.
   async historyStep(dev, j) {
+    if(j.own_human || j.catchup || await this.ownHistoryAuthority(dev))return this.historyCatchupStep(dev,j);
     const checks=[],book=structuredClone(await this.groupRead(checks,"kv","history"));
     if(!book?.[dev.address] || JSON.stringify(book[dev.address])!==JSON.stringify(j))return false;
     if(j.own_human && (j.own_human!==this.fp || !await this.ownHistoryAuthority(dev,checks)))return false;
@@ -1559,6 +1617,137 @@ export class Engine {
     this.changed();
     if (this.connected) for (const c of copies) await this.post(c);
     return state === "running";
+  }
+
+  // v2 retains the old snapshot cursor. A separate recent/older pass repairs
+  // accepted pre-upgrade gaps once, while a storage-arrival tail keeps moving
+  // during backfill. Exact original tuples, never timestamps, deduplicate it.
+  async historyCatchupStep(dev,j) {
+    const checks=[],book=structuredClone(await this.groupRead(checks,"kv","history"));
+    if(!book?.[dev.address] || JSON.stringify(book[dev.address])!==JSON.stringify(j))return false;
+    if(j.own_human&&j.own_human!==this.fp || j.catchup?.source&&j.catchup.source!==this.fp || !await this.ownHistoryAuthority(dev,checks))return false;
+    // Arrivals after this boundary belong to the next tail page; they need
+    // not invalidate unrelated source authority or starve this transaction.
+    const ceiling=await this.store.get("kv","history-arrival")||0;
+    const p=structuredClone(j.catchup||{v:2,source:this.fp,stage:"recent",recent:"",older:null,tail:ceiling,ceiling,started:this.now(),legacy_running:j.state==="running"});
+    if(p.v!==2)throw Error("Unsupported local history progress.");
+    const convs=new Map();
+    for(const c of await this.store.all("convs"))if(c.root&&wire.rootMember(wire.parseRoot(c.root),this.me.person))convs.set(c.id,c);
+    for(const g of await this.store.prefix("kv","group/"))if(g?.root) {
+      const root=wire.parseGroupRoot(g.root),id=await wire.rootID(root);
+      convs.set(id,{id,kind:"group",root:g.root});
+    }
+    const prefix="history-deferred/"+dev.fingerprint+"/",copyPrefix="history-copy/"+dev.fingerprint+"/";
+    this.historySweeps ||= new Map();
+    let sweep=this.historySweeps.get(dev.fingerprint);
+    if(!sweep||sweep.wake!==this.historyWake) {sweep={wake:this.historyWake,after:prefix,done:false,contextAfter:""};this.historySweeps.set(dev.fingerprint,sweep);}
+    const ops=[],copies=[],visiting=new Set(),attempted=new Map(),contexts=new Set();
+    const pending=async(ref,why)=>{const k=prefix+ref.tuple;await this.groupRead(checks,"kv",k);ops.push({s:"kv",k,v:{...ref,key:k,why}});};
+    const clear=async tuple=>{const k=prefix+tuple;if(await this.groupRead(checks,"kv",k))ops.push({s:"kv",k});};
+    const context=async c=>{
+      if(c.kind!=="group"||contexts.has(c.id))return;
+      const carriers=await this.groupHistoryCarriers(c,dev,checks);copies.push(...carriers);contexts.add(c.id);
+    };
+    const queue=async(row,here=false)=>{
+      const s=here?"outbox":"inbox",m=await this.groupRead(checks,s,row.id);
+      if(!m||!historySource(m)||this.erasedRow(m))return;
+      const item=this.itemOf(m,here),tuple=m.conv+"/"+item.from_key+"/"+item.lid;
+      if(item.from_key===dev.fingerprint)return true;
+      if(visiting.has(tuple))throw new Hold("proof_pending","Historical dependency is cyclic.");
+      if(attempted.has(tuple))return attempted.get(tuple);
+      attempted.set(tuple,false);visiting.add(tuple);
+      const ref={tuple,conv:m.conv,id:m.id,dir:s};
+      try {
+        const hash=item.ref?await this.groupControlHash(m.conv,item):await wire.groupHistoryContentHash(m.conv,item),key=copyPrefix+tuple;
+        const saved=await this.groupRead(checks,"kv",key);
+        if(saved&&saved.hash!==hash)throw new Hold("conflicting_duplicate","Historical original conflicts with its queued copy.");
+        if(saved?.copy) {
+          const sent=await this.groupRead(checks,"outbox",saved.copy);
+          if(sent?.to===dev.address&&sent.recipient_fp===dev.fingerprint&&sent.sub==="history"&&["queued","waiting","custody","delivered"].includes(sent.state)) {
+            const h=wire.parseHistory(sent.body),actual=h.ref?await this.groupControlHash(m.conv,h):await wire.groupHistoryContentHash(m.conv,h);
+            if(h.from_key!==item.from_key||h.lid!==item.lid||actual!==hash)throw new Hold("conflicting_duplicate","Historical copy ledger differs from its durable envelope.");
+            await clear(tuple);attempted.set(tuple,true);return true;
+          }
+        }
+        if(copies.length>=historyPage*3)throw new Hold("proof_pending","Historical dependencies continue in bounded backfill.");
+        const c=convs.get(m.conv);if(!c)throw new Hold("proof_pending","Historical conversation root unavailable.");
+        await context(c);
+        const dependencies=[];
+        if(item.pid&&item.sub!=="event") {
+          const events=(await this.authorityRows({conv:m.conv,pid:item.pid,sub:"event"},checks)).filter(historySource);
+          events.sort((a,b)=>{const rank=r=>({invite:0,scope:1,accept:2}[wire.parseEvent(r.body).type]??3);return rank(a)-rank(b)||a.at-b.at||a.id.localeCompare(b.id);});
+          dependencies.push(...events);
+        }
+        const target=item.ref?.id||item.reply_to;
+        if(target) {
+          for(const table of ["inbox","outbox"]) {const r=await this.groupRead(checks,table,target);if(r&&r.conv===m.conv&&historySource(r))dependencies.push(r);}
+          if(!dependencies.some(r=>r.id===target))dependencies.push(...(await this.authorityRows({conv:m.conv,lid:target},checks)).filter(historySource));
+        }
+        for(const d of dependencies)if(!await queue(d,!!d.to))throw new Hold("proof_pending","Historical dependency remains unavailable.");
+        const rec=await this.historyCopy(dev,c,item,checks);rec.recipient_fp=dev.fingerprint;
+        copies.push(rec);ops.push({s:"kv",k:key,v:{hash,copy:rec.id}});await clear(tuple);attempted.set(tuple,true);return true;
+      } catch(e) {
+        if(e instanceof StoreConflict)throw e;
+        await pending(ref,e instanceof Hold?e.reason:"proof_pending");return false;
+      } finally {visiting.delete(tuple);}
+    };
+    // A bounded fresh-arrival page takes precedence on every step, even while
+    // another conversation's older pages or unresolved proof are pending.
+    const tail=await this.store.historyRows("inbox",{arrival:true,after:p.tail,ceiling});
+    for(const row of tail)await queue(row);
+    if(tail.length)p.tail=tail.at(-1).history_arrival;
+    if(tail.length<historyPage)p.tail=ceiling;
+    const sourcePage=async options=>{
+      const rows=[...(await this.store.historyRows("inbox",options)).map(m=>({m,here:false})),...(await this.store.historyRows("outbox",options)).map(m=>({m,here:true}))];
+      rows.sort((a,b)=>historyOrder(a.m.history_pos,b.m.history_pos)*(options.reverse?-1:1));return rows.slice(0,historyPage);
+    };
+    // The existing carrier repair also covers quiet groups and completed jobs.
+    // Advance once per group per external wake, including unavailable groups.
+    const groups=[...convs.values()].filter(c=>c.kind==="group"&&c.id>sweep.contextAfter).sort((a,b)=>a.id.localeCompare(b.id));
+    if(groups.length) {
+      const c=groups[0];sweep.contextAfter=c.id;
+      try{await context(c);await clear("context/"+c.id);}catch(e){if(e instanceof StoreConflict)throw e;await pending({tuple:"context/"+c.id,conv:c.id},"proof_pending");}
+    }
+    if(p.stage==="recent") {
+      const id=[...convs.keys()].sort().find(id=>id>p.recent);
+      if(id) {
+        const c=convs.get(id);
+        try{await context(c);await clear("context/"+id);}catch(e){if(e instanceof StoreConflict)throw e;await pending({tuple:"context/"+id,conv:id},"proof_pending");}
+        for(const {m,here} of await sourcePage({conv:id,reverse:true}))await queue(m,here);
+        p.recent=id;
+      } else p.stage="older";
+    } else if(p.stage==="older") {
+      const page=await sourcePage({after:p.older});
+      for(const {m,here} of page)if(here?m.at<=p.started:m.history_arrival<=p.ceiling)await queue(m,here);
+      if(page.length)p.older=page.at(-1).m.history_pos;
+      if(page.length<historyPage)p.stage="tail";
+    }
+    let pendingMore=false;
+    if(!sweep.done) {
+      const refs=(await this.store.after("kv",sweep.after,historyPage)).filter(r=>r?.key?.startsWith(prefix));
+      for(const ref of refs) {
+        sweep.after=ref.key;
+        if(ref.tuple.startsWith("context/")) {try{const c=convs.get(ref.conv);if(c){await context(c);await clear(ref.tuple);}}catch(e){if(e instanceof StoreConflict)throw e;}}
+        else {
+          let row=await this.groupRead(checks,ref.dir,ref.id);
+          if(!row&&ref.dir==="inbox") {const lid=ref.tuple.split("/").slice(-2).join("/"),seen=await this.groupRead(checks,"lids",lid);if(seen)row=await this.groupRead(checks,"inbox",seen.id);}
+          if(row)await queue(row,ref.dir==="outbox");
+        }
+      }
+      pendingMore=refs.length===historyPage;if(!pendingMore)sweep.done=true;
+    }
+    const next={...j,own_human:this.fp,catchup:p};
+    if(p.stage==="tail"&&p.legacy_running) {next.state="done";next.done=convs.size;next.total=convs.size;if(p.older)next.pos={conv:p.older[0],ms:p.older[1],id:p.older[2]};p.legacy_running=false;}
+    // IndexedDB key order is random envelope ID order. Reuse the existing
+    // durable outbox ordering field for proof/dependency/recent-page order.
+    if(copies.length) {let order=Math.max(p.order||0,this.now());for(const c of copies)c.send_order=++order;p.order=order;}
+    book[dev.address]=next;
+    if(JSON.stringify(next)!==JSON.stringify(j))ops.push({s:"kv",k:"history",v:book});
+    if(ops.length||copies.length) {
+      await this.store.write([...copies.map(c=>({s:"outbox",k:c.id,v:c})),...ops],checks);
+      this.changed();if(this.connected)this.queueOutbox();
+    }
+    return p.stage!=="tail"||tail.length===historyPage||pendingMore||groups.length>1;
   }
 
   // Reuse original signed group journals and existing encrypted carriers.
@@ -1936,6 +2125,7 @@ export class Engine {
     await put(this.store, "persons", next.person, next);
     await this.pinDevices(next);
     this.changed();
+    this.runHistory().catch(()=>{}); // newly verified host/member proof may unblock a deferred original
     return next;
   }
 
@@ -4273,6 +4463,7 @@ export class Engine {
       }
       if(ops.readSync)this.syncReadMarks().catch(()=>{});
       if(ops.rootSync){this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});}
+      if(ops.groupCarrier || ops.some(o=>o.s==="inbox"&&historySource(o.v)))this.runHistory().catch(()=>{});
       if (this.connected && ops.some((o) => o.s === "outbox")) this.flushOutbox().catch(() => {}); // history forwarded to your other devices
       if (ops.some((o) => o.s === "kv" && o.v && o.v.serve)) this.runServes().catch(() => {});
       const atts = ops.flatMap((o) => (o.s === "inbox" && o.v && o.v.conv ? (o.v.attachments || []).filter((a) => a.blob) : []));
@@ -4587,17 +4778,17 @@ export class Engine {
       attachments: attachments.length ? attachments : undefined, files: files.length ? files.map((f) => ({ ...f, uploaded: false })) : undefined, state: "queued", detail: "" };
   }
 
-  async historyCopy(dev, c, item) {
+  async historyCopy(dev, c, item, checks=[]) {
     if(c.kind==="group") {
-      const {packet}=await this.groupTurnEvidence(c.id),members=await this.dmMembers(c),stamp=members.epochs.get(this.fp);
+      const {packet}=await this.groupTurnEvidence(c.id,checks),members=await this.dmMembers(c,null,checks),stamp=members.epochs.get(this.fp);
       if(!members.get(this.me.person)?.devices.some(d=>d.address===dev.address&&d.fingerprint===dev.fingerprint))throw Error("Group history goes only to exact current own linked device.");
-      const source=await this.store.get(item.from===this.address&&item.from_key===this.fp?"outbox":"inbox",item.id);
+      const source=await this.groupRead(checks,item.from===this.address&&item.from_key===this.fp?"outbox":"inbox",item.id);
       if(!source||source.conv!==c.id)throw Error("Original group history source is unavailable.");
       const original=this.itemOf(source,!!source.to);
       if(wire.historyJSON({...original,group_admission:undefined,send_group:undefined})!==wire.historyJSON({...item,group_admission:undefined,send_group:undefined}))throw Error("Group history differs from its exact source row.");
       item={...item,send_group:original.send_group,group_admission:source.to?stamp:source.group_admission};
       if(item.group_admission!==stamp)throw Error("Historical group source admission changed.");
-      if(item.pid||item.ref)await this.groupParticipationHistoryCheck(c.id,item,{address:this.address,fingerprint:this.fp});
+      if(item.pid||item.ref)await this.groupParticipationHistoryCheck(c.id,item,{address:this.address,fingerprint:this.fp},checks);
       item={...item,send_group:await this.sendGroupCopy(dev.address,await this.pinned(dev.address),item.send_group)};
       const rec=await this.groupDataCopy(packet,"history",wire.historyJSON(item),dev);rec.group_history=true;rec.send_group_wire=!!item.send_group;return rec;
     }

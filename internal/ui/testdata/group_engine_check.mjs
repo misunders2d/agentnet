@@ -47,7 +47,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    throw Error('unexpected fixture fetch '+u.pathname);
   };
   const recovery=new Set(),track=engine=>{const run=engine.recoverGroupIntents.bind(engine);engine.recoverGroupIntents=(...args)=>{const work=run(...args);recovery.add(work);work.then(()=>recovery.delete(work),()=>recovery.delete(work));return work;};};
-  const drain=async()=>{if(e.retrying)await e.retrying;if(e.disclosing)await e.disclosing;while(recovery.size)await Promise.allSettled([...recovery]);};
+  const drain=async()=>{if(e.retrying)await e.retrying;if(e.disclosing)await e.disclosing;while(recovery.size)await Promise.allSettled([...recovery]);if(e.historyRun)await e.historyRun;if(e.erasing)await e.erasing;};
   let e=new Engine({store:st,base:'http://127.0.0.1:1',fetch});track(e);e.keys=keys;e.address=address;e.fp=await wire.fingerprint(pub);e.realm=root.realm;
   for(const raw of [...v.challenge.rosters,v.invited_roster]){const r=await wire.parseRoster(raw);await wire.verifyFirst(r);const p=await e.personRecord([r],r.person===roster.person?'self':'pinned',null);if(r.person===roster.person){e.me=p;await st.write([{s:'kv',k:'person',v:p}]);}else await st.write([{s:'persons',k:p.person,v:p}]);await e.pinDevices(p);}
   await st.write([{s:'kv',k:'identity',v:{keys,address,fingerprint:e.fp}}]);
@@ -59,7 +59,7 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
   };
   return {get e(){return e;},st,name,receive,make,blobs,receipts,mode:x=>mode=x,extraChains,
    async reload(){await drain();st.close();st=realIDB?await openIDB(name):st;e=new Engine({store:st,base:'http://127.0.0.1:1',fetch});track(e);await e.load();e.realm=root.realm;this.st=st;},
-   async close(){await drain();st.close();if(realIDB)await new Promise((res,rej)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=res;r.onerror=()=>rej(r.error);r.onblocked=()=>rej(Error('fixture database blocked after '+labels.at(-1)));});}};
+   async close(){await drain();st.close();if(realIDB)await new Promise((res,rej)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=res;r.onerror=()=>rej(r.error);/* close is pending until active read transactions finish; onsuccess proves deletion. */});}};
  };
  const quiet=async(w)=>{for(const s of ['inbox','outbox','convs','lids'])check((await w.st.all(s)).length===0,'quiet '+s);check((await w.e.overview()).threads.length===0,'no visible threads');for(const x of await w.st.all('held'))check(!('body'in x)&&!('plaintext'in x),'held has ciphertext only');for(const x of await w.st.all('files'))check(x.ct instanceof Uint8Array&&!('body'in x),'files ciphertext only');};
  let w;
@@ -99,6 +99,28 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    const remove=(await w.st.all('inbox')).map(r=>({s:'inbox',k:r.id}));if(remove.length)await w.st.write(remove);
   }
   await w.close();
+  // Storage order must remain distinct from history display order. A v3
+  // database upgrades in place; later read-state writes create no new arrival.
+  {
+   const name='agentnet-history-upgrade-'+wire.newID(),a={id:wire.newID(),lid:wire.newID(),conv,at:200,kind:'message',body:'newer display'},b={id:wire.newID(),lid:wire.newID(),conv,at:100,kind:'message',body:'older delayed display'};
+   let st;
+   if(realIDB) {
+    const old=await new Promise((resolve,reject)=>{const request=indexedDB.open(name,3);request.onupgradeneeded=()=>{for(const s of ['kv','pins','persons','convs','inbox','outbox','held','lids','receipts','files','erased'])request.result.createObjectStore(s);};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+    await new Promise((resolve,reject)=>{const tx=old.transaction('inbox','readwrite');tx.objectStore('inbox').put(a,a.id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});old.close();st=await openIDB(name);
+   } else {st=memoryStore();await st.write([{s:'inbox',k:a.id,v:a}]);}
+   await st.write([{s:'inbox',k:b.id,v:b}]);
+   const ordered=await st.historyRows('inbox',{conv,reverse:true}),arrivals=await st.historyRows('inbox',{arrival:true});
+   check(ordered.map(r=>r.id).join()===a.id+','+b.id&&arrivals.map(r=>r.id).join()===a.id+','+b.id,'upgraded bounded indexes separate display order from late acceptance order');
+   const stored=await st.get('inbox',a.id),before=await st.get('kv','history-arrival');await st.write([{s:'inbox',k:a.id,v:{...stored,read:true}}]);
+   check(await st.get('kv','history-arrival')===before&&(await st.get('inbox',a.id)).history_arrival===stored.history_arrival,'read-state update preserves original durable arrival');
+   const rejected={...a,id:wire.newID(),lid:wire.newID()};let conflict=false;
+   try{await st.write([{s:'inbox',k:rejected.id,v:rejected}],[{s:'inbox',k:a.id,v:stored}]);}catch{conflict=true;}
+   check(conflict&&!await st.get('inbox',rejected.id)&&await st.get('kv','history-arrival')===before,'aborted storage transaction advances neither arrival watermark nor accepted row');
+   const other=realIDB?await openIDB(name):st,x={...a,id:wire.newID(),lid:wire.newID()},y={...a,id:wire.newID(),lid:wire.newID()};
+   await Promise.all([st.write([{s:'inbox',k:x.id,v:x}]),other.write([{s:'inbox',k:y.id,v:y}])]);
+   check(new Set([(await st.get('inbox',x.id)).history_arrival,(await st.get('inbox',y.id)).history_arrival]).size===2&&await st.get('kv','history-arrival')===before+2,'competing store connections allocate distinct durable arrivals');
+   if(other!==st)other.close();st.close();if(realIDB)await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);});
+  }
   // Chat alerts use verified current members, not a separate DM/grant.
   w=await world();await w.receive(c.proof);await w.receive(c.context);
   {
@@ -358,6 +380,17 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
    for(const row of copies){for(const file of row.files||[])target.blobs.set(file.attachment.blob.id,file.ct);await target.receive({envelope:row.envelope});}
    const original=v.participations.ordinary.inner,stored=await target.st.get('inbox',original.id);
    check(stored?.lid===original.lid&&stored.claimed_key===await wire.fingerprint(alicePub)&&stored.history&&stored.replica&&stored.state===''&&stored.synced_from===address,'discovered browser snapshot retains exact original attribution and remains inert');
+   // The approver is now offline. A delayed accepted original arrives after
+   // this sender completed the phone's snapshot; its old display timestamp
+   // cannot strand it behind that snapshot's cursor.
+   const delayed={...w.e.itemOf(await w.st.get('inbox',original.id),false),id:wire.newID(),lid:wire.newID(),body:'late accepted person history',ts:original.ts-3600};
+   const delayedEnvelope=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:approverAddress,to:address,ts:1700000200,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:wire.historyJSON(delayed)},approverKeys,pub);
+   await w.reload();w.e.groupSupport=async()=>{};await w.receive({envelope:delayedEnvelope});await w.e.runHistory();
+   const onward=(await w.st.all('outbox')).filter(r=>r.to===phoneAddress&&r.sub==='history'&&wire.parseHistory(r.body).lid===delayed.lid);
+   check(onward.length===1,'late accepted original follows completed own-human snapshot after restart');
+   await target.receive({envelope:onward[0].envelope});
+   const lateStored=await target.st.get('inbox',delayed.id);
+   check(lateStored?.lid===delayed.lid&&lateStored.claimed_key===await wire.fingerprint(alicePub)&&lateStored.history&&lateStored.state==='','late accepted original keeps author and remains inert on phone');
    await target.close();
    const checkpoint=JSON.stringify(await w.e.historyBook()),count=(await w.st.all('outbox')).length;
    await w.e.runHistory();await w.reload();w.e.groupSupport=async()=>{};await w.e.runHistory();
@@ -390,15 +423,77 @@ export async function checks(v, realIDB=false, requireWarmRecovery=false) {
     check(JSON.stringify((await w.e.historyBook())[phoneAddress])===JSON.stringify(kept),'browser discovery preserves existing '+state+' job and key/cursor/policy');
    }
    const running={...savedBook[phoneAddress],state:'running',pos:null},dev=valid.devices.find(d=>d.address===phoneAddress),originalWrite=w.st.write.bind(w.st);let raced=false;
+   const racingItem={...delayed,id:wire.newID(),lid:wire.newID(),body:'accepted before concurrent human role loss'};
+   const racingEnvelope=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:approverAddress,to:address,ts:1700000200,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:wire.historyJSON(racingItem)},approverKeys,pub);
+   const admitted=await w.e.admitInner(racingEnvelope,wire.parseEnvelope(racingEnvelope));await w.st.write(admitted,admitted.checks);
    await w.st.write([{s:'kv',k:'history',v:{[phoneAddress]:running}}]);
    w.st.write=async(ops,expected)=>{if(!raced&&ops.some(o=>o.s==='outbox'&&o.v?.sub==='history')){raced=true;const changed={...valid,human_keys:valid.human_keys.filter(fp=>fp!==phoneFP)};await originalWrite([{s:'kv',k:'person',v:changed}]);}return originalWrite(ops,expected);};
    let refused=false;try{await w.e.historyStep(dev,running);}catch(e){refused=e.message==='storage changed during verification';}finally{w.st.write=originalWrite;}
    check(raced&&refused&&(await w.st.all('outbox')).length===count&&(await w.e.historyBook())[phoneAddress].state==='running','browser transaction aborts new history and cursor when human role changes after preparation');
    await w.st.write([{s:'kv',k:'person',v:valid},{s:'kv',k:'history',v:savedBook}]);w.e.me=valid;
+   await w.e.runHistory();const restoredCheckpoint=JSON.stringify(await w.e.historyBook());
    const reconcile=w.e.reconcileHistory.bind(w.e);let scans=0;
    w.e.reconcileHistory=async()=>{scans++;await reconcile();if(scans===1)w.e.runHistory();};
    await w.e.runHistory();w.e.reconcileHistory=reconcile;
-   check(scans===2&&JSON.stringify(await w.e.historyBook())===checkpoint,'history wake during an active browser pass is drained once without changing completed jobs');
+   check(scans===2&&JSON.stringify(await w.e.historyBook())===restoredCheckpoint,'history wake during an active browser pass is drained once without changing completed jobs');
+
+   // More than one page of legitimately admitted older originals: a newly
+   // linked reader gets the newest useful page before resumable backfill.
+   const pageItems=[],at=Math.max(...(await w.st.all('inbox')).map(r=>r.at||0))+1;
+   const accept=async item=>{const envelope=await wire.seal({v:2,id:wire.newID(),lid:wire.newID(),from:approverAddress,to:address,ts:1700000200,kind:'message',conv,root:wire.rootJSON(root),sub:'history',replica:true,body:wire.historyJSON(item)},approverKeys,pub);const ops=await w.e.admitInner(envelope,wire.parseEnvelope(envelope));await w.st.write(ops,ops.checks);};
+   for(let i=0;i<57;i++){const item={...delayed,id:wire.newID(),lid:wire.newID(),at:at+i,body:'newest-page-'+i,...(i===56?{reply_to:pageItems[0].id}:{})};await accept(item);pageItems.push(item);}
+   const fourthAddress='browser/fourth',fourthKeys=await wire.newKeys(),fourthPub=await wire.publicEntry(fourthKeys,fourthAddress),fourthFP=await wire.fingerprint(fourthPub);
+   const fourthRoster=await wire.nextRoster(keys,address,withPhone,[...withPhone.devices,fourthPub],await wire.joinConsent(fourthKeys,fourthAddress,roster.person,3,await wire.rosterHash(withPhone)),roster.label,[...await wire.rosterHumans(withPhone),fourthFP]);
+   await wire.verifyNext(fourthRoster,withPhone);const four=await w.e.personRecord([...chain,fourthRoster],'self',valid);w.e.me=four;
+   w.extraChains.set(roster.person,[...chain,fourthRoster].map(r=>JSON.parse(wire.rosterJSON(r))));await w.st.write([{s:'kv',k:'person',v:four}]);await w.e.pinDevices(four);await w.e.reconcileHistory();
+   const fourth=four.devices.find(d=>d.address===fourthAddress),fourthCopies=()=>w.st.all('outbox').then(rows=>rows.filter(r=>r.to===fourthAddress&&r.sub==='history').sort((a,b)=>(a.send_order??a.at)-(b.send_order??b.at)));
+   await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
+   const firstPage=(await fourthCopies()).map(r=>wire.parseHistory(r.body));
+   check(firstPage.length===51&&firstPage[0].lid===pageItems[0].lid&&firstPage.slice(1).every((h,i)=>h.body==='newest-page-'+(56-i)),'first bounded group history page is newest first with its exact old reply dependency queued before display');
+   const during={...delayed,id:wire.newID(),lid:wire.newID(),at:at-86400000,body:'late arrival while older backfill runs'};await accept(during);
+   await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
+   check((await fourthCopies()).some(r=>wire.parseHistory(r.body).lid===during.lid),'arrival tail supplies old timestamp immediately while recent/older backfill remains');
+   await w.reload();w.e.groupSupport=async()=>{};await w.e.runHistory();
+   const complete=await fourthCopies();
+   check(pageItems.every(item=>complete.filter(r=>wire.parseHistory(r.body).lid===item.lid).length===1)&&complete.filter(r=>wire.parseHistory(r.body).lid===during.lid).length===1,'recent/older/tail resume after restart with each exact original queued once');
+   const oldPos=JSON.stringify((await w.e.historyBook())[fourthAddress].pos);
+   // A missing group context must retain its source ref while a healthy DM
+   // continues in the same page. Restored proof wakes the existing deferral.
+   const blocked={...delayed,id:wire.newID(),lid:wire.newID(),at:at-86400001,body:'wait for exact context'};await accept(blocked);
+   const alice=await w.st.get('persons',v.challenge.rosters[0].person),dmRoot=await wire.newRoot(keys,{person:four.person,roster:four.hash,address,fingerprint:w.e.fp},{person:alice.person,roster:alice.hash}),dm=await wire.rootID(dmRoot);
+   const dmInner={v:2,id:wire.newID(),lid:wire.newID(),from:alicePub.address,to:address,ts:1700000000,kind:'message',conv:dm,root:wire.rootJSON(dmRoot),body:'healthy other chat while group proof waits',origin:'ui'};
+   const dmEnvelope=await wire.seal(dmInner,aliceKeys,pub),dmOps=await w.e.admitInner(dmEnvelope,wire.parseEnvelope(dmEnvelope));await w.st.write(dmOps,dmOps.checks);
+   const group=await w.st.get('kv','group/'+conv);await w.st.write([{s:'kv',k:'group/'+conv,v:{...group,context:null}}]);
+   const more=await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
+   check(!more&&(await fourthCopies()).some(r=>wire.parseHistory(r.body).lid===dmInner.lid)&&!(await fourthCopies()).some(r=>wire.parseHistory(r.body).lid===blocked.lid),'missing exact group context defers one source without blocking healthy chat or busylooping');
+   const deferred=await w.st.prefix('kv','history-deferred/'+fourthFP+'/');
+   check(deferred.some(r=>r.id===blocked.id)&&JSON.stringify((await w.e.historyBook())[fourthAddress].pos)===oldPos,'unavailable accepted source stays durable while legacy completed cursor is preserved');
+   const heldCount=(await fourthCopies()).length;await w.e.historyStep(fourth,(await w.e.historyBook())[fourthAddress]);
+   check((await fourthCopies()).length===heldCount,'unchanged proof does not repeat a deferred attempt during internal drain');
+   await w.st.write([{s:'kv',k:'group/'+conv,v:group}]);await w.e.runHistory();
+   check((await fourthCopies()).filter(r=>wire.parseHistory(r.body).lid===blocked.lid).length===1&&!(await w.st.prefix('kv','history-deferred/'+fourthFP+'/')).some(r=>r.id===blocked.id),'existing proof wake recovers retained source exactly once after context restoration');
+   // A v1 completed job had neither acceptance watermark nor copy metadata.
+   // Upgrade reconciles accepted rows once, retaining its exact old cursor.
+   const missed={...delayed,id:wire.newID(),lid:wire.newID(),at:at-86400002,body:'accepted before upgrade after legacy snapshot completed'};await accept(missed);
+   const legacyBook=await w.e.historyBook(),legacy={...legacyBook[fourthAddress]};delete legacy.catchup;
+   const copyKey='history-copy/'+fourthFP+'/'+conv+'/'+pageItems[0].from_key+'/'+pageItems[0].lid;
+   await w.st.write([{s:'kv',k:'history',v:{...legacyBook,[fourthAddress]:legacy}},{s:'kv',k:copyKey}]);await w.e.runHistory();
+   const migrated=await fourthCopies();
+   check(migrated.filter(r=>wire.parseHistory(r.body).lid===missed.lid).length===1&&JSON.stringify((await w.e.historyBook())[fourthAddress].pos)===oldPos,'one-time accepted-row upgrade fills pre-upgrade gap without resetting completed cursor');
+   check(migrated.filter(r=>wire.parseHistory(r.body).lid===pageItems[0].lid).length===2,'legacy missing tuple evidence reissues one inert copy with the same original logical identity');
+   await w.e.runHistory();check((await fourthCopies()).length===migrated.length,'completed v2 migration does not resnapshot on later wake');
+   const ledger=await w.st.get('kv',copyKey),tuple=conv+'/'+pageItems[0].from_key+'/'+pageItems[0].lid,deferredKey='history-deferred/'+fourthFP+'/'+tuple;
+   await w.st.write([{s:'kv',k:copyKey,v:{...ledger,hash:'0'.repeat(64)}},{s:'kv',k:deferredKey,v:{key:deferredKey,tuple,conv,id:pageItems[0].id,dir:'inbox'}}]);await w.e.runHistory();
+   check((await fourthCopies()).length===migrated.length&&(await w.st.get('kv',deferredKey))?.why==='conflicting_duplicate'&&(await w.st.get('kv',copyKey)).hash==='0'.repeat(64),'conflicting local tuple evidence stays deferred without a new carrier or overwritten authority');
+   await w.st.write([{s:'kv',k:copyKey,v:ledger}]);await w.e.runHistory();
+   check(!await w.st.get('kv',deferredKey)&&(await fourthCopies()).length===migrated.length,'restored exact tuple evidence clears deferral without duplicate sending');
+   const reader=await world();reader.extraChains.set(roster.person,[...chain,fourthRoster].map(r=>JSON.parse(wire.rosterJSON(r))));
+   reader.e.keys=fourthKeys;reader.e.address=fourthAddress;reader.e.fp=fourthFP;reader.e.me=four;
+   await reader.st.write([{s:'kv',k:'identity',v:{keys:fourthKeys,address:fourthAddress,fingerprint:fourthFP}},{s:'kv',k:'person',v:four}]);await reader.e.pinDevices(four);
+   for(const row of (await w.st.all('outbox')).filter(r=>r.to===fourthAddress)){for(const file of row.files||[])reader.blobs.set(file.attachment.blob.id,file.ct);await reader.receive({envelope:row.envelope});}
+   const received=await reader.st.all('inbox');
+   check([...pageItems,during,blocked,missed].every(item=>received.filter(r=>r.lid===item.lid&&r.claimed_key===item.from_key&&r.history&&r.state==='').length===1),'actual receiver stores each reordered/migrated original once under original author with no execution');
+   await reader.close();
   }
   await w.close();
   // Actual native HistoryItem bytes, forwarded by a newly linked own key.
