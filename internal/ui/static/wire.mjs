@@ -27,6 +27,7 @@ export const CapHumanParticipation = "hgp1"; // protocol.CapHumanParticipation: 
 export const CapSendGroup = "sg1"; // optional signed presentation; never a routing or execution capability
 export const CapRoom = "rm1"; // protocol.CapRoom: reads room participation (ROOM_V1 §2); implies RoomImplies
 export const CapOwnSyncV2 = "own2", SubInvitationSync = "invitation-sync";
+export const SubTopicSync = "topic-sync";
 export const CapReadSync = "rd1", SubReadSync = "read-sync";
 export const CapRootSync = "crs1", SubRootSync = "root-sync"; // explicit quiet DM-root copies, current own-human devices; NOT implied by rm1
 export const MaxHumanAudience = 16, MaxHumanProof = 32;
@@ -680,9 +681,9 @@ async function checkV2(n) {
     if (n.target && (!n.target.agent_id || !["question", "task"].includes(n.kind) || n.target.address !== n.to || !validFingerprint(n.target.fingerprint))) throw new Error("a device message target must name an agent on its exact recipient");
     return;
   }
-  if(n.sub===SubReadSync || n.sub===SubInvitationSync) {
+  if(n.sub===SubReadSync || n.sub===SubInvitationSync || n.sub===SubTopicSync) {
     if(n.conv || n.lid || n.root || n.kind!=="message" || !n.replica || n.target || n.pid || n.attachments.length || n.reply_to || n.origin || n.emotion || n.status || n.fan || n.human || n.receiver_route || n.agent_id || n.topic || n.topic_event || n.topic_done || n.quote)throw Error("read sync: quiet rootless reference carrier required");
-    if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
+    if(n.sub===SubTopicSync){if(n.session||n.fallback)throw Error("topic sync: quiet rootless title carrier required");parseTopicSync(n.body);}else if(n.sub===SubInvitationSync)await validateInvitationSync(parseInvitationSync(n.body));else parseReadSync(n.body);return;
   }
   if (!validHash(n.conv) || !validID(n.lid)) throw new Error("invalid conversation or logical id");
   if (!n.root || utf8.encode(n.root).length > convRootSizeLimit(n.root)) throw new Error("missing or oversized conversation root");
@@ -770,7 +771,7 @@ export async function seal(m, keys, recipient) {
   // A turn that asks for the recipient's attention names its channel
   // (envelope.SealAttention); only version 2 carries it.
   const chan = m.chan || "";
-  if ((inner.sub === SubRootSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync) && chan) throw new Error("root sync carries no attention");
+  if ((inner.sub === SubRootSync || inner.sub === SubReadSync || inner.sub === SubInvitationSync || inner.sub === SubTopicSync) && chan) throw new Error("root sync carries no attention");
   if (chan && (v !== Version2 || !validChannel(chan))) throw new Error("attention needs a version 2 message and a notification channel");
   const env = { v, id: m.id, from: m.from, to: m.to, ts: m.ts, kind: m.kind, ct,
     blobs: attachments.map((a) => a.blob), session: inner.session, fallback: inner.fallback, attn: !!chan, chan };
@@ -857,7 +858,7 @@ export async function open(json, keys, selfAddress, sender) {
     throw new Error("encrypted header does not match signed envelope");
   }
   await checkV2(n);
-  if ((n.sub === SubRootSync || n.sub === SubReadSync || n.sub === SubInvitationSync) && e.attn) throw new Error("root sync carries no attention");
+  if ((n.sub === SubRootSync || n.sub === SubReadSync || n.sub === SubInvitationSync || n.sub === SubTopicSync) && e.attn) throw new Error("root sync carries no attention");
   if (n.attachments.length !== e.blobs.length) throw new Error("encrypted manifest does not match signed attachments");
   n.attachments.forEach((a, i) => {
     const b = e.blobs[i];
@@ -1006,6 +1007,17 @@ export function parseReadSync(json) {
   const x=strict(ref,"read reference",{conv:"string",fingerprint:"string",lid:"string"});
   if(typeof x.conv!=="string" || x.conv && !validHash(x.conv) || !validFingerprint(x.fingerprint) || !validID(x.lid))throw Error("read sync: invalid reference");
   const key=x.conv+"|"+x.fingerprint+"|"+x.lid;if(seen.has(key))throw Error("read sync: duplicate reference");seen.add(key);return x;
+ });return r;
+}
+export const topicTitle = s => String(s||"").split(/\p{White_Space}+/u).filter(Boolean).join(" ");
+export function parseTopicSync(json) {
+ const r=strictRecord(json,65536,"topic sync",{v:"number",person:"string",roster:"string",titles:"array"});
+ if(r.v!==1||!validID(r.person)||!validHash(r.roster)||!r.titles?.length||r.titles.length>64)throw Error("topic sync: invalid owner or titles");
+ const seen=new Set();r.titles=r.titles.map(title=>{
+  const x=strict(title,"topic title",{scope:"string",topic:"string",title:"string",rev:"number",writer:"string"});
+  const key=x.scope+"|"+x.topic;
+  if(!validHash(x.scope)&&!validAddress(x.scope)||!validID(x.topic)||!validFingerprint(x.writer)||!Number.isSafeInteger(x.rev)||x.rev<1||typeof x.title!=="string"||[...x.title].length>120||x.title!==topicTitle(x.title)||seen.has(key))throw Error("topic sync: invalid or duplicate title");
+  seen.add(key);return x;
  });return r;
 }
 function strictRecord(json, max, what, fields) {

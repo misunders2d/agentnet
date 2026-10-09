@@ -1321,7 +1321,7 @@ export class Engine {
       this.changed();
       await this.replayErased({ address, fingerprint }).catch(() => {}); // what was deleted here stays deleted there
     }
-    this.syncRoots().catch(() => {});this.syncReadMarks().catch(()=>{});this.syncInvitations().catch(()=>{});
+    this.syncRoots().catch(() => {});this.syncReadMarks().catch(()=>{});this.syncTopicTitles().catch(()=>{});this.syncInvitations().catch(()=>{});
     this.runHistory().catch(() => {});
   }
 
@@ -1355,7 +1355,7 @@ export class Engine {
   }
 
   readRef(m) {
-    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
+    if(!m || m.local || m.control || m.ref || m.aside || [wire.SubTopicSync,wire.SubInvitationSync,wire.SubReadSync,wire.SubRootSync,wire.SubDriveSpace,wire.SubGroupProof,wire.SubGroupContext,wire.SubGroupInvite,wire.SubGroupConsent,wire.SubGroupWithdrawal].includes(m.sub))return null;
     const ref={conv:m.conv||"",fingerprint:m.fp||m.claimed_key||"",lid:m.lid||m.id};
     if(!wire.validFingerprint(ref.fingerprint) || !wire.validID(ref.lid))return null;
     return ref;
@@ -1432,6 +1432,82 @@ export class Engine {
       }
     }
     ops.checks=checks;ops.readSync=true;return ops;
+  }
+  topicTitleKey(person,t) { return "topic-title/"+person+"/"+t.scope+"/"+t.topic; }
+  topicTitleCopyKey(person,fp,t) { return "topic-title-copy/"+person+"/"+fp+"/"+t.scope+"/"+t.topic; }
+  topicTitleOrder(a,b) { return !b?1:a.rev-b.rev||(a.writer<b.writer?-1:a.writer>b.writer?1:0); }
+  async topicTitleOps(scope,topic,title,checks=[],seed=false) {
+    const own=await this.groupRead(checks,"kv","person");
+    if(!own||own.state!=="self"||!own.human_keys?.includes(this.fp)||!own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return [];
+    const k=this.topicTitleKey(own.person,{scope,topic}),old=await this.groupRead(checks,"kv",k),fact={scope,topic,title,rev:seed?1:Math.max(old?.rev||0,1)+1,writer:this.fp};
+    wire.parseTopicSync(JSON.stringify({v:1,person:own.person,roster:own.hash,titles:[fact]}));
+    return [{s:"kv",k,v:{...fact,key:k,person:own.person}}];
+  }
+  syncTopicTitles() {
+    this.topicSyncAgain=true;
+    if(!this.topicSyncRun)this.topicSyncRun=(async()=>{do{this.topicSyncAgain=false;try{await this.syncTopicPages();}catch(e){if(e instanceof StoreConflict)this.topicSyncAgain=true;else throw e;}}while(this.topicSyncAgain);})().finally(()=>{this.topicSyncRun=null;});
+    return this.topicSyncRun;
+  }
+  async syncTopicPages() {
+    const recoveryChecks=[],own=await this.groupRead(recoveryChecks,"kv","person");
+    if(!own||own.state!=="self"||!own.human_keys?.includes(this.fp)||!own.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
+    const recovered="topic-title-recovered/"+own.person;
+    if(!await this.groupRead(recoveryChecks,"kv",recovered)){
+      const ops=[];
+      for(const row of await this.store.prefix("kv","topic/")){
+        if(row?.type!=="topic-state"||!row.title||!wire.validID(row.topic)||!wire.validHash(row.peer)&&!wire.validAddress(row.peer))continue;
+        const local=await this.groupRead(recoveryChecks,"kv","topic/"+row.peer+"/"+row.topic),k=this.topicTitleKey(own.person,{scope:row.peer,topic:row.topic});
+        if(local?.title&&!await this.groupRead(recoveryChecks,"kv",k))ops.push(...await this.topicTitleOps(row.peer,row.topic,wire.topicTitle(local.title),recoveryChecks,true));
+      }
+      ops.push({s:"kv",k:recovered,v:{done:true}});await this.store.write(ops,recoveryChecks);
+    }
+    const prefix="topic-title/"+own.person+"/";let after=prefix;
+    for(;;){
+      const page=(await this.store.after("kv",after,64)).filter(r=>r?.key?.startsWith(prefix));if(!page.length)return;after=page.at(-1).key;
+      const checks=[],current=await this.groupRead(checks,"kv","person"),ops=[];
+      if(!current||current.person!==own.person||current.state!=="self"||!current.human_keys?.includes(this.fp)||!current.devices.some(d=>d.address===this.address&&d.fingerprint===this.fp))return;
+      for(const dev of current.devices){
+        if(dev.address===this.address||!current.human_keys.includes(dev.fingerprint))continue;
+        const titles=[];
+        for(const saved of page){
+          const fact=await this.groupRead(checks,"kv",saved.key);if(!fact)continue;
+          const ck=this.topicTitleCopyKey(current.person,dev.fingerprint,fact),copy=await this.groupRead(checks,"kv",ck),row=copy?.id&&await this.groupRead(checks,"outbox",copy.id);
+          if(copy&&this.topicTitleOrder(fact,copy)===0&&fact.title===copy.title&&(copy.seen||row&&["queued","waiting","custody","delivered"].includes(row.state)))continue;
+          const {scope,topic,title,rev,writer}=fact;titles.push({scope,topic,title,rev,writer});
+        }
+        if(!titles.length)continue;
+        const body=JSON.stringify({v:1,person:current.person,roster:current.hash,titles}),r=wire.parseTopicSync(body);
+        try{await this.readSyncAuthority(r,this.address,this.fp,dev.address,dev.fingerprint,checks);}catch{continue;}
+        const id=wire.newID(),at=this.now(),envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",sub:wire.SubTopicSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
+        ops.push({s:"outbox",k:id,v:{id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapOwnSyncV2,sub:wire.SubTopicSync,body,envelope,at,state:"queued",aside:true}});
+        for(const t of titles)ops.push({s:"kv",k:this.topicTitleCopyKey(current.person,dev.fingerprint,t),v:{...t,id}});
+      }
+      if(ops.length){await this.store.write(ops,checks);this.changed();if(this.connected)this.queueOutbox();}
+      if(page.length<64)return;
+    }
+  }
+  async topicSyncGate(rec) {
+    await this.refreshPerson(this.me);const r=wire.parseTopicSync(rec.body);
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);
+    const pin=await this.store.get("pins",rec.to),features=await this.features(),profile=await this.profile(rec.to);
+    if(!features.includes("env2")||!features.includes("caps")||!await wire.profileSupports(profile,rec.to,(await this.pubOf(pin)).sign_key,wire.CapOwnSyncV2))throw Object.assign(Error("This device needs to update AgentNet to synchronize topic names."),{code:"topic_sync_unsupported"});
+    await this.readSyncAuthority(r,this.address,this.fp,rec.to,rec.recipient_fp);return {why:"",pin};
+  }
+  async admitTopicSync(n,env,pin) {
+    const r=wire.parseTopicSync(n.body),checks=[],ops=[];
+    if(!this.me||this.me.person!==r.person)throw new Hold("invalid","Topic names belong to another person.");
+    await this.refreshPerson(this.me);try{await this.readSyncAuthority(r,env.from,pin.fingerprint,this.address,this.fp,checks);}catch(e){throw new Hold("invalid",e.message);}
+    for(const t of r.titles){
+      const k=this.topicTitleKey(r.person,t),old=await this.groupRead(checks,"kv",k),order=this.topicTitleOrder(t,old);
+      if(order===0&&t.title!==old.title)throw new Hold("conflicting_duplicate","Topic name has a conflicting revision.");
+      if(order>0){
+        const lk="topic/"+t.scope+"/"+t.topic,local=await this.groupRead(checks,"kv",lk);
+        ops.push({s:"kv",k,v:{...t,key:k,person:r.person}},{s:"kv",k:lk,v:{...local,type:"topic-state",peer:t.scope,topic:t.topic,title:t.title}});
+      }
+      const ck=this.topicTitleCopyKey(r.person,pin.fingerprint,t),copy=await this.groupRead(checks,"kv",ck);
+      if(this.topicTitleOrder(t,copy)>=0)ops.push({s:"kv",k:ck,v:{...t,seen:true}});
+    }
+    ops.checks=checks;ops.topicSync=true;return ops;
   }
   invitationViewKey(fp,id) { return "own-invitation/"+fp+"/"+id; }
   syncInvitations() {
@@ -2118,7 +2194,7 @@ export class Engine {
       await put(this.store, "kv", "person", this.me);
       await this.pinDevices(this.me);
       this.changed();
-      this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});this.syncInvitations().catch(()=>{});
+      this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});this.syncTopicTitles().catch(()=>{});this.syncInvitations().catch(()=>{});
       this.runHistory().catch(()=>{});
       return this.me;
     }
@@ -2217,7 +2293,7 @@ export class Engine {
       { person: them.person, roster: them.hash });
     const id = await wire.rootID(c);
     await put(this.store, "convs", id, { id, root: wire.rootJSON(c), peer: them.person, created: c.created, creator: this.address });
-    await this.syncRoots();await this.syncReadMarks();
+    await this.syncRoots();await this.syncReadMarks();await this.syncTopicTitles();
     this.changed();
     // Starting a DM is deciding on that person: with notifications on, they may alert.
     if ((await this.notifyState()).enabled) this.syncNotify().catch(() => {});
@@ -2374,6 +2450,7 @@ export class Engine {
         const [ok, why] = await this.ctlSupport(rec.to, pin);
         if (!ok) throw Object.assign(Error(why), {code:"control_unsupported"});
       }
+      if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
       if(rec.sub===wire.SubRootSync)await this.rootSyncGate(rec);
@@ -2444,6 +2521,7 @@ export class Engine {
         }
       }
       await this.receiverDeliveryGate(rec);
+      if(rec.sub===wire.SubTopicSync)await this.topicSyncGate(rec);
       if(rec.sub===wire.SubInvitationSync)await this.invitationSyncGate(rec);
       if(rec.sub===wire.SubReadSync)await this.readSyncGate(rec);
       if (!await this.startHandover(rec)) return;
@@ -2454,7 +2532,7 @@ export class Engine {
       if (rec.files) rec.files = rec.files.map((f) => ({ ...f, ct: null }));
     } catch (e) {
       if (e.code === "receiver_redacted") return; // keep the newer exact-scope retention transaction
-      if (e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
+      if (e.code === "receiver_unsupported" || e.code === "read_sync_unsupported" || e.code === "invitation_sync_unsupported" || e.code === "topic_sync_unsupported" || e.code === "control_unsupported" || rec.conv && ["group_invitation_unsupported", "root_sync_unsupported", "agent_identity_unsupported", "human_unsupported", "group_unsupported", "clear_unsupported", "room_unsupported"].includes(e.code)) {
         rec.state = "waiting"; rec.detail = "peer_update: " + e.message;
       } else if (retryable(e)) {
         rec.detail = e.message;
@@ -2526,6 +2604,7 @@ export class Engine {
   async gate(c, rec) {
     try { await this.groupHumanReaderGate(c, rec); }
     catch (e) { return { why: e.message, code: e.code }; }
+    if(rec?.sub===wire.SubTopicSync)return this.topicSyncGate(rec);
     if(rec?.sub===wire.SubInvitationSync)return this.invitationSyncGate(rec);
     if(rec?.sub===wire.SubReadSync)return this.readSyncGate(rec);
     if(rec?.sub===wire.SubRootSync)return this.rootSyncGate(rec);
@@ -3004,7 +3083,7 @@ export class Engine {
 
   // ---- topics: what the person set here, and the All topics list -------------------------------
   // Kept in this device's IndexedDB (kv "topic/<peer>/<id>", type
-  // "topic-state"), like read marks: never sent to another device.
+  // "topic-state"). Private title facts follow own human devices; marks stay local.
 
   async topicLocals() {
     const out = new Map();
@@ -3070,13 +3149,15 @@ export class Engine {
     if (!g) throw new Error("No such topic here.");
     if(what==="delete")return this.deleteThread(peer,id);
     const locals = await this.topicLocals(), was = g.find((m) => locals.has(peer + "/" + m.id));
-    const l = { ...(was ? locals.get(peer + "/" + was.id) : {}), type: "topic-state", peer, topic: id, updated_at: Math.floor(this.now() / 1000) };
+    const checks=[],oldKey="topic/"+peer+"/"+(was?.id||id),prior=await this.groupRead(checks,"kv",oldKey);
+    if(was&&was.id!==id)await this.groupRead(checks,"kv","topic/"+peer+"/"+id);
+    const l = { ...prior, type: "topic-state", peer, topic: id, updated_at: Math.floor(this.now() / 1000) };
     let note;
     if (what === "rename") {
-      const title = String(body.title || "").split(/\s+/).filter(Boolean).join(" ");
+      const title = wire.topicTitle(body.title);
       if ([...title].length > TOPICS.titleMax) throw new Error("A topic's name is at most " + TOPICS.titleMax + " characters.");
       if (title) l.title = title; else delete l.title;
-      note = title ? "Topic renamed on this device." : "Topic named after its first message again.";
+      note = title ? "Topic renamed. The name syncs across your linked devices." : "Topic named after its first message again.";
     } else {
       // count: how many messages the page showed; a mark never covers one the person has not seen (client mark).
       const seen = body.count > 0 && body.count < g.length ? body.count : g.length;
@@ -3084,9 +3165,10 @@ export class Engine {
       note = what === "done" ? (seen === g.length ? "Marked done on this device. A new message makes it active again." : topicNewer) : "Reopened on this device.";
     }
     const ops = [{ s: "kv", k: "topic/" + peer + "/" + id, v: l }];
+    if(what==="rename")ops.push(...await this.topicTitleOps(peer,id,l.title||"",checks));
     if (was && was.id !== id) ops.push({ s: "kv", k: "topic/" + peer + "/" + was.id, v: undefined });
-    await this.store.write(ops);
-    this.changed();
+    await this.store.write(ops,checks);
+    this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});
     return { note };
   }
 
@@ -3138,9 +3220,11 @@ export class Engine {
       for(const [k,n]of names){ops.push({s:"erased",k,v:{conv,key:n.key,lid:n.lid,deletion,shared:false}});this.erased.add(k);}
       try{ops.push(...this.eraseOps(conv,inbox,outbox));await this.store.write(ops);}finally{await this.loadErased();}this.changed();await this.shareErased();return {note:"Deleted for you and your devices. Other people keep their copies."};
     }
-    const key="topic/"+conv+"/"+id,l={...(await this.store.get("kv",key)||{}),type:"topic-state",peer:conv,topic:id};
-    if(what==="rename"){const title=String(body.title||"").split(/\s+/).filter(Boolean).join(" ");if([...title].length>TOPICS.titleMax)throw Error("Topic name too long.");l.title=title;}else Object.assign(l,{mark:"archived",mark_at:Math.floor(this.now()/1000),mark_count:t.count+msgs.filter(m=>m.topic===id&&m.topic_event).length});
-    await put(this.store,"kv",key,l);this.changed();return {note:what==="rename"?"Topic renamed on this device.":"Archived on this device. Nothing deleted."};
+    const key="topic/"+conv+"/"+id,checks=[],l={...(await this.groupRead(checks,"kv",key)||{}),type:"topic-state",peer:conv,topic:id};
+    if(what==="rename"){const title=wire.topicTitle(body.title);if([...title].length>TOPICS.titleMax)throw Error("Topic name too long.");l.title=title;}else Object.assign(l,{mark:"archived",mark_at:Math.floor(this.now()/1000),mark_count:t.count+msgs.filter(m=>m.topic===id&&m.topic_event).length});
+    const ops=[{s:"kv",k:key,v:l}];if(what==="rename")ops.push(...await this.topicTitleOps(conv,id,l.title,checks));
+    await this.store.write(ops,checks);this.changed();if(what==="rename")this.syncTopicTitles().catch(()=>{});
+    return {note:what==="rename"?(l.title?"Topic renamed. The name syncs across your linked devices.":"Topic named after its first message again."):"Archived on this device. Nothing deleted."};
   }
 
   // ---- quiet group proof/current-context carriers (grp1 remains off) ---------------------------
@@ -4569,6 +4653,7 @@ export class Engine {
       if (this.connected && ops.some(o => o.s === "convs" || o.s === "kv" && o.k.startsWith("group/") && o.v?.context || o.s === "inbox" && o.v?.sub === "event")) {
         this.notifyState().then(st => st.enabled ? this.syncNotify() : undefined).catch(() => {});
       }
+      if(ops.topicSync)this.syncTopicTitles().catch(()=>{});
       if(ops.readSync)this.syncReadMarks().catch(()=>{});
       if(ops.rootSync){this.syncRoots().catch(()=>{});this.syncReadMarks().catch(()=>{});}
       if(ops.groupCarrier || ops.some(o=>o.s==="inbox"&&historySource(o.v)))this.runHistory().catch(()=>{});
@@ -4645,6 +4730,7 @@ export class Engine {
     }
     if (n.receiver_route && n.receiver_route.op !== "request") return this.admitReceiverSetup(n, env, pin);
     if (n.v === wire.Version3) return this.admitControl(n, env, pin);
+    if(n.sub===wire.SubTopicSync)return this.admitTopicSync(n,env,pin);
     if(n.sub===wire.SubInvitationSync)return this.admitInvitationSync(n,env,pin);
     if(n.sub===wire.SubReadSync)return this.admitReadSync(n,env,pin);
     if(n.sub===wire.SubRootSync)return this.admitRootSync(n,env,pin);
@@ -5518,7 +5604,7 @@ export class Engine {
       await this.recoverGroupIntents();
       await this.flushOutbox();
       await this.retryApproved();
-      await this.syncRoots();await this.syncReadMarks();await this.syncInvitations();
+      await this.syncRoots();await this.syncReadMarks();await this.syncTopicTitles();await this.syncInvitations();
       await this.discloseHumanAudience(); // after a restart or reconnect: accepted guests learn each other
       this.runHistory().catch(() => {});
       this.runServes().catch(() => {});

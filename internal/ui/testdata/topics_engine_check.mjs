@@ -142,7 +142,7 @@ for (const q of [{ state: 'deleted' }, { limit: String(TOPICS.pageMax + 1) }, { 
 // The person's changes, kept in this device's store only.
 const writesBefore = changes;
 const a = plain[121];
-check((await engine.api('/api/topic/rename', { peer: bob, id: a.id, title: '  Zebra\n crossing ' })).note === 'Topic renamed on this device.', 'renamed');
+check((await engine.api('/api/topic/rename', { peer: bob, id: a.id, title: '  Zebra\n crossing ' })).note === 'Topic renamed. The name syncs across your linked devices.', 'renamed');
 t = await topicOf(a.id);
 check(t.title === 'Zebra crossing' && t.renamed && t.auto_title === 'Alpha note 121', 'a name of the person\'s own: ' + JSON.stringify(t));
 page = await list({ q: 'zebra' });
