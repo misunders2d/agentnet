@@ -160,6 +160,13 @@ func TestBrowserEngineLinksAsNewDevice(t *testing.T) {
 		return w.ok(map[string]any{"op": "status"})["link"] == "linked" && p != nil && p["label"] == "Alice" && deviceCount(o) == 2 && o["link"] == nil
 	})
 
+	// Approval ends the restricted stream; the normal member stream must
+	// resume before it can supply the queued history and live messages.
+	w.until("member stream after linked approval", func() bool {
+		s := w.ok(map[string]any{"op": "status"})
+		return s["connected"] == true && s["members"] == true
+	})
+
 	// The chats from before, as history from the laptop: the laptop's own
 	// message is yours, Bob's is his.
 	w.until("the history", func() bool {

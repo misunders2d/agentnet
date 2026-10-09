@@ -690,7 +690,9 @@ export class Engine {
     const reader = r.body.getReader(), chunks = [];
     let size = 0;
     try {
-      for (;;) {
+      // A linked event ends the approval stream between reads. Some readers
+      // do not reject a later read after cancellation; reconnect immediately.
+      while (!ctrl.signal.aborted) {
         const { value, done } = await reader.read();
         if (done) break;
         size += value.length;
@@ -5360,7 +5362,9 @@ export class Engine {
     const parser = createParser({ onEvent: (m) => queue.push(m), onError: (err) => { if (err.type === "max-buffer-size-exceeded") queue.push({ overflow: true }); }, maxBufferSize: 8 << 20 });
     let healthy = true;
     try {
-      for (;;) {
+      // A linked event ends the approval stream between reads. Some readers
+      // do not reject a later read after cancellation; reconnect immediately.
+      while (!ctrl.signal.aborted) {
         const { value, done } = await reader.read();
         if (done) break;
         clearTimeout(watchdog);

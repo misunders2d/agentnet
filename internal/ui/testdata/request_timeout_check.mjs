@@ -68,5 +68,17 @@ for(let i=0;(await store.get('outbox',sent.id)).state!=='custody'&&i<60;i++)awai
 assert.equal((await store.get('outbox',sent.id)).state,'custody');
 assert.deepEqual(posts,[original.envelope],'reconnect sends original encrypted envelope once');
 await e.flushOutbox();assert.equal(posts.length,1);releaseStream();await bounded(resumed);e.stop();
+// Linked dispatch aborts the approval-only stream after verifying the roster.
+// A fetch reader may not reject an abort between reads: do not read it again.
+{
+ let reads=0;
+ const linked=new Engine({store:memoryStore(),base:'https://isolated.invalid',fetch:async()=>({ok:true,headers:new Headers(),body:{getReader:()=>({read:async()=>++reads===1?{value:new TextEncoder().encode('event: linked\ndata: {}\n\n'),done:false}:{done:true}})}})});
+ linked.keys=await wire.newKeys();linked.address='alice/phone';linked.link={state:'pending'};
+ linked.finishLink=async()=>linked.setLink('linked');
+ await bounded(linked.streamOnce());
+ assert.equal(linked.link.state,'linked');assert.equal(linked.connected,false);
+ assert.equal(reads,1,'verified linked transition must not read its aborted approval stream again');
+ linked.stop();
+}
 assert(deadlines>=8,'bounded all exercised requests');
 console.log('request timeout PASS: headers/body/error-body, caller/close cancellation, real onConnect recovery, durable original send once');
