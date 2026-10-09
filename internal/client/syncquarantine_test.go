@@ -10,11 +10,11 @@ import (
 )
 
 func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
-	for _, sub := range []string{envelope.SubReadSync, envelope.SubTopicSync} {
+	for _, sub := range []string{envelope.SubReadSync, envelope.SubTopicSync, envelope.SubRootSync, envelope.SubInvitationSync} {
 		t.Run(sub, func(t *testing.T) {
 			w := newWorld(t, "")
 			stop := runAgent(t, w.alice)
-			persons(t, w.alice)
+			persons(t, w.alice, w.bob)
 			phone, awaited, _ := linkPhone(t, w.alice, "phone")
 			if err := w.alice.DecideLink(tctx(t), pendingLink(t, w.alice).ID, true); err != nil {
 				t.Fatal(err)
@@ -29,15 +29,75 @@ func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
 				t.Fatalf("verified owner: %v %v", ok, err)
 			}
 			conv, topic := strings.Repeat("c", 64), protocol.NewID()
-			for i := 0; i < protocol.MaxReadRefs; i++ {
+			batch, carriers := protocol.MaxReadRefs, 1
+			var root protocol.ConvRoot
+			var invitation protocol.InvitationSync
+			if sub == envelope.SubRootSync {
+				stopBob := runAgent(t, w.bob)
+				conv = newDM(t, a, w.bob)
+				stopBob()
+				root, _ = rootOf(t, a, conv)
+				batch, carriers = historyPage, historyPage
+			} else if sub == envelope.SubInvitationSync {
+				group, err := a.CreateGroup(tctx(t), "Private pending invitations")
+				if err != nil {
+					t.Fatal(err)
+				}
+				bob, _, err := w.bob.store.selfPerson(w.bob.Address)
+				if err != nil {
+					t.Fatal(err)
+				}
+				invitation = protocol.InvitationSync{V: 1, Person: own.info.Person, Roster: own.info.Roster, Revision: 1, Status: "pending",
+					Proposal: protocol.GroupInvitation{V: 1, Root: group.Root, State: group.State, Target: bob.info.Person, Roster: bob.info.Roster, Seq: group.State.Seq + 1, Prev: group.State.Hash()}}
+				batch, carriers = historyPage, historyPage
+			}
+			addRoot := func() {
+				t.Helper()
+				root.Nonce = protocol.NewID()
+				root.Sign(a.id.Sign)
+				raw, err := json.Marshal(root)
+				if err == nil {
+					peer := root.Members[0].Person
+					if peer == own.info.Person {
+						peer = root.Members[1].Person
+					}
+					err = a.store.addConversation(root, raw, peer)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			putInvitation := func() {
+				t.Helper()
+				invitation.ID = invitation.Proposal.ID()
+				tx, err := a.store.db.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				if err = saveInvitationView(tx, invitation, a.Address, a.Self().Fingerprint()); err == nil {
+					err = tx.Commit()
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := 0; i < batch; i++ {
 				id := protocol.NewID()
 				if i == 0 {
 					id = topic
 				}
 				if sub == envelope.SubReadSync {
 					_, err = a.store.db.Exec(`INSERT INTO read_marks VALUES(?,?,?,?)`, own.info.Person, conv, w.bob.Self().Fingerprint(), id)
-				} else {
+				} else if sub == envelope.SubTopicSync {
 					_, err = a.store.db.Exec(`INSERT INTO topic_titles VALUES(?,?,?,?,?,?)`, own.info.Person, conv, id, "Private name", 2, a.Self().Fingerprint())
+				} else if sub == envelope.SubRootSync {
+					if i > 0 { // CreateDM already stored the first signed root.
+						addRoot()
+					}
+				} else {
+					invitation.Proposal.Nonce = protocol.NewID()
+					putInvitation()
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -47,7 +107,13 @@ func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
 				if sub == envelope.SubReadSync {
 					return a.syncReadMarks()
 				}
-				return a.syncTopicTitles()
+				if sub == envelope.SubTopicSync {
+					return a.syncTopicTitles()
+				}
+				if sub == envelope.SubRootSync {
+					return a.syncRoots()
+				}
+				return a.syncInvitations()
 			}
 			if more, err := sync(); err != nil || !more {
 				t.Fatalf("full first page: more=%v err=%v", more, err)
@@ -66,13 +132,25 @@ func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
 			if _, err = phone.store.db.Exec(`UPDATE peers SET pending=public WHERE address=?`, a.Address); err != nil {
 				t.Fatal(err)
 			}
+			if sub == envelope.SubRootSync {
+				// Root admission uses the verified person as authority; exercise
+				// its frozen-person hold without bypassing the transport pin gate.
+				if _, err = phone.store.db.Exec(`UPDATE persons SET state=? WHERE state=?`, personConflict, personSelf); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err = phone.verifyAndStore(tctx(t), env); err != nil {
 				t.Fatal(err)
 			}
 			if heldReason(t, phone, id) == "" {
-				t.Fatal("pending key did not quarantine the real encrypted carrier")
+				t.Fatal("blocked authority did not quarantine the real encrypted carrier")
 			}
 			if err = a.store.setOutboxState(id, protocol.StateQuarantined, "", ""); err != nil {
+				t.Fatal(err)
+			}
+			// Root/invitation pages use one carrier per fact; model the same
+			// quarantine receipt for the rest of this full producer page.
+			if _, err = a.store.db.Exec(`UPDATE outbox SET state=? WHERE sub=? AND recipient=?`, protocol.StateQuarantined, sub, phone.Address); err != nil {
 				t.Fatal(err)
 			}
 			// convSync immediately asks for another page after a full batch.
@@ -93,7 +171,7 @@ func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
 					t.Fatalf("restart reissued held facts: more=%v err=%v", more, err)
 				}
 			}
-			if n := count(t, a, "outbox WHERE sub='"+sub+"'"); n != 1 {
+			if n := count(t, a, "outbox WHERE sub='"+sub+"'"); n != carriers {
 				t.Fatalf("held facts produced %d carriers", n)
 			}
 			var kept string
@@ -104,6 +182,11 @@ func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
 			// real key problem is resolved, without another source send.
 			if _, err = phone.store.db.Exec(`UPDATE peers SET pending=NULL WHERE address=?`, a.Address); err != nil {
 				t.Fatal(err)
+			}
+			if sub == envelope.SubRootSync {
+				if _, err = phone.store.db.Exec(`UPDATE persons SET state=? WHERE state=?`, personSelf, personConflict); err != nil {
+					t.Fatal(err)
+				}
 			}
 			in, err := envelope.Open(env, phone.id, phone.Address, a.Self())
 			if err != nil {
@@ -120,11 +203,23 @@ func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
 					t.Fatalf("recovered read facts: %d", n)
 				}
 				_, err = a.store.db.Exec(`INSERT INTO read_marks VALUES(?,?,?,?)`, own.info.Person, conv, w.bob.Self().Fingerprint(), protocol.NewID())
-			} else {
+			} else if sub == envelope.SubTopicSync {
 				if titleAt(t, phone, conv, topic) != "Private name" {
 					t.Fatal("retained title was not applied")
 				}
 				err = a.setTopicTitle(conv, topic, "") // an explicit new reset is a different fact
+			} else if sub == envelope.SubRootSync {
+				if !hasRoot(t, phone, in.Conv) {
+					t.Fatal("retained root was not admitted")
+				}
+				addRoot()
+			} else {
+				if n := count(t, phone, "own_invitation_views"); n != 1 {
+					t.Fatalf("retained invitation view not admitted: %d", n)
+				}
+				invitation.Revision++
+				invitation.Status = "cancelled"
+				putInvitation()
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -132,7 +227,7 @@ func TestOwnSyncQuarantinedFullBatchStaysBounded(t *testing.T) {
 			if more, err := sync(); err != nil || more {
 				t.Fatalf("new single fact: more=%v err=%v", more, err)
 			}
-			if n := count(t, a, "outbox WHERE sub='"+sub+"'"); n != 2 {
+			if n := count(t, a, "outbox WHERE sub='"+sub+"'"); n != carriers+1 {
 				t.Fatalf("new semantic fact did not get one new carrier: %d", n)
 			}
 		})

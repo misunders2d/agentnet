@@ -1206,7 +1206,7 @@ func contextSpeaker(msg ConvMessage, names, claims map[string]string) string {
 	// host's person is ownership context, not the author of the agent's text.
 	// Keep forwarded/excerpt provenance intact; an origin label alone never
 	// upgrades a claimed speaker to a verified agent.
-	if msg.VerifiedAgent || envelope.AgentOrigin(msg.Origin) {
+	if msg.VerifiedAgent || envelope.AgentOrigin(msg.Origin) || msg.AgentID != "" {
 		name := msg.AgentID
 		if name == "" {
 			name = strings.TrimPrefix(msg.Origin, "agent:")

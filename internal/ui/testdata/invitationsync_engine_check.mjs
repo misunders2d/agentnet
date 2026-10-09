@@ -52,7 +52,14 @@ const intent={type:'group-invitation',id,direction:'out',status:'pending',propos
 await a.store.write([{s:'kv',k:intentKey,v:intent}]);await a.syncInvitations();
 const copies=async(e)=>(await e.store.all('outbox')).filter(o=>o.sub===wire.SubInvitationSync);
 let rows=await copies(a);check(rows.length===1&&!wire.parseEnvelope(rows[0].envelope).attn,'one quiet encrypted own-device view');
-const first=rows[0];await a.post(first);await receive(first.envelope,p);
+const first=rows[0];await a.post(first);
+const sourcePin=await p.store.get('pins',a.address);
+await p.store.write([{s:'pins',k:a.address,v:{...sourcePin,pending:{fingerprint:b.fp}}}]);
+await receive(first.envelope,p);check(!!await p.store.get('held',first.id),'pending source key holds exact invitation carrier');
+await a.store.write([{s:'outbox',k:first.id,v:{...first,state:'quarantined'}}]);
+for(let i=0;i<2;i++)await a.syncInvitations();
+check((await copies(a)).length===1&&(await a.store.get('outbox',first.id)).envelope===first.envelope,'quarantined invitation is retained without resealing');
+await p.store.write([{s:'pins',k:a.address,v:sourcePin}]);await receive(first.envelope,p);
 let views=await p.groupInvitations();check(views.length===1&&views[0].id===id&&views[0].status==='pending'&&views[0].direction==='out'&&!views[0].can_cancel&&!views[0].can_refresh,'linked device shows exact pending invitation without action authority');
 check(!await p.store.get('kv',intentKey),'mirror is never local consent/publication intent');
 await assert.rejects(()=>p.cancelGroup({id}),/No outgoing invitation/);checks++;

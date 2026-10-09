@@ -61,7 +61,9 @@ func TestReviewInvalidRecordDoesNotClaimSignatureFailure(t *testing.T) {
  ('77777777777777777777777777777777','peer/device','invalid','{}',2,'')`); err != nil {
 		t.Fatal(err)
 	}
-	out, err := diagnosticOutput(t, func() error { return runInbox(a, []string{"--review"}) })
+	// The bounded review overview shows one item per section. Inspect its
+	// existing held section to compare both diagnostic records.
+	out, err := diagnosticOutput(t, func() error { return runInbox(a, []string{"--review", "--section", "held"}) })
 	if err != nil {
 		t.Fatal(err)
 	}

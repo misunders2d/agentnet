@@ -18,6 +18,7 @@ func TestContextSpeakerSeparatesAgentFromOwner(t *testing.T) {
 	}{
 		{"human", ConvMessage{From: "owner/laptop", Key: "key", Kind: "message"}, `your owner, "Sergey"`},
 		{"agent", ConvMessage{From: "owner/laptop", Key: "key", Kind: "answer", Origin: "agent:codex", AgentID: "codex", VerifiedAgent: true}, `Agent "codex", answer; host person: your owner, "Sergey"`},
+		{"named direct agent", ConvMessage{From: "owner/laptop", Key: "key", Kind: "answer", AgentID: "named-executor"}, `Claimed agent "named-executor", answer; host person: your owner, "Sergey"`},
 		{"forwarded agent", ConvMessage{From: "owner/laptop", Claimed: "key", Kind: "answer", Origin: "agent:codex", VerifiedAgent: true, History: true, SyncedFrom: "owner/phone"}, `Agent "codex", answer; host person: "Sergey" on Laptop (as shared by owner/phone, not verified here)`},
 		{"unverified excerpt", ConvMessage{From: "owner/laptop", Claimed: "key", Kind: "answer", Origin: "agent:codex", ExcerptPID: "excerpt", SyncedFrom: "other/mac"}, `Claimed agent "codex", answer; host person: "Sergey" on Laptop (as shared by other/mac, not verified here)`},
 	} {

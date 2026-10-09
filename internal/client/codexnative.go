@@ -462,7 +462,16 @@ func (a *Agent) registerCodexReplySession(event, sid, file string, route codexNa
 }
 
 func (a *Agent) drainCodexReplyInputs() {
-	rows, e := a.store.db.Query(`SELECT record FROM reply_sessions WHERE json_extract(record,'$.harness')='codex' AND json_extract(record,'$.active')=1`)
+	// Store changes wake the worker even when no native input arrived. Only
+	// candidate inputs justify hashing/probing a native executable; Take still
+	// rechecks the exact session, binding, signing key and claim transactionally.
+	rows, e := a.store.db.Query(`SELECT s.record FROM reply_sessions s
+		WHERE json_extract(s.record,'$.harness')='codex' AND json_extract(s.record,'$.active')=1
+		AND EXISTS(SELECT 1 FROM reply_receiver_inputs x
+			JOIN reply_receivers b ON b.id=x.binding JOIN inbox i ON i.id=x.inbox_id
+			WHERE x.state='pending' AND b.canceled_at IS NULL
+			AND json_extract(b.receiver,'$.kind')='live_session'
+			AND json_extract(b.receiver,'$.session_handle')=s.handle)`)
 	if e != nil {
 		return
 	}

@@ -44,7 +44,7 @@ func TestHistoryCarrierReceiptSurvivesRestartWithoutVisibleTurn(t *testing.T) {
 		t.Fatalf("carrier dedup lost: %v %v", seen, err)
 	}
 	rows, err := s.unsentReceipts()
-	if err != nil || len(rows) != 1 || rows[0] != (receipt{carrier, protocol.StateDelivered}) {
+	if err != nil || len(rows) != 1 || rows[0] != (receipt{id: carrier, state: protocol.StateDelivered, table: "history_receipts"}) {
 		t.Fatalf("exact carrier receipt: %+v %v", rows, err)
 	}
 	if err = s.markAcked(rows[0]); err != nil {

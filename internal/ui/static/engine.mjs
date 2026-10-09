@@ -1578,7 +1578,7 @@ export class Engine {
         if(!old||r.revision!==old.record.revision)ops.push({s:"kv",k,v:{type:"own-invitation",from:this.address,fp:this.fp,record:r}});
         views.push(r);
       }
-      const saved=await this.store.all("outbox"),present=new Set(saved.filter(o=>o.sub===wire.SubInvitationSync&&["queued","waiting","custody","delivered"].includes(o.state)).map(o=>o.recipient_fp+"/"+o.invitation_id+"/"+o.invitation_revision));
+      const saved=await this.store.all("outbox"),present=new Set(saved.filter(o=>o.sub===wire.SubInvitationSync&&["queued","waiting","custody","delivered","quarantined"].includes(o.state)).map(o=>o.recipient_fp+"/"+o.invitation_id+"/"+o.invitation_revision));
       let count=0;
       outer:for(const dev of own.devices) {
         if(dev.address===this.address||!(own.human_keys||[]).includes(dev.fingerprint))continue;
@@ -1639,7 +1639,7 @@ export class Engine {
           if(dev.address===this.address || !(own.human_keys||[]).includes(dev.fingerprint))continue;
           try { await this.rootSyncAuthority(root,this.address,this.fp,dev.address,dev.fingerprint,checks); } catch(e) { continue; }
           const saved=await this.authorityRows({conv:c.id,sub:wire.SubRootSync},checks);
-          if(saved.some(r=>r.to===dev.address&&r.recipient_fp===dev.fingerprint&&r.required_cap===wire.CapRootSync&&["queued","waiting","custody","delivered"].includes(r.state)))continue;
+          if(saved.some(r=>r.to===dev.address&&r.recipient_fp===dev.fingerprint&&r.required_cap===wire.CapRootSync&&["queued","waiting","custody","delivered","quarantined"].includes(r.state)))continue;
           const id=wire.newID(),lid=wire.newID(),body='{"v":1}',at=this.now();
           const envelope=await wire.seal({v:wire.Version2,id,from:this.address,to:dev.address,ts:Math.floor(at/1000),kind:"message",conv:c.id,lid,root:c.root,sub:wire.SubRootSync,replica:true,body},this.keys,await wire.parsePublic(JSON.parse(dev.json)));
           ops.push({s:"outbox",k:id,v:{id,lid,conv:c.id,to:dev.address,recipient_fp:dev.fingerprint,required_cap:wire.CapRootSync,sub:wire.SubRootSync,body,envelope,at,state:"queued",aside:true}});

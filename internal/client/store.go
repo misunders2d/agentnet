@@ -324,7 +324,7 @@ CREATE TABLE reported(
   PRIMARY KEY(item, recipient));
 `, TeamSchema, GroupClientSchema, GroupProofSchema, agentIdentitySchema, agentCapabilitySchema, groupTurnRecipientSchema, replyReceiverSchema, GroupLifecycleSchema, replySessionSchema, GroupHistorySchema, receiverRouteSchema, humanScopeSchema, convClearSchema, statusDueSchema, runGroupSchema, topicStateSchema, messagingSchema, deliveryPersonSchema, personGrantSchema, operatorPersonsSchema, deviceAdminNoticeSchema, roomSchema, roomReaderSchema, chatTopicSchema, groupInvitationCancellationSchema, readSyncSchema, chatAlertDefaultsSchema, queuedRetractionSchema, heldNoticeSchema, sendGroupSchema, continuationSchema, ownInvitationSchema, historyCatchupSchema, groupHistoryWitnessSchema, topicSyncSchema, `
 CREATE INDEX outbox_conv_lid ON outbox(conv, lid);
-`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema}
+`, historyReceiptSchema, deviceHistorySchema, proposalChoiceSchema, receiptGenerationSchema}
 
 // Outbox states. Hub states (custody, delivered) are stored as reported.
 const (
@@ -909,11 +909,14 @@ func (s *store) promote(in envelope.Inner, verifiedBy string) error {
 	return s.done(tx.Commit())
 }
 
-type receipt struct{ id, state string }
+type receipt struct {
+	id, state, table string
+	generation       int64
+}
 
 // unsentReceipts lists dispositions not yet acknowledged to the Hub.
 func (s *store) unsentReceipts() ([]receipt, error) {
-	rows, err := s.db.Query(`SELECT id, ? FROM inbox WHERE acked = 0 UNION SELECT id, ? FROM quarantine WHERE acked = 0 UNION SELECT id, ? FROM history_receipts WHERE acked = 0`,
+	rows, err := s.db.Query(`SELECT id, ?, 'inbox', receipt_gen FROM inbox WHERE acked = 0 UNION ALL SELECT id, ?, 'quarantine', receipt_gen FROM quarantine WHERE acked = 0 UNION ALL SELECT id, ?, 'history_receipts', receipt_gen FROM history_receipts WHERE acked = 0`,
 		protocol.StateDelivered, protocol.StateQuarantined, protocol.StateDelivered)
 	if err != nil {
 		return nil, err
@@ -922,7 +925,7 @@ func (s *store) unsentReceipts() ([]receipt, error) {
 	var out []receipt
 	for rows.Next() {
 		var r receipt
-		if err := rows.Scan(&r.id, &r.state); err != nil {
+		if err := rows.Scan(&r.id, &r.state, &r.table, &r.generation); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -944,18 +947,20 @@ func (s *store) resendReceipt(id string) error {
 }
 
 func (s *store) markAcked(r receipt) error {
-	table := "inbox"
-	if r.state == protocol.StateQuarantined {
-		table = "quarantine"
+	switch r.table {
+	case "inbox", "history_receipts":
+		if r.state != protocol.StateDelivered {
+			return errors.New("delivered receipt required for admitted row")
+		}
+	case "quarantine":
+		if r.state != protocol.StateQuarantined {
+			return errors.New("quarantined receipt required for held row")
+		}
+	default:
+		return errors.New("unknown receipt source")
 	}
-	if _, err := s.db.Exec(`UPDATE `+table+` SET acked = 1 WHERE id = ?`, r.id); err != nil {
-		return err
-	}
-	if r.state == protocol.StateDelivered {
-		_, err := s.db.Exec(`UPDATE history_receipts SET acked = 1 WHERE id = ?`, r.id)
-		return err
-	}
-	return nil
+	_, err := s.db.Exec(`UPDATE `+r.table+` SET acked = 1 WHERE id = ? AND receipt_gen = ?`, r.id, r.generation)
+	return err
 }
 
 // Message is a received message as shown to the user.

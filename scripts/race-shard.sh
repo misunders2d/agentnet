@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 shard=$1
 count=${2:-6}
 if [ "$shard" = others ]; then
-	exec go test -race -count=1 -timeout 3600s $(go list ./... | grep -v '/internal/client$')
+	exec go test -race -count=1 -timeout 600s $(go list ./... | grep -v '/internal/client$')
 fi
 k=${shard#client-}
 tests=$(go test -list '.*' ./internal/client | grep '^Test' | awk -v k="$k" -v n="$count" '(NR-1)%n==k')
@@ -18,4 +18,4 @@ if [ -z "$tests" ]; then
 	exit 0
 fi
 echo "shard $shard of $count: $(echo "$tests" | wc -l) tests"
-exec go test -race -count=1 -timeout 3600s -run "^($(echo "$tests" | paste -sd'|'))\$" ./internal/client
+exec go test -race -count=1 -timeout 600s -run "^($(echo "$tests" | paste -sd'|'))\$" ./internal/client

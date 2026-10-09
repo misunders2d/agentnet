@@ -11,7 +11,8 @@ This record starts with v0.8.1; earlier releases remain on the
 - Keep incompatible invitation-sync copies from blocking ordinary questions, files and replies behind them.
 - Synchronize older direct-agent conversations across verified personal devices, preserving the original sender, recipient, request, replies and files. Restored messages remain history and never rerun a task; these new copies wait for compatible clients.
 - Retain admission receipts for restored history and repair missing receipts from earlier browser versions. Reuse held copies while their evidence is pending, and distinguish queued, stored, admitted and blocked transfers in sync progress.
-- Stop unchanged read markers and topic names from generating repeated encrypted copies when a receiving device holds them. New reads and title changes still synchronize normally.
+- Stop unchanged conversation records, invitations, read markers and topic names from generating repeated encrypted copies when a receiving device holds them. New facts and revisions still synchronize normally.
+- Avoid repeatedly hashing and probing Codex when no reply input is waiting. Actual inputs retain the same native identity, binding and receipt checks.
 - Preserve the verified original author of forwarded participation records during history catch-up, and repair older transfer bookkeeping without accepting invalid records or rerunning work.
 - Show repeated background sync failures in one expandable status, grouped by their recorded cause and sender, with bounded bulk archive. Archiving keeps the encrypted message blocked; new or changed reasons remain visible. Older records without a cause are explicitly unknown.
 - Keep human invitations reachable directly in the chat at narrow desktop and phone widths, using the same exact Join and No thanks decisions as OKs.
@@ -20,6 +21,7 @@ This record starts with v0.8.1; earlier releases remain on the
 - Let a verified own human device explicitly mark an exact remote needs-human request as handled. The host checks the request and attempt, and its confirmation updates the state without rerunning work. Attachment-only requests retain useful context in reports.
 
 - Keep incoming messages and heartbeat acknowledgements moving while delivery receipts are delayed. Pending invitation synchronization no longer blocks ordinary queued turns.
+- Keep older direct-delivery completions or relay responses from erasing a newer pending delivery receipt, including after restart.
 - Use recipient delivery for the chat-list waiting count, matching message ticks; a lagging extra device no longer leaves a delivered conversation marked as unsent.
 - Preserve agent authorship in selected conversation history after reinviting an agent. Clarify that admitted action requests use native tools and permissions even when classified as questions.
 - Include the owner in named agent labels so same-named agents can be distinguished in mentions and participant cards.

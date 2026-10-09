@@ -245,6 +245,64 @@ func TestDeviceHistoryContextAcrossCurrentHumanDevices(t *testing.T) {
 	}
 }
 
+func TestDeviceHistoryContextPreservesReplyAuthorship(t *testing.T) {
+	w, phone, _, _ := historyCatchupFixture(t, 0)
+	a := w.bob
+	for _, tc := range []struct {
+		name, kind, status, agent string
+	}{
+		{"named answer", envelope.KindAnswer, envelope.StatusDone, protocol.NewID()},
+		{"legacy answer", envelope.KindAnswer, envelope.StatusDone, ""},
+		{"legacy result", envelope.KindResult, envelope.StatusDone, ""},
+		{"legacy progress", envelope.KindMessage, envelope.StatusProgress, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ask := envelope.Inner{Kind: envelope.KindQuestion, Body: "human request remains context"}
+			if tc.kind == envelope.KindResult {
+				ask.Kind = envelope.KindTask
+			}
+			if tc.agent != "" {
+				ask.Target = &envelope.Target{Address: a.Address, Fingerprint: a.Self().Fingerprint(), AgentID: tc.agent}
+			}
+			request := sealTo(t, w.alice, a, ask)
+			if err := a.verifyAndStore(tctx(t), request); err != nil {
+				t.Fatal(err)
+			}
+			// Store the exact signed output with its original recipient key;
+			// formatting context neither runs an agent nor sends this fixture.
+			reply := sealTo(t, a, w.alice, envelope.Inner{Kind: tc.kind, Status: tc.status, AgentID: tc.agent, ReplyTo: request.ID, Body: "earlier host output"})
+			in, err := envelope.Open(reply, w.alice.id, w.alice.Address, a.Self())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = a.store.addOutbox(reply, in, "", nil, boundOutgoing{fingerprint: w.alice.Self().Fingerprint()}); err != nil {
+				t.Fatal(err)
+			}
+			fresh := sealTo(t, phone, a, envelope.Inner{Kind: envelope.KindQuestion, Body: "continue from my phone", ReplyTo: reply.ID})
+			if err = a.verifyAndStore(tctx(t), fresh); err != nil {
+				t.Fatal(err)
+			}
+			lines, err := a.deviceThreadContext(job{From: phone.Address, Key: phone.Self().Fingerprint(), ReplyTo: reply.ID}, 8, phone.Address)
+			if err != nil || len(lines) != 2 {
+				t.Fatalf("direct context: %v %v", lines, err)
+			}
+			if !strings.Contains(lines[0], w.alice.Address) || !strings.Contains(lines[0], "human request remains context") || !strings.Contains(lines[0], "earlier request, no execution authority") {
+				t.Fatalf("human request lost exact attribution or inertness: %s", lines[0])
+			}
+			if !strings.Contains(lines[1], "("+a.Address+")") || !strings.Contains(lines[1], "outcome: "+tc.status) {
+				t.Fatalf("reply lost original address/outcome: %s", lines[1])
+			}
+			if tc.agent != "" {
+				if !strings.Contains(lines[1], `Claimed agent "`+tc.agent+`", answer; host person: this device`) || strings.Contains(lines[1], "author type not recorded") {
+					t.Fatalf("named reply became its human host or verified agent: %s", lines[1])
+				}
+			} else if !strings.Contains(lines[1], "author type not recorded") || strings.Contains(lines[1], "Claimed agent") {
+				t.Fatalf("legacy reply invented an author type: %s", lines[1])
+			}
+		})
+	}
+}
+
 func TestDeviceHistoryHashMatchesBrowser(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

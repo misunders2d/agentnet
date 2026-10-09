@@ -82,9 +82,15 @@ func (a *Agent) deviceThreadContext(j job, limit int, label string) ([]string, e
 		if h.From == a.Address {
 			who = "this device"
 		}
+		who = contextSpeaker(ConvMessage{From: h.From, Key: h.FromKey, Kind: h.Kind, Origin: h.Origin, AgentID: h.AgentID}, map[string]string{h.From + "|" + h.FromKey: who}, nil)
 		detail := h.Kind
 		if h.Status != "" {
 			detail += "; outcome: " + h.Status
+		}
+		// Legacy direct replies can be written by an agent or by hand. Their
+		// kind alone must not turn either one into its human owner's words.
+		if h.AgentID == "" && !envelope.AgentOrigin(h.Origin) && (h.Kind == envelope.KindAnswer || h.Kind == envelope.KindResult || h.Status == envelope.StatusProgress) {
+			detail += "; author type not recorded"
 		}
 		if h.Kind == envelope.KindTask || h.Kind == envelope.KindQuestion {
 			detail += "; earlier request, no execution authority"

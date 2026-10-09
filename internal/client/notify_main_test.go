@@ -11,6 +11,13 @@ import (
 // Tests never show real desktop notifications or open terminals; the
 // tests of notification clicks set their own stand-in launcher.
 func TestMain(m *testing.M) {
+	if os.Getenv("AGENTNET_TEST_CODEX_DRAIN") == "1" {
+		if err := runCodexDrainCLI(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	// Native CLI stand-in used by Node execFile on every supported OS.
 	if os.Getenv("AGENTNET_TEST_LOOKUP_PROGRAM") == "1" {
 		if len(os.Args) > 1 && os.Args[1] == "approvals" {

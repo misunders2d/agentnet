@@ -81,7 +81,7 @@ func (a *Agent) rootSyncCopy(root protocol.ConvRoot, raw []byte, dev identity.Pu
 }
 
 func (a *Agent) rootSyncPresent(q dbq, conv string, dev identity.Public) (bool, error) {
-	rows, err := q.Query(`SELECT envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND sub=? AND required_cap=? AND state IN ('queued','waiting','custody','delivered')`, conv, dev.Address, dev.Fingerprint(), envelope.SubRootSync, protocol.CapRootSync)
+	rows, err := q.Query(`SELECT envelope FROM outbox WHERE conv=? AND recipient=? AND recipient_fp=? AND sub=? AND required_cap=? AND state IN ('queued','waiting','custody','delivered','quarantined')`, conv, dev.Address, dev.Fingerprint(), envelope.SubRootSync, protocol.CapRootSync)
 	if err != nil {
 		return false, err
 	}
@@ -100,7 +100,7 @@ func (a *Agent) rootSyncPresent(q dbq, conv string, dev identity.Public) (bool, 
 }
 
 // syncRoots queues at most one page of missing root copies. The outbox is the
-// durable reconciliation marker, including old-reader waiting copies. Completed
+// durable reconciliation marker, including waiting and quarantined copies. Completed
 // message snapshot positions never change. A terminal failed carrier may recover
 // on a later existing wake after its authority becomes valid again.
 func (a *Agent) syncRoots() (bool, error) {

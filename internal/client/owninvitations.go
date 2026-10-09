@@ -127,7 +127,9 @@ func (a *Agent) syncInvitations() (bool, error) {
 		if dev.Address == a.Address || !me.roster.Human(dev.Fingerprint()) {
 			continue
 		}
-		rows, e := tx.Query(`SELECT v.payload FROM own_invitation_views v WHERE v.source=? AND v.source_fp=? AND NOT EXISTS(SELECT 1 FROM own_invitation_copies c JOIN outbox o ON o.id=c.carrier WHERE c.id=v.id AND c.source_fp=v.source_fp AND c.revision=v.revision AND c.recipient_fp=? AND o.state IN ('queued','waiting','custody','delivered')) ORDER BY v.id LIMIT ?`, a.Address, fp, dev.Fingerprint(), historyPage-len(copies))
+		// A quarantined copy awaits normal recovery of that exact ciphertext.
+		// Only a new revision needs another carrier while it is held.
+		rows, e := tx.Query(`SELECT v.payload FROM own_invitation_views v WHERE v.source=? AND v.source_fp=? AND NOT EXISTS(SELECT 1 FROM own_invitation_copies c JOIN outbox o ON o.id=c.carrier WHERE c.id=v.id AND c.source_fp=v.source_fp AND c.revision=v.revision AND c.recipient_fp=? AND o.state IN ('queued','waiting','custody','delivered','quarantined')) ORDER BY v.id LIMIT ?`, a.Address, fp, dev.Fingerprint(), historyPage-len(copies))
 		if e != nil {
 			return false, e
 		}

@@ -463,13 +463,13 @@ func (s *directServer) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		state, err = s.a.store.disposition(env.ID)
 	}
-	if err == nil {
-		// The Hub never saw this message, so there is no Hub receipt to send.
-		err = s.a.store.markAcked(receipt{env.ID, state})
-	}
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "", "not stored yet: "+err.Error())
 		return
 	}
+	// The sender may already have fallen back to the Hub. Preserve the
+	// durable receipt; the existing worker handles both delivery and a 404
+	// for direct-only messages without blocking this response.
+	s.a.kickNow()
 	writeJSON(w, http.StatusOK, protocol.Receipt{ID: env.ID, State: state, Path: protocol.PathDirect})
 }
