@@ -1019,7 +1019,15 @@ export interface TaskGrantView {
   status: string;
 }
 
+export interface TeamAgent {
+  id: string;
+  host: string;
+  host_key: string;
+}
+
 export interface TeamChange {
+  v?: number;
+  agent?: TeamAgent;
   team?: string;
   op: string;
   name?: string;
@@ -1040,6 +1048,7 @@ export interface TeamSnapshot {
 }
 
 export interface TeamState {
+  version?: number;
   realm_id: string;
   id: string;
   name: string;
@@ -1047,10 +1056,12 @@ export interface TeamState {
   hash: string;
   managers: string[] | null;
   members: string[] | null;
+  agents?: TeamAgent[];
   archived: boolean;
 }
 
 export interface TeamView {
+  version?: number;
   realm_id: string;
   id: string;
   name: string;
@@ -1058,6 +1069,7 @@ export interface TeamView {
   hash: string;
   managers: string[] | null;
   members: string[] | null;
+  agents?: TeamAgent[];
   archived: boolean;
   member: boolean;
   manager: boolean;
@@ -1066,6 +1078,7 @@ export interface TeamView {
 }
 
 export interface TeamsView {
+  tags: boolean;
   realm_id?: string;
   status: string;
   current: boolean;

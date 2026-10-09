@@ -1,8 +1,8 @@
 // Signed person teams. One captured Engine; existing workspace kv storage only.
 import * as wire from './wire.mjs';
 const enc = new TextEncoder();
-const ops = new Set(['create', 'join', 'leave', 'rename', 'archive', 'restore', 'remove', 'manager-add', 'manager-remove']);
-const fields = new Set(['v', 'realm_id', 'team', 'seq', 'prev', 'author', 'op', 'name', 'target', 'ts', 'sig']);
+const ops = new Set(['create', 'join', 'leave', 'rename', 'archive', 'restore', 'remove', 'manager-add', 'manager-remove', 'add', 'agent-add', 'agent-remove']);
+const fields = new Set(['v', 'realm_id', 'team', 'seq', 'prev', 'author', 'op', 'name', 'target', 'agent', 'ts', 'sig']);
 const fail = message => { throw new Error(message); };
 
 export function validateTeam(s) {
@@ -10,17 +10,23 @@ export function validateTeam(s) {
   const a = s.author;
   if ((s.name !== undefined && typeof s.name !== 'string') || (s.target !== undefined && typeof s.target !== 'string') ||
       (s.sig !== undefined && typeof s.sig !== 'string' && !(s.sig instanceof Uint8Array))) fail('team: invalid optional field');
-  if (s.v !== 1 || !wire.validID(s.realm_id) || !wire.validID(s.team) ||
+  if (![1,2].includes(s.v) || !wire.validID(s.realm_id) || !wire.validID(s.team) ||
       !Number.isSafeInteger(s.seq) || s.seq < 0 || !Number.isSafeInteger(s.ts) || s.ts <= 0 ||
       !a || Object.keys(a).some(k => !['person', 'roster', 'address', 'fingerprint'].includes(k)) ||
       !wire.validID(a.person) || !wire.validHash(a.roster) || !wire.validAddress(a.address) ||
       !wire.validFingerprint(a.fingerprint) || !ops.has(s.op)) fail('team: invalid fields');
+  if (s.v === 1 && (s.agent || ['add','agent-add','agent-remove'].includes(s.op)) || s.v === 2 && ['join','leave'].includes(s.op)) fail('team: wrong operation version');
+  if (['agent-add','agent-remove'].includes(s.op) !== !!s.agent) fail('team: unexpected agent target');
   if (s.seq === 0 ? s.op !== 'create' || s.prev !== '' : s.op === 'create' || !wire.validHash(s.prev)) fail('team: invalid predecessor');
   if (['create', 'rename'].includes(s.op)) {
     wire.validLabel(s.name);
+    if(s.v===2 && s.name.toLowerCase()==='everyone') fail('everyone is reserved for all participants in the chat');
     if (s.target) fail('team: unexpected target');
-  } else if (['remove', 'manager-add', 'manager-remove'].includes(s.op)) {
+  } else if (['add', 'remove', 'manager-add', 'manager-remove'].includes(s.op)) {
     if (!wire.validID(s.target) || s.name) fail('team: invalid target');
+  } else if (['agent-add','agent-remove'].includes(s.op)) {
+    const a=s.agent;
+    if (!a || Object.keys(a).some(k=>!['id','host','host_key'].includes(k)) || !/^[0-9a-f]{32}$/.test(a.id||'') || !wire.validAddress(a.host) || !wire.validFingerprint(a.host_key) || s.name || s.target) fail('team: invalid agent target');
   } else if (s.name || s.target) fail('team: unexpected name/target');
   if (enc.encode(teamJSON(s, true)).length > 2048) fail('team: too large');
   return s;
@@ -32,7 +38,7 @@ export function teamJSON(s, signature = false) {
     ',"seq":' + s.seq + ',"prev":' + q(s.prev) + ',"author":{"person":' + q(a.person) +
     ',"roster":' + q(a.roster) + ',"address":' + q(a.address) + ',"fingerprint":' + q(a.fingerprint) +
     '},"op":' + q(s.op) + (s.name ? ',"name":' + q(s.name) : '') +
-    (s.target ? ',"target":' + q(s.target) : '') + ',"ts":' + s.ts +
+    (s.target ? ',"target":' + q(s.target) : '') + (s.agent ? ',"agent":{"id":'+q(s.agent.id)+',"host":'+q(s.agent.host)+',"host_key":'+q(s.agent.host_key)+'}' : '') + ',"ts":' + s.ts +
     (signature && s.sig ? ',"sig":' + q(typeof s.sig === 'string' ? s.sig : wire.b64(s.sig)) : '') + '}';
 }
 export function teamCanonical(s) { return enc.encode('agentnet-team-v1\n' + teamJSON(s)); }
@@ -54,16 +60,21 @@ export async function applyTeam(s, prev, roster) {
   let st;
   if (!prev) {
     if (s.seq !== 0) fail('team: missing predecessor');
-    st = { realm_id: s.realm_id, id: s.team, name: s.name, managers: [person], members: [person], archived: false };
+    st = { realm_id: s.realm_id, id: s.team, name: s.name, managers: [person], members: s.v===2?[]:[person], archived: false, ...(s.v===2?{version:2}:{}) };
   } else {
     if (prev.realm_id !== s.realm_id || prev.id !== s.team || s.seq !== prev.seq + 1 || s.prev !== prev.hash) fail('team: wrong predecessor');
+    if ((prev.version===2)!==(s.v===2)) fail('team: list version cannot change');
     st = structuredClone(prev);
     if (['join', 'leave'].includes(s.op)) {
       if (st.archived) fail('team is archived; a manager must explicitly restore it');
     } else if (!st.managers.includes(person)) fail('this team operation requires a manager');
     const add = (list, p) => { if (!list.includes(p)) list.push(p); };
     const remove = (list, p) => list.filter(x => x !== p);
+    const agentKey=a=>a.host+'/'+a.host_key+'/'+a.id;
     switch (s.op) {
+      case 'add': add(st.members,s.target); break;
+      case 'agent-add': st.agents ||= []; if(!st.agents.some(a=>agentKey(a)===agentKey(s.agent))) st.agents.push({...s.agent}); break;
+      case 'agent-remove': st.agents=(st.agents||[]).filter(a=>agentKey(a)!==agentKey(s.agent)); break;
       case 'join': add(st.members, person); break;
       case 'leave':
         if (st.managers.includes(person)) fail(st.managers.length === 1 ? 'last manager must explicitly transfer first' : 'remove your manager role explicitly before leaving the team');
@@ -72,23 +83,25 @@ export async function applyTeam(s, prev, roster) {
       case 'archive': st.archived = true; break;
       case 'restore': st.archived = false; break;
       case 'remove':
-        if (st.managers.includes(s.target)) fail('remove the manager role explicitly before removing membership');
+        if (st.version!==2 && st.managers.includes(s.target)) fail('remove the manager role explicitly before removing membership');
         st.members = remove(st.members, s.target); break;
       case 'manager-add':
-        if (!st.members.includes(s.target)) fail('team manager must be a member');
+        if (st.version!==2 && !st.members.includes(s.target)) fail('team manager must be a member');
         add(st.managers, s.target); break;
       case 'manager-remove':
         if (st.managers.includes(s.target) && st.managers.length === 1) fail('last manager must explicitly transfer first');
         st.managers = remove(st.managers, s.target); break;
     }
   }
-  if (st.members.length > 1000) fail('team: too many members');
+  if (st.members.length + (st.agents||[]).length > 1000) fail('team: too many members');
+  if (st.managers.length > 1000) fail('team: too many managers');
+  if(st.agents){ st.agents.sort((a,b)=>{const x=a.host+'/'+a.host_key+'/'+a.id,y=b.host+'/'+b.host_key+'/'+b.id;return x<y?-1:x>y?1:0;});if(!st.agents.length)delete st.agents; }
   st.members.sort(); st.managers.sort(); st.seq = s.seq; st.hash = await teamHash(s);
   return st;
 }
 
 function directory(d, realm) {
-  if (!d || d.realm_id !== realm || !Array.isArray(d.teams) || d.teams.length > 1000 || typeof d.truncated !== 'boolean') fail('team: invalid directory');
+  if (!d || (d.version!==undefined && ![0,2].includes(d.version)) || d.realm_id !== realm || !Array.isArray(d.teams) || d.teams.length > 1000 || typeof d.truncated !== 'boolean') fail('team: invalid directory');
   const seen = new Set();
   for (const r of d.teams) {
     if (!wire.validID(r.id) || !wire.validHash(r.hash) || !Number.isSafeInteger(r.seq) || r.seq < 0 || seen.has(r.id)) fail('team: invalid directory ref');
@@ -191,7 +204,7 @@ export function browserTeams(engine, realmID) {
   async function view() {
     await load();
     const listed = new Set(data.directory.teams.map(r => r.id)), self = engine.me?.person;
-    return { realm_id: realmID, status, current, reason, at: data.at, truncated: data.directory.truncated,
+    return { realm_id: realmID, status, current, reason, tags: data.directory.version===2, at: data.at, truncated: data.directory.truncated,
       teams: Object.keys(data.chains).filter(id => !data.deleted?.[id]).sort().map(id => {
         const st = data.chains[id].at(-1).state;
         return { ...structuredClone(st), member: st.members.includes(self), manager: st.managers.includes(self), conflict: !!data.conflicts[id], listed: listed.has(id) };
@@ -200,7 +213,7 @@ export function browserTeams(engine, realmID) {
   async function refresh() {
     const gen = generation; current = false;
     try {
-      await accept(await call('GET', '/v1/teams'), true);
+      await accept(await call('GET', '/v1/teams?version=2'), true);
       if (gen === generation && !pending) { current = true; status = 'available'; reason = ''; }
     } catch (e) {
       current = false; status = (Object.values(data?.conflicts || {}).some(Boolean) || /person conflict|pinned person fork|verified fork/.test(e.message)) ? 'conflict' : e.status === 404 ? 'unsupported' : 'unavailable'; reason = e.message;
@@ -209,7 +222,7 @@ export function browserTeams(engine, realmID) {
   }
   async function change(c) {
     if (c.op === 'delete') {
-      if (!wire.validID(c.team) || c.name || c.target) fail('Invalid people list deletion.');
+      if (!wire.validID(c.team) || c.name || c.target || c.agent) fail('Invalid people list deletion.');
       const v = await refresh(), st = v.teams.find(t => t.id === c.team && t.listed && !t.conflict);
       if (!v.current || !st) fail('Refresh this people list before deleting it.');
       await call('DELETE', '/v1/teams/' + c.team);
@@ -220,15 +233,16 @@ export function browserTeams(engine, realmID) {
     for (let attempt = 0; attempt < 2; attempt++) {
       const v = await refresh();
       if (!v.current) fail('team: current directory required');
+      if(c.op==='create' && c.v===2 && !v.tags) fail('Update the server to create shared agent tags.');
       const proof = await personChain(engine.me.person), roster = proof.records.at(-1);
       if (await wire.rosterHash(roster) !== engine.me.hash) fail('team: refresh local self roster first');
       const d = await wire.rosterDevice(roster, engine.fp);
       if (!d || d.address !== engine.address) fail('team: current self device required');
       const prev = c.op === 'create' ? null : data.chains[id]?.at(-1)?.state;
       if (c.op !== 'create' && (!prev || data.conflicts[id])) fail('team: missing or frozen team');
-      const s = await signTeam(engine.keys, { v: 1, realm_id: realmID, team: id, seq: prev ? prev.seq + 1 : 0, prev: prev?.hash || '',
+      const s = await signTeam(engine.keys, { v: prev?.version===2?2:(c.v||1), realm_id: realmID, team: id, seq: prev ? prev.seq + 1 : 0, prev: prev?.hash || '',
         author: { person: roster.person, roster: await wire.rosterHash(roster), address: engine.address, fingerprint: engine.fp },
-        op: c.op, ...(c.name ? { name: c.name } : {}), ...(c.target ? { target: c.target } : {}), ts: Math.floor(Date.now() / 1000) });
+        op: c.op, ...(c.name ? { name: c.name } : {}), ...(c.target ? { target: c.target } : {}), ...(c.agent?{agent:c.agent}:{}), ts: Math.floor(Date.now() / 1000) });
       const accepted = await applyTeam(s, prev, roster);
       try { await call('PUT', '/v1/team', teamJSON(s, true)); }
       catch (e) {

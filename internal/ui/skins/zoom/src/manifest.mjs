@@ -19,6 +19,7 @@ export default {
     "icon.png",
     "topics.mjs",
     "person-topics.mjs",
+    "collective-mentions.mjs",
     "optimistic.mjs",
     "pictures.mjs",
     "link-text.mjs",

@@ -165,7 +165,7 @@ func (a *Agent) streamOnce(ctx context.Context) (healthy bool, err error) {
 	if seq < 0 {
 		seq = 0
 	}
-	req, err := a.hub.request(ctx, "GET", "/v1/stream"+a.adQuery+"&receipts="+strconv.FormatInt(seq, 10), nil)
+	req, err := a.hub.request(ctx, "GET", "/v1/stream"+a.adQuery+"&receipts="+strconv.FormatInt(seq, 10)+"&teams=2", nil)
 	if err != nil {
 		return false, err
 	}

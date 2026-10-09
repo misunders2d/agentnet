@@ -26,10 +26,12 @@ CREATE TABLE team_chain(
 `
 
 type TeamChange struct {
-	Team   string `json:"team,omitempty"`
-	Op     string `json:"op"`
-	Name   string `json:"name,omitempty"`
-	Target string `json:"target,omitempty"`
+	V      int                 `json:"v,omitempty"`
+	Agent  *protocol.TeamAgent `json:"agent,omitempty"`
+	Team   string              `json:"team,omitempty"`
+	Op     string              `json:"op"`
+	Name   string              `json:"name,omitempty"`
+	Target string              `json:"target,omitempty"`
 }
 type TeamView struct {
 	protocol.TeamState
@@ -39,6 +41,7 @@ type TeamView struct {
 	Listed   bool `json:"listed"`
 }
 type TeamsView struct {
+	Tags      bool       `json:"tags"`
 	RealmID   string     `json:"realm_id,omitempty"`
 	Status    string     `json:"status"` // available, unknown, unsupported, unavailable, conflict
 	Current   bool       `json:"current"`
@@ -114,6 +117,7 @@ func (a *Agent) TeamView() (TeamsView, error) {
 	}
 	v.RealmID = realm
 	a.teams.mu.Lock()
+	v.Tags = a.teams.directory.Version == 2
 	v.Status = a.teams.supported
 	v.Current = a.teams.current
 	v.At = a.teams.at
@@ -173,7 +177,7 @@ func (a *Agent) Teams(ctx context.Context) (TeamsView, error) {
 		known, err = a.store.teamIDs(realm)
 		if err == nil {
 			var d protocol.TeamDirectory
-			err = a.hub.do(ctx, http.MethodGet, "/v1/teams", nil, &d)
+			err = a.hub.do(ctx, http.MethodGet, "/v1/teams?version=2", nil, &d)
 			if err == nil {
 				err = a.pinTeamDirectory(ctx, realm, d, true, known)
 			}
@@ -442,7 +446,7 @@ func (a *Agent) pinTeamSteps(realm, team string, steps []protocol.TeamStep, raws
 func (a *Agent) ChangeTeam(ctx context.Context, c TeamChange) (protocol.TeamState, error) {
 	var none protocol.TeamState
 	if c.Op == "delete" {
-		if !protocol.ValidID(c.Team) || c.Name != "" || c.Target != "" {
+		if !protocol.ValidID(c.Team) || c.Name != "" || c.Target != "" || c.Agent != nil {
 			return none, errors.New("invalid people list deletion")
 		}
 		v, err := a.Teams(ctx)
@@ -474,6 +478,15 @@ func (a *Agent) ChangeTeam(ctx context.Context, c TeamChange) (protocol.TeamStat
 		a.changes.bump()
 		_, _ = a.Teams(ctx)
 		return state, nil
+	}
+	if c.Op == protocol.TeamCreate && c.V == 2 {
+		v, err := a.Teams(ctx)
+		if err != nil {
+			return none, err
+		}
+		if !v.Current || !v.Tags {
+			return none, errors.New("update the server to create shared agent tags")
+		}
 	}
 	if c.Op == protocol.TeamCreate {
 		if c.Team != "" {
@@ -522,7 +535,14 @@ func (a *Agent) ChangeTeam(ctx context.Context, c TeamChange) (protocol.TeamStat
 			}
 			prev = &state
 		}
-		step := protocol.TeamStep{V: 1, RealmID: realm, Team: c.Team, Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: a.Self().Fingerprint()}, Op: c.Op, Name: c.Name, Target: c.Target, TS: time.Now().Unix()}
+		version := c.V
+		if version == 0 {
+			version = 1
+		}
+		if prev != nil && prev.Version == 2 {
+			version = 2
+		}
+		step := protocol.TeamStep{V: version, Agent: c.Agent, RealmID: realm, Team: c.Team, Author: protocol.EventAuthor{Person: me.info.Person, Roster: me.info.Roster, Address: a.Address, Fingerprint: a.Self().Fingerprint()}, Op: c.Op, Name: c.Name, Target: c.Target, TS: time.Now().Unix()}
 		if prev != nil {
 			step.Seq = prev.Seq + 1
 			step.Prev = prev.Hash

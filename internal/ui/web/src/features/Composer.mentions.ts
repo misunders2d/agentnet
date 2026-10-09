@@ -79,12 +79,17 @@ export function trigger(text: string, caret: number): { start: number; query: st
 /** Candidate: someone the picker offers. */
 export interface Candidate {
   key: string;
-  kind: RefKind;
+  kind: RefKind | "collective";
   id: string;            // person id, guest pid, or agent pid
   name: string;
   sub: string;           // who they are here, in words
   seed: string;
   device?: DeviceKind;   // an agent's device badge
+  targets?: Candidate[];
+  person?: string;
+  agentID?: string;
+  host?: string;
+  hostKey?: string;
 }
 
 /** guestAuthor is this installation's own joined guest participation in a
@@ -101,7 +106,7 @@ export function candidates(t: T.DMThread, o: T.Overview | null, agentNames: Reco
     for (const p of participants(t, o, agentNames)) {
       if (p.kind !== "guest-agent" || p.state !== "active" || !p.can.ask || !p.pid) continue;
       const name = mentionName(p.name);
-      if (name) out.push({ key: "a:" + p.pid, kind: "agent", id: p.pid, name, sub: p.subtitle, seed: p.seed, device: deviceKind(p.agent?.host.address) });
+      if (name) out.push({ key: "a:" + p.pid, kind: "agent", id: p.pid, name, sub: p.subtitle, seed: p.seed, device: deviceKind(p.agent?.host.address), agentID: p.agent?.agent_id, host: p.agent?.host.address, hostKey: p.agent?.host.fingerprint });
     }
   }
   const me = o?.person?.person;
@@ -126,7 +131,7 @@ export function candidates(t: T.DMThread, o: T.Overview | null, agentNames: Reco
   for (const g of t.guests || []) {
     if (g.state !== "active" || g.host_here) continue;
     const name = mentionName(g.host.label);
-    if (name) people.set("g:" + g.pid, { key: "g:" + g.pid, kind: "guest", id: g.pid, name, sub: "Guest · invited by " + personName(g.inviter), seed: g.host.person || g.host.address });
+    if (name) people.set("g:" + g.pid, { key: "g:" + g.pid, kind: "guest", id: g.pid, name, sub: "Guest · invited by " + personName(g.inviter), seed: g.host.person || g.host.address, person: g.host.person });
   }
   return [...out, ...people.values()];
 }

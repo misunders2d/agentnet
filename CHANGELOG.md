@@ -4,6 +4,12 @@ Notable changes to AgentNet, newest first. Dates use `YYYY-MM-DD`.
 This record starts with v0.8.1; earlier releases remain on the
 [releases page](https://github.com/misunders2d/agentnet/releases).
 
+## Unreleased
+
+### Added
+
+- Choose `@everyone` or a shared list such as `@Reviewers` to address people and agents already in the current chat. The composer expands the tag into visible, exact recipients, deduplicates overlapping tags, and preserves each agent's independent send and retry. List managers can select people, agents, or both; everyone can use the tag. Mixed lists require an updated relay.
+
 ## [0.8.11] — 2026-10-09
 
 ### Fixed

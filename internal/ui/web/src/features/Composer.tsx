@@ -19,6 +19,8 @@ import { DropTarget, FilesTray, bytes, draftFiles, overLimit, releaseFiles, useF
 import { agentTargets, candidates, decode, encode, guestAuthor, matches, shift, trigger, type Candidate, type Span } from "./Composer.mentions";
 import { Field, IntentRow, PlusMenu, ReplyChip, SendButton, menuIcons, type MenuAction } from "./Composer.parts";
 import { MentionList, optionId } from "./Composer.picker";
+import { useTeams } from "./Teams";
+import { collectiveOptions } from "../collective-mentions.mjs";
 import { useTypingSignal } from "./Composer.typing";
 import { coarse, useFieldFocus } from "./Composer.focus";
 import { usePortal } from "../owned";
@@ -80,7 +82,11 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   const { watch, focusField } = useFieldFocus(field);
 
   // ---- who is here and who this goes to
-  const people = useMemo(() => (dm ? candidates(dm, overview, names) : []), [dm, overview, names]);
+  const {view: teams} = useTeams(!!dm && caret !== null && !!trigger(text, caret));
+  const people = useMemo(() => {
+    const here = dm ? candidates(dm, overview, names) : [];
+    return [...collectiveOptions(here, teams), ...here];
+  }, [dm, overview, names, teams]);
   const humanGuest = dm?.role === "human_guest";
   const visitor = dm?.role === "visitor";
   const author = dm ? guestAuthor(dm) : undefined;
@@ -194,16 +200,21 @@ export function Composer({ dm, thread }: { dm?: T.DMThread; thread?: T.Thread })
   function pick(c: Candidate) {
     if (!trig || caret == null) return;
     const d = latest();
-    const token = "@" + c.name + " ";
+    const selected = (c.targets || [c]).filter((p): p is Candidate & {kind: Span["kind"]} => p.kind !== "collective")
+      .filter(p => c.kind !== "collective" || !spans.some(s => s.kind === p.kind && s.id === p.id));
+    const token = selected.length ? selected.map(p => "@" + p.name).join(" ") + " " : "";
     const cur = text.slice(0, trig.start) + token + text.slice(caret);
     let { kept } = shift(spans, text, cur);
     // Keep every exact selected agent mention; target extraction deduplicates PIDs.
-    const span: Span = { start: trig.start, name: c.name, kind: c.kind, id: c.id };
+    let start = trig.start;
+    const added: Span[] = selected.map(p => {const s = {start, name:p.name,kind:p.kind,id:p.id}; start += p.name.length+2; return s;});
+    const agent = selected.find(p => p.kind === "agent");
     write({
-      ...d, text: encode(cur, [...kept, span]),
-      ...(c.kind === "agent" ? { agent: c.id, replyTo: undefined } : {}),
+      ...d, text: encode(cur, [...kept, ...added]),
+      ...(agent ? { agent: agent.id, replyTo: undefined } : {}),
     }, trig.start + token.length);
-    if (c.kind === "agent") announce("Asking " + c.name + ".");
+    if (c.kind === "collective") announce(selected.length ? "@"+c.name+" expanded to "+selected.length+" recipients. Review their names before sending." : "Everyone from @"+c.name+" is already selected.");
+    else if (agent) announce("Asking " + c.name + ".");
   }
 
   function stopAsking() {
