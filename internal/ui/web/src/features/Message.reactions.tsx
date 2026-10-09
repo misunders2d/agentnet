@@ -10,13 +10,18 @@ import { useApp } from "../context";
 import { EmojiPicker, QuickReactions } from "./Emoji";
 import { agentLabel, agentOf, isThreadMsg, type AnyMsg, type Ctx } from "./Message.model";
 import { useModal, usePortal } from "../owned";
+import { humanReactionOrder, recordReaction } from "../reaction-preferences.mjs";
 
 export const controlRef = (m: AnyMsg, ctx: Ctx): T.ControlAction =>
   isThreadMsg(m) ? { id: m.id, dir: m.dir } : { conv: ctx.conv, id: m.id, dir: m.dir };
 
 export function useReact(m: AnyMsg, ctx: Ctx) {
   const store = useApp();
-  return (emoji: string, remove = false) => void store.run((a) => a.react({ ...controlRef(m, ctx), emoji, remove }));
+  return (emoji: string, remove = false) => void store.run(async (a) => {
+    const result = await a.react({ ...controlRef(m, ctx), emoji, remove });
+    if (!remove && !m.reactions?.some((r) => r.emoji === emoji && r.mine)) recordReaction(emoji);
+    return result;
+  });
 }
 
 const reactor = (b: T.Reactor, ctx: Ctx) => {
@@ -27,7 +32,7 @@ const reactor = (b: T.Reactor, ctx: Ctx) => {
 
 export function Reactions({ m, ctx, can, wide }: { m: AnyMsg; ctx: Ctx; can: boolean; wide: boolean }) {
   const react = useReact(m, ctx);
-  const list = m.reactions || [];
+  const list = humanReactionOrder(m.reactions || []);
   if (!list.length || m.deleted) return null;
   return (
     <div className={"flex flex-wrap items-center gap-x-1.5 " + (wide ? "-mb-1" : "-mb-1.5")}>

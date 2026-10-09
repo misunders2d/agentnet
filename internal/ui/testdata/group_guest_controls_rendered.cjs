@@ -3,7 +3,7 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require(process.env.AGENTNET_PLAYWRIGHT||'playwright-core');
 const settle=async page=>{await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await page.evaluate(async()=>{await document.fonts.ready;await Promise.all(document.querySelector('#skin').shadowRoot.querySelector('.skin-root').getAnimations({subtree:true}).filter(a=>a.effect.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});};
-const root=path.resolve(__dirname,'../static'),evidence=process.env.AGENTNET_SCREENSHOTS;
+const root=process.env.AGENTNET_RENDERED_ASSETS?path.resolve(process.env.AGENTNET_RENDERED_ASSETS):path.resolve(__dirname,'../static'),evidence=process.env.AGENTNET_SCREENSHOTS;
 assert(evidence,'private screenshot directory required');fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const conv='c'.repeat(64),at='2026-10-05T10:00:00Z';
 const person=(name,address,key)=>({person:name.toLowerCase().padEnd(32,'a'),label:name,address,fingerprint:key,state:'pinned',devices:[{address,fingerprint:key}]});
@@ -32,6 +32,15 @@ if(variant==='long-links'){
  fixture.linkBody='Read '+fixture.url+' then <'+fixture.url+'>.\\n[Useful guide]('+fixture.url+')\\n'+String.fromCharCode(96)+fixture.url+String.fromCharCode(96)+'\\n\\n~~~text\\n'+fixture.url+'\\n~~~';
  fixture.thread.messages.push({id:'long-links',lid:'long-links',from:'brin/desktop',dir:'in',kind:'message',body:fixture.linkBody,at:'2026-10-05T10:02:00Z'});
  fixture.overview.group_invitations=[];
+}
+if(variant==='reactions'){
+ fixture.overview.group_invitations=[];fixture.thread.guests=[];
+ const people=[{id:'brin',label:'Brin'},{id:'cora',label:'Cora'},{id:'dune',label:'Dune'}];
+ const agent={id:'agent-mark',assistant:true,host:'brin/desktop',agent_id:'a'.repeat(32)};
+ Object.assign(fixture.thread.messages[0],{can:['react'],reactions:[
+  {emoji:'😂',by:people.slice(0,1)},{emoji:'👍',by:[...people,agent]},
+  {emoji:'🎉',by:people.slice()},{emoji:'👀',by:[agent]}]});
+ fixture.thread.messages=[fixture.thread.messages[0]];
 }
 if(variant==='oks'){
  fixture.thread.kind='dm';fixture.thread.peer=${JSON.stringify(brin)};fixture.thread.guests=[];fixture.thread.members=[];
@@ -131,7 +140,18 @@ if(variant==='heldback'){
 }
 let open,changed;
 const host={version:1,platform:'daemon',workspace:{id:'default',name:'P6 fixture',endpoint:location.origin,address:seed.overview.me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async f=>{if(variant==='multi-agent'){const id='multi-stage-'+(fixture.stages.length+1);fixture.stages.push({id,name:f.name,size:f.size});return {id};}if(variant==='oks'){fixture.staged={name:f.name,size:f.size};return {id:'staged-1'};}throw Error('fixture accepts no files');},file:async()=>{throw Error('fixture contains no files');},api:async(p,body)=>{
-fixture.requests.push({path:p,body});if(variant.startsWith('continuation-')&&['/api/act','/api/operator/decide'].includes(p)){
+fixture.requests.push({path:p,body});
+if(variant==='reactions'&&p==='/api/message/react'){
+ if(body.conv!==fixture.thread.id||body.id!=='context'||body.dir!=='in')throw Error('Unexpected reaction target');
+ if(fixture.failReaction){fixture.failReaction=false;throw Error('Synthetic reaction failed');}
+ if(fixture.holdReaction)await new Promise(resolve=>{window.finishReaction=()=>{fixture.holdReaction=false;resolve();};});
+ const m=fixture.thread.messages[0];let r=m.reactions.find(r=>r.emoji===body.emoji);
+ if(!r){r={emoji:body.emoji,by:[]};m.reactions.push(r);}
+ if(body.remove){r.by=r.by.filter(b=>b.id!=='me');r.mine=false;}
+ else if(!r.mine){r.by.push({id:'me',label:'Aster'});r.mine=true;}
+ return {note:'Reaction saved'};
+}
+if(variant.startsWith('continuation-')&&['/api/act','/api/operator/decide'].includes(p)){
  const c=fixture.thread.messages.find(m=>m.id==='needs-answer-exact').continuation;
  if(!c||body.id!==c.id||body.key!==c.key||body.attempt!==c.attempt||!body.send_id)throw Error('Unexpected continuation identity');
  if(!fixture.continuationFailed){fixture.continuationFailed=true;throw Error('Synthetic lost transport response; retry this same answer');}
@@ -196,6 +216,55 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
   browser=await chromium.launch({headless:true,executablePath:process.env.AGENTNET_CHROMIUM||undefined});
   for(const skin of (process.env.AGENTNET_TEST_SKINS||'classic,zoom').split(','))for(const width of [1280,390]){
    const openCase=async variant=>{const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());const page=await context.newPage();page.setDefaultTimeout(8000);page.on('pageerror',e=>errors.push(skin+': '+e.stack));await page.goto(origin+'/?skin='+skin+'&case='+variant);try{await page.waitForFunction(()=>window.ready);}catch(e){console.error(JSON.stringify({skin,width,variant,errors,text:await page.locator('body').innerText()}));throw e;}if(variant==='device-oks'||variant.startsWith('delivery-')||variant.startsWith('decline-invite-'))return {page,context};await page.evaluate(()=>openGroup());try{await page.getByText(variant==='oks'?'Main flow conversation':'Selected warehouse context',{exact:skin!=='comic'}).first().waitFor();}catch(e){console.error(JSON.stringify({errors,text:await page.locator('#skin').evaluate(e=>e.shadowRoot.innerText||e.shadowRoot.textContent)}));throw e;}return {page,context};};
+if(process.env.AGENTNET_REACTION_REGRESSION==='1'){
+ const {page,context}=await openCase('reactions');
+ try{
+  const key='agentnet.messenger.reaction-usage.v1';
+  const message=()=>page.locator(skin==='comic'?'[data-mid="context"]':skin==='zoom'?'.zoom-message':'#m-context');
+  const enter=async()=>{if(skin==='zoom')await page.locator('#m-context .mc-bubble').click();await message().waitFor();};
+  const chip=emoji=>message().getByRole('button',{name:new RegExp('^'+emoji+' (from|by) ')});
+  const stored=()=>page.evaluate(key=>localStorage.getItem(key),key);
+  const counts=async()=>JSON.parse(await stored()||'[]');
+  const openPicker=async()=>{await message().getByLabel('Add a reaction',{exact:true}).click();await page.getByRole('button',{name:'React 👍',exact:true}).waitFor();};
+  const choices=()=>page.getByRole('button',{name:/^React /}).evaluateAll(es=>es.map(e=>e.getAttribute('aria-label').slice(6)));
+  const closePicker=async()=>{if(skin==='comic')await page.keyboard.press('Escape');else await page.getByRole('group',{name:'Choose a reaction',exact:true}).getByRole('button',{name:'Close',exact:true}).click();await settle(page);};
+  await enter();
+  const humanLabels=await message().getByRole('button',{name:/ (from|by) /}).allTextContents();
+  assert.deepEqual(humanLabels.map(s=>s.trim().split(/\s|(?=[0-9])/)[0]),['👍','🎉','😂'],'Human chips sort by count with stable ties');
+  assert.equal(await message().locator(skin==='comic'?'[role="img"]':'.assistant-reaction').count(),2,'Agent marks remain separate, noninteractive chips');
+  assert.equal(await stored(),null,'Receiving/rendering reactions never counts them');
+  await openPicker();assert.deepEqual((await choices()).slice(0,6),skin==='comic'?['👍','❤️','😂','🎉','🙏','👀']:['👍','❤️','😂','🎉','👀','✅']);await closePicker();
+  await chip('😂').click();await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)||'[]').some(([e,n])=>e==='😂'&&n===1),key);
+  await chip('😂').click();await page.waitForFunction(()=>fixture.requests.filter(r=>r.path==='/api/message/react').at(-1)?.body.remove===true);await settle(page);
+  assert.deepEqual(await counts(),[['😂',1]],'Removal does not increment usage');
+  await page.evaluate(()=>{fixture.failReaction=true;});await chip('👍').click();await page.getByText('Synthetic reaction failed',{exact:true}).waitFor();assert.deepEqual(await counts(),[['😂',1]],'Failure does not increment usage');
+  await page.evaluate(()=>{fixture.holdReaction=true;});await chip('👍').click();await page.waitForFunction(()=>!!window.finishReaction);assert.deepEqual(await counts(),[['😂',1]],'Pending calls do not count');await page.evaluate(()=>finishReaction());
+  await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)||'[]').some(([e,n])=>e==='👍'&&n===1),key);await settle(page);
+  await openPicker();assert.deepEqual((await choices()).slice(0,2),['😂','👍'],'Usage ties retain first-use order');
+  // Comic toggles in its picker; legacy pickers retain their existing add-only behavior.
+  await page.getByRole('button',{name:'React 👍',exact:true}).click();await settle(page);
+  assert.deepEqual(await counts(),[['😂',1],['👍',1]],'An owned choice cannot count another addition');
+  if(skin!=='comic'){await chip('👍').click();await settle(page);}
+  await chip('👍').click();await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)||'[]').some(([e,n])=>e==='👍'&&n===2),key);await settle(page);
+  await openPicker();assert.deepEqual((await choices()).slice(0,2),['👍','😂']);
+  assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'Picker does not overflow phone');
+  if(skin!=='comic')assert(await page.getByRole('button',{name:/^React /}).evaluateAll(es=>es.every(e=>{const b=e.getBoundingClientRect();return b.width>=44&&b.height>=44&&b.left>=0&&b.right<=innerWidth&&b.top>=0&&b.bottom<=innerHeight;})),'Every legacy choice has a visible 44px target');
+  await settle(page);let shot=path.join(evidence,skin+'-reactions-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  if(skin==='comic'){
+   await page.getByRole('button',{name:'More reactions',exact:true}).click();
+   const frequent=page.getByRole('group',{name:'Frequently used emoji',exact:true});await frequent.waitFor();
+   await page.locator('[frimousse-emoji]').filter({visible:true}).first().waitFor();await settle(page);
+   assert.deepEqual(await frequent.getByRole('button').allTextContents(),['👍','😂'],'Full picker puts frequently used exact emoji first');
+   assert(await frequent.evaluate(e=>e.scrollWidth<=e.clientWidth),'Frequent row fits phone');
+   shot=path.join(evidence,skin+'-full-reactions-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
+  }
+  const usage=await stored();await page.reload();await page.waitForFunction(()=>window.ready);await page.evaluate(()=>openGroup());await enter();await openPicker();
+  assert.deepEqual((await choices()).slice(0,2),['👍','😂'],'Usage survives reload');assert.equal(await stored(),usage,'Reload/render does not increment');
+  await closePicker();await page.evaluate(key=>localStorage.setItem(key,'{malformed'),key);await openPicker();assert.equal((await choices())[0],'👍','Malformed preference falls back');await closePicker();
+  await page.evaluate(()=>{Storage.prototype.getItem=()=>{throw Error('Denied');};Storage.prototype.setItem=()=>{throw Error('Denied');};});await openPicker();assert.equal((await choices())[0],'👍','Denied storage falls back');await closePicker();
+ }finally{await context.close();}
+ continue;
+}
 if(process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'){
  assert.equal(skin,'comic');if(width!==390)continue;
  for(const mode of ['navigate-loaded','navigate-pending','navigate-error','update-active','update-invited','click-active','click-invited','ended','key','name','host','error']){
@@ -645,6 +714,6 @@ if(process.env.AGENTNET_DELIVERY_STOP_REGRESSION==='1'){
    const {page,context}=await openCase('admin');await page.getByRole('button',{name:'Retract invitation…',exact:true}).filter({visible:true}).first().click();await page.evaluate(()=>disableInvite());await page.waitForTimeout(40);await page.locator('#dialog-ok').click();await page.getByText('This invitation can no longer be changed here. Refresh the conversation and review it again.',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.path==='/api/groups/cancel').length),0,'Stale capability blocks action');await context.close();
   }
   if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'),'retained synthetic evidence must stay in /tmp');fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,checks:process.env.AGENTNET_REACTION_REGRESSION==='1'?'All skins: first-use/persisted frequency, success/failure/removal, human-count ordering and separate agent chips, desktop/mobile':process.env.AGENTNET_PHONE_REJOIN_REGRESSION==='1'?'Comic phone: active/pending rejoin, stale click/navigation, genuine return, exact key/agent/host identity and fresh-read error':process.env.AGENTNET_DIRECT_REVIEW_REGRESSION==='1'?'Direct review[]: held/running/stopping/complete; decision badge/list vs Working; exact request/Stop; desktop/mobile':process.env.AGENTNET_OKS_REGRESSION==='1'?'Comic: working excluded from OK count, exact topic/repeat focus, unsent draft/files preserved, full reason, future approve separate from held accept, exact Stop':process.env.AGENTNET_NOTIFY_REGRESSION==='1'?'Comic: one person grant across duplicate roots and separate conversation mute':(process.env.AGENTNET_TEST_SKINS||'Classic+Zoom source')+': guest/member distinction, exact targets, retract/refresh, rights, desktop/mobile',shots}));
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

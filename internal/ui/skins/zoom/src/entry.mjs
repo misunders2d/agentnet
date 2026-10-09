@@ -1,3 +1,4 @@
+import { reactionChoices, recordReaction, humanReactionOrder } from "./reaction-preferences.mjs";
 import { rawLinkParts } from "./link-text.mjs";
 function niceGoogleDevice(address) { const name = String(address || "").split("/").pop() || "device"; return name.charAt(0).toUpperCase() + name.slice(1); }
 import { avatarPicture, openPictureEditor, pastePictures } from "./pictures.mjs";
@@ -3200,10 +3201,11 @@ const quickEmoji = ["👍", "❤️", "😂", "🎉", "👀", "✅",
 const canDo = (m, what) => !m.excerpt_pid && !(state.dm && (dmVisitor() || dmHumanGuest())) && Array.isArray(m.can) && m.can.includes(what);
 const controlRef = (m, conv) => (conv ? { conv, id: m.id, dir: m.dir } : { id: m.id, dir: m.dir });
 
-async function control(what, body, done) {
+async function control(what, body, done, countReaction = false) {
   const host = currentHost, gen = state.gen; // the membership the message is in
   try {
     const r = await api("/api/message/" + what, body, host);
+    if (countReaction) recordReaction(body.emoji);
     announce(r.note || "Done.");
     if (gen !== state.gen) { if (done) done(null); return; }
     if (state.dm) await loadDM(false); else await loadThread(false);
@@ -3219,14 +3221,14 @@ async function control(what, body, done) {
 function reactionsRow(m, conv) {
   if (m.deleted) return null;
   const can = canDo(m, "react");
-  const chips = (m.reactions || []).flatMap((r) => {
+  const chips = humanReactionOrder(m.reactions || []).flatMap((r) => {
     // People's marks toggle as one chip; each assistant's own mark is its
     // own chip, named, so it never reads as a person's (or its host's).
     const people = { ...r, by: (r.by || []).filter((b) => !b.assistant) }, agents = (r.by || []).filter((b) => b.assistant);
     const label = r.emoji + " " + people.by.length;
     const title = reactorNames(people);
     const own = !people.by.length ? [] : [can ? el("button", { type: "button", class: "reaction" + (r.mine ? " mine" : ""), title, "aria-label": r.emoji + " by " + title + (r.mine ? " (you); press to remove yours" : "; press to add yours"),
-      onclick: () => control("react", { ...controlRef(m, conv), emoji: r.emoji, remove: !!r.mine }) }, label)
+      onclick: () => control("react", { ...controlRef(m, conv), emoji: r.emoji, remove: !!r.mine }, undefined, !r.mine) }, label)
       : el("span", { class: "reaction" + (r.mine ? " mine" : ""), title }, label)];
     return own.concat(agents.map((b) => {
       const name = assistantReactorLabel(b);
@@ -3244,7 +3246,11 @@ function reactionsRow(m, conv) {
 function reactPicker(m, conv) {
   const d = el("details", { class: "react-pick" });
   const close = () => { d.open = false; d.querySelector("summary").focus(); };
-  const send = (emoji) => { d.open = false; control("react", { ...controlRef(m, conv), emoji }); };
+  const send = (emoji) => {
+    d.open = false;
+    const alreadyMine = (m.reactions || []).some(r => r.emoji === emoji && r.mine);
+    control("react", { ...controlRef(m, conv), emoji }, undefined, !alreadyMine);
+  };
   d.addEventListener("keydown", (e) => { if (e.key === "Escape" && d.open) { e.preventDefault(); close(); } });
   d.addEventListener("toggle", () => {
     const menu = d.querySelector(".react-menu");
@@ -3256,7 +3262,7 @@ function reactPicker(m, conv) {
   d.append(el("summary", { "aria-label": "Add a reaction", title: "Add a reaction" }, "＋"),
     el("div", { class: "react-menu", role: "group", "aria-label": "Choose a reaction" },
       el("div", { class: "react-head" }, el("strong", {}, "Choose a reaction"), el("button", { type: "button", class: "react-close", "aria-label": "Close", onclick: close }, "✕")),
-      el("div", { class: "react-grid" }, quickEmoji.map((e) => el("button", { type: "button", "aria-label": "React " + e, onclick: () => send(e) }, e)))));
+      el("div", { class: "react-grid" }, reactionChoices(quickEmoji).map((e) => el("button", { type: "button", "aria-label": "React " + e, onclick: () => send(e) }, e)))));
   return d;
 }
 

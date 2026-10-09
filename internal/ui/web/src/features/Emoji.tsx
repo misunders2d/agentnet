@@ -6,6 +6,7 @@ import { Menu } from "@base-ui/react/menu";
 import { EmojiPicker as Picker, defaultEmojiDataResolver, useSkinTone, type EmojiData, type EmojiDataResolver, type SkinTone } from "frimousse";
 import { IconChevronDown, IconDots, IconMoodPlus, IconSearch, IconX } from "@tabler/icons-react";
 import { usePortal } from "../owned";
+import { reactionChoices } from "../reaction-preferences.mjs";
 
 const toneKey = "agentnet.messenger.skin-tone";
 // The emoji data ships in the package (m/emoji/en/), next to this module.
@@ -56,6 +57,7 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
   const viewport = useRef<HTMLDivElement>(null);
   const columns = useMemo(() => (innerWidth < 440 ? 7 : 8), []);
   const parts = useMemo(() => (data ? sections(data, columns) : []), [data, columns]);
+  const [frequent] = useState(() => reactionChoices([], columns));
 
   // The default resolver fetches, caches and drops emoji this device cannot
   // draw; we keep a copy to place the category tabs. A failed load shows an
@@ -134,6 +136,16 @@ export function EmojiPicker({ onPick, onClose }: { onPick: (emoji: string) => vo
 
       {choosingTone ? <ToneRow tone={tone} onChoose={chooseTone} />
         : !search && parts.length > 0 && <CategoryTabs parts={parts} current={current} onJump={jump} />}
+
+      {!search && !choosingTone && frequent.length > 0 && (
+        <div role="group" aria-label="Frequently used emoji" className="shrink-0 border-b border-hairline px-2 pb-1">
+          <div className="px-1 pt-1 text-[13px] font-semibold text-muted">Frequently used</div>
+          <div className="flex">
+            {frequent.map((e) => <button key={e} type="button" aria-label={"Choose " + e} onClick={() => onPick(e)}
+              className="grid size-11 shrink-0 place-items-center rounded-xl text-[26px] hover:bg-sunken">{e}</button>)}
+          </div>
+        </div>
+      )}
 
       <Picker.Viewport ref={viewport} onScroll={scrolled} className="relative min-h-0 flex-1 outline-none">
         <Picker.Loading className="absolute inset-0 grid place-items-center text-[13px] text-muted">
@@ -260,12 +272,12 @@ function ToneRow({ tone, onChoose }: { tone: SkinTone; onChoose: (t: SkinTone) =
 
 const quick = ["👍", "❤️", "😂", "🎉", "🙏", "👀"];
 
-/** QuickReactions: the six everyday reactions and a way to all of them.
+/** QuickReactions: six frequent reactions, with everyday choices as fallback.
  *  `chosen` are the ones this person already added (pressed). */
 export function QuickReactions({ onPick, onMore, chosen = [] }: { onPick: (emoji: string) => void; onMore: () => void; chosen?: string[] }) {
   return (
     <div role="group" aria-label="React" className="inline-flex items-center gap-0.5 rounded-full bg-surface p-1 stroke">
-      {quick.map((e) => {
+      {reactionChoices(quick).map((e) => {
         const on = chosen.includes(e);
         return (
           <button key={e} type="button" onClick={() => onPick(e)} aria-pressed={on} aria-label={"React " + e}
