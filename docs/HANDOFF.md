@@ -4,9 +4,31 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Current release — v0.8.10, October 8, 2026 (UTC)
+## Current release — v0.8.11, October 9, 2026 (UTC)
 
-### Active next release — v0.8.11
+### Published v0.8.11
+
+[Download v0.8.11](https://github.com/misunders2d/agentnet/releases/tag/v0.8.11).
+Published at **10:50:40 UTC** from
+`0209d7f1790b85ba817d3e3842206c82105e5e31`. This release-record commit changes
+only documentation from the final qualified application source `3c880b65`.
+All five [release packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/37919244927)
+passed, including native shell checks and the final Linux AppImage replacement,
+restart and stable-install journey. All 12 downloaded asset sizes/digests and all
+11 SHA256SUMS entries matched; standalone and bundled Linux CLI report the exact
+clean released revision.
+
+The existing Contabo relay upgraded at **10:51:31 UTC**, after a verified
+stopped-state backup. Its running binary and normal HTTPS from both server and
+laptop report v0.8.11; the original realm and data volume remain unchanged.
+Zero restarts/OOM events; the neighboring service retains its original start
+time. No installed desktop client or live client data was changed. GitHub's latest
+release is v0.8.11. Update source laptops through their existing app/CLI controls
+and refresh linked phones; source devices must be online to provide retained
+history. Actual physical-phone convergence is still unverified and must not be
+claimed from producer preparation or automated tests.
+
+### v0.8.11 scope and verification
 
 The owner requires the remaining mobile history and Held back failures in this
 release, together with the integrated unread and reaction fixes. All verified
@@ -111,24 +133,22 @@ MEL-580's Waiting report has no verified false-pending
 reproduction: exact request/reply correlation remains authoritative; unrelated
 later answers cannot close another request. No live state was changed. ThinkPad
 separately owns MEL-502 collective tags and latency investigation; avoid duplicate
-writers. This integrated candidate is ready for the full/native release suite.
-Retain the valid focused and rendered evidence; repeat affected checks only if
-qualification exposes a new failure or a subsequent source change requires it.
-No v0.8.11 publication or relay rollout has occurred. Clients update through
-their own controls; actual phone convergence remains a separate physical check.
+writers. The full/native qualification and final corrected-path results are recorded
+below. Clients update through their own controls; actual phone convergence
+remains a separate physical check.
 
 The first full integrated qualification at `634691e7`
 ([run 37914687984](https://github.com/misunders2d/agentnet/actions/runs/37914687984))
 completed with failures. Desktop builds/restart checks, the container journey,
 three client race shards and all unaffected package tests passed. Corrections
-are batched before requalification: updated fixtures for intentional OKs actions,
+were batched before requalification: updated fixtures for intentional OKs actions,
 capability inheritance and immutable history; terminal status for removed history
 recipients; exact signed own-edit recovery after original readers withdraw;
 browser control indexing and original-author projection; and bounded file work
 during bulk catch-up. The Windows governance journey now waits for the direct
 incoming file it intends to verify, since a preceding history copy may be replaced.
-No timeout was raised. Preserve passing unaffected evidence and qualify all
-affected paths on the final corrected candidate before tagging.
+No timeout was raised. Passing unaffected evidence was retained; all affected
+paths then passed on the final corrected candidate before tagging.
 
 The corrected application source at `3c880b65183d051dbeb25bc41855eaeab1156377`
 passed all affected native paths on Linux, macOS and Windows in
@@ -137,7 +157,7 @@ Final focused race checks cover history/file fairness, removal and frozen-person
 boundaries; final browser checks passed 755 signed Node vectors and 756 actual
 IndexedDB vectors. Repository-wide vet passed locally and on all three runners.
 The release-record commit changes documentation only; application source remains
-identical to that qualified revision. Packaging still must pass its native shell
+identical to that qualified revision. Final packaging passed its native shell
 and Linux AppImage replacement/restart gates before publication and relay rollout.
 
 Next-release scope from the owner, explicitly excluded from this release:
