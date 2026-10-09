@@ -41,13 +41,14 @@ type ThreadSummary struct {
 	// sent it, when the agent did; whether anything in it is still open
 	// (then it is never archived); and the person's own name for it here,
 	// with the automatic one (its first line) kept beside it.
-	State       string `json:"state"`
-	DoneBy      string `json:"done_by,omitempty"`
-	Conclusion  string `json:"conclusion,omitempty"`
-	ConcludedBy string `json:"concluded_by,omitempty"`
-	Pending     bool   `json:"pending"`
-	Renamed     bool   `json:"renamed,omitempty"`
-	AutoTitle   string `json:"auto_title,omitempty"`
+	State       string   `json:"state"`
+	DoneBy      string   `json:"done_by,omitempty"`
+	Conclusion  string   `json:"conclusion,omitempty"`
+	ConcludedBy string   `json:"concluded_by,omitempty"`
+	Pending     bool     `json:"pending"`
+	PendingIDs  []string `json:"pending_ids,omitempty"` // exact visible requests/notices keeping Pending true
+	Renamed     bool     `json:"renamed,omitempty"`
+	AutoTitle   string   `json:"auto_title,omitempty"`
 	// QuietSince is when it went quiet: its last message, or a later Mark
 	// done or Reopen here. Archived counts from it.
 	QuietSince time.Time `json:"quiet_since"`

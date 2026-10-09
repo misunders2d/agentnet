@@ -118,7 +118,7 @@ export function TeamsSection({ titleRef }: { titleRef?: React.Ref<HTMLHeadingEle
     <Confirm open={!!change} onOpenChange={(v) => { if (!v) setChange(null); }} title={change?.title || "Change people list?"} ok="Confirm change" onOk={() => { if (change) void act(change.c); }}>
       <p>{change?.hint}</p>
     </Confirm>
-    <Sheet open={draft !== null} onOpenChange={(v) => { if (!v) setDraft(null); }} title="New group" description="Review the people. Each receives an independent invitation and must accept.">
+    <Sheet open={draft !== null} onOpenChange={(v) => { if (!v) setDraft(null); }} title="New group" description="Choose who to invite. Each person decides whether to join.">
       {draft && <NewGroupForm initialPeople={draft} onBack={() => setDraft(null)} onCreated={() => { setDraft(null); setChosen(null); }} />}
     </Sheet>
   </>;
@@ -186,10 +186,10 @@ export function TeamPeople({ selected, onChange, excluded = [], disabled = false
     </select></label>
     <Button size="sm" type="button" disabled={!team || !view?.current || busy || disabled} onClick={() => void add()}>{busy ? "Reading people…" : "Add list’s people"}</Button>
     {error || detail ? <p role="alert" className="text-sm text-danger">{detail || error}</p> : null}
-    {at > 0 && <Hint>Reviewed snapshot at {new Date(at * 1000).toLocaleString()}. Later list changes do not change this selection.</Hint>}
+    {at > 0 && <Hint>People added from this list on {new Date(at * 1000).toLocaleString()}. Later list edits won’t change your choices.</Hint>}
     {showSelected && <ul aria-label="Selected people" className="flex flex-wrap gap-2">{selected.map((p) => <li key={p.id} className="flex min-w-0 items-center gap-2">
       <span className="min-w-0 flex-1 break-words">{personLabel(o, p.id)}</span><Button variant="outline" size="sm" disabled={disabled || busy} onClick={() => onChange(selected.filter((x) => x.id !== p.id))}>Remove {personLabel(o, p.id)}</Button>
     </li>)}</ul>}
-    {showSelected && <Hint>This selection grants no access. Only the people you keep are invited, and each decides whether to join.</Hint>}
+    {showSelected && <Hint>Only selected people will receive an invitation. They decide whether to join.</Hint>}
   </fieldset>;
 }

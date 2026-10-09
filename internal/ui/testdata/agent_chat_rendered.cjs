@@ -41,6 +41,13 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    await page.getByRole('button',{name:'Chat with Laptop agent',exact:true}).waitFor();
    assert(await page.getByRole('button',{name:'Chat with Sleeping agent',exact:true}).isDisabled());
    assert(await page.getByRole('button',{name:'Chat with Zenbook agent',exact:true}).isVisible(),'own remote agent discoverable without threads');
+   const yours=page.getByRole('region',{name:'Your agents',exact:true});
+   await yours.getByText('Default agent',{exact:true}).waitFor({timeout:2000});
+   await yours.getByText('Used when a request to this computer doesn’t name an agent.',{exact:true}).waitFor();
+   const localCard=yours.locator('article').filter({has:page.getByRole('button',{name:'Chat with Laptop agent',exact:true})});
+   await localCard.getByText(/^On /).waitFor();
+   const localLast=await page.getByRole('button',{name:'Chat with Sleeping agent',exact:true}).boundingBox(),remoteFirst=await page.getByRole('button',{name:'Chat with Zenbook agent',exact:true}).boundingBox();
+   assert(localLast && remoteFirst && localLast.y<remoteFirst.y,'local managed agents stay together before other-device agents');
    assert.deepEqual(await sent(),[],'discovery must send nothing');
    await settle(page);const agentsShot=path.join(evidence,'comic-agent-list-'+width+'.png');await page.screenshot({path:agentsShot});shots.push(agentsShot);
    await page.getByRole('button',{name:'Chat with Laptop agent',exact:true}).click();
@@ -68,6 +75,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://127.0
    await settle(page);const shot=path.join(evidence,'comic-agent-starter-'+width+'.png');await page.screenshot({path:shot});shots.push(shot);
    assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'document overflow');assert.deepEqual(errors,[]);await context.close();
   }
+  if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'));fs.mkdirSync(keep,{recursive:true,mode:0o700});for(const shot of shots)fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
   console.log(JSON.stringify({ok:true,checks:'No-history agent discovery; local default and exact local/remote named question; fresh readiness/catalog refusal keeps draft, no default substitution; no human DM/group; desktop/phone',shots}));
  }finally{if(browser)await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

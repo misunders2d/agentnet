@@ -9,6 +9,7 @@ assert(evidence, 'AGENTNET_SCREENSHOTS must be outside the repository');
 fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const boot = `
 const kind=new URL(location).searchParams.get('kind'),skin=new URL(location).searchParams.get('skin');
+const pendingMode=${!!process.env.P11_PENDING_ONLY};
 const conv='c'.repeat(64),at='2026-10-05T10:00:00Z';
 const person=(label,address,key)=>({person:label.toLowerCase().padEnd(32,'a'),label,address,fingerprint:key,state:'pinned',devices:[{address,fingerprint:key}]});
 const me=person('Sergey','sergey/laptop','own-key'),peer=person('Vitalii','vitalii/desktop','peer-key');me.state='self';
@@ -16,13 +17,15 @@ const topics=Array.from({length:4},(_,i)=>({id:String(i+1).repeat(32),...(kind==
 const message=(i)=>({id:topics[i].id,lid:topics[i].id,from:peer.address,dir:'in',body:'Topic '+(i+1)+' message',kind:'message',at,state:'stored',actions:[],...(kind==='agent'?{to:me.address,author:{label:'Vitalii',about:'Fixture author'}}:{topic:topics[i].id})});
 const main={id:'a'.repeat(32),lid:'a'.repeat(32),from:peer.address,dir:'in',body:'Quick main flow message',kind:'message',at,state:'stored',actions:[]};
 let thread=kind==='agent'?{id:topics[0].id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:topics[0],messages:[message(0)]}:{id:conv,kind:kind==='group'?'group':'dm',title:kind==='group'?'Team launch':'',peer:kind==='group'?{label:'Team launch',address:'',state:''}:peer,role:'member',members:[{...me,admin:true},peer],frozen:'',agents:[],guests:[],topics,messages:[main,...topics.map((_,i)=>message(i))]};
+if(pendingMode){topics[0].pending=topics[0].waiting=true;topics[0].pending_ids=[topics[0].id,'b'.repeat(32)];thread.messages=[...(kind==='agent'?[]:[main]),{...message(0),kind:'task',body:'Earlier unresolved task'},{...message(0),id:'b'.repeat(32),lid:'b'.repeat(32),kind:'question',body:'Second pending question'},{...message(0),id:'d'.repeat(32),lid:'d'.repeat(32),kind:'answer',body:'Unrelated final answer'}];}
 const overview={version:'fixture',topic_list:true,seq:1,me:{address:me.address,fingerprint:me.fingerprint},person:me,persons:true,agents:true,files:false,controls:false,role:'person',people:[peer],review:[],links:[],reminders:[],threads:kind==='agent'?topics:[],topics:kind==='agent'?[{peer:peer.address,total:4,archived:0,archived_unread:0,latest:topics[0]}]:[],dms:kind==='agent'?[]:[{id:conv,kind:thread.kind,title:thread.title,peer:thread.peer,count:5,unread:0}],directory:{current:true,members:[{address:me.address,presence:'connected'},{address:peer.address,presence:'connected'}]},quarantine:[]};
 window.fixture={overview,thread,requests:[],topics};let open,changed;
+window.resolvePending=()=>{topics[0].pending_ids=[];topics[0].pending=topics[0].waiting=false;changed?.({type:'change',seq:++overview.seq});};
 const host={version:1,platform:'daemon',workspace:{id:'default',name:'P11 local fixture',endpoint:location.origin,address:me.address,realm:'',state:'enrolled'},workspaces:null,skins:[],onSkinsChange(){return()=>{};},onOpen(fn){open=fn;},listen(fn){changed=fn;return()=>{};},stage:async()=>{throw Error('No fixture files');},file:async()=>{throw Error('No fixture files');},api:async(p,body)=>{
  fixture.requests.push({path:p,body});const url=new URL(p,location.origin);
  if(p.startsWith('/api/overview'))return structuredClone(overview);
  if(p.startsWith('/api/dm?'))return structuredClone(thread);
- if(p.startsWith('/api/thread?')){const t=topics.find(t=>t.id===url.searchParams.get('id'))||topics[0];return {id:t.id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:structuredClone(t),messages:[t.id==='f'.repeat(32)?window.freshMessage:{...message(Number(t.title.slice(-1))-1)}]};}
+ if(p.startsWith('/api/thread?')){if(pendingMode)return structuredClone(thread);const t=topics.find(t=>t.id===url.searchParams.get('id'))||topics[0];return {id:t.id,peer:peer.address,key:{pinned:'peer-key'},approved:false,task_grant:'',topic:structuredClone(t),messages:[t.id==='f'.repeat(32)?window.freshMessage:{...message(Number(t.title.slice(-1))-1)}]};}
  if(p.startsWith('/api/topics?')){const state=url.searchParams.get('state'),q=(url.searchParams.get('q')||'').toLowerCase();const rows=topics.filter(t=>(!state||t.state===state)&&t.title.toLowerCase().includes(q));return {topics:structuredClone(rows),matched:rows.length};}
 
  if(p==='/api/dm/send'||p==='/api/send'){
@@ -60,7 +63,7 @@ const server = http.createServer((req, res) => {
     await new Promise(r => server.listen(0, '127.0.0.1', r));
     const origin = 'http://127.0.0.1:' + server.address().port;
     browser = await chromium.launch({ headless: true, executablePath: process.env.AGENTNET_CHROMIUM || '/usr/bin/chromium' });
-    for (const skin of (process.env.P11_SKINS||'comic,classic,zoom').split(',')) for (const kind of ['dm', 'group', 'agent']) for (const width of [1280, 390]) {
+    for (const skin of (process.env.P11_SKINS||'comic,classic,zoom').split(',')) for (const kind of (process.env.P11_PENDING_ONLY?['group','agent']:['dm', 'group', 'agent'])) for (const width of [1280, 390]) {
       const tag = skin + '-' + kind + '-' + width;
       const ctx = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
       await ctx.route('**/*', r => new URL(r.request().url()).origin === origin ? r.continue() : r.abort());
@@ -73,12 +76,35 @@ const server = http.createServer((req, res) => {
         await page.goto(origin + '/?skin=' + skin + '&kind=' + kind);
         await page.waitForFunction(() => window.ready); await page.evaluate(() => openChat());
         await all().waitFor();
-        if (kind !== 'agent') {
+        if (kind !== 'agent' && !process.env.P11_PENDING_ONLY) {
           await page.getByText('Quick main flow message', { exact: false }).first().waitFor();
           assert.equal(await page.getByText('Topic 1 message', { exact: false }).isVisible(), false, tag + ': topic is separate from main');
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, tag + ': page fits');
         await page.evaluate(() => document.fonts.ready); await shot('main');
+
+        if(process.env.P11_PENDING_ONLY){
+          if(kind!=='agent'){
+            await all().click();await page.getByRole('dialog',{name:'All topics',exact:true}).getByRole('button',{name:/^Topic 1(?:\b)/}).click();
+          }
+          const current=()=>page.locator('[data-topic="'+ '1'.repeat(32)+'"][aria-current="true"]');
+          await current().click();
+          await page.getByRole('menuitem',{name:'Show pending requests (2)',exact:true}).click();
+          const pending=page.getByRole('dialog',{name:'Pending requests',exact:true});
+          await pending.waitFor();
+          assert.equal(await pending.getByRole('button',{name:/Open pending/}).count(),2,tag+': every exact pending item listed');
+          assert.equal(await pending.getByText('Unrelated final answer',{exact:true}).count(),0,tag+': unrelated reply is not a pending request');
+          await shot('pending-list');
+          await pending.getByRole('button',{name:/Open pending question 2 Second pending question/}).click();
+          await pending.waitFor({state:'hidden'});
+          await page.waitForFunction(()=>document.querySelector('#skin').shadowRoot.querySelector('[data-mid="'+ 'b'.repeat(32)+'"]')?.getAnimations().length>0);
+          assert.equal((await page.evaluate(()=>fixture.requests.filter(r=>r.body&&r.path!='/api/refresh'&&!(r.path==='/api/act'&&r.body.do==='read')))).length,0,tag+': navigation sends no grants/retries/cancel/topic decisions');
+          await page.evaluate(()=>resolvePending());
+          await page.waitForTimeout(100);
+          await current().click();
+          assert.equal(await page.getByRole('menuitem',{name:/Show pending requests/}).count(),0,tag+': refreshed exact final state removes pending navigation');
+          combinations++;console.log('PENDING PASS '+tag);await ctx.close();continue;
+        }
 
         if(process.env.P11_FLOW_ONLY){
           if(kind!=='agent'){

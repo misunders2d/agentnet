@@ -98,7 +98,7 @@ func TestP7LivePersonGrantViews(t *testing.T) {
 	if _, e = pb.Act(Action{Do: DoApprove, ID: ap.Person}); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = bob.GrantTasks(ap.Person); e != nil {
+	if _, e = pb.Act(Action{Do: "grant_tasks", ID: ap.Person}); e != nil {
 		t.Fatal(e)
 	}
 	sent, e := alice.SendMessage(ctx, client.Outgoing{To: bob.Address, Kind: envelope.KindQuestion, Body: "P7 current person"})
@@ -118,6 +118,37 @@ func TestP7LivePersonGrantViews(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.Handler().ServeHTTP(w, r) }))
 	defer ts.Close()
 	server = New(pb, strings.TrimPrefix(ts.URL, "http://"), testToken)
+	// The new button uses the existing authenticated local action route.
+	// Display names, absent consent, and malformed requests cannot grant it.
+	me, _, err := bob.Person()
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantBody := `{"do":"grant_tasks","id":"` + me.Person + `"}`
+	for _, tc := range []struct {
+		method, body string
+		headers      map[string]string
+		want         int
+	}{
+		{"POST", grantBody, nil, http.StatusUnauthorized},
+		{"POST", grantBody, authed(ts, map[string]string{"Content-Type": "application/json"}), http.StatusForbidden},
+		{"GET", "", authed(ts, nil), http.StatusMethodNotAllowed},
+		{"POST", `{"do":"grant_tasks","id":"Vitalii"}`, post(ts), http.StatusConflict},
+		{"POST", `{"do":"grant_tasks","id":"` + me.Person + `","all":true}`, post(ts), http.StatusBadRequest},
+	} {
+		if resp := do(t, ts, tc.method, "/api/act", tc.body, tc.headers); resp.StatusCode != tc.want {
+			t.Fatalf("grant route %s: got %d want %d", tc.method, resp.StatusCode, tc.want)
+		}
+	}
+	if gs, e := bob.PersonGrants(); e != nil || len(gs) != 1 || gs[0].Person != ap.Person {
+		t.Fatalf("refused grant changed permissions: %v %v", gs, e)
+	}
+	if resp := do(t, ts, "POST", "/api/act", grantBody, post(ts)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("grant own person: %d", resp.StatusCode)
+	}
+	if _, e = pb.Act(Action{Do: DoRevokeTasks, ID: me.Person}); e != nil {
+		t.Fatal(e)
+	}
 	body := `{"kind":"question","person":"` + ap.Person + `"}`
 	for _, bad := range []string{`{"kind":"question","person":"` + ap.Person + `","address":"` + alice.Address + `"}`, `{"kind":"participation","person":"` + ap.Person + `","pid":"` + ap.Person + `"}`} {
 		if resp := do(t, ts, "POST", "/api/approvals/revoke", bad, post(ts)); resp.StatusCode != http.StatusConflict {

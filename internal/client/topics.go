@@ -130,22 +130,30 @@ func topicOpen(r threadRow, replied bool) bool {
 	return (r.kind == envelope.KindQuestion || r.kind == envelope.KindTask) && !replied && !topicUndelivered[r.state]
 }
 
-// deriveTopic is a topic's state from its messages (thread order, oldest
-// first, at least one), what the person set on it here and the time now
-// (unix seconds). engine.mjs deriveTopic is the same function.
-func deriveTopic(g []threadRow, l topicLocal, now int64) topicVerdict {
-	var v topicVerdict
+// pendingTopicRows names the exact rows that keep a topic open. It is derived
+// from retained history on every read, just like Pending; no decision is stored.
+func pendingTopicRows(g []threadRow) []int {
 	replied := map[string]bool{}
 	for _, r := range g {
 		if r.in && r.replyTo != "" && r.status != envelope.StatusProgress {
 			replied[r.replyTo] = true
 		}
 	}
-	for _, r := range g {
+	var pending []int
+	for i, r := range g {
 		if topicOpen(r, replied[r.id]) {
-			v.Pending = true
+			pending = append(pending, i)
 		}
 	}
+	return pending
+}
+
+// deriveTopic is a topic's state from its messages (thread order, oldest
+// first, at least one), what the person set on it here and the time now
+// (unix seconds). engine.mjs deriveTopic is the same function.
+func deriveTopic(g []threadRow, l topicLocal, now int64) topicVerdict {
+	var v topicVerdict
+	v.Pending = len(pendingTopicRows(g)) != 0
 	last := g[len(g)-1]
 	v.QuietSince = last.at
 	live := l.Mark != "" && len(g) <= l.MarkCount // a later message ends the mark
@@ -237,6 +245,9 @@ func summarize(self, peer string, g []string, rows map[string]threadRow, l topic
 		}
 	}
 	v := deriveTopic(facts, l, now)
+	for _, i := range pendingTopicRows(facts) {
+		t.PendingIDs = append(t.PendingIDs, facts[i].id)
+	}
 	t.State, t.DoneBy, t.Pending, t.conclusionID, t.QuietSince = v.State, v.DoneBy, v.Pending, v.Conclusion, time.Unix(v.QuietSince, 0)
 	if v.Conclusion != "" {
 		t.ConcludedBy = peer

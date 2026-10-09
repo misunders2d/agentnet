@@ -207,6 +207,11 @@ func summarizeChatTopics(conv string, msgs []ConvMessage, locals map[string]topi
 		}
 
 		t := ThreadSummary{ID: id, Conv: conv, Title: firstLine(first.Body), Last: firstLine(last.Body), LastAt: time.Unix(activity, 0), Count: len(g), State: v.State, DoneBy: v.DoneBy, Pending: v.Pending, QuietSince: time.Unix(v.QuietSince, 0)}
+		for _, i := range pendingTopicRows(facts) {
+			// The logical id matches replies; the stored copy id opens the
+			// exact request and its existing local actions.
+			t.PendingIDs = append(t.PendingIDs, g[i].ID)
+		}
 		if shared.Mark == "done" && v.DoneBy == DoneByYou {
 			t.DoneBy = "person"
 			t.ConcludedBy = by

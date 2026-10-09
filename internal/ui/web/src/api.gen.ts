@@ -109,6 +109,7 @@ export interface ApprovalRevoke {
 export interface ApprovalsView {
   questions: QuestionApproval[] | null;
   tasks: TaskGrantView[] | null;
+  native_tasks?: TaskGrantView[];
   participations: ParticipationGrant[] | null;
   read_only: boolean;
   unresolved?: string[];
@@ -1121,6 +1122,7 @@ export interface ThreadSummary {
   conclusion?: string;
   concluded_by?: string;
   pending: boolean;
+  pending_ids?: string[];
   renamed?: boolean;
   auto_title?: string;
   quiet_since: string;

@@ -74,8 +74,8 @@ export function AgentsView() {
 
       <Section title="Your agents">
         {data.browser ? <BrowserNote /> : <MyAgent o={o} r={data.responder} />}
-        <OwnAgentChats overview={o} includeLocal={false} />
         {!data.browser && <NamedAgents o={o} catalog={data.catalog} />}
+        <OwnAgentChats overview={o} includeLocal={false} />
       </Section>
 
       <ReportsNote o={o} />
@@ -111,10 +111,11 @@ function MyAgent({ o, r }: { o: T.Overview; r: Load<T.ResponderView> }) {
       <div className="flex items-center gap-3.5">
         <AgentAvatar seed={o.me.address} size={56} mood={state === "ready" ? "neutral" : "asleep"} device={deviceKind(o.me.address)} />
         <div className="min-w-0 flex-1">
-          <p className="font-display text-[20px] font-bold leading-tight">Your agent</p>
+          <p className="font-display text-[20px] font-bold leading-tight">Default agent</p>
           <p className="truncate text-[14px] font-medium text-text-2">On {niceDevice(o.me.address)}{harness && state !== "manual" && state !== "unset" ? " · " + capital(harness) : ""}</p>
         </div>
       </div>
+      <p className="pt-2 text-[13px] text-muted">Used when a request to this computer doesn’t name an agent.</p>
       <p className="pt-3 flex items-center gap-2 text-[15px] font-bold">
         <Dot tone={state === "ready" ? "ok" : state === "problem" ? "bad" : "off"} />
         {{ ready: "Ready", problem: "Not ready", manual: "No automatic answers", unset: "Not set up yet", loading: "Checking…" }[state]}
@@ -217,6 +218,7 @@ function NamedAgent({ a, o, onToggle }: { a: T.CatalogAgent; o: T.Overview; onTo
         <AgentAvatar seed={a.record.id} size={48} mood={a.enabled && r?.ready ? "neutral" : "asleep"} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[17px] font-bold leading-tight">{a.record.label}</p>
+          <p className="pt-0.5 text-[13px] text-muted">On {niceDevice(a.record.host)}</p>
           <p className="pt-0.5 flex items-center gap-1.5 text-[14px] text-text-2"><Dot tone={!a.enabled ? "off" : r?.ready ? "ok" : "bad"} />{status}</p>
         </div>
         <label className="flex min-h-11 cursor-pointer items-center gap-2 pl-2">

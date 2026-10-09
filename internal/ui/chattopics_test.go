@@ -171,3 +171,9 @@ func TestChatTopicsAllSkinsRendered(t *testing.T) {
 	out := browserCheck(t, "testdata/chattopics_rendered.cjs")
 	t.Log(out)
 }
+
+func TestTopicPendingRequestsComicRendered(t *testing.T) {
+	t.Setenv("P11_SKINS", "comic")
+	t.Setenv("P11_PENDING_ONLY", "1")
+	t.Log(browserCheck(t, "testdata/chattopics_rendered.cjs"))
+}

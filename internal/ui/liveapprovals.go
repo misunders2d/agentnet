@@ -12,8 +12,8 @@ import (
 
 // Standing grants on the page: what agentnet approvals lists, and revoking
 // one through the same operations as agentnet unapprove, unapprove --tasks
-// and dm dismiss-agent. Nothing here grants anything: a grant is made by
-// a decision (approve, accept --always, accepting an agent's invitation).
+// and dm dismiss-agent. Grants are made by an explicit local decision
+// (approve, grant_tasks, accept --always, accepting an agent's invitation).
 
 // ApprovalsProvider is implemented by providers that keep standing grants
 // (the daemon). The browser device holds none: its view is read-only and
@@ -30,8 +30,11 @@ type ApprovalsProvider interface {
 // the tasks of the member keys their accepted invitation named. ReadOnly:
 // grants are not kept on this device (the browser).
 type ApprovalsView struct {
-	Questions      []QuestionApproval   `json:"questions"`
-	Tasks          []TaskGrantView      `json:"tasks"`
+	Questions []QuestionApproval `json:"questions"`
+	Tasks     []TaskGrantView    `json:"tasks"`
+	// NativeTasks are independent trusted-own-device permissions for direct
+	// tasks, not removed by revoking a person or explicit device task grant.
+	NativeTasks    []TaskGrantView      `json:"native_tasks,omitempty"`
 	Participations []ParticipationGrant `json:"participations"`
 	ReadOnly       bool                 `json:"read_only"`
 	// Unresolved: conversations whose agents cannot be resolved here now
@@ -107,6 +110,13 @@ func (l *Live) Approvals() (ApprovalsView, error) {
 	}
 	for _, g := range ts {
 		v.Tasks = append(v.Tasks, TaskGrantView{Address: g.Address, Fingerprint: g.Fingerprint, Status: g.Status})
+	}
+	native, err := l.a.NativeTaskPermissions()
+	if err != nil {
+		return v, err
+	}
+	for _, g := range native {
+		v.NativeTasks = append(v.NativeTasks, TaskGrantView{Address: g.Address, Fingerprint: g.Fingerprint, Status: g.Status})
 	}
 	pgs, err := l.a.PersonGrants()
 	if err != nil {

@@ -5,7 +5,7 @@
 // (act trust {id, key}). A browser keeps no trust of its own: it says to do
 // this in AgentNet on a computer. Answering a device's questions
 // automatically, and running its tasks without asking, are this computer's
-// own permissions (act approve, unapprove, revoke_tasks); they change
+// own permissions (act approve, unapprove, grant_tasks, revoke_tasks); they change
 // nothing already running.
 import { useEffect, useState, type ReactNode } from "react";
 import { IconCheck, IconShieldExclamation } from "@tabler/icons-react";
@@ -93,41 +93,51 @@ export function TrustNotice({ thread }: { thread: T.Thread }) {
 
 // ---- standing permissions for one device's agent ----------------------------------------------
 
-export type GrantChange = "approve" | "unapprove" | "revoke_tasks";
+export type GrantChange = "approve" | "unapprove" | "grant_tasks" | "revoke_tasks";
 
-/** The three permission changes, each its own act on the device's address. */
+/** Each local permission change names the exact person ID or device address. */
 const grantActs: Record<GrantChange, (peer: string) => (a: Api) => Promise<unknown>> = {
   approve: (peer) => (a) => a.act({ do: "approve", id: peer }),
   unapprove: (peer) => (a) => a.act({ do: "unapprove", id: peer }),
+  grant_tasks: (peer) => (a) => a.act({ do: "grant_tasks", id: peer }),
   revoke_tasks: (peer) => (a) => a.act({ do: "revoke_tasks", id: peer }),
 };
 
 /** DeviceGrantConfirm: turn automatic answers on or off for a device, or stop
  *  running its tasks without asking, after saying what that means. */
-export function DeviceGrantConfirm({ change, onClose, peer, thread }: { change: GrantChange | null; onClose: () => void; peer: string; thread?: { task_grant?: string } }) {
+export function DeviceGrantConfirm({ change, onClose, peer }: { change: GrantChange | null; onClose: () => void; peer: string; thread?: { task_grant?: string } }) {
   const store = useApp();
   const o = useStore(store, (s) => s.overview);
-  const who = deviceWords(peer, o);
+  const person = [o?.person, ...(o?.people || [])].find((p) => p?.person === peer);
+  const own = !!person && person.person === o?.person?.person;
+  const who = own ? "your devices" : person?.label || deviceWords(peer, o);
+  const possessive = own ? "your devices’" : who + "’s";
+  const host = o ? deviceWords(o.me.address, o) : "this computer";
   const [shown, setShown] = useState<GrantChange>(change || "approve");
   useEffect(() => { if (change) setShown(change); }, [change]);
   const text: Record<GrantChange, { title: string; ok: string; done: string; body: ReactNode; danger: boolean }> = {
     approve: {
-      title: "Answer " + who + "’s questions automatically?", ok: "Answer automatically", danger: false,
-      done: "Your agent now answers " + who + "’s questions without asking you.",
+      title: "Answer " + possessive + " questions automatically?", ok: "Answer automatically", danger: false,
+      done: "Your agent now answers " + possessive + " questions without asking you.",
       body: <>
         <p>From now on your agent answers questions from {who} without asking you. It works with your own setup, without editing tools or anything that needs a new OK; tools you already allow keep their effects.</p>
-        <p>{thread?.task_grant === "active" ? "Tasks aren’t affected: those from this device already run without asking, as you allowed." : "Tasks still wait for your OK."} Questions already waiting stay waiting: answer them, or let your agent answer each one.</p>
+        <p>Task permissions are unchanged. Questions already waiting stay waiting: answer them, or let your agent answer each one.</p>
       </>,
     },
     unapprove: {
-      title: "Stop answering " + who + "’s questions automatically?", ok: "Stop automatic answers", danger: true,
-      done: "Their questions wait for you again.",
-      body: <p>Their questions will wait for you again. An answer already being written may still finish unless you stop it.</p>,
+      title: "Stop answering " + possessive + " questions automatically?", ok: "Stop automatic answers", danger: true,
+      done: "This automatic question permission ended. Separate permissions are unchanged.",
+      body: <p>This removes the automatic question permission on {host}. Questions need your OK unless a separate device permission or chat already allows them. An answer already being written may still finish unless you stop it.</p>,
     },
     revoke_tasks: {
-      title: "Stop running " + who + "’s tasks without asking?", ok: "Stop", danger: true,
-      done: "Their tasks wait for you again.",
-      body: <p>Their tasks will wait for your OK again. A task already running isn’t stopped by this.</p>,
+      title: "Remove " + (own ? "your devices’" : who + "’s") + " task permission here?", ok: "Remove permission", danger: true,
+      done: "This standing task permission ended. Other permissions and accepted tasks are unchanged.",
+      body: <><p>This removes the permission for {who} on {host}. Future tasks need your OK unless a separate device permission or accepted agent invitation already allows them.</p><p>It does not stop running tasks or undo one-time approvals. Other receiving computers are unchanged.</p></>,
+    },
+    grant_tasks: {
+      title: "Allow tasks from " + who + " without asking here?", ok: "Allow future tasks", danger: false,
+      done: "Future tasks may run here with the agent’s normal permissions. Tasks already waiting stay waiting.",
+      body: <><p>On {host}, your agent may run future tasks from {who} without another AgentNet approval. {person ? "This covers their current and future verified devices, including phones." : "This covers only this device’s current key."}</p><p>The agent keeps this computer’s normal tools and permissions; native approval requirements still apply. Removed devices, changed keys and frozen identities stay blocked. Tasks already waiting, failed or interrupted are not restarted. Other receiving computers are unchanged.</p></>,
     },
   };
   const w = text[shown];

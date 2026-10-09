@@ -4,6 +4,37 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
+## Release candidate — v0.8.12, October 9, 2026
+
+The owner authorized implementation, integration, qualification, publication and
+upgrade of the existing relay. Branch `release/v0.8.12` integrates ThinkPad's
+MEL-502 collective tags (`4fc19719`, applied as `fec2b046`) and the bounded fixes
+in the [release checklist](plans/V0_8_12.md). The direct Linear sweep records
+[all 79 open issue dispositions](plans/V0_8_12_ISSUES.md), including unresolved
+physical journeys and explicitly deferred features. Earlier notification,
+compact approval and concurrency branches are already in v0.8.11; they were not
+applied again.
+
+Implemented: exact current-chat collective recipients with independent retries;
+Comic own-human task permission through existing verified-person grants; exact
+pending-request navigation; prominent available-version heading and Update;
+clearer default/local agent labels and group invitation wording. Independent
+native device trust stays separate and now displays inactive after a pinned-key
+replacement. No authority, native sandbox or automatic replay policy changed.
+
+For MEL-580, read-only retained metadata showed an unmatched task: later final
+replies belonged to other requests, and ordinary reply messages did not complete
+it. The new list exposes exact contributing requests and their existing actions.
+It does not claim to repair an unproven stale state or silently close old work.
+Shared vectors and a reopened synthetic history store verify late exact replies
+clear the derived pending list without execution-state mutations.
+
+Focused native, browser, authority/race, desktop/narrow rendered checks and
+repository-wide vet pass; detailed evidence is in the checklist. Root inspected
+the affected screenshots and reviewed the merged source. The costly integrated
+qualification and final packaging gates are next. This is not a published
+release yet. Live clients, grants, requests and desktop sessions are unchanged.
+
 ## Current release — v0.8.11, October 9, 2026 (UTC)
 
 ### Published v0.8.11
@@ -161,6 +192,10 @@ identical to that qualified revision. Final packaging passed its native shell
 and Linux AppImage replacement/restart gates before publication and relay rollout.
 
 ### Follow-up release scope — v0.8.12
+
+Implementation started on `release/v0.8.12` after fetching/pulling main.
+The shared [release checklist](plans/V0_8_12.md) records owners, acceptance and
+evidence. Root owns integration and publication; ThinkPad has no active writer.
 
 The October 9 post-release Herdr handoff and direct Linear reads confirm these
 outstanding requirements. They are scope, not implementation or shipment claims:

@@ -19,7 +19,7 @@ import { Sheet } from "../ui/Sheet";
 import { Tag } from "../ui/Tag";
 import { focusedIn, usePortal } from "../owned";
 import { AllTopics } from "./Conversation.alltopics";
-import { threadAgentName, type Ctx } from "./Message.model";
+import { shownText, threadAgentName, type Ctx } from "./Message.model";
 
 /** barTopics picks the bar's chips: what needs you, then unread, then the
  *  open topic, then the most recent active ones; the open topic always gets
@@ -221,6 +221,7 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
   const store = useApp();
   const portal = usePortal();
   const [rename, setRename] = useState(false);
+  const [pending, setPending] = useState(false);
   const item = "flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-3 text-[15px] font-medium outline-none data-[highlighted]:bg-sunken";
   return (
     <>
@@ -229,6 +230,7 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
         <Menu.Portal container={portal}>
           <Menu.Positioner side="bottom" align="start" sideOffset={6} collisionPadding={12} className="z-50">
             <Menu.Popup className="min-w-60 rounded-2xl bg-surface p-1.5 text-ink outline-none stroke shadow-pop transition-[opacity,scale] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 motion-reduce:transition-opacity">
+              {!!topic.pendingIDs?.length && <Menu.Item className={item} onClick={() => setPending(true)}><IconClock size={20} aria-hidden="true" />Show pending requests ({topic.pendingIDs.length})</Menu.Item>}
               <Menu.Item className={item} onClick={() => setRename(true)}><IconPencil size={20} aria-hidden="true" />Rename…</Menu.Item>
               {topic.state === "active"
                 ? <Menu.Item className={item} onClick={() => void changeTopic(store, "done", topic)}><IconCircleCheck size={20} aria-hidden="true" />Mark done</Menu.Item>
@@ -240,8 +242,31 @@ export function TopicMenu({ topic, trigger, onAll }: { topic: Topic; trigger: Re
         </Menu.Portal>
       </Menu.Root>
       <RenameTopic open={rename} onOpenChange={setRename} topic={topic} />
+      <PendingTopic open={pending} onOpenChange={setPending} topic={topic} />
     </>
   );
+}
+
+/** Navigation to the exact contributing requests, with their existing actions. */
+function PendingTopic({ open, onOpenChange, topic }: { open: boolean; onOpenChange: (open: boolean) => void; topic: Topic }) {
+  const store = useApp();
+  const view = useStore(store, s => s.views[topic.conv || topic.id]);
+  return <Sheet open={open} onOpenChange={onOpenChange} title="Pending requests"
+    description="These items keep this topic open. Open one to see its current status and available actions.">
+    <div className="grid gap-2">
+      {(topic.pendingIDs || []).map((id, i) => {
+        const m = view?.messages?.find(m => m.id === id);
+        return <Button key={id} variant="ghost" className="h-auto min-h-12 justify-start whitespace-normal text-left" onClick={() => {
+          onOpenChange(false);
+          void store.openMessage(id, topic.conv ? { conv: topic.conv } : undefined);
+        }}>
+          <span><span className="block text-[12px] text-text-2">Open pending {m?.kind === "task" ? "task" : m?.kind === "question" ? "question" : "item"} {i + 1}</span>
+            <span>{m ? firstLine(shownText(m)) || "Message without text" : "Open request"}</span></span>
+        </Button>;
+      })}
+      {!topic.pendingIDs?.length && <p className="text-text-2">No pending requests remain in this topic.</p>}
+    </div>
+  </Sheet>;
 }
 
 /** changeTopic sends one of your changes to a topic and says what it did. */

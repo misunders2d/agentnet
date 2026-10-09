@@ -30,7 +30,7 @@ for(const c of vectors.chat_cases){
  const msgs=c.messages.map(m=>({...m,ts:m.sent,to:m.dir==='out'?'bob/desk':undefined,at:m.sent*1000}));
  same(Object.fromEntries(chatTopicAssignments(msgs)),c.assigned,c.name+' assignment');
  const locals=new Map(Object.entries(c.local).map(([id,l])=>['chat/'+id,l]));
- const got=summarizeChatTopics('chat',msgs,locals,vectors.now).map(t=>({ID:t.id,State:t.state,Count:t.count,DoneBy:t.done_by||'',Pending:t.pending}));
+ const got=summarizeChatTopics('chat',msgs,locals,vectors.now).map((t,i)=>({ID:t.id,State:t.state,Count:t.count,DoneBy:t.done_by||'',Pending:t.pending,...(c.want[i]?.PendingIDs?{PendingIDs:t.pending_ids||[]}:{})}));
  same(got,c.want,c.name+' shared derivation');
 }
 
@@ -105,8 +105,10 @@ t = await topicOf(failed.id);
 check(t.state === 'active' && !t.done_by && !t.pending, 'a failed result is not done');
 t = await topicOf(held.id);
 check(t.state === 'active' && t.pending && t.review === 1, 'a held question keeps an old topic pending');
+same(t.pending_ids,[held.id],'held question links its exact existing actions');
 t = await topicOf(waits.id);
 check(t.state === 'active' && t.pending && t.waiting, 'an old unanswered question waits');
+same(t.pending_ids,[waits.id],'old unanswered question is named exactly');
 t = await topicOf(plain[0].id);
 check(t.state === 'archived' && !t.pending, 'an old quiet topic is archived and still opens');
 
@@ -156,6 +158,8 @@ check(t.state === 'done' && t.done_by === 'you' && t.title === 'Zebra crossing',
 const reload = new Engine({ store, base: engine.base, fetch, now: () => clock });
 reload.address = me; reload.fp = engine.fp; await reload.loadErased();
 check((await reload.api('/api/thread?id=' + a.id)).topic.done_by === 'you', 'kept in IndexedDB: a fresh engine reads it');
+same((await reload.api('/api/thread?id='+waits.id)).topic.pending_ids,[waits.id],'fresh engine derives the same pending request from retained history');
+same((await reload.api('/api/thread?id='+held.id)).topic.pending_ids,[held.id],'fresh engine retains the exact held item without deciding it');
 await engine.api('/api/topic/reopen', { peer: bob, id: task.id });
 t = await topicOf(task.id);
 check(t.state === 'active' && !t.done_by, 'Reopen after the agent finished');

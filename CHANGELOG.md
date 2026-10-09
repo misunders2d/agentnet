@@ -9,6 +9,15 @@ This record starts with v0.8.1; earlier releases remain on the
 ### Added
 
 - Choose `@everyone` or a shared list such as `@Reviewers` to address people and agents already in the current chat. The composer expands the tag into visible, exact recipients, deduplicates overlapping tags, and preserves each agent's independent send and retry. List managers can select people, agents, or both; everyone can use the tag. Mixed lists require an updated relay.
+- Enable automatic tasks from all your verified devices in the receiving computer's Permissions settings. This uses the existing person grant, includes future linked devices, and preserves native permissions and independent device grants. Previously waiting, failed or interrupted tasks are not restarted.
+- Open a topic's exact pending requests from its menu to see what keeps it waiting and use the existing actions. Retained history and later replies update this list without rerunning or closing unrelated work.
+
+### Fixed
+
+- Display an available update as a prominent version heading beside Update AgentNet. The previous update result remains secondary while a newer version is available.
+- Keep local default and named agents together, label their computers, and explain which requests use the default agent.
+- Show an independent trusted-device task permission as inactive after its pinned key changes, matching the existing execution checks.
+- Simplify group invitation wording: selected people receive invitations and choose whether to join.
 
 ## [0.8.11] — 2026-10-09
 

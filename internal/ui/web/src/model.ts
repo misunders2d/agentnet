@@ -92,6 +92,7 @@ export interface Topic {
   needsYou: number;            // decisions waiting for you in it
   waiting: boolean;            // a request in it waits for the agent, or the agent is working
   pending: boolean;            // anything in it is still open: never archived
+  pendingIDs?: string[];       // exact requests/notices keeping it open; navigation only
   state: TopicState;
   doneBy?: "agent" | "you" | "person";
   conclusion?: string;         // the final reply that made it done, first line: the agent's, or yours when you answered by hand here
@@ -102,7 +103,7 @@ export interface Topic {
 
 export const topicOf = (t: T.ThreadSummary): Topic => ({
   id: t.id, conv:t.conv,peer: t.peer, title: t.title, autoTitle: t.auto_title, renamed: !!t.renamed, last: t.last, lastAt: t.last_at, unread: t.unread,
-  needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending,
+  needsYou: t.review, waiting: t.waiting || t.running > 0, pending: t.pending, pendingIDs: t.pending_ids,
   state: t.state === "done" || t.state === "archived" ? t.state : "active",
   doneBy: t.done_by === "agent" || t.done_by === "you" || t.done_by === "person" ? t.done_by : undefined, conclusion: t.conclusion, concludedBy: t.concluded_by,
   count: t.count, quietSince: t.quiet_since || t.last_at,

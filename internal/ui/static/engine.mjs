@@ -454,14 +454,17 @@ const topicRequest = (k) => k === "question" || k === "task";
 const topicOpen = (r, replied) => r.notice ? r.state === "needs_human"
   : r.in ? !r.selected && (topicOpenIn.has(r.state) || r.state === "interrupted" && topicRequest(r.kind)) // interrupted: waits for the person (client reviewStates)
   : topicRequest(r.kind) && !replied && !topicUndelivered.has(r.state);
+const pendingTopicRows = g => {
+  const replied = new Set(g.filter(r => r.in && r.reply_to && r.status !== "progress").map(r => r.reply_to));
+  return g.flatMap((r,i) => topicOpen(r,replied.has(r.id)) ? [i] : []);
+};
 // deriveTopic is a topic's state from its messages (thread order, oldest
 // first; facts {id, reply_to, at (seconds), in, kind, state, status,
 // notice, selected}), what the person set on it here ({mark, mark_at,
 // mark_count}) and now (seconds): client topics.go deriveTopic exactly.
 export function deriveTopic(g, local, now) {
   const l = local || {}, v = { state: "active", pending: false, quiet_since: 0 };
-  const replied = new Set(g.filter((r) => r.in && r.reply_to && r.status !== "progress").map((r) => r.reply_to));
-  for (const r of g) if (topicOpen(r,replied.has(r.id))) v.pending=true;
+  v.pending = pendingTopicRows(g).length > 0;
   const last = g[g.length - 1];
   v.quiet_since = last.at;
   const live = !!l.mark && g.length <= (l.mark_count || 0); // a later message ends the mark
@@ -498,6 +501,7 @@ export function summarizeChatTopics(conv,msgs,locals=new Map(),now=Math.floor(Da
   v.quiet_since=Math.max(v.quiet_since,activity);
   if(v.state==="archived"&&l.mark!=="archived"&&now-v.quiet_since<TOPICS.archiveAfter)v.state=v.done_by?"done":"active";
   const t={id,conv,peer:"",title:firstLine(first.body),last:firstLine(last.body),last_at:iso(activity*1000),count:g.length,state:v.state,pending:v.pending,quiet_since:iso(v.quiet_since*1000),review:g.filter(m=>["held","needs_human"].includes(m.job)).length,unread:0,running:g.filter(m=>m.job==="running").length,waiting:v.pending,key_changed:false,notices:0,notice_only:false};
+  if(v.pending)t.pending_ids=pendingTopicRows(facts).map(i=>g[i].id);
   if(v.done_by)t.done_by=v.done_by;if(shared.mark==="done"&&v.done_by==="you"){t.done_by="person";t.concluded_by=by;}
   const conclusion=g.find(m=>m.lid===v.conclusion);if(conclusion){t.conclusion=firstLine(conclusion.body);t.concluded_by=conclusion.from||"";}
   if(local.title)Object.assign(t,{auto_title:t.title,title:local.title,renamed:true});out.push(t);
@@ -3078,6 +3082,7 @@ export class Engine {
       key_changed: !!(pin && pin.pending), notices: g.filter((m) => m.dir === "in" && notice(m) && !m.resolved).length, notice_only: g.every(notice),
       state: v.state, pending: v.pending, quiet_since: iso(v.quiet_since * 1000), ...(v.done_by ? { done_by: v.done_by } : {}),
       ...(concluded ? { conclusion: firstLine(concluded.body), concluded_by: concluded.dir === "in" ? first.peer : this.address } : {}) };
+    if(v.pending)t.pending_ids=pendingTopicRows(facts).map(i=>g[i].id);
     if (local.title) Object.assign(t, { auto_title: t.title, title: local.title, renamed: true });
     return t;
   }

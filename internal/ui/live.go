@@ -531,7 +531,10 @@ func (l *Live) Act(x Action) (string, error) {
 		note = "Trusted " + x.ID + "'s key " + shortFP(fp) + "."
 	case DoRevokeTasks:
 		_, err = l.a.RevokeTasks(x.ID)
-		note = "Tasks from " + x.ID + " wait for you again."
+		note = "This standing task permission ended. Other permissions and accepted tasks are unchanged."
+	case DoGrantTasks:
+		_, err = l.a.GrantTasks(x.ID)
+		note = "Future tasks from " + l.a.PermissionLabel(x.ID) + " may run on this computer with its agent's normal permissions. Tasks already waiting stay waiting."
 	case DoArchiveHeld:
 		err = l.a.ArchiveHeldNotice(x.ID)
 		note = "Notice archived locally. The retained message has not been accepted or run."

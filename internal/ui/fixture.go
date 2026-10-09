@@ -452,6 +452,8 @@ func (f *Fixture) Act(a Action) (string, error) {
 			p.approved = false
 		case DoRevokeTasks:
 			p.taskGrant = ""
+		case DoGrantTasks:
+			p.taskGrant = "active"
 		default:
 			return "", Refuse("Unknown action.")
 		}

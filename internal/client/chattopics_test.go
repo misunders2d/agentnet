@@ -26,6 +26,7 @@ func TestChatTopicVectors(t *testing.T) {
 				ID, State, DoneBy string
 				Count             int
 				Pending           bool
+				PendingIDs        []string
 			}
 		} `json:"chat_cases"`
 	}
@@ -57,6 +58,9 @@ func TestChatTopicVectors(t *testing.T) {
 				g := got[i]
 				if g.ID != w.ID || g.State != w.State || g.DoneBy != w.DoneBy || g.Count != w.Count || g.Pending != w.Pending {
 					t.Fatalf("got %+v want %+v", g, w)
+				}
+				if w.PendingIDs != nil && !reflect.DeepEqual(append([]string{}, g.PendingIDs...), w.PendingIDs) {
+					t.Fatalf("pending IDs got %v want %v", g.PendingIDs, w.PendingIDs)
 				}
 			}
 		})

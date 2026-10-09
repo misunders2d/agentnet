@@ -74,6 +74,37 @@ func (a *Agent) SelfConsentTrust() ([]TrustedDevice, error) {
 	return append([]TrustedDevice{{Address: a.Address, Fingerprint: a.Self().Fingerprint()}}, added...), nil
 }
 
+// NativeTaskPermissions reports the independent, locally trusted own-device
+// permission for direct tasks. It is not a person grant or a group TaskKeys
+// grant; removing either of those does not remove this trust. The same current
+// authority predicate used by the worker supplies the effective status.
+func (a *Agent) NativeTaskPermissions() ([]Grant, error) {
+	devices, err := selfConsentAddedIn(a.store.db)
+	if err != nil {
+		return nil, err
+	}
+	grants := make([]Grant, 0, len(devices))
+	for _, d := range devices {
+		active, err := ownDeviceHolds(a.store.db, d.Address, d.Fingerprint)
+		if err != nil {
+			return nil, err
+		}
+		// Receipt also verifies the sender against its current pin. A stored
+		// native trust entry cannot describe an old, replaced key as active.
+		key, pinned, err := pinnedKey(a.store.db, d.Address)
+		if err != nil {
+			return nil, err
+		}
+		active = active && pinned && key.Fingerprint() == d.Fingerprint
+		status := "inactive: current own-device trust does not hold"
+		if active {
+			status = "active"
+		}
+		grants = append(grants, Grant{Address: d.Address, Fingerprint: d.Fingerprint, Status: status})
+	}
+	return grants, nil
+}
+
 // UntrustOwnDevice removes the device at address from the trust set; this
 // device itself always stays in it. Its invites of this person's agents
 // wait for a click again, and its tasks to this device's agent wait for the

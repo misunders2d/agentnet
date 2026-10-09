@@ -5,7 +5,8 @@ const path = require('node:path');
 const { chromium } = require(process.env.AGENTNET_PLAYWRIGHT || 'playwright-core');
 const settle = page => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
 async function releaseChecks(browser) {
-  for (const skin of (process.env.AGENTNET_TEST_SKINS || 'comic,classic,zoom').split(',')) for (const width of [1280,390]) {
+  const prominent = process.argv.includes('--prominent-update');
+  for (const skin of (prominent ? ['comic'] : (process.env.AGENTNET_TEST_SKINS || 'comic,classic,zoom').split(','))) for (const width of (prominent ? [1440,390] : [1280,390])) {
     const context = await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce'});
     const page = await context.newPage();page.setDefaultTimeout(8000);await page.clock.install();
     const errors = [], actions = [], checks = [], pending = [];
@@ -20,7 +21,10 @@ async function releaseChecks(browser) {
       const url = new URL(r.request().url());url.pathname = url.pathname.replace(/^\/workspaces\/[^/]+\/[^/]+/,'');
       return r.continue({url:url.href});
     });
-    await page.route('**/api/app/status', r => r.fulfill({json:{version:'v0.8.9',cli_path:'/synthetic/agentnet',cli_state:'installed',app_update_supported:supported,problem:supported?'':'Managed by the fixture package manager.'}}));
+    const oldSuccess = 'Updated app and CLI to v0.8.9';
+    await page.route('**/api/app/status', r => r.fulfill({json:{version:'v0.8.9',cli_path:'/synthetic/agentnet',cli_state:'installed',app_update_supported:supported,update_result:oldSuccess,problem:supported?'':'Managed by the fixture package manager.'}}));
+    let installing;
+    await page.route('**/api/app/update', r => { assert.equal(r.request().method(),'POST'); installing=r; });
     const reply = (r,v) => v.error ? r.fulfill({status:503,contentType:'text/plain',body:v.error}) : r.fulfill({json:v});
     await page.route('**/api/app/check', r => {
       assert.equal(r.request().method(),'GET');checks.push(r.request().url());
@@ -62,6 +66,22 @@ async function releaseChecks(browser) {
       assert(await update().isDisabled(),'checking disables installation');
       assert.equal(pending.length,1);await reply(pending[0].route,pending[0].value);pending.length=0;
       await page.getByText('Version v0.8.10 is available.',{exact:true}).waitFor();assert(!(await update().isDisabled()));
+      if(prominent){
+        const heading=page.getByRole('heading',{name:'Version v0.8.10 is available.',exact:true});
+        await heading.waitFor({timeout:2000});
+        assert.equal(await page.getByText(oldSuccess,{exact:true}).count(),0,'old update success is identified as a previous result');
+        const title=await heading.boundingBox(),action=await update().boundingBox();
+        assert(title && action && Math.abs(action.y-title.y)<100,'update action sits next to the available-version heading');
+        const size=await heading.evaluate(e=>Number.parseFloat(getComputedStyle(e).fontSize));
+        const installedSize=await page.getByText('Installed app: v0.8.9.',{exact:true}).evaluate(e=>Number.parseFloat(getComputedStyle(e).fontSize));
+        const previousSize=await page.getByText('Last update: '+oldSuccess,{exact:true}).evaluate(e=>Number.parseFloat(getComputedStyle(e).fontSize));
+        assert(size>=22 && size>installedSize,'available version is visually primary');
+        assert(previousSize<=installedSize,'previous update result remains secondary');
+        if(process.env.AGENTNET_SCREENSHOTS){
+          const shot=path.join(process.env.AGENTNET_SCREENSHOTS,'comic-update-available-'+width+'.png');await page.screenshot({path:shot});
+          if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'));fs.mkdirSync(keep,{recursive:true,mode:0o700});fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
+        }
+      }
       for(const value of [{state:'current',version:'v0.8.9',latest:'v0.8.9'},{state:'ahead',version:'v0.8.9',latest:'v0.8.8'}]){
         await run(value);assert(await update().isDisabled(),'current/ahead cannot install the latest stable');
       }
@@ -104,6 +124,16 @@ async function releaseChecks(browser) {
         const shot=path.join(process.env.AGENTNET_SCREENSHOTS,skin+'-release-check-'+width+'.png');await page.screenshot({path:shot});
         if(process.env.AGENTNET_RENDERED_RETAIN){const keep=path.resolve(process.env.AGENTNET_RENDERED_RETAIN);assert(keep.startsWith('/tmp/'));fs.mkdirSync(keep,{recursive:true,mode:0o700});fs.copyFileSync(shot,path.join(keep,path.basename(shot)));}
       }
+      if(prominent){
+        assert.deepEqual(actions,[],'discovery alone never starts installation');
+        await run({state:'available',version:'v0.8.9',latest:'v0.8.10'});
+        await update().click();await page.getByRole('button',{name:'Updating…',exact:true}).waitFor();
+        assert(await check().isDisabled(),'installation keeps the existing in-progress state');
+        assert(installing);await installing.fulfill({json:{message:'Synthetic update requested; app will restart when ready.'}});installing=null;
+        await page.getByText('Synthetic update requested; app will restart when ready.',{exact:true}).waitFor();
+        assert.equal(actions.length,1,'only the explicit install click posts once');
+      }
+      const completedChecks=checks.length;
       // Remount the same package over the public host contract, as an old host
       // or a browser would supply it. Neither may invoke a desktop check.
       for(const mode of ['old-host','browser']){
@@ -115,12 +145,12 @@ async function releaseChecks(browser) {
         },{skin,mode});
         await about();await settle(page);
         assert.equal(await check().count(),0,mode+' hides the optional desktop control');
-        assert.equal(checks.length,explicitChecks,mode+' never calls app check');
+        assert.equal(checks.length,completedChecks,mode+' never calls app check');
       }
-      assert.deepEqual(actions,[],'checking never posts update or CLI replacement');assert.deepEqual(errors,[],'no browser exceptions');
-      console.log(`${skin} ${width}: published release check PASS (${checks.length} explicit GETs; no POSTs)`);
+      if(!prominent)assert.deepEqual(actions,[],'checking never posts update or CLI replacement');assert.deepEqual(errors,[],'no browser exceptions');
+      console.log(`${skin} ${width}: published release check PASS (${checks.length} explicit GETs; ${actions.length} explicit install POSTs)`);
     }catch(e){console.error(JSON.stringify({skin,width,errors,text:await page.locator('#skin').first().evaluate(e=>e.shadowRoot?.textContent||e.textContent)}));throw e;}
-    finally{for(const held of pending)await held.route.abort().catch(()=>{});await context.close();}
+    finally{for(const held of pending)await held.route.abort().catch(()=>{});if(installing)await installing.abort().catch(()=>{});await context.close();}
   }
 }
 (async () => {

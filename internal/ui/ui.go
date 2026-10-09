@@ -853,13 +853,14 @@ type ThreadSummary struct {
 	// then); Renamed says Title is the person's own name for it here, and
 	// AutoTitle is then the automatic one (its first line). A name and
 	// Mark done / Reopen are kept on this device only.
-	State       string `json:"state"`
-	DoneBy      string `json:"done_by,omitempty"`
-	Conclusion  string `json:"conclusion,omitempty"`
-	ConcludedBy string `json:"concluded_by,omitempty"`
-	Pending     bool   `json:"pending"`
-	Renamed     bool   `json:"renamed,omitempty"`
-	AutoTitle   string `json:"auto_title,omitempty"`
+	State       string   `json:"state"`
+	DoneBy      string   `json:"done_by,omitempty"`
+	Conclusion  string   `json:"conclusion,omitempty"`
+	ConcludedBy string   `json:"concluded_by,omitempty"`
+	Pending     bool     `json:"pending"`
+	PendingIDs  []string `json:"pending_ids,omitempty"` // exact message IDs; opening them decides nothing
+	Renamed     bool     `json:"renamed,omitempty"`
+	AutoTitle   string   `json:"auto_title,omitempty"`
 	// QuietSince is when it went quiet (its last message, or a later Mark
 	// done or Reopen here); it is archived TopicArchiveAfter later.
 	QuietSince time.Time `json:"quiet_since"`
@@ -1174,9 +1175,10 @@ const (
 	DoDecline      = "decline"
 	DoResolve      = "resolve" // close a needs-human item without sending anything
 	DoCancel       = "cancel"
-	DoApprove      = "approve"   // ID = verified person or explicit device: answer future questions
-	DoUnapprove    = "unapprove" // ID = peer
-	DoTrust        = "trust"     // ID = peer: trust its changed key
+	DoApprove      = "approve"     // ID = verified person or explicit device: answer future questions
+	DoUnapprove    = "unapprove"   // ID = peer
+	DoTrust        = "trust"       // ID = peer: trust its changed key
+	DoGrantTasks   = "grant_tasks" // ID = verified person or explicit device: permit future tasks here
 	DoRevokeTasks  = "revoke_tasks"
 	DoArchiveHeld  = "archive_held" // hide only this local notice; retained envelope stays blocked
 	DoRead         = "read"

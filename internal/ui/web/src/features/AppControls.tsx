@@ -55,7 +55,9 @@ export function AppControls({ command = false }: { command?: boolean }) {
     </Card>;
     return error ? <p role="alert" className="text-danger">{error}</p> : null;
   }
-  return <Card className="space-y-2 p-4">
+  const available = !command && checked?.state === "available" ? checked.latest : "";
+  const update = <Button variant="act" disabled={busy || checking || !status.app_update_supported || !host.appUpdate || (!!checked && checked.state !== "available")} onClick={() => void act(false)}>{busy ? "Updating…" : "Update AgentNet"}</Button>;
+  return <Card tone={available ? "agent" : "surface"} className="space-y-2 p-4">
     {command ? <>
       <h3 className="font-bold">AgentNet command for your tools</h3>
       <Fact name="Location">{status.cli_path}</Fact>
@@ -66,19 +68,22 @@ export function AppControls({ command = false }: { command?: boolean }) {
         <p>Your tools will use the app’s version at {status.cli_path}. Your existing custom build at this location is replaced.</p>
       </Confirm>
     </> : <>
-      <h3 className="font-bold">Update this computer</h3>
+      {available ? <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 aria-live="polite" className="font-display text-[24px] font-extrabold leading-tight">Version {available} is available.</h3>
+        {update}
+      </div> : <h3 className="font-bold">Update this computer</h3>}
       <p>The app, its AgentNet command and connected tools update together. The app restarts when ready.</p>
       <Hint>Installed app: {status.version}.</Hint>
       <div className="flex flex-wrap gap-3">
         {host.appCheckUpdate && <Button disabled={checking || busy} onClick={() => void check()}>{checking ? "Checking…" : "Check for updates"}</Button>}
-        <Button variant="act" disabled={busy || checking || !status.app_update_supported || !host.appUpdate || (!!checked && checked.state !== "available")} onClick={() => void act(false)}>{busy ? "Updating…" : "Update AgentNet"}</Button>
+        {!available && update}
       </div>
-      {checked && <p role="status">{checked.state === "available" ? `Version ${checked.latest} is available.` :
-        checked.state === "current" ? `This app matches the latest stable release (${checked.latest}).` :
+      {checked && !available && <p role="status">{checked.state === "current" ? `This app matches the latest stable release (${checked.latest}).` :
           `This app (${checked.version}) is ahead of the latest stable release (${checked.latest}).`}</p>}
       {checkError && <p role="alert" className="text-danger">{checkError}</p>}
       {!status.app_update_supported && <Hint>{status.problem || "This installation is updated by its package manager."}</Hint>}
-      {(message || status.update_result) && <p role="status">{message || status.update_result}</p>}
+      {message ? <p role="status">{message}</p> : status.update_result && (available ?
+        <Hint>Last update: {status.update_result}</Hint> : <p role="status">{status.update_result}</p>)}
     </>}
     {error && <p role="alert" className="text-danger">{error}</p>}
   </Card>;
