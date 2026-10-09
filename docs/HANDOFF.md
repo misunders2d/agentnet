@@ -4,7 +4,63 @@ Keep notable user-facing changes in [CHANGELOG.md](../CHANGELOG.md) under
 Unreleased as they are implemented. Move shipped entries into a dated version
 section at release; keep detailed verification and remaining work here.
 
-## Current published release — v0.8.13, October 9, 2026 (UTC)
+## Current published release — v0.8.14, October 9, 2026 (UTC)
+
+[Download v0.8.14](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14).
+Published at **19:34:43 UTC** from
+`760e945a28c38461c74d84c7d4c9610464573dea`. Product code is unchanged from
+`cde2cba6`; final test/workflow corrections were qualified at `36260adb`.
+All five final [packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/37980178645)
+passed. All 12 asset digests and all 11 SHA256SUMS entries matched. Standalone
+and bundled Linux commands report the exact clean tagged revision.
+
+The [release checklist](plans/V0_8_14.md) records composed source qualification:
+retained native Linux/macOS and Windows package results, all 965 Linux client
+race assignments, other-package race/browser/desktop/container checks, exact
+Windows controls/governance, and disjoint Windows client
+[A–G](https://github.com/misunders2d/agentnet/actions/runs/37978551047)
+(**655.004 s**) and [H–Z](https://github.com/misunders2d/agentnet/actions/runs/37978560159)
+(**424.799 s**). The Windows list has 945 testing.T declarations, excluding
+TestMain (387 + 558); it is separate from the Linux list. Initial full runs were
+not all green. No deadline increased. Four shell-stub history scenarios execute
+on Linux/macOS and skip Windows; a green Windows job does not mean they ran.
+
+The existing Contabo relay was verified at **19:35:17 UTC**, with container
+start **19:35:15.674 UTC**, on image `agentnet-revived:v0.8.14-760e945a`.
+The verified stopped-state backup is
+`/opt/agentnet-revived/backups/pre-v0.8.14-dx443TBQ`. Normal HTTPS checks from
+server and laptop passed with the original realm and data volume. The neighboring
+service is unchanged; zero OOM events or restarts. Deployment changed only the
+existing relay, with no installed-client mutations by Codex.
+
+**Urgent post-update diagnosis — IN PROGRESS, root Codex owns it.** After
+publication, the owner updated Zenbook himself and reported
+“Could not connect 127.0.0.1: Connection refused.” Read-only inspection confirms the app/launchers use the permanent application
+data path, not Downloads. Both running backends subsequently reported the exact
+clean v0.8.14 tag; update activation is running and authenticated local Overview
+returns200/v0.8.14. The shell can retain a failed page during attached-daemon
+restart: Go does not wait for UI readiness after lock reacquisition, and Rust
+suppresses a same-URL page event. Focused reproductions/fixes are in progress;
+tray Quit/reopen was advised, but recovery is not user-confirmed. This takes
+priority over v0.8.15 feature work. A separate
+new report says the phone on v0.8.13 shows “Sending” for 15 minutes; its exact
+cause is unverified. v0.8.14 fixes confirmed sync/queue blockers, but no exact
+fix or physical convergence is claimed for this report. Preserve live sessions,
+identity, data and native permissions; no reset, relink or task replay.
+
+Physical phone convergence and actual post-fix ThinkPad CPU remain unverified.
+The shutdown abort has no attributed fix. The owner explicitly made MEL-590's
+historical Mac installation report nonblocking because the app is already
+installed. Absent Developer ID signing/notarization is a possible barrier, not
+an established cause or fix. Installers remain unsigned.
+
+**Queued next phase — v0.8.15:** start from the released tag after the urgent
+post-update diagnosis. Follow [V0_8_15.md](plans/V0_8_15.md) for
+MEL-591/592/571/583/574/575, verified directly in Linear. Zenbook owns overnight
+implementation/integration; ThinkPad is offline and no peer response is required.
+MEL-527 remains v0.9. No v0.8.15 feature implementation has started.
+
+## Previous release — v0.8.13, October 9, 2026 (UTC)
 
 [Download v0.8.13](https://github.com/misunders2d/agentnet/releases/tag/v0.8.13).
 Published at **15:23:08 UTC** from
@@ -19,43 +75,8 @@ Standalone and bundled Linux commands report the exact clean tagged revision.
 The existing Contabo relay upgraded at **15:24:52 UTC**, after a verified
 stopped-state backup. Its running binary and normal HTTPS from both server and
 laptop report v0.8.13 on the original realm and data volume. Zero restarts/OOM
-events; the neighboring service retains its original start time. GitHub latest
-is v0.8.13. No installed client, live client grant or desktop session changed.
-
-**Owner resumed v0.8.14 on October 9 after restart.** Release publication and
-relay checks for v0.8.13 are complete. Active work now follows
-[the v0.8.14 checklist](plans/V0_8_14.md) on branch `release/v0.8.14` from
-`ea2ad0cf`, including the final ThinkPad MEL-586/587/588 inbox-output,
-app-close crash and quarantine-notice findings. No v0.8.14 release yet.
-
-**v0.8.14 source qualification is complete; final tag packaging/publication is pending.**
-Product source is `cde2cba6`; test/workflow corrections are at `36260adb`.
-The [release checklist](plans/V0_8_14.md) retains both initial failed runs and
-all corrected evidence. Native Linux/macOS, all client and other-package race
-coverage, real browser storage, desktop/shell builds and the container journey
-pass. Windows controls/governance pass in
-[37978167194](https://github.com/misunders2d/agentnet/actions/runs/37978167194).
-The remaining Windows client selections both pass:
-[A–G](https://github.com/misunders2d/agentnet/actions/runs/37978551047) and
-[H–Z](https://github.com/misunders2d/agentnet/actions/runs/37978560159).
-The 965 Linux race assignments and 945 Windows test declarations are separate
-platform lists; existing platform/opt-in skips remain. Four shell-stub history
-variants execute on Linux/macOS and skip Windows. No deadline was increased.
-Only documentation/verification differs from the qualified product source.
-
-Actual post-fix ThinkPad CPU and physical phone convergence remain unverified.
-The reported shutdown abort has no attributed fix. The owner explicitly made
-MEL-590's historical Mac installation alert nonblocking: official Apple/Tauri
-guidance and absent Developer ID signing/notarization suggest a possible barrier,
-not a confirmed cause or fix. Preserve running clients; deploy only the existing
-relay after packaging, artifact verification and publication.
-
-**Queued next phase:** after v0.8.14 publication and relay verification, start
-[v0.8.15](plans/V0_8_15.md) from that release. The owner assigned MEL-591/592/571/583/574/575
-through Herdr; all six assignments were verified directly in Linear. Zenbook is
-the sole overnight implementation/integration owner; ThinkPad is offline and no
-peer response/review is required. MEL-527 stays v0.9. This does not expand or
-delay the current v0.8.14 candidate, and no v0.8.15 feature is implemented yet.
+events; the neighboring service retains its original start time. At publication,
+GitHub latest was v0.8.13. No installed client, live client grant or desktop session changed.
 
 ### v0.8.13 scope and qualification
 
@@ -96,8 +117,8 @@ changed. Physical phone convergence and ThinkPad's reported sustained busy
 renderer CPU remain unverified; the synthetic native profile did not reproduce
 that load. Deployment changed the existing relay only.
 
-**Owner restart boundary:** after publishing v0.8.13 and verifying the relay,
-save this handoff and pause for the owner's update/restart. Do not start v0.8.14
+**Historical v0.8.13 owner restart boundary:** after publishing v0.8.13 and
+verifying the relay, save this handoff and pause for the owner's update/restart. Do not start v0.8.14
 until explicitly resumed. Its immediate issues and today's bug scope are recorded
 in [the checklist](plans/V0_8_13.md#owner-restart-boundary-and-v0814-scope), including
 all own-device direct chats (MEL-569), the separate invitation-sync queue blocker,

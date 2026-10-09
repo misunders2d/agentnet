@@ -1,46 +1,60 @@
-# AgentNet v0.8.14 — resumed October 9
+# AgentNet v0.8.14 — released October 9, 2026 (UTC)
 
-The owner restarted Codex and resumed release work. Current implementation,
-triage and verification evidence live in [V0_8_14.md](plans/V0_8_14.md).
-Source qualification is complete on product code `cde2cba6`, with verification
-corrections at `36260adb`. Retained passing suites plus focused corrections cover
-native Linux/macOS/Windows, all race partitions, actual browser storage,
-desktop/shell builds and the container journey. Both final Windows client
-selections pass: [A–G](https://github.com/misunders2d/agentnet/actions/runs/37978551047)
-and [H–Z](https://github.com/misunders2d/agentnet/actions/runs/37978560159).
-Initial full runs were not all green; their failures and exact retained coverage
-remain in the checklist. Final tagged packaging, artifact checks, publication
-and existing-relay deployment are pending. After those finish, begin the
-[six-feature v0.8.15 batch](plans/V0_8_15.md).
+[Published v0.8.14](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14)
+at **19:34:43 UTC** from `760e945a28c38461c74d84c7d4c9610464573dea`.
+All five [packaging jobs](https://github.com/misunders2d/agentnet/actions/runs/37980178645)
+passed; all 12 asset digests and 11 SHA256SUMS entries matched. Standalone and
+bundled Linux commands report the exact clean tag. The existing relay was
+verified at **19:35:17 UTC** on `agentnet-revived:v0.8.14-760e945a`, after a
+verified stopped-state backup, with normal HTTPS from server and laptop,
+unchanged realm/volume/neighbor, and zero OOM events or restarts. Deployment
+changed no installed client.
+
+**Current priority: urgent post-update diagnosis, owned by root Codex.** The
+owner then updated Zenbook himself and reported “Could not connect 127.0.0.1:
+Connection refused.” Cause and recovery remain unverified. The new phone
+v0.8.13 report of “Sending” for 15 minutes also has no exact diagnosis;
+v0.8.14 fixes confirmed blockers but is not claimed to fix that exact report.
+Resolve the urgent regression before the queued
+[six-feature v0.8.15 batch](plans/V0_8_15.md). No v0.8.15 feature work has started.
 
 Implemented areas include direct-agent history across personal devices, durable
 history receipts and progress, grouped/archiveable Held back notices, bounded
 CLI inbox output, visible inherited permissions, exact remote request resolution,
-topic-only invitations and editable proposals. Focused native/browser and rendered
-checks pass. ThinkPad's MEL-589 shared-context authorship and other prepared
-fixes are integrated. Repeated native executable hashing without pending input
-and four own-sync quarantine retry loops are corrected with focused regressions.
-Actual post-fix ThinkPad CPU and phone convergence remain unverified. The owner
-clarified MEL-590 is an installation issue and explicitly removed it as a release
-blocker; the app is already installed. No exact cause or fix is claimed. The
-reported ThinkPad shutdown abort has not been reproduced by the isolated Linux
-package probe and is not claimed fixed.
+topic-only invitations and editable proposals. ThinkPad's MEL-589 shared-context
+authorship and other prepared fixes are integrated. Repeated native executable
+hashing without pending input and four own-sync quarantine retry loops are
+corrected with focused regressions.
 
-After publication, update source computers and receiving clients through their
-existing app/CLI controls, then reload linked browsers after the relay rollout.
-New direct-agent history and remote resolution require compatible own devices;
-edited or sibling-device proposal confirmations also require an updated agent
-host. Topic-only invitations require compatible original-member devices and the
-invited host, so an older participant device can leave that option unavailable.
-The new topic-scope and proposal-edit controls are in Comic. Existing whole-chat
-access remains unchanged; a new topic invitation does not narrow it. File
-references synchronize, but downloads need a linked source retaining the bytes.
+Source qualification combines retained passing native/race/browser/desktop/
+container evidence with corrected affected checks on product code `cde2cba6`,
+verification candidate `36260adb`. Windows client
+[A–G](https://github.com/misunders2d/agentnet/actions/runs/37978551047)
+passed 655.004 s and [H–Z](https://github.com/misunders2d/agentnet/actions/runs/37978560159)
+passed 424.799 s, covering 945 platform-specific test declarations. Linux client
+race coverage contains 965 assignments. Initial full runs were not all green;
+four shell-stub history scenarios skip Windows. No deadline increased. Exact
+composed evidence is in [V0_8_14.md](plans/V0_8_14.md).
+
+Actual post-fix ThinkPad CPU and physical phone convergence remain unverified.
+The reported shutdown abort has no attributed fix. The owner made the historical
+Mac installation report explicitly nonblocking; no exact cause or fix is claimed.
+Installers remain unsigned.
+
+Clients use their existing app/CLI update controls; linked browsers reload after
+the relay rollout. New direct-agent history and remote resolution require
+compatible own devices; edited or sibling-device proposal confirmations also
+require an updated agent host. Topic-only invitations require compatible
+original-member devices and the invited host, so an older participant can leave
+that option unavailable. Topic-scope and proposal-edit controls are in Comic.
+An additional topic invitation does not narrow existing whole-chat access.
+File references synchronize, but downloads need a linked source retaining the
+bytes. Preserve live sessions, native permissions and exact grants; no reset,
+relink or task replay.
 
 Previous [v0.8.13](https://github.com/misunders2d/agentnet/releases/tag/v0.8.13)
-was published15:23:08UTC on October9; the existing relay passed its upgrade
-checks15:24:52UTC. Its retained evidence and physical-device limits are in
-[V0_8_13.md](plans/V0_8_13.md). Deploy only the existing relay; installed clients
-update through their button/CLI. Preserve live sessions and native permissions.
+was published at 15:23:08 UTC on October 9; its existing-relay checks passed at
+15:24:52 UTC. Historical evidence remains in [V0_8_13.md](plans/V0_8_13.md).
 
 ---
 

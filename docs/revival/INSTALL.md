@@ -9,30 +9,42 @@ People do not need Go, Rust, Docker or a database server on their computer.
 ## People: install and open the app
 
 The current published release is
-[v0.8.11](https://github.com/misunders2d/agentnet/releases/tag/v0.8.11), dated
-October 9, 2026, published at 10:50:40 UTC from `0209d7f1790b85ba817d3e3842206c82105e5e31`.
+[v0.8.14](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14), dated
+October 9, 2026, published at 19:34:43 UTC from
+`760e945a28c38461c74d84c7d4c9610464573dea`.
 Download the matching package below and verify `SHA256SUMS`. Existing app users
-can use **Settings → About → Update AgentNet** or `agentnet update v0.8.11`, then
+can use **Settings → About → Update AgentNet** or `agentnet update v0.8.14`, then
 reload linked browser clients. If the registered old AppImage has already been
 removed, reinstall the official app once; the updater checks this before shutdown.
-Identity and history remain; no reset or relinking is needed.
+Identity and history remain; no reset or relinking is required.
 
-Qualification retained passing results from the full integrated suite and
-batched its corrections before final affected checks on Linux/macOS/Windows.
-Repository-wide vet, focused race checks, browser IndexedDB and all-skin
-checks passed. All five release packaging jobs passed. All 12 asset sizes/digests
-and 11 SHA256SUMS entries matched; Linux CLI and bundled CLI report the exact
-clean revision. The final AppImage passed replacement/restart and stable-install
-checks. Update source laptops as well as linked phones for the history fixes;
-keep a source device online while its retained history catches up. Actual phone
-convergence, physical notification/clipboard interaction and interactive
-Windows/macOS installation remain unverified.
-Installers are unsigned. See [the handoff](../HANDOFF.md) for exact evidence.
+**Current issue under investigation:** after the owner updated Zenbook himself,
+it reported “Could not connect 127.0.0.1: Connection refused.” Root Codex is
+investigating before v0.8.15 feature work; no cause or recovery is claimed yet.
+The separate phone v0.8.13 “Sending” report also has no exact diagnosis. See
+[the handoff](../HANDOFF.md) for current status.
+
+Qualification combines retained passing checks with focused corrections and
+bounded Windows client coverage; the initial full runs were not all green.
+Four shell-stub linked-history scenarios skip Windows. All five final packaging
+jobs passed; all 12 asset digests and 11 SHA256SUMS entries matched. Standalone
+and bundled Linux commands report the exact clean tag. The existing relay passed
+normal HTTPS checks from server and laptop at 19:35:17 UTC after its stopped-state
+backup; deployment did not change installed clients.
+
+Source computers and receiving clients need compatible versions for new
+own-device sync and proposal operations; topic-only invitations also require
+compatible participants. Keep a source online for history and files it retains.
+Physical phone convergence, post-fix ThinkPad CPU and interactive Windows/macOS
+installation remain unverified. The reported shutdown abort has no attributed
+fix; the historical Mac installation report is explicitly nonblocking and not
+claimed fixed. Installers remain unsigned. Exact evidence is in
+[the handoff](../HANDOFF.md).
 
 **Upgrading a v0.8.3/v0.8.4 AppImage:** its old updater still needs one
-manual reopen after installing v0.8.11. Open AgentNet from its launcher if it
+manual reopen after installing v0.8.14. Open AgentNet from its launcher if it
 closes without returning. If v0.8.4's Update button is unavailable, run
-`agentnet update v0.8.11` for the registered desktop installation, then reopen
+`agentnet update v0.8.14` for the registered desktop installation, then reopen
 once. Updates started by v0.8.5 include the restart fix.
 
 | Device | Package to choose | How to open it |
@@ -405,7 +417,7 @@ be copied the same way: stop the daemon, then copy the home directory.
 **From v0.8.0:** install the matching desktop package once. v0.8.0 has
 no in-app installer; its About notice incorrectly directs desktop users to
 `agentnet update`. If **What's new** does nothing, open the
-[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.11)
+[release page](https://github.com/misunders2d/agentnet/releases/tag/v0.8.14)
 directly.
 
 - **AppImage:** download `AgentNet-linux-x86_64.AppImage`, verify its entry
@@ -422,7 +434,7 @@ directly.
 
 Keep the local AgentNet data directory: it contains identity, history and
 permissions. Do not reset or re-enroll for an ordinary update. Let active jobs
-finish first. Check **Settings → About → v0.8.11**, then inspect
+finish first. Check **Settings → About → v0.8.14**, then inspect
 `agentnet version` in a fresh terminal separately. If an older manually
 managed daemon owns the home, follow [existing installs and recovery](#existing-installs-and-recovery)
 before assuming the new AppImage changed that daemon.
@@ -435,7 +447,7 @@ refresh with it. This does not update Claude, Codex, Pi or unrelated settings.
 Custom/unrecognized CLI copies require the owner's **Replace command…**
 choice. Package-manager authorization may be required for deb/rpm.
 
-**Upgrading from v0.8.1/v0.8.2:** use About once to reach v0.8.11. Those
+**Upgrading from v0.8.1/v0.8.2:** use About once to reach v0.8.14. Those
 older standalone executables retain their older updater until replaced. The
 new app recognizes unchanged official commands by published checksum and
 adopts them automatically; a separate Replace command step is unnecessary.
@@ -494,7 +506,7 @@ admin device:
 
 ```bash
 agentnet admin release show
-agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.11 v0.8.11
+agentnet admin release set --url https://github.com/misunders2d/agentnet/releases/tag/v0.8.14 v0.8.14
 ```
 
 That publishes advice only. It installs nothing on the relay or clients.
