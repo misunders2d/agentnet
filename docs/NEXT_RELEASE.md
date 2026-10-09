@@ -2,13 +2,16 @@
 
 The owner restarted Codex and resumed release work. Current implementation,
 triage and verification evidence live in [V0_8_14.md](plans/V0_8_14.md).
-The combined source is pushed on `release/v0.8.14` at
-`2be8e1eef4bbeed080ae772b1c4fc9e70480e291`. Its
-[integrated qualification](https://github.com/misunders2d/agentnet/actions/runs/37968753848)
-started at17:47:31 UTC and exposed the recorded failures. The corrected candidate
-`cde2cba6` passes all previously failing cases in focused batches;
-[second combined qualification](https://github.com/misunders2d/agentnet/actions/runs/37973201082)
-is running. Publication and relay deployment have not started.
+Source qualification is complete on product code `cde2cba6`, with verification
+corrections at `36260adb`. Retained passing suites plus focused corrections cover
+native Linux/macOS/Windows, all race partitions, actual browser storage,
+desktop/shell builds and the container journey. Both final Windows client
+selections pass: [A–G](https://github.com/misunders2d/agentnet/actions/runs/37978551047)
+and [H–Z](https://github.com/misunders2d/agentnet/actions/runs/37978560159).
+Initial full runs were not all green; their failures and exact retained coverage
+remain in the checklist. Final tagged packaging, artifact checks, publication
+and existing-relay deployment are pending. After those finish, begin the
+[six-feature v0.8.15 batch](plans/V0_8_15.md).
 
 Implemented areas include direct-agent history across personal devices, durable
 history receipts and progress, grouped/archiveable Held back notices, bounded

@@ -28,22 +28,27 @@ relay checks for v0.8.13 are complete. Active work now follows
 `ea2ad0cf`, including the final ThinkPad MEL-586/587/588 inbox-output,
 app-close crash and quarantine-notice findings. No v0.8.14 release yet.
 
-The combined source is pushed at `2be8e1eef4bbeed080ae772b1c4fc9e70480e291`;
-[integrated qualification](https://github.com/misunders2d/agentnet/actions/runs/37968753848)
-started at17:47:31 UTC. ThinkPad's `bfac23e5` is integrated as `dd8a7f66`, with
-subsequent receipt-race, authorship and performance corrections. Focused vet,
-race, browser and rendered checks pass. Unnecessary Codex executable hashing
-without pending inputs is a confirmed live CPU contributor on Zenbook's old
-client; the same path exists in v0.8.13. Actual post-fix ThinkPad CPU and physical
-phone convergence remain unverified. The owner clarified MEL-590 concerns
-installation, with the app already installed, and explicitly said it must not
-delay this release. Official Mac/Tauri guidance and the build's lack of Developer
-ID signing/notarization are recorded as a possible cause, not a confirmed fix.
-Preserve running clients and complete remaining source/package gates before
-publication. The first integrated run exposed history/routing bugs and fixture
-failures. All known failures have focused passing regressions at `cde2cba6`;
-[second combined qualification](https://github.com/misunders2d/agentnet/actions/runs/37973201082)
-is running on that corrected candidate. No deadline was increased.
+**v0.8.14 source qualification is complete; final tag packaging/publication is pending.**
+Product source is `cde2cba6`; test/workflow corrections are at `36260adb`.
+The [release checklist](plans/V0_8_14.md) retains both initial failed runs and
+all corrected evidence. Native Linux/macOS, all client and other-package race
+coverage, real browser storage, desktop/shell builds and the container journey
+pass. Windows controls/governance pass in
+[37978167194](https://github.com/misunders2d/agentnet/actions/runs/37978167194).
+The remaining Windows client selections both pass:
+[A–G](https://github.com/misunders2d/agentnet/actions/runs/37978551047) and
+[H–Z](https://github.com/misunders2d/agentnet/actions/runs/37978560159).
+The 965 Linux race assignments and 945 Windows test declarations are separate
+platform lists; existing platform/opt-in skips remain. Four shell-stub history
+variants execute on Linux/macOS and skip Windows. No deadline was increased.
+Only documentation/verification differs from the qualified product source.
+
+Actual post-fix ThinkPad CPU and physical phone convergence remain unverified.
+The reported shutdown abort has no attributed fix. The owner explicitly made
+MEL-590's historical Mac installation alert nonblocking: official Apple/Tauri
+guidance and absent Developer ID signing/notarization suggest a possible barrier,
+not a confirmed cause or fix. Preserve running clients; deploy only the existing
+relay after packaging, artifact verification and publication.
 
 **Queued next phase:** after v0.8.14 publication and relay verification, start
 [v0.8.15](plans/V0_8_15.md) from that release. The owner assigned MEL-591/592/571/583/574/575

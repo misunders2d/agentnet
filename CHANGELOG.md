@@ -6,6 +6,8 @@ This record starts with v0.8.1; earlier releases remain on the
 
 ## Unreleased
 
+## [0.8.14] — 2026-10-09
+
 ### Fixed
 
 - Keep incompatible invitation-sync copies from blocking ordinary questions, files and replies behind them.

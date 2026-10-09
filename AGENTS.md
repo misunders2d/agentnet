@@ -85,10 +85,15 @@ program, `agentnet`, that is both the laptop client and the Hub.
   `Co-authored-by: Codex <noreply@openai.com>` and Claude uses
   `Co-authored-by: Claude <noreply@anthropic.com>`. Credit actual contributors;
   do not invent account emails for other assistants.
-- Tests: `go vet ./...` and `go test -race -count=1 -timeout 600s $(go list ./... | grep -v /internal/client$)`,
-  plus `./internal/client` in four runs of the same command with `-run '^Test[A-F]'`, `-run '^TestG'`,
-  `-run '^Test[H-P]'` and `-run '^Test[Q-Z]'` (781 tests; under race the package needs ~1500 s, each part
-  ~350-440 s on a quiet machine). Never raise the timeout to make a run fit.
+- Tests: `go vet ./...`, `scripts/race-shard.sh others`, and all client
+  partitions `scripts/race-shard.sh client-K 12` for K=0 through 11. The script
+  derives the current test list and keeps every race package at 600 seconds.
+  The older four/six partitions outgrew that bound; do not reuse their obsolete
+  duration estimates or raise timeouts to make a run fit. Retain passing
+  unchanged partitions when correcting a failure. Native Windows client
+  qualification may use disjoint `^Test[A-G]` and `^Test[H-Z]` selections in
+  parallel, separately from other packages, at the existing 1800-second bound.
+  Platform-specific and opt-in skips must not be reported as executed tests.
   Add a focused regression for every bug. Tests that need a real model or
   infrastructure are opt-in (`AGENTNET_LIVE=claude`, `scripts/hub-container-test.sh`).
 - Claims must match evidence: cross-compiling is not running on that OS;
